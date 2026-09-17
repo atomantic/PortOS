@@ -435,14 +435,13 @@ describe('schedule() lifecycle with fake timers', () => {
 
       await vi.advanceTimersByTimeAsync(1000);
 
-      // A stack-bearing console line exists among whatever else logged.
-      expect(consoleError.mock.calls.some(call =>
-        call.some(arg => typeof arg === 'string' && arg.includes('Event fail-log-1 failed: boom')) &&
-        call.some(arg => typeof arg === 'string' && arg.includes('Error: boom'))
-      )).toBe(true);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('Event fail-log-1 failed: boom'),
+        expect.stringContaining('Error: boom'),
+      );
 
-      const errorLogs = logListener.mock.calls.map(([entry]) => entry).filter(entry => entry.level === 'error');
-      expect(errorLogs.some(entry => entry.eventId === 'fail-log-1' && entry.message.includes('boom'))).toBe(true);
+      const [entry] = logListener.mock.calls.map(([e]) => e).filter(e => e.level === 'error');
+      expect(entry).toMatchObject({ eventId: 'fail-log-1', message: expect.stringContaining('boom') });
     } finally {
       cosEvents.off('log', logListener);
       consoleError.mockRestore();
@@ -591,10 +590,6 @@ describe('schedule() lifecycle with fake timers', () => {
 // describe runs, so getStats() from the shared import can never observe a truly
 // empty ring (#7549).
 describe('getStats().recentSuccessRate on an empty ring', () => {
-  afterEach(() => {
-    vi.resetModules();
-  });
-
   it('is null, not "100%", when no run has been recorded', async () => {
     vi.resetModules();
     const fresh = await import('./eventScheduler.js');

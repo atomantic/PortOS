@@ -6,7 +6,6 @@
  */
 
 import { cosEvents, emitLog } from './cosEvents.js'
-import { logFailureWithStack } from '../lib/failureLogging.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { recurrenceRuleSchema } from '../lib/recurrenceValidation.js'
 // Syntax/range validation is shared with every save boundary and the browser
@@ -568,23 +567,21 @@ async function runEvent(event) {
 
   try {
     await event.handler(event)
-    event.lastRunSucceeded = true
-    event.lastError = null
-    event.consecutiveFailures = 0
   } catch (err) {
     success = false
     error = err.message
-    event.lastRunSucceeded = false
-    event.lastError = error
-    event.consecutiveFailures += 1
-    logFailureWithStack(`⚠️ Event ${event.id} failed`, err)
     emitLog('error', `Event ${event.id} failed: ${err.message}`, {
       eventId: event.id,
       type: event.type,
       source: event.metadata?.source,
-      durationMs: Date.now() - startTime
+      durationMs: Date.now() - startTime,
+      stack: err.stack
     })
   } finally {
+    event.lastRunSucceeded = success
+    event.lastError = error
+    event.consecutiveFailures = success ? 0 : event.consecutiveFailures + 1
+
     recordEventHistory(event, { startTime, success, error })
 
     // A synchronous listener that throws must not cost the schedule its re-arm
