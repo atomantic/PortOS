@@ -55,6 +55,17 @@ vi.mock('./github.js', () => ({
   ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
   getIssueDispatchHint: (...args) => getIssueDispatchHintMock(...args),
 }));
+// The per-repo gh credential overlay (#7540). Mocked rather than real so the
+// suite asserts what execGh RECEIVED without spawning git/gh probes.
+const PINNED_ENV = { GH_TOKEN: 'token-for-other-account' };
+const resolveForgeExecOptionsMock = vi.fn(async (repoPath) => ({
+  cwd: repoPath || undefined,
+  env: PINNED_ENV,
+  customEnv: PINNED_ENV,
+}));
+vi.mock('./forgeExecOptions.js', () => ({
+  resolveForgeExecOptions: (...args) => resolveForgeExecOptionsMock(...args),
+}));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({
     hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS'
@@ -102,6 +113,7 @@ import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
+import { __resetForgeNoAccessLog } from '../lib/forgeAccessErrors.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -111,6 +123,10 @@ beforeEach(() => {
   // clearAllMocks keeps implementations, so restore the default GitHub origin —
   // a case that swaps in a GitLab/origin-less remote would otherwise leak into
   // every test after it.
+  // mockReset, not just the clearAllMocks above: a case that queued an unused
+  // mockResolvedValueOnce/mockRejectedValueOnce leaves it at the head of the
+  // queue, where it outranks this default and leaks into the NEXT test.
+  getOriginInfo.mockReset();
   getOriginInfo.mockResolvedValue({
     hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS'
   });
@@ -812,6 +828,54 @@ describe('unreachable forge (#3358)', () => {
     expect(getOriginInfo).toHaveBeenCalledOnce();
   });
 
+  it('runs `gh pr list` with the per-repo credential, honouring the app\'s forgeAccount pin', async () => {
+    // #7540: without this the poll used gh's ambient active login and 404'd
+    // forever on a private repo owned by another GitHub account.
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
+    execGh.mockResolvedValue('[]');
+
+    await reconcile('/repo', { forgeAccount: 'other-account' });
+
+    expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'other-account' });
+    const [, , options] = execGh.mock.calls.find(([callArgs]) => callArgs[0] === 'pr' && callArgs[1] === 'list');
+    expect(options).toMatchObject({ cwd: '/repo', env: PINNED_ENV });
+    // One resolve per cycle, shared by the reachability probe and the PR read.
+    expect(resolveForgeExecOptionsMock).toHaveBeenCalledOnce();
+  });
+
+  it('logs a no-access 404 ONCE per repo instead of once per cycle', async () => {
+    // #7540: `Could not resolve to a Repository` is permanent until credentials
+    // change, so re-narrating it every scheduler tick is pure noise.
+    __resetForgeNoAccessLog();
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
+    const noAccess = Object.assign(new Error("GraphQL: Could not resolve to a Repository with the name 'o/r'. (repository)"), {
+      ghExitCode: 1, ghNoAccess: true,
+    });
+    execGh.mockRejectedValue(noAccess);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const first = await reconcile('/repo');
+    const second = await reconcile('/repo');
+
+    // The cycle is still reported unreadable both times — only the LOG is deduped.
+    expect(first.prStateUnavailable).toBe(true);
+    expect(second.prStateUnavailable).toBe(true);
+    const noAccessLines = errors.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes('not visible to the gh account'));
+    expect(noAccessLines).toHaveLength(1);
+    expect(noAccessLines[0]).toContain('Forge account');
+    errors.mockRestore();
+  });
+
   it('leaves prStateUnavailable false on a clean cycle', async () => {
     git.getBranches.mockResolvedValue([
       { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
@@ -826,7 +890,10 @@ describe('unreachable forge (#3358)', () => {
     getOriginInfo.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'github.acme-corp.example', fullName: 'o/r' });
     ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'not-authenticated', detail: null });
     await reconcile('/repo');
-    expect(ensureForgeReachableMock).toHaveBeenCalledWith('branch-reconcile', { hostname: 'github.acme-corp.example' });
+    expect(ensureForgeReachableMock).toHaveBeenCalledWith('branch-reconcile', {
+      hostname: 'github.acme-corp.example',
+      env: PINNED_ENV,
+    });
   });
 
   it('does not gate a non-GitHub repo on the gh probe — it has no gh PR state to lose', async () => {

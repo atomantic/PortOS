@@ -105,7 +105,9 @@ export function describeMindTurnProgress({ state, runtime, events } = {}) {
   const thinking = state?.status === 'thinking' && Boolean(trimmed(state?.activeTurnId));
   // A degraded/interrupted wake is as opaque as a quota pause: both stop making
   // progress and both retry on their own, so both get the retry time inline.
-  const blocked = state?.usageLimited === true || ['degraded', 'interrupted'].includes(state?.status);
+  const blocked = state?.usageLimited === true
+    || state?.contextBudgetBlocked === true
+    || ['degraded', 'interrupted'].includes(state?.status);
   const stalled = thinking && inference?.heartbeatStale === true;
   const phase = blocked ? 'blocked' : stalled ? 'stalled' : thinking ? 'thinking' : 'idle';
   const busy = phase === 'thinking' || phase === 'stalled';
@@ -134,7 +136,11 @@ export function describeMindTurnProgress({ state, runtime, events } = {}) {
     retryAt: phase !== 'blocked' ? null
       : state?.usageLimited === true
         ? trimmed(runtime?.usageLimitRetryAt)
-        : trimmed(state?.nextEligibleWakeAt),
+        // Context-budget autopauses clear nextEligibleWakeAt and do not probe;
+        // never invent a retry time that would imply the mind will recover alone.
+        : state?.contextBudgetBlocked === true
+          ? null
+          : trimmed(state?.nextEligibleWakeAt),
     reason: phase === 'blocked' ? trimmed(state?.pauseReason) : null,
     detail: parts.length > 0 ? parts.join(' · ') : null,
   };

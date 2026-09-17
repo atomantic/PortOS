@@ -36,6 +36,7 @@ export * from './layeredIntelligenceReasons.js';
 export * from './localModelHeuristics.js';
 export * from './providerAssignments.js';
 export * from './providerContextWindows.js';
+export * from './providerModelAccess.js';
 export * from './providerEndpoints.js';
 export * from './providerGateways.js';
 export * from './providerHarnesses.js';

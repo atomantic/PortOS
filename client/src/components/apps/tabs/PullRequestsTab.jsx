@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import { Link } from 'react-router';
 import {
-  AlertTriangle, Bot, CheckCircle2, ExternalLink, GitBranch, GitMerge,
+  AlertTriangle, Bot, CheckCircle2, ExternalLink, FileSearch, GitBranch, GitMerge,
   GitPullRequest, Loader2, RefreshCw, Rocket, ScanSearch, Search, ShieldAlert, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -33,21 +33,28 @@ const actionStatusForTask = status => ({
   failed: 'failed',
 }[status] || null);
 
-// The two per-row agent actions. They share every piece of state machinery —
+// The three per-row agent actions. They share every piece of state machinery —
 // only the CoS task that backs each one differs, so the kind is data rather
 // than a duplicated block of hooks.
-//   resolve — the review-loop follow-up that fixes and merges the branch.
-//   review  — `pr-reviewer` narrowed to this one request.
+//   resolve   — the review-loop follow-up that fixes and merges the branch.
+//   review    — `pr-reviewer` narrowed to this one request.
+//   doReview  — the bundled `/do:review` workflow, review-only, on any GitHub row.
 // `field` is where the GET response carries this kind's server-side state, and
-// `queued` reads the same record out of the POST response. `matches` is the
+// `queued` reads the same record out of the POST response (defaulting to the
+// same `field`). `eligibleField` is the server's own per-row verdict on whether
+// the action can run — absent means "always offered". `matches` is the
 // LATE-BINDING rule: a click knows its PR number before the server has a task
 // id, so a socket update is claimed by the row it names.
 const ACTION_KINDS = {
   resolve: {
     label: 'Resolve & merge',
+    verb: 'resolve and merge',
     Icon: Rocket,
     field: 'agentAction',
+    // The only kind whose POST answers with a bare `task` rather than a record
+    // named after its field.
     queued: result => result.task && { taskId: result.task.id, status: result.task.status },
+    call: (appId, number, settings) => api.resolveAppPullRequest(appId, number, settings),
     title: (forgeLabel, number, appName) =>
       `Start a CoS agent now to resolve and merge ${forgeLabel} request #${number} for ${appName}`,
     matches: (task, appId, number) => task.metadata?.app === appId
@@ -55,17 +62,40 @@ const ACTION_KINDS = {
   },
   review: {
     label: 'PR review',
+    verb: 'run the pr-reviewer task against',
     Icon: ScanSearch,
     field: 'reviewAction',
-    queued: result => result.reviewAction,
+    eligibleField: 'reviewEligible',
+    // The one action that follows its own saved stage providers unless the user
+    // explicitly opts the page-level pin in.
+    call: (appId, number, settings, { overrideProvider }) =>
+      api.reviewAppPullRequest(appId, number, overrideProvider ? settings : {}),
     title: (forgeLabel, number, appName) =>
       `Run the pr-reviewer scheduled task against ${forgeLabel} request #${number} for ${appName}`,
     matches: (task, appId, number) => task.metadata?.app === appId
       && task.metadata?.analysisType === 'pr-reviewer'
       && Number(task.metadata?.targetPullRequest) === number,
   },
+  doReview: {
+    label: 'Do:Review',
+    verb: 'run /do:review against',
+    Icon: FileSearch,
+    field: 'doReviewAction',
+    eligibleField: 'doReviewEligible',
+    call: (appId, number, settings) => api.doReviewAppPullRequest(appId, number, settings),
+    title: (forgeLabel, number, appName) =>
+      `Run the /do:review workflow against ${forgeLabel} request #${number} for ${appName} and post an inline review`,
+    // Shares `targetPullRequest` with the pr-reviewer match above — one
+    // vocabulary for "this task targets PR #N" — and is told apart by the
+    // slashdo command it carries.
+    matches: (task, appId, number) => task.metadata?.app === appId
+      && task.metadata?.slashdoCommand === 'review'
+      && Number(task.metadata?.targetPullRequest) === number,
+  },
 };
 const KIND_IDS = Object.keys(ACTION_KINDS);
+const actionRecord = (kind, result) =>
+  (ACTION_KINDS[kind].queued || (r => r[ACTION_KINDS[kind].field]))(result);
 const emptyActions = () => Object.fromEntries(KIND_IDS.map(kind => [kind, {}]));
 
 const EMPTY_REASONS = {
@@ -273,22 +303,31 @@ export default function PullRequestsTab({ appId, appName }) {
   const requestNoun = data?.forge === 'gitlab' ? 'merge requests' : 'pull requests';
   const unavailable = data?.transient === true;
 
-  // Both row actions queue a CoS task and then track it identically: optimistic
+  // Submit the visible session selection; clearing Auto restores server routing.
+  const providerSettings = {
+    provider: selectedProviderId || undefined,
+    model: selectedModel || undefined,
+    effort: effort || undefined,
+  };
+
+  // Every row action queues a CoS task and then tracks it identically: optimistic
   // `queuing`, roll back on failure, and never let a stale response downgrade a
   // status a socket update already advanced.
-  const queueAction = async (kind, pullRequest, { call, queued, already }) => {
+  const queueAction = async (kind, pullRequest) => {
     const { number } = pullRequest;
+    const { verb, call } = ACTION_KINDS[kind];
     setAction(kind, number, { status: 'queuing', taskId: null });
-    const result = await call().catch(err => {
-      toast.error(err?.message || `Failed to queue an agent for #${number}`);
-      return null;
-    });
+    const result = await call(appId, number, providerSettings, { overrideProvider: overrideReviewProvider })
+      .catch(err => {
+        toast.error(err?.message || `Failed to queue an agent for #${number}`);
+        return null;
+      });
     if (!result) {
       setAction(kind, number, null);
       return;
     }
 
-    const record = ACTION_KINDS[kind].queued(result);
+    const record = actionRecord(kind, result);
     const taskStatus = actionStatusFromRecord(record) || 'queued';
     replaceActions(previous => {
       const current = previous[kind][number];
@@ -305,50 +344,31 @@ export default function PullRequestsTab({ appId, appName }) {
         },
       };
     });
-    // The `queued` toast text may be a function of the response, for an action
-    // that reports whether an agent actually STARTED (resolve dispatches
-    // immediately) rather than only that a task was persisted.
-    const duplicate = result.duplicate === true;
-    const message = duplicate ? already
-      : (typeof queued === 'function' ? queued(result) : queued);
-    // Queued-but-not-started is not a failure — it just isn't running yet (no
-    // agent slots, daemon stopped) — but it is not a success claim either, so it
-    // gets the neutral toast. A duplicate stays a success: something is already
-    // on it.
-    if (!duplicate && result.started === false) toast(message);
-    else toast.success(message);
+    // A duplicate is a success: something is already on it. Otherwise the toast
+    // reports whether an agent actually STARTED — an action that only persisted
+    // a task (no agent slots, daemon stopped) is not a failure, but it is not a
+    // success claim either, so it gets the neutral toast. `started` is absent for
+    // the one queue-only action, which leaves it on the success path.
+    const target = `${forgeLabel} #${number}`;
+    if (result.duplicate === true) {
+      toast.success(`An agent is already queued to ${verb} ${target}`);
+    } else if (result.started === false) {
+      toast(`Queued an agent to ${verb} ${target}${result.queueReason ? ` — ${result.queueReason}` : ''}`);
+    } else {
+      toast.success(`${result.started ? 'Started' : 'Queued'} an agent to ${verb} ${target}`);
+    }
   };
 
-  // Submit the visible session selection; clearing Auto restores server routing.
-  const providerSettings = {
-    provider: selectedProviderId || undefined,
-    model: selectedModel || undefined,
-    effort: effort || undefined,
-  };
-
-  const handleResolve = pullRequest => queueAction('resolve', pullRequest, {
-    call: () => api.resolveAppPullRequest(appId, pullRequest.number, providerSettings),
-    queued: result => (result.started
-      ? `Started an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`
-      : `Queued an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`
-        + (result.queueReason ? ` — ${result.queueReason}` : '')),
-    already: `An agent is already resolving ${forgeLabel} #${pullRequest.number}`,
+  // Which actions this row offers. Each kind names the server's own per-row
+  // verdict (`eligibleField`) rather than the tab re-deriving one: two copies of
+  // an eligibility rule drift, and the button would then promise an action the
+  // route answers with 409. A kind with no `eligibleField` is always offered.
+  const rowActionsFor = pullRequest => KIND_IDS.filter(kind => {
+    const { eligibleField } = ACTION_KINDS[kind];
+    return !eligibleField || pullRequest[eligibleField];
   });
 
-  const handleReview = pullRequest => queueAction('review', pullRequest, {
-    call: () => api.reviewAppPullRequest(appId, pullRequest.number, overrideReviewProvider ? providerSettings : {}),
-    queued: `Queued the pr-reviewer task for ${forgeLabel} #${pullRequest.number}`,
-    already: `pr-reviewer is already queued for ${forgeLabel} #${pullRequest.number}`,
-  });
-
-  // pr-reviewer covers only GitHub PRs opened by someone else against the default
-  // branch, and the server answers every other row with 409. `reviewEligible` is
-  // the server's own verdict per row, so the button appears exactly where it can
-  // work rather than offering a guaranteed failure.
-  const rowActionsFor = pullRequest => [
-    { kind: 'resolve', onQueue: handleResolve },
-    ...(pullRequest.reviewEligible ? [{ kind: 'review', onQueue: handleReview }] : []),
-  ];
+  const offersKind = kind => (data?.pullRequests || []).some(pullRequest => rowActionsFor(pullRequest).includes(kind));
 
   if (loading && !data) return <BrailleSpinner text="Loading pull requests" />;
 
@@ -390,9 +410,14 @@ export default function PullRequestsTab({ appId, appName }) {
         <p>
           Resolve and merge starts a PortOS agent right away to inspect feedback, fix the branch, wait for checks, and merge when the forge allows it. It uses the configured Code Review Defaults.
         </p>
-        {(data?.pullRequests || []).some(pullRequest => pullRequest.reviewEligible) && (
+        {offersKind('review') && (
           <p>
             PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and uses the providers saved on its review stages. The security scan must pass before either review stage runs.
+          </p>
+        )}
+        {offersKind('doReview') && (
+          <p>
+            Do:Review runs the <span className="font-mono">/do:review</span> workflow against one request with your Code Review Defaults and posts the findings as an inline review. It is review-only — nothing is committed, pushed, or merged — and it is offered on every open request, including the code-contributor PRs the pr-reviewer task skips.
           </p>
         )}
       </div>
@@ -512,7 +537,7 @@ export default function PullRequestsTab({ appId, appName }) {
                   </div>
 
                   <div className="shrink-0 lg:pt-0.5 flex flex-wrap items-start gap-2">
-                    {rowActionsFor(pullRequest).map(({ kind, onQueue }) => {
+                    {rowActionsFor(pullRequest).map(kind => {
                       const { label, Icon, title } = ACTION_KINDS[kind];
                       const action = actions[kind][pullRequest.number];
                       const actionStatus = action?.status;
@@ -528,11 +553,12 @@ export default function PullRequestsTab({ appId, appName }) {
                       if (actionStatus === 'failed') {
                         return (
                           <div key={kind} className="max-w-md text-xs text-port-error space-y-2" role="alert">
-                            <p>{action.error || (kind === 'review' ? 'PR review failed. View the failure record for details.' : 'Resolve & merge failed. View the failure record for details.')}</p>
+                            <p>{action.error || `${label} failed. View the failure record for details.`}</p>
                             <div className="flex flex-wrap gap-3">
                               <Link className="underline" to={taskHref}>View failure record</Link>
+                              {/* Only pr-reviewer's preflight can fail on the model-abuse scan. */}
                               {kind === 'review' && <Link className="underline" to="/models/llms/abuse">Abuse Guard setup</Link>}
-                              <button type="button" className="underline" onClick={() => onQueue(pullRequest)}>{kind === 'review' ? 'Retry PR review' : 'Retry resolve & merge'}</button>
+                              <button type="button" className="underline" onClick={() => queueAction(kind, pullRequest)}>Retry {label}</button>
                             </div>
                           </div>
                         );
@@ -552,7 +578,7 @@ export default function PullRequestsTab({ appId, appName }) {
                         <button
                           key={kind}
                           type="button"
-                          onClick={() => onQueue(pullRequest)}
+                          onClick={() => queueAction(kind, pullRequest)}
                           disabled={actionStatus === 'queuing'}
                           title={title(forgeLabel, pullRequest.number, appName)}
                           className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 transition-colors"

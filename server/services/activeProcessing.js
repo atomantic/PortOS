@@ -9,6 +9,15 @@ import { readPersistentMindStateForSafetyCheck } from './cosState.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import * as cos from './cos.js';
 
+// Lazy — NOT a static top-level import. `services/runner.js` and
+// `services/backup.js` both drag heavy subtrees (provider CLI spawning;
+// `socket.js` → `instances.js` respectively) that this module's own callers
+// (`routes/systemHealth.js`, the dashboard) must not eagerly reach just to
+// read a count/flag. `routes/update.js` already defers this whole module the
+// same way for the same reason — see "Import scoping" in server/AGENTS.md.
+const importRunner = () => import('./runner.js');
+const importBackup = () => import('./backup.js');
+
 const LIVE_STATUSES = new Set(['queued', 'running']);
 
 /**
@@ -36,6 +45,18 @@ function summarizeMind(snapshot) {
     thinkingSince: activeTurn?.startedAt || null,
     queued: Array.isArray(mind?.queuedMessages) ? mind.queuedMessages.length : 0,
   };
+}
+
+/**
+ * In-flight LLM/pipeline run count, off the toolkit's own `activeRuns` +
+ * `externalRuns` tracking (`getActiveRunCount` in `services/runner.js`).
+ * Counts and lifecycle only — no prompt or response content ever reaches this
+ * slice. `trusted: false` (the count could not be read) is NOT collapsed into
+ * "idle", the same contract the agent and Persistent Mind slices keep: a
+ * failed read must never manufacture the zero that unlocks a restart.
+ */
+function llmRunState(count) {
+  return count === null ? { trusted: false, active: 0 } : { trusted: true, active: count };
 }
 
 /**
@@ -83,7 +104,7 @@ function agentCounts(agents, cosStatus, pendingTaskIds) {
  * when the daemon is wedged. Neither feeds the verdict.
  */
 export async function getSystemActivity() {
-  const [jobs, models, pendingTaskIds, agents, mindState] = await Promise.all([
+  const [jobs, models, pendingTaskIds, agents, mindState, activeRunCount, backupInProgress] = await Promise.all([
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
     // `null` = the read FAILED, distinct from `[]` = read fine, nothing
     // building. Both of these degrade to the value that unlocks a restart, so
@@ -96,6 +117,13 @@ export async function getSystemActivity() {
     // Same contract one layer down: the reader reports `trusted: false` rather
     // than an empty mind, so an unreadable state cannot read as an idle one.
     readPersistentMindStateForSafetyCheck().catch(() => ({ trusted: false, persistentMind: null })),
+    // Same contract again: a failed read degrades to `null`, not 0.
+    importRunner().then((m) => m.getActiveRunCount()).catch(() => null),
+    // The only way this rejects is the lazy import itself failing (the module
+    // is otherwise a synchronous, no-I/O flag read) — an anomaly rare enough
+    // that it is itself reason to refuse rather than read as "no backup
+    // running", the same fail-closed direction every other slice here takes.
+    importBackup().then((m) => m.isBackupInProgress()).catch(() => true),
   ]);
   const cosStatus = agents === null ? await cos.getStatus().catch(() => null) : null;
   const slices = {
@@ -105,11 +133,18 @@ export async function getSystemActivity() {
     extras: { imageTo3d: models === null ? null : models.map((model) => ({ id: model.id, name: model.name || model.id })) },
     agents: agentCounts(agents, cosStatus, pendingTaskIds),
     mind: summarizeMind(mindState),
+    // A prompt/stage run holds a provider connection or a CLI/TUI child
+    // process — activity in exactly the sense the updater must not restart
+    // through, and distinct from a CoS agent (its own slice above, spawned
+    // through a different path entirely).
+    llm: llmRunState(activeRunCount),
     // An App Management update/standardize holds a checkout and restarts PM2
     // processes — activity in exactly the sense that matters to a caller
     // deciding whether it may restart the install.
     appOperations: listActiveAppOperations(),
     update: { inProgress: isUpdateInProgress() },
+    // No trusted contract needed: an in-process flag with no I/O once loaded.
+    backup: { inProgress: backupInProgress },
   };
   return { ...slices, activity: summarizeSystemActivity(slices) };
 }

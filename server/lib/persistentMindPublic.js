@@ -3,13 +3,23 @@
 import { nextPersistentMindWakeAt } from './persistentMind.js';
 import { normalizePersistentMindThinkingSelection } from './persistentMindThinkingPresets.js';
 import { isUsageLimitPauseReason } from './persistentMindUsageLimit.js';
+import {
+  isContextBudgetPauseReason,
+  publicContextBudgetReason,
+} from './persistentMindContextBudget.js';
 
 const publicReason = (state) => {
-  if (!state.pauseReason) return null;
   // A quota autopause is NOT a user action. Saying "Paused by user" there is the
   // exact confusion this projection exists to prevent: the page would blame the
   // human for a provider limit it will retry out of on its own.
   if (isUsageLimitPauseReason(state.pauseReason)) return 'Provider usage limit reached';
+  // Context-budget / known-window-below-request failures are similarly not a
+  // user pause, and the numbers are safe to show so the operator can raise
+  // numCtx instead of staring at "Provider unavailable or wake failed".
+  const contextBudget = publicContextBudgetReason(state.pauseReason)
+    || publicContextBudgetReason(state.lastError);
+  if (contextBudget) return contextBudget;
+  if (!state.pauseReason) return null;
   if (state.status === 'paused') return 'Paused by user';
   if (state.status === 'degraded' || state.status === 'interrupted') return 'Provider unavailable or wake failed';
   return 'Waiting for the next eligible wake';
@@ -65,6 +75,10 @@ export function publicPersistentMindState(state = {}) {
     // an ordinary user pause so it can say "blocked, retrying at X" rather than
     // leaving a quota stall indistinguishable from a deliberate stop.
     usageLimited: isUsageLimitPauseReason(state.pauseReason),
+    // Non-transient local fitness block: the page must not look like a vague
+    // provider outage, and must not imply an automatic retry is coming.
+    contextBudgetBlocked: isContextBudgetPauseReason(state.pauseReason)
+      || isContextBudgetPauseReason(state.lastError),
     queuedMessageCount: queuedMessages.length,
     // How many of those queued messages will spend a borrowed (possibly
     // account-backed) route, so the page can say that a pause is holding paid
@@ -78,6 +92,13 @@ export function publicPersistentMindState(state = {}) {
     nextEligibleWakeAt: typeof state.nextEligibleWakeAt === 'string' ? state.nextEligibleWakeAt : null,
     nextWakeAt: nextWakeAt == null ? null : new Date(nextWakeAt).toISOString(),
     failureCount: Number.isInteger(state.failureCount) ? state.failureCount : 0,
-    lastError: state.lastError ? 'The last wake did not complete; local diagnostics have details' : null,
+    lastError: (() => {
+      if (!state.lastError) return null;
+      const contextBudget = publicContextBudgetReason(state.lastError)
+        || publicContextBudgetReason(state.pauseReason);
+      // Safe: only token counts + recovery hint — never prompts or API keys.
+      if (contextBudget) return contextBudget;
+      return 'The last wake did not complete; local diagnostics have details';
+    })(),
   };
 }

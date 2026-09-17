@@ -1,18 +1,24 @@
-import { BookOpen, Check } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { BookOpen, Check, Pause, Play } from 'lucide-react';
 import { DRILL_LABELS, effectiveCognitiveDrillConfig, cognitiveRungPending } from './constants';
+import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
+import { useVisibilityEvent } from '../../../hooks/useVisibilityEvent.js';
+import { pluralize } from '../../../lib/textUtils.js';
 import { safeReadJsonStorage, safeWriteStorage } from '../../../lib/safeStorage.js';
 import Modal from '../../ui/Modal';
 
 /**
- * The static how-to material for the cognitive drills: the per-type tutorial
+ * The how-to material for the cognitive drills: the per-type tutorial
  * copy, the n-back worked example, the card that renders them, and the two
  * entry points that open it (the standalone preview and its button).
  *
  * Deliberately separate from PostCognitiveDrillRunner: this is help text with
- * no timers, no scoring and no provider calls, and the settings/launcher
- * surfaces that link to it (PostDrillConfig, PostSessionLauncher) have no
- * business importing a live drill runner to reach it. The runner keeps only
- * `DrillTutorialGate`, which gates its own mount and imports the card from here.
+ * no scoring, no stimulus generation and no provider calls, and the
+ * settings/launcher surfaces that link to it (PostDrillConfig,
+ * PostSessionLauncher) have no business importing a live drill runner to reach
+ * it. The runner keeps only `DrillTutorialGate`, which gates its own mount and
+ * imports the card from here. The one timer in this module drives the n-back
+ * demo loop — it animates an explanation and records nothing.
  */
 
 // One JSON blob keyed by drill type. Reads/writes go through the shared
@@ -84,13 +90,14 @@ export function getDrillTutorial(drill) {
   switch (drill?.type) {
     case 'n-back': {
       const n = cfg.n ?? 2;
-      const step = `${n} step${n !== 1 ? 's' : ''}`;
+      const step = pluralize(n, 'step');
       return {
         goal: `Watch a stream of letters and catch when one repeats from ${step} earlier.`,
         steps: [
           'Letters appear one at a time, then vanish.',
           `Compare each letter to the one ${step} back in the stream.`,
           'When they match, hit Match right away. If it doesn’t match, do nothing.',
+          'Letters change color as they go so a back-to-back repeat still reads as a new letter. The color never signals a match.',
         ],
         controls: 'Tap Match, or press Space / Enter.',
         nBackExample: buildNBackExample(n),
@@ -223,7 +230,7 @@ export function CognitiveDrillTutorial({ drill, tut, header = null, onAction, ac
           ))}
         </ol>
 
-        {tut.nBackExample && <NBackExampleStrip example={tut.nBackExample} />}
+        {tut.nBackExample && <NBackDemo example={tut.nBackExample} />}
 
         <p className="text-xs text-gray-500">
           <span className="text-gray-400 font-medium">Controls:</span> {tut.controls}
@@ -331,42 +338,236 @@ export function CognitiveDrillHowItWorksButton({ type, onClick, compact = false 
   );
 }
 
-// Worked example for the n-back tutorial: the letters as they'd arrive, with
-// the one match highlighted and called out. Text alone ("matches the one N back")
-// is the part first-timers misread, so the card shows it rather than asserting it.
-function NBackExampleStrip({ example: { sequence, n } }) {
+// =============================================================================
+// WORKED N-BACK EXAMPLE — an animated replay of a short stream
+// =============================================================================
+// "Press Match when the letter matches the one N back" is the sentence
+// first-timers misread: the stream is transient, so the thing being compared is
+// never on screen next to the thing you compare it to. Static text can't fix
+// that. This plays the example the way the drill actually runs — one letter at
+// a time on a stage, the sliding N-back window marked as it moves, and the
+// Match press fired at the exact frame it belongs on — so the timing is SHOWN
+// rather than asserted.
+//
+// The strip keeps every chip's BOX on every frame so the row never reflows, but
+// a letter's glyph and the two moving markers appear with the frame they belong
+// to. A screen reader gets the rule from the prose paragraph at the bottom, not
+// from the strip.
+
+const DEMO_PREROLL_MS = 900; // "Get ready…" before the first letter
+const DEMO_STEP_MS = 1150; // one non-match letter — brisk, but readable
+const DEMO_HIT_HOLD_MS = 3300; // linger on the match, then loop
+// Passes before the demo parks itself on the hit frame. Looping matters — a
+// reader who looked away has to be able to catch the press — but an open help
+// card would otherwise animate for as long as it is mounted, and by the third
+// pass the rule has landed. The Play control is the way back.
+const DEMO_MAX_LOOPS = 3;
+
+/**
+ * How long frame `step` stays on screen. Exported so the suite can drive the
+ * demo on the component's own schedule instead of re-declaring its constants —
+ * retuning the pacing then can't leave the tests green against a timeline the
+ * component no longer runs.
+ */
+export function demoFrameDelay(step, matchIndex) {
+  if (step < 0) return DEMO_PREROLL_MS;
+  return step === matchIndex ? DEMO_HIT_HOLD_MS : DEMO_STEP_MS;
+}
+
+/**
+ * The caption under the stage: what a player should be thinking on this frame.
+ * Pure, and exported so the phrasing is testable without driving timers — the
+ * three cases (warm-up, non-match, hit) are the whole lesson.
+ */
+export function nBackDemoCaption({ sequence, n, step }) {
+  if (step < 0) return 'Watch — the stream is about to start.';
+  const letter = sequence[step];
+  if (step < n) {
+    return `${letter} — nothing is ${n} back yet, so there's nothing to answer.`;
+  }
+  const back = sequence[step - n];
+  return letter === back
+    ? `${letter} is the same as the ${back} ${n} back — press Match now.`
+    : `${letter} vs ${back} ${n} back — different, so do nothing.`;
+}
+
+// Chip tones, keyed by what the frame is saying about that letter. A map rather
+// than a ternary chain so the four looks can be read against each other.
+const CHIP_TONE = {
+  lit: 'border-rose-500/60 bg-rose-500/15 text-rose-300',
+  current: 'border-white/60 text-white',
+  compare: 'border-rose-500/40 text-rose-300/80',
+  idle: 'border-port-border text-gray-400',
+};
+
+function NBackDemo({ example: { sequence, n } }) {
+  const reduced = usePrefersReducedMotion();
   const matchIndex = sequence.length - 1;
-  const sourceIndex = matchIndex - n;
-  const step = `${n} step${n !== 1 ? 's' : ''}`;
+  const stepLabel = pluralize(n, 'step');
+
+  // `reduced` is policy, not state: read it at render and the "park on the last
+  // frame, paused" rule lives in these two lines instead of being re-asserted by
+  // initializers plus a sync effect that has to catch the setting flipping
+  // mid-read. The finished frame is the one that explains the rule, so a user
+  // who asked for stillness loses nothing.
+  const [rawStep, setStep] = useState(-1);
+  const [wantsPlay, setWantsPlay] = useState(true);
+  // A backgrounded tab is the other reason to stop scheduling: PortOS is
+  // routinely left open on a second tailnet machine, and an unseen animation
+  // would otherwise re-render this subtree about once a second forever.
+  // Seeded from the CURRENT state, not `false`: a card mounted into an
+  // already-hidden tab would otherwise animate until the next visibilitychange.
+  const [hidden, setHidden] = useState(
+    () => (typeof document !== 'undefined' && document.visibilityState === 'hidden'),
+  );
+  useVisibilityEvent(state => setHidden(state === 'hidden'));
+
+  const step = reduced ? matchIndex : rawStep;
+  const playing = !reduced && wantsPlay;
+  const loopsRef = useRef(0);
+
+  // One timer per frame: each render schedules only the NEXT step, so pausing,
+  // hiding the tab and unmounting all reduce to "don't schedule another one".
+  useEffect(() => {
+    if (!playing || hidden) return undefined;
+    const timer = setTimeout(() => {
+      if (step < matchIndex) { setStep(step + 1); return; }
+      loopsRef.current += 1;
+      if (loopsRef.current >= DEMO_MAX_LOOPS) { setWantsPlay(false); return; }
+      setStep(-1);
+    }, demoFrameDelay(step, matchIndex));
+    return () => clearTimeout(timer);
+  }, [playing, hidden, step, matchIndex]);
+
+  const hit = step === matchIndex;
+  // Parked on the hit frame with nothing left to play — the control replays
+  // from the top rather than resuming a stream that has already ended.
+  const finished = !playing && step === matchIndex;
+  const togglePlay = () => {
+    if (finished) { loopsRef.current = 0; setStep(-1); }
+    setWantsPlay(play => !play);
+  };
+
+  // Which chip the N-back window is pointing at right now. Before the window has
+  // anything to point at (pre-roll, and the first `n` letters) it rests on the
+  // position the example's one match will come from, so the marker is always
+  // mounted exactly once — the strip reads correctly paused at any frame.
+  const compareIndex = (step >= n ? step : matchIndex) - n;
+
   return (
     <div className="rounded-lg border border-port-border bg-port-bg/40 p-4 space-y-3">
-      <div className="text-[0.65rem] uppercase tracking-wide text-gray-500">Example — {n}-back</div>
+      <div className="flex items-center gap-2">
+        <div className="text-[0.65rem] uppercase tracking-wide text-gray-500">Example — {n}-back</div>
+        {!reduced && (
+          <button
+            type="button"
+            onClick={togglePlay}
+            aria-label={playing ? 'Pause example' : finished ? 'Replay example' : 'Play example'}
+            className="ml-auto inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 sm:py-0.5 px-2 -my-2 sm:my-0 rounded text-[0.65rem] uppercase tracking-wide text-gray-500 hover:text-rose-300 transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+          >
+            {playing ? <Pause size={12} /> : <Play size={12} />}
+            {playing ? 'Pause' : finished ? 'Replay' : 'Play'}
+          </button>
+        )}
+      </div>
 
-      <ol aria-label="Example letter stream" className="flex flex-wrap items-end gap-2 list-none">
+      {/* The stage: the drill shows ONE letter at a time and nothing else, so
+          the example has to as well — a strip alone would teach the wrong task. */}
+      <div
+        className={`rounded-md border transition-colors ${hit ? 'border-rose-500/60 bg-rose-500/10' : 'border-port-border/60 bg-port-bg/60'}`}
+      >
+        <div className="h-16 flex items-center justify-center">
+          <span
+            data-testid="nback-demo-stage"
+            aria-hidden="true"
+            className={`transition-colors ${
+              step < 0
+                ? 'text-base text-gray-600'
+                : `font-mono text-4xl font-bold ${hit ? 'text-rose-300' : 'text-white'}`
+            }`}
+          >
+            {step < 0 ? 'Get ready…' : sequence[step]}
+          </span>
+        </div>
+        {/* A mock of the drill's Match button, not a real control: it must never
+            be reachable by tab or by name — the preview asserts no "Match"
+            button exists outside a live run. It lights on the hit frame, which
+            is the "when do I press?" answer the copy alone can't give. */}
+        <div
+          data-testid="nback-demo-press"
+          aria-hidden="true"
+          className={`m-3 mt-0 rounded border py-1.5 text-center text-xs font-semibold transition-[transform,color,background-color,border-color] ${
+            hit
+              ? 'border-rose-400 bg-rose-500/30 text-rose-100 scale-[1.03]'
+              : 'border-port-border/60 text-gray-600'
+          }`}
+        >
+          {hit ? 'Match — pressed!' : 'Match'}
+        </div>
+      </div>
+
+      {/* The stream so far. The row NEVER wraps: it is `n + 3` letters long,
+          and wrapping a high lag on a narrow phone puts the match and the
+          letter it matches on separate lines — breaking the one relationship
+          the strip exists to show. Chips shrink to fit instead, capped at their
+          natural size, and each marker is positioned out of flow (the list's
+          vertical padding reserves its space) because a marker is several times
+          wider than the letter it points at and would otherwise stretch its own
+          chip. */}
+      <ol
+        aria-label="Example letter stream"
+        className="flex flex-nowrap justify-center gap-1.5 sm:gap-2 py-4 list-none"
+      >
         {sequence.map((letter, i) => {
           const isMatch = i === matchIndex;
-          const isSource = i === sourceIndex;
+          const seen = i <= step;
+          const isCurrent = i === step;
+          // The window marker only lights once it has actually slid onto a
+          // letter the demo has shown; the final hit lights both ends at once.
+          const compareLit = i === compareIndex && step >= n;
+          const tone = (isCurrent || compareLit) && hit ? 'lit'
+            : isCurrent ? 'current'
+              : compareLit ? 'compare' : 'idle';
+          const marker = isMatch ? 'Match!' : i === compareIndex ? `${stepLabel} back` : null;
+          const markerShown = isMatch ? hit : compareLit;
           return (
-            <li key={i} className="flex flex-col items-center gap-1">
+            <li key={i} className="relative flex-1 min-w-0 max-w-9 sm:max-w-10 aspect-square">
               <span
-                className={`w-10 h-10 rounded-md border font-mono text-xl font-bold flex items-center justify-center ${
-                  isMatch || isSource ? 'border-rose-500/60 bg-rose-500/15 text-rose-300' : 'border-port-border text-gray-400'
-                }`}
+                className={`absolute inset-0 rounded-md border font-mono text-lg sm:text-xl font-bold flex items-center justify-center transition-[color,background-color,border-color,opacity] ${CHIP_TONE[tone]} ${seen ? 'opacity-100' : 'opacity-25'}`}
               >
-                {letter}
+                {/* Letters not yet shown keep their box (stable layout, no
+                    reflow jitter) but hide the glyph — the box is the beat. */}
+                <span className={seen ? '' : 'invisible'}>{letter}</span>
               </span>
-              {/* Non-breaking space, not an em dash: an unlabeled chip must hold
-                  the baseline without reading as a third label. */}
-              <span className={`text-[0.6rem] ${isMatch ? 'text-rose-300' : 'text-gray-600'}`}>
-                {isMatch ? 'Match!' : isSource ? `${step} back` : '\u00a0'}
-              </span>
+              {marker && (
+                // The window marker rides ABOVE the stream and the verdict below
+                // it. Both are wider than the chip they point at, so on a 1-back
+                // — where they land on adjacent chips — sharing one side runs
+                // them together.
+                <span
+                  className={`absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[0.6rem] transition-opacity ${
+                    isMatch ? 'top-full mt-1 text-rose-300' : 'bottom-full mb-1 text-gray-500'
+                  } ${markerShown ? 'opacity-100' : 'opacity-0'}`}
+                >
+                  {marker}
+                </span>
+              )}
             </li>
           );
         })}
       </ol>
 
-      <p className="text-xs text-gray-400">
-        The last <span className="font-mono text-rose-300">{sequence[matchIndex]}</span> repeats the letter {step}{' '}
+      <p className={`text-xs min-h-[2rem] ${hit ? 'text-rose-300' : 'text-gray-400'}`}>
+        {nBackDemoCaption({ sequence, n, step })}
+      </p>
+
+      {/* The same rule in prose. The animation and its running caption are the
+          explanation for anyone who can see it, so this is `sr-only` while the
+          demo plays and visible when it doesn't — the card sits above a "Start
+          drill" button that has to stay above the fold on a phone, and saying
+          the rule twice on screen is what would push it under. */}
+      <p className={reduced ? 'text-xs text-gray-500' : 'sr-only'}>
+        The last <span className="font-mono text-rose-300">{sequence[matchIndex]}</span> repeats the letter {stepLabel}{' '}
         earlier — press <span className="text-white font-medium">Match</span> on it. Every other letter is a
         non-match: do nothing.
       </p>

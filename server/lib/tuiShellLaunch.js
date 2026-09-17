@@ -21,6 +21,7 @@ import { buildTuiInvocation } from './tuiHandshake.js';
 import { formatShellCommandLine } from './shellCd.js';
 import { resolveInteractiveShell } from './interactiveShellResolver.js';
 import { composeProviderEnv } from './cliChildEnv.js';
+import { applyCredentialBootstrap } from './credentialBootstrap.js';
 
 /**
  * @param {object|null|undefined} provider - a RAW provider record (unredacted
@@ -31,8 +32,12 @@ import { composeProviderEnv } from './cliChildEnv.js';
  */
 export function buildTuiShellLaunch(provider) {
   if (provider?.type !== PROVIDER_TYPES.TUI) return null;
-  const { command, args } = buildTuiInvocation(provider, provider.defaultModel);
-  if (!command) return null;
+  const invocation = buildTuiInvocation(provider, provider.defaultModel);
+  if (!invocation.command) return null;
+  // What the shell must type is what every agent spawn runs: the bootstrap CLI
+  // in front of the harness for a credential-bootstrap provider (see
+  // credentialBootstrap.js) — a bare harness here would run with no credential.
+  const { command, args } = applyCredentialBootstrap(provider, invocation.command, invocation.args);
   return {
     commandLine: formatShellCommandLine(command, args, resolveInteractiveShell()),
     env: composeProviderEnv({ provider, model: provider.defaultModel }),

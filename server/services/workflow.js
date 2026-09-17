@@ -24,6 +24,7 @@
 import { getScheduleStatus } from './taskSchedule.js';
 import { DEFAULT_PERPETUAL_RECHECK_MS } from './taskScheduleConstants.js';
 import { AUDIT_TASK_TYPES } from '../lib/auditCatalog.js';
+import { dedupeByKey } from '../lib/arrayUtils.js';
 import * as autonomousJobs from './autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from './jobGates.js';
 import { parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
@@ -200,6 +201,11 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
       appOverrides: info.appOverrides || {},
       enabledAppCount: info.enabledAppCount || 0,
       totalAppCount: info.totalAppCount || 0,
+      // Cron cadences that live on an APP rather than on this task's global
+      // row — most visibly a task left on-demand globally that one app puts on
+      // a clock. Those launches are real, so the timeline projects them below
+      // and the UI must not file the track under "no clock time".
+      appSchedules: Array.isArray(info.appSchedules) ? info.appSchedules : [],
       taskMetadata: info.taskMetadata || null,
       managedAgentOptions: info.managedAgentOptions || null,
       // The task's provider/model pin — the per-app rows render their
@@ -302,60 +308,13 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
   const windows = [];
 
   for (const node of nodes.filter(item => item.enabled)) {
-    const schedule = node.schedule || {};
-    if (node.kind === 'task' && schedule.type === 'on-demand' && schedule.autoStart === false) continue;
-    if (node.kind === 'task' && schedule.perpetual) {
-      projectPerpetual(node, startMs, endMs, timezone, occurrences, windows);
-      continue;
-    }
-
-    if (schedule.cronSchedule) {
-      const dueNow = isRecurrenceDueNow(node, schedule.cronSchedule, startMs, timezone);
-      if (dueNow) {
-        occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
-      }
-      appendRecurrenceOccurrences({
-        node,
-        rule: schedule.cronSchedule,
-        startMs,
-        endMs,
-        timezone,
-        target: occurrences,
-        kind: 'launch',
-        skipStart: dueNow
-      });
-      continue;
-    }
-
-    if (schedule.cronExpression) {
-      const dueNow = isCronDueNow(node, schedule.cronExpression, startMs, timezone);
-      if (dueNow) {
-        occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
-      }
-      // When a due-now marker was emitted, start the projection strictly after
-      // startMs so a cron slot landing exactly on the current minute doesn't
-      // produce a duplicate occurrence id at the same instant.
-      appendCronOccurrences({
-        node,
-        expression: schedule.cronExpression,
-        startMs,
-        endMs,
-        timezone,
-        target: occurrences,
-        kind: 'launch',
-        skipStart: dueNow
-      });
-      continue;
-    }
-
-    if (node.kind === 'job') {
-      projectIntervalJob(node, startMs, endMs, timezone, occurrences);
-      continue;
-    }
-
-    // Anything left is an on-demand task (or a cron task with an unusable
-    // expression): the scheduler promises it no wall-clock position, so it gets
-    // neither an occurrence nor a window.
+    // Collected per node so the global cadence and any per-app schedules can be
+    // reconciled before they reach the shared list — two sources landing on the
+    // same instant are ONE launch, not a stack of identical markers.
+    const nodeOccurrences = [];
+    projectGlobalCadence(node, startMs, endMs, timezone, nodeOccurrences, windows);
+    appendAppScheduleOccurrences(node, startMs, endMs, timezone, nodeOccurrences);
+    occurrences.push(...mergeOccurrences(nodeOccurrences));
   }
 
   occurrences.sort((a, b) => new Date(a.at) - new Date(b.at) || a.nodeId.localeCompare(b.nodeId));
@@ -368,6 +327,135 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
     occurrences: occurrences.map(item => ({ ...item, collision: collisionOccurrenceIds.has(item.id) })),
     windows
   };
+}
+
+/**
+ * Project the cadence the task/job itself declares — its global row. A task an
+ * app schedules on its own is handled separately by appendAppScheduleOccurrences,
+ * so this returning empty no longer means "nothing runs".
+ */
+function projectGlobalCadence(node, startMs, endMs, timezone, occurrences, windows) {
+  const schedule = node.schedule || {};
+  if (node.kind === 'task' && schedule.type === 'on-demand' && schedule.autoStart === false) return;
+  if (node.kind === 'task' && schedule.perpetual) {
+    projectPerpetual(node, startMs, endMs, timezone, occurrences, windows);
+    return;
+  }
+
+  if (schedule.cronSchedule) {
+    const dueNow = isRecurrenceDueNow(node, schedule.cronSchedule, startMs, timezone);
+    if (dueNow) {
+      occurrences.push(makeOccurrence(node, startMs, 'launch', nodeDueNow(node)));
+    }
+    appendRecurrenceOccurrences({
+      node,
+      rule: schedule.cronSchedule,
+      startMs,
+      endMs,
+      timezone,
+      target: occurrences,
+      kind: 'launch',
+      skipStart: dueNow
+    });
+    return;
+  }
+
+  if (schedule.cronExpression) {
+    const dueNow = isCronDueNow(node, schedule.cronExpression, startMs, timezone);
+    if (dueNow) {
+      occurrences.push(makeOccurrence(node, startMs, 'launch', nodeDueNow(node)));
+    }
+    // When a due-now marker was emitted, start the projection strictly after
+    // startMs so a cron slot landing exactly on the current minute doesn't
+    // produce a duplicate occurrence id at the same instant.
+    appendCronOccurrences({
+      node,
+      expression: schedule.cronExpression,
+      startMs,
+      endMs,
+      timezone,
+      target: occurrences,
+      kind: 'launch',
+      skipStart: dueNow
+    });
+    return;
+  }
+
+  if (node.kind === 'job') {
+    projectIntervalJob(node, startMs, endMs, timezone, occurrences);
+    return;
+  }
+
+  // Anything left is an on-demand task (or a cron task with an unusable
+  // expression): its GLOBAL row promises no wall-clock position. Per-app
+  // schedules, if any, are added by the caller.
+}
+
+/**
+ * Project the cron cadences apps pin for themselves (`node.appSchedules`) —
+ * the launches that exist nowhere on the task's global row. Without these, a
+ * task left on-demand globally but scheduled by one app draws an empty track
+ * and reads as "never runs on a clock", which is the opposite of the truth.
+ *
+ * Apps sharing one expression share one marker: the track answers "when does
+ * this task launch", and five identical squares stacked at 07:00 answer it
+ * worse than one square labelled with five apps.
+ */
+function appendAppScheduleOccurrences(node, startMs, endMs, timezone, target) {
+  const schedules = node.kind === 'task' && Array.isArray(node.appSchedules) ? node.appSchedules : [];
+  if (schedules.length === 0) return;
+
+  const byExpression = new Map();
+  for (const entry of schedules) {
+    if (!entry?.cronExpression) continue;
+    if (!byExpression.has(entry.cronExpression)) byExpression.set(entry.cronExpression, []);
+    byExpression.get(entry.cronExpression).push(entry);
+  }
+
+  for (const [expression, entries] of byExpression) {
+    // Due-now is per APP (each carries its own last run and backoff), so the
+    // marker at Now names only the apps actually due and borrows that app's
+    // reason rather than the task's global one.
+    const due = entries.filter(entry => entry.shouldRun);
+    if (due.length > 0) {
+      target.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(due[0], { apps: due.map(entry => entry.appId) })));
+    }
+    appendCronOccurrences({
+      node,
+      expression,
+      startMs,
+      endMs,
+      timezone,
+      target,
+      kind: 'launch',
+      skipStart: due.length > 0,
+      extra: { apps: entries.map(entry => entry.appId) }
+    });
+  }
+}
+
+/**
+ * Collapse occurrences that land on the same instant for one node. Two sources
+ * can produce a launch there: the global cadence and an app override sharing
+ * its slot, or two apps on the same cron. A marker from the global cadence
+ * carries no app list, so merging one in drops the list rather than naming a
+ * misleading subset of the apps the launch covers.
+ */
+function mergeOccurrences(items) {
+  // `pick` folds the two rather than choosing one, which is a superset of what
+  // dedupeByKey's survivor contract asks for — the id is the instant, so both
+  // sides describe the same launch and dropping either would lose a state.
+  return dedupeByKey(items, item => item.id, (held, item) => {
+    const merged = { ...held };
+    if (held.apps && item.apps) merged.apps = [...new Set([...held.apps, ...item.apps])];
+    else delete merged.apps;
+    if (item.dueNow && !held.dueNow) {
+      merged.dueNow = true;
+      merged.reason = item.reason ?? null;
+      merged.missedSlot = item.missedSlot ?? null;
+    }
+    return merged;
+  });
 }
 
 function appendRecurrenceOccurrences({ node, rule, startMs, endMs, timezone, target, kind, skipStart = false }) {
@@ -383,7 +471,7 @@ function appendRecurrenceOccurrences({ node, rule, startMs, endMs, timezone, tar
   }
 }
 
-function appendCronOccurrences({ node, expression, startMs, endMs, timezone, target, kind, skipStart = false }) {
+function appendCronOccurrences({ node, expression, startMs, endMs, timezone, target, kind, skipStart = false, extra = {} }) {
   // parseCronToNextRun searches strictly after its cursor, so startMs - 60s
   // makes a slot exactly at startMs eligible (unless the caller already
   // emitted a due-now marker there — skipStart).
@@ -403,7 +491,7 @@ function appendCronOccurrences({ node, expression, startMs, endMs, timezone, tar
     // shouldRunTask refuses weekday-only tasks on weekends regardless of the
     // schedule type, so weekend cron slots would never actually dispatch.
     if (next.getTime() >= startMs && isAllowedWeekday(node, next.getTime(), timezone)) {
-      target.push(makeOccurrence(node, next.getTime(), kind));
+      target.push(makeOccurrence(node, next.getTime(), kind, extra));
     }
     cursor = next;
   }
@@ -486,7 +574,7 @@ function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {
   let nextMs = Number.isFinite(lastRunMs) ? lastRunMs + cadence : startMs;
   const timeMatch = String(node.schedule?.scheduledTime || '').match(/^([01]\d|2[0-3]):([0-5]\d)$/);
   if (isIntervalJobDueNow(node, startMs, timezone)) {
-    occurrences.push(makeOccurrence(node, startMs, 'launch', dueNowExtra(node)));
+    occurrences.push(makeOccurrence(node, startMs, 'launch', nodeDueNow(node)));
     nextMs = startMs + cadence;
   }
   // Fast-forward a stale anchor (lastRun many cadences ago but not due right
@@ -579,9 +667,14 @@ function makeOccurrence(node, atMs, kind, extra = {}) {
 // because a cadence slot happens to land now. Tag it so the UI can distinguish
 // it from an on-cadence launch (a NOW marker next to "Sun at 07:00" otherwise
 // reads as a bug). Future cadence slots never carry this flag.
-function dueNowExtra(node) {
-  return { dueNow: true, reason: node?.runReason || null, missedSlot: node?.missedSlot || null };
+function dueNowExtra({ reason = null, missedSlot = null } = {}, extra = {}) {
+  return { dueNow: true, reason: reason || null, missedSlot: missedSlot || null, ...extra };
 }
+
+// A node's global cadence reports its due-now reason on the node itself; a
+// per-app one reports it on the app's own schedule entry. Same shape, two
+// sources — named so the call sites read as "why is THIS due".
+const nodeDueNow = node => dueNowExtra({ reason: node?.runReason, missedSlot: node?.missedSlot });
 
 function findCollisionOccurrenceIds(occurrences) {
   const ids = new Set();

@@ -155,6 +155,12 @@ export function buildQuotaBurnCustomJob({ id, familyId, stepId, label, appId, pr
     autonomyLevel: UNATTENDED_AUTONOMY_LEVEL,
     promptTemplate: prompt,
     dataInputs: [],
+    // A converted step carries no configuration form — its prompt is already
+    // fully specified. Stamped anyway so the record this builder writes straight
+    // into the jobs file stays identical to the one `createJob` produces for an
+    // install that PUT the same legacy body (asserted in quotaBurnConversion.test.js).
+    formFields: [],
+    formValues: {},
     providerId: null,
     model: null,
     effort: null,

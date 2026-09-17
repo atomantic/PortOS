@@ -1741,7 +1741,13 @@ describe('mediaJobQueue unreadable snapshot (#4115)', () => {
 // genuinely broken predicate stays diagnosable instead of becoming an
 // anonymous 3-second stall. No predicate here uses expect(), so a real
 // assertion failure cannot be downgraded into a timeout by the catch.
-async function waitFor(predicate, { timeoutMs = 3000, intervalMs = 30 } = {}) {
+// CI's default budget is scaled up here, in the one helper every call site
+// shares — a cold spawn plus filesystem work through an AV filter driver on a
+// shared Windows runner routinely exceeds the budget that's generous on a
+// developer machine (#7516). A call site that needs a longer budget for a
+// real reason should say so locally via `timeoutMs`, not rely on this default.
+const DEFAULT_WAIT_MS = process.env.CI ? 15000 : 3000;
+async function waitFor(predicate, { timeoutMs = DEFAULT_WAIT_MS, intervalMs = 30 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   for (;;) {

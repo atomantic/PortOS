@@ -22,6 +22,8 @@
 import { spawn } from './childProcess.js';
 import { safeChildProcessEnv, safeChildProcessOptions } from './processEnv.js';
 import { createLineReader, createOutputTail } from './streamLines.js';
+import { killProcessTree } from './bufferedSpawn.js';
+import { trackDetachedGroup } from './credentialBootstrap.js';
 
 /**
  * How often `isCancelled` is asked. A second is well under human perception for
@@ -34,7 +36,7 @@ const CANCEL_POLL_MS = 1_000;
  * @param {string} cmd
  * @param {string[]} args
  * @param {(line: string) => void} [onLine] - called once per non-empty line
- * @param {{timeoutMs?: number, cwd?: string, env?: object, spawnImpl?: Function, splitRe?: RegExp, isCancelled?: () => boolean}} [options]
+ * @param {{timeoutMs?: number, cwd?: string, env?: object, spawnImpl?: Function, splitRe?: RegExp, isCancelled?: () => boolean, processGroup?: boolean}} [options]
  *   `timeoutMs: 0` (default) means no timeout. `splitRe` is forwarded to the
  *   line readers — pass `/[\r\n]+/` for a tool whose progress bar redraws the
  *   same line with a bare `\r`, so each redraw surfaces instead of the stream
@@ -47,16 +49,26 @@ const CANCEL_POLL_MS = 1_000;
  *   recurring offender — see `services/vllmQwenManager.js#startVllmQwenProject`)
  *   gets silently remapped. Audit a new docker-compose target's variable names
  *   against `lib/ports.js` before assuming the default inheritance is safe.
+ *   `processGroup` spawns the child detached and signals its whole group on
+ *   timeout/cancel — pass `needsProcessGroup(wrapped)` when the command is a
+ *   credential-bootstrap WRAPPER supervising the real harness, which a per-pid
+ *   SIGKILL would leave running (#7496). Off by default: for an ordinary
+ *   command the direct child IS the thing to kill.
  * @returns {Promise<{success: boolean, error?: string}>}
  */
-export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env, spawnImpl = spawn, splitRe, isCancelled } = {}) {
+export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env, spawnImpl = spawn, splitRe, isCancelled, processGroup = false } = {}) {
   return new Promise((resolve) => {
     const child = spawnImpl(cmd, args, safeChildProcessOptions({
       env: env ? safeChildProcessEnv(env) : process.env,
       ...(cwd ? { cwd } : {}),
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: processGroup,
     }));
+    // Remember the detached group so the graceful-shutdown sweep can reach it:
+    // detaching moved this child out of the server's own process group, and a
+    // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+    trackDetachedGroup(child, processGroup);
 
     let settled = false;
     // Recent output, kept so a non-zero exit reports what the tool actually said.
@@ -79,7 +91,7 @@ export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env
 
     const timer = timeoutMs > 0
       ? setTimeout(() => {
-        child.kill('SIGKILL');
+        killProcessTree(child, 'SIGKILL', { processGroup });
         finish({ success: false, error: `timed out after ${Math.round(timeoutMs / 1000)}s` });
       }, timeoutMs)
       : null;
@@ -98,7 +110,7 @@ export function runStreamingCommand(cmd, args, onLine, { timeoutMs = 0, cwd, env
         let cancelled = false;
         try { cancelled = isCancelled(); } catch (err) { console.error(`⚠️ cancellation check failed for ${cmd}: ${err.message}`); }
         if (!cancelled) return;
-        child.kill('SIGKILL');
+        killProcessTree(child, 'SIGKILL', { processGroup });
         finish({ success: false, error: 'cancelled' });
       }, CANCEL_POLL_MS)
       : null;

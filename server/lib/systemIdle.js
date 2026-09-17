@@ -103,6 +103,17 @@ export function summarizeSystemActivity(snapshot) {
     if (queuedMessages > 0) add('mind-queued', `${pluralize(queuedMessages, 'Persistent Mind message')} queued`, queuedMessages);
   }
 
+  // Same contract as the agent and mind slices: an unreadable run count is not
+  // a zero one, and zero in-flight runs is exactly the value that unlocks a
+  // restart. A prompt/stage run (promptRunner, stageRunner, loops, sprite
+  // workflows) is the most common form of live work on this install — this
+  // is deliberately separate from `agents-running` above, which is a CoS
+  // agent spawned through an entirely different path.
+  const llmState = snapshot?.llm;
+  if (llmState?.trusted === false) add('llm-unreadable', 'In-flight LLM run state unreadable', 1);
+  const activeLlmRuns = Number(llmState?.active) || 0;
+  if (activeLlmRuns > 0) add('llm-running', `${pluralize(activeLlmRuns, 'LLM run')} running`, activeLlmRuns);
+
   const appOperations = Array.isArray(snapshot?.appOperations) ? snapshot.appOperations : [];
   if (appOperations.length > 0) {
     add('app-operations', `${pluralize(appOperations.length, 'app operation')} running`, appOperations.length);
@@ -110,8 +121,14 @@ export function summarizeSystemActivity(snapshot) {
 
   if (snapshot?.update?.inProgress) add('update-in-progress', 'An update is already running', 1);
 
+  // Milder than the others: a killed backup wastes a snapshot rather than
+  // losing work, but restarting still kills the rsync/pg_dump mid-write.
+  const backupActive = snapshot?.backup?.inProgress ? 1 : 0;
+  if (backupActive) add('backup-running', 'A backup snapshot is running', 1);
+
   const activeCount = jobs.filter((job) => job?.status === 'running').length
-    + imageTo3d + activeAgents + (mind?.thinking ? 1 : 0) + appOperations.length;
+    + imageTo3d + activeAgents + activeLlmRuns + (mind?.thinking ? 1 : 0) + appOperations.length
+    + backupActive;
   const queuedCount = jobs.filter((job) => job?.status === 'queued').length
     + queuedAgents + (Number(mind?.queued) || 0);
 

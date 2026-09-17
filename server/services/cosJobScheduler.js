@@ -11,7 +11,9 @@
  *    (`spawningJobIds` / `addSpawningJob` / `clearSpawningJob`) that prevents
  *    duplicate spawns when timers overlap.
  *  - `scheduleNextImprovementCheck` — the improvement-check cadence timer that
- *    queues eligible improvement tasks and asks the scheduler to dequeue.
+ *    queues eligible improvement tasks and asks the scheduler to dequeue. Owns
+ *    a short retry (`IMPROVEMENT_CHECK_RETRY_MS`) when getUpcomingTasks' inputs
+ *    are unavailable, instead of falling back to the 1h default (#7527).
  *
  * Self-contained — imports only sibling services (no import back to cos.js).
  * The paused check reads loadState() directly (cos.js's isPaused lived there),
@@ -21,7 +23,7 @@
  * (job:spawned/job:spawn-failed → clearSpawningJob + re-register) back to these.
  */
 
-import { schedule as scheduleEvent, cancel as cancelEvent, parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
+import { schedule as scheduleEvent, cancel as cancelEvent, getEvent as getScheduledEvent, parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
 import { getLocalParts, nextLocalTime } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { formatDuration } from '../lib/fileUtils.js';
@@ -452,31 +454,122 @@ export async function unregisterJobSchedules() {
   }
 }
 
+// Cap for the "nothing scheduled" fallback delay.
+const MAX_CHECK_INTERVAL = 60 * 60 * 1000;
+// Retry cadence when getUpcomingTasks' inputs (app inventory/override/
+// readiness reads) are unavailable — short enough that a transient outage
+// self-heals well inside a cron minute, per #7527.
+const IMPROVEMENT_CHECK_RETRY_MS = 15 * 1000;
+
+// Transition-based logging: log once when the input read starts failing and
+// once when it recovers, not on every 15s retry — a persistent outage would
+// otherwise flood the log every 15s.
+let improvementCheckInputUnavailable = false;
+
+/**
+ * The improvement-check one-shot handler — shared by every arm of the
+ * 'cos-improvement-check' event, whether the delay came from a normal
+ * calculation or the input-unavailable retry below. Queues eligible
+ * improvement work, then re-arms via scheduleNextImprovementCheck().
+ *
+ * This is a 'once' event — the eventScheduler does NOT auto-reschedule it,
+ * so the handler must re-arm itself. Re-arm in `finally` so a throw in the
+ * body (loadState / getCosTasks / queueEligibleImprovementTasks) can't
+ * permanently halt the improvement cadence until a process restart.
+ * scheduleNextImprovementCheck() never throws (its own getUpcomingTasks call
+ * is caught internally) — a naive throw from here would otherwise leave this
+ * fired 'once' event deactivated with no replacement registered.
+ */
+async function runImprovementCheckOnce() {
+  if (!isDaemonRunning()) return;
+  try {
+    const paused = (await loadState()).paused || false;
+    if (paused) return;
+
+    const state = await loadState();
+    // Gate on the CoS auto-run domain (see canQueueImprovementTasks): off/
+    // dry-run are planning postures that withhold the COS-TASKS.md mutation.
+    if (canQueueImprovementTasks(state)) {
+      const cosTaskData = await getCosTasks();
+      await queueEligibleImprovementTasks(state, cosTaskData);
+      cosEvents.emit('cos:dequeue-requested');
+    }
+  } finally {
+    await scheduleNextImprovementCheck();
+  }
+}
+
 /**
  * Schedule a one-shot timer for the next due improvement task.
  * When it fires, queues eligible improvement tasks and re-schedules.
+ *
+ * Called from three places (cos.js boot, the 'schedule:changed' handler, and
+ * this same re-arm from runImprovementCheckOnce's `finally`) — every one of
+ * them must end up with exactly one 'cos-improvement-check' timer armed, so
+ * this function never throws. When getUpcomingTasks' inputs are unavailable
+ * it arms a short retry instead of propagating (#7527).
  */
 export async function scheduleNextImprovementCheck() {
   if (!isDaemonRunning()) return;
 
   const taskSchedule = await import('./taskSchedule.js');
-  // Pull a wider list so a perpetually-"ready" weekly task can't mask an upcoming
-  // cron boundary. We sort by status (ready first), so 1-element peeks always miss
-  // the cron slot when anything else is ready.
-  const upcoming = await taskSchedule.getUpcomingTasks(50);
+  const now = Date.now();
+  let delayMs;
+  let description;
+  let upcoming;
+
+  try {
+    // Pull a wider list so a perpetually-"ready" weekly task can't mask an upcoming
+    // cron boundary. We sort by status (ready first), so 1-element peeks always miss
+    // the cron slot when anything else is ready.
+    upcoming = await taskSchedule.getUpcomingTasks(50);
+  } catch (err) {
+    // An app inventory/override/readiness read failed — the calculation is
+    // UNAVAILABLE, not "nothing scheduled". Falling back to the 1h default
+    // here could sleep through a cron minute a healthy read would have
+    // caught, so arm a short retry and let the next attempt recompute the
+    // real deadline once the input recovers.
+    if (!improvementCheckInputUnavailable) {
+      improvementCheckInputUnavailable = true;
+      console.error(`❌ Upcoming-tasks calculation unavailable, retrying in 15s: ${err?.message || err}`);
+    }
+
+    // Don't let the retry push out an earlier deadline this same event is
+    // already armed for (e.g. a cron boundary a prior successful calculation
+    // found) — arm the sooner of "now + retry delay" and that deadline.
+    const existing = getScheduledEvent('cos-improvement-check');
+    const existingDelay = existing?.active && Number.isFinite(existing.nextRunAt)
+      ? existing.nextRunAt - now
+      : null;
+    delayMs = existingDelay !== null && existingDelay > 0
+      ? Math.min(existingDelay, IMPROVEMENT_CHECK_RETRY_MS)
+      : IMPROVEMENT_CHECK_RETRY_MS;
+
+    scheduleEvent({
+      id: 'cos-improvement-check',
+      type: 'once',
+      delayMs: Math.max(delayMs, 1000),
+      handler: runImprovementCheckOnce,
+      metadata: { description: 'Improvement check retry (upcoming-tasks unavailable)' }
+    });
+    return;
+  }
+
+  if (improvementCheckInputUnavailable) {
+    improvementCheckInputUnavailable = false;
+    console.log('✅ Upcoming-tasks calculation recovered');
+  }
 
   // Default: check again in 1 hour if nothing scheduled
   // Cap at 1 hour as a fallback for work whose next boundary is not known;
   // getUpcomingTasks also includes per-app cron overrides.
-  const MAX_CHECK_INTERVAL = 60 * 60 * 1000;
-  let delayMs = MAX_CHECK_INTERVAL;
-  let description = 'Periodic improvement check (1h)';
+  delayMs = MAX_CHECK_INTERVAL;
+  description = 'Periodic improvement check (1h)';
 
   // Keep future app deadlines even when another app makes the same task ready.
   // Ready tasks don't gate the delay — they'll be queued on whatever the next check
   // ends up being. Cron tasks DO gate the delay, because their firing window is a
   // single minute; missing it pushes the next attempt out by a full period.
-  const now = Date.now();
   const nextScheduled = upcoming
     .map(t => ({ ...t, eligibleIn: t.nextScheduledAt > now
       ? t.nextScheduledAt - now
@@ -495,28 +588,7 @@ export async function scheduleNextImprovementCheck() {
     id: 'cos-improvement-check',
     type: 'once',
     delayMs: Math.max(delayMs, 1000),
-    handler: async () => {
-      if (!isDaemonRunning()) return;
-      // This is a 'once' event — the eventScheduler does NOT auto-reschedule it,
-      // so the handler must re-arm itself. Re-arm in `finally` so a throw in the
-      // body (loadState / getCosTasks / queueEligibleImprovementTasks) can't
-      // permanently halt the improvement cadence until a process restart.
-      try {
-        const paused = (await loadState()).paused || false;
-        if (paused) return;
-
-        const state = await loadState();
-        // Gate on the CoS auto-run domain (see canQueueImprovementTasks): off/
-        // dry-run are planning postures that withhold the COS-TASKS.md mutation.
-        if (canQueueImprovementTasks(state)) {
-          const cosTaskData = await getCosTasks();
-          await queueEligibleImprovementTasks(state, cosTaskData);
-          cosEvents.emit('cos:dequeue-requested');
-        }
-      } finally {
-        await scheduleNextImprovementCheck();
-      }
-    },
+    handler: runImprovementCheckOnce,
     metadata: { description }
   });
 }

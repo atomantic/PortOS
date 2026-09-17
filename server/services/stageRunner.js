@@ -29,6 +29,14 @@ import {
   knownProviderContextWindow,
   catalogModelContextWindow,
 } from '../lib/providerContextWindows.js';
+// The Ollama `num_ctx` ceiling — the same module the pre-dispatch gate resolves
+// it through, so the budgeter and the gate cannot disagree again (#7466). The
+// dependency-free `internal/` leaf, not the toolkit barrel: that reaches `fs`
+// and `child_process`, and this module is inside the server suite's import budget.
+import { clampToRuntimeContextWindow } from '../lib/aiToolkit/internal/ollamaBacked.js';
+// …and the rung of that ceiling the toolkit cannot resolve for itself: the
+// ambient `OLLAMA_CONTEXT_LENGTH` PortOS launches the daemon with (#7472).
+import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { createRun, patchRunMetadata } from './runner.js';
 import { resolveProviderModelTier, MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
 
@@ -197,15 +205,19 @@ const isLikelyLargeContextProvider = (provider) => {
   return false;
 };
 
-// Planning-time context window for a provider/model: an explicit
-// `contextWindow` wins, else the window the provider's own catalog reported for
-// this model, else a known model window for the resolved model, else a known
-// provider-level window for configured-default process providers, else the
-// Ollama per-request `numCtx`, else a large default for frontier providers,
-// else null (the budgeter applies a conservative floor for unknown local
-// backends). The rungs themselves live in lib/providerContextWindows.js, the
-// pure leaf the browser's provider-card meter shares.
-export function effectiveContextWindow(provider, model) {
+// Which window this provider/model CLAIMS, before the runtime ceiling: an
+// explicit `contextWindow` wins, else the window the provider's own catalog
+// reported for this model, else a known model window for the resolved model,
+// else a known provider-level window for configured-default process providers,
+// else `numCtx`, else a large default for frontier providers, else null (the
+// budgeter applies a conservative floor for unknown local backends). The rungs
+// themselves live in lib/providerContextWindows.js, the pure leaf the browser's
+// provider-card meter shares.
+//
+// `numCtx` still ends the ladder, but it only DECIDES for a non-Ollama local
+// endpoint, where it is a user's hint about a window the endpoint ignores. On
+// an Ollama-backed provider the clamp has already bounded every rung above it.
+function claimedContextWindow(provider, model) {
   if (Number(provider?.contextWindow) > 0) return Number(provider.contextWindow);
   const catalogWindow = catalogModelContextWindow(provider, model);
   if (catalogWindow) return catalogWindow;
@@ -216,6 +228,26 @@ export function effectiveContextWindow(provider, model) {
   if (Number(provider?.numCtx) > 0) return Number(provider.numCtx);
   if (isLikelyLargeContextProvider(provider)) return DEFAULT_LARGE_CONTEXT_WINDOW;
   return null;
+}
+
+/**
+ * Planning-time context window for a provider/model — the number the prompt
+ * budgeter chunks against: the claimed window held to what the daemon will
+ * actually serve. The ceiling bounds every rung, an explicit override included
+ * (a user preference the daemon cannot honor past its launch window). See
+ * {@link clampToRuntimeContextWindow} for the rule and why it is shared.
+ *
+ * The provider is projected through `withOllamaRuntimeContextWindow` first so
+ * the ceiling sees BOTH rungs the daemon was launched from — `numCtx` and the
+ * ambient `OLLAMA_CONTEXT_LENGTH`. Without it an install that configures the
+ * window through the env var alone budgeted at the model's catalog window and
+ * the call died at dispatch (#7472). The projection is in-memory and never
+ * persisted; `resolveStageContext` deliberately does NOT do it for us, because
+ * both of its branches (probe and no-probe) must get the same ceiling.
+ */
+export function effectiveContextWindow(provider, model) {
+  const runtime = withOllamaRuntimeContextWindow(provider);
+  return clampToRuntimeContextWindow(runtime, claimedContextWindow(runtime, model));
 }
 
 /**
@@ -257,7 +289,8 @@ export async function resolveStageContext(stageName, options = {}) {
   // An explicit `contextWindow` already short-circuits the ladder's first rung,
   // so observing one could not change the answer — skip the probe rather than
   // spend a round trip (up to the probe timeout on a black-holed endpoint) on a
-  // result that is provably discarded.
+  // result that is provably discarded. (The `numCtx` ceiling still applies: it
+  // reads the provider RECORD, which an observation never touches.)
   if (Number(provider?.contextWindow) > 0) {
     return { provider, model, contextWindow: effectiveContextWindow(provider, model) };
   }

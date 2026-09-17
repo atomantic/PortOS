@@ -12,7 +12,7 @@
 
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlabJson } from './gitlab.js';
-import { resolveForgeForRepo } from './forgeAuth.js';
+import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { forkHeadFromGithubPr } from '../lib/forkHead.js';
@@ -153,12 +153,7 @@ function answeredResult(rows, normalize) {
 }
 
 async function fetchGithubPullRequests(repoSpec, apiHost, { repoPath = null, forgeAccount = null } = {}) {
-  const forgeAuth = repoPath
-    ? await resolveForgeForRepo(repoPath, { forgeAccount }).catch(() => null)
-    : null;
-  const customEnv = forgeAuth?.env && forgeAuth.env !== process.env ? forgeAuth.env : null;
-  const env = customEnv || process.env;
-  const cwd = repoPath || undefined;
+  const { cwd, env, customEnv } = await resolveForgeExecOptions(repoPath, { forgeAccount });
 
   const forge = await ensureForgeReachable('app-pull-requests', {
     hostname: apiHost,

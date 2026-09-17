@@ -6,6 +6,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import { filterSelectableModels, isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isCodexSubscriptionProvider, isLocalEndpoint, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import { copyToClipboard } from '../lib/clipboard';
+import { formatCount } from '../utils/formatters';
 import { isHttpsUrl } from '../utils/urlNormalize';
 import useLocalModels from '../hooks/useLocalModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -85,6 +86,7 @@ export default function AIProviders() {
   const [runnerAllowedCommands, setRunnerAllowedCommands] = useState(null);
   const [statuses, setStatuses] = useState({}); // runtime availability by providerId (separate from the `enabled` toggle)
   const [recovering, setRecovering] = useState({});
+  const [addingTuiMode, setAddingTuiMode] = useState({}); // in-flight "Add interactive mode" by providerId
   const [activeProviderId, setActiveProviderId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -364,6 +366,22 @@ export default function AIProviders() {
 
   const handleDelete = async (id) => {
     await api.deleteProvider(id);
+    loadData();
+  };
+
+  // Complete a lone CLI provider into a CLI / TUI pair. A full `loadData()`
+  // rather than an in-place patch: the two records become ONE card, and the
+  // grouping (`executionModes`) is computed server-side — there is no correct
+  // way to splice a new mode into the list from here.
+  const handleAddTuiMode = async (provider) => {
+    setAddingTuiMode(prev => ({ ...prev, [provider.id]: true }));
+    const created = await api.addProviderTuiMode(provider.id, { silent: true }).catch(() => null);
+    setAddingTuiMode(prev => ({ ...prev, [provider.id]: false }));
+    if (!created) {
+      toast.error(`Could not add an interactive mode for ${provider.name}`);
+      return;
+    }
+    toast.success(`${created.name} added — edit it to change its arguments`);
     loadData();
   };
 
@@ -870,6 +888,17 @@ export default function AIProviders() {
                       {filterSelectableModels(provider.models).length > 0 && (
                         <p>Models: {filterSelectableModels(provider.models).slice(0, 3).join(', ')}{filterSelectableModels(provider.models).length > 3 ? ` +${filterSelectableModels(provider.models).length - 3}` : ''}</p>
                       )}
+                      {/* The card's model line shows the SCOPED list, so say when a
+                          model-access policy is what makes it short — otherwise a
+                          user comparing it against the vendor's catalog reads a
+                          deliberate scope as a failed refresh. */}
+                      {provider.modelAccessHiddenCount > 0 && (
+                        <p className="text-gray-500">
+                          {formatCount(provider.modelAccessHiddenCount)} more hidden by model access
+                          {provider.modelAccessSource && provider.modelAccessSource !== 'own'
+                            ? ` (from ${provider.modelAccessSource})` : ''}
+                        </p>
+                      )}
                       {provider.envVars && Object.keys(provider.envVars).length > 0 && (
                         <div className="mt-0.5">
                           <span>Env:</span>
@@ -1068,6 +1097,8 @@ export default function AIProviders() {
                       onSetActive={handleSetActive}
                       onEdit={openForm}
                       onDelete={handleDelete}
+                      onAddTuiMode={handleAddTuiMode}
+                      addingTuiMode={Boolean(addingTuiMode[provider.id])}
                       onRecover={handleRecover}
                       onInstallRuntime={setInstallingRuntime}
                       onAutoSetupRuntime={setSettingUpRuntime}

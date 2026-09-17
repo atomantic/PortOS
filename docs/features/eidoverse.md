@@ -607,6 +607,18 @@ Incoming chat makes no AI call and is never an instruction or permission grant.
 The [guest-conversation ADR](../decisions/2026-09-05-eidoverse-guest-chat.md)
 documents this narrowly scoped exception to the machine-local record policy.
 
+**Vernacular labeling on a visit (#7459).** A guest visit reaches only what the
+destination install chose to build in its own private world — its local
+vernacular style and buildings — never the shared PortOS baseline population,
+which has no visit surface of its own. Both entry points say so explicitly
+rather than leaving a visitor to infer it: `eidoverse.visit`'s response
+`guidance` tells a visiting Mind in the same turn it receives a `visitId`, and
+the human guest shell (`client/src/pages/EidoverseGuest.jsx`) carries the same
+line in its header. This is a labeling change only — nothing about what
+crosses the federation layer changes: the vernacular/baseline ownership model
+(below) already keeps a foundation's `style` and its whole local ledger out of
+every peer exchange, and a guest visit was never a foundation-ledger read.
+
 ### Object controls
 
 The Commons island extends into an irregular grassy shoreline, a sandy beach,
@@ -669,8 +681,427 @@ any failure. Two reference fixtures live beside the harness: a passing
 skips it; only `eidoverseResilienceAssay.test.js` exercises it, proving the
 harness catches the "author-mind-only" failure mode).
 
-This harness is standalone and does not yet gate anything — the actual
-promote-to-baseline pipeline is
-[#7455](https://github.com/atomantic/PortOS/issues/7455), not yet built. Once
-it exists, it is expected to call `runResilienceAssay()` (or shell out to this
-script) per candidate contribution and block promotion on a failing verdict.
+This harness is what the promote gate below runs:
+`services/eidoverseFoundationLedger.js` replays a foundation's declared
+contribution through `runResilienceAssay()` and refuses to package a promote
+candidate on a failing verdict ([#7455](https://github.com/atomantic/PortOS/issues/7455)).
+Both the CLI and that gate resolve contributions through the one registry in
+`server/services/eidoverseResilienceContributions.js`.
+
+### Local vernacular vs shared baseline, and the promote gate (#7455)
+
+Federated instances are meant to keep their own style and buildings while
+discoveries that help everyone find a path into a shared PortOS baseline. That
+boundary is a data model, not a convention. `server/lib/eidoverseFoundations.js`
+declares three ownership layers:
+
+- **`runtime`** — the shared Eidoverse/PortOS framework. Upstream's to change; an
+  instance never authors into it and never promotes it.
+- **`baseline`** — the shared promoted-foundation population a peer can inherit.
+- **`vernacular`** — this install's own artifacts. **The default for everything
+  authored locally**, so nothing is shared by omission; promoting is an explicit
+  act with a gate in front of it, never the absence of a "keep this private" flag.
+
+A foundation is `{ body, style }` **by construction** rather than one bag with a
+blocklist. `body` is the promotable substance (declared schema, affordance,
+optional controller spec); `style` is the cosmetics that make this Commons look
+like itself — palette, motif, asset paths, placement, district, display aliases.
+Packaging carries `body` and drops `style` outright, which is what makes "a peer
+inherits the foundation without the author's cosmetics overwriting its own style
+layer" a property of the payload rather than a merge rule a receiver has to get
+right. On top of that split there is an authoring check: an unambiguously
+cosmetic key found *inside* `body` (`palette`, `motif`, `accent`, `color`,
+`material`, `texture`, a label alias) **refuses** the package rather than being
+silently trimmed, so "I put the palette in `body` and expected peers to get it"
+gets named. Spatial and asset-binding keys (`pos`, `yaw`, `lib`, `districtId`)
+are deliberately *not* on that list — they are exactly the substance of a
+`district-template` foundation.
+
+`data/eidoverse/foundations.json` (`server/services/eidoverseFoundationLedger.js`)
+is the install-local ledger — machine-local like `portos-world.json` beside it,
+never federated, no seed file and no migration, since an absent file is the empty
+ledger every install starts from.
+
+**The promote gate runs the assay; it never accepts a verdict.**
+`POST /api/eidoverse/world/foundations/:id/candidate` resolves the foundation's
+declared `contributionId` through `server/services/eidoverseResilienceContributions.js`
+(by id against a fixed directory — never by a caller-supplied module path),
+replays it through the agent-free harness above, and packages against the verdict
+it just produced. A caller therefore cannot assert that its build survived its
+author's absence; it can only ask for the check — the same proposal-versus-
+consequence separation the construction tools got in #7454, applied to promotion.
+A foundation that is re-authored loses both its candidate and its verdict, because
+both described the previous body; a refused package likewise clears any candidate
+packaged earlier, since the verdict that vouched for it no longer holds.
+
+Contributions are resolved **by id against a fixed directory**, which today holds
+only the two reference fixtures shipped with the assay harness. So on a stock
+install the endpoint can package a candidate for the demo contribution and
+nothing else — a real author gets "no resilience-assay contribution is
+registered" until executable world controllers (#7456) add their registry as a
+second source behind the same resolver.
+
+Four refusals stand between a local artifact and the shared baseline, and every
+one returns a readable reason naming what to fix:
+
+1. **Ownership** — only a `vernacular` foundation is promotable.
+2. **Agent-free resilience** — the verdict must pass, cover the full disturbance
+   suite, and be bound to the contribution this foundation names (a passing
+   verdict borrowed from another build is refused explicitly).
+3. **Style leak** — a vernacular style key inside `body`.
+4. **Federation safety** — `server/lib/federationSafety.js` refuses the package
+   when the candidate carries machine identity, network info, PII,
+   credential-shaped values, or a credential-*named* field (`{ apiKey: … }`,
+   which no value-shape scan can see), anywhere in its values **or its keys**.
+   Nothing is redacted and shipped: a redacted promote would leave the author
+   believing they published what they wrote.
+
+The candidate envelope carries a content-addressed `fingerprint` (sha256 over the
+canonicalized envelope), so `verifyFoundationCandidate()` is one gate seen from
+both sides — the packaging side and a receiving peer's.
+
+**Promoting publishes into this install's baseline population.**
+`POST /api/eidoverse/world/foundations/:id/promote` re-packages first and
+publishes the candidate it just produced, so promotion never rests on a stored
+verdict — every gate above is re-run against the body as it stands. On a pass the
+record moves to the `baseline` layer and takes a `promotedAt` stamp; its
+`style` stays behind, because only the envelope crosses and the envelope has no
+style layer at all. A refusal is a 200 with its reasons and moves nothing.
+Re-authoring a promoted foundation returns it to `vernacular` and clears
+`promotedAt`: the body that was published no longer exists on this install, and
+keeping the stamp would also be a dead end, since the gate refuses to package a
+`baseline` foundation.
+
+**Where the user does this.** Eidoverse > World controls > **Foundations**
+(`client/src/components/eidoverse/EidoverseFoundationsPanel.jsx`) lists every
+foundation with its ownership-layer badge, records or re-authors one, runs the
+assay, promotes, and renders each refusal reason verbatim beside the foundation
+it refused. The expanded foundation is a `?foundation=<id>` search param, so a
+refusal is linkable. `GET /api/eidoverse/world/contributions` backs the
+contribution picker — an install that registers none says so rather than offering
+an empty list.
+
+**The mind needs its own grant to promote.** `eidoverse.promote` (with the read
+beside it, `eidoverse.foundations`) is gated on `manageEidoverse` **and** the
+separate default-off `promoteEidoverseFoundations` grant, and is mind-scope only
+— building in the local world is never permission to publish out of it, and an
+ephemeral CoS task agent never gets the tool at all. The server runs the assay
+itself, so a mind can ask for the check but can never assert a passing verdict.
+Both tools return summaries (`summarizeFoundation`) rather than whole records:
+the local style layer and the packaged envelope have no business riding into a
+prompt.
+
+A mind can also author, not just list and promote. `eidoverse.record` wraps the
+same `recordEidoverseFoundation()` the HTTP route above uses, gated on
+`manageEidoverse` alone (no promote grant needed — authoring stays local by
+construction) and mind-scope only. `authorKind` is stamped `'mind'` server-side
+regardless of what the call arguments claim, the same reason `layer` is never
+caller-supplied. `eidoverse.contributions` (`manageEidoverse`, read) lists the
+`contributionId` values a new foundation may bind to before it is promotable.
+
+### Provenance graph and inheritance edges (#7461)
+
+Every foundation carries queryable provenance: who authored it (an opaque
+instance id + coarse `authorKind` — `mind` / `cos` / `user`, never a display
+name) and its ordered lineage. `foundationLineage()`
+(`server/lib/eidoverseFoundations.js`) derives that lineage — `authored` →
+`assayed` → `packaged` → `promoted`, or `inherited` → `assayed` for a local
+copy of a peer's — from fields the record already persists, so it costs no
+extra storage and a ledger written before this existed still projects
+correctly. `GET /api/eidoverse/world/foundations` returns it on every entry,
+and the mind tools' `summarizeFoundation()` projection carries `provenance`,
+`inheritance`, and `lineage` too — the same identity fields a candidate
+envelope was already authorized to carry, now surfaced consistently
+everywhere a foundation is read. `GET /api/eidoverse/world/foundations/:id`
+only reaches a locally-authored (plain-id) record: an inherited copy lives
+under a separate ledger key precisely so it can share a human-readable id
+with a local vernacular foundation without colliding, which also means a
+single bare id cannot disambiguate the two — the list endpoint is the
+provenance query surface for an inherited entry.
+
+**`recordEidoverseFoundationInheritance()`** (`eidoverseFoundationLedger.js`)
+is the accept-side of a peer pull: given an already-verified candidate
+envelope, the peer this install pulled it FROM, and this install's own
+instance id, it re-runs the exact gate a peer runs on a candidate it was
+handed — schema, content-addressed fingerprint, the embedded assay evidence,
+and federation safety — and, on a pass, stores a `baseline` local copy
+carrying an `inherited-from` edge (origin instance, source instance, the
+envelope's fingerprint, and when it was pulled). It refuses a self-referential
+pull (a peer handing back a foundation this install itself originated) and
+never re-runs the resilience assay itself — replaying a peer's controller code
+on the receiving install is exactly what the assay harness exists to keep off
+every OTHER install.
+
+The inherited copy is stored under `peer:<originInstanceId>:<foundationId>` —
+deliberately disjoint from any id a local author could ever write — so it can
+never shadow, collide with, or erase a same-id local vernacular foundation;
+both simply coexist in the listing. An inherited foundation can never be
+re-promoted from this install (`packageFoundationCandidate` refuses it by
+name): promotion publishes only what this install itself authored, never a
+relay of another install's work.
+
+### The peer pull/inherit transport (#7455)
+
+`server/services/sharing/peerEidoverseFoundationSync.js` is the wire between
+the two gates above. It owns no policy of its own — which foundations an
+install offers is `listPromotedFoundationCandidates()` in the ledger, and
+which it accepts is `recordEidoverseFoundationInheritance()`. It owns the
+payload wrapper, the version gate, the caps and the sweep.
+
+**Outbound.** `GET /api/peer-sync/eidoverse-foundations` advertises
+`{ schemaVersion, listHash, candidates: [...] }`. The offering is exactly the
+foundations this install PROMOTED and AUTHORED:
+
+- `layer === 'baseline'` — a merely *packaged* candidate is a dry run ("would
+  this pass?"), not a publication, and is never served.
+- `!inheritance` — `baseline` also covers a local copy of a peer's foundation,
+  so an inherited record is excluded rather than relayed. That matches the
+  ledger's existing refusal to re-package an inherited record: a peer that
+  wants a third install's foundation pulls it from the install that authored it.
+- the stored envelope must still pass `verifyFoundationCandidate()`.
+  `foundations.json` is a file a human can edit, and refuse-never-redact
+  applies outbound as well as inbound, so a candidate that no longer passes is
+  withheld from the offering and logged.
+
+Unlike the older peer-pull routes, this one does not ride the warn-first
+authorization ramp: it passes `alwaysEnforce`, so only a registered,
+outbound-enabled peer ever reads it. The ramp exists so a peer mid-upgrade
+does not lose sync it already had, and a brand-new endpoint has no such
+history to protect.
+
+**Inbound.** `syncEidoverseFoundationsFromPeer()` runs for peers the user
+flagged `fullSync`, on the same 60-second sweep as the media-library,
+CoS-history and CoS-task sweeps (`services/sharing/index.js`). It byte-caps
+the response, validates the wrapper, gently skips a sender whose
+`schemaVersion` is ahead of local (the ledger has no re-fetch path that would
+correct a mis-applied envelope later), short-circuits on an unchanged
+`listHash`, and hands every remaining candidate to
+`recordEidoverseFoundationInheritance()` — which re-runs the *entire*
+accept-side gate and writes nothing on a refusal. A candidate whose
+fingerprint this install already holds is skipped, so the periodic forced
+re-pull (there so a local deletion self-heals) never rewrites `inheritedAt`
+on an unchanged copy.
+
+Both directions are gated on the `eidoverse` instance feature: an install with
+Eidoverse turned off neither offers nor accumulates.
+
+**Compatibility.** `PORTOS_SCHEMA_VERSIONS.eidoverseFoundations` (v1) is the
+transport contract, registered in `NON_RECORD_SCHEMA_CATEGORIES` because this
+is a receiver-pull category with no push to gate — a foundation is not a
+peer-subscribable record kind. It is deliberately separate from the envelope's
+own `candidateVersion`, which pins one envelope's shape and is hashed into its
+fingerprint: a change to the envelope bumps both, a change to the wrapper or
+the caps bumps only the category.
+
+### Creative toolkit for minds (#7459)
+
+Authoring a foundation from a blank `body`/`style` is a lot to invent from
+scratch every time. `server/lib/eidoverseCreativeToolkit.js` is a small,
+documented, closed vocabulary a mind reaches for instead: named **materials**
+and **motifs** (cosmetics — install-local `style`, the same class of value
+`styleLeakFindings` refuses inside a `body`) and named **generative placement
+layouts** (`radial-ring`, `grid-plot`, `arc-row`, `grove-cluster` — structure,
+safe as `body`). `eidoverse.creative-catalog` (`manageEidoverse`, read) lists
+all three; nothing here calls an AI provider — every layout is deterministic
+and seeded (`generateDistrictTemplatePlacement`), so the same
+`{layoutId, anchor, seed}` reproduces the same geometry on replay or on a peer
+that later inherits the promoted foundation.
+
+Two ways to use a chosen layout:
+
+- `buildDistrictTemplateAugmentOperations()` turns a placement into
+  ready-to-submit `eidoverse.augment` `spawn` operations for the *live* scene
+  (asset-path validity is still checked where `eidoverse.augment` lands them).
+- `buildDistrictTemplateFoundationDraft()` composes a placement plus a
+  material/motif choice into an `eidoverseFoundationInputSchema`-shaped
+  `district-template` input — the generative substance (layout id, anchor,
+  seed, resulting positions) in `body`, the material/motif cosmetics in
+  `style` — ready to pass straight to `eidoverse.record`. It always lands on
+  the local `vernacular` layer, matching every other authored foundation;
+  publishing it to the shared baseline remains the separate, explicit
+  `eidoverse.promote` act above.
+
+## Observation-first discovery (#7457)
+
+SwarmWorld's finding is that reuse between agents starts by **looking at the
+world**, not by asking its author about it. PortOS's mind tools grew the other
+way round: a mind could speak (`eidoverse.say`), travel (`eidoverse.visit`) and
+chat (`eidoverse.chat`, `eidoverse.visit-chat`) long before it could see what
+was already standing in its own Commons. The continuous-play playbook has told
+it to "move through the world and map what already exists" since that loop
+landed — naming places, projections and affordances it had no tool to read.
+
+`eidoverse.observe` is that missing read, and the playbook now leads with it.
+
+### What it answers
+
+One mind-scoped call (`manageEidoverse`, the same grant as the foundation and
+controller reads it summarizes) returns:
+
+- **`places`** — the eight districts as somewhere a mind can stand and
+  describe: label, direction, landmark, which signal sources feed it, how many
+  live signals those sources currently report, and whether any of them want
+  attention. Districts come from the install's **resolved design recipe**, not
+  from a constant, so a mind never names a district a later design version
+  renamed (V3 calls it the Federation Terminal, not the V2 Harbor) or one the
+  user's own overrides moved. A source the recipe has switched off reports as
+  `disabled` rather than counted — the projection places nothing for it.
+- **`peers`** — the opaque travel ids `eidoverse.destinations` also returns, so
+  one carries straight into `eidoverse.visit` — each with **how many
+  foundations this install inherited through it**.
+- **`foundations.inherited`** — a peer's contributions, newest first, with the
+  peer they arrived through and the instance that authored them (distinct on
+  purpose: a multi-hop re-share is only legible when they are).
+- **`controllers.needsAttention`** — only installs that are disarmed or
+  failing. A controller that has never ticked yet is one interval away from its
+  first tick, which is normal, not an alarm.
+- **`changes`** — what is new since this mind last observed.
+
+That third bullet is the epic's acceptance criterion: **a peer contribution is
+discoverable by touring the Commons**, because the Federation Terminal chamber
+carries the count and the inherited list names the build — no repository read
+and no conversation with its author required.
+
+### Three distinctions the report refuses to collapse
+
+- **Unavailable is not empty.** A district whose source failed to read reports
+  `signalCount: null` and `status: 'unknown'`, never `0`/`quiet`. Reporting an
+  unreadable app list as "the terraces are empty" is the same misreport #7458
+  fixed for district density, and it would be worse here, where the mind acts
+  on it.
+- **`signalCount` counts signals, not placed entities.** The projection
+  allocates a capped, round-robin sample of live signals into the world, so the
+  world may hold fewer. Counting sources keeps the tour readable **without a
+  running world runtime** — a mind that cannot start the runtime still needs to
+  know what is in its Commons — and the field name says "signals" so the
+  difference is never implied away.
+- **Never-observed is not nothing-new.** A first observation reports
+  `firstObservation: true` with no new items rather than handing a mind waking
+  into a months-old install its entire world as "new".
+- **A section that failed to collect is not an empty section.** It arrives as
+  `null`, contributes no changes, and **carries the previous marker's ids
+  forward**. Collapsing it to `[]` would report every peer as departed on a
+  transient read failure, rewrite the marker without them, and then report them
+  all as new on the next observation — a flap that repeats for as long as the
+  source keeps failing intermittently.
+
+### The visit marker
+
+"What is new since I last looked" has to cross a **wake boundary**: a mind
+wakes, observes, acts, and ends its turn, and the next wake is a different
+process. Nothing in-memory survives that. The world chat cursor lives in a
+100-entry ring buffer a restart empties; the peer sync's `lastOfferingListHash`
+is per-peer content-change detection for a background sweep, also in memory.
+
+So observing **stamps a marker** — `data/eidoverse/observation.json`, covered
+in [STORAGE.md](../STORAGE.md). That is the stigmergic half of the slice: the
+trail a mind leaves is what makes the next observation's `changes` mean
+anything. It also means `eidoverse.observe` is **not idempotent**, and that it
+is declared `sideEffect: 'write'` even though a mind reads it like a read.
+That is not a label: `mindToolRecipes.js` only lets a saved recipe compose
+`'read'` tools, and the MCP bridge exports `readOnlyHint: sideEffect ===
+'read'`. Calling a marker-stamping tool a read would let a replayable recipe
+silently consume the `changes` delta the playbook depends on, and would tell an
+external MCP client the tool touches nothing.
+`observeEidoverseWorld({ commit: false })` is the internal look-without-stamping
+form.
+
+The marker holds ids, per-district status, and a timestamp — no body, no style,
+no record content — and is machine-local like the ledger and the controller
+store beside it. A marker written by a newer PortOS degrades to one honest
+`firstObservation` rather than being diffed against fields this build does not
+understand, and an *unreadable* marker file throws rather than reading as
+never-observed, because the next write would otherwise replace a real marker
+and re-report a settled world.
+
+### Signal, not noise
+
+Two filters keep `changes` worth reading on a busy install:
+
+- **Places diff on a status flip, never on a count change.** Signal counts move
+  every wake as agents and tasks come and go; diffing them would make `changes`
+  pure churn. The live count stays in `places` for a mind that wants it.
+- **A controller already wanting attention last visit is not re-reported.** A
+  long-broken controller would otherwise re-alarm every wake and drown the one
+  that just broke.
+
+### Where it lives
+
+`server/lib/eidoverseObservation.js` is pure: `buildEidoverseObservation()`
+takes already-collected snapshots plus the previous marker and returns
+`{ report, marker }`, so the whole diff contract is testable without a world
+runtime, a socket or a file. `server/services/eidoverseObservationLedger.js` is
+the I/O, clock and marker shell around it — and every collection failure
+degrades that section to `null` rather than failing the tour, because a mind
+that cannot read its controllers should still get to see its districts.
+
+
+## Executable world controllers (#7456)
+
+SwarmWorld's strongest result is that technologies are *executable*: they keep
+running once the agent that authored them is gone. PortOS minds wake
+intermittently, so a world that only changes during a mind turn is a world that
+is dead most of the time. A **controller** is the durable thing that keeps
+running between wakes — a resource tick, an ambient verb, a gentle NPC, a
+maintenance hook — supervised by PortOS rather than by whoever installed it.
+
+**Behavior is code PortOS ships; an install is data a mind authors.** The only
+thing an install may say about behavior is a `controllerId`, resolved by
+`server/services/eidoverseControllerRegistry.js` against a fixed directory of
+shipped modules. There is deliberately no path-taking export on that resolver at
+all: an install arrives from an HTTP body or a mind's tool call, and "import the
+module this request names" is arbitrary code execution wearing a feature's
+clothes. This is the same rule the resilience-assay contribution registry
+already applies, for the same reason.
+
+**A tick cannot reach an AI provider.** `runControllerStep`
+(`server/lib/eidoverseControllers.js`) refuses a step that returns a Promise, so
+there is no await for a network, disk, or provider call to hide behind. Root
+`AGENTS.md`'s "no cold-bootstrap LLM calls" rule is therefore a structural
+property of the tick path rather than a convention — boot arms a timer and
+nothing else. The same synchronous rule is why every shipped controller is
+replayable by the agent-free assay with no extra authoring: the controller
+registry is the assay's **second contribution source**, behind the same
+`findContributionById` resolver, so a `controller` foundation can name its
+controller's id as its `contributionId` and be gated for promotion on evidence
+it still runs with its author gone.
+
+**Effects are proposals, from a closed vocabulary.** A step returns effects, it
+does not perform them — the same proposal-versus-consequence separation the
+construction tools have. `note` never leaves the ledger; `say` and `augment`
+reach the world only for an install whose `deliverEffects` was explicitly turned
+on (it defaults to `false`), and `augment` reuses the existing world-verb
+operation schema rather than inventing a second one. A delivery that fails is
+recorded and the step still counts: the controller's own state advanced, and
+re-running it to retry a world write would double-count everything it did.
+
+**Supervision.** `server/services/eidoverseControllerRuntime.js` registers one
+`eidoverse-controller-tick` interval with the event scheduler and steps every
+install whose own cadence is due. Arming is reconciled at every gate move —
+install, retire, arm/disarm — and not only at boot, so a controller installed at
+16:00 is not waiting for a restart to start ticking. A pass never replays a
+backlog: a machine asleep for three days wakes to ONE tick, because a cadence is
+"about this often", never a ledger of owed executions. A controller that fails
+`maxConsecutiveFailures` ticks in a row is disarmed with a recorded reason rather
+than retried forever, and an install whose `controllerId` this version no longer
+ships is disarmed immediately.
+
+**Storage** is `data/eidoverse/controllers.json` — `file-primary` and machine
+local, never federated (`docs/STORAGE.md`). A controller crosses to a peer only
+as the *body* of a promoted foundation, which carries no install.
+
+**Shipped controllers.** `ambient-beacon` counts ticks and marks a pulse every
+Nth one (`announce` decides whether that pulse is spoken into the world or kept
+as a note). `lantern-keeper` re-issues the `light` verb for a fixed set of world
+entities every Nth tick, so lamps an author placed stay lit across host restarts
+while the author is away — re-lighting an already-lit lamp is a no-op, which is
+what makes running it on a schedule safe.
+
+**The mind needs its own grant to install.** `eidoverse.install-controller` and
+`eidoverse.retire-controller` are gated on `manageEidoverse` **and** the separate
+default-off `installEidoverseControllers` grant, and are mind-scope only:
+building in the world during a turn is a different act from leaving something
+running in it afterwards. The read beside them, `eidoverse.controllers`, needs
+only `manageEidoverse` — a mind that can build should be able to see what is
+already ticking, and seeing is what makes the writes usable rather than
+guesswork.

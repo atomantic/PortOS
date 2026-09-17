@@ -3,6 +3,8 @@ import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi } from 'vitest';
 import AppQuality from './AppQuality';
 vi.mock('./AppQualityRunner', () => ({ default: ({ children }) => children(<div>Runner</div>) }));
+// The schedule form owns its own async load and is covered by its own suite.
+vi.mock('./AppQualityScheduleForm', () => ({ default: () => <div>Schedule form</div> }));
 vi.mock('../../services/apiApps', () => ({
   getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }),
   publishAppQualitySnapshot: vi.fn(),

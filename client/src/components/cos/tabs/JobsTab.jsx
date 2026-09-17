@@ -48,6 +48,8 @@ const INITIAL_JOB = {
 export default function JobsTab() {
   const timezone = useUserTimezone();
   const [jobs, setJobs] = useState([]);
+  // The job whose trigger is in flight, so its card can disable Run now.
+  const [triggering, setTriggering] = useState(null);
   const [apps, setApps] = useState([]);
   const [rawProviders, setRawProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState('');
@@ -134,12 +136,22 @@ export default function JobsTab() {
     }
   };
 
-  const handleTrigger = async (jobId) => {
+  // `runOptions` carries the card's ad-hoc run configuration, when the job
+  // declares one — the values apply to this run only and are not saved.
+  const handleTrigger = async (jobId, runOptions) => {
     toast.loading('Triggering job...', { id: 'job-trigger' });
-    const result = await api.triggerCosJob(jobId, { silent: true }).catch(err => {
+    // Held so the card can disable its own button: without it a second click
+    // fires a second trigger, which for a re-aimed run comes back as a
+    // confusing duplicate-skipped success.
+    setTriggering(jobId);
+    const result = await api.triggerCosJob(jobId, { ...runOptions, silent: true }).catch(err => {
       toast.error(err.message, { id: 'job-trigger' });
       return null;
     });
+    // Only if this job is still the one held: triggering a second job while the
+    // first is in flight would otherwise have the first's completion re-enable
+    // the second's button, which is the double-click this state exists to stop.
+    setTriggering(prev => (prev === jobId ? null : prev));
     if (result) {
       if (result.status === 'skipped') {
         const notify = result.duplicate ? toast.success : toast.error;
@@ -372,6 +384,7 @@ export default function JobsTab() {
               dataInputCatalog={dataInputCatalog}
               onToggle={handleToggle}
               onTrigger={handleTrigger}
+              triggering={triggering === job.id}
               onDelete={handleDelete}
               onUpdate={fetchJobs}
             />

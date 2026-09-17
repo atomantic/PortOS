@@ -19,8 +19,9 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 /**
  * Models → Harnesses: the coding-agent CLIs/TUIs this install drives.
  *
- * A harness is one binary — `opencode`, `claude`, `codex`, `agy`, `grok`,
- * `kimi`, `cursor-agent` — that several provider records share. The Providers
+ * A harness is one binary — `opencode`, `kilo`, `openchamber`, `claude`,
+ * `codex`, `agy`, `grok`, `kimi`, `cursor-agent` — that several provider
+ * records share. The Providers
  * page could already install a MISSING one from its card, but nothing showed
  * which version was installed, whether it was stale, how to update it, or which
  * models this install of it actually knows about. So an OpenCode months behind
@@ -235,8 +236,13 @@ export default function HarnessesTab() {
     });
     const result = await refreshHarnessModels(harness.id, { silent: true })
       .then((data) => ({
-        ok: true,
-        message: `${data.models.length} models from ${harness.command} → ${plural(data.updated.length, 'provider')} updated.`,
+        // A 200 carrying `reason` is a PARTIAL success — one credential's probe
+        // failed while another answered (see server/services/harnesses.js).
+        ok: !data.reason,
+        message: [
+          `${data.models.length} models from ${harness.command} → ${plural(data.updated.length, 'provider')} updated.`,
+          data.reason,
+        ].filter(Boolean).join(' '),
       }))
       .catch((err) => ({ ok: false, message: err?.message || 'Could not read the model list.' }));
     setRefreshResults((prev) => ({ ...prev, [harness.id]: result }));

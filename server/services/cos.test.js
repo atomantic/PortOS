@@ -1331,17 +1331,21 @@ describe('cos.js source — priority + capacity invariants', () => {
     // so the guard narrows nothing that was already running.
     expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['task-real', 'task-fieldless']);
 
-    // Both engines run their own user tier, so the rule has to be called in each —
-    // one is a fix, two is the fix. The shared body is cosDequeue.js's.
+    // Both engines used to run their own copy of this tier, verified only by
+    // grepping each body for the guard in source order — one is a fix, two is
+    // the fix. #7523 replaced the duplicated ladder with one shared pass
+    // (admitPendingUserTasks in cosTaskGenerator.js); now the only thing either
+    // engine's body needs to prove is that it DELEGATES there, and the ladder's
+    // own ordering (including this #7300 hold) is pinned once, behaviorally,
+    // against the shared pass in cosTaskGenerator.test.js's
+    // `describe('admitPendingUserTasks', …)` block.
     const cosTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority1UserTasks'));
     const genTier = extractFnBody(GEN_SRC, GEN_SRC.indexOf('async function spawnPriority1UserTasks'));
-    for (const [label, body, emit] of [
-      ['cos.js', cosTier, "cosEvents.emit('task:ready', userTask)"],
-      ['cosTaskGenerator.js', genTier, 'tasksToSpawn.push(userTask)'],
+    for (const [label, body] of [
+      ['cos.js', cosTier],
+      ['cosTaskGenerator.js', genTier],
     ]) {
-      const guardIdx = body.indexOf('isUserTaskRunnableUnattended(task)');
-      expect(guardIdx, `${label} user tier must consult isUserTaskRunnableUnattended`).toBeGreaterThan(-1);
-      expect(body.indexOf(emit), `${label} must admit the task only after the guard`).toBeGreaterThan(guardIdx);
+      expect(body, `${label} user tier must delegate to the shared admitPendingUserTasks pass`).toContain('admitPendingUserTasks(');
     }
   });
 
@@ -2519,5 +2523,40 @@ describe('CoS startup — single-flight recovery', () => {
     expect(COS_SRC).toMatch(/let daemonStartPromise = null/);
     expect(COS_SRC).toMatch(/daemonStartPromise = runStart\(\)\.finally\(\(\) => \{\s*daemonStartPromise = null;/);
     expect(COS_SRC).toMatch(/export function start\(\) \{[\s\S]*?return daemonStartPromise;\s*\}/);
+  });
+});
+
+describe('cos-rehabilitation-check timer — failure observability (#7552)', () => {
+  // A rejecting checkAndRehabilitateSkippedTasks used to collapse to the same
+  // { count: 0 } a healthy no-op call produces, so a persistence failure in the
+  // ONLY path back from an auto-skipped task type went silent forever. This
+  // extracts and REALLY EXECUTES the shipped `.catch(err => {...})` handler
+  // (not a reimplementation) against a mocked emitLog, rather than mocking the
+  // full `runStart()` import graph — the file's own header explains why that
+  // full-mock approach is rejected here as "a brittle test of mocks".
+  const anchor = 'checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(err => {';
+  const anchorStart = COS_SRC.indexOf(anchor);
+
+  it('is still the exact call site this test extracts its handler from', () => {
+    expect(anchorStart, 'the rehabilitation catch handler moved/changed shape — update this test\'s anchor').toBeGreaterThan(-1);
+  });
+
+  it('logs via emitLog(\'warn\', ...) with the stack, and still resolves the neutral fallback, when the rehabilitation call rejects', () => {
+    const bodyStart = anchorStart + anchor.length;
+    const bodyEnd = COS_SRC.indexOf('\n      });', bodyStart);
+    const fnBody = COS_SRC.slice(bodyStart, bodyEnd);
+    const emitLog = vi.fn();
+    // eslint-disable-next-line no-new-func -- executes the real extracted source, not a rewritten copy
+    const catchHandler = new Function('emitLog', `return function(err) {${fnBody}}`)(emitLog);
+
+    const err = new Error('learning store unavailable');
+    const result = catchHandler(err);
+
+    expect(emitLog).toHaveBeenCalledWith(
+      'warn',
+      expect.stringContaining('checkAndRehabilitateSkippedTasks failed: learning store unavailable'),
+      expect.objectContaining({ stack: expect.any(String) })
+    );
+    expect(result).toEqual({ count: 0 });
   });
 });

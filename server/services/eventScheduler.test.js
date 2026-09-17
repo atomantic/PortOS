@@ -424,6 +424,61 @@ describe('schedule() lifecycle with fake timers', () => {
     expect(handler).toHaveBeenCalledTimes(2); // recurring run still happened
   });
 
+  it('logs the stack and emits a structured error carrying the event id when a handler throws (#7549)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logListener = vi.fn();
+    cosEvents.on('log', logListener);
+
+    try {
+      const handler = vi.fn().mockRejectedValue(new Error('boom'));
+      schedule({ id: 'fail-log-1', type: 'once', delayMs: 1000, handler });
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining('Event fail-log-1 failed: boom'),
+        expect.stringContaining('Error: boom'),
+      );
+
+      const [entry] = logListener.mock.calls.map(([e]) => e).filter(e => e.level === 'error');
+      expect(entry).toMatchObject({ eventId: 'fail-log-1', message: expect.stringContaining('boom') });
+    } finally {
+      cosEvents.off('log', logListener);
+      consoleError.mockRestore();
+    }
+  });
+
+  it('tracks lastRunSucceeded/lastError/consecutiveFailures across failing and passing runs', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const handler = vi.fn()
+        .mockRejectedValueOnce(new Error('first failure'))
+        .mockRejectedValueOnce(new Error('second failure'))
+        .mockResolvedValueOnce(undefined);
+      schedule({ id: 'failure-state-1', type: 'interval', intervalMs: 1000, handler });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      let event = getEvent('failure-state-1');
+      expect(event.lastRunSucceeded).toBe(false);
+      expect(event.lastError).toBe('first failure');
+      expect(event.consecutiveFailures).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      event = getEvent('failure-state-1');
+      expect(event.lastError).toBe('second failure');
+      expect(event.consecutiveFailures).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      event = getEvent('failure-state-1');
+      expect(event.lastRunSucceeded).toBe(true);
+      expect(event.lastError).toBeNull();
+      expect(event.consecutiveFailures).toBe(0);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('records a successful run in history with a non-negative duration', async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     schedule({ id: 'success-1', type: 'once', delayMs: 1000, handler });
@@ -527,5 +582,17 @@ describe('schedule() lifecycle with fake timers', () => {
     expect(stats.totalEvents).toBe(2);
     expect(stats.activeEvents).toBe(1); // stat-b paused
     expect(stats.byType).toEqual({ once: 1, interval: 1 });
+  });
+});
+
+// A fresh module instance is required here: eventHistory is module-level state
+// that every other test in this file has already appended to by the time this
+// describe runs, so getStats() from the shared import can never observe a truly
+// empty ring (#7549).
+describe('getStats().recentSuccessRate on an empty ring', () => {
+  it('is null, not "100%", when no run has been recorded', async () => {
+    vi.resetModules();
+    const fresh = await import('./eventScheduler.js');
+    expect(fresh.getStats().recentSuccessRate).toBeNull();
   });
 });

@@ -41,6 +41,7 @@ function deferred() {
 vi.mock('./eventScheduler.js', () => ({
   schedule: vi.fn(),
   cancel: vi.fn(),
+  getEvent: vi.fn(() => null),
   parseCronToNextRun: vi.fn(() => new Date(0)),
 }));
 vi.mock('../lib/timezone.js', () => ({
@@ -57,6 +58,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
 vi.mock('./cosState.js', () => ({
   loadState: vi.fn(async () => sharedState),
   isDaemonRunning: vi.fn(() => daemonRunning),
+  canQueueImprovementTasks: vi.fn(() => false),
 }));
 vi.mock('../lib/domainAutonomy.js', () => ({
   getDomainMode: vi.fn(() => 'execute'),
@@ -107,11 +109,12 @@ import {
   clearSpawningJob,
   registerSingleJobSchedule,
 } from './cosJobScheduler.js';
-import { schedule as scheduleEvent, cancel as cancelEvent } from './eventScheduler.js';
+import { schedule as scheduleEvent, cancel as cancelEvent, getEvent as getScheduledEvent } from './eventScheduler.js';
 vi.mock('./taskSchedule.js', () => ({ getUpcomingTasks: vi.fn() }));
 import { getUpcomingTasks } from './taskSchedule.js';
 import { getJob } from './autonomousJobs.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
+import { canQueueImprovementTasks } from './cosState.js';
 
 beforeEach(() => {
   daemonRunning = true;
@@ -311,4 +314,98 @@ it('wakes at a future app deadline even while the task is ready for another app'
   } finally {
     vi.useRealTimers();
   }
+});
+
+// #7527: getUpcomingTasks now REJECTS (rather than swallowing input failures
+// into a misleadingly "complete" []) when app inventory/override/readiness
+// reads fail. cosJobScheduler owns that failure — it must retry soon instead
+// of falling back to the 1h default, which could sleep through a cron minute.
+describe('scheduleNextImprovementCheck — getUpcomingTasks input failure (#7527)', () => {
+  beforeEach(async () => {
+    // Reset the module-level "input unavailable" transition flag to a known
+    // state (false) before each test, so the log-once assertions below don't
+    // depend on execution order with other tests in this file.
+    getScheduledEvent.mockReturnValue(null);
+    getUpcomingTasks.mockResolvedValueOnce([]);
+    await scheduleNextImprovementCheck();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('arms a short retry instead of the 1h fallback, and logs the outage once (not per consecutive failure)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    scheduleEvent.mockClear();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    getUpcomingTasks.mockRejectedValueOnce(new Error('inventory read failed'));
+    await scheduleNextImprovementCheck();
+    expect(scheduleEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: 'cos-improvement-check', delayMs: 15000
+    }));
+    expect(errSpy).toHaveBeenCalledTimes(1);
+
+    getUpcomingTasks.mockRejectedValueOnce(new Error('still down'));
+    await scheduleNextImprovementCheck();
+    expect(errSpy).toHaveBeenCalledTimes(1);
+
+    errSpy.mockRestore();
+  });
+
+  it('logs recovery exactly once when getUpcomingTasks succeeds again', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    getUpcomingTasks.mockRejectedValueOnce(new Error('inventory read failed'));
+    await scheduleNextImprovementCheck();
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    getUpcomingTasks.mockResolvedValueOnce([]);
+    await scheduleNextImprovementCheck();
+    expect(logSpy).toHaveBeenCalledTimes(1);
+
+    logSpy.mockRestore();
+  });
+
+  it('preserves an already-armed earlier deadline instead of pushing it out to the 15s retry', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    scheduleEvent.mockClear();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    getScheduledEvent.mockReturnValue({ active: true, nextRunAt: Date.now() + 5000 });
+
+    getUpcomingTasks.mockRejectedValueOnce(new Error('inventory read failed'));
+    await scheduleNextImprovementCheck();
+
+    expect(scheduleEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      id: 'cos-improvement-check', delayMs: 5000
+    }));
+  });
+
+  it('re-arms via the retry handler even when its own finally-block recompute also fails (no orphaned one-shot)', async () => {
+    // This is the trap called out in #7527: the fired handler recomputes the
+    // next arm from its own `finally`. If that recompute threw instead of
+    // catching internally, the eventScheduler's 'once' rearm logic would
+    // deactivate this fired event with no replacement — the improvement
+    // cadence would die silently until a process restart.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    scheduleEvent.mockClear();
+    getScheduledEvent.mockReturnValue(null);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    canQueueImprovementTasks.mockReturnValue(false);
+
+    getUpcomingTasks.mockRejectedValueOnce(new Error('inventory read failed'));
+    await scheduleNextImprovementCheck();
+    const retryHandler = scheduleEvent.mock.calls.at(-1)[0].handler;
+
+    scheduleEvent.mockClear();
+    getUpcomingTasks.mockRejectedValueOnce(new Error('still down'));
+    await expect(retryHandler()).resolves.toBeUndefined();
+
+    expect(scheduleEvent).toHaveBeenCalledTimes(1);
+    expect(scheduleEvent).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'cos-improvement-check' }));
+  });
 });

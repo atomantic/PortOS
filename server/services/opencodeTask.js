@@ -20,6 +20,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { applyCredentialBootstrap, needsProcessGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { isOpencodeCommand, prefixOpencodeModel, getOpencodeLocalProviderNamespace } from '../lib/providerModels.js';
 import { parseAgentLine } from '../lib/opencodeStream.js';
@@ -82,7 +83,13 @@ export async function runOpencodeTask({ provider, modelId, cwd, prompt, timeoutM
   // Pins PWD to `cwd` (#3193) — OpenCode resolves its project root from PWD, so
   // an inherited one would silently run the task in the PortOS checkout.
   const env = buildCliChildEnv({ provider, model: modelId, cwd, guard: true });
-  const spawnTarget = prepareCliSpawn(provider.command, args, env);
+  // Credential-bootstrap wrap first (credentialBootstrap.js), then shim resolution.
+  const bootstrapped = applyCredentialBootstrap(provider, provider.command, args);
+  const spawnTarget = prepareCliSpawn(bootstrapped.command, bootstrapped.args, env);
+  // A bootstrap-wrapped child is the WRAPPER supervising the harness, so the
+  // timeout and the cancellation poll inside runStreamingCommand must signal
+  // the whole process group or the harness runs on past the task (#7496).
+  const processGroup = needsProcessGroup(bootstrapped.wrapped);
 
   const result = await runStreamingCommand(spawnTarget.command, spawnTarget.args, (line) => {
     const event = parseAgentLine(line);
@@ -91,7 +98,7 @@ export async function runOpencodeTask({ provider, modelId, cwd, prompt, timeoutM
     // Hook failures are already caught by runStreamingCommand — this runs
     // outside the request lifecycle, where a throw would take the process down.
     onEvent?.(event);
-  }, { cwd, env, timeoutMs, isCancelled: () => signal?.aborted === true });
+  }, { cwd, env, timeoutMs, processGroup, isCancelled: () => signal?.aborted === true });
 
   return { success: result.success, error: result.error || null, events };
 }

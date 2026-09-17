@@ -4,13 +4,18 @@
  *   GET  /:id/pull-requests                         → open forge requests
  *   POST /:id/pull-requests/:number/resolve         → queue a review-loop agent
  *   POST /:id/pull-requests/:number/review          → queue pr-reviewer for ONE PR
+ *   POST /:id/pull-requests/:number/do-review       → queue /do:review for ONE PR
  *
- * Neither POST route merges a user's PR directly. `/resolve` queues PortOS's
+ * No POST route merges a user's PR directly. `/resolve` queues PortOS's
  * existing review-loop follow-up, which owns fetching feedback, fixing the
  * branch, waiting for checks, and merging — and starts it immediately, because
  * pressing the button is the approval. `/review` queues the `pr-reviewer`
  * scheduled task narrowed to a single request, so the security-scan → review
  * pipeline that normally sweeps every external PR can be pointed at one.
+ * `/do-review` runs the bundled `/do:review` workflow against one request with
+ * the install's Code Review Defaults and publishes an inline review — the only
+ * one of the three that offers a review on EVERY open GitHub PR, whoever opened
+ * it, because `pr-reviewer` covers untrusted contributors alone.
  */
 
 import { Router } from 'express';
@@ -24,6 +29,7 @@ import { resolveReviewLoopOptions } from '../../services/codeReview.js';
 import { getAllTasks } from '../../services/cos.js';
 import { spawnReviewLoopFollowUp } from '../../services/agentWorktreeCleanup.js';
 import { listAppPullRequests } from '../../services/appPullRequests.js';
+import { isDoReviewTask, spawnPrDoReviewTask } from '../../services/prDoReviewTask.js';
 import {
   isReviewablePullRequest,
   listExternalOpenPullRequests,
@@ -62,6 +68,17 @@ const isReviewTaskFor = (task, appId, pullRequest) => {
   const metadata = task?.metadata;
   return ACTIVE_TASK_STATUSES.has(task?.status)
     && metadata?.analysisType === PR_REVIEWER_TASK_TYPE
+    && metadata?.app === appId
+    && Number(metadata.targetPullRequest) === pullRequest.number;
+};
+
+// A `/do:review` run pinned to this request. It shares `targetPullRequest` with
+// the pr-reviewer match above — one vocabulary for "this task targets PR #N" —
+// and `isDoReviewTask` is what tells the two apart.
+const isDoReviewTaskFor = (task, appId, pullRequest) => {
+  const metadata = task?.metadata;
+  return ACTIVE_TASK_STATUSES.has(task?.status)
+    && isDoReviewTask(metadata)
     && metadata?.app === appId
     && Number(metadata.targetPullRequest) === pullRequest.number;
 };
@@ -119,9 +136,25 @@ async function resolveReviewEligibility(app, result) {
   return pullRequest => eligible.has(pullRequest.number);
 }
 
-function actionFor(pullRequest, tasks, appId) {
+// Per-row Do:Review eligibility. Deliberately NOT an authorship test — that is
+// the whole point of the action: pr-reviewer covers untrusted contributors only,
+// so every other row had no review-only action. What it does gate is what
+// slashdo's PR mode actually needs — a GitHub request with a URL to read it by.
+// Pure, unlike `resolveReviewEligibility` beside it, so it costs no forge call.
+//
+// Server-side rather than re-derived in the tab, for the same reason
+// `reviewEligible` is: two copies of one rule drift, and the client's copy was
+// missing the URL half — painting a button whose only outcome is a 502.
+const isDoReviewablePullRequest = (result, pullRequest) =>
+  result.forge === 'github' && !!pullRequest.url;
+
+// The find-and-project contract shared by the two single-task actions, with the
+// matcher passed in. Written once so the "unreadable tasks is not the same as no
+// action" rule (`!tasks` → null, never a cheerful empty answer) cannot be
+// restated differently per kind.
+function actionFor(pullRequest, tasks, appId, matches) {
   if (!tasks) return null;
-  const task = tasks.find(candidate => isResolveTaskFor(candidate, appId, pullRequest));
+  const task = tasks.find(candidate => matches(candidate, appId, pullRequest));
   return task ? { taskId: task.id, status: task.status } : null;
 }
 
@@ -158,9 +191,11 @@ async function listWithActionState(app) {
       ...result,
       pullRequests: pullRequests.map(pullRequest => ({
         ...pullRequest,
-        agentAction: actionFor(pullRequest, tasks, app.id),
+        agentAction: actionFor(pullRequest, tasks, app.id, isResolveTaskFor),
         reviewAction: reviewActionFor(pullRequest, tasks, requests, app.id),
+        doReviewAction: actionFor(pullRequest, tasks, app.id, isDoReviewTaskFor),
         reviewEligible: reviewEligible(pullRequest),
+        doReviewEligible: isDoReviewablePullRequest(result, pullRequest),
       })),
     },
     tasks,
@@ -397,6 +432,105 @@ router.post('/:id/pull-requests/:number/review', loadApp, asyncHandler(async (re
     requestId: request.id,
     reviewAction: { taskId: null, status: 'pending' },
     duplicate: false,
+  });
+}));
+
+// POST /api/apps/:id/pull-requests/:number/do-review — run the bundled
+// `/do:review` workflow against ONE open request and publish its findings as an
+// inline review.
+//
+// Deliberately NOT gated on authorship. `/review` above covers untrusted
+// contributors only, and `/resolve` is the fix-and-land lifecycle, so a PR from
+// a known code contributor, a teammate, or PortOS's own agents had no
+// review-only action at all. Eligibility here is just "an open PR slashdo's PR
+// mode can read": GitHub, with a URL.
+router.post('/:id/pull-requests/:number/do-review', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const { number } = validateRequest(pullRequestParamsSchema, req.params);
+  // Optional provider/model/effort pin from the tab's "Run with" picker, applied
+  // exactly as /resolve applies it: this is a directly user-triggered agent run,
+  // not a scheduled task with saved stage providers.
+  const { provider, model, effort } = validateRequest(pullRequestProviderOverrideSchema, req.body || {});
+  // Deliberately NOT `listWithActionState`: that annotates every row with all
+  // four action fields, and its `resolveReviewEligibility` spends a `gh repo
+  // view`, a `gh api user`, and one collaborator-permission call per distinct PR
+  // author — for `reviewEligible`, which this route never reads. `/review` skips
+  // it for the same reason. The two reads are independent, so they overlap.
+  const [result, tasks] = await Promise.all([listAppPullRequests(app), readActiveTasks()]);
+  throwForgeReadError(result);
+
+  // Before any row lookup: on a non-GitHub forge every row is a guaranteed 409,
+  // so say so rather than searching a list that cannot produce a match.
+  // slashdo's PR mode aborts on a GitLab merge-request URL rather than falling
+  // back to a local diff, so there is nothing to burn an agent run on.
+  if (result.forge !== 'github') {
+    throw new ServerError(
+      `Do:Review covers GitHub pull requests only (this app's forge is ${result.forge || 'unknown'})`,
+      { status: 409, code: 'PULL_REQUEST_NOT_REVIEWABLE' },
+    );
+  }
+
+  const pullRequest = (result.pullRequests || []).find(candidate => candidate.number === number);
+  if (!pullRequest) {
+    throw new ServerError(`Open pull request or merge request #${number} was not found`, {
+      status: 404,
+      code: 'PULL_REQUEST_NOT_OPEN',
+    });
+  }
+  if (!isDoReviewablePullRequest(result, pullRequest)) {
+    throw new ServerError(`Pull request #${number} has no usable forge URL`, {
+      status: 502,
+      code: 'PULL_REQUEST_CONTEXT_UNAVAILABLE',
+    });
+  }
+
+  // Fail CLOSED on unreadable task state, matching /resolve and /review: reading
+  // it as "nothing in flight" would spend a second full review roster on a
+  // request an agent is already reviewing.
+  if (tasks === null) {
+    throw new ServerError('Could not inspect existing CoS actions before queueing this review', {
+      status: 503,
+      code: 'AGENT_ACTION_UNAVAILABLE',
+    });
+  }
+
+  const existing = tasks.find(task => isDoReviewTaskFor(task, app.id, pullRequest));
+  if (existing) {
+    res.json({
+      appId: app.id,
+      appName: app.name,
+      number,
+      doReviewAction: { taskId: existing.id, status: existing.status },
+      duplicate: true,
+    });
+    return;
+  }
+
+  const queued = await spawnPrDoReviewTask({
+    app,
+    pullRequest,
+    repoFullName: result.fullName,
+    provider,
+    model,
+    effort,
+  });
+  if (!queued.task) {
+    throw new ServerError('Could not queue the pull-request review agent', {
+      status: 503,
+      code: 'AGENT_ACTION_UNAVAILABLE',
+    });
+  }
+
+  res.status(queued.duplicate ? 200 : 202).json({
+    appId: app.id,
+    appName: app.name,
+    number,
+    doReviewAction: { taskId: queued.task.id, status: queued.task.status },
+    duplicate: queued.duplicate,
+    // Same `started` / `queueReason` pair /resolve returns, so the tab's one
+    // toast builder reads both actions the same way.
+    started: queued.dispatch.started,
+    queueReason: queued.dispatch.reason,
   });
 }));
 

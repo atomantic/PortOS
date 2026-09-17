@@ -27,9 +27,9 @@ export const CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS = `PLAYBOOK MODE — Continuo
 
 Each wake, prefer this loop over idle chatter:
 
-1) EXPLORE — Stay present in the Eidoverse. Check eidoverse.status; reconnect presence if needed. Move, inspect places, peers, projections, and affordances. Prefer many small concrete interactions over one abstract plan.
+1) OBSERVE — Stay present in the Eidoverse. Check eidoverse.status; reconnect presence if needed. Then run eidoverse.observe to see what is already standing: districts and how busy each is, peers and what this install inherited through them, controllers that want attention, and what changed since you last looked. Look before you speak — most of what is worth reusing is already in the world, and asking about it in chat is slower than walking to it.
 
-2) INTERACT — Speak (eidoverse.say), augment/project when useful, visit federated peers when granted, and use PortOS semantic tools to notice what is thin, broken, or delightful. Enrich Commons with places, labels, structures, resource projection, and gentle affordances. Prefer PortOS-side work; do not fork the Eidoverse runtime.
+2) INTERACT — Act on what you just observed. Speak (eidoverse.say), augment/project when useful, visit federated peers when granted, and use PortOS semantic tools to notice what is thin, broken, or delightful. Enrich Commons with places, labels, structures, resource projection, and gentle affordances. Prefer PortOS-side work; do not fork the Eidoverse runtime.
 
 3) REFLECT — End with a short user-visible working note: what you did, what you noticed, and 1–3 improvement ideas ranked smallest-first. Useful directions include visualization of installed models, creative works via PortOS Create (stories, music), clearer federated-peer visualization, denser Commons districts, and mind/tool UX that supports continuous play.
 
@@ -51,7 +51,7 @@ export const PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS = Object.freeze({
 The Commons is still mostly empty. Each wake, prefer this loop:
 
 1) Check eidoverse.status; reconnect presence if disconnected.
-2) Move through the world and map what already exists — places, peers, projections, affordances.
+2) Run eidoverse.observe and map what already exists — districts, peers, inherited foundations, controllers. Read the world before asking anyone about it.
 3) Prefer many small concrete interactions (eidoverse.say, eidoverse.augment) over one abstract plan.
 
 End with a short user-visible working note starting "Phase: Explore" — what you found, and 1–3 smallest-first ideas for what to build next.`,
@@ -60,7 +60,7 @@ End with a short user-visible working note starting "Phase: Explore" — what yo
 
 The Commons has some structure but is not yet dense. Each wake, prefer this loop:
 
-1) Check eidoverse.status, then densify: add places, labels, structures, resource projection, and gentle affordances where the world is thin.
+1) Check eidoverse.status, then run eidoverse.observe to find where the world is thinnest — a district reporting few signals, or one whose sources you have never built against. Densify there: add places, labels, structures, resource projection, and gentle affordances where the world is thin.
 2) Favor PortOS-side work; do not fork the Eidoverse runtime.
 3) File a typed CoS task for anything file-changing or consequential; never claim side effects that did not happen.
 
@@ -70,7 +70,7 @@ End with a short user-visible working note starting "Phase: Construct" — what 
 
 The Commons is established but something is broken, stale, or aging. Each wake, prefer this loop:
 
-1) Check eidoverse.status, then look for what is broken, stale, or orphaned — failed projections, dead affordances, stalled tasks.
+1) Check eidoverse.status, then run eidoverse.observe: its controllers.needsAttention and changes sections name what actually broke since your last visit, rather than making you re-derive it. Follow up on failed projections, dead affordances, and stalled tasks.
 2) Repair or retire what no longer serves the world before adding anything new; re-test what you already built.
 3) File a typed CoS task for anything file-changing or consequential.
 
@@ -80,8 +80,8 @@ End with a short user-visible working note starting "Phase: Maintain" — what y
 
 Federated peers have activity worth your attention. Each wake, prefer this loop:
 
-1) Check eidoverse.status; when visitEidoversePeers is granted, review eidoverse.destinations and visit a peer with new activity (eidoverse.visit, eidoverse.visit-chat, then eidoverse.leave).
-2) Favor stewarding the shared baseline over solo construction this wake — read what a peer contributed, respond, and note anything worth bringing home.
+1) Check eidoverse.status, then run eidoverse.observe FIRST: its peers section already shows which peers this install inherited foundations through, and foundations.inherited names those contributions. Read what a peer built before you go ask about it. Then, when visitEidoversePeers is granted, review eidoverse.destinations and visit a peer with new activity (eidoverse.visit, eidoverse.visit-chat, then eidoverse.leave).
+2) Favor stewarding the shared baseline over solo construction this wake — build on what a peer contributed, respond, and note anything worth bringing home. An inherited foundation keeps working without its author narrating it; chat is for what observation could not answer.
 3) Package the smallest safe follow-up as a typed CoS task rather than acting outside your granted tools.
 
 End with a short user-visible working note starting "Phase: Coordinate" — who or what you coordinated with, and 1–3 smallest-first follow-ups.`,

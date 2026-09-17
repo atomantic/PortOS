@@ -134,6 +134,23 @@ describe('HarnessesTab', () => {
     expect(screen.getByTestId('install-modal')).toBeInTheDocument();
   });
 
+  // The harness is probed once per bootstrap credential, so a 200 can carry a
+  // `reason`: one credential answered and another did not. Reporting that as a
+  // clean success hides a record the refresh left alone.
+  it('does not claim success when one credential’s probe failed', async () => {
+    refreshHarnessModels.mockResolvedValue({
+      models: ['opencode/a'],
+      updated: ['opencode-zen-cli'],
+      reason: '`token-cli opencode models` returned no models.',
+    });
+    render(<HarnessesTab />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Refresh models/ }));
+
+    expect(await screen.findByText(/token-cli opencode models` returned no models/)).toBeInTheDocument();
+    expect(screen.getByText(/1 models from opencode → 1 provider updated/)).toBeInTheDocument();
+  });
+
   it('renders a refusal reason verbatim instead of a generic failure', async () => {
     refreshHarnessModels.mockRejectedValue(new Error('Sign in to OpenCode CLI in a terminal.'));
     render(<HarnessesTab />);

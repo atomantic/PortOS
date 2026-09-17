@@ -136,6 +136,7 @@ import {
   parkPerpetual,
   resetPerpetualForManualRun,
   getPerpetualParkInfo,
+  recordPerpetualStall,
   isPerpetualParkActive,
   getPerpetualDrainState,
   recordPerpetualDispatch,
@@ -2713,6 +2714,118 @@ describe('taskSchedule', () => {
       })
     })
 
+    // #7527: a rejected app inventory/override/readiness read used to be
+    // swallowed into [] / {} / null, which read as "no apps configured" or
+    // "not ready" rather than "the calculation is unavailable" — hiding the
+    // failure from cosJobScheduler.scheduleNextImprovementCheck (which then
+    // armed its 1h fallback and could sleep through a cron minute). Assert
+    // the rejection now propagates out of getUpcomingTasks instead.
+    describe('getUpcomingTasks — propagates input failures instead of swallowing them (#7527)', () => {
+      it('propagates a rejected active-apps read instead of treating it as no apps', async () => {
+        getActiveApps.mockRejectedValueOnce(new Error('app inventory unavailable'))
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        await expect(getUpcomingTasks(50)).rejects.toThrow('app inventory unavailable')
+      })
+
+      it('propagates a rejected app-override read instead of treating it as no overrides', async () => {
+        getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
+        getAppTaskTypeOverrides.mockRejectedValueOnce(new Error('app overrides unavailable'))
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        await expect(getUpcomingTasks(50)).rejects.toThrow('app overrides unavailable')
+      })
+
+      it('propagates a rejected per-app readiness read instead of treating the app as not-ready', async () => {
+        getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
+        getAppTaskTypeOverrides.mockResolvedValueOnce({
+          'release-check': { enabled: true, interval: '15 9 * * *' }
+        })
+        isTaskTypeEnabledForApp.mockRejectedValueOnce(new Error('app readiness unavailable'))
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        await expect(getUpcomingTasks(50)).rejects.toThrow('app readiness unavailable')
+      })
+    })
+
+    describe('getScheduleStatus — appSchedules', () => {
+      // vi.clearAllMocks() keeps a mockResolvedValue, so these cases restore the
+      // apps.js factory defaults rather than leaking an app roster into the
+      // suites that follow.
+      afterEach(() => {
+        vi.useRealTimers()
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        getAppTaskTypeInterval.mockResolvedValue(null)
+        getActiveApps.mockResolvedValue([])
+        getAppTaskTypeOverrides.mockResolvedValue({})
+      })
+
+      const withRealCron = async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-01-01T16:00:00Z')) // 08:00 in the mocked America/Los_Angeles zone
+        const actual = await vi.importActual('./eventScheduler.js')
+        const actualTimezone = await vi.importActual('../lib/timezone.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getLocalParts.mockImplementation(actualTimezone.getLocalParts)
+      }
+
+      // The reported bug: a task left on-demand globally while one app puts it
+      // on a cron read as "manual trigger only" everywhere, and the Schedule
+      // Timeline dropped it into the unpinned bucket.
+      it('lists an app cron on a task that is on-demand globally, with that app\'s next slot', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
+        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+
+        const status = await getScheduleStatus()
+        expect(status.tasks['release-check'].appSchedules).toEqual([{
+          appId: 'app-1',
+          appName: 'Acme',
+          cronExpression: '15 9 * * *',
+          nextRunAt: '2026-01-01T17:15:00.000Z',
+          shouldRun: false,
+          reason: 'cron-cooldown',
+          missedSlot: null
+        }])
+      })
+
+      it('omits an app that merely inherits the global cadence', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        getAppTaskTypeInterval.mockResolvedValue(null)
+        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true } })
+        mockSchedule({ tasks: { 'release-check': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
+
+        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+      })
+
+      // An app restating the task's own expression adds no schedule the global
+      // row cannot already show, so counting it would make "N apps scheduled"
+      // mean something different per task.
+      it('omits an app that restates the global expression', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValue(true)
+        getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
+        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: true, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'release-check': { type: 'cron', cronExpression: '15 9 * * *', enabled: true, runAfter: [] } } })
+
+        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+      })
+
+      it('omits an app that is disabled for the task', async () => {
+        await withRealCron()
+        getActiveApps.mockResolvedValue([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValue(false)
+        getAppTaskTypeInterval.mockResolvedValue('15 9 * * *')
+        getAppTaskTypeOverrides.mockResolvedValue({ 'release-check': { enabled: false, interval: '15 9 * * *' } })
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+
+        expect((await getScheduleStatus()).tasks['release-check'].appSchedules).toEqual([])
+      })
+    })
+
     describe('parkPerpetual / perpetual park state', () => {
       it('parkPerpetual stamps parkedUntil + reason on the per-app record', async () => {
         mockSchedule({ tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 3600000 } } })
@@ -3263,6 +3376,49 @@ describe('taskSchedule', () => {
         const status = await getScheduleStatus()
         const p = status.tasks['claim-issue'].perpetualStatus
         expect(p).toMatchObject({ parkedAppCount: 1, trackedAppCount: 2, globalParked: false, nextRecheckAt: future, parkReason: 'no-actionable-issues' })
+      })
+    })
+
+    // The escalated-stall diagnostic (#7551): a perpetual gate that skips
+    // WITHOUT parking (a broken forge CLI) has no park record to hang its
+    // reason on, so it needs its own persisted channel — one that survives a
+    // process restart the same way a park does, and that coexists with a
+    // "draining" (not parked) status.
+    describe('recordPerpetualStall + getScheduleStatus stall surfacing', () => {
+      it('stamps a stall on the per-app record without touching the park fields', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
+        })
+        await recordPerpetualStall('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed', detail: 'gh: authentication failed', consecutive: 3 })
+        const status = await getScheduleStatus()
+        const p = status.tasks['claim-issue'].perpetualStatus
+        expect(p.stall).toMatchObject({ cli: 'gh', reason: 'gh-list-failed', detail: 'gh: authentication failed', consecutive: 3 })
+        expect(p.globalParked).toBe(false)
+        expect(p.parkedAppCount).toBe(0)
+      })
+
+      it('clears the stall when recorded with a null verdict', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
+        })
+        await recordPerpetualStall('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed', consecutive: 3 })
+        await recordPerpetualStall('claim-issue', 'app-1', null)
+        const status = await getScheduleStatus()
+        expect(status.tasks['claim-issue'].perpetualStatus.stall).toBeNull()
+      })
+
+      it('survives being re-read as if from a process restart (persisted, not in-memory)', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
+        })
+        await recordPerpetualStall('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed', consecutive: 5 })
+        // A fresh getScheduleStatus() call re-reads the persisted schedule from
+        // scratch rather than any in-process cache, standing in for a restart.
+        const status = await getScheduleStatus()
+        expect(status.tasks['claim-issue'].perpetualStatus.stall).toMatchObject({ consecutive: 5 })
       })
     })
 

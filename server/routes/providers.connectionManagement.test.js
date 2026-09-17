@@ -24,6 +24,7 @@ import { modelAliasRevision } from '../lib/providerModelAliases.js';
 
 const store = {
   readGraph: vi.fn(),
+  applyServiceColumnBackfill: vi.fn().mockResolvedValue(undefined),
   applyReconciliation: vi.fn().mockResolvedValue(undefined),
   commitPendingProjection: vi.fn().mockResolvedValue(undefined),
   acknowledgeProjection: vi.fn().mockResolvedValue(undefined),

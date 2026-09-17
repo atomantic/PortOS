@@ -30,6 +30,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance, isManualOnDemandRequest } from '../lib/quotaBurnOrigin.js';
 import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
@@ -494,10 +495,7 @@ export async function buildClaimWorkTask(app, {
   const targetRef = normalizeWorkItemRef(target);
   const swarmBlock = targetRef ? '' : resolveSwarmBlock(promptTaskType, metadata.swarmCount);
 
-  const prompt = `${swarmBlock}${template}`
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id)
+  const prompt = applyAppPlaceholders(`${swarmBlock}${template}`, app)
     // Function-form replacers so literal `$`/`$1` in the substituted text isn't
     // interpreted as a backreference (see the scheduler's same-pattern note).
     .replace(/\{reviewers\}/g, () => reviewersCsv || 'none')
@@ -595,10 +593,7 @@ export async function buildJiraTicketTask(app, ticketKey) {
     getTaskPrompt('claim-issue-jira'),
     resolveClaimReviewerPrompt(app),
   ]);
-  const prompt = template
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id)
+  const prompt = applyAppPlaceholders(template, app)
     // Function-form replacer so a literal `$` in the reviewers CSV isn't read as
     // a backreference.
     .replace(/\{reviewers\}/g, () => reviewersCsv || 'none')
@@ -892,6 +887,51 @@ async function recordAutoApprovedDeferral({ type, task, appId, project }, state,
 }
 
 /**
+ * Run the one Priority-1 admission pass shared by the periodic evaluator and
+ * event-driven dequeue engine (#7523 — the two used to hand-mirror this
+ * ordered ladder, and #4520/#7300 each landed as two synchronized edits).
+ * Owns the ordered not-runnable-here, approval, and max-spawn gates for
+ * pending user tasks; adapters only decide how an admitted task is emitted,
+ * how per-cycle capacity is tracked, and (optionally) what happens when
+ * capacity denies a candidate.
+ */
+export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, adapter) {
+  const { capacityExhausted, canSpawn, emitSpawn, trackSpawn, onDefer = async () => {} } = adapter;
+
+  const admitted = [];
+  for (const task of pendingUserTasks) {
+    if (capacityExhausted()) break;
+    // Not runnable here: the task is pinned to another instance (#4520), or a
+    // federated peer holds a live lease on it (#1650) and is working it on the
+    // other machine. Skip it during candidate selection so it doesn't consume
+    // this cycle's spawn slot (the spawn guard would return null anyway) and
+    // starve later runnable tasks.
+    const skipReason = getSkipReason(task.metadata, instanceId);
+    if (skipReason) {
+      emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
+      continue;
+    }
+    // A user row that says it is NOT auto-approved is withheld from the unattended
+    // spawn (#7300) — see isUserTaskRunnableUnattended for why, and for why the
+    // rule lives in cosDequeue.js rather than once per engine.
+    if (!isUserTaskRunnableUnattended(task)) {
+      emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
+      continue;
+    }
+    if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
+    const userTask = { ...task, taskType: 'user' };
+    if (!canSpawn(userTask)) {
+      await onDefer(userTask);
+      continue;
+    }
+    emitSpawn(userTask);
+    trackSpawn(userTask);
+    admitted.push(userTask);
+  }
+  return admitted;
+}
+
+/**
  * Priority 0: On-demand task requests (highest priority — user explicitly
  * requested these). Reads the live schedule's `onDemandRequests`, clears each
  * as it is processed, and pushes any produced task (deduped) into the spawn set.
@@ -919,40 +959,23 @@ async function spawnPriority0OnDemand(ctx) {
  */
 async function spawnPriority1UserTasks(ctx) {
   const { pendingUserTasks, availableSlots, perProjectLimit, tasksToSpawn, canSpawnTask, trackSpawn, instanceId } = ctx;
-  for (const task of pendingUserTasks) {
-    if (tasksToSpawn.length >= availableSlots) break;
-    // Not runnable here: the task is pinned to another instance (#4520), or a
-    // federated peer holds a live lease on it (#1650) and is working it on the
-    // other machine. Skip it during candidate selection so it doesn't consume
-    // this cycle's spawn slot (the spawn guard would return null anyway) and
-    // starve later runnable tasks.
-    const skipReason = getSkipReason(task.metadata, instanceId);
-    if (skipReason) {
-      emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
-      continue;
-    }
-    // A user row that says it is NOT auto-approved is withheld from the unattended
-    // spawn (#7300) — see isUserTaskRunnableUnattended for why, and for why the
-    // rule lives in cosDequeue.js rather than once per engine.
-    if (!isUserTaskRunnableUnattended(task)) {
-      emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
-      continue;
-    }
-    if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
-    const userTask = { ...task, taskType: 'user' };
-    if (!canSpawnTask(userTask)) {
-      const project = task.metadata?.app || '_self';
-      emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${project}`);
-      await recordDecision(
-        DECISION_TYPES.CAPACITY_FULL,
-        `User task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${project}`,
-        { taskId: task.id, project, limit: perProjectLimit }
-      );
-      continue;
-    }
-    tasksToSpawn.push(userTask);
-    trackSpawn(userTask);
-  }
+  await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
+    capacityExhausted: () => tasksToSpawn.length >= availableSlots,
+    canSpawn: (task) => canSpawnTask(task),
+    emitSpawn: (task) => tasksToSpawn.push(task),
+    trackSpawn,
+    onDefer: (task) => recordPendingUserDeferral(task, perProjectLimit),
+  });
+}
+
+async function recordPendingUserDeferral(task, perProjectLimit) {
+  const project = task.metadata?.app || '_self';
+  emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${project}`);
+  await recordDecision(
+    DECISION_TYPES.CAPACITY_FULL,
+    `User task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${project}`,
+    { taskId: task.id, project, limit: perProjectLimit }
+  );
 }
 
 /**
@@ -2065,10 +2088,24 @@ const TRANSIENT_VERDICT_TTL_MS = 60_000;
 const transientVerdicts = new Map();
 const transientVerdictKey = (taskType, appId) => `${taskType}:${appId || 'global'}`;
 
+// How many CONSECUTIVE transient skips (across evaluations, not within any
+// single 60s window) applyPerpetualWorkGate tolerates at `debug` before
+// escalating to `warn` — see recordPerpetualTransient's return value.
+export const PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD = 3;
+
+// Consecutive-transient-skip counters, keyed the same as transientVerdicts but
+// deliberately tracked SEPARATELY from it: this streak must survive across
+// evaluations more than 60s apart (it counts how many evaluations IN A ROW came
+// back transient, not how many landed inside one verdict's TTL window), and it
+// is reset — not just expired — the moment a probe stops being transient.
+const transientStreaks = new Map();
+
 /**
  * Record why a perpetual work gate skipped WITHOUT parking. `cli` is the forge
  * CLI whose probe failed (`gh` / `glab`), or null when no forge was involved.
- * Passing a null verdict clears any stale entry (the actionable / park paths).
+ * Passing a null verdict clears any stale entry (the actionable / park paths)
+ * AND resets the consecutive-transient streak — a successful probe means
+ * whatever was stuck has cleared.
  *
  * Also doubles as pr-reviewer's idle-skip reason channel: pr-reviewer is
  * on-demand, not perpetual, so its preflight skip (churn park, no external PRs,
@@ -2077,14 +2114,22 @@ const transientVerdictKey = (taskType, appId) => `${taskType}:${appId || 'global
  * for WHY — the same gap this map already closes for 'transient'. The payload
  * shape here is a free-form object (`{ ...verdict }`), so a `{ reason }` payload
  * under the `taskType: 'pr-reviewer'` key needs no separate map or TTL logic.
+ * pr-reviewer shares the streak counter too — harmless, since it is keyed
+ * per-`taskType:appId` and nothing reads pr-reviewer's streak today.
+ *
+ * @returns {number} the new consecutive-transient count (0 once cleared).
  */
 export function recordPerpetualTransient(taskType, appId, verdict) {
   const key = transientVerdictKey(taskType, appId);
   if (!verdict) {
     transientVerdicts.delete(key);
-    return;
+    transientStreaks.delete(key);
+    return 0;
   }
   transientVerdicts.set(key, { ...verdict, at: Date.now() });
+  const count = (transientStreaks.get(key) || 0) + 1;
+  transientStreaks.set(key, count);
+  return count;
 }
 
 /** Read-and-consume the recorded verdict; null when absent or past its TTL. */
@@ -2432,6 +2477,11 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
     ignoreTaskId
   });
   if (detection.actionable) {
+    // A probe that reports actionable work is, by definition, not stuck — clear
+    // both the transient streak and any persisted stall diagnostic before
+    // deciding whether THIS evaluation dispatches or parks on no-progress.
+    recordPerpetualTransient(taskType, app.id, null);
+    await taskSchedule.recordPerpetualStall(taskType, app.id, null);
     // A successful claim/plan agent can still return without changing forge or
     // PLAN state (for example, it decides not to pick the advertised item). The
     // completion refill would otherwise dispatch the same candidate forever.
@@ -2456,25 +2506,42 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
         return { skip: true };
       }
     }
-    recordPerpetualTransient(taskType, app.id, null);
     metadata.perpetual = true;
     // The dispatch is SPENT BY THE CALLER, once a task is certain — see the note
     // on `spendDispatch` in the JSDoc above.
     return { skip: false, spendDispatch: true, signature: drainSignature };
   }
   if (detection.transient) {
-    emitLog('debug', `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason})`, { appId: app.id });
-    // The skip is silent by design (the next tick retries), but an explicit user
-    // "Run" ends here too — record which CLI failed so emitOnDemandEmpty can tell
-    // the difference between a blip and a forge that is broken for good, plus any
-    // remedy the detector already named (a permission the token lacks, which no
-    // amount of retrying fixes).
-    recordPerpetualTransient(taskType, app.id, {
-      cli: detection.cli || null, reason: detection.reason, remedy: detection.remedy || null
+    // Record BEFORE logging, so the log line (and the escalation decision) can
+    // report which consecutive occurrence this is. A single blip stays at
+    // `debug` (suppressed on a default install); once the SAME probe has failed
+    // PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD evaluations in a row, escalate to
+    // `warn` (reaches the console and the cos:log stream) and persist the
+    // stalled verdict — otherwise a perpetual drain whose forge CLI is broken
+    // produces zero console output, zero persisted state, and zero UI signal,
+    // indefinitely (#7551).
+    const consecutive = recordPerpetualTransient(taskType, app.id, {
+      cli: detection.cli || null, reason: detection.reason, remedy: detection.remedy || null, detail: detection.detail || null
     });
+    const detailSuffix = detection.detail ? ` — ${detection.detail}` : '';
+    const escalated = consecutive >= PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD;
+    emitLog(escalated ? 'warn' : 'debug',
+      `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason}${detailSuffix}, ${consecutive} consecutive)`,
+      { appId: app.id, consecutive });
+    // The skip is silent by design at low counts (the next tick retries), but an
+    // explicit user "Run" ends here too — record which CLI failed so
+    // emitOnDemandEmpty can tell the difference between a blip and a forge that
+    // is broken for good, plus any remedy the detector already named (a
+    // permission the token lacks, which no amount of retrying fixes).
+    if (escalated) {
+      await taskSchedule.recordPerpetualStall(taskType, app.id, {
+        cli: detection.cli || null, reason: detection.reason, detail: detection.detail || null, consecutive
+      });
+    }
     return { skip: true };
   }
   recordPerpetualTransient(taskType, app.id, null);
+  await taskSchedule.recordPerpetualStall(taskType, app.id, null);
   // Carry the detector's open/in-flight/filtered breakdown into the park so an
   // explicit "Run" can explain WHY a non-empty queue yielded no work.
   const counts = detection.total != null

@@ -83,6 +83,32 @@ describe('useAutoRefetch', () => {
     warn.mockRestore();
   });
 
+  it('exposes the failure as `error` alongside the preserved last-good `data`, and clears it on recovery', async () => {
+    // `enabled: false` + manual refetch() calls give deterministic control
+    // over each fetch, rather than racing an on-interval poll (refetch is
+    // intentionally unconditional — see the hook's own doc comment).
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce('first')
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce('recovered');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useAutoRefetch(fetchFn, 60_000, { enabled: false }));
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.data).toBe('first');
+    expect(result.current.error).toBeNull();
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.error?.message).toBe('boom');
+    expect(result.current.data).toBe('first'); // last-good data is untouched by the failure
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.data).toBe('recovered');
+    expect(result.current.error).toBeNull();
+    warn.mockRestore();
+  });
+
   it('survives non-Error rejections (null, string) without throwing inside the catch', async () => {
     const fetchFn = vi.fn()
       .mockResolvedValueOnce('first')

@@ -162,3 +162,28 @@ it('rejects sync-aa when no API key is provided and syncs successfully when mock
     spy.mockRestore();
   }
 });
+
+it('scopes the chart inventory — and a fresh discovery — to the provider model-access policy', async () => {
+  // The chart defaults its pills to "models your providers can dispatch", so a
+  // provider scoped to a free tier must narrow the chart too. Otherwise the page
+  // plots, and offers to research, models an unentitled account cannot run.
+  providerService.getAllProviders.mockResolvedValue({ providers: [{
+    id: 'nvidia-nim', name: 'NVIDIA NIM', type: 'api', enabled: true,
+    models: ['meta/llama-3.3-70b-instruct', 'nvidia/nemotron-4-340b-instruct'],
+    modelAccess: { mode: 'allow', patterns: ['meta/*'] },
+  }] });
+  providerService.fetchProviderModelCatalog.mockResolvedValue({
+    models: ['meta/llama-3.1-8b-instruct', 'nvidia/nemotron-4-340b-instruct'], contextWindows: {},
+  });
+
+  const result = await request(app).get('/comparison');
+  expect(result.body.inventory[0].models.map(m => m.model)).toEqual(['meta/llama-3.3-70b-instruct']);
+  // The scoped inventory is what `availableModels` is read back off, so the
+  // chart's default selection cannot reach past the policy either.
+  expect(result.body.availableModels).not.toContain('nemotron-4-340b-instruct');
+
+  // A freshly probed catalog is scoped the same way: the policy describes the
+  // ACCOUNT, not just whatever happens to be on the stored record.
+  const discovery = await request(app).post('/comparison/discover').send({ providerId: 'nvidia-nim' });
+  expect(discovery.body.models.map(m => m.model)).toEqual(['meta/llama-3.1-8b-instruct']);
+});

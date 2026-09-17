@@ -68,6 +68,12 @@ import { systemTimeZone } from './claudeCodeUsage.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota } from './imageGenQuota.js';
 
+// Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
+// `needsProcessGroup` is false there and these sites spawn attached. The policy
+// itself is pinned with an injected platform in credentialBootstrap.test.js;
+// these assert only that each site plumbs the decision through.
+const EXPECT_GROUP = process.platform !== 'win32';
+
 // Synthetic Antigravity `/usage` panel — invented values, redacted account, in
 // the agy 1.1.x rendered shape (`… Limit Remaining`). The bar percentage is
 // percent REMAINING; a full bar with "Quota available" has no reset.
@@ -435,6 +441,45 @@ describe('getProviderQuotas', () => {
     getAllProviders.mockResolvedValueOnce({ activeProvider: null, providers: [] });
     expect(await getProviderQuotas({ family: 'grok' })).toEqual([]);
   });
+
+  // #7496. The scrape kills its PTY on every exit path, and with a credential
+  // bootstrap the PTY's direct child is the WRAPPER — node-pty's kill() signals
+  // that pid alone, so the harness would go on rendering into a PTY nobody
+  // reads. The flag has to travel from the wrap decision to the scrape.
+  it('asks for a process-group teardown when the scraped command is bootstrap-wrapped', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{
+        id: 'grok', enabled: true, type: 'tui', command: 'grok',
+        credentialBootstrap: { command: 'token-cli', args: ['run'] },
+      }]
+    });
+    getSettings.mockResolvedValueOnce({});
+    scrapeTuiUsage.mockResolvedValue('Weekly limit: 5% Next reset: Jan 1, 00:00');
+
+    await getProviderQuotas({ family: 'grok' });
+
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'token-cli',
+      processGroup: EXPECT_GROUP,
+    }));
+  });
+
+  it('leaves an unwrapped scrape on the plain node-pty kill', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{ id: 'grok', enabled: true, type: 'tui', command: 'grok' }]
+    });
+    getSettings.mockResolvedValueOnce({});
+    scrapeTuiUsage.mockResolvedValue('Weekly limit: 5% Next reset: Jan 1, 00:00');
+
+    await getProviderQuotas({ family: 'grok' });
+
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'grok',
+      processGroup: false,
+    }));
+  });
 });
 
 describe('agyRefreshToIso', () => {
@@ -582,12 +627,43 @@ describe('parseGrokUsage', () => {
     expect(parseGrokUsage('Weekly limit (8% used): 42%', opts).plan).toBeNull();
     expect(parseGrokUsage('Weekly limit (SuperGrok): 42%', opts).plan).toBe('SuperGrok');
   });
+
+  it('accepts multi-word vendor tier names with interior spaces', () => {
+    // Regression: plan names like "Claude Max 20x" and "SuperGrok Heavy" were
+    // dropped because the regex forbade spaces. They are valid vendor tiers.
+    expect(parseGrokUsage('Weekly limit (Claude Max 20x): 42%', opts).plan).toBe('Claude Max 20x');
+    expect(parseGrokUsage('Weekly limit (SuperGrok Heavy): 42%', opts).plan).toBe('SuperGrok Heavy');
+    expect(parseGrokUsage('Weekly limit (Max 20x): 42%', opts).plan).toBe('Max 20x');
+    // Still rejects leading/trailing spaces (the code trims these before testing)
+    expect(parseGrokUsage('Weekly limit (Claude Max 20x ): 42%', opts).plan).toBe('Claude Max 20x');
+    expect(parseGrokUsage('Weekly limit ( Claude Max 20x): 42%', opts).plan).toBe('Claude Max 20x');
+  });
+
+  it('still caps a tier-shaped name at 60 characters', () => {
+    // Allowing interior spaces must not drop the length cap the single-token
+    // form carried: a long scraped fragment shaped like a tier is still panel
+    // text, not a plan, and a wrong plan reads as fact.
+    const sixty = `Max ${'A'.repeat(56)}`;
+    expect(sixty).toHaveLength(60);
+    expect(parseGrokUsage(`Weekly limit (${sixty}): 42%`, opts).plan).toBe(sixty);
+    expect(parseGrokUsage(`Weekly limit (Max ${'A'.repeat(57)}): 42%`, opts).plan).toBeNull();
+  });
 });
 
 describe('TUI usage fetchers (via getProviderQuotas)', () => {
   beforeEach(() => {
     __resetUsageScrapeCache();
     scrapeTuiUsage.mockReset();
+  });
+
+  it('scrapes through the credential-bootstrap CLI when the provider names one', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'agy', providers: [{
+      id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy',
+      credentialBootstrap: { command: 'token-cli', args: ['run'] },
+    }] });
+    scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
+    await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ command: 'token-cli', args: ['run', 'agy'], slashCommand: '/usage' }));
   });
 
   it('surfaces a supported Antigravity card with parsed limits', async () => {

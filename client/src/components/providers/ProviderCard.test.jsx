@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import ProviderCard from './ProviderCard';
 import { PROVIDER_CARD_STATE } from '../../utils/providers';
@@ -16,7 +16,7 @@ const wrapper = (overrides = {}) => ({
   ...overrides,
 });
 
-const renderCard = (provider, daemonReadiness = null) => render(
+const renderCard = (provider, daemonReadiness = null, props = {}) => render(
   <MemoryRouter>
     <ProviderCard
       provider={provider}
@@ -30,6 +30,7 @@ const renderCard = (provider, daemonReadiness = null) => render(
       providersById={{}}
       runnerAllowedCommands={[]}
       testResult={null}
+      {...props}
     />
   </MemoryRouter>
 );
@@ -271,5 +272,98 @@ describe('ProviderCard codex routing override', () => {
     expect(screen.queryByText(/Model routing is overridden/)).toBeNull();
     expect(screen.queryByText(/127\.0\.0\.1/)).toBeNull();
     expect(screen.queryByText(/may not be counted here/)).toBeNull();
+  });
+});
+
+describe('ProviderCard delete confirmation', () => {
+  const renderDeletable = (provider, props = {}) => {
+    const onDelete = vi.fn();
+    renderCard(provider, null, { onDelete, ...props });
+    return onDelete;
+  };
+
+  it('asks before deleting instead of firing on the first click', () => {
+    // Delete sits in the same button row as Test and Edit and the record is not
+    // recoverable — a misclick there used to destroy the provider outright.
+    const onDelete = renderDeletable(wrapper());
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.getByText(/Delete OpenCode OpenRouter TUI\?/)).toBeTruthy();
+  });
+
+  it('deletes once the confirm button is pressed', () => {
+    const onDelete = renderDeletable(wrapper());
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete provider' }));
+    expect(onDelete).toHaveBeenCalledWith('opencode-openrouter-tui');
+  });
+
+  it('cancels back to the card without deleting', () => {
+    const onDelete = renderDeletable(wrapper());
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Delete OpenCode OpenRouter TUI\?/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeTruthy();
+  });
+
+  it('warns that a unified card takes both modes with it', () => {
+    // The server deletes the whole mode group, so a question naming only the
+    // mode whose button was clicked would understate what is about to happen.
+    const cli = wrapper({ id: 'opencode-cli', name: 'OpenCode CLI', type: 'cli' });
+    const tui = wrapper({ id: 'opencode-tui', name: 'OpenCode TUI' });
+    renderDeletable(
+      { ...cli, executionModes: [{ id: 'opencode-cli' }, { id: 'opencode-tui' }] },
+      { providersById: { 'opencode-cli': cli, 'opencode-tui': tui } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(screen.getByText(/Both its CLI and TUI modes are removed/)).toBeTruthy();
+  });
+});
+
+describe('ProviderCard "Add interactive mode"', () => {
+  const cliRecord = (overrides = {}) => wrapper({
+    id: 'opencode-cli', name: 'OpenCode CLI', type: 'cli', canAddTuiMode: true, ...overrides,
+  });
+
+  it('offers the action on an unpaired CLI record and hands the whole provider to the page', () => {
+    // The record already carries the command, endpoint, credentials and env the
+    // sibling needs — the click is the whole interaction, not a pre-filled form.
+    const onAddTuiMode = vi.fn();
+    const provider = cliRecord();
+    renderCard(provider, null, { onAddTuiMode });
+    fireEvent.click(screen.getByRole('button', { name: /Add interactive mode/ }));
+    expect(onAddTuiMode).toHaveBeenCalledWith(provider);
+  });
+
+  it('offers nothing on an already-unified card, whatever the server flagged', () => {
+    // Flagged `true` on purpose: the card's own `!unified` guard is what this
+    // pins, so a stale list still refuses rather than offering a second TUI
+    // mode beside the one already on the card. (Which RECORDS qualify — a TUI
+    // record, an api record, a CLI-only harness — is the server's rule, pinned
+    // where it lives in routes/providers.tuiMode.test.js; the card reads only
+    // the flag and never looks at `type`.)
+    const cli = cliRecord();
+    const tui = wrapper({ id: 'opencode-tui', name: 'OpenCode TUI' });
+    renderCard(
+      { ...cli, executionModes: [{ id: 'opencode-cli' }, { id: 'opencode-tui' }] },
+      null,
+      { providersById: { 'opencode-cli': cli, 'opencode-tui': tui } },
+    );
+    expect(screen.queryByRole('button', { name: /Add interactive mode/ })).toBeNull();
+  });
+
+  it('offers nothing when the server did not flag the record', () => {
+    renderCard(cliRecord({ canAddTuiMode: false }));
+    expect(screen.queryByRole('button', { name: /Add interactive mode/ })).toBeNull();
+  });
+
+  it('shows the in-flight state rather than letting a second click mint twice', () => {
+    const onAddTuiMode = vi.fn();
+    renderCard(cliRecord(), null, { onAddTuiMode, addingTuiMode: true });
+    const button = screen.getByRole('button', { name: /Adding/ });
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(onAddTuiMode).not.toHaveBeenCalled();
   });
 });

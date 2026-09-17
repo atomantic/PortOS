@@ -58,6 +58,12 @@ const { writeFile, readFile } = await import('fs/promises');
 const { atomicWrite, tryReadFile } = await import('../lib/fileUtils.js');
 const runner = await import('./runner.js');
 const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
+
+// Windows takes killProcessTree's tree-wide `taskkill /T` branch instead, so
+// `needsProcessGroup` is false there and these sites spawn attached. The policy
+// itself is pinned with an injected platform in credentialBootstrap.test.js;
+// these assert only that each site plumbs the decision through.
+const EXPECT_GROUP = process.platform !== 'win32';
 const {
   setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel,
   emitRunStarted, finalizeRunRecord, patchRunMetadata,
@@ -676,6 +682,168 @@ describe('executeCliRun — Windows .cmd/.bat shim spawning (#1865)', () => {
     const [command, , options] = spawn.mock.calls.at(-1);
     expect(command).toBe('codex');
     expect(options.shell).toBeFalsy();
+  });
+});
+
+describe('executeCliRun — credential-bootstrap wrapping', () => {
+  it('spawns the bootstrap CLI in front of the harness when credentialBootstrap is configured', async () => {
+    const { resolveWindowsExecutable } = await import('../lib/bufferedSpawn.js');
+    vi.mocked(resolveWindowsExecutable).mockReturnValueOnce(null);
+
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    const provider = {
+      id: 'claude',
+      command: 'claude',
+      args: [],
+      timeout: 5000,
+      credentialBootstrap: { command: 'token-cli', args: ['run'], harnessId: 'claude-code', argsSeparator: '--' },
+    };
+
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('output'));
+      child.emit('close', 0);
+    });
+
+    await executeCliRun({ runId: 'run-credential-bootstrap', provider, prompt: 'test prompt', workspacePath: TEST_WORKSPACE });
+
+    const [command, args] = spawn.mock.calls.at(-1);
+    expect(command).toBe('token-cli');
+    // Exact order: bootstrap args, then the harness by its bootstrap-side id,
+    // then the separator, then the harness's own argv — whose prompt-delivery
+    // convention (claude's `-p -`) is still resolved against `provider.command`,
+    // not the bootstrap CLI. `arrayContaining` would pass with the separator
+    // after the harness args, the exact mistake the wrap exists to prevent.
+    expect(args).toEqual(['run', 'claude-code', '--', '-p', '-']);
+  });
+
+  // #7496. With a bootstrap provider the direct child is the WRAPPER, not the
+  // harness, and nothing obliges it to exec-replace itself. A per-pid SIGTERM
+  // would then leave the harness running — possibly with
+  // `--dangerously-skip-permissions` in a worktree, holding a freshly minted
+  // credential — after the run is finalized and the lane released. These assert
+  // the group reaches it, and that an unwrapped provider is untouched.
+  const bootstrapProvider = (timeout = 5000) => ({
+    id: 'claude',
+    command: 'claude',
+    args: [],
+    timeout,
+    credentialBootstrap: { command: 'token-cli', args: ['run'], argsSeparator: '--' },
+  });
+
+  it('spawns a bootstrap-wrapped child detached, so its process group is signalable', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    setImmediate(() => { child.emit('close', 0); });
+    await executeCliRun({ runId: 'run-bootstrap-detached', provider: bootstrapProvider(), prompt: 'p', workspacePath: TEST_WORKSPACE });
+
+    const [, , options] = spawn.mock.calls.at(-1);
+    expect(options.detached).toBe(EXPECT_GROUP);
+  });
+
+  it('leaves an unwrapped provider attached — its direct child IS the harness', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    setImmediate(() => { child.emit('close', 0); });
+    await executeCliRun({
+      runId: 'run-unwrapped-attached',
+      provider: { id: 'codex', command: 'codex', args: [], timeout: 5000 },
+      prompt: 'p',
+      workspacePath: TEST_WORKSPACE,
+    });
+
+    const [, , options] = spawn.mock.calls.at(-1);
+    expect(options.detached).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('signals the whole process group on timeout for a bootstrap-wrapped run', async () => {
+    // Spy so the negative pid never reaches a real process group.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const child = makeChild();
+    child.pid = 424242;
+    spawn.mockReturnValue(child);
+
+    const run = executeCliRun({ runId: 'run-bootstrap-timeout', provider: bootstrapProvider(10), prompt: 'p', workspacePath: TEST_WORKSPACE });
+    await new Promise(resolve => setTimeout(resolve, 60));
+
+    expect(killSpy).toHaveBeenCalledWith(-424242, 'SIGTERM');
+    // The wrapper's own pid is never signalled directly: the group signal
+    // succeeded, so killProcessTree returns without the per-pid fallback.
+    expect(child.kill).not.toHaveBeenCalled();
+
+    child.emit('close', null);
+    await run;
+    killSpy.mockRestore();
+  });
+
+  it.skipIf(process.platform === 'win32')('signals only the child pid on timeout for an unwrapped run', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const child = makeChild();
+    child.pid = 515151;
+    spawn.mockReturnValue(child);
+
+    const run = executeCliRun({
+      runId: 'run-unwrapped-timeout',
+      provider: { id: 'codex', command: 'codex', args: [], timeout: 10 },
+      prompt: 'p',
+      workspacePath: TEST_WORKSPACE,
+    });
+    await new Promise(resolve => setTimeout(resolve, 60));
+
+    expect(killSpy).not.toHaveBeenCalledWith(-515151, expect.anything());
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+
+    child.emit('close', null);
+    await run;
+    killSpy.mockRestore();
+  });
+
+  it.skipIf(process.platform === 'win32')('registers a group-aware killable so /runs Stop reaches the harness, not just the wrapper', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const registered = [];
+    const toolkit = fakeToolkit();
+    toolkit.services.runner.registerExternalRun = vi.fn((runId, killable) => registered.push(killable));
+    setAIToolkit(toolkit, { dataDir: '/tmp/test-runner' });
+
+    const child = makeChild();
+    child.pid = 616161;
+    spawn.mockReturnValue(child);
+
+    setImmediate(() => { child.emit('close', 0); });
+    await executeCliRun({ runId: 'run-bootstrap-stop', provider: bootstrapProvider(), prompt: 'p', workspacePath: TEST_WORKSPACE });
+
+    expect(registered).toHaveLength(1);
+    // The toolkit's vendored killProcessTree has no processGroup option and
+    // reaches a non-ChildProcess killable through its own .kill().
+    expect(registered[0]).not.toBe(child);
+    expect(registered[0].pid).toBe(616161);
+    registered[0].kill('SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(-616161, 'SIGTERM');
+    killSpy.mockRestore();
+  });
+
+  it('registers the raw child for an unwrapped run, unchanged', async () => {
+    const registered = [];
+    const toolkit = fakeToolkit();
+    toolkit.services.runner.registerExternalRun = vi.fn((runId, killable) => registered.push(killable));
+    setAIToolkit(toolkit, { dataDir: '/tmp/test-runner' });
+
+    const child = makeChild();
+    child.pid = 717171;
+    spawn.mockReturnValue(child);
+
+    setImmediate(() => { child.emit('close', 0); });
+    await executeCliRun({
+      runId: 'run-unwrapped-stop',
+      provider: { id: 'codex', command: 'codex', args: [], timeout: 5000 },
+      prompt: 'p',
+      workspacePath: TEST_WORKSPACE,
+    });
+
+    expect(registered).toEqual([child]);
   });
 });
 

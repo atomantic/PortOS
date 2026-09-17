@@ -86,7 +86,7 @@ import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskByI
 export { getPendingTaskIds } from './cosTaskStore.js';
 export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instanceIdentity.js';
-import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, getSkipReason } from './cosTaskClaim.js';
+import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
 import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';
 
@@ -131,8 +131,8 @@ import {
   generateIdleReviewTask,
   queueEligibleImprovementTasks,
   recordDeferredPerpetualDispatch,
-  blockIfExceedsMaxSpawns,
   admitAutoApprovedSystemTasks,
+  admitPendingUserTasks,
   resolveAutonomyBudget,
   countRunningAgentsByProject,
   isWithinProjectLimit,
@@ -159,7 +159,7 @@ import {
 // predicate are shared with the scheduler unit tests so they exercise the real
 // guards instead of a local replica. The async tiers stay here as
 // `spawnDequeuePriorityN(ctx)` helpers.
-import { closeStolenIdleReviewCard, createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { closeStolenIdleReviewCard, createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible } from './cosDequeue.js';
 import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
 import {
   initializePersistentMindSupervisor,
@@ -389,13 +389,19 @@ async function runStart() {
   // already mutated the on-disk agents map.
   const freshState = await loadState();
   const liveAgentIds = new Set(Object.keys(freshState.agents || {}));
-  const { cleared: clearedActiveAgents } = await clearStaleActiveAgents(liveAgentIds).catch(() => ({ cleared: [] }));
+  const { cleared: clearedActiveAgents } = await clearStaleActiveAgents(liveAgentIds).catch(err => {
+    console.warn(`⚠️ clearStaleActiveAgents failed: ${err?.message || err}`, err?.stack || '');
+    return { cleared: [] };
+  });
   if (clearedActiveAgents.length > 0) {
     emitLog('info', `🧹 Cleared ${clearedActiveAgents.length} stale activeAgentId pointer(s) from app-activity`);
   }
 
   // Archive stale completed agents from state.json on startup
-  const { archived } = await _archiveStaleAgents().catch(() => ({ archived: 0 }));
+  const { archived } = await _archiveStaleAgents().catch(err => {
+    console.warn(`⚠️ _archiveStaleAgents failed: ${err?.message || err}`, err?.stack || '');
+    return { archived: 0 };
+  });
   if (archived > 0) {
     emitLog('info', `📦 Startup: archived ${archived} stale agent(s) from state`);
   }
@@ -417,7 +423,10 @@ async function runStart() {
         emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
       }
       await resetOrphanedTasks();
-      const { archived } = await _archiveStaleAgents().catch(() => ({ archived: 0 }));
+      const { archived } = await _archiveStaleAgents().catch(err => {
+        console.warn(`⚠️ _archiveStaleAgents failed: ${err?.message || err}`, err?.stack || '');
+        return { archived: 0 };
+      });
       if (archived > 0) {
         emitLog('info', `📦 Auto-archived ${archived} stale agent(s) from state`);
       }
@@ -489,7 +498,10 @@ async function runStart() {
     handler: async () => {
       const s = await loadState();
       const gracePeriodMs = (s.config.rehabilitationGracePeriodDays || 7) * 24 * 60 * 60 * 1000;
-      const result = await checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(() => ({ count: 0 }));
+      const result = await checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(err => {
+        emitLog('warn', `⚠️ checkAndRehabilitateSkippedTasks failed: ${err?.message || err}`, { stack: err?.stack || '' });
+        return { count: 0 };
+      });
       if (result.count > 0) {
         emitLog('success', `Auto-rehabilitated ${result.count} skipped task type(s)`, {
           rehabilitated: result.rehabilitated?.map(r => r.taskType) || []
@@ -832,7 +844,9 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
           // scan's possibly-stale copy) is redundant and would risk clobbering a
           // concurrent content edit. It also keeps the heartbeat a claim-only
           // patch so it never bumps the updatedAt LWW stamp (#1714).
-          await updateTask(task.id, { metadata: renewal }, taskType).catch(() => {});
+          await updateTask(task.id, { metadata: renewal }, taskType).catch(err => {
+            emitLog('warn', `⚠️ Lease renewal failed for task ${task.id}: ${err?.message || err}`, { taskId: task.id, stack: err?.stack || '' });
+          });
         }
         continue;
       }
@@ -1035,37 +1049,18 @@ async function spawnDequeuePriority0OnDemand(ctx) {
  * `hasPendingUserTasks` on `ctx` for the idle tier below.
  */
 async function spawnDequeuePriority1UserTasks(ctx) {
-  const { state, instanceId, capacity } = ctx;
+  const { instanceId, capacity } = ctx;
 
   const userTaskData = await getUserTasks();
   const pendingUserTasks = userTaskData.grouped?.pending || [];
   ctx.hasPendingUserTasks = pendingUserTasks.length > 0;
 
-  for (const task of pendingUserTasks) {
-    if (capacity.spawned >= capacity.availableSlots) break;
-    // Not runnable here: the task is pinned to another instance (#4520), or a
-    // federated peer holds a live lease on it (#1650) and is working it on the
-    // other machine. Skip it during candidate selection so it doesn't consume
-    // this cycle's spawn slot (the spawn guard would return null anyway) and
-    // starve later runnable tasks.
-    const skipReason = getSkipReason(task.metadata, instanceId);
-    if (skipReason) {
-      emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
-      continue;
-    }
-    // A user row that says it is NOT auto-approved is withheld from the unattended
-    // spawn (#7300) — see isUserTaskRunnableUnattended for why, and for why the
-    // rule lives in cosDequeue.js rather than once per engine.
-    if (!isUserTaskRunnableUnattended(task)) {
-      emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
-      continue;
-    }
-    if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
-    const userTask = { ...task, taskType: 'user' };
-    if (!capacity.canSpawn(userTask)) continue;
-    cosEvents.emit('task:ready', userTask);
-    capacity.trackSpawn(userTask);
-  }
+  await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
+    capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    canSpawn: (task) => capacity.canSpawn(task),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
 }
 
 /**

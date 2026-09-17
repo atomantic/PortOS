@@ -4,6 +4,7 @@
  */
 
 import { setAIToolkitInstance, requireToolkit } from '../lib/aiToolkitState.js';
+import { applyModelAccessList } from '../lib/aiToolkit/internal/modelAccess.js';
 
 // `server/index.js` imports `setAIToolkit` from here — keep the named export
 // stable while the underlying singleton lives in `lib/aiToolkitState.js` so
@@ -48,6 +49,42 @@ export async function getAllProviders() {
 export async function listProviders() {
   const data = await getAllProviders().catch(() => null);
   return Array.isArray(data?.providers) ? data.providers : [];
+}
+
+/**
+ * The provider records with each one's `models` narrowed to what this install is
+ * ENTITLED to run — see `lib/aiToolkit/internal/modelAccess.js` and
+ * `docs/MODEL_ACCESS.md`.
+ *
+ * The distinction this names, once, is SELECTING versus EXECUTING:
+ *
+ * - A caller OFFERING a choice — a picker payload, a task-model allowlist, the
+ *   connection graph's model menus, the comparison chart's inventory — must use
+ *   this one, or it offers models the account cannot run.
+ * - A caller EXECUTING, ACCOUNTING or WRITING — the runner, quota burn, usage
+ *   reconciliation, a harness catalog refresh — must use {@link listProviders},
+ *   because the entitlement policy is about what a human may pick next, not
+ *   about what already ran or what the upstream actually advertises. Narrowing
+ *   there would also let a write path persist a truncated catalog over the real
+ *   one, which no refresh would restore until the policy was cleared.
+ *
+ * Two methods rather than a flag on one, because the answer is a property of the
+ * CALLER's purpose and picking the wrong one has to be visible at the call site.
+ * Each scoped record carries the untouched list as `modelCatalog`, so a caller
+ * that needs both has both.
+ */
+export async function getSelectableProviders() {
+  const data = await getAllProviders();
+  return { ...data, providers: applyModelAccessList(data.providers) };
+}
+
+/**
+ * The list form of {@link getSelectableProviders}, mirroring
+ * {@link listProviders} against {@link getAllProviders} — same envelope trap,
+ * same answer.
+ */
+export async function listSelectableProviders() {
+  return applyModelAccessList(await listProviders());
 }
 
 export async function getProviderById(id) {

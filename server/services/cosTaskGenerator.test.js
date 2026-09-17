@@ -68,6 +68,7 @@ vi.mock('./github.js', async (importActual) => ({
 
 import {
   selectDryRunAutoApproved,
+  admitPendingUserTasks,
   exceedsMaxSpawns,
   shouldParkUnchangedPerpetualWork,
   resolveIssueExcludeLabelsBlock,
@@ -76,6 +77,7 @@ import {
   applyOnDemandConsent,
   isConfiguredApprovalRequired,
   recordPerpetualTransient,
+  PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD,
   buildJiraTicketTask,
   buildClaimWorkTask,
   resolveAppClaimReviewers,
@@ -251,6 +253,18 @@ describe('dry-run hook wiring matches the shared execute path', () => {
       .toContain('admitAutoApprovedSystemTasks(');
   });
 
+  it('both engines delegate Priority 1 to admitPendingUserTasks (#7523)', () => {
+    // The two Priority-1 tiers used to hand-mirror the same ordered ladder
+    // (not-runnable-here → approval → max-spawn → capacity), verified only by a
+    // source-order check against each body. Now both are thin adapters over the
+    // one shared pass — this pins the delegation itself, not the ladder's order,
+    // which the shared pass's own tests below cover.
+    expect(between(COS_SRC, 'async function spawnDequeuePriority1UserTasks', 'async function spawnDequeuePriority2AutoApproved'))
+      .toContain('admitPendingUserTasks(');
+    expect(between(GEN_SRC, 'async function spawnPriority1UserTasks', 'async function recordPendingUserDeferral'))
+      .toContain('admitPendingUserTasks(');
+  });
+
   it('the shared EXECUTE loop gates cooldown on isCooldownExemptTask', () => {
     // The spawn gate (not just the dry-run planner) must consult the shared
     // predicate, or a perpetual task the refill queued is skipped at spawn time
@@ -409,9 +423,12 @@ describe('the on-demand consent flip reaches every drain path', () => {
 // evaluateTasks here) must apply it, in both their execute loops AND their
 // dry-run plan. `getSkipReason` answers both halves in one call.
 describe('not-runnable-here skip during candidate selection (#1650, #4520)', () => {
-  it('both engines import getSkipReason from the shared claim module', () => {
-    expect(COS_SRC).toContain("from './cosTaskClaim.js'");
-    expect(COS_SRC).toMatch(/import\s*\{[^}]*getSkipReason[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
+  it('cosTaskGenerator.js imports getSkipReason from the shared claim module', () => {
+    // Both the Priority-1 (admitPendingUserTasks) and Priority-2
+    // (admitAutoApprovedSystemTasks) shared passes live here (#7523) and both
+    // consult getSkipReason, so this is the one module that needs the import.
+    // cos.js no longer imports it directly — dequeueNextTask's Priority-1 tier
+    // delegates to admitPendingUserTasks instead of re-checking the lease itself.
     expect(GEN_SRC).toMatch(/import\s*\{[^}]*getSkipReason[^}]*\}\s*from\s*'\.\/cosTaskClaim\.js'/);
   });
 
@@ -420,11 +437,13 @@ describe('not-runnable-here skip during candidate selection (#1650, #4520)', () 
     expect(GEN_SRC).toContain('const instanceId = await ensureInstanceId();');
   });
 
-  it('both engines keep user-task skips and share the auto-approved execute skip', () => {
-    const cosSkips = COS_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\);\n\s*if \(skipReason\)/g) || [];
+  it('the two shared admission passes keep the not-runnable-here skip', () => {
+    // Both Priority-1 (admitPendingUserTasks) and Priority-2
+    // (admitAutoApprovedSystemTasks) consult getSkipReason exactly once, in
+    // cosTaskGenerator.js — the ONE place either spawn engine can drift this
+    // guard now that both delegate here instead of hand-mirroring it (#7523).
     const genSkips = GEN_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\);\n\s*if \(skipReason\)/g) || [];
-    expect(cosSkips.length).toBeGreaterThanOrEqual(1);
-    expect(genSkips.length).toBeGreaterThanOrEqual(2);
+    expect(genSkips.length).toBe(2);
   });
 
   it('the shared pass supplies notRunnableHere so both dry-run adapters match execute', () => {
@@ -1020,6 +1039,108 @@ describe('selectDryRunAutoApproved', () => {
   });
 });
 
+// admitPendingUserTasks is the one ordered Priority-1 admission pass shared by
+// evaluateTasks (spawnPriority1UserTasks, cosTaskGenerator.js) and
+// dequeueNextTask (spawnDequeuePriority1UserTasks, cos.js) — #7523. Both
+// engines used to hand-mirror the not-runnable-here / approval / max-spawn /
+// capacity ladder; the delegation itself is pinned by the source guard above,
+// and these are the behavioral boundary tests against the shared pass both
+// engines now call, driven through mocked adapters exactly like the real
+// engines wire them (no live store/socket needed since the adapter functions
+// ARE the seam each engine supplies).
+describe('admitPendingUserTasks', () => {
+  const makeAdapter = (overrides = {}) => {
+    const emitted = [];
+    const tracked = [];
+    const deferred = [];
+    return {
+      emitted,
+      tracked,
+      deferred,
+      adapter: {
+        capacityExhausted: () => false,
+        canSpawn: () => true,
+        emitSpawn: (t) => emitted.push(t.id),
+        trackSpawn: (t) => tracked.push(t.id),
+        onDefer: (t) => { deferred.push(t.id); },
+        ...overrides,
+      },
+    };
+  };
+
+  it('admits ordinary and fieldless pending rows, in order', async () => {
+    const pendingUserTasks = [task('ordinary', { app: 'appA' }), task('fieldless')];
+    const { adapter, emitted, tracked } = makeAdapter();
+    const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter);
+    expect(admitted.map(t => t.id)).toEqual(['ordinary', 'fieldless']);
+    expect(emitted).toEqual(['ordinary', 'fieldless']);
+    expect(tracked).toEqual(['ordinary', 'fieldless']);
+    // Priority 1 stamps taskType for the spawner, same as both engines did inline.
+    expect(admitted.every(t => t.taskType === 'user')).toBe(true);
+  });
+
+  it('withholds a row that says it is not auto-approved (#7300), while ordinary/fieldless rows still run', async () => {
+    const pendingUserTasks = [
+      { ...task('recovered'), autoApproved: false },
+      task('ordinary', { app: 'appA' }),
+      task('fieldless'),
+    ];
+    const { adapter, emitted } = makeAdapter();
+    const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter);
+    expect(admitted.map(t => t.id)).toEqual(['ordinary', 'fieldless']);
+    expect(emitted).toEqual(['ordinary', 'fieldless']);
+  });
+
+  it('skips a task pinned to another instance without consuming a slot or stopping later rows (#4520)', async () => {
+    const pendingUserTasks = [
+      task('elsewhere', { targetInstanceId: 'other-instance' }),
+      task('here'),
+    ];
+    const { adapter } = makeAdapter();
+    const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter);
+    expect(admitted.map(t => t.id)).toEqual(['here']);
+  });
+
+  it('stops admitting once capacityExhausted() reports true, without touching later rows', async () => {
+    const pendingUserTasks = [task('one'), task('two')];
+    let calls = 0;
+    const { adapter, emitted } = makeAdapter({ capacityExhausted: () => calls++ > 0 });
+    const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter);
+    expect(admitted.map(t => t.id)).toEqual(['one']);
+    expect(emitted).toEqual(['one']);
+  });
+
+  it('defers (does not emit/track/admit) a task canSpawn denies, and keeps evaluating later rows', async () => {
+    const pendingUserTasks = [task('full', { app: 'appA' }), task('fits', { app: 'appB' })];
+    const { adapter, emitted, tracked, deferred } = makeAdapter({
+      canSpawn: (t) => t.metadata?.app !== 'appA',
+    });
+    const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter);
+    expect(admitted.map(t => t.id)).toEqual(['fits']);
+    expect(emitted).toEqual(['fits']);
+    expect(tracked).toEqual(['fits']);
+    expect(deferred).toEqual(['full']);
+  });
+
+  it('onDefer is optional — a denial is silently dropped when the adapter omits it', async () => {
+    const pendingUserTasks = [task('denied')];
+    const { adapter } = makeAdapter({ canSpawn: () => false, onDefer: undefined });
+    const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter);
+    expect(admitted).toEqual([]);
+  });
+
+  it('blocks (does not admit) a task that has hit the max-total-spawns ceiling', async () => {
+    const persist = vi.spyOn(taskStore, 'updateTask').mockResolvedValue({});
+    const pendingUserTasks = [task('exhausted', { totalSpawnCount: MAX_TOTAL_SPAWNS }), task('fresh')];
+    const { adapter, emitted } = makeAdapter();
+    const admitted = await admitPendingUserTasks({ pendingUserTasks, instanceId: 'local' }, adapter);
+    expect(admitted.map(t => t.id)).toEqual(['fresh']);
+    expect(emitted).toEqual(['fresh']);
+    expect(persist).toHaveBeenCalledWith('exhausted', expect.objectContaining({ status: 'blocked' }), 'user');
+    persist.mockRestore();
+  });
+});
+
 // Layered Intelligence's on-demand feedback bridge (emitHandlerBackedOnDemand) was
 // removed when LI migrated off the handler-backed path onto a normal agent task
 // (see taskTypeHooks.js + layeredIntelligenceHooks.js). A "Run now" now generates a
@@ -1154,6 +1275,48 @@ describe('emitOnDemandEmpty', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('recordPerpetualTransient counts CONSECUTIVE transient verdicts for the same taskType+app', () => {
+    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
+    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(2);
+    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(3);
+    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(4);
+  });
+
+  it('recordPerpetualTransient resets the streak to 0 on a null (actionable/idle) verdict', () => {
+    recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' });
+    recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' });
+    expect(recordPerpetualTransient('claim-issue', 'app-streak-2', null)).toBe(0);
+    // The next transient verdict after a reset starts the streak over at 1, not
+    // where it left off — a recovered probe means the escalation clock restarts.
+    expect(recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
+  });
+
+  it('recordPerpetualTransient keys the streak by taskType+app, so one app never inherits another\'s count', () => {
+    recordPerpetualTransient('claim-issue', 'app-streak-a', { cli: 'gh', reason: 'gh-list-failed' });
+    recordPerpetualTransient('claim-issue', 'app-streak-a', { cli: 'gh', reason: 'gh-list-failed' });
+    expect(recordPerpetualTransient('claim-issue', 'app-streak-b', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
+  });
+
+  it('the escalation threshold is exported and applyPerpetualWorkGate levels its skip log against it, persisting a stall once escalated', () => {
+    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
+    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
+    expect(PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD).toBeGreaterThanOrEqual(1);
+    expect(gate).toMatch(/consecutive >= PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD/);
+    expect(gate).toMatch(/emitLog\(escalated \? 'warn' : 'debug'/);
+    expect(gate).toContain('taskSchedule.recordPerpetualStall(taskType, app.id,');
+  });
+
+  it('the actionable path resets both the transient streak and the persisted stall before deciding to dispatch or no-progress-park', () => {
+    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
+    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
+    const actionableIdx = gate.indexOf('if (detection.actionable) {');
+    const resetIdx = gate.indexOf('recordPerpetualTransient(taskType, app.id, null);');
+    const stallClearIdx = gate.indexOf('taskSchedule.recordPerpetualStall(taskType, app.id, null);');
+    expect(actionableIdx).toBeGreaterThan(-1);
+    expect(resetIdx).toBeGreaterThan(actionableIdx);
+    expect(stallClearIdx).toBeGreaterThan(actionableIdx);
   });
 
   it("surfaces the pr-reviewer preflight's recorded skip reason on an idle outcome", async () => {
@@ -1869,6 +2032,52 @@ describe('claim prompt author-filter scripts', () => {
         }
       }
     }
+  });
+});
+
+// `data/cos/worktrees/` is ONE directory shared by every managed app, so a claim
+// worktree named only after the work item collides the moment two apps carry the
+// same issue number, PLAN slug, or ticket key. That collision is worse than a
+// failed mkdir: every claim prompt reads a failing `git worktree add` as "a
+// concurrent run won this claim" and moves on, so the second app silently skips
+// work nobody had claimed. `{appSlug}` is the segment that separates them, and it
+// has to be expanded by EVERY renderer — a literal `{appSlug}` would put a brace
+// into a shell path instead.
+describe('claim worktree per-app namespacing', () => {
+  const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
+
+  it.each([
+    ['github', 'claim-issue', 'claim-acme-app-acme-issue-${NUM}'],
+    ['gitlab', 'claim-issue-gitlab', 'claim-acme-app-acme-issue-${NUM}'],
+    ['plan', 'plan-task', 'claim-acme-app-acme-${SLUG}'],
+  ])('scopes the %s claim worktree to the app in both the manual and scheduled renderer', async (tracker, taskType, expected) => {
+    const { DEFAULT_TASK_PROMPTS } = await import('./taskPromptDefaults.js');
+    const { getTaskPrompt } = await import('./taskPromptService.js');
+    const { resolveAppWorkTracker } = await import('../lib/workTracker.js');
+    resolveAppWorkTracker.mockResolvedValueOnce({ resolved: tracker, source: 'test' });
+    getTaskPrompt.mockResolvedValueOnce(DEFAULT_TASK_PROMPTS[taskType]);
+
+    const manual = await buildClaimWorkTask(app);
+    const scheduled = await cosTaskPreStepBlocks.buildImprovementTaskDescription({
+      promptTemplate: DEFAULT_TASK_PROMPTS[taskType], app, promptTaskType: taskType,
+      metadata: {}, blocks: {},
+    });
+
+    for (const prompt of [manual.prompt, scheduled]) {
+      expect(prompt).not.toContain('{appSlug}');
+      expect(prompt).toContain(`WORKTREE="{worktreesRoot}/${expected}"`);
+    }
+  });
+
+  // The JIRA board's per-card play button renders the body itself rather than
+  // through the claim-work router, so it needs its own coverage.
+  it('scopes the JIRA claim worktree the same way', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('./taskPromptDefaults.js');
+    const { getTaskPrompt } = await import('./taskPromptService.js');
+    getTaskPrompt.mockResolvedValueOnce(DEFAULT_TASK_PROMPTS['claim-issue-jira']);
+    const { prompt } = await buildJiraTicketTask(app, 'ACME-42');
+    expect(prompt).not.toContain('{appSlug}');
+    expect(prompt).toContain('WORKTREE="{worktreesRoot}/claim-acme-app-acme-${KEY}"');
   });
 });
 

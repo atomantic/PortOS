@@ -145,23 +145,6 @@ describe('createShellSession', () => {
     expect(onData).toHaveBeenCalledWith('hello');
   });
 
-  it('buffers output and trims oldest chunks past 50KB', () => {
-    const id = shell.createShellSession(makeSocket());
-    const oldest = 'A'.repeat(20 * 1024);
-    const middle = 'B'.repeat(20 * 1024);
-    const newest = 'C'.repeat(20 * 1024);
-    ptyInstances[0].emitData(oldest);
-    ptyInstances[0].emitData(middle);
-    ptyInstances[0].emitData(newest);
-
-    const session = shell.getSession(id);
-    expect(session.bufferSize()).toBeLessThanOrEqual(50 * 1024);
-    const result = shell.attachSession(id, makeSocket('sock-B'));
-    expect(result.bufferedOutput).not.toContain('A');
-    expect(result.bufferedOutput).toContain(middle);
-    expect(result.bufferedOutput).toContain(newest);
-  });
-
   it('catches synchronous errors from the onData hook without crashing', async () => {
     const onData = vi.fn(() => { throw new Error('hook explodes'); });
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -348,6 +331,9 @@ describe('attachSession', () => {
     expect(shell.attachSession('does-not-exist', makeSocket())).toBeNull();
   });
 
+  // The WIRING only: that attach hands back what the session buffer rendered.
+  // What that render DECIDES — eviction, query stripping, the mode preamble and
+  // its ordering — is pinned in lib/terminalReplay.test.js, with no PTY.
   it('swaps socket and returns buffered output', () => {
     const sock1 = makeSocket('sock-A');
     const id = shell.createShellSession(sock1);
@@ -356,31 +342,6 @@ describe('attachSession', () => {
     const result = shell.attachSession(id, sock2);
     expect(result).toEqual({ sessionId: id, bufferedOutput: 'saved' });
     expect(shell.getSession(id).socket).toBe(sock2);
-  });
-
-  // A full-screen TUI (Claude Code / Ink, vim) emits `ESC[6n` on nearly every
-  // render, and the ring buffer stores raw PTY output verbatim. Replaying those
-  // queries makes the attaching xterm answer EVERY one of them as input — and the
-  // TUI that asked is gone, so the cursor-position reports land on the shell
-  // prompt as literal `56;3R56;3R…` garbage. Queries must not survive the replay.
-  it('strips terminal queries from the replay buffer so the client cannot answer them', () => {
-    const sock1 = makeSocket('sock-A');
-    const id = shell.createShellSession(sock1);
-    ptyInstances[0].emitData('\x1b[32mprompt\x1b[0m' + '\x1b[6n'.repeat(50));
-    const result = shell.attachSession(id, makeSocket('sock-B'));
-    expect(result.bufferedOutput).not.toContain('\x1b[6n');
-    // Colour/rendering state still has to repaint correctly.
-    expect(result.bufferedOutput).toBe('\x1b[32mprompt\x1b[0m');
-  });
-
-  it('strips a query split across two PTY chunks', () => {
-    const sock1 = makeSocket('sock-A');
-    const id = shell.createShellSession(sock1);
-    // node-pty hands over whatever arrived; an escape sequence can straddle reads.
-    ptyInstances[0].emitData('done\x1b[');
-    ptyInstances[0].emitData('6n');
-    const result = shell.attachSession(id, makeSocket('sock-B'));
-    expect(result.bufferedOutput).toBe('done');
   });
 
   it('emits shell:detached on the previous socket when displaced', () => {

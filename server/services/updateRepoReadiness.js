@@ -241,10 +241,17 @@ export async function prepareUpdateRepo({ repoPath = PATHS.root } = {}) {
  * unpushed commit, an interrupted rebase, conflict markers.
  *
  * The first line is constant, so `addTask`'s description+app dedup collapses
- * every subsequent tick onto the one open task instead of queueing an agent per
- * poll. The task store is imported lazily — this module is on the update path,
- * the repair branch is rare, and a static import would pull the whole CoS state
- * graph into that closure.
+ * every subsequent tick onto the one open task ONLY WHILE THAT TASK STAYS
+ * OPEN — once the agent finishes (fixed or not) the task flips to `completed`
+ * and the dedup no longer matches. What actually bounds re-dispatch after that
+ * is the caller: `autoUpdateScheduler.repairDispatchDue` gates a call to this
+ * function on a `repairQueuedAt` timestamp stamped right after a successful
+ * enqueue, so a stand-down agent costs one dispatch per cooldown window
+ * rather than one per poll (#7468). That gate is deliberately separate from
+ * the update cooldown, so a checkout this agent fixes still updates on the
+ * very next idle tick. The task store is imported lazily — this module is on
+ * the update path, the repair branch is rare, and a static import would pull
+ * the whole CoS state graph into that closure.
  *
  * Never rejects: a failed enqueue must not mask the readiness refusal itself.
  *

@@ -108,6 +108,11 @@ async function createJob(jobData) {
       // Selected deterministic context sources resolved immediately before the
       // agent task is generated. Empty is a real configured selection.
       dataInputs: Array.isArray(jobData.dataInputs) ? jobData.dataInputs : [],
+      // The job's own configuration form — the declared inputs and what they are
+      // currently set to. `getJobEffectivePrompt` projects the pair into the run
+      // configuration section of the prompt. Empty is a real configured state.
+      formFields: Array.isArray(jobData.formFields) ? jobData.formFields : [],
+      formValues: jobData.formValues && typeof jobData.formValues === 'object' ? jobData.formValues : {},
       // Optional per-job AI provider + model override. Null = use the active
       // provider / its default model (historical behavior). generateTaskFromJob
       // forwards these into the task metadata the agent runner resolves.
@@ -161,7 +166,10 @@ async function updateJob(jobId, updates) {
     const updatableFields = [
       'name', 'description', 'category', 'type', 'interval', 'intervalMs',
       'scheduledTime', 'cronExpression', 'cronSchedule', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate', 'dataInputs',
-      'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model', 'effort'
+      'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model', 'effort',
+      // Separately updatable on purpose: re-aiming a job sends `formValues`
+      // alone, which must not have to restate the whole field design to do it.
+      'formFields', 'formValues'
     ]
 
     for (const field of updatableFields) {

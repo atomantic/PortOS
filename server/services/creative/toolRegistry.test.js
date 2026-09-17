@@ -74,6 +74,16 @@ vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: vi.fn(() => ({ jobId: 
 // preset via a dynamic import of the CD project store — mock it so the video
 // preset-enforcement path is observable without a DB.
 vi.mock('../creativeDirector/local.js', () => ({ getProject: vi.fn(async () => null) }));
+// The render-backend pin ladder in tools/media.js reads the INSTALL's settings.
+// Unmocked, that is the developer's own `data/settings.json`: on a machine with
+// a cloud video backend pinned for the creative agent, the enqueue resolves to
+// that backend and correctly strips the local-only render knobs — so these
+// assertions passed on CI and on an unconfigured checkout, and failed on a
+// configured one. The pin is a fixture here, per test, not ambient state.
+vi.mock('../settings.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSettings: vi.fn(async () => ({})),
+}));
 vi.mock('../catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../creativeDirector/autoCast.js', () => ({ suggestCastForBrief: vi.fn(async () => []) }));
 
@@ -86,6 +96,7 @@ import { startSeriesAutopilot } from '../pipeline/seriesAutopilot/orchestrator.j
 import { renderComicCover, renderVolumeCover, renderComicPage, refineComicPageRender } from '../pipeline/visualStages.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getProject } from '../creativeDirector/local.js';
+import { getSettings } from '../settings.js';
 import {
   CREATIVE_TOOLS,
   getToolSpecs,
@@ -307,6 +318,31 @@ describe('budget charging', () => {
     // No projectId → the preset reconciliation short-circuits before any project read.
     await dispatchCreativeTool('media_enqueueVideoJob', { params: { prompt: 'p', width: 640 } }, {});
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'video', params: { prompt: 'p', width: 640 }, owner: 'creative' });
+  });
+
+  it('routes onto a pinned cloud video backend, dropping the local-only render knobs', async () => {
+    setMode('execute');
+    // The install pins a metered backend for the creative agent. Its renderer
+    // owns the model namespace, so mlx_video's numFrames/fps/steps/guidance are
+    // meaningless there and must not ride along — only the geometry and the
+    // creative content do. This is the path an unmocked settings read was
+    // silently exercising on a configured install.
+    getSettings.mockResolvedValueOnce({
+      renderDefaults: { 'creative-agent': { videoMode: 'reactor' } },
+      videoGen: { reactor: { apiKey: 'test-key' } },
+    });
+    await dispatchCreativeTool(
+      'media_enqueueVideoJob',
+      { params: { prompt: 'p', width: 640, numFrames: 184, fps: 30, steps: 30, guidanceScale: 3.5 } },
+      {},
+    );
+    const enqueued = enqueueJob.mock.calls.at(-1)[0];
+    expect(enqueued.params.mode).toBe('reactor');
+    expect(enqueued.params.prompt).toBe('p');
+    expect(enqueued.params.width).toBe(640);
+    for (const knob of ['numFrames', 'fps', 'steps', 'guidanceScale']) {
+      expect(enqueued.params).not.toHaveProperty(knob);
+    }
   });
 
   it('tags a planner-enqueued audio job with creativeDirectorMusicBed so the durable hook files it onto the project (#2772)', async () => {

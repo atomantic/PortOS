@@ -79,7 +79,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('hasBranchMergeEvidence', () => {
     initialHead = (await execGit(['rev-parse', 'HEAD'], dir)).stdout.trim();
   });
   beforeEach(async () => { await resetGitSandbox({ repo: dir, initialHead, assertPath: safePath }); });
-  afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
+  afterAll(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
   it('detects a normal (--no-ff) merge', async () => {
     await execGit(['checkout', '-b', 'feat'], dir);
@@ -160,8 +160,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
   });
   beforeEach(async () => { await resetGitWorktreeSandbox(dir, initialHead, safePath); });
   afterAll(async () => {
-    await rm(dir, { recursive: true, force: true });
-    await rm(externalRoot, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await rm(externalRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   // The reaper only considers trees under WORKTREES_DIR (the real CoS data dir)
@@ -374,7 +374,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
   it('reaps a merged branch whose worktree directory is already gone', async () => {
     const path = await addWorktree(dir, 'vanished', 'vanished-br');
     await execGit(['merge', '--no-ff', 'vanished-br', '--no-edit'], dir);
-    await rm(path, { recursive: true, force: true });
+    await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 
     const result = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
 

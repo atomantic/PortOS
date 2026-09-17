@@ -20,6 +20,12 @@
  * `server/services/ollamaAgentContext.js` owns the pre-spawn enforcement.
  */
 
+// The `internal/` leaf on purpose: the toolkit's public barrel reaches `fs` and
+// `child_process`, and this module sits in the closure of the prompt budgeter
+// and the dispatch gate, both inside the server suite's import budget. The leaf
+// imports nothing.
+import { isOllamaBackedProvider, ollamaBaseFromProvider, withRuntimeContextWindow } from './aiToolkit/internal/ollamaBacked.js'
+
 /**
  * Smallest runtime window an Ollama-backed *agent harness* can realistically
  * finish a task in. Not a hard requirement — it is the threshold below which
@@ -55,6 +61,67 @@ const positiveInt = (value) => {
  */
 export function resolveOllamaContextLength(provider, env = process.env) {
   return positiveInt(provider?.numCtx) ?? positiveInt(env?.[OLLAMA_CONTEXT_ENV_VAR])
+}
+
+/**
+ * The base URL of the Ollama daemon THIS install manages — `OLLAMA_URL`, then
+ * the `OLLAMA_HOST` (`host:port`) convention, then the stock local daemon.
+ *
+ * Declared here rather than restated at each reader because it is half of the
+ * `isSameOllamaDaemon` comparison below, and a second spelling of it is a second
+ * answer to "is this provider's daemon the one PortOS launched?".
+ * `services/ollamaManager.js` normalizes the result into its own config.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string}
+ */
+export function managedOllamaBaseUrl(env = process.env) {
+  const raw = String(env?.OLLAMA_URL || env?.OLLAMA_HOST || '').trim()
+  return raw || 'http://localhost:11434'
+}
+
+/**
+ * The window PortOS holds `provider`'s daemon at, or `null` when it holds it at
+ * none (Ollama's VRAM auto-pick stands).
+ *
+ * {@link resolveOllamaContextLength} gated on the daemon being the one this
+ * install manages. The gate matters because the ambient `OLLAMA_CONTEXT_LENGTH`
+ * only ever reaches the daemon PortOS launches (`withOllamaContextEnv`): applied
+ * to a provider pointed at a REMOTE Ollama it would describe a window nobody
+ * set, and budget that remote daemon down to a local machine's VRAM headroom.
+ * The same gate `services/ollamaAgentContext.js` puts on the reload.
+ *
+ * `numCtx` is deliberately NOT gated with it — an `api`-type provider's
+ * `numCtx` rides the request as `num_ctx` and binds a remote daemon just as
+ * well, which is why the clamp reads that rung straight off the record.
+ *
+ * @param {object|null|undefined} provider
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {number|null}
+ */
+export function managedOllamaContextLength(provider, env = process.env) {
+  if (!isOllamaBackedProvider(provider)) return null
+  if (!isSameOllamaDaemon(ollamaBaseFromProvider(provider), managedOllamaBaseUrl(env))) return null
+  return resolveOllamaContextLength(provider, env)
+}
+
+/**
+ * `provider` with that window stamped on for a caller about to ask a context
+ * question about it — the ONE operation the prompt budgeter
+ * (`services/stageRunner.js#effectiveContextWindow`) and the pre-dispatch gate
+ * (`services/promptRunner.js#assertRequestFitsContext`) both want.
+ *
+ * This is how the env rung reaches the vendored toolkit, which may not import
+ * out to this module: as data on an in-memory projection, never persisted. See
+ * `aiToolkit/internal/ollamaBacked.js#withRuntimeContextWindow` for the field's
+ * contract and #7472 for the failure it closes.
+ *
+ * @param {object|null|undefined} provider
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {object|null|undefined}
+ */
+export function withOllamaRuntimeContextWindow(provider, env = process.env) {
+  return withRuntimeContextWindow(provider, managedOllamaContextLength(provider, env))
 }
 
 /** `host:port` for comparing two Ollama base URLs, or null when unparseable. */

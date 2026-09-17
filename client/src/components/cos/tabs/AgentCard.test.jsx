@@ -11,6 +11,7 @@ vi.mock('../../../services/api', () => ({
   getCosAgentPrompt: vi.fn(),
   getCosAgentStats: vi.fn(() => new Promise(() => {})),
   addCosTask: vi.fn(),
+  hydrateCosAgentDescription: vi.fn(async (a) => a),
 }));
 
 vi.mock('../../ui/Toast', () => ({
@@ -833,5 +834,54 @@ describe('AgentCard branch posture badges', () => {
     expect(screen.getByText('main')).toBeInTheDocument();
     expect(screen.queryByText('Claim WT')).not.toBeInTheDocument();
     expect(screen.queryByText('Read-only')).not.toBeInTheDocument();
+  });
+});
+
+// The listing bounds `metadata.taskDescription` — see server/lib/cosAgentListProjection.js.
+// The card must still be able to show the whole thing, without every row paying
+// for it on load.
+describe('AgentCard truncated task description', () => {
+  const longAgent = {
+    ...agent,
+    metadata: {
+      ...agent.metadata,
+      taskDescription: 'The preview the listing carried',
+      taskDescriptionTruncated: true,
+      taskDescriptionLength: 54000,
+    },
+  };
+
+  it('renders the preview without fetching, then hydrates the rest on expand', async () => {
+    const user = userEvent.setup();
+    api.hydrateCosAgentDescription.mockResolvedValue({
+      ...longAgent,
+      metadata: { ...longAgent.metadata, taskDescription: 'The preview the listing carried, and the rest of it', taskDescriptionTruncated: false },
+    });
+
+    render(<MemoryRouter><AgentCard agent={longAgent} liveOutputs={{}} /></MemoryRouter>);
+
+    expect(screen.getByText('The preview the listing carried')).toBeInTheDocument();
+    expect(api.hydrateCosAgentDescription).not.toHaveBeenCalled();
+
+    await user.click(screen.getAllByRole('button', { name: /Show more/ })[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText('The preview the listing carried, and the rest of it')).toBeInTheDocument();
+    });
+    expect(api.hydrateCosAgentDescription).toHaveBeenCalledTimes(1);
+  });
+
+  // The control: an untruncated description must never cost a round trip, which
+  // is the whole point of the flag.
+  it('never fetches for a description the listing carried whole', async () => {
+    const user = userEvent.setup();
+    const whole = { ...agent, metadata: { ...agent.metadata, taskDescription: 'Example task '.repeat(40) } };
+
+    render(<MemoryRouter><AgentCard agent={whole} liveOutputs={{}} /></MemoryRouter>);
+
+    const toggle = screen.queryAllByRole('button', { name: /Show more/ })[0];
+    if (toggle) await user.click(toggle);
+
+    expect(api.hydrateCosAgentDescription).not.toHaveBeenCalled();
   });
 });

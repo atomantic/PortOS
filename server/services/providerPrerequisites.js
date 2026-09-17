@@ -38,6 +38,7 @@ import { PROVIDER_GATEWAYS } from '../lib/providerGateways.js';
 import { readCodexRoutingOverride } from '../lib/codexUserConfig.js';
 import { inferTuiCommand } from '../lib/providerVendors.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 import { peekCodexAccountReadiness } from './codexAppServer.js';
 import { getCodexOssSupport, peekCodexOssSupport, refreshCodexOssSupportInBackground } from './codexOssSupport.js';
 import { codexOssLocalProvider } from '../lib/providerModels.js';
@@ -163,10 +164,17 @@ const prerequisiteReadinessFor = (provider, runtimes, gatewayKeySet) => {
 const processProviderRuntimeStatus = (provider, { cwd = null, deferCwdDependent = false } = {}) => {
   if (provider?.type !== 'cli' && provider?.type !== 'tui') return null;
   if (!configuredCommandIsNormalized(provider)) return { installed: false, reasonCode: 'command' };
-  const command = effectiveProcessCommand(provider);
-  const effectiveProvider = { ...provider, command };
+  const harnessCommand = effectiveProcessCommand(provider);
+  const effectiveProvider = { ...provider, command: harnessCommand };
   const runtimeKey = providerRuntimeKey(effectiveProvider);
-  if (runtimeKey && getProviderRuntime(runtimeKey)) return null;
+  // A managed runtime installs the HARNESS; a credential-bootstrap provider
+  // still spawns its bootstrap binary in front of it, so that one is probed
+  // regardless. The probe targets whatever PortOS actually spawns
+  // (credentialBootstrap.js): the harness may legitimately be absent from PATH
+  // when the bootstrap CLI supplies it, and a missing bootstrap binary is the
+  // ENOENT every run would hit.
+  const { command } = applyCredentialBootstrap(provider, harnessCommand, []);
+  if (command === harnessCommand && runtimeKey && getProviderRuntime(runtimeKey)) return null;
   const env = { ...process.env, ...(provider?.envVars || {}) };
   const explicitRelativeCommand = /[\\/]/.test(command) && !isAbsolute(command);
   const relativePathEntry = String(env.PATH || env.Path || '')

@@ -1967,6 +1967,16 @@ CREATE TABLE IF NOT EXISTS ai_connections (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+-- Service-instance columns (#7563): a connection is one instance of a
+-- SERVICE_DEFINITIONS row, addressed by slug, under a declared plan.
+ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS slug TEXT;
+ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS definition_id TEXT;
+ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'paid';
+ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS credential_via TEXT NOT NULL DEFAULT 'stored';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_connections_slug
+  ON ai_connections (slug)
+  WHERE slug IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS ai_harness_bindings (
   id UUID PRIMARY KEY,

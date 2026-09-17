@@ -87,23 +87,20 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     api.getCosLearningDurations().then(setDurations).catch(() => {});
   }, []);
 
-  // Fetch date buckets on mount and auto-load the most recent date
+  // Fetch date buckets on mount, with the most recent one hydrated in the SAME
+  // response. The tab always wants that bucket but can't name its date until the
+  // bucket list arrives, so asking separately costs a second serial round trip
+  // before any archived card can paint — the whole visible delay on a slow link.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const result = await api.getCosAgentDates().catch(() => ({ dates: [] }));
+      const result = await api.getCosAgentDates({ hydrate: true }).catch(() => ({ dates: [] }));
       if (cancelled) return;
       const dates = result.dates || [];
       setDateBuckets(dates);
-
-      // Auto-load the most recent date
-      if (dates.length > 0) {
-        const firstDate = dates[0].date;
-        const agents = await api.getCosAgentsByDate(firstDate).catch(() => []);
-        if (cancelled) return;
-        setLoadedAgents(agents);
-        setLoadedDates(new Set([firstDate]));
-      }
+      if (!result.latest) return;
+      setLoadedAgents(result.latest.agents || []);
+      setLoadedDates(new Set([result.latest.date]));
     })();
     return () => { cancelled = true; };
   }, []);
@@ -151,13 +148,23 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     onRefresh();
   }, [onRefresh]);
 
-  const handleResumeClick = (agent) => {
-    setResumingAgent(agent);
-  };
+  // ResumeAgentModal builds a NEW task prompt out of `metadata.taskDescription`,
+  // and the listing carries a bounded copy of it (server/lib/cosAgentListProjection.js).
+  // Hydrate BEFORE opening, or a long description would be resumed clipped —
+  // silently, since the dialog shows exactly what it would send. The await costs
+  // nothing for the >90% of runs the listing carried whole (no request is made),
+  // and one small `?lines=1` read for the rest; opening on the preview and
+  // swapping the text in later would leave a window where Submit ships the
+  // clipped copy, which is the failure this exists to prevent.
+  const handleResumeClick = useCallback(async (agent) => {
+    setResumingAgent(await api.hydrateCosAgentDescription(agent));
+  }, []);
 
   // A stalled RUNNING agent (a CLI parked on a provider usage limit) moves to a
   // different provider/model in one step. The dialog owns the call and the
-  // outcome message — see RelaunchAgentModal.
+  // outcome message — see RelaunchAgentModal. No hydration here: relaunch sends
+  // provider/model/effort/app and a note, never the description, and the dialog
+  // fetches the rest itself if the reader expands it.
   const handleRelaunchClick = useCallback((agent) => setRelaunchingAgent(agent), []);
 
   const handleFeedbackChange = useCallback((updatedAgent) => {
@@ -241,6 +248,10 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     return indexTotal + stateOnlyCount;
   }, [dateBuckets, recentCompleted, loadedAgents]);
 
+  // Search runs over what the listing carries. `metadata.taskDescription` is
+  // bounded at AGENT_LIST_DESCRIPTION_CHARS server-side, which leaves over 90% of
+  // real records whole — only a pasted-prompt description is clipped, and its
+  // opening 2000 characters are what a reader searches for anyway.
   const filteredCompleted = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return allCompleted.filter(a => {

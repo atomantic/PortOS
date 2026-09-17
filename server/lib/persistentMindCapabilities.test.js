@@ -23,6 +23,8 @@ describe('persistent mind capabilities', () => {
       expect.objectContaining({ id: 'portos.write', capability: 'writePortos', defaultEnabled: false }),
       expect.objectContaining({ id: 'eidoverse.travel', capability: 'visitEidoversePeers', defaultEnabled: false }),
       expect.objectContaining({ id: 'eidoverse.manage', capability: 'manageEidoverse', defaultEnabled: false }),
+      expect.objectContaining({ id: 'eidoverse.promote', capability: 'promoteEidoverseFoundations', defaultEnabled: false }),
+      expect.objectContaining({ id: 'eidoverse.controllers', capability: 'installEidoverseControllers', defaultEnabled: false }),
       expect.objectContaining({ id: 'mind.adjust-local-context', capability: 'adjustLocalContext', defaultEnabled: false }),
       expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', defaultEnabled: false }),
       expect.objectContaining({ id: 'voice.call-user', capability: 'callUser', kind: 'typed-action', defaultEnabled: false }),
@@ -52,11 +54,12 @@ describe('persistent mind capabilities', () => {
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 3, callUser: true }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 5 }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 8 }).success).toBe(true);
-    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 10 }).success).toBe(true);
-    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 11 }).success).toBe(false);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 11 }).success).toBe(true);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 12 }).success).toBe(true);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 13 }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ taskModelAllowlist: [{ providerId: 'ollama', model: 'example-local' }] }).success).toBe(true);
     expect(normalizePersistentMindCapabilities({ schemaVersion: 2, createTasks: true }))
-      .toMatchObject({ schemaVersion: 10, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, callUser: false, adjustLocalContext: false });
+      .toMatchObject({ schemaVersion: 12, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, callUser: false, adjustLocalContext: false });
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: ['example-app', 'second-app'] }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: Array.from({ length: 51 }, (_, index) => `app-${index}`) }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, shell: true }).success).toBe(false);

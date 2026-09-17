@@ -217,12 +217,23 @@ describe('resolveLlmEndpoint', () => {
     expect(ep.apiBase).toBe('http://localhost:11434/v1');
   });
 
-  it('falls back to the env LM Studio default for CLI/TUI providers', async () => {
+  it('falls back to the default local backend for CLI/TUI providers', async () => {
     getProviderById.mockResolvedValue({ id: 'claude-code', type: 'cli', command: 'claude' });
     const ep = await resolveLlmEndpoint('claude-code');
-    expect(ep.apiBase).toBe('http://localhost:1234/v1');
+    expect(ep.apiBase).toBe('http://localhost:11434/v1');
+    expect(ep.providerName).toBe('Ollama');
     expect(ep.apiKey).toBe('');
     expect(ep.defaultModel).toBeNull();
+  });
+
+  // A named local backend must not be silently redirected to the default one:
+  // an install that pinned lmstudio and whose provider record went missing has
+  // to keep landing on LM Studio, or voice quietly talks to the wrong daemon.
+  it('falls back to the NAMED local backend rather than the default one', async () => {
+    getProviderById.mockResolvedValue(null);
+    const ep = await resolveLlmEndpoint('lmstudio');
+    expect(ep.apiBase).toBe('http://localhost:1234/v1');
+    expect(ep.providerName).toBe('LM Studio');
   });
 
   it('falls back when the provider is missing or the lookup throws', async () => {
@@ -261,11 +272,11 @@ describe('resolveLlmEndpoint', () => {
     expect(ep.apiBase).toBe('http://localhost:11434/v1');
   });
 
-  it('defaults to lmstudio when no provider id is passed', async () => {
+  it('defaults to ollama when no provider id is passed', async () => {
     getProviderById.mockResolvedValue(null);
     const ep = await resolveLlmEndpoint();
-    expect(getProviderById).toHaveBeenCalledWith('lmstudio');
-    expect(ep.apiBase).toBe('http://localhost:1234/v1');
+    expect(getProviderById).toHaveBeenCalledWith('ollama');
+    expect(ep.apiBase).toBe('http://localhost:11434/v1');
   });
 });
 

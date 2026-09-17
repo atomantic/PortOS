@@ -11,6 +11,7 @@
  * and which section the page filed the card under can never disagree.
  */
 
+import { useState } from 'react';
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { Link } from 'react-router';
 import { ExternalLink, Network, Terminal } from 'lucide-react';
@@ -34,12 +35,14 @@ import {
   providerTypeClass,
   resolveModelContextWindow,
   supportsModelRefresh,
+  withRuntimeContextWindow,
 } from '../../utils/providers';
 import { formatContextLength, formatDateTime } from '../../utils/formatters';
 import { isHttpsUrl } from '../../utils/urlNormalize';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
 import { CodexRoutingNotice, GatewayKeyHint } from './ProviderNotices';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist".
 // The editor states the same thing in its own inline banner, in prose.
@@ -105,6 +108,8 @@ export default function ProviderCard({
   onSetActive,
   onEdit,
   onDelete,
+  onAddTuiMode,
+  addingTuiMode = false,
   onRecover,
   onInstallRuntime,
   onAutoSetupRuntime,
@@ -123,8 +128,15 @@ export default function ProviderCard({
   onCodexCopyCode,
   onCodexEnable,
 }) {
+  // Deleting a provider is not undoable and the button sits in the same row as
+  // Test/Edit, so it arms an inline confirm row rather than firing immediately.
+  // (Inline confirm, not a two-click-arm button — see client/src/AGENTS.md.)
+  // One card, one record: a plain boolean, not the id-keyed useConfirmDelete
+  // that a component owning several rows needs.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const modes = (provider.executionModes || []).map(mode => providersById?.[mode.id]).filter(Boolean);
   const unified = modes.length > 1;
+  const displayName = unified ? provider.name.replace(/\b(CLI|TUI)\b\s*/i, '').trim() : provider.name;
   const shellProvider = unified ? modes.find(isTuiProvider) : provider;
   const style = CARD_STATE_STYLES[cardState.state];
   // Non-blocking: it never touches `cardState`, only what the card SAYS about
@@ -167,7 +179,7 @@ export default function ProviderCard({
           to split, and it is narrower than the viewport by the sidebar. */}
       <div className="flex flex-col @2xl:flex-row @2xl:items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <h3 className="text-lg font-semibold text-white">{unified ? provider.name.replace(/\b(CLI|TUI)\b\s*/i, '').trim() : provider.name}</h3>
+          <h3 className="text-lg font-semibold text-white">{displayName}</h3>
           <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
             {unified ? 'CLI / TUI' : provider.type.toUpperCase()}
           </span>
@@ -338,18 +350,60 @@ export default function ProviderCard({
             Edit
           </button>}
 
-          <button
-            onClick={() => onDelete(provider.id)}
-            className="px-3 py-1.5 text-sm bg-port-error/20 text-port-error hover:bg-port-error/30 rounded transition-colors"
-          >
-            Delete
-          </button>
+          {/* A lone CLI record is half a harness: the same program usually also
+              runs interactively, and configuring that half used to mean adding
+              the provider a second time from /ai/new and retyping the command,
+              endpoint, credentials and env — which only pairs the two records
+              if every one of those matches exactly. The server mints the
+              sibling from the record already on disk instead.
+
+              `canAddTuiMode` is the SERVER's verdict (the provider list
+              decorates it), not a re-derivation here: it also answers whether
+              this harness has an interactive mode at all and whether the
+              sibling id is free, neither of which the card can see. */}
+          {!unified && provider.canAddTuiMode && (
+            <button
+              onClick={() => onAddTuiMode(provider)}
+              disabled={addingTuiMode}
+              title={`Add the interactive (TUI) mode of ${displayName}, using its existing command and connection`}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50"
+            >
+              <Terminal size={14} />
+              {addingTuiMode ? 'Adding…' : 'Add interactive mode'}
+            </button>
+          )}
+
+          {!confirmingDelete && (
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              className="px-3 py-1.5 text-sm bg-port-error/20 text-port-error hover:bg-port-error/30 rounded transition-colors"
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
 
       {/* Card body — full width, below the header row rather than beside the
           action buttons. */}
       <div className="mt-3 space-y-2">
+        {/* Full-width and directly under the action row so the question is
+            read where the click happened, whatever the buttons wrapped to.
+            A unified card owns BOTH modes: the server deletes the whole mode
+            group, so the question has to say so. */}
+        {confirmingDelete && (
+          <InlineConfirmRow
+            question={`Delete ${displayName}?${unified ? ' Both its CLI and TUI modes are removed.' : ''} Its saved settings and model defaults are gone for good.`}
+            confirmText="Delete provider"
+            autoFocus
+            aria-label={`Confirm deleting ${displayName}`}
+            onConfirm={() => {
+              setConfirmingDelete(false);
+              onDelete(provider.id);
+            }}
+            onCancel={() => setConfirmingDelete(false)}
+          />
+        )}
         {unified && (
           <div className="text-xs text-gray-400 space-y-1">
             <p>CLI and TUI share enablement and the model catalog. Edit a mode to configure its arguments and model defaults.</p>
@@ -513,9 +567,15 @@ export default function ProviderCard({
             // first, so the meter agrees with what the dispatch gate enforces —
             // a card reading 128K beside an endpoint serving 32K promised a
             // budget no run could ever spend. Down or silent → `null`, and the
-            // ladder resolves exactly as it did before.
+            // ladder resolves exactly as it did before. The window PortOS
+            // LAUNCHED that daemon at rides the same payload — it is resolved
+            // server-side because its second rung is the ambient
+            // `OLLAMA_CONTEXT_LENGTH` the browser cannot read (#7472).
             const { tokens, source } = resolveModelContextWindow(
-              mergeObservedContextWindows(provider, daemonReadiness?.contextWindows),
+              withRuntimeContextWindow(
+                mergeObservedContextWindows(provider, daemonReadiness?.contextWindows),
+                daemonReadiness?.runtimeContextWindow,
+              ),
               provider.defaultModel
             );
             const windowLabel = formatContextLength(tokens);

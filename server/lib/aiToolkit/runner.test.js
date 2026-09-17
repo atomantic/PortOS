@@ -27,6 +27,10 @@ describe('AI Toolkit runner service', () => {
   const tempDirs = [];
 
   afterEach(async () => {
+    // Before restoreAllMocks: a spy restored while the clock is still faked is
+    // reinstalled onto the faked globals, so the next test inherits a timer
+    // that never fires. No-op when the test used real timers.
+    vi.useRealTimers();
     vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) {
       await rm(dir, { recursive: true, force: true });
@@ -628,6 +632,11 @@ describe('AI Toolkit runner service', () => {
     // every API timeout reached the host's failure hook as an uncategorized
     // failure and was escalated for investigation instead of read as a timeout.
     expect(metadata.errorAnalysis).toMatchObject({ hasError: true, category: 'timeout' });
+    // Which of the two ceilings ended it. A provider that went quiet is a
+    // bench candidate; one that outran the absolute cap while producing is not,
+    // so the host's classifier must be able to tell them apart without prose.
+    expect(metadata.timeoutBound).toBe('stall');
+    expect(metadata.error).toMatch(/no stream progress/i);
   });
 
   it('bounds a run whose provider-readiness hook never resolves (fetch never reached)', async () => {
@@ -668,6 +677,708 @@ describe('AI Toolkit runner service', () => {
     expect(await runner.isRunActive('run-hung-setup')).toBe(false);
     expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
   });
+
+  // A Stop of an API run reaches the finalizer as Node's bare
+  // `AbortError: This operation was aborted` — a string no error pattern
+  // matches. Classified as UNKNOWN it fired the host's failure hook, which
+  // escalates to a tier-4 investigation task: a post-mortem over a human
+  // pressing Stop. CLI/TUI runs already finalize a Stop as `canceled`.
+  it('finalizes a mid-stream Stop as canceled, without firing the failure hook', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    const fetch = vi.fn(async (_url, opts) => {
+      const { signal } = opts;
+      return {
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: () => new Promise((_resolve, reject) => {
+              // Reject with the signal's own reason, exactly as undici does —
+              // for a reason-less `abort()` that is Node's DOMException whose
+              // message is "This operation was aborted".
+              const fail = () => reject(signal.reason);
+              if (signal.aborted) return fail();
+              signal.addEventListener('abort', fail, { once: true });
+            }),
+            cancel: async () => {}
+          })
+        }
+      };
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    const onRunFailed = vi.fn();
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    await runner.executeApiRun({
+      runId: 'run-stopped',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      // Far beyond the test's lifetime, so a timeout can't be what finalizes it.
+      timeout: 600_000,
+      onData: undefined,
+      onComplete: (m) => done(m)
+    });
+
+    expect(await runner.stopRun('run-stopped')).toBe(true);
+
+    const metadata = await completed;
+    expect(metadata).toMatchObject({
+      success: false,
+      canceled: true,
+      completionReason: 'canceled',
+      errorCategory: 'canceled',
+    });
+    // A cancellation is evidence about the operator, not the provider: no
+    // failure hook, so nothing benches the provider or escalates a task.
+    expect(onRunFailed).not.toHaveBeenCalled();
+    expect(await runner.isRunActive('run-stopped')).toBe(false);
+    // Persisted too — /runs replays the record, not the in-memory result.
+    const persisted = JSON.parse(await readFile(join(dataDir, 'runs', 'run-stopped', 'metadata.json'), 'utf-8'));
+    expect(persisted).toMatchObject({ canceled: true, errorCategory: 'canceled' });
+  });
+
+  it('finalizes a Stop that lands before the response headers as canceled', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    // The provider never sends headers, so the abort rejects `fetch` itself and
+    // the run finalizes through the non-OK branch rather than the stream reader.
+    const fetch = vi.fn((_url, opts) => new Promise((_resolve, reject) => {
+      const { signal } = opts;
+      const fail = () => reject(signal.reason);
+      if (signal.aborted) return fail();
+      signal.addEventListener('abort', fail, { once: true });
+    }));
+    vi.stubGlobal('fetch', fetch);
+
+    const onRunFailed = vi.fn();
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    // `fetch` never settles until the stop, so `executeApiRun` does not return
+    // on its own — the run is registered synchronously before the first await.
+    runner.executeApiRun({
+      runId: 'run-stopped-early',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      timeout: 600_000,
+      onData: undefined,
+      onComplete: (m) => done(m)
+    }).catch(() => {});
+
+    // Let the readiness hook resolve so the run is parked inside `fetch`.
+    await Promise.resolve();
+    expect(await runner.stopRun('run-stopped-early')).toBe(true);
+
+    const metadata = await completed;
+    expect(metadata).toMatchObject({
+      success: false,
+      canceled: true,
+      errorCategory: 'canceled',
+    });
+    expect(onRunFailed).not.toHaveBeenCalled();
+    expect(await runner.isRunActive('run-stopped-early')).toBe(false);
+  });
+
+  // The stop marker is one-shot and describes only the run that was in flight
+  // when Stop was pressed. A Stop that loses the race to the last chunk (it
+  // lands while the final `read()` is still awaited, so the run is registered
+  // but the success path has not released it yet) must neither retro-cancel
+  // the answer that was delivered nor leak into a later run of the same id.
+  it('drops a stop marker that lost the race to the final chunk', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    let runner;
+    let stopDuringFinalRead = true;
+    // Recorded, not asserted inline: a throw inside the reader would reject the
+    // stream and be reported as a cancel/failure rather than a test failure.
+    let stopAccepted = null;
+    const frame = (text) => new TextEncoder()
+      .encode(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n`);
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      let sent = false;
+      return {
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (sent) {
+                // Stop lands inside the await boundary that precedes the
+                // success finalizer, while `activeRuns` still holds the run.
+                if (stopDuringFinalRead) {
+                  stopDuringFinalRead = false;
+                  stopAccepted = await runner.stopRun('run-reused');
+                }
+                return { done: true };
+              }
+              sent = true;
+              return { done: false, value: frame('answer') };
+            },
+            cancel: async () => {}
+          })
+        }
+      };
+    }));
+
+    const onRunFailed = vi.fn();
+    runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed }
+    });
+
+    const runOnce = async () => {
+      let done;
+      const completed = new Promise((resolve) => { done = resolve; });
+      await runner.executeApiRun({
+        runId: 'run-reused', provider: runReady(), model: null, prompt: 'hi',
+        workspacePath: process.cwd(), screenshots: [], timeout: 600_000,
+        onData: undefined, onComplete: (m) => done(m)
+      });
+      return completed;
+    };
+
+    // The chunk was already delivered, so the run is a success despite the Stop.
+    const first = await runOnce();
+    // The Stop really did land on a registered run — otherwise no marker was
+    // ever set and the rest of this test would pass vacuously.
+    expect(stopAccepted).toBe(true);
+    expect(first).toMatchObject({ success: true });
+    expect(first.canceled).toBeUndefined();
+
+    // The stale marker must not make the next run of this id report canceled.
+    const second = await runOnce();
+    expect(second).toMatchObject({ success: true });
+    expect(second.canceled).toBeUndefined();
+    expect(onRunFailed).not.toHaveBeenCalled();
+  });
+  // A `data:` frame is NOT guaranteed to arrive whole: the reader hands back
+  // arbitrary byte-sized chunks (~8KB from undici), so a long frame — a
+  // reasoning model's `delta.reasoning`, a big content burst — routinely
+  // straddles two reads. Parsing per-chunk instead of per-LINE fed JSON.parse a
+  // half frame and threw `Unterminated string in JSON at position 8064`,
+  // failing a 220s NVIDIA NIM nemotron run with outputSize 0. Every other SSE
+  // consumer in the tree already carries the remainder forward.
+  it('reassembles a data frame split across two reads instead of failing the run', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const frame = `data: ${JSON.stringify({ choices: [{ delta: { content: 'split-across-reads' } }] })}\n`;
+    const cut = frame.indexOf('split') + 5;
+    const chunks = [
+      encoder.encode(frame.slice(0, cut)),
+      encoder.encode(frame.slice(cut)),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-split-frame', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-split-frame', 'output.txt'), 'utf-8'))
+      .toBe('split-across-reads');
+  });
+
+  // Same boundary, one layer down: a multi-byte character cut in half by the
+  // read boundary needs the decoder's own streaming carry, or it lands as U+FFFD.
+  it('decodes a multi-byte character split across two reads', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const frame = encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'café — 日本' } }] })}\n`);
+    // Cut inside the 3-byte encoding of "—".
+    const cut = frame.indexOf(0xe2) + 1;
+    const chunks = [frame.slice(0, cut), frame.slice(cut), encoder.encode('data: [DONE]\n')];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-split-utf8', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    await completed;
+
+    expect(await readFile(join(dataDir, 'runs', 'run-split-utf8', 'output.txt'), 'utf-8'))
+      .toBe('café — 日本');
+  });
+
+  // A CRLF transport leaves `\r` on every line; `[DONE]\r` missed the terminal
+  // check and reached JSON.parse, and a trailing `\r` rode into the output text.
+  it('tolerates CRLF frame separators', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'crlf' } }] })}\r\n\r\n`),
+      encoder.encode('data: [DONE]\r\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-crlf', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-crlf', 'output.txt'), 'utf-8')).toBe('crlf');
+  });
+
+  // One corrupt frame mid-stream must not throw away the tokens around it — the
+  // old code let a single JSON.parse throw abort the whole run.
+  it('skips an unparseable frame and keeps the surrounding output', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'before ' } }] })}\n`),
+      encoder.encode('data: {"choices":[{"delta":{"content":"oops\n'),
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'after' } }] })}\n`),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-bad-frame', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-bad-frame', 'output.txt'), 'utf-8'))
+      .toBe('before after');
+  });
+
+  // `data: ` with an empty payload is a keep-alive on some providers. It is not
+  // a frame, so it must not reach the parse-failure log — which would otherwise
+  // emit one line per heartbeat for the life of the stream.
+  it('treats an empty data payload as a heartbeat, not an unparseable frame', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode('data: \n\n'),
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'beat' } }] })}\n`),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-heartbeat', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-heartbeat', 'output.txt'), 'utf-8')).toBe('beat');
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('unparseable stream frame');
+    warn.mockRestore();
+  });
+
+  // A reasoning model streams `delta.reasoning` before any content, so a
+  // mid-stream failure finds `output` empty and the real work sitting in
+  // `reasoning`. The success path already falls back to it; the failure path
+  // discarded it, which is how the NVIDIA NIM nemotron run lost 220s of
+  // generation to `outputSize: 0`.
+  it('salvages reasoning-only partial output when the stream fails mid-run', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning: 'thought so far' } }] })}\n`),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : Promise.reject(new Error('socket hang up'))) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-reasoning-salvage', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(false);
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(await readFile(join(dataDir, 'runs', 'run-reasoning-salvage', 'output.txt'), 'utf-8'))
+      .toBe('thought so far');
+  });
+
+  // The hidden channel is named `reasoning_content` by NVIDIA NIM, vLLM and the
+  // DeepSeek-R1-compatible servers — only OpenRouter-style endpoints say
+  // `reasoning`. Reading the one name discarded every reasoning token from NIM
+  // (`nvidia/nemotron-3.5-lightning-30b-a3b` sends 126 of 128 frames that way),
+  // so the salvage below never fired and a cut-off run reported `outputSize: 0`
+  // — indistinguishable from a provider that answered nothing.
+  it.each([
+    ['reasoning', 'openrouter-style'],
+    ['reasoning_content', 'nvidia-nim/vllm-style'],
+    ['thinking', 'llama.cpp-style'],
+  ])('salvages a %s-named reasoning channel (%s)', async (field) => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { [field]: 'deliberating' } }] })}\n`),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: `run-reasoning-${field}`, provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(await readFile(join(dataDir, 'runs', `run-reasoning-${field}`, 'output.txt'), 'utf-8'))
+      .toBe('deliberating');
+  });
+
+  // The wall-clock ceiling is the THIRD terminal path, and the only one that
+  // discarded the reasoning it cut off. A reasoning model spends its whole
+  // budget in the hidden channel before the first content token, so a run the
+  // timer ends has an empty `output` and minutes of generation in `reasoning`;
+  // writing `output` alone stamped `outputSize: 0`, which reads downstream as
+  // "the provider sent nothing" and escalates a healthy-but-slow model as dead.
+  it('salvages streamed reasoning when the wall-clock timeout ends the run', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    // One reasoning frame, then a read that never settles — the timer wins.
+    const frame = encoder.encode(
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'partial thinking' } }] })}\n`);
+    let sent = false;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => {
+        if (sent) return new Promise(() => {});
+        sent = true;
+        return { done: false, value: frame };
+      } }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-timeout-reasoning', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 50,
+      onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
+    // The salvage, not a zero-byte "provider said nothing" record.
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(metadata.hadReasoning).toBe(true);
+    expect(metadata.usedReasoningAsFallback).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-timeout-reasoning', 'output.txt'), 'utf-8'))
+      .toBe('partial thinking');
+  });
+
+  // The timeout closure is built before the stream reader that fills
+  // `reasoning`, so a timer that fires before the response arrives must not
+  // read it through the temporal dead zone — a ReferenceError there would
+  // abandon the finalizer and leak the very run slot the ceiling reclaims.
+  it('finalizes a timeout that fires before any response, with no reasoning to salvage', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: () => new Promise(() => {}) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    runner.executeApiRun({
+      runId: 'run-timeout-pre-response', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 20,
+      onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
+    expect(metadata.outputSize).toBe(0);
+    expect(metadata.hadReasoning).toBe(false);
+    expect(metadata.usedReasoningAsFallback).toBe(false);
+    expect(await runner.isRunActive('run-timeout-pre-response')).toBe(false);
+  });
+
+  // A SSE reader whose chunks arrive on the (fake) clock, so a test can hold a
+  // stream open across the timeout bounds without sleeping. Rejects on abort
+  // the way a real reader does, so a timer that wins the race still unwinds
+  // `processStream` instead of leaving it parked on a read forever.
+  const clockDrivenReader = ({ intervalMs, frames = Infinity, signal }) => {
+    const encoder = new TextEncoder();
+    let sent = 0;
+    return {
+      read: () => new Promise((resolve, reject) => {
+        const fail = () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+        if (signal?.aborted) return fail();
+        signal?.addEventListener('abort', fail, { once: true });
+        setTimeout(() => {
+          if (signal?.aborted) return fail();
+          if (sent >= frames) return resolve({ done: true, value: undefined });
+          sent += 1;
+          resolve({
+            done: false,
+            value: encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'tok' } }] })}\n`),
+          });
+        }, intervalMs);
+      }),
+      cancel: async () => {},
+    };
+  };
+
+  // The regression #7560 reports. A single wall-clock ceiling cannot tell a
+  // provider that opened the stream and STALLED from one that is actively
+  // streaming and simply needs longer, so both died at the same 300s — an
+  // NVIDIA NIM nemotron run spending its whole budget in the hidden reasoning
+  // channel was killed mid-generation while healthy and producing. Every chunk
+  // must push the no-progress bound out, so a run that keeps producing outlives
+  // that bound by any multiple.
+  it('lets a steadily streaming run outlive the configured no-progress bound', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.useFakeTimers();
+
+    const FRAMES = 20;
+    const INTERVAL_MS = 400;
+    const STALL_MS = 1000;
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+      ok: true,
+      body: { getReader: () => clockDrivenReader({ intervalMs: INTERVAL_MS, frames: FRAMES, signal: opts.signal }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-slow-stream', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: STALL_MS,
+      onData: undefined, onComplete: complete,
+    });
+
+    // 8000ms of streaming against a 1000ms no-progress bound: the old single
+    // ceiling ended this run at 1000ms with `success: false`.
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS * (FRAMES + 1));
+    const metadata = await completed;
+
+    expect(metadata).toMatchObject({ success: true, exitCode: 0 });
+    expect(metadata.duration).toBeGreaterThan(STALL_MS);
+    expect(await readFile(join(dataDir, 'runs', 'run-slow-stream', 'output.txt'), 'utf-8'))
+      .toBe('tok'.repeat(FRAMES));
+    expect(await runner.isRunActive('run-slow-stream')).toBe(false);
+  });
+
+  // The other half of the split: relaxing the no-progress bound must not let a
+  // provider that trickles bytes forever hold its `activeRuns` slot for good.
+  // The absolute cap never extends, and it says so — a run that outran its
+  // total budget while producing is a different diagnosis from one that stalled.
+  it('caps a run that never stops trickling, naming the absolute bound', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.useFakeTimers();
+
+    // 55s between frames keeps the 120s no-progress bound permanently re-armed
+    // (and never lands on the same tick as the 30-minute cap).
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+      ok: true,
+      body: { getReader: () => clockDrivenReader({ intervalMs: 55_000, signal: opts.signal }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-trickle', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 120_000,
+      onData: undefined, onComplete: complete,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_800_000);
+    const metadata = await completed;
+
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout', timeoutBound: 'absolute' });
+    expect(metadata.error).toMatch(/absolute runtime cap/i);
+    // The cap is a ceiling on total runtime, not on the no-progress bound: it
+    // fired while the stream was still producing, so the partial output is
+    // salvaged rather than reported as a zero-byte "provider said nothing".
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(await runner.isRunActive('run-trickle')).toBe(false);
+  });
+
+  // `Math.max` against the default cap: an install that deliberately raised
+  // `provider.timeout` past 30 minutes keeps running exactly as long as it
+  // asked to, rather than being silently clamped DOWN by the new ceiling.
+  it('never caps a run below its configured no-progress bound', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.useFakeTimers();
+
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+      ok: true,
+      body: { getReader: () => clockDrivenReader({ intervalMs: 600_000, signal: opts.signal }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    // A 45-minute bound, past the 30-minute default cap.
+    await runner.executeApiRun({
+      runId: 'run-long-bound', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 2_700_000,
+      onData: undefined, onComplete: complete,
+    });
+
+    // Past the default cap, before the configured bound — still running.
+    await vi.advanceTimersByTimeAsync(1_900_000);
+    expect(await runner.isRunActive('run-long-bound')).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    const metadata = await completed;
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout', timeoutBound: 'absolute' });
+    expect(metadata.error).toMatch(/2700000ms/);
+  });
+
+  // A stream that ends without [DONE] still has a complete frame sitting in the
+  // carry buffer; dropping it silently truncates the tail of the answer.
+  it('flushes a trailing frame left unterminated by the final read', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'head ' } }] })}\n`),
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'tail' } }] })}`),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-tail-frame', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-tail-frame', 'output.txt'), 'utf-8'))
+      .toBe('head tail');
+  });
+
 });
 
 describe('AI Toolkit runner — declared extension points', () => {
@@ -725,6 +1436,20 @@ describe('AI Toolkit runner — declared extension points', () => {
     // stopRun drops the entry, so a follow-up reports inactive.
     expect(await runner.isRunActive('x')).toBe(false);
     expect(await runner.stopRun('x')).toBe(false);
+  });
+
+  // getActiveRunCount is the surface the host's system-idle gate reads — it
+  // must count BOTH tracking maps (API runs and host-spawned CLI/TUI runs),
+  // since a host runner never populates the other one for the same run.
+  it('getActiveRunCount sums external and internally-tracked runs', async () => {
+    const runner = createRunnerService({ dataDir: './data' });
+    expect(await runner.getActiveRunCount()).toBe(0);
+
+    runner.registerExternalRun('external-1', externalChild());
+    expect(await runner.getActiveRunCount()).toBe(1);
+
+    await runner.stopRun('external-1');
+    expect(await runner.getActiveRunCount()).toBe(0);
   });
 
   // registerExternalRun also holds node-pty sessions (the host's TUI runs). On

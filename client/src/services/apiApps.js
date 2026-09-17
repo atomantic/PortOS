@@ -19,6 +19,17 @@ export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/
 // Response: { success, published, reason?, hash?, path }.
 export const publishAppQualitySnapshot = (id, options = {}) =>
   request(`/apps/${id}/quality-snapshot`, { method: 'POST', silent: true, ...options });
+// The Quality tab's weekly-schedule form. `get` returns the applicable checks,
+// the repo shapes that verdict came from, the cron expressions already spoken
+// for, and the plan the shipped defaults produce; `preview` re-plans an edited
+// form without writing; `apply` persists the plan as per-app task overrides.
+// All three are silent — the form renders its own errors and warnings inline.
+export const getAppQualitySchedule = (id, options = {}) =>
+  request(`/apps/${id}/quality-schedule`, { silent: true, ...options });
+export const previewAppQualitySchedule = (id, body, options = {}) =>
+  request(`/apps/${id}/quality-schedule/preview`, { method: 'POST', body: JSON.stringify(body), silent: true, ...options });
+export const applyAppQualitySchedule = (id, body, options = {}) =>
+  request(`/apps/${id}/quality-schedule/apply`, { method: 'POST', body: JSON.stringify(body), silent: true, ...options });
 // Managed checkout topology: returns sanitized local/fork/upstream revision
 // state without exposing machine-local repo paths.
 export const getAppRepositorySources = (id, options = {}) =>
@@ -95,6 +106,18 @@ export const resolveAppPullRequest = (id, number, settings = {}, options = {}) =
 // pr-reviewer posture's eligible set.
 export const reviewAppPullRequest = (id, number, settings = {}, options = {}) =>
   request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/review`, {
+    method: 'POST',
+    body: JSON.stringify(settings),
+    silent: true,
+    ...options,
+  });
+// Run the bundled `/do:review` workflow against ONE open GitHub PR with the
+// install's Code Review Defaults, review-only. Unlike `reviewAppPullRequest`
+// this is offered on every open GitHub request whoever opened it — `pr-reviewer`
+// covers untrusted contributors alone. `settings` is the same provider/model/
+// effort pin as `resolveAppPullRequest`.
+export const doReviewAppPullRequest = (id, number, settings = {}, options = {}) =>
+  request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/do-review`, {
     method: 'POST',
     body: JSON.stringify(settings),
     silent: true,

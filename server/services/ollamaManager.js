@@ -34,7 +34,7 @@ import { buildHfAuthHeaders, buildHfResolveUrl, HF_API } from '../lib/huggingfac
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js'
 import { commandExists } from '../lib/commandExists.js'
 import {
-  OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, resolveOllamaContextLength, withOllamaContextEnv
+  OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, managedOllamaBaseUrl, resolveOllamaContextLength, withOllamaContextEnv
 } from '../lib/ollamaContext.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
@@ -76,7 +76,7 @@ const HF_IMPORT_METADATA_TIMEOUT_MS = 180_000
 const DEFAULT_CONFIG = {
   // Ollama uses OLLAMA_HOST (host:port, no scheme) by convention; also accept
   // an explicit OLLAMA_URL. Normalize to a scheme + no trailing slash + no /v1.
-  baseUrl: normalizeBaseUrl(process.env.OLLAMA_URL || process.env.OLLAMA_HOST || 'http://localhost:11434'),
+  baseUrl: normalizeBaseUrl(managedOllamaBaseUrl()),
   timeout: DEFAULT_REQUEST_TIMEOUT_MS
 }
 
@@ -1361,6 +1361,33 @@ async function unloadModel(modelName) {
 }
 
 /**
+ * Make `modelName` resident so the next request doesn't pay a cold load.
+ * The inverse of `unloadModel`: an empty-prompt `/api/generate` with a
+ * non-zero `keep_alive` loads the weights and returns without generating
+ * tokens (Ollama answers with `done_reason: "load"`).
+ *
+ * Unlike the unload path there is deliberately NO "already resident" guard
+ * here — the caller checks `/api/ps` first because re-warming is merely
+ * wasteful, whereas an unguarded UNLOAD-shaped request against a cold model
+ * would load many GB just to evict it.
+ * @returns {Promise<{ warmed: true, model: string } | { warmed: false, reason: string }>}
+ */
+async function warmModel(modelName, keepAlive = '30m') {
+  if (typeof modelName !== 'string' || modelName.length === 0) {
+    return { warmed: false, reason: 'missing model name' }
+  }
+  if (!(await checkOllamaAvailable())) {
+    return { warmed: false, reason: 'Ollama unreachable' }
+  }
+  const body = JSON.stringify({ model: modelName, prompt: '', keep_alive: keepAlive, stream: false })
+  const result = await ollamaRequest('/api/generate', { method: 'POST', body }).catch((err) => ({ _err: err }))
+  if (result && result._err) {
+    return { warmed: false, reason: result._err.message || 'request failed' }
+  }
+  return { warmed: true, model: modelName }
+}
+
+/**
  * Pull a model, streaming progress. Resolves once the pull finishes.
  * Non-percent frames carry a reason flag so the UI can show why the banner is
  * paused instead of stalling: `retrying: true` during a transient-error backoff,
@@ -2001,6 +2028,7 @@ export {
   getLastInstalledModelsError,
   getLastLoadedModelsError,
   unloadModel,
+  warmModel,
   pullModel,
   importModelFromHfSafetensors,
   deleteModel,

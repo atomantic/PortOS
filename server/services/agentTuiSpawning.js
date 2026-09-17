@@ -83,6 +83,7 @@ import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
 import { shellHasLiveChild } from '../lib/shellLivenessProbe.js';
 import { appendRunEvent } from './agentRunEventLog.js';
+import { applyCredentialBootstrap } from '../lib/credentialBootstrap.js';
 
 // Agent-specific timing/lifecycle constants (not shared with the one-shot
 // runner — agents stay alive much longer and write a sentinel file when done).
@@ -197,8 +198,8 @@ export async function createAgentTuiSession({
     const session = await spawnTuiSessionViaRunner({
       agentId,
       taskId,
-      command: tuiConfig.command,
-      args: tuiConfig.args,
+      command: tuiConfig.spawnCommand,
+      args: tuiConfig.spawnArgs,
       workspacePath: cwd,
       envVars: env,
       providerAuth: cliProviderAuthDescriptor(provider),
@@ -227,7 +228,7 @@ export async function createAgentTuiSession({
     // paste gate before the spawn — exactly as the runner branch above does —
     // or the TUI's first bracketed-paste/input-ready bytes are discarded.
     onInitialCommandSent?.();
-    sessionId = shellService.spawnCommandSession(tuiConfig.command, tuiConfig.args, {
+    sessionId = shellService.spawnCommandSession(tuiConfig.spawnCommand, tuiConfig.spawnArgs, {
       ...sessionOptions,
       env,
       onData,
@@ -308,10 +309,18 @@ export function buildTuiSpawnConfig(provider, model, {
       safetyProfile,
       tui: true,
     });
+    // Public-review postures never get credential-bootstrap-wrapped — the
+    // enforced recipe above IS the sandbox. `applyCredentialBootstrap` owns
+    // that skip (keyed on `safetyProfile`), so `spawnCommand`/`spawnArgs` come
+    // back identical to `command`/`args` and every branch of this function
+    // returns the same shape.
+    const { command: spawnCommand, args: spawnArgs } = applyCredentialBootstrap(provider, recipe.command, recipe.args, { safetyProfile });
     return {
       command: recipe.command,
       args: recipe.args,
-      commandLine: formatShellCommandLine(recipe.command, recipe.args, shell),
+      spawnCommand,
+      spawnArgs,
+      commandLine: formatShellCommandLine(spawnCommand, spawnArgs, shell),
       promptDelayMs: provider?.tuiPromptDelayMs || DEFAULT_TUI_PROMPT_DELAY_MS,
     };
   }
@@ -332,11 +341,22 @@ export function buildTuiSpawnConfig(provider, model, {
   if (systemPromptFile && isClaudeCommand(command)) {
     args = [...args, '--append-system-prompt-file', systemPromptFile];
   }
-  const commandLine = formatShellCommandLine(command, args, shell);
+  // `command`/`args` keep naming the harness itself — every consumer of this
+  // config (ready-text detection, permission-dialog handling, error messages)
+  // keys off them by identity. `spawnCommand`/`spawnArgs` are what actually
+  // gets launched: the bootstrap CLI in front of the harness invocation for a
+  // credential-bootstrap-configured provider (see credentialBootstrap.js), or
+  // an identical copy otherwise. `commandLine` (used both to type the harness
+  // into a login shell and to display "what's running") is built from the
+  // SPAWNED pair so it always matches the real process.
+  const { command: spawnCommand, args: spawnArgs } = applyCredentialBootstrap(provider, command, args);
+  const commandLine = formatShellCommandLine(spawnCommand, spawnArgs, shell);
 
   return {
     command,
     args,
+    spawnCommand,
+    spawnArgs,
     commandLine,
     promptDelayMs: provider?.tuiPromptDelayMs || DEFAULT_TUI_PROMPT_DELAY_MS
   };
@@ -733,7 +753,10 @@ export async function spawnTuiAgent({
     leaveOpen: leavesPrForHuman(task),
   });
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
-  const commandName = tuiConfig.command.split('/').pop();
+  // The login shell prints "command not found" for the binary it was asked to
+  // run — the SPAWNED one, which for a credential-bootstrap provider is the
+  // bootstrap CLI, not the harness `tuiConfig.command` names.
+  const commandName = tuiConfig.spawnCommand.split('/').pop();
   /**
    * Where this session is in its lifecycle — the one value every path that
    * ends a run reads and writes.
@@ -1520,7 +1543,7 @@ export async function spawnTuiAgent({
           await finish({
             success: false,
             exitCode: 127,
-            error: `TUI command not found: ${tuiConfig.command}`,
+            error: `TUI command not found: ${tuiConfig.spawnCommand}`,
             reason: 'command-not-found'
           });
         }

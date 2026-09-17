@@ -57,9 +57,12 @@ describe('cos-runner spawn — per-provider prompt delivery (antigravity --print
     // Antigravity (`agy`) takes the prompt as the --print VALUE and does NOT read
     // stdin; without this the prompt never reaches the model. prepareCliPrompt
     // rewrites the argv (and returns useStdin=false for agy) before the resolve.
-    const prepareIdx = RUNNER_SRC.indexOf('prepareCliPrompt(command, spawnArgs, prompt)');
+    // The trailing options object carries the run's `cwd`, which OpenChamber
+    // needs as the `--dir` its control plane cannot infer — pinned here so a
+    // refactor cannot drop it and leave that harness running in the wrong tree.
+    const prepareIdx = RUNNER_SRC.indexOf('prepareCliPrompt(command, spawnArgs, prompt, { cwd })');
     const resolveIdx = RUNNER_SRC.indexOf('prepareCliSpawn(command, deliveredArgs, childEnv)');
-    expect(prepareIdx, 'must call prepareCliPrompt(command, spawnArgs, prompt)').toBeGreaterThan(-1);
+    expect(prepareIdx, 'must call prepareCliPrompt(command, spawnArgs, prompt, { cwd })').toBeGreaterThan(-1);
     expect(resolveIdx, 'must resolve the delivered argv').toBeGreaterThan(-1);
     expect(prepareIdx, 'prompt delivery runs before the spawn resolve').toBeLessThan(resolveIdx);
   });

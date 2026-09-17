@@ -19,6 +19,14 @@ export const updateProvider = (id, data, options = {}) => request(`/providers/${
   ...options,
 });
 export const deleteProvider = (id) => request(`/providers/${id}`, { method: 'DELETE' });
+// Mint the TUI half of an existing CLI provider's harness. No body: the sibling
+// is built from the stored record plus the harness recipe's interactive argv,
+// so the connection details never get retyped (and never get retyped WRONG,
+// which would leave two unrelated routes instead of one CLI / TUI card).
+export const addProviderTuiMode = (id, options = {}) => request(`/providers/${id}/modes/tui`, {
+  method: 'POST',
+  ...options,
+});
 export const getSampleProviders = () => request('/providers/samples');
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });
 export const refreshProviderModels = (id, options) => request(`/providers/${id}/refresh-models`, { method: 'POST', ...options });

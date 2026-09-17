@@ -77,14 +77,38 @@ function normalizeDescriptionToMarkdown(text) {
 // `line-clamp` can't clamp this — MarkdownOutput emits block children — so it
 // uses CollapsibleText's max-height variant, which measures the real overflow
 // instead of guessing from a character count.
-function TaskDescription({ id, text }) {
+// The listing bounds `metadata.taskDescription` (server/lib/cosAgentListProjection.js),
+// which is exactly what the clamped preview needs and 68% less to download. The
+// rest arrives only if the reader opens it — `onExpand` fires once per mount, so
+// collapsing and re-opening never re-fetches.
+function TaskDescription({ agent, remote }) {
+  const preview = agent.metadata?.taskDescription || agent.taskId;
+  const [hydrated, setHydrated] = useState(null);
+  const text = hydrated ?? preview;
   const md = useMemo(() => normalizeDescriptionToMarkdown(text), [text]);
+  // `!remote` for the same reason the transcript fetch below carries it: a peer's
+  // agent id means nothing to THIS instance's /cos/agents/:id, so hydrating it
+  // would either 404 or read a local run that happens to share the id.
+  const clipped = Boolean(agent.metadata?.taskDescriptionTruncated) && !remote;
+
+  const hydrate = useCallback(async () => {
+    const full = await api.hydrateCosAgentDescription(agent);
+    setHydrated(full.metadata?.taskDescription ?? null);
+  }, [agent]);
 
   if (!text) return null;
 
   return (
     <div className="mb-2">
-      <CollapsibleText id={`agent-desc-${id}`} className="text-sm">
+      {/* `forceToggle` because a clipped preview is LOSSY, not merely clamped:
+          the toggle is the only route to text the browser never received, so it
+          must not depend on the preview happening to overflow its height cap. */}
+      <CollapsibleText
+        id={`agent-desc-${agent.id}`}
+        className="text-sm"
+        forceToggle={clipped}
+        onExpand={clipped ? hydrate : null}
+      >
         <MarkdownOutput content={md} />
       </CollapsibleText>
     </div>
@@ -741,7 +765,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           onOpenPrompt={openPromptModal}
           pid={agent.pid}
         />
-        <TaskDescription id={agent.id} text={agent.metadata?.taskDescription || agent.taskId} />
+        <TaskDescription agent={agent} remote={remote} />
 
         {/* JIRA ticket info */}
         {agent.metadata?.jiraTicketId && (

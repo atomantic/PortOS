@@ -11,6 +11,8 @@ import { addTask, updateTask } from './cos.js';
 import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { redactOutput } from '../lib/commandSecurity.js';
+import { scrubSecretTokens } from '../lib/secretText.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
 import { stripAnsi } from '../lib/ansiStrip.js';
 import { describeOllamaContextOverflow, parseOllamaContextOverflow } from '../lib/ollamaContext.js';
 import { retryHoldMetadata } from '../lib/taskRetryHold.js';
@@ -40,37 +42,24 @@ const SNIPPET_MAX_CHARS = 240;
 // which is useful at a glance and unreadable at full length.
 const CONFIG_EXPECTED_MAX_CHARS = 120;
 
-// Machine-identity / network / PII fragments stripped before a captured failure
-// snippet (or any interpolated free text) lands in a human-facing — and possibly
-// federated — investigation task body. See the "Sensitive Data & Privacy" section
-// in AGENTS.md: the *shape* of the failure is what a human needs, never the live
-// hostnames, paths, addresses, or secrets pulled off the running instance.
-const SNIPPET_REDACTIONS = [
-  // Home-dir paths that embed an OS username → strip the user segment only.
-  // Handles both POSIX (`/Users/alice`) and Windows (`C:\Users\alice`) checkouts.
-  [/[\\/](Users|home)[\\/][^\\/\s"']+/gi, '/$1/<user>'],
-  // Email addresses.
-  [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '<email>'],
-  // Tailscale MagicDNS / mDNS hostnames — consume ALL leading labels so a
-  // multi-label name like `machine.tailnet.ts.net` doesn't leak `machine`.
-  [/\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:ts\.net|local)\b/gi, '<host>'],
-  // IPv4 addresses (LAN / Tailscale / public alike).
-  [/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '<ip>'],
-  // Bearer tokens and common secret-key formats.
-  [/\bbearer\s+[\w.\-/+=]{12,}/gi, 'bearer <token>'],
-  [/\bsk-[A-Za-z0-9\-_]{16,}/g, '<token>'],
-];
-
 /**
  * Redact machine identity, network info, PII, and secrets from free text before
  * it is embedded in an investigation-task body. Also normalizes whitespace and
  * caps length so a captured multi-line snippet stays a single readable line.
  * Pure — safe to unit-test directly.
+ *
+ * The machine-identity / PII patterns (home/Windows paths, IPv4/IPv6, MAC,
+ * `.ts.net`/`.local` hosts, email, phone, GPS) live in the shared
+ * `lib/piiRedactionPatterns.js` table so a fix reaches `agentContextMcp.js`
+ * and `federationSafety.js` too (#7474), rather than drifting here alone.
+ * Credential-shaped values (bearer headers, `sk-`/`ghp_`/JWT-style tokens)
+ * go through `scrubSecretTokens`, the same leaf `federationSafety.js` uses.
  */
 export function redactFailureSnippet(text) {
   if (typeof text !== 'string' || !text.trim()) return '';
   let out = redactOutput(text); // JSON secret key/value pairs
-  for (const [re, replacement] of SNIPPET_REDACTIONS) out = out.replace(re, replacement);
+  out = scrubSecretTokens(out); // credential-shaped values pasted into free text
+  out = redactPii(out);
   out = out.replace(/\s+/g, ' ').trim();
   return out.length > SNIPPET_MAX_CHARS ? `${out.slice(0, SNIPPET_MAX_CHARS)}…` : out;
 }

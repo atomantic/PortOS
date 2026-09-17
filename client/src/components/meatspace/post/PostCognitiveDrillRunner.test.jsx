@@ -6,6 +6,8 @@ import PostCognitiveDrillRunner, {
   localSchulteMetrics,
   buildCognitiveResult,
   buildNBackQuestions,
+  buildNBackInkSequence,
+  NBACK_INK_COLORS,
   scoreDigitSpanRecall,
   scoreStroopTrial,
   scoreMentalRotationTrial,
@@ -463,6 +465,104 @@ describe('NBackRunner stimulus timeouts', () => {
       expect.objectContaining({ index: 1, expected: 'match', answered: null, correct: false }),
       expect.objectContaining({ index: 2, expected: 'no-match', answered: null, correct: true }),
     ]);
+  });
+});
+
+// The n-back letter used to sit in one slot for the whole stream with no blank
+// between stimuli, so a back-to-back repeat ("A G T T") redrew an identical
+// glyph in place: the second T looked like the first one still sitting there,
+// and the one event the drill scores went unseen. The gap is the guarantee;
+// the per-letter ink color reinforces it.
+describe('n-back stimulus onset is visible on a repeated letter', () => {
+  const REPEAT_DRILL = { type: 'n-back', config: { n: 1, stimulusMs: 1000 }, sequence: ['T', 'T'] };
+  // stimulusMs 1000 → 200ms gap, 800ms visible.
+  const renderRepeat = () => render(
+    <PostCognitiveDrillRunner drill={REPEAT_DRILL} drillIndex={0} drillCount={1} onComplete={vi.fn()} isTraining={false} />,
+  );
+  const glyph = () => screen.getByText('T');
+  const inkOf = (el) => NBACK_INK_COLORS.find(c => el.className.split(' ').includes(c));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    markDrillTutorialSeen('n-back');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    window.localStorage.clear();
+  });
+
+  it('blanks the slot between the two letters, then brings the second one back', () => {
+    renderRepeat();
+
+    act(() => { vi.advanceTimersByTime(900); }); // 800ms pre-roll + 100ms into letter 1
+    expect(glyph().className).not.toContain('invisible');
+    act(() => { vi.advanceTimersByTime(750); }); // 850ms in — past the 800ms show window
+    expect(glyph().className).toContain('invisible');
+    act(() => { vi.advanceTimersByTime(250); }); // 1100ms in — 100ms into letter 2
+    expect(glyph().className).not.toContain('invisible');
+  });
+
+  it('gives the repeated letter a different ink color than the one before it', () => {
+    renderRepeat();
+
+    act(() => { vi.advanceTimersByTime(900); }); // into letter 1
+    const first = inkOf(glyph());
+    act(() => { vi.advanceTimersByTime(1000); }); // into letter 2 — same letter
+    const second = inkOf(glyph());
+
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+  });
+
+  // Registering a Match used to recolor the glyph itself, which would repaint
+  // the very stimulus whose onset the ink is meant to reinforce. The press is
+  // acknowledged around the letter instead.
+  it('keeps the press acknowledgement off the glyph ink', () => {
+    renderRepeat();
+
+    act(() => { vi.advanceTimersByTime(1900); }); // into letter 2, so Match is live
+    const before = glyph().className;
+    act(() => { fireEvent.keyDown(document.body, { code: 'Space', key: ' ' }); });
+
+    expect(glyph().className).toBe(before);
+    expect(glyph().parentElement.className).toContain('border-rose-400/70');
+  });
+
+  // The gap is carved out of the stimulus window rather than added to it, so a
+  // stream's total running time — and every recorded responseMs — is unchanged.
+  it('keeps the whole stream inside the unchanged per-stimulus cadence', () => {
+    const onComplete = vi.fn();
+    render(
+      <PostCognitiveDrillRunner
+        drill={{ type: 'n-back', config: { n: 1, stimulusMs: 1000 }, sequence: ['A', 'A', 'B'] }}
+        drillIndex={0}
+        drillCount={1}
+        onComplete={onComplete}
+        isTraining={false}
+      />,
+    );
+
+    act(() => { vi.advanceTimersByTime(3799); }); // 800ms pre-roll + 3 windows, one tick short
+    expect(onComplete).not.toHaveBeenCalled();
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('buildNBackInkSequence', () => {
+  // Adjacency is structural (the predecessor is filtered out of every draw), so
+  // a deterministic sweep over the rng's buckets — including both ends, where an
+  // unclamped index would fall off the palette and emit undefined — covers the
+  // state space that random sampling only visits by luck.
+  it('emits a palette color at every position and never repeats one back to back', () => {
+    for (const random of [Math.random, () => 0, () => 1, () => 0.999999, () => 0.5]) {
+      const colors = buildNBackInkSequence(40, random);
+      const bad = colors.filter((c, i) => !NBACK_INK_COLORS.includes(c) || (i > 0 && c === colors[i - 1]));
+      expect(bad).toEqual([]);
+      expect(colors).toHaveLength(40);
+    }
   });
 });
 

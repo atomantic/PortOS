@@ -1,9 +1,9 @@
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
-import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
+import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, withRuntimeContextWindow, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
 import Banner from '../ui/Banner';
 import {
   formatDurationMs,
@@ -19,6 +19,8 @@ import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import { GatewayKeyHint } from './ProviderNotices';
+import ProviderModelAccess from './ProviderModelAccess';
+import { CONFIGURED_MODEL_KEYS, configuredModelsOf, normalizeModelAccess, providerModelCatalog } from '../../utils/providerModelAccess';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
@@ -45,6 +47,9 @@ const PROVIDER_FIELD_RANGES = {
   topP: { min: 0, max: 1 },
 };
 
+/** A space-separated argv input as the array the provider schema takes. */
+const argList = (text) => (text ? text.split(' ').filter(Boolean) : []);
+
 const rangeMessage = (label, { min, max }, unit = '') =>
   `${label} must be between ${formatCount(min)} and ${formatCount(max)}${unit ? ` ${unit}` : ''}`;
 
@@ -58,7 +63,15 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     apiKey: '',
     allowCustomEndpoint: provider?.allowCustomEndpoint === true,
     ignoreUserConfig: provider?.ignoreUserConfig === true,
-    models: provider?.models || [],
+    // The FULL advertised catalog, never the model-access-scoped `models` the
+    // payload carries. This textarea is saved verbatim, so seeding it from the
+    // scoped list would let an ordinary Save persist the narrowed catalog over
+    // the real one — recoverable only by a refresh, and silently wrong until then.
+    models: providerModelCatalog(provider),
+    // Absent on a record with no policy, which is the shape the server reads as
+    // "unconstrained". `null` (not `undefined`) when cleared, so the PATCH
+    // spread-merge sees a clear rather than "unchanged".
+    modelAccess: provider?.modelAccess || null,
     hardwareRequirements: provider?.hardwareRequirements,
     modelHardwareRequirements: provider?.modelHardwareRequirements,
     defaultModel: provider?.defaultModel || '',
@@ -85,7 +98,12 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     envVars: provider?.envVars || {},
     secretEnvVars: provider?.secretEnvVars || [],
     headlessArgs: provider?.headlessArgs?.join(' ') || '',
-    tuiPromptDelayMs: provider?.tuiPromptDelayMs || 2500
+    tuiPromptDelayMs: provider?.tuiPromptDelayMs || 2500,
+    credentialBootstrapSetupCommand: provider?.credentialBootstrap?.setupCommand || '',
+    credentialBootstrapCommand: provider?.credentialBootstrap?.command || '',
+    credentialBootstrapArgs: provider?.credentialBootstrap?.args?.join(' ') || '',
+    credentialBootstrapHarnessId: provider?.credentialBootstrap?.harnessId || '',
+    credentialBootstrapArgsSeparator: provider?.credentialBootstrap?.argsSeparator || '',
   });
 
   const [activeTab, setActiveTab] = useDrawerTab('providerTab', 'connection', PROVIDER_FORM_TAB_IDS);
@@ -93,6 +111,26 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   const [newEnvKey, setNewEnvKey] = useState('');
   const [newEnvValue, setNewEnvValue] = useState('');
   const [newEnvSecret, setNewEnvSecret] = useState(false);
+
+  // A CLI create may declare that the same harness ALSO runs as a TUI, which
+  // mints both records at once (`modes` on POST /api/providers). Neither field
+  // is ever part of a provider record, so both stay out of `formData` — a
+  // scratch value that rode the `...formData` spread would have to be deleted
+  // back out of every payload.
+  //
+  // Editing never offers it: pairing describes two records being created
+  // together, which a save against one existing record cannot mean. An existing
+  // CLI record gains its TUI sibling from the card's "Add interactive mode"
+  // instead (`POST /api/providers/:id/modes/tui`), which mints it from what is
+  // already stored rather than from a re-submitted form.
+  const canPairModes = !provider && formData.type === 'cli';
+  const [alsoTui, setAlsoTui] = useState(false);
+  const [tuiArgs, setTuiArgs] = useState('');
+
+  // The CLI record stays the one this form edits; the TUI sibling is minted
+  // from it, so `formData.type` remains a real type and every type-derived
+  // control below behaves exactly as it does for a plain CLI provider.
+  const createsModePair = canPairModes && alsoTui;
 
   // Live installed Ollama/LM Studio models, folded into the model pickers so a
   // local provider shows what's actually installed — not just the stale `models`
@@ -112,6 +150,15 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // models (and internal sentinels) so an embedding can't be chosen as a model
   // that runs prompts, consistent with the fallback picker below.
   const mergedModels = mergeModelLists(formData.models, liveModelsFor(formData));
+  // The tier models the access policy must never scope out. Memoized on the six
+  // fields themselves rather than on `formData`, so typing in any other field
+  // cannot re-scope the whole catalog in the policy editor's preview.
+  const modelAccessKeeps = useMemo(
+    () => configuredModelsOf(formData),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [formData.defaultModel, formData.lightModel, formData.mediumModel,
+      formData.heavyModel, formData.ultraModel, formData.fallbackModel],
+  );
   // The server publishes compatibility for both the provider runtime and any
   // explicitly annotated model. Unknown probe results stay in the list; only a
   // definitive mismatch is hidden.
@@ -120,7 +167,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // never saved — `modelContextWindows` is not a form field, so an observation
   // can reach "Budgeter uses …" and the model-option labels without any risk of
   // a Save writing a running process's window into the record (#7441).
-  const capabilityProvider = mergeObservedContextWindows({
+  // The daemon's LAUNCH ceiling folds in the same way and for the same reason
+  // (#7472): it is resolved server-side from the ambient `OLLAMA_CONTEXT_LENGTH`
+  // the browser cannot read, and a typed-but-unsaved `numCtx` still outranks it
+  // — the clamp reads the record's own rung first.
+  const capabilityProvider = withRuntimeContextWindow(mergeObservedContextWindows({
     ...provider,
     ...formData,
     id: provider?.id,
@@ -129,7 +180,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
       ...provider?.modelHardwareCompatibility,
       ...liveHardwareFor(formData),
     },
-  }, daemonReadiness?.contextWindows);
+  }, daemonReadiness?.contextWindows), daemonReadiness?.runtimeContextWindow);
   const availableModels = filterHardwareCompatibleProviderModels(
     filterGenerationModels(mergedModels),
     capabilityProvider,
@@ -266,7 +317,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
         return { tab: 'connection', message: 'Endpoint must be a full URL, e.g. http://localhost:1234/v1' };
       }
     }
-    if (formData.type === 'tui' && outOfRange(formData.tuiPromptDelayMs, PROVIDER_FIELD_RANGES.tuiPromptDelayMs)) {
+    if ((formData.type === 'tui' || createsModePair) && outOfRange(formData.tuiPromptDelayMs, PROVIDER_FIELD_RANGES.tuiPromptDelayMs)) {
       return { tab: 'connection', message: rangeMessage('Prompt Paste Delay', PROVIDER_FIELD_RANGES.tuiPromptDelayMs, 'ms') };
     }
     if (text(formData.timeout) !== '' && parseTimeoutMs(formData.timeout) == null) {
@@ -310,8 +361,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     const timeoutInput = String(formData.timeout ?? '').trim();
     const data = {
       ...formData,
-      args: formData.args ? formData.args.split(' ').filter(Boolean) : [],
-      headlessArgs: formData.headlessArgs ? formData.headlessArgs.split(' ').filter(Boolean) : [],
+      args: argList(formData.args),
+      headlessArgs: argList(formData.headlessArgs),
       contextWindow: parseOptionalIntField(formData.contextWindow),
       numCtx: showsNumCtx ? parseOptionalIntField(formData.numCtx) : null,
       // A blank generation field clears back to "let the backend pick" — `null`
@@ -336,9 +387,13 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     // still spread into `data` and silently persisted on an unrelated edit.
     // Clear any embedding value that slipped through so the saved record matches
     // what the picker allows.
-    for (const field of ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'fallbackModel']) {
+    for (const field of CONFIGURED_MODEL_KEYS) {
       if (isEmbeddingModel(data[field])) data[field] = '';
     }
+    // An explicit `null` rather than `undefined` when the policy says nothing:
+    // the server merges a PATCH by spread, which reads `undefined` as "unchanged"
+    // and would leave a policy the user just cleared in place.
+    data.modelAccess = normalizeModelAccess(formData.modelAccess);
     // Effort is meaningful only for providers/models that expose an effort
     // ladder. Clear a stale value when an edit switches to an effort-less
     // provider or Antigravity model; narrowed ladders are clamped by the
@@ -359,6 +414,20 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     } else {
       delete data.tuiPromptDelayMs;
     }
+    // Both modes from one submit. Only what actually differs per mode is
+    // declared: everything else on the body is shared by both records, which is
+    // what lets the server pair them as one harness rather than two unrelated
+    // routes. `cli: {}` because the body's own `args` / `headlessArgs` already
+    // describe the CLI record — the key is there so the pair is declared.
+    if (createsModePair) {
+      data.modes = {
+        cli: {},
+        tui: {
+          args: argList(tuiArgs),
+          ...(Number.isFinite(tuiPromptDelay) ? { tuiPromptDelayMs: tuiPromptDelay } : {}),
+        },
+      };
+    }
     // These controls belong only to the advertised Codex subscription
     // transport. Do not stamp false capability fields onto unrelated provider
     // records when their editor saves an ordinary connection change.
@@ -369,6 +438,32 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     // `--ignore-user-config` is a Codex flag. Never stamp it onto a record
     // running another vendor's binary, where it would be a stored lie.
     if (!isCodexProvider({ ...provider, ...data, id: provider?.id })) delete data.ignoreUserConfig;
+
+    // Fold the five flat scratch fields into the nested shape the server
+    // schema expects. Only a CLI/TUI provider carries the field at all (the
+    // section above is gated the same way): an api-type save must not ship
+    // `credentialBootstrap: null` onto a record that never had one. A named
+    // bootstrap command becomes the object; an emptied one becomes an explicit
+    // `null` (absent means "unchanged" on a PATCH) — never
+    // `{ command: '' }`, which would fail the server's `min(1)` check on every
+    // unrelated save.
+    const bootstrapCommand = formData.credentialBootstrapCommand.trim();
+    if (formData.type === 'cli' || formData.type === 'tui') {
+      data.credentialBootstrap = bootstrapCommand
+        ? {
+          ...(formData.credentialBootstrapSetupCommand.trim() ? { setupCommand: formData.credentialBootstrapSetupCommand.trim() } : {}),
+          command: bootstrapCommand,
+          args: argList(formData.credentialBootstrapArgs),
+          ...(formData.credentialBootstrapHarnessId.trim() ? { harnessId: formData.credentialBootstrapHarnessId.trim() } : {}),
+          ...(formData.credentialBootstrapArgsSeparator.trim() ? { argsSeparator: formData.credentialBootstrapArgsSeparator.trim() } : {}),
+        }
+        : null;
+    }
+    delete data.credentialBootstrapSetupCommand;
+    delete data.credentialBootstrapCommand;
+    delete data.credentialBootstrapArgs;
+    delete data.credentialBootstrapHarnessId;
+    delete data.credentialBootstrapArgsSeparator;
 
     // Only send apiKey if user entered a new value (avoid overwriting existing key with empty string)
     if (!data.apiKey && provider) {
@@ -475,6 +570,122 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     />
                   </FormField>
 
+                  {/* Most coding harnesses run both headless and interactively.
+                      PortOS stores one execution mode per record, so configuring
+                      both used to mean adding the same command twice and hoping
+                      the two records matched closely enough to be treated as one
+                      harness. Checking this mints the pair from this one form. */}
+                  {canPairModes && (
+                    <div>
+                      <label htmlFor="provider-also-tui" className="flex items-start gap-2 text-sm text-gray-300 cursor-pointer">
+                        <input
+                          id="provider-also-tui"
+                          type="checkbox"
+                          checked={alsoTui}
+                          onChange={(e) => setAlsoTui(e.target.checked)}
+                          className="mt-1"
+                        />
+                        <span>
+                          This command also runs as a TUI
+                          <span className="block text-xs text-gray-500">
+                            Creates the interactive mode alongside this one, sharing the command, endpoint,
+                            credentials and models. Only the arguments differ.
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                  )}
+
+                  {createsModePair && (
+                    <FormField label="TUI Arguments (space-separated)">
+                      <input
+                        type="text"
+                        value={tuiArgs}
+                        onChange={(e) => setTuiArgs(e.target.value)}
+                        placeholder="--dangerously-skip-permissions"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                  )}
+
+                  {/* Generic support for a harness whose auth is provisioned by an
+                      external CLI at spawn time — e.g. a company-internal tool that
+                      mints a short-lived token for a proxy and execs the harness
+                      itself — instead of a static API key PortOS stores. When set,
+                      PortOS spawns the bootstrap command in front of the harness
+                      invocation above, exactly as typing `<bootstrap> run <harness>
+                      ...` would. Setup Command is shown for the user to run
+                      themselves; PortOS never executes it. */}
+                  <p className="text-sm text-gray-400 -mb-1">Credential Bootstrap (optional)</p>
+                  <FormField label="Setup Command" compact>
+                    <input
+                      type="text"
+                      value={formData.credentialBootstrapSetupCommand}
+                      onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapSetupCommand: e.target.value }))}
+                      placeholder="One-time step shown to you, e.g. npm install -g @your-org/token-cli"
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                    />
+                  </FormField>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <FormField label="Bootstrap Command" compact>
+                      <input
+                        type="text"
+                        value={formData.credentialBootstrapCommand}
+                        onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapCommand: e.target.value }))}
+                        placeholder="e.g. token-cli"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                    <FormField label="Bootstrap Args" compact>
+                      <input
+                        type="text"
+                        value={formData.credentialBootstrapArgs}
+                        onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapArgs: e.target.value }))}
+                        placeholder="e.g. run"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                    <FormField label="Harness ID (optional)" compact>
+                      <input
+                        type="text"
+                        value={formData.credentialBootstrapHarnessId}
+                        onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapHarnessId: e.target.value }))}
+                        placeholder={`Defaults to Command above (${formData.command || 'e.g. claude'})`}
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                    <FormField label="Args Separator (optional)" compact>
+                      <input
+                        type="text"
+                        value={formData.credentialBootstrapArgsSeparator}
+                        onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapArgsSeparator: e.target.value }))}
+                        placeholder="e.g. --"
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                    </FormField>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    For a CLI that provisions its own short-lived credential (e.g. a token for a proxy) and then
+                    runs the harness itself. <strong>Setup Command</strong> is a one-time step shown to you —
+                    PortOS never runs it. When a Bootstrap Command is set, PortOS spawns it in front of the harness
+                    (<code>{formData.credentialBootstrapCommand || '<bootstrap>'} {formData.credentialBootstrapArgs}{' '}
+                    {formData.credentialBootstrapHarnessId || formData.command || '<harness>'}{' '}
+                    {formData.credentialBootstrapArgsSeparator} …</code>) instead of the harness directly, and never
+                    routes this provider through the CoS Agent Runner (its fixed list of known harness binaries has
+                    no way to recognize a custom bootstrap binary). <strong>Harness ID</strong> overrides what PortOS calls the harness
+                    when the bootstrap CLI uses its own name for it instead of the binary above (e.g.{' '}
+                    <code>claude-code</code> rather than <code>claude</code>).{' '}
+                    <strong>Args Separator</strong> (e.g. <code>--</code>) is inserted before the harness's own
+                    arguments when the bootstrap CLI needs its flags kept apart from the harness's.
+                    Bootstrap Args are stored and shown in clear text (agent records, run transcripts, the shell
+                    line typed for a TUI session) — put a secret in Environment Variables marked secret, never here.{' '}
+                    <strong>Your bootstrap CLI should <code>exec</code> the harness, or forward the signals it
+                    receives to it.</strong> Stop, timeout and cancel signal the wrapped spawn's whole process
+                    group, so a wrapper that forks is still taken down with its harness — but a wrapper that
+                    re-parents the harness out of that group, or traps signals without passing them on, can leave
+                    it running after PortOS has finished the run.
+                  </p>
+
                   {/* The CLI/TUI backends that can authenticate: the vLLM compose
                       stack is started with VLLM_API_KEY, so without this field
                       there is nowhere to put it and the container 401s every
@@ -536,7 +747,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     </FormField>
                   )}
 
-                  {formData.type === 'tui' && (
+                  {(formData.type === 'tui' || createsModePair) && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <FormField label="Prompt Paste Delay (ms)">
                         <input
@@ -718,6 +929,17 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                   Comma-separated list of available models. For API providers, use Refresh to auto-populate.
                 </p>
               </FormField>
+
+              {/* Which of that catalog this install is entitled to run. Fed the
+                  FULL list (`formData.models`, seeded from `modelCatalog`), because
+                  the policy is authored against everything the upstream
+                  advertises — the scoped view is what it produces. */}
+              <ProviderModelAccess
+                catalog={formData.models || []}
+                value={formData.modelAccess}
+                configuredModels={modelAccessKeeps}
+                onChange={(modelAccess) => setFormData(prev => ({ ...prev, modelAccess }))}
+              />
 
               <FormField label="Default Model">
                 {availableModels.length > 0 ? (

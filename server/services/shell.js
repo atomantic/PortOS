@@ -9,7 +9,7 @@ import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
 import { buildRunThenExitCommand } from '../lib/shellExit.js';
 import { buildReadinessProbe } from '../lib/shellReadinessProbe.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
-import { stripTerminalQueries } from '../lib/terminalReplay.js';
+import { createReplayBuffer } from '../lib/terminalReplay.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 
 // Store active shell sessions (persist across socket reconnects)
@@ -189,10 +189,10 @@ function ptyTerminalOptions({ cwd, cols, rows }) {
  * spawned them, which ends the session through `unregisterExternalSession`.
  */
 function adoptPtySession(sessionId, ptyProcess, options = {}) {
-  // Buffer recent output for re-attach (last 50KB)
-  const outputBuffer = [];
-  let bufferSize = 0;
-  const MAX_BUFFER = 50 * 1024;
+  // Recent output, replayed to a client that attaches later. The buffer owns
+  // its own window, eviction, query-stripping and mode tracking — see
+  // lib/terminalReplay.js.
+  const replay = createReplayBuffer();
 
   // Store session info
   shellSessions.set(sessionId, {
@@ -215,18 +215,12 @@ function adoptPtySession(sessionId, ptyProcess, options = {}) {
     // Keeps the session out of the interactive cap count and out of Shell's
     // auto-attach — you opt into watching a run by clicking its tab.
     ...(options.external ? { external: true } : {}),
-    outputBuffer,
-    bufferSize: () => bufferSize
+    replay
   });
 
   // Handle pty output
   ptyProcess.onData((data) => {
-    // Buffer output for re-attach
-    outputBuffer.push(data);
-    bufferSize += data.length;
-    while (bufferSize > MAX_BUFFER && outputBuffer.length > 1) {
-      bufferSize -= outputBuffer.shift().length;
-    }
+    replay.push(data);
     const session = shellSessions.get(sessionId);
     session?.socket?.emit('shell:output', { sessionId, data });
     if (session) runHook('onData', session, session.onData, data);
@@ -636,10 +630,7 @@ export function attachSession(sessionId, socket, { claim = false } = {}) {
   broadcastSessionList();
   return {
     sessionId,
-    // Queries stripped, not raw: a replayed `ESC[6n` is a question the attaching
-    // terminal answers as INPUT, and the TUI that asked it is long gone — the
-    // reply lands on the shell prompt. See lib/terminalReplay.js.
-    bufferedOutput: stripTerminalQueries(session.outputBuffer.join(''))
+    bufferedOutput: session.replay.render()
   };
 }
 

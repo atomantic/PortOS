@@ -201,9 +201,39 @@ export const deleteOrchestrationProfile = (id, options = {}) => request(`/settin
 export const getCosHealth = () => request('/cos/health');
 export const forceHealthCheck = (options = {}) => request('/cos/health/check', { method: 'POST', ...options });
 export const getCosAgents = (options) => request('/cos/agents', options);
-export const getCosAgentDates = () => request('/cos/agents/history');
+// `hydrate` also returns the newest bucket as `latest: { date, agents }`, so the
+// Agents tab reaches its first archived card in ONE round trip instead of
+// waiting for this response to name the date it must then ask for.
+export const getCosAgentDates = ({ hydrate = false } = {}) =>
+  request(`/cos/agents/history${hydrate ? '?hydrate=1' : ''}`);
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
-export const getCosAgent = (id, options) => request(`/cos/agents/${id}`, options);
+// `lines` caps the transcript TAIL the server hydrates (server default: 1000
+// lines / 512 KB). Pass it when the record is wanted for its metadata rather
+// than its log.
+export const getCosAgent = (id, { lines, ...options } = {}) =>
+  request(`/cos/agents/${id}${lines ? `?lines=${lines}` : ''}`, options);
+
+// Agent LIST responses bound `metadata.taskDescription` (see
+// `server/lib/cosAgentListProjection.js`), which is fine for a clamped card but
+// NOT for anything that reuses the text — Resume and Relaunch build a new task
+// prompt out of it, so a clipped copy would silently ship a truncated task.
+// Callers in those paths hydrate first; the record comes back unchanged when it
+// was never clipped (the common case) or when the read fails, so this is safe to
+// call unconditionally and never blocks the action on a network blip.
+export const hydrateCosAgentDescription = async (agent) => {
+  if (!agent?.id || !agent.metadata?.taskDescriptionTruncated) return agent;
+  // `lines: 1` because this read wants ONE metadata field: the default hydrates a
+  // 1000-line / 512 KB transcript tail, which would cost far more than the
+  // description it came for. The card's Show-output path asks for the real tail
+  // separately, when the reader opens it.
+  const full = await getCosAgent(agent.id, { lines: 1, silent: true }).catch(() => null);
+  const taskDescription = full?.metadata?.taskDescription;
+  if (typeof taskDescription !== 'string') return agent;
+  return {
+    ...agent,
+    metadata: { ...agent.metadata, taskDescription, taskDescriptionTruncated: false }
+  };
+};
 export const pauseCosAgent = (id, reason, options = {}) => request(`/cos/agents/${id}/pause`, {
   method: 'POST',
   body: JSON.stringify({ reason }),
@@ -353,7 +383,13 @@ export const updateCosJob = (id, data, options = {}) => request(`/cos/jobs/${id}
   ...options
 });
 export const toggleCosJob = (id, options = {}) => request(`/cos/jobs/${id}/toggle`, { method: 'POST', ...options });
-export const triggerCosJob = (id, options = {}) => request(`/cos/jobs/${id}/trigger`, { method: 'POST', ...options });
+// `formValues` re-aims this ONE run (the server merges them over the job's
+// stored values and writes nothing back); omit it to run the job as saved.
+export const triggerCosJob = (id, { formValues = null, ...options } = {}) => request(`/cos/jobs/${id}/trigger`, {
+  method: 'POST',
+  ...(formValues ? { body: JSON.stringify({ formValues }) } : {}),
+  ...options
+});
 export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { method: 'DELETE', ...options });
 
 // Workflow visualizer — canonical scheduled-task ordering across tasks + jobs

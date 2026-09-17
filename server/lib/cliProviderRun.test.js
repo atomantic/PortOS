@@ -126,6 +126,23 @@ describe('runCliProviderPrompt', () => {
     expect(child.forgeToken).toBeNull();
   });
 
+  it.skipIf(process.platform === 'win32')('runs the enforced no-tool recipe on the harness itself, never through a configured credential bootstrap', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'review-cli-bootstrap-'));
+    const command = join(dir, 'claude');
+    await writeFile(command, '#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ args: process.argv.slice(2) })));', { mode: 0o755 });
+    // The bootstrap binary does not exist: had the wrap applied, this spawn
+    // would ENOENT instead of reaching the harness script above.
+    const provider = { ...cli('example-claude'), command, credentialBootstrap: { command: join(dir, 'token-cli-missing'), args: ['run'] } };
+    const result = await runCliProviderPrompt({
+      provider, model: 'pinned-model', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate',
+    }).finally(() => rm(dir, { recursive: true, force: true }));
+    expect(result.error).toBeUndefined();
+    expect(JSON.parse(result.text).args).toEqual(expect.arrayContaining(['--restricted', '--tools', '']));
+  });
+
   it('rejects a missing command without spawning', async () => {
     const result = await runCliProviderPrompt({ provider: { id: 'x' }, prompt: 'hi' });
     expect(result.error).toMatch(/no command/i);
@@ -233,5 +250,61 @@ describe('runCliProviderPrompt', () => {
       expect(result.stderrTail).toContain('boom');
       expect(result.partial).toBeUndefined();
     });
+  });
+});
+
+// #7496. With a credentialBootstrap provider the direct child is the user's
+// bootstrap CLI, not the harness, and `<bootstrap> run <harness> -- <args>` is
+// the shape of a supervising PARENT. Stop/timeout is a safety control, so the
+// timeout must take down the harness behind the wrapper, not just the wrapper.
+describe('runCliProviderPrompt — credential-bootstrap process-group teardown', () => {
+  // `sh -c cat <harnessId>` runs `cat` with $0 set to the harness id, so the
+  // stdin round-trip still works through a real bootstrap-shaped wrap.
+  const bootstrapProvider = {
+    id: 'gemini-cli',
+    type: 'cli',
+    command: 'cat',
+    args: [],
+    credentialBootstrap: { command: 'sh', args: ['-c', 'cat'] },
+  };
+
+  it.skipIf(process.platform === 'win32')('round-trips the prompt through the bootstrap wrapper', async () => {
+    const result = await runCliProviderPrompt({ provider: bootstrapProvider, prompt: 'wrapped round-trip' });
+    expect(result.error).toBeUndefined();
+    expect(result.text).toBe('wrapped round-trip');
+  });
+
+  // The end-to-end proof of the whole change: a wrapper that IGNORES SIGTERM
+  // and leaves a live grandchild is exactly the shape the issue describes.
+  // Under the old per-pid kill the `sleep` outlived the run; the group kill
+  // reaps it with its parent.
+  it.skipIf(process.platform === 'win32')('takes the harness down with the wrapper on timeout', async () => {
+    const result = await runCliProviderPrompt({
+      provider: {
+        id: 'gemini-cli',
+        type: 'cli',
+        command: 'stand-in-harness',
+        args: [],
+        // A no-op TERM handler, so the wrapper survives the signal without
+        // forwarding it — a trap of "" instead would set SIG_IGN, which the
+        // grandchild INHERITS, and the test would then prove nothing about
+        // reach. Print the grandchild's pid so the assertion can probe it.
+        credentialBootstrap: { command: 'sh', args: ['-c', 'trap ":" TERM; sleep 30 & echo $!; wait'] },
+      },
+      prompt: 'ignored',
+      timeoutMs: 300,
+    });
+
+    expect(result.error).toMatch(/timed out/);
+    const grandchildPid = Number(result.text.trim());
+    expect(Number.isInteger(grandchildPid)).toBe(true);
+
+    // Signal 0 probes for existence without delivering anything. The group
+    // SIGTERM has to have reached the `sleep`, not just the trapping wrapper.
+    await new Promise(resolve => setTimeout(resolve, 200));
+    let alive = true;
+    try { process.kill(grandchildPid, 0); } catch { alive = false; }
+    if (alive) process.kill(grandchildPid, 'SIGKILL');
+    expect(alive).toBe(false);
   });
 });

@@ -15,7 +15,9 @@ cosEvents.setMaxListeners(60);
  * Emit a log event for UI display
  * @param {string} level - Log level: 'info', 'warn', 'error', 'success', 'debug'
  * @param {string} message - Log message
- * @param {Object} data - Additional data to include in log entry
+ * @param {Object} data - Additional data to include in log entry. A `stack`
+ *   string is also appended to the console line (#7549), so a caller reporting
+ *   a caught error doesn't need a second console.error call to keep it.
  * @param {string} prefix - Optional prefix for console output (e.g., 'SelfImprovement')
  */
 export function emitLog(level, message, data = {}, prefix = '') {
@@ -30,7 +32,9 @@ export function emitLog(level, message, data = {}, prefix = '') {
     const emoji = level === 'error' ? '❌' : level === 'warn' ? '⚠️' : level === 'success' ? '✅' : level === 'debug' ? '🔍' : 'ℹ️';
     const prefixStr = prefix ? ` ${prefix}` : '';
     const logFn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
-    logFn(`${emoji}${prefixStr} ${message}`);
+    const consoleArgs = [`${emoji}${prefixStr} ${message}`];
+    if (data?.stack) consoleArgs.push(data.stack);
+    logFn(...consoleArgs);
   }
   cosEvents.emit('log', logEntry);
 }

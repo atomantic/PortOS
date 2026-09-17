@@ -261,6 +261,15 @@ describe('NotificationDropdown', () => {
       expect(remove.className).toContain('sm:opacity-0');
       expect(remove.className).not.toMatch(/(^|\s)opacity-/);
     });
+
+    it('gives the bell trigger a 44px touch target on mobile and compact size on desktop', () => {
+      renderDropdown();
+      const trigger = screen.getByRole('button', { name: /^Notifications/ });
+      expect(trigger.className).toContain('min-w-[44px]');
+      expect(trigger.className).toContain('min-h-[44px]');
+      expect(trigger.className).toContain('lg:min-w-0');
+      expect(trigger.className).toContain('lg:min-h-0');
+    });
   });
 
   describe('overflow beyond the collapsed limit', () => {

@@ -6,6 +6,7 @@ import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { PROVIDER_FAMILIES, familyForProvider } from '../lib/providerFamilies.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
+import { applyCredentialBootstrap, needsProcessGroup } from '../lib/credentialBootstrap.js';
 import { createStaleWhileRevalidate, PENDING, WAIT } from '../lib/staleWhileRevalidate.js';
 import { parseHumanReset, normalizeResetAt } from '../lib/quotaReset.js';
 import { compareNewerWins, parseTsMs } from '../lib/lwwTimestamp.js';
@@ -584,11 +585,16 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
   // Grok 1.0 names the subscription in the window header:
   // `Weekly limit (SuperGrok)`. Last named frame wins on a repaint.
   // Anything else in those parens — a note, a timestamp, a repaint fragment —
-  // is not a plan name, so only a single identifier-like token is accepted
-  // (starts alphanumeric, letters/digits plus a few separators, carries a
-  // letter) rather than echoing arbitrary panel text onto the Usage card. A
-  // missing plan reads as unknown; a wrong one reads as fact.
-  const PLAN_NAME = /^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9.,_+-]{0,59}$/;
+  // is not a plan name, so only identifier-like tokens are accepted:
+  // alphanumeric start, then alphanumeric plus separators (dots, commas, underscores,
+  // plus, hyphen), with interior spaces allowed only before uppercase letters/digits
+  // (vendor names like "Claude Max 20x"). This rejects arbitrary English prose like
+  // "as of Tuesday" while keeping recognized tiers on the Usage card. The 60-char
+  // cap is unchanged from the single-token form: a scraped fragment that happens to
+  // be shaped like a tier is still not one. A missing plan reads as unknown; a wrong
+  // one reads as fact.
+  const PLAN_NAME =
+    /^(?=.*[A-Za-z])(?=.{1,60}$)[A-Za-z0-9](?:[A-Za-z0-9.,_+-]*(?:[ ][A-Z0-9][A-Za-z0-9.,_+-]*)*)?$/;
   let plan = null;
 
   const matches = [...str.matchAll(/(weekly|monthly)\s+limit(?:\s*\(([^)]+)\))?:?/gi)];
@@ -693,7 +699,16 @@ function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name, rea
     // doesn't serve the previous account's quota from a stale entry.
     const cacheKey = `${id}:${command}:${provider.type}:${JSON.stringify(env)}:${JSON.stringify(args)}`;
     const card = await scrapeCache.read(cacheKey, async () => {
-      const text = await scrapeTuiUsage({ command, args, slashCommand, env, readyMarker });
+      // The scrape spawns the provider like any other site: wrapped by its
+      // credential bootstrap when configured (credentialBootstrap.js), or the
+      // TUI comes up unauthenticated and never renders a usage panel.
+      const spawned = applyCredentialBootstrap(provider, command, args);
+      const text = await scrapeTuiUsage({
+        command: spawned.command, args: spawned.args, slashCommand, env, readyMarker,
+        // The scrape kills the PTY on every exit path; with a wrapper in front
+        // that has to reach the harness behind it, not just the wrapper (#7496).
+        processGroup: needsProcessGroup(spawned.wrapped),
+      });
       // The panel's reset is relative (agy) or zone-less (grok) — both resolve
       // against the read's own clock and the zone the child rendered in.
       const { limits, plan } = parse(text, { now: Date.now(), timezone: tz });

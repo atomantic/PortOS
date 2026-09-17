@@ -414,6 +414,41 @@ max_memory_restart: '500M'
 
 ## Development Issues
 
+### "Another git process seems to be running" — but none is
+
+**Symptom**: every git command against one repo (or, most often, every submodule
+checkout) fails with:
+
+```
+fatal: Unable to create '<repo>/.git/modules/lib/slashdo/index.lock': File exists.
+Another git process seems to be running in this repository, or the lock file may be stale
+fatal: Unable to checkout '<sha>' in submodule path 'lib/slashdo'
+```
+
+**Cause**: a git process was killed before it could remove its lock file — a PM2
+tree-kill during self-update, an `execGit` timeout, a reaped CoS agent. The lock
+outlives the process and nothing else removes it, so the failure is permanent.
+A submodule lock lives in `.git/modules/<submodule>/`, which every git worktree
+of the repo shares, so ONE dead process wedges submodule checkout for the primary
+checkout, every CoS agent worktree, `update.sh` and `npm run setup` at once.
+
+**PortOS clears this itself** on the paths that hit it — the Submodules tab's
+Update button and CoS worktree creation both remove a lock older than 30 minutes
+and retry, `update.sh` / `update.ps1` sweep one before they start (they are the
+likeliest producer), and `npm run doctor` names the lock as the blocker instead
+of telling you to run the command that will fail. One rule, in
+`server/lib/gitStaleLock.js`: a lock young enough to still belong to a running
+git command is never touched.
+
+**Manual recovery** (confirm no git process is really running first):
+
+```bash
+ps aux | grep '[g]it'                  # must show nothing working on this repo
+find .git -name '*.lock' -not -path '*/rr-cache/*'
+rm <the-lock-path>
+git submodule update --init --recursive
+```
+
 ### Hot Reload Not Working
 
 **Symptom**: Frontend changes require manual refresh.

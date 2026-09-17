@@ -6,7 +6,7 @@ import {
   PROVIDER_GRAPH_SCHEMA_VERSION,
   buildProviderGraphPreview,
 } from './providerGraphPreview.js';
-import { PROVIDER_HARNESSES, PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';
+import { CREATABLE_HARNESS_IDS, PROVIDER_HARNESSES, PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';
 import {
   effectiveModelAliases,
   modelAliasRevision,
@@ -15,6 +15,7 @@ import {
 } from './providerModelAliases.js';
 import { routeSettingsRevision, routeSettingsSchema } from './providerRouteSettings.js';
 import { CREATABLE_CONNECTION_KINDS, connectionKindLabel } from './providerRouteRecipes.js';
+import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS } from './serviceDefinitions.js';
 
 // `PROVIDER_GRAPH_SCHEMA_VERSION` is deliberately NOT re-exported: it is one
 // wire version shared with the preview, and two flat `export *` modules in this
@@ -58,9 +59,14 @@ const catalogSchema = z.object({
   // (#6369). Optional so rows written before the field existed still parse, and
   // nullable so a later SUCCESS can clear it without deleting the key.
   error: z.string().nullable().optional(),
+  // Per-model facts a listing declared (#7563) and when it was last asked.
+  // Optional for the same reason `error` is: older rows carry neither.
+  capabilities: z.record(z.string(), z.object({ contextWindow: z.number().optional() }).strict()).optional(),
+  refreshedAt: z.string().optional(),
 }).strict();
 
-const connectionDtoSchema = z.object({
+/** One connection row as every management surface publishes it — exported so the service DTO extends it. */
+export const connectionDtoSchema = z.object({
   id: z.string().min(1),
   revision: z.number().int().positive(),
   kind: z.string().min(1),
@@ -68,6 +74,14 @@ const connectionDtoSchema = z.object({
   transports: z.record(z.string(), z.object({ baseUrl: z.string().min(1) }).strict()),
   hasCredentials: z.boolean(),
   catalog: catalogSchema,
+  // The service-instance identity (#7563). Additive, so
+  // `PROVIDER_GRAPH_SCHEMA_VERSION` stays at 1 and an older client ignores them.
+  // `slug` / `definitionId` are null on a row the boot backfill has not named.
+  slug: z.string().nullable(),
+  definitionId: z.string().nullable(),
+  plan: z.enum(SERVICE_PLANS),
+  enabled: z.boolean(),
+  credentialVia: z.enum(SERVICE_CREDENTIAL_VIAS),
 }).strict();
 
 const bindingDtoSchema = z.object({
@@ -142,7 +156,9 @@ const creatableKindSchema = z.object({
 
 /** The static half of the create surface. Derived from code, never from rows. */
 const CREATABLE = Object.freeze({
-  harnesses: Object.freeze(PROVIDER_HARNESSES.filter((harness) => harness.recipe).map((harness) => Object.freeze({
+  // Creatable FROM A CONNECTION — a subscription program or Pi carries a
+  // recipe too (#7562) but composes only onto named services, not here.
+  harnesses: Object.freeze(PROVIDER_HARNESSES.filter((harness) => CREATABLE_HARNESS_IDS.includes(harness.id)).map((harness) => Object.freeze({
     id: harness.id,
     label: harness.label,
     modes: [...harness.modes],
@@ -193,14 +209,22 @@ export function toManagementGraphDto({ connections, bindings, routes, activeProv
     activeProvider: typeof activeProvider === 'string' ? activeProvider : null,
     creatableHarnesses: CREATABLE.harnesses,
     creatableConnectionKinds: CREATABLE.kinds,
-    connections: connections.map(({ id, revision, kind, label, transports, credentials, catalog }) => ({
+    connections: connections.map(({
+      id, revision, kind, label, transports, credentials, catalog,
+      slug = null, definitionId = null, plan = 'paid', enabled = true, credentialVia = 'stored',
+    }) => ({
       id,
       revision,
       kind,
       label,
       transports,
-      hasCredentials: Object.keys(credentials || {}).length > 0,
+      hasCredentials: connectionHasCredentials({ credentials, credentialVia }),
       catalog,
+      slug,
+      definitionId,
+      plan,
+      enabled,
+      credentialVia,
     })),
     bindings: bindings.map(({ id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels }) => ({
       id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels, blocked: blocked.has(id),
@@ -229,6 +253,14 @@ export function toManagementGraphDto({ connections, bindings, routes, activeProv
     }),
   });
 }
+
+/**
+ * Whether a row holds a secret. Only a `stored` instance does (#7563): a
+ * `bootstrap` one is supplied at spawn and an `env` / `cli-login` one is
+ * held by something else, so a key left on such a row is not the credential.
+ */
+export const connectionHasCredentials = ({ credentials, credentialVia = 'stored' }) =>
+  credentialVia === 'stored' && Object.keys(credentials || {}).length > 0;
 
 /**
  * One connection row, sanitized exactly as `GET /api/providers/management`
@@ -627,14 +659,31 @@ export function sanitizeCatalogError(error, credentials = {}) {
  * because reporting it as clean would hide a harness that cannot reach the
  * backend behind the models of one that can.
  *
- * @param {{state:string, models:string[]}} current - the stored catalog
- * @param {{refreshed: boolean, models?: string[], error?: string|null}} outcome
- * @returns {{state:'unknown'|'known'|'failed', models:string[], error:string|null}}
+ * Every refresh stamps `refreshedAt` (#7563) — a failure too, so "last asked"
+ * and "last answered" stay distinct facts — and a success records the
+ * per-model `capabilities` its listing declared (today the context window),
+ * while a failure keeps the previous ones with the previous models.
+ *
+ * @param {{state:string, models:string[], capabilities?: object}} current - the stored catalog
+ * @param {{refreshed: boolean, models?: string[], error?: string|null, contextWindows?: Record<string, number>|null}} outcome
+ * @param {{now?: () => string}} [options] - injected clock, for tests
+ * @returns {{state:'unknown'|'known'|'failed', models:string[], error:string|null, capabilities?: object, refreshedAt: string}}
  */
-export function nextConnectionCatalog(current, outcome) {
+export function nextConnectionCatalog(current, outcome, { now = () => new Date().toISOString() } = {}) {
   const models = Array.isArray(current?.models) ? current.models : [];
   if (!outcome?.refreshed) {
-    return { state: 'failed', models, error: outcome?.error ?? 'The model refresh failed' };
+    return {
+      state: 'failed',
+      models,
+      error: outcome?.error ?? 'The model refresh failed',
+      ...(current?.capabilities ? { capabilities: current.capabilities } : {}),
+      refreshedAt: now(),
+    };
   }
-  return { state: 'known', models: [...new Set(outcome.models || [])], error: outcome.error ?? null };
+  const next = [...new Set(outcome.models || [])];
+  const windows = outcome.contextWindows && typeof outcome.contextWindows === 'object' ? outcome.contextWindows : {};
+  const capabilities = Object.fromEntries(next
+    .filter((model) => Number.isFinite(windows[model]))
+    .map((model) => [model, { contextWindow: windows[model] }]));
+  return { state: 'known', models: next, error: outcome.error ?? null, capabilities, refreshedAt: now() };
 }

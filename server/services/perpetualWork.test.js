@@ -29,19 +29,48 @@ import {
   getWorkDetector,
   hasWorkDetector,
   NON_ACTIONABLE_ISSUE_LABELS,
-  EPIC_DECOMPOSED_LABEL
+  EPIC_DECOMPOSED_LABEL,
+  CLI_TIMEOUT_MS
 } from './perpetualWork.js';
 
-// A fake child process that emits canned stdout then closes — enough for the
-// best-effort runCli() in perpetualWork.js (stdout/close/error + kill).
-function fakeChild(stdout, code = 0) {
+// A fake child process that emits canned stdout/stderr then closes — enough for
+// the best-effort runCli() in perpetualWork.js (stdout/close/error + kill).
+function fakeChild(stdout, code = 0, stderr = '') {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.kill = () => {};
   setImmediate(() => {
     if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+    if (stderr) child.stderr.emit('data', Buffer.from(stderr));
     child.emit('close', code);
+  });
+  return child;
+}
+
+// A fake child process that emits stderr and then a spawn `error` event
+// (never closes) — exercises runCli's error path rather than its close path.
+function fakeErrorChild(stderr) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = () => {};
+  setImmediate(() => {
+    if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+    child.emit('error', new Error('spawn failed'));
+  });
+  return child;
+}
+
+// A fake child process that emits stderr and then HANGS — never closes and
+// never errors — so only runCli's CLI_TIMEOUT_MS timer can settle it.
+function fakeHangingChild(stderr) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = () => {};
+  setImmediate(() => {
+    if (stderr) child.stderr.emit('data', Buffer.from(stderr));
   });
   return child;
 }
@@ -51,7 +80,7 @@ function routeSpawn(routes) {
   spawn.mockImplementation((cmd, args = []) => {
     const key = `${cmd} ${args[0] || ''}`;
     const r = routes[key] ?? (key === 'gh api' ? { stdout: 'alice\n' } : undefined);
-    return fakeChild(r?.stdout ?? '', r?.code ?? 0);
+    return fakeChild(r?.stdout ?? '', r?.code ?? 0, r?.stderr ?? '');
   });
 }
 
@@ -479,6 +508,55 @@ describe('perpetualWork', () => {
       routeSpawn({ 'gh issue': { stdout: '', code: 1 } });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
       expect(out).toMatchObject({ actionable: false, reason: 'gh-list-failed', transient: true });
+    });
+
+    it('carries the CLI stderr into the transient reason as a redacted detail, instead of the bare literal alone', async () => {
+      routeSpawn({ 'gh issue': { stdout: '', code: 1, stderr: 'gh: authentication failed\n' } });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ reason: 'gh-list-failed', transient: true });
+      expect(out.detail).toBe('gh: authentication failed');
+    });
+
+    it('redacts a hostname and a token-shaped string out of the CLI stderr before it reaches the transient detail', async () => {
+      routeSpawn({
+        'gh issue': {
+          stdout: '', code: 1,
+          stderr: 'error talking to machine-abc123.tailnet-xyz.ts.net: token ghp_1234567890abcdef1234567890abcdef1234 rejected\n'
+        }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out.detail).not.toContain('.ts.net');
+      expect(out.detail).not.toContain('ghp_1234567890abcdef1234567890abcdef1234');
+      expect(out.detail).not.toContain('machine-abc123');
+    });
+
+    it('runCli preserves accumulated stderr when the child process emits a spawn error, instead of blanking it', async () => {
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'gh' && args[0] === 'issue') return fakeErrorChild('gh: rate limit exceeded\n');
+        return fakeChild('');
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ reason: 'gh-list-failed', transient: true });
+      expect(out.detail).toBe('gh: rate limit exceeded');
+    });
+
+    it('runCli preserves accumulated stderr on its CLI_TIMEOUT_MS timeout path, instead of blanking it', async () => {
+      vi.useFakeTimers();
+      try {
+        spawn.mockImplementation((cmd, args = []) => {
+          if (cmd === 'gh' && args[0] === 'issue') return fakeHangingChild('gh: request timed out\n');
+          return fakeChild('');
+        });
+        const pending = detectGithubIssues(app, { issueAuthorFilter: 'any' });
+        // Let the setImmediate stderr emission land before the timer fires.
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(CLI_TIMEOUT_MS);
+        const out = await pending;
+        expect(out).toMatchObject({ reason: 'gh-list-failed', transient: true });
+        expect(out.detail).toBe('gh: request timed out');
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('self mode passes --author @me to the list (gh resolves @me natively, no extra lookup)', async () => {

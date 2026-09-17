@@ -490,3 +490,21 @@ describe('adding a backend and a harness (#6369)', () => {
     expect(api.createProviderBinding).not.toHaveBeenCalled();
   });
 });
+
+describe('deleting a backend', () => {
+  it('asks before it throws the backend and its stored key away', async () => {
+    api.deleteProviderConnection.mockResolvedValue({ deleted: true });
+    renderPanel({ connectionId: OTHER });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Delete/ }));
+    expect(api.deleteProviderConnection).not.toHaveBeenCalled();
+    expect(screen.getByText(/Delete the Remote daemon backend\?/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(api.deleteProviderConnection).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Delete/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete backend' }));
+    await waitFor(() => expect(api.deleteProviderConnection).toHaveBeenCalledWith(OTHER, { silent: true }));
+  });
+});

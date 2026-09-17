@@ -747,12 +747,12 @@ export function describeStep(step) {
  * or an agent. Never throws; a scan that blows up is reported as a `scan-failed`
  * escalation so the sweep continues.
  *
- * @param {{repoPath:string, appId?:string, name?:string, actions?:object}} repo
+ * @param {{repoPath:string, appId?:string, name?:string, actions?:object, forgeAccount?:string|null}} repo
  * @param {{activeAgentIds?:Set<string>}} [deps]
  * @returns {Promise<object>} per-repo result
  */
 export async function syncRepo(repo, { activeAgentIds = new Set() } = {}) {
-  const { repoPath, appId = null, name = repoPath, actions = {} } = repo;
+  const { repoPath, appId = null, name = repoPath, actions = {}, forgeAccount = null } = repo;
   const base = { appId, name, repoPath, performed: [], escalations: [] };
 
   if (!repoPath || !existsSync(repoPath)) {
@@ -805,7 +805,8 @@ export async function syncRepo(repo, { activeAgentIds = new Set() } = {}) {
     const result = await reconcile(repoPath, {
       cleanup: true,
       reapRemotes: actions.reapRemotes === true,
-      activeAgentIds
+      activeAgentIds,
+      forgeAccount
     }).catch((err) => {
       escalations.push({ kind: ESCALATION_KINDS.SCAN_FAILED, detail: `branch cleanup failed: ${err.message}` });
       return null;
@@ -847,7 +848,7 @@ export async function syncRepo(repo, { activeAgentIds = new Set() } = {}) {
  * parallel sweep interleaves push output and git index locks across repos that
  * may share a worktree parent.
  *
- * @param {{repoPath:string, appId?:string, name?:string, actions?:object}[]} repos
+ * @param {{repoPath:string, appId?:string, name?:string, actions?:object, forgeAccount?:string|null}[]} repos
  * @param {{activeAgentIds?:Set<string>}} [deps]
  * @returns {Promise<object[]>}
  */
@@ -1012,6 +1013,9 @@ export function resolveSyncTargets(apps, actions = {}) {
       repoPath,
       appId: app.id,
       name: app.name || app.id,
+      // Carried so the delegated branch-reconcile runs gh as the account this
+      // repo needs rather than gh's ambient active login (#7540).
+      forgeAccount: app.forgeAccount || null,
       // A per-app override may switch an individual action off for one repo
       // (e.g. leave one checkout's stashes alone) without opting the repo out.
       actions: { ...actions, ...override }

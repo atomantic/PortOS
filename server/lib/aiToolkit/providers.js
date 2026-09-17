@@ -1,4 +1,5 @@
-import { providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
+import { composeBootstrapSpawn } from './internal/credentialBootstrap.js';
+import { expandModePair, modeSiblingPayload, providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, delimiter, isAbsolute } from 'path';
@@ -25,6 +26,7 @@ import { isOllamaBackedProvider, ollamaBaseFromProvider } from './internal/ollam
 import { gatewayForProvider, isGatewayBackedProvider } from './internal/gateways.js';
 import { canRefreshModels, ollamaRefreshGroupKey, resolveModelFetcher } from './internal/modelFetchers.js';
 import { modelCatalogUpdate, modelContextWindowPatch, parseModelCatalog, toModelCatalog } from './internal/modelCatalog.js';
+import { normalizeModelAccess } from './internal/modelAccess.js';
 
 // Re-exported (rather than defined here) so the model-fetcher table can key its
 // ollama row on the same predicate without importing back into this module.
@@ -62,6 +64,52 @@ function withGatewayApiKey(provider, providers) {
   });
   return executionProvider;
 }
+
+/**
+ * Resolve the MODEL ACCESS policy a provider read is governed by, stamped as
+ * the derived `modelAccessEffective` (+ `modelAccessSource`) rather than folded
+ * into the persisted `modelAccess` field.
+ *
+ * A gateway-backed OpenCode wrapper front-ends the SAME upstream catalog as the
+ * sibling `api` record whose id equals the gateway id — one NVIDIA NIM
+ * entitlement serves the api provider, its CLI wrapper and its TUI wrapper — so
+ * a wrapper with no policy of its own inherits the gateway's. Exactly the
+ * inheritance {@link withGatewayApiKey} already performs for the key, and for
+ * the same reason: the wrapper stores nothing the gateway record owns.
+ *
+ * Two separate field names, not one, because the resolved value must never be
+ * able to become the wrapper's OWN stored policy: `modelAccess` is in
+ * `providerSchema`, so a client that echoes a GET back on a PUT would persist
+ * whatever it was handed. `modelAccessEffective` is not in the schema and is
+ * stripped by `providerSchema.partial()`, which keeps inheritance live — a
+ * later edit to the gateway still reaches every wrapper.
+ *
+ * Returns the SAME object when no policy applies, so an install that has not
+ * configured this sees no change at all.
+ *
+ * Composition order against {@link withGatewayApiKey} is load-bearing: that one
+ * attaches the sibling key as a NON-ENUMERABLE property, which a spread here
+ * would silently drop. This runs first and the key attach stays outermost.
+ */
+function withGatewayModelAccess(provider, providers) {
+  if (!provider || typeof provider !== 'object') return provider;
+  const own = normalizeModelAccess(provider.modelAccess);
+  if (own) return { ...provider, modelAccessEffective: own, modelAccessSource: 'own' };
+  const gateway = gatewayForProvider(provider);
+  const inherited = gateway ? normalizeModelAccess(providers?.[gateway.id]?.modelAccess) : null;
+  if (!inherited) return provider;
+  return { ...provider, modelAccessEffective: inherited, modelAccessSource: gateway.id };
+}
+
+/**
+ * One provider as a READ sees it: the gateway's model-access policy resolved,
+ * then the gateway's API key attached. In that order — the key rides as a
+ * NON-enumerable property, so a spread after it would silently drop the
+ * credential and every wrapper run would lose it.
+ */
+const readProvider = (provider, providers) => (provider
+  ? withGatewayApiKey(withGatewayModelAccess(provider, providers), providers)
+  : null);
 
 // Extensions Windows can launch directly, checked in cmd.exe's own resolution
 // preference. Deliberately excludes an extension-less match — npm ships a
@@ -129,6 +177,21 @@ function escapeCmdMetacharsIfUnquoted(value) {
   const str = String(value);
   if (NEEDS_NODE_QUOTING_RE.test(str)) return str;
   return str.replace(CMD_METACHAR_RE, '^$&');
+}
+
+/**
+ * What a model-catalog probe should actually spawn for a provider, and the
+ * label its failure messages must name.
+ *
+ * The bootstrap wrap belongs on EVERY probe (a bare harness runs with no
+ * credential and answers for the wrong account — see
+ * `internal/credentialBootstrap.js`), and every message has to name what really
+ * ran or a missing bootstrap binary reports itself as the harness failing.
+ * Stating both once keeps the next vendor fetcher from spawning bare.
+ */
+function resolveProbeSpawn(provider, defaultBin, args) {
+  const spawned = composeBootstrapSpawn(provider, provider?.command || defaultBin, args);
+  return { ...spawned, label: `'${spawned.command} ${spawned.args.join(' ')}'` };
 }
 
 // windowsHide is applied here rather than by importing server/lib/childProcess.js:
@@ -623,26 +686,149 @@ export function createProviderService(config = {}) {
     await notifyProvidersSaved(data);
   }
 
+  /**
+   * Build ONE record, refusing an id `existing` already holds.
+   *
+   * PURE — it returns the record rather than storing it, which is what makes a
+   * multi-record create atomic for free: a throw on the second record cannot
+   * leave the first one behind. That matters because `loadProviders` hands back
+   * the WARM CACHE object, so a record written into it and then abandoned would
+   * stay visible to every reader in the process despite never reaching disk.
+   *
+   * The explicit field list (rather than a spread of the body) is the
+   * create-side contract this directory keeps — see AGENTS.md — so a new
+   * provider field is added here deliberately.
+   */
+  function buildProviderRecord(existing, providerData) {
+    const id = providerData.id || providerData.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+
+    if (existing[id]) {
+      throw new Error('Provider with this ID already exists');
+    }
+
+    const modelAccess = normalizeModelAccess(providerData.modelAccess);
+
+    const provider = {
+      id,
+      name: providerData.name,
+      type: providerData.type || 'cli',
+      command: providerData.command || null,
+      args: providerData.args || [],
+      endpoint: providerData.endpoint || null,
+      apiKey: providerData.apiKey || '',
+      models: providerData.models || [],
+      ...(providerData.hardwareRequirements ? { hardwareRequirements: providerData.hardwareRequirements } : {}),
+      ...(providerData.modelHardwareRequirements
+        ? { modelHardwareRequirements: providerData.modelHardwareRequirements }
+        : {}),
+      defaultModel: providerData.defaultModel || null,
+      effort: providerData.effort || null,
+      lightModel: providerData.lightModel || null,
+      mediumModel: providerData.mediumModel || null,
+      heavyModel: providerData.heavyModel || null,
+      ultraModel: providerData.ultraModel || null,
+      fallbackProvider: providerData.fallbackProvider || null,
+      fallbackModel: providerData.fallbackModel || null,
+      numCtx: providerData.numCtx || null,
+      temperature: providerData.temperature,
+      topP: providerData.topP,
+      thinking: providerData.thinking,
+      contextWindow: providerData.contextWindow || null,
+      // Per-model windows learned from the provider's own /models catalog.
+      // Same non-empty rule the refresh path uses, from one implementation.
+      ...modelContextWindowPatch(providerData.modelContextWindows),
+      timeout: providerData.timeout || 300000,
+      enabled: providerData.enabled !== false,
+      // Subscription text-transport capability + its explicit opt-in. Only
+      // persisted when set, so every existing HTTP/CLI record stays byte-identical
+      // and an older install reading this file sees nothing new.
+      ...(typeof providerData.textTransport === 'string' && providerData.textTransport
+        ? { textTransport: providerData.textTransport } : {}),
+      ...(providerData.textTransportEnabled === true ? { textTransportEnabled: true } : {}),
+      ...(providerData.textTransportReadRiskAcknowledged === true
+        ? { textTransportReadRiskAcknowledged: true } : {}),
+      // Claude Ollama marker — preserve so adopting the sample via POST drives
+      // ollama-backed model refresh (see isOllamaBackedProvider).
+      ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
+      // MTPLX's native MTP runtime is a separate local OpenAI-compatible
+      // backend. Preserve this marker so OpenCode receives the `mtplx/`
+      // namespace and model refresh probes its local endpoint.
+      // LM Studio is a local backend PortOS already manages; preserve the
+      // marker so OpenCode receives the `lmstudio/` namespace and model
+      // refresh probes the LM Studio server rather than the harness.
+      ...(providerData.lmstudioBacked === true ? { lmstudioBacked: true } : {}),
+      ...(providerData.mtplxBacked === true ? { mtplxBacked: true } : {}),
+      ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
+      // The local vLLM container is a third distinct local backend: preserve
+      // the marker so OpenCode receives the `vllm/` namespace and model
+      // refresh probes the container rather than the OpenCode harness.
+      ...(providerData.vllmBacked === true ? { vllmBacked: true } : {}),
+      // The SGLang container is a fourth distinct local backend (Hopper/Blackwell,
+      // PortOS-owned launch line): preserve the marker so OpenCode receives the
+      // `sglang/` namespace and model refresh probes the container.
+      ...(providerData.sglangBacked === true ? { sglangBacked: true } : {}),
+      // Hosted gateway markers: the generic one plus the legacy per-gateway
+      // boolean, both preserved so a record written by any version keeps
+      // resolving through internal/gateways.js.
+      ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked
+        ? { gatewayBacked: providerData.gatewayBacked } : {}),
+      ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
+      // Which of the upstream catalog this install is entitled to run
+      // (internal/modelAccess.js). Normalized on the way in so a stored record
+      // never holds a mode this build does not know, and only persisted when it
+      // says something — an unconfigured provider stays byte-identical.
+      ...(modelAccess ? { modelAccess } : {}),
+      // Explicit opt-in to send the API key to an arbitrary (non-local,
+      // non-allowlisted) endpoint — see endpointGuard.js. Only
+      // persisted when true so existing keyless/local providers stay clean.
+      ...(providerData.allowCustomEndpoint === true ? { allowCustomEndpoint: true } : {}),
+      // Codex 'ignore my ~/.codex/config.toml' pin. Only persisted when true so
+      // every existing record stays byte-identical and an older install
+      // reading this file sees nothing new.
+      ...(providerData.ignoreUserConfig === true ? { ignoreUserConfig: true } : {}),
+      // Generic credential-bootstrap wrapper — only persisted when a bootstrap
+      // command is actually named, so every existing record stays byte-identical.
+      ...(providerData.credentialBootstrap?.command ? { credentialBootstrap: providerData.credentialBootstrap } : {}),
+      envVars: providerData.envVars || {},
+      secretEnvVars: providerData.secretEnvVars || [],
+      headlessArgs: providerData.headlessArgs || [],
+      tuiPromptDelayMs: providerData.tuiPromptDelayMs || 2500,
+      ...(providerData.tuiIdleTimeoutMs != null ? { tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs } : {})
+    };
+
+    return provider;
+  }
+
+  /** Store freshly built records and adopt the first as active on an empty install. */
+  function storeProviderRecords(data, records) {
+    for (const record of records) {
+      data.providers[record.id] = record;
+      if (!data.activeProvider) data.activeProvider = record.id;
+    }
+    unifyProviderModes(data);
+  }
+
   return {
     async getAllProviders() {
       const data = await loadProviders();
+      // Model-access resolution only — the API key stays OFF the list shape,
+      // which is read by routes that serialize every provider. The envelope
+      // below is pinned by services/providers.shape.test.js; keep it literal.
       return {
         activeProvider: data.activeProvider,
-        providers: Object.values(data.providers)
+        providers: Object.values(data.providers).map(provider => withGatewayModelAccess(provider, data.providers))
       };
     },
 
     async getProviderById(id) {
       const data = await loadProviders();
-      const provider = data.providers[id];
-      return provider ? withGatewayApiKey(provider, data.providers) : null;
+      return readProvider(data.providers[id], data.providers);
     },
 
     async getActiveProvider() {
       const data = await loadProviders();
       if (!data.activeProvider) return null;
-      const provider = data.providers[data.activeProvider];
-      return provider ? withGatewayApiKey(provider, data.providers) : null;
+      return readProvider(data.providers[data.activeProvider], data.providers);
     },
 
     async setActiveProvider(id) {
@@ -657,101 +843,73 @@ export function createProviderService(config = {}) {
 
     async createProvider(providerData) {
       const data = await loadProviders();
-      const id = providerData.id || providerData.name.toLowerCase().replace(/[^a-z0-9]/g, '-');
-
-      if (data.providers[id]) {
-        throw new Error('Provider with this ID already exists');
-      }
-
-      const provider = {
-        id,
-        name: providerData.name,
-        type: providerData.type || 'cli',
-        command: providerData.command || null,
-        args: providerData.args || [],
-        endpoint: providerData.endpoint || null,
-        apiKey: providerData.apiKey || '',
-        models: providerData.models || [],
-        ...(providerData.hardwareRequirements ? { hardwareRequirements: providerData.hardwareRequirements } : {}),
-        ...(providerData.modelHardwareRequirements
-          ? { modelHardwareRequirements: providerData.modelHardwareRequirements }
-          : {}),
-        defaultModel: providerData.defaultModel || null,
-        effort: providerData.effort || null,
-        lightModel: providerData.lightModel || null,
-        mediumModel: providerData.mediumModel || null,
-        heavyModel: providerData.heavyModel || null,
-        ultraModel: providerData.ultraModel || null,
-        fallbackProvider: providerData.fallbackProvider || null,
-        fallbackModel: providerData.fallbackModel || null,
-        numCtx: providerData.numCtx || null,
-        temperature: providerData.temperature,
-        topP: providerData.topP,
-        thinking: providerData.thinking,
-        contextWindow: providerData.contextWindow || null,
-        // Per-model windows learned from the provider's own /models catalog.
-        // Same non-empty rule the refresh path uses, from one implementation.
-        ...modelContextWindowPatch(providerData.modelContextWindows),
-        timeout: providerData.timeout || 300000,
-        enabled: providerData.enabled !== false,
-        // Subscription text-transport capability + its explicit opt-in. Only
-        // persisted when set, so every existing HTTP/CLI record stays byte-identical
-        // and an older install reading this file sees nothing new.
-        ...(typeof providerData.textTransport === 'string' && providerData.textTransport
-          ? { textTransport: providerData.textTransport } : {}),
-        ...(providerData.textTransportEnabled === true ? { textTransportEnabled: true } : {}),
-        ...(providerData.textTransportReadRiskAcknowledged === true
-          ? { textTransportReadRiskAcknowledged: true } : {}),
-        // Claude Ollama marker — preserve so adopting the sample via POST drives
-        // ollama-backed model refresh (see isOllamaBackedProvider).
-        ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
-        // MTPLX's native MTP runtime is a separate local OpenAI-compatible
-        // backend. Preserve this marker so OpenCode receives the `mtplx/`
-        // namespace and model refresh probes its local endpoint.
-        // LM Studio is a local backend PortOS already manages; preserve the
-        // marker so OpenCode receives the `lmstudio/` namespace and model
-        // refresh probes the LM Studio server rather than the harness.
-        ...(providerData.lmstudioBacked === true ? { lmstudioBacked: true } : {}),
-        ...(providerData.mtplxBacked === true ? { mtplxBacked: true } : {}),
-        ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
-        // The local vLLM container is a third distinct local backend: preserve
-        // the marker so OpenCode receives the `vllm/` namespace and model
-        // refresh probes the container rather than the OpenCode harness.
-        ...(providerData.vllmBacked === true ? { vllmBacked: true } : {}),
-        // The SGLang container is a fourth distinct local backend (Hopper/Blackwell,
-        // PortOS-owned launch line): preserve the marker so OpenCode receives the
-        // `sglang/` namespace and model refresh probes the container.
-        ...(providerData.sglangBacked === true ? { sglangBacked: true } : {}),
-        // Hosted gateway markers: the generic one plus the legacy per-gateway
-        // boolean, both preserved so a record written by any version keeps
-        // resolving through internal/gateways.js.
-        ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked
-          ? { gatewayBacked: providerData.gatewayBacked } : {}),
-        ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
-        // Explicit opt-in to send the API key to an arbitrary (non-local,
-        // non-allowlisted) endpoint — see endpointGuard.js. Only
-        // persisted when true so existing keyless/local providers stay clean.
-        ...(providerData.allowCustomEndpoint === true ? { allowCustomEndpoint: true } : {}),
-        // Codex 'ignore my ~/.codex/config.toml' pin. Only persisted when true so
-        // every existing record stays byte-identical and an older install
-        // reading this file sees nothing new.
-        ...(providerData.ignoreUserConfig === true ? { ignoreUserConfig: true } : {}),
-        envVars: providerData.envVars || {},
-        secretEnvVars: providerData.secretEnvVars || [],
-        headlessArgs: providerData.headlessArgs || [],
-        tuiPromptDelayMs: providerData.tuiPromptDelayMs || 2500,
-        ...(providerData.tuiIdleTimeoutMs != null ? { tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs } : {})
-      };
-
-      data.providers[id] = provider;
-      unifyProviderModes(data);
-
-      if (!data.activeProvider) {
-        data.activeProvider = id;
-      }
-
+      const provider = buildProviderRecord(data.providers, providerData);
+      storeProviderRecords(data, [provider]);
       await saveProviders(data);
       return provider;
+    },
+
+    /**
+     * Create BOTH execution modes of one harness from a single body, in one
+     * `providers.json` write.
+     *
+     * A program that can be driven headlessly and interactively is one program
+     * on one backend, but a record stores exactly one `type` — so configuring
+     * both used to mean adding the provider twice and hoping the two records
+     * happened to satisfy the pairing rule. `expandModePair` mints them in the
+     * `<stem>` / `<stem>-tui` shape {@link providerModeGroups} recognizes with
+     * every grouped field shared, so the pair arrives already unified instead of
+     * as two unrelated routes.
+     *
+     * Either record colliding with an existing id aborts the whole create with
+     * nothing stored — see {@link buildProviderRecord} on why that has to hold
+     * against the warm cache and not just against the file.
+     *
+     * @param {object} providerData - a create body carrying `modes`
+     * @returns {Promise<object[]>} the created records, CLI first
+     */
+    async createProviderModes(providerData) {
+      const split = expandModePair(providerData);
+      if (!split) throw new Error('createProviderModes requires a modes declaration');
+
+      const data = await loadProviders();
+      const created = split.map((modeData) => buildProviderRecord(data.providers, modeData));
+      storeProviderRecords(data, created);
+      await saveProviders(data);
+      return created;
+    },
+
+    /**
+     * Complete an existing CLI record's harness by minting its TUI sibling.
+     *
+     * The sibling is built from the STORED record, never from a re-submitted
+     * form: retyping the command, endpoint, credentials and env is exactly the
+     * friction a dual-mode create removed for a provider being added, and a
+     * second hand-entry is also a second chance for a grouped field to differ
+     * and leave two unrelated routes. Everything but the mode's own argv comes
+     * across unchanged, which is what makes the result groupable.
+     *
+     * Routed through {@link modeSiblingPayload} — the same writer a dual-mode
+     * create goes through — so the `<stem>` / `<stem>-tui` id and name
+     * convention has ONE spelling whether a pair is born together or completed
+     * later. The CLI id is already fixed, so a taken sibling id is not a
+     * collision to suffix around — it is something else already standing there,
+     * and this throws rather than guessing.
+     *
+     * @param {string} id - the CLI record to derive from
+     * @param {object} [tuiOverrides] - mode-specific fields, typically `args`
+     * @returns {Promise<object|null>} the created TUI record, or `null` when `id` names no record
+     */
+    async createProviderTuiMode(id, tuiOverrides = {}) {
+      const data = await loadProviders();
+      const stored = data.providers[id];
+      if (!stored) return null;
+      if (stored.type !== 'cli') throw new Error('Only a CLI provider can gain a TUI mode');
+
+      const created = buildProviderRecord(data.providers, modeSiblingPayload(stored, 'tui', tuiOverrides));
+      storeProviderRecords(data, [created]);
+      await saveProviders(data);
+      return created;
     },
 
     async updateProvider(id, updates) {
@@ -766,11 +924,40 @@ export function createProviderService(config = {}) {
         ...updates,
         id
       };
+      // The editor clears a bootstrap with an explicit `null` (absent means
+      // "unchanged" on a PATCH). Drop the key rather than store the null, so
+      // the record reads exactly like one that never had a bootstrap — the
+      // invariant `createProvider` keeps by only writing the key when named.
+      // Applied to the fanned-out siblings too: a cleared sibling that kept a
+      // stored `null` would no longer read as "never had one".
+      // Fields whose CLEARED form has to be normalized away rather than stored:
+      // a record that was reset must read exactly like one that never had the
+      // field, or the next reader has to know two spellings of "none".
+      const normalizeClearedFields = (record) => {
+        if (record.credentialBootstrap === null) delete record.credentialBootstrap;
+        // Same convention for the model-access policy: an explicit `null` is
+        // "clear it", and a policy that normalizes to nothing (mode `all` with
+        // no patterns) is stored as absent rather than as an inert object, so a
+        // record that was reset reads exactly like one that never had a policy.
+        if (Object.hasOwn(record, 'modelAccess')) {
+          const normalized = normalizeModelAccess(record.modelAccess);
+          if (normalized) record.modelAccess = normalized;
+          else delete record.modelAccess;
+        }
+      };
+      normalizeClearedFields(provider);
 
+      // Grouped BEFORE the edit lands: every connection-identity value the
+      // fan-out shares (endpoint, API key, env vars, bootstrap) is exactly what
+      // `providerModeGroups` pairs on, so reading the group after would find
+      // the siblings already split and skip the fan-out that keeps them
+      // together.
       const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));
       data.providers[id] = provider;
       for (const sibling of group || []) {
-        if (sibling.id !== id) Object.assign(sibling, sharedModeUpdates(updates, sibling));
+        if (sibling.id === id) continue;
+        Object.assign(sibling, sharedModeUpdates(updates, sibling));
+        normalizeClearedFields(sibling);
       }
       await saveProviders(data);
       return provider;
@@ -838,7 +1025,11 @@ export function createProviderService(config = {}) {
         // Use execFile (no shell) so user-configured `provider.command` cannot
         // inject extra shell commands via metacharacters.
         const lookup = isWin32 ? 'where' : 'which';
-        const { stdout } = await execFileAsync(lookup, [provider.command], { windowsHide: true })
+        // Probe what PortOS actually spawns: the credential-bootstrap CLI in
+        // front of the harness when one is named (the harness may then live
+        // behind it, off PATH), else the harness itself.
+        const probeCommand = composeBootstrapSpawn(provider, provider.command, []).command;
+        const { stdout } = await execFileAsync(lookup, [probeCommand], { windowsHide: true })
           .catch(() => ({ stdout: '', stderr: 'not found' }));
 
         // `where` lists every match (one per line); `which` prints one. Take the
@@ -846,7 +1037,7 @@ export function createProviderService(config = {}) {
         const commandPath = stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
 
         if (!commandPath) {
-          return { success: false, error: `Command '${provider.command}' not found in PATH` };
+          return { success: false, error: `Command '${probeCommand}' not found in PATH` };
         }
 
         // On Windows, `where` can return the wrong file: npm ships an
@@ -894,7 +1085,7 @@ export function createProviderService(config = {}) {
         if (!everSpawned) {
           return {
             success: false,
-            error: `Resolved '${provider.command}' to ${invokePath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
+            error: `Resolved '${probeCommand}' to ${invokePath} but it could not be executed (a Windows .cmd/.bat npm shim is not directly spawnable by the agent runner)`,
           };
         }
 
@@ -1480,8 +1671,9 @@ export function createProviderService(config = {}) {
      * @returns {Promise<string[]>} parsed ids; empty only when explicitly recognized
      */
     async _execCliModelList(provider, defaultBin, parse, listArgs = ['models'], isEmptyCatalog = () => false) {
-      const bin = provider?.command || defaultBin;
-      const { command, args } = prepareWindowsSafeSpawn(bin, listArgs);
+      const spawned = resolveProbeSpawn(provider, defaultBin, listArgs);
+      const probe = spawned.label;
+      const { command, args } = prepareWindowsSafeSpawn(spawned.command, spawned.args);
       const pending = execFileAsync(command, args, {
         timeout: 15000,
         env: { ...process.env, ...provider?.envVars },
@@ -1498,12 +1690,12 @@ export function createProviderService(config = {}) {
       const { stdout } = await pending.catch((err) => {
         const output = `${err.stdout || ''}\n${err.stderr || ''}`;
         if (!err.killed && isEmptyCatalog(output)) return { stdout: output };
-        throw new Error(`'${bin} ${listArgs.join(' ')}' failed: ${err?.message || 'could not run the binary'}`);
+        throw new Error(`${probe} failed: ${err?.message || 'could not run the binary'}`);
       });
 
       const listed = parse(stdout);
       if (listed.length === 0 && !isEmptyCatalog(stdout)) {
-        throw new Error(`'${bin} ${listArgs.join(' ')}' returned no model ids`);
+        throw new Error(`${probe} returned no model ids`);
       }
       return listed;
     },
@@ -1547,15 +1739,16 @@ export function createProviderService(config = {}) {
      * consistent with _execCliModelList and _fetchOllamaToolCapableModels.
      */
     async _fetchCodexModels(provider) {
-      const bin = provider?.command || 'codex';
+      const spawned = resolveProbeSpawn(provider, 'codex', ['app-server']);
+      const probe = spawned.label;
       // On Windows, npm places a POSIX `codex` stub beside its runnable
       // `codex.cmd` shim. `spawn('codex')` can select the former (or fail to
       // resolve it entirely), even though the provider passed its capability
       // check. Resolve the extension-bearing shim before the safe cmd.exe
       // wrapper below, matching the other CLI probes in this module.
       const childEnv = { ...process.env, ...provider?.envVars };
-      const resolvedBin = resolveWindowsExecutable(bin, process.platform === 'win32', childEnv) || bin;
-      const { command, args } = prepareWindowsSafeSpawn(resolvedBin, ['app-server']);
+      const resolvedBin = resolveWindowsExecutable(spawned.command, process.platform === 'win32', childEnv) || spawned.command;
+      const { command, args } = prepareWindowsSafeSpawn(resolvedBin, spawned.args);
       return new Promise((resolve, reject) => {
         let settled = false;
         let child;
@@ -1571,7 +1764,7 @@ export function createProviderService(config = {}) {
         };
 
         const timer = setTimeout(() => {
-          settle(new Error(`'${bin} app-server' timed out waiting for model catalog`));
+          settle(new Error(`${probe} timed out waiting for model catalog`));
         }, 15000);
         timer.unref?.();
 
@@ -1582,18 +1775,18 @@ export function createProviderService(config = {}) {
             windowsHide: true,
           });
         } catch (err) {
-          settle(new Error(`'${bin} app-server' failed to spawn: ${err?.message || err}`));
+          settle(new Error(`${probe} failed to spawn: ${err?.message || err}`));
           return;
         }
 
         child.on('error', (err) => {
-          settle(new Error(`'${bin} app-server' failed: ${err?.message || err}`));
+          settle(new Error(`${probe} failed: ${err?.message || err}`));
         });
 
         child.stdin?.on('error', () => {});
 
         child.on('exit', (code, signal) => {
-          settle(new Error(`'${bin} app-server' exited prematurely with code ${code ?? signal}`));
+          settle(new Error(`${probe} exited prematurely with code ${code ?? signal}`));
         });
 
         let buffer = '';
@@ -1611,7 +1804,7 @@ export function createProviderService(config = {}) {
                 child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'model/list', params: {} }) + '\n');
               } else if (msg.id === 2) {
                 if (msg.error) {
-                  settle(new Error(`'${bin} app-server' model/list error: ${msg.error.message || JSON.stringify(msg.error)}`));
+                  settle(new Error(`${probe} model/list error: ${msg.error.message || JSON.stringify(msg.error)}`));
                   return;
                 }
                 const rawModels = msg.result?.data || msg.result?.models || [];
@@ -1620,7 +1813,7 @@ export function createProviderService(config = {}) {
                   .map((m) => (typeof m === 'string' ? m : m?.id || m?.model))
                   .filter(Boolean);
                 if (ids.length === 0) {
-                  settle(new Error(`'${bin} app-server' returned no model ids`));
+                  settle(new Error(`${probe} returned no model ids`));
                   return;
                 }
                 settle(null, [...new Set(ids)]);

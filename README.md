@@ -84,7 +84,7 @@ Bring your entire portfolio of projects under one roof.
 
 An autonomous AI agent orchestrator that manages your development workflow. Submit a task, and CoS dispatches the right AI agent to handle it — then learns from the result. ([Full docs](./docs/features/chief-of-staff.md))
 
-- **Multi-Agent Orchestration** — Run Claude Code, Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode, Ollama, and LM Studio concurrently with global and per-project limits, capacity management, and fair scheduling. Each CLI agent has a headless (`cli`) and an interactive terminal (`tui`) provider variant ([Agent Runner docs](./docs/features/cos-agent-runner.md))
+- **Multi-Agent Orchestration** — Run Claude Code, Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode, Kilo Code, OpenChamber, Ollama, and LM Studio concurrently with global and per-project limits, capacity management, and fair scheduling. Each CLI agent has a headless (`cli`) and an interactive terminal (`tui`) provider variant ([Agent Runner docs](./docs/features/cos-agent-runner.md))
 - **Intelligent Routing** — 7 agent skill templates (bug-fix, feature, feature-agent, security-audit, refactor, documentation, mobile-responsive) route tasks to the best model based on complexity ([Agent Skills docs](./docs/features/agent-skills.md))
 - **Task Learning** — Tracks success rates, error patterns, and model performance to dynamically improve routing decisions ([Memory System docs](./docs/features/memory-system.md))
 - **Goal Tracking** — Define goals and track progress across hundreds of completed tasks with success rate metrics
@@ -94,7 +94,7 @@ An autonomous AI agent orchestrator that manages your development workflow. Subm
 - **Productivity Analytics** — Hourly/daily work patterns, task milestones, and AI-generated weekly digests
 - **Decision Transparency** — Every skip, switch, and routing decision is logged with reasons, surfaced on the dashboard
 - **Briefing + Health** — A daily briefing of what CoS did and what needs you, plus a health view of queue depth, failure storms, and circuit-breaker state
-- **Schedule Timeline** — Launch-order visualization of every scheduled task with an inline schedule editor, so overlapping cron runs are visible before they collide
+- **Schedule Timeline** — Launch-order visualization of every scheduled task with an inline schedule editor, so overlapping cron runs are visible before they collide. Per-app cron overrides get their own markers, so a task left on-demand globally still shows when it runs for the apps that schedule it
 - **GSD Scanner** — Reads `.planning/` directories in managed apps and tracks phase state and concerns per project
 
 ### Create Suite
@@ -361,7 +361,7 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 | **Frontend** | React 19, Vite 8, Tailwind CSS 4, Three.js, xterm.js |
 | **Backend** | Express 5, Socket.IO, PM2, Zod validation |
 | **Data** | PostgreSQL + pgvector (primary datastore — mandatory), JSON files for binary assets and synced/ephemeral state ([storage contract](./docs/STORAGE.md)) |
-| **AI** | Claude Code, Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode, Ollama, LM Studio (via the in-tree AI toolkit, `server/lib/aiToolkit/`) |
+| **AI** | Claude Code, Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode, Kilo Code, OpenChamber, Ollama, LM Studio (via the in-tree AI toolkit, `server/lib/aiToolkit/`) |
 
 ## Project Structure
 
@@ -404,7 +404,7 @@ Each registered app includes:
 
 ### AI Providers (`data/providers.json`)
 Configure AI providers for the runner and Chief of Staff:
-- **CLI-based** (headless): Claude Code (incl. Bedrock), Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode
+- **CLI-based** (headless): Claude Code (incl. Bedrock), Codex, Antigravity, Grok Build, Kimi Code, Cursor Agent, OpenCode, Kilo Code, OpenChamber (drives your running OpenChamber workspace through its control CLI)
 - **TUI-based**: the same agents driven through a real terminal session, for the ones whose interactive mode does more than their headless mode
 - **API-based**: OpenAI, Anthropic, Google, xAI, Cerebras, NVIDIA (with model tier management)
 - **Local models**: Ollama, LM Studio (OpenAI-compatible endpoints)

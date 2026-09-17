@@ -46,6 +46,203 @@ describe('Provider Service', () => {
     expect((await providerService.getActiveProvider()).id).toBe('remote');
   });
 
+  it('creates both execution modes of one harness as a pair the toolkit already groups', async () => {
+    // The point of a dual-mode create is not that two records exist — it is
+    // that they satisfy the pairing rule, which is what makes the two modes ONE
+    // provider for enablement, models and the mode pickers. Minting them with
+    // any other id shape, or letting a grouped field differ, silently produces
+    // two unrelated routes instead, and nothing would report it.
+    const [cli, tui] = await providerService.createProviderModes({
+      name: 'Example Agent',
+      type: 'cli',
+      command: 'example',
+      enabled: false,
+      modes: {
+        cli: { args: ['--print'], headlessArgs: ['--quiet'] },
+        tui: { args: ['--interactive'], tuiPromptDelayMs: 3000 },
+      },
+    });
+    expect([cli.id, tui.id]).toEqual(['example-agent', 'example-agent-tui']);
+    expect([cli.args, tui.args]).toEqual([['--print'], ['--interactive']]);
+    expect(tui.tuiPromptDelayMs).toBe(3000);
+
+    // Grouped: enabling either mode enables the harness.
+    await providerService.updateProvider('example-agent-tui', { enabled: true });
+    expect((await providerService.getProviderById('example-agent')).enabled).toBe(true);
+  });
+
+  it('completes an existing CLI record into a pair the toolkit groups, without re-entering its connection', async () => {
+    // The whole point of minting from the STORED record: an install that
+    // already has a lone CLI provider gets the sibling for free, and the two
+    // records satisfy the pairing rule by construction rather than because the
+    // user retyped the endpoint, key and env identically.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: {
+        id: 'example', name: 'Example Agent', type: 'cli', command: 'example', enabled: true,
+        args: ['--print'], headlessArgs: ['--quiet'], models: ['a'], defaultModel: 'a',
+        endpoint: 'https://backend.example.com', apiKey: 'sk-test', envVars: { EXAMPLE_HOME: '/opt/example' },
+      },
+    } }));
+
+    const tui = await providerService.createProviderTuiMode('example', { args: ['--interactive'] });
+    expect(tui.id).toBe('example-tui');
+    expect(tui.name).toBe('Example Agent TUI');
+    expect(tui.args).toEqual(['--interactive']);
+    // Every grouped field came across unchanged — that is what makes it groupable.
+    expect(tui).toMatchObject({
+      command: 'example',
+      endpoint: 'https://backend.example.com',
+      apiKey: 'sk-test',
+      envVars: { EXAMPLE_HOME: '/opt/example' },
+      enabled: true,
+    });
+    // The CLI's non-interactive argv did NOT — it is a flag list for a program
+    // being driven without a terminal, and inheriting it would hand those flags
+    // to a PTY launch.
+    expect(tui.headlessArgs).toEqual([]);
+
+    // The grouping CONSEQUENCE, not just "two records exist": disabling one
+    // mode disables the harness, which only happens for a real pair.
+    await providerService.updateProvider('example-tui', { enabled: false });
+    expect((await providerService.getProviderById('example')).enabled).toBe(false);
+  });
+
+  it('refuses to derive a TUI mode from a record that is not a CLI, or from an id that does not exist', async () => {
+    await providerService.createProvider({ name: 'Example TUI', id: 'example-tui', type: 'tui', command: 'example' });
+    // The CLI id is the stem, so minting it from the TUI half is a rename.
+    await expect(providerService.createProviderTuiMode('example-tui')).rejects.toThrow(/Only a CLI provider/);
+    expect(await providerService.createProviderTuiMode('missing')).toBeNull();
+  });
+
+  it('refuses rather than suffixing when the sibling id is already taken', async () => {
+    // `mintRouteIds` suffixes a whole set on collision because it owns both
+    // halves; here the CLI id is fixed, so a taken sibling id means something
+    // else is standing there — and a `example-tui-2` would group with nothing.
+    await providerService.createProvider({ name: 'Example Agent', id: 'example', type: 'cli', command: 'example' });
+    await providerService.createProvider({ name: 'Unrelated', id: 'example-tui', type: 'tui', command: 'other' });
+    await expect(providerService.createProviderTuiMode('example')).rejects.toThrow(/already exists/);
+    expect((await providerService.getProviderById('example-tui')).command).toBe('other');
+  });
+
+  it('lands no half-made pair when the second record collides with an existing id', async () => {
+    await providerService.createProvider({ name: 'Example Agent TUI', id: 'example-agent-tui', type: 'tui', command: 'example' });
+    await expect(providerService.createProviderModes({
+      name: 'Example Agent',
+      type: 'cli',
+      command: 'example',
+      modes: { cli: {}, tui: {} },
+    })).rejects.toThrow(/already exists/);
+    // `loadProviders` hands back the WARM CACHE object, so a CLI half
+    // materialized before the collision threw would stay visible to every
+    // reader in the process even though nothing reached disk.
+    expect(await providerService.getProviderById('example-agent')).toBeNull();
+  });
+
+  it('persists a credential bootstrap only while one is named, and drops the key on an explicit clear', async () => {
+    const created = await providerService.createProvider({ name: 'Bootstrap CLI', type: 'cli', command: 'claude' });
+    expect(created).not.toHaveProperty('credentialBootstrap');
+    const bootstrap = { command: 'token-cli', args: ['run'] };
+    expect((await providerService.updateProvider(created.id, { credentialBootstrap: bootstrap })).credentialBootstrap).toEqual(bootstrap);
+    // The editor clears with an explicit `null` (absent = unchanged on a PATCH);
+    // the stored record must read like one that never had a bootstrap.
+    const cleared = await providerService.updateProvider(created.id, { credentialBootstrap: null });
+    expect(cleared).not.toHaveProperty('credentialBootstrap');
+    expect(await providerService.getProviderById(created.id)).not.toHaveProperty('credentialBootstrap');
+  });
+
+  it('does not pair CLI/TUI modes as one connection when they name DIFFERENT credential bootstraps', async () => {
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false, models: ['a'], credentialBootstrap: { command: 'token-cli' } },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['b'], credentialBootstrap: { command: 'other-cli' } },
+    } }));
+    // Two credentials are two connections: nothing converges, and neither
+    // enablement nor models unify across the two.
+    expect((await providerService.getProviderById('example')).enabled).toBe(false);
+    expect((await providerService.getProviderById('example')).credentialBootstrap).toEqual({ command: 'token-cli' });
+    await providerService.updateProvider('example-tui', { models: ['c'] });
+    expect((await providerService.getProviderById('example')).models).toEqual(['a']);
+  });
+
+  it('converges a pair that carries the bootstrap on only ONE mode', async () => {
+    // The asymmetry the fan-out now prevents can still ARRIVE — a record
+    // written before it, a hand-edited file, a restored backup — and the TUI
+    // mode is what "Launch in Shell" spawns, so the load-time convergence
+    // repairs it rather than leaving the card split and the launch bare.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: true, models: ['a'], credentialBootstrap: { command: 'token-cli', args: ['run'] } },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['a'] },
+    } }));
+    expect((await providerService.getProviderById('example-tui')).credentialBootstrap).toEqual({ command: 'token-cli', args: ['run'] });
+  });
+
+  it('fans a credential bootstrap out to the mode sibling, set and cleared', async () => {
+    // Why the connection's auth has to reach the sibling: see
+    // `sharedModeUpdates`. The TUI mode is what "Launch in Shell" spawns.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: true, models: ['a'], args: ['--print'] },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['a'], args: [] },
+    } }));
+    const bootstrap = { command: 'token-cli', args: ['run'] };
+    await providerService.updateProvider('example', { credentialBootstrap: bootstrap });
+    expect((await providerService.getProviderById('example-tui')).credentialBootstrap).toEqual(bootstrap);
+    // Mode-specific argv still never crosses over.
+    expect((await providerService.getProviderById('example-tui')).args).toEqual([]);
+    // Cleared the same way it was set: the key is dropped on BOTH records, so
+    // neither reads as a stored `null` the pairing test would treat as a
+    // different value from the other's absent key.
+    await providerService.updateProvider('example', { credentialBootstrap: null });
+    expect(await providerService.getProviderById('example')).not.toHaveProperty('credentialBootstrap');
+    expect(await providerService.getProviderById('example-tui')).not.toHaveProperty('credentialBootstrap');
+  });
+
+  it('fans the whole connection — endpoint, key and env — out to the mode sibling', async () => {
+    // The editor opens the group's REPRESENTATIVE (the CLI mode) and edits the
+    // connection there. Before the fan-out covered these three, the save left
+    // the TUI record — the one "Launch in Shell" resolves its command line and
+    // env from — on the old backend with the old key, and the disagreement
+    // split the one card in two on the next load.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: true, models: ['a'], args: ['--print'], endpoint: 'https://old.example.com', apiKey: 'old-key', envVars: { BASE: 'old' } },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['a'], args: [], endpoint: 'https://old.example.com', apiKey: 'old-key', envVars: { BASE: 'old' } },
+    } }));
+    await providerService.updateProvider('example', {
+      endpoint: 'https://new.example.com', apiKey: 'new-key', envVars: { BASE: 'new' },
+    });
+    const sibling = await providerService.getProviderById('example-tui');
+    expect(sibling).toMatchObject({ endpoint: 'https://new.example.com', apiKey: 'new-key', envVars: { BASE: 'new' } });
+    // Mode-specific argv still never crosses over.
+    expect(sibling.args).toEqual([]);
+    // Still ONE card after the edit: a fan-out that missed a pairing key would
+    // leave the two disagreeing, and this catalog change would stop crossing.
+    await providerService.updateProvider('example-tui', { models: ['b'] });
+    expect((await providerService.getProviderById('example')).models).toEqual(['b']);
+  });
+
+  it('converges a pair whose connection landed on only ONE mode, and refuses when the two CONTRADICT', async () => {
+    // An install that edited a unified card before the fan-out covered these
+    // keys still carries the split; so does a hand-edited file or a restored
+    // backup. The load-time repair fills what only one mode names — including
+    // the two-key case a single-key projection could never see.
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: true, models: ['a'], endpoint: 'https://api.example.com', apiKey: 'k' },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['a'] },
+      // Two connections that happen to share a command: they CONTRADICT on the
+      // endpoint, so the key one of them names must not be handed to the other.
+      other: { id: 'other', name: 'Other CLI', type: 'cli', command: 'other', enabled: true, models: ['a'], endpoint: 'https://one.example.com', apiKey: 'secret' },
+      'other-tui': { id: 'other-tui', name: 'Other TUI', type: 'tui', command: 'other', enabled: true, models: ['a'], endpoint: 'https://two.example.com' },
+      // DISJOINT halves contradict nowhere — no key is named twice — but each
+      // mode is the sole namer of a different one. Merging would mint a hybrid
+      // neither record described and hand the CLI's credential to a backend it
+      // was never entered for, so one donor mode is required.
+      halves: { id: 'halves', name: 'Halves CLI', type: 'cli', command: 'halves', enabled: true, models: ['a'], apiKey: 'sk-private' },
+      'halves-tui': { id: 'halves-tui', name: 'Halves TUI', type: 'tui', command: 'halves', enabled: true, models: ['a'], endpoint: 'https://elsewhere.example.com' },
+    } }));
+    expect(await providerService.getProviderById('example-tui')).toMatchObject({ endpoint: 'https://api.example.com', apiKey: 'k' });
+    expect(await providerService.getProviderById('other-tui')).not.toHaveProperty('apiKey');
+    expect(await providerService.getProviderById('halves-tui')).not.toHaveProperty('apiKey');
+    expect(await providerService.getProviderById('halves')).not.toHaveProperty('endpoint');
+  });
+
   it.skipIf(process.platform === 'win32')('refreshes Pi models and distinguishes authentication from probe failure', async () => {
     const command = join(TEST_DATA_DIR, 'pi');
     const emit = async (text, code = 0) => {
@@ -65,6 +262,28 @@ describe('Provider Service', () => {
     expect(await providerService._fetchPiModels({ command })).toEqual([]);
     await emit('No models available. Use /login to authenticate.', 1);
     expect(await providerService._fetchPiModels({ command })).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')('probes the catalog through the credential bootstrap, not the bare harness', async () => {
+    // The harness itself is never on PATH here: it exists only behind the
+    // bootstrap CLI, which is the point — a probe that spawned the bare
+    // harness would fail outright rather than answer for the credential the
+    // bootstrap mints. The stub refuses any argv but the wrapped shape.
+    const bootstrap = join(TEST_DATA_DIR, 'token-cli');
+    await writeFile(bootstrap, [
+      '#!/usr/bin/env node',
+      "const argv = process.argv.slice(2).join(' ');",
+      "if (argv !== 'run pi-harness -- --list-models') { console.error('unexpected argv: ' + argv); process.exit(9); }",
+      "console.log('provider model context max-out thinking images');",
+      "console.log('example model-a 200K 32K yes yes');",
+    ].join('\n'));
+    await chmod(bootstrap, 0o755);
+
+    const provider = await providerService.createProvider({
+      name: 'Bootstrapped Pi', type: 'cli', command: join(TEST_DATA_DIR, 'pi'), models: [],
+      credentialBootstrap: { command: bootstrap, args: ['run'], harnessId: 'pi-harness', argsSeparator: '--' },
+    });
+    expect((await providerService.refreshProviderModels(provider.id)).models).toEqual(['example/model-a']);
   });
 
   it('should create a provider', async () => {

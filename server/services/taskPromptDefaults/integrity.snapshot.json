@@ -10,16 +10,16 @@
     "better-test-quality": "ab53a477cd194a5c4fbda09d901a3775",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "44281269863b3133696fdebe9b558256",
-    "claim-issue": "3138a2057377f1596f46bd64541e1100",
-    "claim-issue-gitlab": "707bd0ad55e25d1b24726f837b93bf87",
-    "claim-issue-jira": "b14a5dde5519fda59c2ba1ae7a3d8989",
+    "claim-issue": "5586ecf0fd11dc078c6b5a94714b72ad",
+    "claim-issue-gitlab": "21b987fcc27f3fce711d481eb09f40b3",
+    "claim-issue-jira": "84843e8068d75fa023b4ed85b8df9239",
     "code-quality": "6762542233cdffb86d4e2244945bf52b",
     "code-reviewer-implement": "2e10cac7c1e1cd021d06bfddb5c1eaf2",
     "code-reviewer-review": "27ded42013f28e7d327d8f1cc624aac1",
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
-    "dependency-updates": "f34cfa7e495d2bd6d3ac3c80b44447e8",
+    "dependency-updates": "44de787b45e037fbce281efc87706873",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
     "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
@@ -33,8 +33,8 @@
     "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
     "performance": "d7e3a80f42903fbf90be0efc9b559c0b",
     "plan-feature": "87f71a894757f89354da4e2119e07118",
-    "plan-task": "b85fe92999aa4ee4a8910320457c4242",
-    "plan-task-claim": "910802d67f3b5a785f068f4d90178543",
+    "plan-task": "8a53a518714cc4029d751fdad92f9b05",
+    "plan-task-claim": "ff9ef899c1b0d13ae2f6d7e31c13a10f",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
     "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
     "pr-reviewer-review": "a4b35a1dc44e03b3d0ecf1a4e1bae6df",
@@ -64,16 +64,16 @@
     "better-structural-drift": 1,
     "better-test-quality": 1,
     "branch-reconcile": 5,
-    "claim-issue": 27,
-    "claim-issue-gitlab": 24,
-    "claim-issue-jira": 16,
+    "claim-issue": 28,
+    "claim-issue-gitlab": 25,
+    "claim-issue-jira": 17,
     "code-quality": 4,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
     "console-errors": 4,
     "copy": 1,
     "data-safety": 1,
-    "dependency-updates": 5,
+    "dependency-updates": 6,
     "do-replan": 2,
     "documentation": 7,
     "error-handling": 3,
@@ -87,7 +87,7 @@
     "observability": 1,
     "performance": 3,
     "plan-feature": 5,
-    "plan-task": 18,
+    "plan-task": 19,
     "pr-reviewer": 5,
     "pr-watcher": 2,
     "react-lifecycle": 2,
@@ -149,7 +149,8 @@
       "688661e7e7b0b4b5af95288dd86a23e8",
       "78325cbcfb0e5698018fcd16b3aa8b49",
       "5600fde65e31874bd96c3ad83ce72a92",
-      "c57f3f92044bd53763d57db35fb77483"
+      "c57f3f92044bd53763d57db35fb77483",
+      "3138a2057377f1596f46bd64541e1100"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -174,7 +175,8 @@
       "745672581d766edff0ec585dd5b1ef5d",
       "42fcfae41076d73b49050015fac0ae0e",
       "bb83608738b6517f3f05df116994a6fd",
-      "7c9e23ed8b4ad76658a4333c02598c12"
+      "7c9e23ed8b4ad76658a4333c02598c12",
+      "707bd0ad55e25d1b24726f837b93bf87"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -191,7 +193,8 @@
       "9d782972b20d6b721eb44d0673315cad",
       "c66170bfcdee911f03e60261c4f503db",
       "d5e2b6cf39c2acfebef9ee8e826a7e42",
-      "1407b5095c18524f02e6bf1ff45ad967"
+      "1407b5095c18524f02e6bf1ff45ad967",
+      "b14a5dde5519fda59c2ba1ae7a3d8989"
     ],
     "code-quality": [
       "62752723eba7a39aa94e010911923cc8",
@@ -209,7 +212,8 @@
       "640a7c4214e6bdba2bbd5b9061d9d425",
       "3f461b1c111ba45b7fa5016883cfa54d",
       "7ed05444e2602f4895bdd1e5e0edcaa8",
-      "1d59f04bea630a85a3085829db8599e7"
+      "1d59f04bea630a85a3085829db8599e7",
+      "f34cfa7e495d2bd6d3ac3c80b44447e8"
     ],
     "do-replan": [
       "59a57f1bb445138c30ab4fa23630c6f8"
@@ -276,7 +280,8 @@
       "bbc5495a02102fd470d2a429eedfbe76",
       "aa5d121b3cb25aa134e3a20e5f0186c6",
       "2012a0da54bdbf441911a0eed05f0cb1",
-      "910802d67f3b5a785f068f4d90178543"
+      "910802d67f3b5a785f068f4d90178543",
+      "b85fe92999aa4ee4a8910320457c4242"
     ],
     "pr-reviewer": [
       "679680b3b382aeb6786df01c4d1a90c6",

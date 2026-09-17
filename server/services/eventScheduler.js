@@ -5,13 +5,16 @@
  * Replaces setInterval with more robust scheduling.
  */
 
-import { cosEvents } from './cosEvents.js'
+import { cosEvents, emitLog } from './cosEvents.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { recurrenceRuleSchema } from '../lib/recurrenceValidation.js'
 // Syntax/range validation is shared with every save boundary and the browser
 // cron editor, so an expression the routes accept is exactly the set this
 // walker can search (#6634).
 import { isValidCronField, CRON_FIELD_BOUNDS, CRON_FIELD_NAMES } from '../lib/cronValidation.js'
+// Field MATCHING is shared with the quality-schedule planner, so an hour the
+// planner reads as free is exactly an hour this walker will not fire in.
+import { matchesCronField } from '../lib/cronFields.js'
 
 // Maximum safe setTimeout value (2^31 - 1 ms, ~24.8 days)
 const MAX_TIMEOUT = 2147483647
@@ -314,47 +317,6 @@ function parseRecurrenceToNextRun(rule, from = new Date(), timezone = 'UTC', unt
   return findNextRecurrenceCandidate(normalized, anchor, from, timezone, maxDate)
 }
 
-/**
- * Check if a value matches a cron field expression
- * @param {number} value - Current value
- * @param {string} expr - Cron field expression
- * @returns {boolean} - True if matches
- */
-function matchesCronField(value, expr, fieldMin = 0) {
-  if (expr === '*') return true
-
-  // Handle comma-separated values
-  if (expr.includes(',')) {
-    return expr.split(',').some(part => matchesCronField(value, part.trim(), fieldMin))
-  }
-
-  // Handle step values first (e.g., */5, 0/10, 1-5/2)
-  if (expr.includes('/')) {
-    const [rangeExpr, step] = expr.split('/')
-    const stepNum = Number(step)
-    let startNum = fieldMin
-    let endNum = Infinity
-    if (rangeExpr === '*') {
-      startNum = fieldMin
-    } else if (rangeExpr.includes('-')) {
-      const [s, e] = rangeExpr.split('-').map(Number)
-      startNum = s
-      endNum = e
-    } else {
-      startNum = Number(rangeExpr)
-    }
-    return value >= startNum && value <= endNum && (value - startNum) % stepNum === 0
-  }
-
-  // Handle ranges (e.g., 1-5)
-  if (expr.includes('-')) {
-    const [start, end] = expr.split('-').map(Number)
-    return value >= start && value <= end
-  }
-
-  // Direct value match
-  return Number(expr) === value
-}
 
 /**
  * Create a timeout-safe timer
@@ -429,7 +391,10 @@ function schedule(config) {
     nextRunAt: null,
     lastRunAt: null,
     runCount: 0,
-    active: true
+    active: true,
+    lastRunSucceeded: null,
+    lastError: null,
+    consecutiveFailures: 0
   }
 
   // Calculate next run time
@@ -549,13 +514,13 @@ function rearm(event) {
   try {
     updateNextRunTime(event)
   } catch (err) {
-    console.error(`❌ Event ${event.id} could not compute its next run (${err.message}) - schedule stopped`)
+    emitLog('error', `Event ${event.id} could not compute its next run (${err.message}) - schedule stopped`, { eventId: event.id, type: event.type })
     deactivate(event)
     return
   }
 
   if (!event.nextRunAt) {
-    console.error(`❌ Event ${event.id} has no next run time - schedule stopped`)
+    emitLog('error', `Event ${event.id} has no next run time - schedule stopped`, { eventId: event.id, type: event.type })
     deactivate(event)
     return
   }
@@ -605,8 +570,18 @@ async function runEvent(event) {
   } catch (err) {
     success = false
     error = err.message
-    console.error(`⚠️ Event ${event.id} failed: ${err.message}`)
+    emitLog('error', `Event ${event.id} failed: ${err.message}`, {
+      eventId: event.id,
+      type: event.type,
+      source: event.metadata?.source,
+      durationMs: Date.now() - startTime,
+      stack: err.stack
+    })
   } finally {
+    event.lastRunSucceeded = success
+    event.lastError = error
+    event.consecutiveFailures = success ? 0 : event.consecutiveFailures + 1
+
     recordEventHistory(event, { startTime, success, error })
 
     // A synchronous listener that throws must not cost the schedule its re-arm
@@ -735,6 +710,9 @@ function getEvent(id) {
     nextRunAt: event.nextRunAt,
     lastRunAt: event.lastRunAt,
     runCount: event.runCount,
+    lastRunSucceeded: event.lastRunSucceeded,
+    lastError: event.lastError,
+    consecutiveFailures: event.consecutiveFailures,
     metadata: event.metadata
   }
 }
@@ -779,7 +757,7 @@ function getStats() {
     totalRuns: eventHistory.length,
     recentSuccessRate: recent.length > 0
       ? ((recent.filter(h => h.success).length / recent.length) * 100).toFixed(1) + '%'
-      : '100%'
+      : null
   }
 }
 

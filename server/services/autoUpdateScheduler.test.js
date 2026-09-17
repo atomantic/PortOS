@@ -34,7 +34,7 @@ vi.mock('./updateChecker.js', () => ({
   recordAutoUpdateRuntime: deps.recordRuntime,
 }));
 
-const { runAutoUpdateTick, syncAutoUpdateSchedule, updateBaselineAt, __resetAutoUpdateSchedulerForTests } =
+const { runAutoUpdateTick, syncAutoUpdateSchedule, updateBaselineAt, repairDispatchDue, __resetAutoUpdateSchedulerForTests } =
   await import('./autoUpdateScheduler.js');
 
 const HOUR = 60 * 60 * 1000;
@@ -48,7 +48,7 @@ beforeEach(() => {
   __resetAutoUpdateSchedulerForTests();
   deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'release', minIntervalHours: 6 } });
   deps.gateState.mockResolvedValue({
-    runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairTaskId: null },
+    runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt: null },
     lastUpdateResult: null,
     updateInProgress: false,
   });
@@ -221,6 +221,185 @@ describe('checkout readiness gate', () => {
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ reason: 'repo-not-ready' });
     expect(deps.queueRepair).not.toHaveBeenCalled();
   });
+
+  // The core regression (#7468): a repair agent that stands down without
+  // fixing the tree must not be re-queued every 5-minute tick forever.
+  // `addTask`'s dedup only holds while that task stays open, and
+  // `agentFinalization` marks it `completed` regardless of whether the
+  // checkout ended up clean — so nothing but the `repairQueuedAt` gate can
+  // bound the re-dispatch. Still `repo-not-ready`, not `cooldown` — the
+  // update-cooldown reason must not be reused here (see next test).
+  it('does not queue a second repair agent on the tick after the first one completed', async () => {
+    deps.readRepo.mockResolvedValue(notReady);
+    deps.queueRepair.mockResolvedValue({ id: 'task-1' });
+
+    await runAutoUpdateTick({ io: {} });
+    expect(deps.queueRepair).toHaveBeenCalledTimes(1);
+    const stampCalls = deps.recordRuntime.mock.calls.filter(([patch]) => typeof patch.repairQueuedAt === 'string');
+    expect(stampCalls).toHaveLength(1);
+    const [[{ repairQueuedAt }]] = stampCalls;
+
+    // The repair task is done by the next tick (whether or not it fixed
+    // anything, same as agentFinalization marking it `completed` either way),
+    // but the checkout is STILL not ready, so the repair-dispatch gate above
+    // is what has to hold, not the update cooldown.
+    deps.queueRepair.mockClear();
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: false, reason: 'repo-not-ready' });
+    expect(deps.queueRepair).not.toHaveBeenCalled();
+  });
+
+  // The bug the reviewer of the first draft of this fix caught: folding the
+  // repair-dispatch timestamp into the UPDATE cooldown would mean a checkout
+  // the repair agent fixes in minutes still can't update for the rest of the
+  // interval. It must update on the very next idle tick instead.
+  it('updates on the next tick once the repair agent actually fixed the checkout', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt: iso(Date.now() - 60_000) },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.readRepo.mockResolvedValue(readyVerdict);
+
+    await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: true });
+    expect(deps.queueRepair).not.toHaveBeenCalled();
+  });
+
+  // A failed enqueue (`queueRepoRepairTask` returns null on its own caught
+  // error) must not stamp the gate — otherwise one failed dispatch locks out
+  // every retry for the whole cooldown window while nothing was queued.
+  it('does not stamp the repair gate when the enqueue itself failed', async () => {
+    deps.readRepo.mockResolvedValue(notReady);
+    deps.queueRepair.mockResolvedValue(null);
+
+    await runAutoUpdateTick({ io: {} });
+    expect(deps.recordRuntime).not.toHaveBeenCalledWith(expect.objectContaining({ repairQueuedAt: expect.any(String) }));
+  });
+});
+
+describe('runtime-write failure handling', () => {
+  // The core regression (#7530): a persistence outage on the FIRST tick
+  // after enabling was reported as an ordinary, freshly-armed cooldown
+  // (`updateBaselineAt` falls back to `now` with no `armedAt`), forever —
+  // indistinguishable from nothing to report. It must surface as its own
+  // reason and never fall through to the update/repair checks.
+  it('reports a persistence-unavailable outcome when the initial arming write fails, without reaching the update gates', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: null, lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.recordRuntime.mockRejectedValue(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+    expect(deps.status).not.toHaveBeenCalled();
+    expect(deps.selfUpdate).not.toHaveBeenCalled();
+    expect(deps.appUpdate).not.toHaveBeenCalled();
+  });
+
+  // Repeated ticks against a still-broken write must keep reporting the same
+  // outcome (the read never sees a persisted armedAt), not silently drift
+  // back into a normal cooldown once the "first tick after enabling" framing
+  // no longer applies.
+  it('keeps reporting persistence-unavailable across repeated ticks while the write stays broken, without flooding the log', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: null, lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.recordRuntime.mockRejectedValue(new Error('disk full'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const first = await runAutoUpdateTick({ io: {} });
+    const second = await runAutoUpdateTick({ io: {} });
+    const third = await runAutoUpdateTick({ io: {} });
+    expect(first).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+    expect(second).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+    expect(third).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+    // One log line for the 'arm' operation, no matter how many ticks it fails
+    // on — dedup is per operation, not per call.
+    const armFailures = errorSpy.mock.calls.filter(([line]) => line.includes('runtime write failed (arm)'));
+    expect(armFailures).toHaveLength(1);
+    errorSpy.mockRestore();
+  });
+
+  // Once the write actually lands, the tick must fall through to ordinary
+  // gating again — a transient outage must not wedge the scheduler forever.
+  it('resumes normal cooldown behavior once the arming write recovers', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: null, lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.recordRuntime.mockRejectedValueOnce(new Error('disk full'));
+    deps.recordRuntime.mockResolvedValue({});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const first = await runAutoUpdateTick({ io: {} });
+    expect(first).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+
+    // The write now lands (recovery), stamping `armedAt` at "now" — correctly
+    // still a fresh cooldown, since this install has never updated before.
+    const second = await runAutoUpdateTick({ io: {} });
+    expect(second).toMatchObject({ ran: false, reason: 'cooldown' });
+    expect(logSpy.mock.calls.some(([line]) => line.includes('runtime write recovered (arm)'))).toBe(true);
+    const [{ armedAt }] = deps.recordRuntime.mock.calls.find(([patch]) => typeof patch.armedAt === 'string');
+    logSpy.mockRestore();
+
+    // A later tick reads that now-persisted `armedAt`, well outside the
+    // interval — ordinary gating resumes with no lingering persistence flag.
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt, lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(armedAt) + 7 * HOUR);
+    const third = await runAutoUpdateTick({ io: {} });
+    vi.useRealTimers();
+    expect(third).toMatchObject({ ran: true, channel: 'release' });
+    expect(third.persistenceWarning).toBeUndefined();
+  });
+
+  // A write failure recording an ORDINARY stand-down (cooldown, busy, …) must
+  // not be discarded silently — it still has to log something a person can
+  // find, distinct from the tick's own reported reason.
+  it('logs, but does not otherwise change, a runtime write failure while recording an ordinary skip', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now() - 2 * HOUR), lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.recordRuntime.mockRejectedValue(new Error('disk full'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: false, reason: 'cooldown' });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('runtime write failed (skip)'));
+    errorSpy.mockRestore();
+  });
+
+  // The launch itself must never be treated as undone or retried because its
+  // OWN bookkeeping write failed afterward — `setUpdateInProgress`'s
+  // persisted lock, not this write, is what guards against a second launch.
+  // The caller instead gets an explicit degradation flag.
+  it('preserves the launched outcome and flags a post-launch record failure without retrying', async () => {
+    deps.recordRuntime.mockImplementation((patch) => {
+      if (patch && typeof patch.lastRunAt === 'string') return Promise.reject(new Error('disk full'));
+      return Promise.resolve({});
+    });
+
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: true, channel: 'release', persistenceWarning: expect.any(String) });
+    expect(deps.selfUpdate).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('poll registration', () => {
@@ -257,5 +436,45 @@ describe('interval baseline', () => {
   it('falls back to now when nothing has ever been recorded', () => {
     const now = 1_000_000;
     expect(updateBaselineAt({}, null, now)).toBe(now);
+  });
+
+  // #7468: a repair-agent dispatch must NOT feed this baseline. A fixed
+  // checkout has to update on the very next tick, not wait out the same
+  // interval a second time — that throttling lives in `repairDispatchDue`.
+  it('ignores a repair-agent dispatch entirely', () => {
+    const now = Date.parse('2026-01-02T00:00:00Z');
+    expect(updateBaselineAt(
+      { repairQueuedAt: '2026-01-01T23:59:00Z', armedAt: '2025-12-01T00:00:00Z' },
+      null,
+      now,
+    )).toBe(Date.parse('2025-12-01T00:00:00Z'));
+  });
+});
+
+describe('repair-dispatch cooldown', () => {
+  const MIN_INTERVAL_MS = 6 * HOUR;
+
+  // The regression this whole fix targets: a repair agent that stands down
+  // must cost one dispatch per window, not one per 5-minute tick.
+  it('refuses a re-dispatch before the interval has elapsed', () => {
+    const now = Date.parse('2026-01-02T00:00:00Z');
+    expect(repairDispatchDue(
+      { repairQueuedAt: iso(now - HOUR) },
+      MIN_INTERVAL_MS,
+      now,
+    )).toBe(false);
+  });
+
+  it('allows a re-dispatch once the interval has elapsed', () => {
+    const now = Date.parse('2026-01-02T00:00:00Z');
+    expect(repairDispatchDue(
+      { repairQueuedAt: iso(now - 7 * HOUR) },
+      MIN_INTERVAL_MS,
+      now,
+    )).toBe(true);
+  });
+
+  it('allows the first dispatch when nothing has ever been queued', () => {
+    expect(repairDispatchDue({}, MIN_INTERVAL_MS, Date.now())).toBe(true);
   });
 });

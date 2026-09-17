@@ -38,7 +38,7 @@ import { codexEffortLevelsForModel } from '../../../server/lib/providerModels.js
 // EFFORT_SELECTABLE_REVIEWERS below: `grok`/`opencode`/`kimi` take a model but no
 // pickable effort, and Cursor takes both while carrying its effort INSIDE the
 // model id rather than as a separate flag.
-export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kimi'];
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi'];
 
 // The local-LLM backends, which take both a model and an effort.
 export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama', 'mtplx'];
@@ -149,7 +149,7 @@ export const sanitizeReviewerModelInput = (raw) =>
 // never offer a slug the server's enum would reject. Mirror of REVIEWER_VALUES —
 // a reviewer listed here but unknown to the server leaves the user configuring a
 // review-loop reviewer that never runs; the reverse hides one their install has.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
+export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kilo', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
 
 // The reviewer identity used for Copilot-specific handling. An empty default
 // reviewer list keeps code review opt-in on a fresh install.

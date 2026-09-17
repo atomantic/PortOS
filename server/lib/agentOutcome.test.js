@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isAgentHandoff, agentHandoffReason } from './agentOutcome.js';
+import { isAgentHandoff, isQueuedContinuation, agentHandoffReason } from './agentOutcome.js';
 
 // The record `resumeAgent` retires when Relaunch swaps providers mid-run: it
 // carries `success: false` and a summary in `error`, because the pause/requeue
@@ -44,6 +44,28 @@ const CASES = [
 describe('isAgentHandoff', () => {
   it.each(CASES)('reads %s as %s', (_label, record, expected) => {
     expect(isAgentHandoff(record)).toBe(expected);
+  });
+});
+
+describe('isQueuedContinuation', () => {
+  it('is true for a relaunch retirement that actually queued a continuation', () => {
+    expect(isQueuedContinuation(HANDOFF)).toBe(true);
+  });
+
+  // The regression this predicate exists for (#7469): `retireStrandedPausedAgents`
+  // stamps `resumed: true` on a pause whose task is gone, with NO `resumedTaskId`
+  // — nothing was requeued. A caller that skipped its own completion handling on
+  // the bare `isAgentHandoff` here would wait forever for a continuation that
+  // never fires.
+  it('is false for a stranded pause retirement with no queued continuation', () => {
+    expect(isQueuedContinuation({
+      status: 'completed',
+      result: { success: false, resumed: true, error: 'Pause retired — its task task-9 no longer exists' },
+    })).toBe(false);
+  });
+
+  it('is false for a genuine outcome', () => {
+    expect(isQueuedContinuation({ status: 'completed', result: { success: true } })).toBe(false);
   });
 });
 

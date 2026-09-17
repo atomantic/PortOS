@@ -110,6 +110,47 @@ export const projectEidoverseWorld = (options = {}) => request('/eidoverse/world
   method: 'POST',
   ...options,
 });
+
+// Eidoverse world foundations — the local-vs-baseline ownership ledger and its
+// promote gate (#7455). Packaging and promoting both return a 200 carrying a
+// refusal verdict when a gate says no, so callers read `outcome` rather than
+// treating a rejection as the failure signal.
+export const listEidoverseFoundations = (options) => request('/eidoverse/world/foundations', options);
+export const getEidoverseContributions = (options) => request('/eidoverse/world/contributions', options);
+export const recordEidoverseFoundation = (payload, options = {}) => request('/eidoverse/world/foundations', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+  ...options,
+});
+export const packageEidoverseFoundationCandidate = (id, options = {}) => request(`/eidoverse/world/foundations/${encodeURIComponent(id)}/candidate`, {
+  method: 'POST',
+  ...options,
+});
+export const promoteEidoverseFoundation = (id, options = {}) => request(`/eidoverse/world/foundations/${encodeURIComponent(id)}/promote`, {
+  method: 'POST',
+  ...options,
+});
+
+// Eidoverse world controllers — the install/arm/retire surface beside the
+// `eidoverse.controllers` mind-tool group (#7456, #7488). An install/arm
+// refusal (unknown `controllerId`, a bad config, an unknown install id) is a
+// 200 carrying its `outcome`/`reasons`, the same shape as the foundations
+// promote gate: callers read `outcome`, not the HTTP status, for a refusal.
+export const listEidoverseControllers = (options) => request('/eidoverse/world/controllers', options);
+export const installEidoverseController = (payload, options = {}) => request('/eidoverse/world/controllers', {
+  method: 'POST',
+  body: JSON.stringify(payload),
+  ...options,
+});
+export const setEidoverseControllerArmed = (id, armed, options = {}) => request(`/eidoverse/world/controllers/${encodeURIComponent(id)}`, {
+  method: 'PATCH',
+  body: JSON.stringify({ armed }),
+  ...options,
+});
+export const retireEidoverseController = (id, options = {}) => request(`/eidoverse/world/controllers/${encodeURIComponent(id)}`, {
+  method: 'DELETE',
+  ...options,
+});
 export const updateSettings = (data, options) => request('/settings', {
   method: 'PUT',
   body: JSON.stringify(data),

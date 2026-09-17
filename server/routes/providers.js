@@ -1,4 +1,5 @@
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
+import { tuiModeAddition } from '../lib/providerModePairing.js';
 import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
 import {
   createBinding,
@@ -14,12 +15,20 @@ import {
   updateRouteModelAliases,
   updateRouteSettings,
 } from '../services/providerGraph.js';
+import {
+  createService,
+  getService,
+  listServices,
+  refreshServiceCatalog,
+  updateService,
+} from '../services/providerServices.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
-import { providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
-import { withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
+import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
+import { canRefreshModels, withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
+import { applyModelAccess, applyModelAccessList } from '../lib/aiToolkit/internal/modelAccess.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -36,6 +45,8 @@ import {
   providerBindingUpdateSchema,
   providerConnectionCreateSchema,
   providerConnectionUpdateSchema,
+  providerServiceCreateSchema,
+  providerServiceUpdateSchema,
   providerRouteModelAliasSchema,
   providerRouteSettingsUpdateSchema,
 } from '../lib/validation.js';
@@ -43,8 +54,7 @@ import {
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
 } from '../services/providerRuntimeInstaller.js';
-import { refreshHarnessModels, usesHarnessCatalog } from '../services/harnesses.js';
-import { providerRuntimeKey } from '../lib/providerPrerequisites.js';
+import { harnessCatalogRuntime, refreshHarnessModels } from '../services/harnesses.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { getProviderReadinessMap, resetProviderReadinessCache, servedModelId } from '../services/providerReadiness.js';
 import { getLlamaServerEndpoint, relaunchLlamaServerWithAlias } from '../services/llamaServerManager.js';
@@ -143,11 +153,6 @@ const withTuiLaunchCommand = (provider) => {
   return launch ? { ...provider, tuiCommandLine: launch.commandLine } : provider;
 };
 
-// Reuse the harness catalog only for wrappers the managed OpenCode refresh
-// can update; custom binaries and declared backends keep their own catalogs.
-const refreshesOpenCodeCatalog = (provider) =>
-  providerRuntimeKey(provider) === 'opencode' && usesHarnessCatalog(provider);
-
 /**
  * The shape a provider takes on its way OUT to the client: secrets stripped,
  * plus the derived `canRefreshModels` flag the AI Providers page reads to
@@ -180,15 +185,49 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   // `publicReviewEnforcedPostures` is the subset backed by a vendor sandbox
   // recipe. The two booleans are derived from it and kept for existing consumers.
   const publicReviewPostures = publicReviewPosturesForProvider(provider);
+  // Narrow `models` to the install's declared entitlement, LAST, so every
+  // derivation above still reads the provider's full advertised catalog. The
+  // untouched list rides along as `modelCatalog` — the editor seeds its
+  // "Available Models" box from it, so an ordinary Save on a scoped provider
+  // cannot persist the narrowed list over the real one.
   return sanitizeProvider({
-    ...decorated,
-    canRefreshModels: decorated.canRefreshModels || refreshesOpenCodeCatalog(provider),
+    ...applyModelAccess(decorated),
+    // The UNION of the two refresh paths, because the button asks only
+    // whether SOME path can serve this record. Which one actually serves it is
+    // decided in `POST /:id/refresh-models`, and the two must stay in step or
+    // a card offers a button the route refuses.
+    canRefreshModels: decorated.canRefreshModels || Boolean(harnessCatalogRuntime(provider)),
     publicReviewPostures,
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
     publicReviewActionsSupported: publicReviewPostures.includes(PUBLIC_REVIEW_ACTIONS_POSTURE),
   });
 };
+
+/**
+ * Carry a gateway-backed wrapper's RESOLVED model-access policy from the read
+ * that preceded a write onto the record the write handed back.
+ *
+ * A write returns the PERSISTED record, and a wrapper stores no policy of its
+ * own — the gateway sibling owns it, and `withGatewayModelAccess` resolves it on
+ * read. Presenting the raw write result would answer that one request with the
+ * unscoped catalog and the next GET with the scoped one, which reads as a bug.
+ * The route already holds a resolved read (it needs it for the 404 and for
+ * secret preservation), so this is a field copy rather than a second load.
+ *
+ * Deliberately not a re-read: several suites drive these routes with a provider
+ * service double whose `getProviderById` answers a different fixture than the
+ * write does, and a write path is the wrong place to depend on a second lookup.
+ *
+ * Safe against a write that CHANGED the policy: `applyModelAccess` reads the
+ * record's own `modelAccess` first and only falls back to the resolved field,
+ * so a freshly written own policy outranks the inherited one copied here.
+ */
+const withResolvedModelAccess = (provider, resolved) => (
+  provider && resolved?.modelAccessEffective
+    ? { ...provider, modelAccessEffective: resolved.modelAccessEffective, modelAccessSource: resolved.modelAccessSource }
+    : provider
+);
 
 /**
  * Create PortOS-specific provider routes
@@ -270,6 +309,14 @@ export function createPortOSProviderRoutes(aiToolkit) {
       providers: data.providers.map((provider) => ({
         ...presentProvider(provider, capabilities),
         executionModes: modeGroups.get(provider.id),
+        // Whether this record can be COMPLETED into a CLI/TUI pair. Derived
+        // here rather than on the record alone because the verdict reads the
+        // whole list — this record's mode GROUP (a `<stem>-cli` record is
+        // already paired while its `<id>-tui` sits unclaimed) and the sibling
+        // id — and decided server-side for the same reason `prerequisitesMet`
+        // is: the card offering the action and the endpoint performing it must
+        // not re-derive the rule apart.
+        canAddTuiMode: tuiModeAddition(provider, data.providers, modeGroups.get(provider.id)).ok,
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
         // NON-blocking notices — today only 'this install's own ~/.codex/config.toml
@@ -319,7 +366,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
    */
   router.get('/management/preview', asyncHandler(async (_req, res) => {
     const data = await providerService.getAllProviders();
-    res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(data)));
+    // Scoped like every other picker payload: the preview's connection catalogs
+    // and binding model menus are what the Backend Connections page offers, so
+    // an unscoped read here would contradict the model-access policy four
+    // handlers below (docs/MODEL_ACCESS.md).
+    const scoped = { ...data, providers: applyModelAccessList(data.providers) };
+    res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(scoped)));
   }));
 
   /**
@@ -424,6 +476,55 @@ export function createPortOSProviderRoutes(aiToolkit) {
    */
   router.post('/connections/:id/refresh-models', asyncHandler(async (req, res) => {
     res.json(await refreshConnectionCatalog(req.params.id));
+  }));
+
+  /**
+   * Service INSTANCES (#7563) — the same `ai_connections` rows read as one
+   * instance each of a `SERVICE_DEFINITIONS` entry: slug, definition, plan,
+   * enabled, how it authenticates, and the catalog it last listed. Sanitized
+   * like the graph: credential PRESENCE and SOURCE only, never a value.
+   *
+   * `:slug` also accepts the row's UUID, and every `/connections/:id` route
+   * above accepts a slug, so the two surfaces address one row either way.
+   */
+  router.get('/services', asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await listServices());
+  }));
+
+  // Create an instance from a definition. Nothing is probed and no route is
+  // minted; the catalog starts `unknown` until the explicit refresh below.
+  router.post('/services', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerServiceCreateSchema, req.body ?? {});
+    res.status(201).json(await createService(input));
+  }));
+
+  router.get('/services/:slug', asyncHandler(async (req, res) => {
+    res.set('Cache-Control', 'no-store').json(await getService(req.params.slug));
+  }));
+
+  // The shared-backend edit plus plan / enabled / credential mode. Same
+  // required `expectedRevision`, same three-valued credential rule, same
+  // projection into every route on the row.
+  router.patch('/services/:slug', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerServiceUpdateSchema, req.body ?? {});
+    res.json(await updateService(req.params.slug, input));
+  }));
+
+  // Refused with a 409 while a binding still names the row — the same rule as
+  // the connection delete, because it IS the connection delete.
+  router.delete('/services/:slug', asyncHandler(async (req, res) => {
+    res.json(await removeConnection(req.params.slug));
+  }));
+
+  /**
+   * List the instance's models through its DEFINITION's strategy — a probe of
+   * its own endpoint with its own key, the local daemon, the program that signs
+   * in, or the declared list — filtered to its plan. Needs no executable route.
+   * An explicit discovery request: it lists, never generates, and a failure
+   * keeps the catalog the instance already had.
+   */
+  router.post('/services/:slug/refresh-catalog', asyncHandler(async (req, res) => {
+    res.json(await refreshServiceCatalog(req.params.slug));
   }));
 
   /**
@@ -907,7 +1008,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
     }
 
     const provider = await providerService.updateProvider(req.params.id, updates);
-    res.json(presentProvider(provider, await detectSystemCapabilities()));
+    res.json(presentProvider(withResolvedModelAccess(provider, existing), await detectSystemCapabilities()));
   }));
 
   // POST /:id/refresh-models — intercept the toolkit response so the refreshed
@@ -916,9 +1017,19 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.post('/:id/refresh-models', asyncHandler(async (req, res) => {
     const stored = await providerService.getProviderById(req.params.id);
     if (!stored) throw new ServerError('Provider not found', { status: 404 });
+    // A record can match BOTH paths — `cursor-cli` and `antigravity-cli` do
+    // today — so the precedence is fixed here: the TOOLKIT FETCHER WINS, and
+    // the harness catalog serves only records no fetcher claims. The fetcher
+    // table keys on the launch command (and, failing that, the display name),
+    // which is a per-record answer; routing a record the table already claims
+    // to its harness instead would silently move where its catalog comes from.
+    const harness = canRefreshModels(stored) ? null : harnessCatalogRuntime(stored);
     let provider;
-    if (refreshesOpenCodeCatalog(stored)) {
-      const result = await refreshHarnessModels('opencode');
+    if (harness) {
+      // Scoped to THIS record: the harness is probed once per bootstrap
+      // credential (services/harnesses.js), and a card's button must not spawn
+      // another record's credential CLI to answer for its own.
+      const result = await refreshHarnessModels(harness.id, { providerId: stored.id });
       if (!result.ok || !result.updated.includes(stored.id)) {
         throw new ServerError(result.reason || 'No models matched this provider’s namespace; its catalog was preserved.', { status: 502 });
       }
@@ -927,18 +1038,60 @@ export function createPortOSProviderRoutes(aiToolkit) {
       provider = await providerService.refreshProviderModels(req.params.id);
     }
     if (!provider) throw new ServerError('Provider not found', { status: 404 });
-    res.json(presentProvider(provider, await detectSystemCapabilities()));
+    res.json(presentProvider(withResolvedModelAccess(provider, stored), await detectSystemCapabilities()));
   }));
 
-  // POST / — intercept to (a) validate the body against providerSchema so
+  /**
+   * POST /:id/modes/tui — give an existing CLI record the TUI half of its
+   * harness, minted from the record already on disk.
+   *
+   * A NEW endpoint rather than a flag on `PUT /:id`, because `modes` is
+   * deliberately create-only: a PATCH against one record cannot mean "make me
+   * two". `:id` names the record the sibling is DERIVED from, and the sibling
+   * is built from what is stored — the user does not retype the command,
+   * endpoint, credentials and env that `providerModeGroups` then has to find
+   * identical on both halves.
+   *
+   * There is no request body: every field either comes from the stored record
+   * or from the harness recipe. The new record is editable like any other
+   * afterwards.
+   */
+  router.post('/:id/modes/tui', asyncHandler(async (req, res) => {
+    const { providers } = await providerService.getAllProviders();
+    const stored = providers.find(provider => provider.id === req.params.id);
+    if (!stored) throw new ServerError('Provider not found', { status: 404 });
+
+    // The same verdict the list decorated this record with, so a card can only
+    // ever offer an action this endpoint accepts.
+    const verdict = tuiModeAddition(stored, providers);
+    if (!verdict.ok) throw new ServerError(verdict.message, { status: verdict.status, code: verdict.code });
+
+    const created = await providerService.createProviderTuiMode(stored.id, { args: verdict.args });
+    res.status(201).json(presentProvider(created, await detectSystemCapabilities()));
+  }));
+
+  // POST / — intercept to (a) validate the body against providerCreateSchema so
   // invalid fields like `timeout: "abc"` or non-object `envVars` don't
   // persist and later break runner behavior, and (b) sanitize the created
   // provider before responding so apiKey/secret envVar values don't echo
   // back to the client (the toolkit's POST returns the raw provider).
+  //
+  // A body declaring `modes` creates BOTH execution modes of one harness and
+  // responds with `{ providers: [cli, tui] }` — a distinct shape rather than a
+  // polymorphic one, so a caller reading `.id` off a single-mode create keeps
+  // working and a pair create cannot silently hide the id of the second record.
   router.post('/', asyncHandler(async (req, res) => {
-    const validation = validate(providerSchema, req.body);
+    const validation = validate(providerCreateSchema, req.body);
     if (!validation.success) {
       throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: validation.errors } });
+    }
+    if (validation.data.modes) {
+      const created = await providerService.createProviderModes(validation.data);
+      // One snapshot for the pair — the probe is per-host, not per-record, and
+      // it stays BEHIND the create so a refused one never pays for it.
+      const capabilities = await detectSystemCapabilities();
+      res.status(201).json({ providers: created.map(provider => presentProvider(provider, capabilities)) });
+      return;
     }
     const provider = await providerService.createProvider(validation.data);
     res.status(201).json(presentProvider(provider, await detectSystemCapabilities()));

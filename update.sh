@@ -148,6 +148,15 @@ fi
 # post-pull HEAD yields exactly the pull's delta on main, so a manifest change
 # the update brings is detected even when launched from another branch.
 pre_pull_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
+# Clear locks a PREVIOUS killed update left behind, before anything tries to
+# take them again. This script is the most likely producer of one: PM2 tree-kills
+# the server mid-run and takes the `git pull` / `git submodule update` subprocess
+# with it, and the abandoned lock then fails every later self-update identically,
+# on a file buried under `.git/` that only a human would find. The rule for
+# "abandoned" lives in the Node helper so shell doesn't carry a second copy of
+# it; it refuses any lock young enough to still belong to a running command.
+# Builtins-only, so it runs before `npm install` — and never fatal.
+node -e "import('./server/lib/gitStaleLock.js').then(m => m.clearStaleGitLocksIn('.git')).catch(() => {})" 2>/dev/null || true
 run git pull --rebase --autostash
 step "git-pull" "done" "Latest changes pulled"
 

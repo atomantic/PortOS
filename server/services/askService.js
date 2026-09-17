@@ -31,11 +31,14 @@ import { getCharacter } from './character.js';
 import { getEvents as getCalendarEvents } from './calendarSync.js';
 import { tokenize as bm25Tokenize, STOP_WORDS } from '../lib/bm25.js';
 import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
-import { resolveCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
+import { resolveCliModel, prefixOpencodeModel, ensureLeadingSubcommand, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
+import { isKiloCommand, ensureKiloHeadlessArgs } from '../lib/kilo.js';
+import { isOpenchamberCommand, ensureOpenchamberHeadlessArgs } from '../lib/openchamber.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
+import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
@@ -491,7 +494,7 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // stdin); ensure it leads the argv even if a customized/TUI provider config
   // omitted it — a bare `opencode` launches the interactive TUI, which never
   // consumes the piped prompt and hangs until the provider timeout fires.
-  if (isOpencodeCommand(provider?.command) && !args.includes('run')) args.unshift('run');
+  if (isOpencodeCommand(provider?.command)) args = ensureLeadingSubcommand(args, 'run');
   if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
   const cliModel = resolveCliModel(model);
   if (isAntigravityCliProvider(provider)) {
@@ -511,6 +514,16 @@ async function* streamCompletion(provider, model, prompt, signal) {
     // Grok reads its prompt from --prompt-file /dev/stdin and needs plain output
     // + permission bypass; ensureGrokHeadlessArgs adds them (gated on user pins).
     args = ensureGrokHeadlessArgs(args, cliModel);
+  } else if (isKiloCommand(provider?.command)) {
+    // Kilo forks OpenCode's `run`, and adds the `--auto` approval posture an
+    // unattended answer needs — without it the run stalls on the first
+    // permission prompt with nobody to answer it.
+    args = ensureKiloHeadlessArgs(args, cliModel);
+  } else if (isOpenchamberCommand(provider?.command)) {
+    // OpenChamber's prompt path is a control-plane action, not a flag: without
+    // `session create` the bare binary starts its SERVER. The builder also drops
+    // a model id that is not `provider/model`, which its CLI rejects outright.
+    args = ensureOpenchamberHeadlessArgs(args, cliModel);
   } else if (cliModel) {
     args.push('--model', cliModel);
   }
@@ -531,14 +544,28 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // launch it — a bare shim name ENOENTs otherwise. No-op off Windows. Mirrors
   // the runner / agent / vision spawn paths. Resolved against childEnv so a
   // provider PATH override is honored.
-  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(provider.command, deliveredArgs, childEnv);
+  // Credential-bootstrap wrap first (credentialBootstrap.js): Ask carries
+  // private records, and a bare harness would fall through to the machine's
+  // ambient vendor auth instead of the backend this provider is configured for.
+  const bootstrapped = applyCredentialBootstrap(provider, provider.command, deliveredArgs);
+  // A bootstrap-wrapped child is the WRAPPER supervising the harness, so both
+  // stop paths below — the timeout and the user's abort — must signal the whole
+  // process group or the harness keeps running (and keeps reading the private
+  // records this call handed it) past the rejection (#7496).
+  const processGroup = needsProcessGroup(bootstrapped.wrapped);
+  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(bootstrapped.command, bootstrapped.args, childEnv);
   const out = await new Promise((resolve, reject) => {
     let buf = '';
     const child = spawn(spawnCommand, spawnArgs, {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
+      detached: processGroup,
     });
+    // Remember the detached group so the graceful-shutdown sweep can reach it:
+    // detaching moved this child out of the server's own process group, and a
+    // shutdown driven by a signal to THAT group would otherwise orphan it (#7496).
+    trackDetachedGroup(child, processGroup);
 
     // Single settlement gate — the timer, the abort listener, and the close
     // handler are all racing each other. Without a settled flag, SIGKILL on a
@@ -562,12 +589,12 @@ async function* streamCompletion(provider, model, prompt, signal) {
     child.stderr.on('data', (d) => { buf += d.toString(); });
 
     timer = setTimeout(() => {
-      child.kill('SIGKILL');
+      killProcessTree(child, 'SIGKILL', { processGroup });
       settle(reject, new Error('CLI timed out'));
     }, provider.timeout || 300000);
 
     function onAbort() {
-      child.kill('SIGKILL');
+      killProcessTree(child, 'SIGKILL', { processGroup });
       settle(reject, new Error('aborted'));
     }
     if (signal) {

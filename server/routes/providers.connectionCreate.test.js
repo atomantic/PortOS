@@ -29,6 +29,7 @@ import { planGraphReconciliation, reconciliationIsNoop } from '../lib/providerGr
 
 const store = {
   readGraph: vi.fn(),
+  applyServiceColumnBackfill: vi.fn().mockResolvedValue(undefined),
   writeGraph: vi.fn().mockResolvedValue(undefined),
   applyReconciliation: vi.fn().mockResolvedValue(undefined),
   commitPendingProjection: vi.fn().mockResolvedValue(undefined),

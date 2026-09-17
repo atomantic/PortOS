@@ -45,6 +45,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
+import { isSecretKey } from '../lib/secretKeys.js';
 import { createPgFileFacade, resolvePgBackend } from '../lib/pgFileFacade.js';
 import { isTestRunner, isVitestRunner } from '../lib/runtimeEnv.js';
 import { isUserActionActor, isUserActionType } from '../lib/userActionTypes.js';
@@ -128,32 +129,6 @@ export function __setUserActionRetention({ maxRows, maxAgeDays } = {}) {
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for focused tests — no I/O, no side effects).
 // ---------------------------------------------------------------------------
-
-// Credential-shaped key names, matched against the key with separators and case
-// removed (`api_key`, `apiKey`, `API-KEY` all normalize to `apikey`). Substring
-// matching is deliberate over-redaction: dropping `tokenCount` costs one boring
-// number, while missing `refreshToken` writes a live credential to disk.
-const SECRET_KEY_FRAGMENTS = [
-  'password', 'passwd', 'passphrase', 'secret', 'token', 'apikey', 'authorization',
-  'credential', 'privatekey', 'ciphertext', 'cookie', 'accesskey',
-];
-// Names too short to substring-match safely (a bare `key` fragment would eat
-// `keysChanged`, `env` would eat `envelope`), so they redact only as a WHOLE key.
-const SECRET_KEY_EXACT = new Set(['key', 'keys', 'auth', 'env', 'dotenv', 'vault', 'pat', 'pw']);
-
-const normalizeKey = (key) => String(key).toLowerCase().replace(/[^a-z0-9]/g, '');
-
-/** True when a payload key name looks like it holds a credential. */
-export function isSecretKey(key) {
-  const normalized = normalizeKey(key);
-  if (!normalized) return false;
-  if (SECRET_KEY_EXACT.has(normalized)) return true;
-  // A trailing `Key`/`Keys` is how every provider-specific credential is named
-  // (`openaiKey`, `sshKey`, `signingKey`, `deployKeys`), and none of them contain
-  // the literal `apikey`. Anchoring at the END keeps `keysChanged` out.
-  if (normalized.endsWith('key') || normalized.endsWith('keys')) return true;
-  return SECRET_KEY_FRAGMENTS.some((fragment) => normalized.includes(fragment));
-}
 
 /** Collapse whitespace and clamp to one LLM-readable line. */
 export function clampSummary(text, max = SUMMARY_MAX_CHARS) {

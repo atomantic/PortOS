@@ -25,6 +25,7 @@ import { dirname, join } from 'path';
 // anchor" version silently slices the wrong region the moment a signature grows
 // a destructured or defaulted parameter.
 import { extractDeclaration, stripCommentsAndNormalize } from '../lib/mirrorParity.js';
+import { logFailureWithStack } from '../lib/failureLogging.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, 'bootstrap.js'), 'utf-8').replace(/\r\n/g, '\n');
@@ -82,11 +83,10 @@ describe('bounded server shutdown', () => {
     const log = vi.fn();
     const error = vi.fn();
     const closeServer = runInNewContext(`
-      ${extractDeclaration(SRC, 'logBootstrapFailure')}
       ${extractDeclaration(SRC, 'withGrace')}
       ${extractDeclaration(SRC, 'closeServer')}
       closeServer;
-    `, { console: { log, error }, setTimeout });
+    `, { console: { log, error }, setTimeout, logBootstrapFailure: logFailureWithStack });
     return { closeServer, log, error };
   };
 
@@ -124,5 +124,29 @@ describe('bounded server shutdown', () => {
     onClose(new Error('late failure'));
     expect(log).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #7496. A credential-bootstrap-wrapped child is spawned `detached: true` so
+// stop/timeout/cancel can signal its whole process group. That detach moves it
+// out of the server's own process group, so a shutdown driven by a signal aimed
+// at that group (Ctrl-C at an `npm start` terminal, `kill -<pgid>`) no longer
+// reaches it. The sweep has to cover EVERY detached spawn site — agent runs,
+// CLI runs and vision calls — which is why it reads the credentialBootstrap
+// registry rather than `activeAgents`, whose map holds only the agent children.
+describe('shutdown handler — detached-group teardown (#7496)', () => {
+  const code = stripCommentsAndNormalize(extractDeclaration(SRC, 'shutdown') || '');
+
+  it('sweeps the detached-group registry, not just the agent map', () => {
+    const signalAt = code.indexOf('signalDetachedGroups(');
+    expect(signalAt, 'signalDetachedGroups(...) is not called in shutdown()').toBeGreaterThan(-1);
+    // A sweep over activeAgents would silently miss every executeCliRun /
+    // describeImageViaCli child, which are detached by the same rule.
+    expect(code).not.toContain('signalDetachedAgentGroups');
+  });
+
+  it('signals the groups before dropping connections', () => {
+    // Signalling after the server has begun closing would race process.exit.
+    expect(code.indexOf('signalDetachedGroups(')).toBeLessThan(code.indexOf('closeAllConnections'));
   });
 });

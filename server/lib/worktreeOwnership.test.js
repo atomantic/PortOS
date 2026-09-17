@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAgentWorktreeId, isHumanClaimWorktree, worktreeAgentId, worktreeHoldExpiresAt, worktreeOwnershipReason } from './worktreeOwnership.js';
+import { appWorktreeSlug, isAgentWorktreeId, isHumanClaimWorktree, worktreeAgentId, worktreeHoldExpiresAt, worktreeOwnershipReason } from './worktreeOwnership.js';
 
 describe('worktree ownership', () => {
   const COS_ROOT = '/repo/data/cos/worktrees';
@@ -75,6 +75,40 @@ describe('worktree ownership', () => {
     expect(isAgentWorktreeId('agent-abc')).toBe(true);
     expect(isAgentWorktreeId('next-issue-42')).toBe(false);
     expect(isHumanClaimWorktree('claim-issue-42')).toBe(true);
+  });
+});
+
+describe('appWorktreeSlug', () => {
+  const ID_A = '3f2a1b9c-4d5e-6f70-8a9b-0c1d2e3f4a5b';
+  const ID_B = '9e8d7c6b-5a49-3827-1605-f4e3d2c1b0a9';
+
+  // The whole point: two managed apps sharing a name must not share a worktree
+  // directory, because every app's claim flow checks out into ONE shared root.
+  it('separates two same-named apps, so their identical issue numbers cannot collide', () => {
+    const a = appWorktreeSlug({ id: ID_A, name: 'Example App' });
+    const b = appWorktreeSlug({ id: ID_B, name: 'Example App' });
+    expect(a).not.toBe(b);
+  });
+
+  it('stays a safe, readable single path segment', () => {
+    expect(appWorktreeSlug({ id: ID_A, name: 'Example App' })).toBe('example-app-3f2a1b9c');
+    // Punctuation, unicode and a runaway name all have to survive as one segment
+    // — the value is interpolated straight into a shell-quoted path.
+    expect(appWorktreeSlug({ id: ID_A, name: 'My App (v2)/prod' })).toMatch(/^[a-z0-9-]+$/);
+    expect(appWorktreeSlug({ id: ID_A, name: 'x'.repeat(200) }).length).toBeLessThanOrEqual(33);
+    // Bounded on a word boundary, never mid-word — the name is what a human reads
+    // in `git worktree list` when judging whether a tree is safe to reap.
+    expect(appWorktreeSlug({ id: ID_A, name: 'Example Application Framework' })).toBe('example-application-3f2a1b9c');
+    // A name that slugifies to nothing must not leave a leading separator.
+    expect(appWorktreeSlug({ id: ID_A, name: '???' })).toBe('3f2a1b9c');
+  });
+
+  // Never empty: an empty segment would collapse `claim-${slug}-issue-10` back to
+  // a colliding `claim--issue-10` shared by every app missing a record field.
+  it('always yields a non-empty segment', () => {
+    expect(appWorktreeSlug({})).toBe('app');
+    expect(appWorktreeSlug(undefined)).toBe('app');
+    expect(appWorktreeSlug({ name: 'Example App' })).toBe('example-app');
   });
 });
 

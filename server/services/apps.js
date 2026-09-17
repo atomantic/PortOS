@@ -667,19 +667,16 @@ export async function getAppTaskTypeIntervalMs(appId, taskType) {
 }
 
 /**
- * Update a task type override for a specific app (enable/disable + optional interval)
+ * Merge one override patch into an app's stored overrides, in place.
+ *
+ * Extracted so a single-type edit and a whole-plan write (the Quality tab's
+ * schedule form rewrites ~26 types at once) apply IDENTICAL field semantics —
+ * the alternative was a second copy of the absent-vs-null ladder below, which
+ * is exactly where "cleared back to inherit" and "left alone" drift apart.
+ * Returns the watcher state keys the caller must reset for a disable.
  */
-export async function updateAppTaskTypeOverride(id, taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata } = {}) {
-  const data = await loadApps();
-  if (!data.apps[id]) return null;
-
-  // Migrate legacy format if needed
-  await migrateTaskTypeOverrides(id);
-
-  const overrides = data.apps[id].taskTypeOverrides || {};
-  const existing = overrides[taskType] || {};
-
-  const updated = { ...existing };
+function mergeTaskTypeOverride(overrides, taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata } = {}) {
+  const updated = { ...(overrides[taskType] || {}) };
   if (typeof enabled === 'boolean') updated.enabled = enabled;
   if (interval !== undefined) updated.interval = interval;
   // intervalMs / providerId / model are the per-app scheduling fields for
@@ -714,18 +711,56 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
   } else {
     overrides[taskType] = updated;
   }
+}
 
-  // Disabling pr-watcher clears its high-water mark AND its execution cooldown
-  // so a later re-enable baselines promptly (like first enable) instead of
-  // dispatching the backlog of PRs opened while it was off. See prWatcher.js /
-  // cosTaskGenerator.js.
-  if (taskType === 'pr-watcher' && enabled === false) {
-    delete data.apps[id].prWatcherState;
+/**
+ * Disabling pr-watcher/issue-watcher clears the high-water mark AND the
+ * execution cooldown so a later re-enable baselines promptly (like first
+ * enable) instead of dispatching the backlog opened while it was off. See
+ * prWatcher.js / cosTaskGenerator.js.
+ */
+async function resetWatcherStateOnDisable(appRecord, id, taskType, enabled) {
+  if (enabled !== false) return;
+  if (taskType === 'pr-watcher') {
+    delete appRecord.prWatcherState;
     await resetWatcherCooldown('pr-watcher', id);
   }
-  if (taskType === 'issue-watcher' && enabled === false) {
-    delete data.apps[id].issueWatcherState;
+  if (taskType === 'issue-watcher') {
+    delete appRecord.issueWatcherState;
     await resetWatcherCooldown('issue-watcher', id);
+  }
+}
+
+/**
+ * Update a task type override for a specific app (enable/disable + optional interval)
+ */
+export async function updateAppTaskTypeOverride(id, taskType, patch = {}) {
+  return updateAppTaskTypeOverrides(id, { [taskType]: patch });
+}
+
+/**
+ * Apply several task-type override patches to one app in a single write.
+ *
+ * `patches` maps task type → the same patch object `updateAppTaskTypeOverride`
+ * takes. One load/save for the whole set: the Quality schedule form touches
+ * every audit type at once, and doing that as ~26 sequential read-modify-writes
+ * of `apps.json` is both slow and a window in which a partial plan is live.
+ *
+ * @param {string} id - App id
+ * @param {Record<string, object>} patches - Task type → override patch
+ * @returns {Promise<object|null>} The updated app record, or null when unknown
+ */
+export async function updateAppTaskTypeOverrides(id, patches = {}) {
+  const data = await loadApps();
+  if (!data.apps[id]) return null;
+
+  // Migrate legacy format if needed
+  await migrateTaskTypeOverrides(id);
+
+  const overrides = data.apps[id].taskTypeOverrides || {};
+  for (const [taskType, patch] of Object.entries(patches)) {
+    mergeTaskTypeOverride(overrides, taskType, patch);
+    await resetWatcherStateOnDisable(data.apps[id], id, taskType, patch?.enabled);
   }
 
   data.apps[id].taskTypeOverrides = overrides;
@@ -805,24 +840,8 @@ export async function bulkUpdateAppTaskTypeOverride(taskType, { enabled } = {}) 
 
   for (const id of activeIds) {
     const overrides = data.apps[id].taskTypeOverrides || {};
-    const existing = overrides[taskType] || {};
-    const updated = { ...existing, enabled };
-
-    if (updated.enabled === undefined && !updated.interval && !updated.taskMetadata) {
-      delete overrides[taskType];
-    } else {
-      overrides[taskType] = updated;
-    }
-
-    // See updateAppTaskTypeOverride: clear pr-watcher's mark + cooldown on disable.
-    if (taskType === 'pr-watcher' && enabled === false) {
-      delete data.apps[id].prWatcherState;
-      await resetWatcherCooldown('pr-watcher', id);
-    }
-    if (taskType === 'issue-watcher' && enabled === false) {
-      delete data.apps[id].issueWatcherState;
-      await resetWatcherCooldown('issue-watcher', id);
-    }
+    mergeTaskTypeOverride(overrides, taskType, { enabled });
+    await resetWatcherStateOnDisable(data.apps[id], id, taskType, enabled);
 
     data.apps[id].taskTypeOverrides = overrides;
     delete data.apps[id].disabledTaskTypes;
@@ -850,13 +869,10 @@ export async function toggleAllAppTaskTypes(id, enabled) {
     overrides[taskType] = { ...existing, enabled };
   }
 
-  // Disabling everything disables pr-watcher too — clear its mark + cooldown so
-  // a later re-enable baselines promptly. See updateAppTaskTypeOverride.
-  if (enabled === false) {
-    delete data.apps[id].prWatcherState;
-    delete data.apps[id].issueWatcherState;
-    await resetWatcherCooldown('pr-watcher', id);
-    await resetWatcherCooldown('issue-watcher', id);
+  // Disabling everything disables the watchers too — same reset as any other
+  // path that moves their gate, so a later re-enable baselines promptly.
+  for (const watcher of ['pr-watcher', 'issue-watcher']) {
+    await resetWatcherStateOnDisable(data.apps[id], id, watcher, enabled);
   }
 
   data.apps[id].taskTypeOverrides = overrides;

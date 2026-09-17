@@ -663,6 +663,28 @@ describe('completion continuation', () => {
     expect(state.runs).toEqual([]);
   });
 
+  it('settles the ledger and walks the plan when a stranded pause is retired with no continuation queued (#7469)', async () => {
+    // `retireStrandedPausedAgents` (server/services/agentManagement.js) stamps
+    // `resumed: true` on a pause whose task was deleted or moved on — but with
+    // no `resumedTaskId`, because nothing was requeued. Reading that as a
+    // handoff (the bare `isAgentHandoff`) made `onBurnAgentCompleted` return
+    // `null`: the denial ledger never ran and the next job in the plan never
+    // dispatched, stalling the family until the 12-hour scheduled tick instead
+    // of advancing immediately like any other completion.
+    state.invokePending = { first: { count: 1 }, second: { count: 1 } };
+    await runQuotaBurnCycle({ trigger: 'manual' });
+    const stranded = {
+      taskId: 'burn-1',
+      metadata: { taskQuotaBurnFamily: 'grok', taskQuotaBurnStepId: 'first' },
+      result: { success: false, resumed: true, error: 'Pause retired — its task task-9 no longer exists' },
+    };
+
+    await __onBurnAgentCompleted(stranded);
+
+    expect(state.settled).toEqual(['grok']);
+    expect(state.invoked.map((entry) => entry.stepId)).toEqual(['first', 'second']);
+  });
+
   it('ignores an agent that was not a quota burn', async () => {
     state.invokePending = { first: { count: 1 } };
     await __onBurnAgentCompleted({ metadata: { taskType: 'user' } });

@@ -337,6 +337,42 @@ describe('agent TUI spawning', () => {
     expect(config.args).not.toContain('--settings');
   });
 
+  // A credential-bootstrap-configured provider wraps the SPAWNED command, not
+  // the identity every other consumer of this config keys on (ready-text
+  // detection, permission-dialog handling, error messages) — see
+  // credentialBootstrap.js. `command`/`args` must stay the harness itself;
+  // only `spawnCommand`/`spawnArgs`/`commandLine` reflect the wrap.
+  it('wraps spawnCommand/spawnArgs/commandLine for a credential-bootstrap provider, leaving command/args as the harness identity', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'claude-tui',
+      type: 'tui',
+      command: 'claude',
+      args: [],
+      credentialBootstrap: { command: 'token-cli', args: ['run'], harnessId: 'claude-code', argsSeparator: '--' },
+    }, null);
+
+    expect(config.command).toBe('claude');
+    expect(config.args).toEqual([]);
+    expect(config.spawnCommand).toBe('token-cli');
+    expect(config.spawnArgs).toEqual(['run', 'claude-code']);
+    expect(config.commandLine).toContain('token-cli');
+    expect(config.commandLine).toContain('claude-code');
+  });
+
+  // Public-review postures are enforced recipes and must never be tampered
+  // with by a user-configured wrapper — see the module docblock above.
+  it('never wraps an actions-posture TUI session even when credentialBootstrap is configured', () => {
+    const config = buildTuiSpawnConfig({
+      id: 'claude-tui',
+      type: 'tui',
+      command: 'claude',
+      credentialBootstrap: { command: 'token-cli', args: ['run'] },
+    }, 'sonnet', { safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, effort: 'high' });
+
+    expect(config.spawnCommand).toBe(config.command);
+    expect(config.spawnArgs).toEqual(config.args);
+  });
+
   it('does not Bedrock-map a cursor TUI model id that merely contains "claude"', () => {
     process.env.CLAUDE_CODE_USE_BEDROCK = '1';
     const config = buildTuiSpawnConfig({
@@ -631,6 +667,11 @@ describe('spawnTuiAgent runtime', () => {
   const defaultTuiConfig = {
     command: 'codex',
     args: [],
+    // `spawnCommand`/`spawnArgs` are what a real `buildTuiSpawnConfig` always
+    // populates (identical to `command`/`args` absent a credentialBootstrap
+    // config) — see credentialBootstrap.test.js for that module's own coverage.
+    spawnCommand: 'codex',
+    spawnArgs: [],
     commandLine: 'codex',
     promptDelayMs: 100,
   };
@@ -833,7 +874,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({
       provider: { id: 'claude-tui', name: 'Local Claude TUI', type: 'tui', command: 'claude', envVars: {} },
       safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
-      tuiConfig: { command: 'claude', args: ['--permission-mode', 'plan'], commandLine: 'claude --permission-mode plan', promptDelayMs: 100 },
+      tuiConfig: { command: 'claude', args: ['--permission-mode', 'plan'], spawnCommand: 'claude', spawnArgs: ['--permission-mode', 'plan'], commandLine: 'claude --permission-mode plan', promptDelayMs: 100 },
     });
     await flushMicrotasks();
 
@@ -895,7 +936,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({
       provider: { id: 'claude-tui', name: 'Local Claude TUI', type: 'tui', command: 'claude', envVars: {} },
       safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
-      tuiConfig: { command: 'claude', args: [], commandLine: 'claude', promptDelayMs: 100 },
+      tuiConfig: { command: 'claude', args: [], spawnCommand: 'claude', spawnArgs: [], commandLine: 'claude', promptDelayMs: 100 },
     });
     await flushMicrotasks();
 
@@ -1132,7 +1173,7 @@ describe('spawnTuiAgent runtime', () => {
 
     const spawnPromise = runSpawn({
       provider: { ...defaultProvider, id: 'opencode-tui', name: 'OpenCode TUI' },
-      tuiConfig: { ...defaultTuiConfig, command: 'opencode', commandLine: 'opencode' },
+      tuiConfig: { ...defaultTuiConfig, command: 'opencode', spawnCommand: 'opencode', commandLine: 'opencode' },
     });
     await flushMicrotasks();
     await capturedOnData(Buffer.from('OpenCode booting...\n'));
@@ -1214,9 +1255,9 @@ describe('spawnTuiAgent runtime', () => {
   });
 
   // ── 1c. claude waits for bracketed-paste mode (input ready) before pasting ───
-  const claudeTuiConfig = { command: 'claude', args: [], commandLine: 'claude', promptDelayMs: 100 };
+  const claudeTuiConfig = { command: 'claude', args: [], spawnCommand: 'claude', spawnArgs: [], commandLine: 'claude', promptDelayMs: 100 };
   // Antigravity (agy) gets the SAME positive input-ready gate as claude (#2705).
-  const agyTuiConfig = { command: 'agy', args: [], commandLine: 'agy', promptDelayMs: 100 };
+  const agyTuiConfig = { command: 'agy', args: [], spawnCommand: 'agy', spawnArgs: [], commandLine: 'agy', promptDelayMs: 100 };
   const pasteCount = () => vi.mocked(shellService.writeToSession).mock.calls
     .filter(([, d]) => typeof d === 'string' && d.includes('\x1b[200~')).length;
   // The launch shell turns bracketed-paste OFF to run the command, then claude
@@ -1312,7 +1353,7 @@ describe('spawnTuiAgent runtime', () => {
   });
 
   it('Cursor workspace trust: selects the keyed choice before delivering the task', async () => {
-    runSpawn({ tuiConfig: { command: 'cursor-agent', args: ['--force'], commandLine: 'cursor-agent --force', promptDelayMs: 100 } });
+    runSpawn({ tuiConfig: { command: 'cursor-agent', args: ['--force'], spawnCommand: 'cursor-agent', spawnArgs: ['--force'], commandLine: 'cursor-agent --force', promptDelayMs: 100 } });
     await flushMicrotasks();
     await capturedOnData(Buffer.from(`${PASTE_OFF}Do you trust the contents of this directory?\n/workspace/example\n▶ [a] Trust this workspace\n[q] Quit\n`));
     await flushMicrotasks();
@@ -1944,7 +1985,7 @@ describe('spawnTuiAgent runtime', () => {
     // satisfy prefix verification. Retrying expanded/duplicated the input.
     runSpawn({
       provider: { id: 'grok-tui', name: 'Grok TUI', type: 'tui', envVars: {} },
-      tuiConfig: { ...defaultTuiConfig, command: 'grok', commandLine: 'grok' },
+      tuiConfig: { ...defaultTuiConfig, command: 'grok', spawnCommand: 'grok', commandLine: 'grok' },
       prompt: 'A long UX audit prompt whose full prefix is hidden by the collapsed preview.',
     });
     await flushMicrotasks();
@@ -2152,7 +2193,7 @@ describe('spawnTuiAgent runtime', () => {
     const completeDone = new Promise((r) => { resolveComplete = r; });
     vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
 
-    runSpawn({ tuiConfig: { command: 'gemini', args: [], commandLine: 'gemini', promptDelayMs: 100 } });
+    runSpawn({ tuiConfig: { command: 'gemini', args: [], spawnCommand: 'gemini', spawnArgs: [], commandLine: 'gemini', promptDelayMs: 100 } });
     await flushMicrotasks();
     // Same banner text codex prints — but this is a gemini session.
     await capturedOnData(Buffer.from('Starting MCP servers (0/3): a, b, c\n'));
@@ -2189,6 +2230,31 @@ describe('spawnTuiAgent runtime', () => {
         success: false,
         exitCode: 127,
         completionReason: 'command-not-found',
+      })
+    );
+  });
+
+  // A credential-bootstrap provider types `token-cli run codex …` into the
+  // login shell, so the shell's "command not found" names the BOOTSTRAP binary.
+  // Keying the probe on the harness (`tuiConfig.command`) would miss it and the
+  // run would hang to the wall-clock backstop instead of exiting 127.
+  it('command-not-found: detects a missing credential-bootstrap binary by the spawned command, not the harness', async () => {
+    const spawnPromise = runSpawn({
+      tuiConfig: { ...defaultTuiConfig, spawnCommand: 'token-cli', spawnArgs: ['run', 'codex'], commandLine: 'token-cli run codex' },
+    });
+    await flushMicrotasks();
+
+    await capturedOnData(Buffer.from('zsh: command not found: token-cli\n'));
+    await flushMicrotasks();
+
+    await spawnPromise;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        exitCode: 127,
+        completionReason: 'command-not-found',
+        error: 'TUI command not found: token-cli',
       })
     );
   });

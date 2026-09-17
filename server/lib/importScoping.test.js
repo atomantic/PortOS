@@ -627,7 +627,64 @@ describe('deferred imports stay deferred (#6156)', () => {
 // at all failed it — the same zero-headroom state #6305 raised it out of, and
 // that is what makes this a budget rather than a high-water mark. Measured after
 // both changes: 104,739.
-const MAX_STATIC_INSTANTIATIONS = 106200;
+//
+// Raised to 107,700 for the Eidoverse foundation promote gate (#7455).
+// Measured after the change: 106,329, so its own cost is +132. Most of that is
+// ONE node on each of the ~60 closures that reach `services/userActions.js`,
+// which now imports the extracted leaf `lib/secretKeys.js` instead of
+// declaring `isSecretKey` inline — the extraction is what lets the federation
+// gate ask the same question, and the leaf has no imports of its own, so the
+// alternative was a second copy of the table. The rest is four small new
+// suites and the mandatory `lib/` barrel rows. Nothing heavy gained an edge:
+// the promote path's assay dependency is reached only from the ledger service,
+// which only `routes/eidoverseWorldRoutes.js` imports. The remainder of the
+// raise restores the ~1.5k of headroom this is meant to carry — the previous
+// number had drifted back to three above the measured total, the same
+// zero-headroom state #6305 raised it out of, where any addition at all fails.
+//
+// Raised to 109,200 for the Kilo Code and OpenChamber harnesses. Measured after
+// the change: 107,699, so their own cost is +816 against the 106,883 this stood
+// at beforehand. There is no new edge into a heavy subtree: `lib/kilo.js` and
+// `lib/openchamber.js` are browser-safe leaves whose whole closure is
+// `providerModels.js`, and almost all of the cost is those two nodes appearing
+// on each of the ~375 closures that already reach `lib/providerVendors.js` —
+// adding a vendor to that registry is what makes it one row instead of N call
+// sites, and this is the price of the row. The rest is three new suites
+// (`lib/kilo.test.js`, `lib/openchamber.test.js`, `lib/providerHarnesses.test.js`)
+// and the mandatory `lib/` barrel rows. Two leaves rather than one is
+// deliberate: OpenChamber is not a fork of Kilo or of OpenCode's argv — it is a
+// control plane with a different prompt-delivery contract — and the "one file
+// per vendor" split is what has kept each of these readable.
+// The remainder of the raise restores the ~1.5k of headroom this is meant to
+// carry: the previous number had drifted to ONE above the measured total, the
+// zero-headroom state #6305 raised it out of, where any addition at all fails.
+//
+// Raised to 110,700 for the stale git lock fix (#7513). Measured after the
+// change: 109,282, so its own cost is +82 — one new test file
+// (`services/git.staleLock.test.js`) reaching `services/git.js`'s existing
+// closure to cover `pull`/`syncBranch`/`ensureLatest`'s lock-clearing paths.
+// No new heavy edge: `git.js` was already reached by a dozen other server
+// test files. The remainder restores headroom the previous number had worn
+// down to zero.
+//
+// Raised to 111,500 for `lib/jobFormFields.js`, the per-job configuration-form
+// vocabulary + schemas: a NEW leaf on `lib/cosValidation.js` — one node on each
+// of the ~131 closures that already reach the job schema, dragging no subtree
+// with it (its only import is `zod`, which every one of those closures already
+// carries). That is the shape this budget is meant to allow: the cost is one
+// module, not a new heavy edge.
+//
+// This raise and the #7513 one above landed on INDEPENDENT branches, so the
+// ceiling is re-measured against the combined tree rather than resolved by
+// taking the larger of the two competing numbers — that would bank headroom
+// neither branch ever verified. Measured after both: 109,991 (so jobFormFields
+// costs +709 over #7513's 109,282), and the ceiling keeps the ~1.5k of real
+// headroom this budget exists to carry rather than being pinned to the
+// measurement.
+// 111,500 → 111,700 (#7563): `routes/providers.js` gained `providerServices.js`
+// and `providerGraph.js` gained `providerServiceInstances.js`, each one file
+// deep, plus two new suites.
+const MAX_STATIC_INSTANTIATIONS = 111700;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

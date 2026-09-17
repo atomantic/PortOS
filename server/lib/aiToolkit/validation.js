@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_MODEL_ACCESS_PATTERNS, MAX_MODEL_ACCESS_PATTERN_LENGTH, MODEL_ACCESS_MODES } from './internal/modelAccess.js';
 import { basename, extname } from 'path';
 import { MAX_TIMEOUT, MIN_TIMEOUT } from './constants.js';
 
@@ -127,6 +128,19 @@ export const providerSchema = z.object({
   // what a person can type, this one has to accept whatever a vendor declares,
   // and rejecting a 10M-window model would 400 the whole provider write.
   modelContextWindows: z.record(z.number().int().min(512).max(33554432)).optional(),
+  // Which of the provider's advertised catalog this install is entitled to
+  // run — a plan/tier scope the upstream `/models` response does not declare
+  // (internal/modelAccess.js). Applied on the way OUT to model pickers; the
+  // stored `models` catalog is never narrowed by it. Nullable so the editor can
+  // clear a policy back to "none" (absent means "unchanged" on a PATCH).
+  modelAccess: z.object({
+    mode: z.enum(MODEL_ACCESS_MODES),
+    // An EMPTY list is valid and means "no constraint yet" — see the sentinel
+    // note in internal/modelAccess.js. Rejecting it here would make the editor
+    // unable to save the mode before the list is typed.
+    patterns: z.array(z.string().trim().min(1).max(MAX_MODEL_ACCESS_PATTERN_LENGTH))
+      .max(MAX_MODEL_ACCESS_PATTERNS).optional(),
+  }).strict().nullable().optional(),
   timeout: z.number().int().min(MIN_TIMEOUT).max(MAX_TIMEOUT).optional(),
   enabled: z.boolean().optional(),
   // A CLI/TUI provider that can ALSO serve plain text through a non-HTTP
@@ -193,12 +207,84 @@ export const providerSchema = z.object({
   // one an existing install already relies on, and an override that silently
   // turned itself on would be its own surprise.
   ignoreUserConfig: z.boolean().optional(),
+  // A CLI/TUI provider whose harness auth is provisioned by an external CLI at
+  // spawn time (e.g. a short-lived token for a proxy) rather than a static
+  // `apiKey` PortOS stores. PortOS spawns `command`(+`args`) in front of the
+  // harness invocation instead of the harness directly — the generic
+  // `<bootstrap> run <harness> ...` shape. `setupCommand` is advisory only
+  // (shown to the user as a one-time step, e.g. installing the bootstrap CLI's
+  // package) — PortOS never executes it. Nullable so the editor can explicitly
+  // clear a previously-set bootstrap back to "none" (absent means "unchanged"
+  // on a PATCH, which is not the same as clearing it).
+  credentialBootstrap: z.object({
+    setupCommand: z.string().trim().max(500).optional(),
+    command: z.string().trim().min(1).max(200),
+    args: z.array(z.string().max(200)).max(20).optional(),
+    // What PortOS names the harness AS, when calling the bootstrap CLI — some
+    // wrapper CLIs use their own identifier for a harness rather than its
+    // binary name (e.g. `claude-code` where `command` is the binary `claude`).
+    // Defaults to `command` when unset.
+    harnessId: z.string().trim().min(1).max(100).optional(),
+    // Inserted between the harness identifier and the harness's OWN args —
+    // some wrapper CLIs need their own flags kept apart from the wrapped
+    // program's (e.g. `<bootstrap> run <harness> -- <harness args>`).
+    argsSeparator: z.string().trim().max(20).optional(),
+  }).strict().nullable().optional(),
   envVars: z.record(z.string()).optional(),
   secretEnvVars: z.array(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
   tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional()
 });
+
+/**
+ * What ONE mode of a dual-mode create may set for itself.
+ *
+ * Every rule is taken from `providerSchema`'s own shape rather than restated,
+ * so a bound the single-mode create enforces cannot quietly differ from the one
+ * a pair create enforces. The set is deliberately small: anything NOT here is
+ * shared by both records, which is what keeps the pair groupable
+ * (`providerModeGroups` refuses siblings that disagree on command, endpoint,
+ * credentials or env — the disjointness test in `validation.test.js` pins that
+ * these keys stay clear of {@link MODE_GROUPED_KEYS}).
+ */
+const providerModeOverrideSchema = z.object({
+  args: providerSchema.shape.args,
+  headlessArgs: providerSchema.shape.headlessArgs,
+  tuiPromptDelayMs: providerSchema.shape.tuiPromptDelayMs,
+}).strict();
+
+/** The keys {@link providerModeOverrideSchema} lets a mode vary. */
+export const PROVIDER_MODE_OVERRIDE_KEYS = Object.freeze(Object.keys(providerModeOverrideSchema.shape));
+
+/**
+ * POST /api/providers — the create body, which may declare BOTH execution modes
+ * of one harness instead of forcing the user to add the CLI and the TUI
+ * separately and hope the two records happen to pair.
+ *
+ * Both keys are required: declaring a single mode is what `type` is for, so the
+ * map's presence IS the "make me a pair" request. An empty `cli: {}` is the
+ * normal case — the body's own `args` / `headlessArgs` already describe the CLI
+ * record, and the key is there so the pair is declared rather than inferred.
+ *
+ * This `modes` is a per-mode MAP, where `POST /api/providers/bindings` takes a
+ * plain array of mode names, because the two creates get their argv from
+ * different places: a binding mints from the harness's shipped command recipe,
+ * while a provider added here has no recipe at all — the user types each mode's
+ * arguments, and they need somewhere to land.
+ *
+ * Create-only, and deliberately absent from `providerSchema` itself: pairing
+ * describes two records being MINTED together, which a PATCH against one
+ * existing record cannot mean, so the PATCH route's `providerSchema.partial()`
+ * drops the key instead of half-acting on it.
+ */
+export const providerCreateSchema = providerSchema.extend({
+  modes: z.object({
+    cli: providerModeOverrideSchema,
+    tui: providerModeOverrideSchema,
+  }).strict().optional(),
+});
+
 
 // PUT /api/providers/active — set the active provider by id. Constrain to the
 // same slug shape createProvider assigns (`providerSchema.id`) so a reserved

@@ -477,18 +477,18 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
        \`gh pr checkout\` there hijacks whatever branch the user is on and fails outright
        on their uncommitted work. The bot branch normally exists only on the remote, so
        name the remote ref explicitly and let \`-b\` create the local branch. Call the
-       worktree \`dep-{appName}-pr-<n>\` (lowercase the app name and collapse anything
-       non-alphanumeric to \`-\`) — {worktreesRoot} is shared by every app this install
-       manages, so a bare \`dep-pr-<n>\` collides with another app's PR of the same number:
+       worktree \`dep-{appSlug}-pr-<n>\` verbatim — {worktreesRoot} is shared by every app
+       this install manages, so a bare \`dep-pr-<n>\` collides with another app's PR of
+       the same number, and {appSlug} is already the per-app segment that separates them:
          \`git -C {repoPath} fetch origin <headRefName>\`
-         \`git -C {repoPath} worktree add -b dep-{appName}-pr-<n> {worktreesRoot}/dep-{appName}-pr-<n> origin/<headRefName>\`
+         \`git -C {repoPath} worktree add -b dep-{appSlug}-pr-<n> {worktreesRoot}/dep-{appSlug}-pr-<n> origin/<headRefName>\`
        Do the work in that worktree: rebase onto the default branch if it was conflicting,
        regenerate the lockfile with the package manager (\`npm install\` — never hand-edit
        a lockfile), run the tests, then push back to the PR's own branch:
        \`git push origin HEAD:<headRefName>\`. Remove the worktree and its local branch
        when you're done with that PR
-       (\`git -C {repoPath} worktree remove {worktreesRoot}/dep-{appName}-pr-<n>\` then
-       \`git -C {repoPath} branch -D dep-{appName}-pr-<n>\`).
+       (\`git -C {repoPath} worktree remove {worktreesRoot}/dep-{appSlug}-pr-<n>\` then
+       \`git -C {repoPath} branch -D dep-{appSlug}-pr-<n>\`).
      * Pushing a rebase rewrites the bot's commits, so a plain push is rejected — add
        \`--force-with-lease=<headRefName>:origin/<headRefName>\`, which refuses if the bot
        pushed again while you worked, so you never clobber a newer version of its branch.
@@ -1748,7 +1748,7 @@ Create the worktree on a branch named \`claim/<slug>\`. This branch name is the 
 
 \`\`\`bash
 SLUG=<picked-slug>
-WORKTREE="{worktreesRoot}/claim-\${SLUG}"
+WORKTREE="{worktreesRoot}/claim-{appSlug}-\${SLUG}"
 mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add --no-track -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
@@ -1920,7 +1920,7 @@ Create the worktree on a branch named \`claim/<slug>\`. This branch name is the 
 
 \`\`\`bash
 SLUG=<picked-slug>
-WORKTREE="{worktreesRoot}/claim-\${SLUG}"
+WORKTREE="{worktreesRoot}/claim-{appSlug}-\${SLUG}"
 mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add --no-track -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
@@ -2195,7 +2195,7 @@ Create the worktree on a branch named \`claim/issue-<num>\`, then set the cross-
 
 \`\`\`bash
 NUM=<picked-number>
-WORKTREE="{worktreesRoot}/claim-issue-\${NUM}"
+WORKTREE="{worktreesRoot}/claim-{appSlug}-issue-\${NUM}"
 mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
@@ -2377,7 +2377,7 @@ Detect the default branch first (forge-agnostic), then create the worktree on \`
 NUM=<picked-number>
 DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
 DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
-WORKTREE="{worktreesRoot}/claim-issue-\${NUM}"
+WORKTREE="{worktreesRoot}/claim-{appSlug}-issue-\${NUM}"
 mkdir -p {worktreesRoot}
 git fetch origin "\${DEFAULT_BRANCH}"
 git worktree add --no-track -b "claim/issue-\${NUM}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
@@ -2570,7 +2570,7 @@ Then create the worktree on a branch named \`claim/<KEY>\`. Do all editing insid
 KEY=<picked-key>
 DEFAULT_BRANCH="$(git -C {repoPath} symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
 DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
-WORKTREE="{worktreesRoot}/claim-\${KEY}"
+WORKTREE="{worktreesRoot}/claim-{appSlug}-\${KEY}"
 mkdir -p "{worktreesRoot}"
 git -C {repoPath} fetch origin "\${DEFAULT_BRANCH}"
 git -C {repoPath} worktree add --no-track -b "claim/\${KEY}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"

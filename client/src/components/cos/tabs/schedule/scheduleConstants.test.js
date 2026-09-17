@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, stagePublicReviewPosture, togglePrReviewerActions, suggestedOrderSteps, compareBySuggestedOrder } from './scheduleConstants';
+import { isManualOnlyCadence, getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, stagePublicReviewPosture, togglePrReviewerActions, suggestedOrderSteps, compareBySuggestedOrder } from './scheduleConstants';
 
 describe('pr-reviewer pipeline helpers', () => {
   it('recognizes semantic roles and legacy prompt-key stages', () => {
@@ -316,5 +316,80 @@ describe('suggestedOrderSteps', () => {
     const steps = { late: 3, early: 1 };
     const sorted = [['unranked', {}], ['late', {}], ['early', {}]].sort(compareBySuggestedOrder(steps));
     expect(sorted.map(([taskType]) => taskType)).toEqual(['early', 'late', 'unranked']);
+  });
+});
+
+// A task can read "On Demand" on its global row while one of its apps runs it
+// on a cron. Every surface that summarizes cadence has to say so — "Manual
+// trigger only" is simply wrong for that task, and it filed under the wrong
+// status group too.
+describe('per-app schedules on a globally on-demand task', () => {
+  const APP_CRON = [{ appId: 'acme', appName: 'Acme', cronExpression: '0 7 * * *', nextRunAt: '2999-01-01T07:00:00Z' }];
+
+  it('counts as Active, not On-Demand — a clock launches it with nobody pressing Run', () => {
+    expect(getTaskStatusGroup({ enabled: true, type: 'on-demand', appSchedules: APP_CRON })).toBe('active');
+    expect(getTaskStatusGroup({ enabled: true, type: 'on-demand', appSchedules: [] })).toBe('on-demand');
+  });
+
+  it('still reads as Disabled or Waiting when those apply', () => {
+    expect(getTaskStatusGroup({ enabled: false, type: 'on-demand', appSchedules: APP_CRON })).toBe('disabled');
+    expect(getTaskStatusGroup({
+      enabled: true, type: 'on-demand', appSchedules: APP_CRON, status: { reason: 'waiting-on-dependencies' },
+    })).toBe('waiting');
+  });
+
+  it('describes the app cadence instead of "Manual trigger only"', () => {
+    const out = describeNextRun({ enabled: true, type: 'on-demand', appSchedules: APP_CRON });
+    expect(out.text).toContain('1 app · at 07:00');
+    expect(out.text).not.toBe('Manual trigger only');
+    expect(out.title).toContain('Acme — at 07:00 (0 7 * * *)');
+  });
+
+  it('names both clocks when the task has a cron of its own and an app overrides it', () => {
+    const out = describeNextRun({
+      enabled: true, type: 'cron', cronExpression: '0 9 * * *',
+      status: { nextRunAt: '2999-01-01T09:00:00Z' },
+      appSchedules: APP_CRON,
+    });
+    expect(out.text).toContain('at 09:00');
+    expect(out.title).toContain('at 09:00 (0 9 * * *)');
+    expect(out.title).toContain('Acme — at 07:00 (0 7 * * *)');
+  });
+
+  it('sorts by the app slot when the task itself has no next run', () => {
+    const sorted = [
+      ['later', { enabled: true, type: 'cron', status: { nextRunAt: '2999-01-02T00:00:00Z' } }],
+      ['app-scheduled', { enabled: true, type: 'on-demand', appSchedules: APP_CRON }],
+    ]
+      .map(([taskType, config]) => taskSortKey(taskType, config))
+      .sort((a, b) => a.next - b.next);
+    expect(sorted[0].taskType).toBe('app-scheduled');
+  });
+});
+
+// The Schedule card and the Timeline both ask "does anything but a human start
+// this?" — they used to carry separate copies of the answer that disagreed
+// about autoStart, so one page could show a track for a task the other filed
+// as manual.
+describe('isManualOnlyCadence', () => {
+  it('is true only when nothing automatic can start the task', () => {
+    expect(isManualOnlyCadence({ type: 'on-demand' })).toBe(true);
+    expect(isManualOnlyCadence({ type: 'cron', cronExpression: '0 7 * * *' })).toBe(false);
+  });
+
+  it('treats a manual drain as manual and an auto-starting one as not', () => {
+    expect(isManualOnlyCadence({ type: 'on-demand', perpetual: true, autoStart: false })).toBe(true);
+    expect(isManualOnlyCadence({ type: 'on-demand', perpetual: true })).toBe(false);
+  });
+
+  it('is false as soon as one app pins its own cron, whatever the global row says', () => {
+    const appSchedules = [{ appId: 'acme', cronExpression: '0 7 * * *' }];
+    expect(isManualOnlyCadence({ type: 'on-demand', appSchedules })).toBe(false);
+    expect(isManualOnlyCadence({ type: 'on-demand', perpetual: true, autoStart: false, appSchedules })).toBe(false);
+  });
+
+  it('answers for a missing or empty cadence without throwing', () => {
+    expect(isManualOnlyCadence()).toBe(false);
+    expect(isManualOnlyCadence({})).toBe(false);
   });
 });

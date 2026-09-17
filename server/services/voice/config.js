@@ -12,6 +12,21 @@ import { PORTS } from '../../lib/ports.js';
 
 const VOICE_HOME = join(homedir(), '.portos', 'voice');
 
+/**
+ * The local LLM backend voice uses when nothing else is configured.
+ *
+ * Ollama is the default: it ships a daemon PortOS can start and probe itself
+ * (`ollamaManager.ensureRunning`), reports per-model tool capability from
+ * /api/show rather than leaving it to an id guess, and needs no separate GUI
+ * running. LM Studio remains fully supported — set `voice.llm.provider` to
+ * 'lmstudio', which migration 392 pins for every install that was relying on
+ * the previous default.
+ *
+ * Lives here rather than in modelProvisioners.js so both that module and
+ * llm.js can read it without an import cycle (modelProvisioners imports llm).
+ */
+export const DEFAULT_VOICE_BACKEND = 'ollama';
+
 export const VOICE_DEFAULTS = Object.freeze({
   enabled: false,
   trigger: 'push-to-talk',
@@ -79,7 +94,7 @@ export const VOICE_DEFAULTS = Object.freeze({
   },
 
   llm: {
-    provider: 'lmstudio',
+    provider: DEFAULT_VOICE_BACKEND,
     model: 'auto',
     visionModel: 'auto',
     // Legacy free-form system prompt. Overridden by `personality` + tool

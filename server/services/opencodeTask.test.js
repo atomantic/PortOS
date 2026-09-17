@@ -87,6 +87,18 @@ describe('runOpencodeTask', () => {
     expect(args[args.indexOf('--dir') + 1]).toBe('/tmp/sandbox');
   });
 
+  it('spawns the credential-bootstrap CLI in front of opencode when the provider names one', async () => {
+    runStreamingCommand.mockResolvedValue({ success: true });
+    await runOpencodeTask({
+      provider: { ...OPENCODE_OLLAMA_TUI, credentialBootstrap: { command: 'token-cli', args: ['run'], argsSeparator: '--' } },
+      modelId: 'qwen2.5-coder:32b', cwd: '/tmp/sandbox', prompt: 'fix it', timeoutMs: 1000,
+    });
+    const [command, args] = runStreamingCommand.mock.calls[0];
+    expect(command).toBe('token-cli');
+    expect(args.slice(0, 4)).toEqual(['run', 'opencode', '--', 'run']);
+    expect(args[args.indexOf('--model') + 1]).toBe('ollama/qwen2.5-coder:32b');
+  });
+
   it('streams parsed frames and returns them for aggregation', async () => {
     runStreamingCommand.mockImplementation(async (_cmd, _args, onLine) => {
       onLine(JSON.stringify({ type: 'text', part: { type: 'text', text: 'Reading.' } }));

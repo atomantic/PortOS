@@ -1296,6 +1296,38 @@ describe('buildUsageReport — local models under a paid provider', () => {
   });
 });
 
+describe('buildUsageReport — a declared service plan (#7563)', () => {
+  // One NVIDIA endpoint, two instances: the record's declared plan is the ONLY
+  // thing that separates the free tier from metered use, so the report must
+  // bill from it — through the report, not the predicate.
+  const nim = (id, servicePlan) => ({ id, name: id, type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1', servicePlan });
+  const dayFor = (providerId) => ({
+    '2026-07-02': {
+      sessions: 1, messages: 1,
+      byProvider: {
+        [providerId]: {
+          name: providerId, sessions: 1, messages: 1, tokensIn: 0, tokensOut: 1_000_000,
+          cacheReadTokens: 0, cacheWriteTokens: 0, source: 'measured',
+          byModel: { 'meta/llama-example-70b': { sessions: 1, messages: 1, tokensIn: 0, tokensOut: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, source: 'measured' } }
+        }
+      }
+    }
+  });
+
+  it('attributes a free-plan instance as free and a paid-plan one as metered', () => {
+    const free = buildUsageReport(dayFor('nim-free'), { providers: [nim('nim-free', 'free')] });
+    expect(free.totals.estimatedCost).toBe(0);
+    expect(free.providers[0].free).toBe(true);
+
+    const paid = buildUsageReport(dayFor('nim-paid'), { providers: [nim('nim-paid', 'paid')] });
+    expect(paid.totals.estimatedCost).toBeGreaterThan(0);
+    expect(paid.providers[0].free).toBe(false);
+
+    const local = buildUsageReport(dayFor('remote-daemon'), { providers: [{ ...nim('remote-daemon', 'local'), endpoint: 'http://daemon.example.com:11434/v1' }] });
+    expect(local.totals.estimatedCost).toBe(0);
+  });
+});
+
 describe('usage.js — limit-block ledger (#7408)', () => {
   beforeEach(async () => {
     vi.useFakeTimers();

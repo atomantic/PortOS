@@ -9,6 +9,7 @@ vi.mock('../../../services/api', () => ({
   getCosAgent: vi.fn(),
   getCosAgentDates: vi.fn(),
   getCosAgentsByDate: vi.fn(),
+  hydrateCosAgentDescription: vi.fn(async (agent) => agent),
   clearCompletedCosAgents: vi.fn(),
   resumeCosAgent: vi.fn(),
   relaunchCosAgent: vi.fn(),
@@ -104,8 +105,9 @@ const renderTab = (agents, onRefresh = vi.fn(), initialEntry = '/cos/agents') =>
 beforeEach(() => {
   vi.clearAllMocks();
   api.getCosLearningDurations.mockResolvedValue({});
-  api.getCosAgentDates.mockResolvedValue({ dates: [] });
+  api.getCosAgentDates.mockResolvedValue({ dates: [], latest: null });
   api.getCosAgentsByDate.mockResolvedValue([]);
+  api.hydrateCosAgentDescription.mockImplementation(async (agent) => agent);
 });
 
 // A relaunch is offered only on a RUNNING agent — it is the recovery for a run
@@ -315,10 +317,10 @@ describe('AgentsTab feedback review queue', () => {
   it('removes an archived run from the queue immediately after feedback', async () => {
     const user = userEvent.setup();
     const onRefresh = vi.fn();
-    api.getCosAgentDates.mockResolvedValue({ dates: [{ date: '2026-07-13', count: 1 }] });
-    api.getCosAgentsByDate.mockResolvedValue([
-      completedAgent('archived', 'Archived task'),
-    ]);
+    api.getCosAgentDates.mockResolvedValue({
+      dates: [{ date: '2026-07-13', count: 1 }],
+      latest: { date: '2026-07-13', agents: [completedAgent('archived', 'Archived task')] },
+    });
 
     renderTab([], onRefresh);
     await act(async () => {});
@@ -341,4 +343,68 @@ it('opens an agent deep link even after it has left the recent agent list', asyn
   </Routes></MemoryRouter>);
   expect(await screen.findByTestId('agent-archived-example')).toBeInTheDocument();
   expect(api.getCosAgent).toHaveBeenCalledWith('archived-example', { silent: true });
+});
+
+// The archive list and its newest bucket arrive together: the tab cannot name the
+// date it needs until the bucket list answers, so asking separately costs a
+// second serial round trip before any archived card can paint.
+describe('AgentsTab archive loading', () => {
+  it('paints the newest bucket from the bucket-list response, with no follow-up request', async () => {
+    api.getCosAgentDates.mockResolvedValue({
+      dates: [{ date: '2026-07-13', count: 1 }, { date: '2026-07-12', count: 4 }],
+      latest: { date: '2026-07-13', agents: [completedAgent('archived', 'Archived task')] },
+    });
+
+    renderTab([]);
+
+    await screen.findByText('Archived task');
+    expect(api.getCosAgentDates).toHaveBeenCalledWith({ hydrate: true });
+    expect(api.getCosAgentsByDate).not.toHaveBeenCalled();
+  });
+
+  it('loads an older bucket on demand, one request per date', async () => {
+    const user = userEvent.setup();
+    api.getCosAgentDates.mockResolvedValue({
+      dates: [{ date: '2026-07-13', count: 1 }, { date: '2026-07-12', count: 1 }],
+      latest: { date: '2026-07-13', agents: [completedAgent('archived', 'Archived task')] },
+    });
+    api.getCosAgentsByDate.mockResolvedValue([completedAgent('older', 'Older task')]);
+
+    renderTab([]);
+    await screen.findByText('Archived task');
+    await user.click(screen.getByRole('button', { name: /Load/ }));
+
+    await screen.findByText('Older task');
+    expect(api.getCosAgentsByDate).toHaveBeenCalledWith('2026-07-12');
+  });
+});
+
+// Resume and Relaunch build a NEW task prompt out of the description, so a copy
+// the listing clipped would silently ship a truncated task.
+describe('AgentsTab hydrates a clipped description before reusing it', () => {
+  const clipped = {
+    id: 'agent-paused',
+    taskId: 'task-abc',
+    status: 'paused',
+    startedAt: '2026-07-13T09:00:00.000Z',
+    metadata: { taskDescription: 'Half-finished', taskDescriptionTruncated: true },
+  };
+
+  it('hands the resume dialog the full description, not the listing preview', async () => {
+    const user = userEvent.setup();
+    api.hydrateCosAgentDescription.mockResolvedValue({
+      ...clipped,
+      metadata: { ...clipped.metadata, taskDescription: 'Half-finished work, in full', taskDescriptionTruncated: false },
+    });
+    api.resumeCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued' });
+
+    renderTab([clipped]);
+    await act(async () => {});
+    await user.click(screen.getByRole('button', { name: 'Resume agent-paused' }));
+    await user.click(await screen.findByRole('button', { name: 'Submit resume' }));
+
+    await waitFor(() => expect(api.resumeCosAgent).toHaveBeenCalled());
+    expect(api.hydrateCosAgentDescription).toHaveBeenCalledWith(clipped);
+    expect(api.resumeCosAgent.mock.calls[0][1].description).toBe('[Resume] Half-finished work, in full');
+  });
 });

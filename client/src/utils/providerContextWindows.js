@@ -12,6 +12,13 @@
  * drift from the server (the walk order, and the client's own local-endpoint
  * test), so keep both beside their server twins in `stageRunner.js`.
  *
+ * The Ollama `num_ctx` ceiling is shared with the SERVER's dispatch gate too,
+ * so the meter cannot promise a window a run would then be refused for (#7466).
+ * Its second rung — the ambient `OLLAMA_CONTEXT_LENGTH` the server launched the
+ * daemon with — is server env the browser cannot read, so it arrives as
+ * `runtimeContextWindow` on the readiness payload and is folded in with
+ * `withRuntimeContextWindow` at the two call sites that budget (#7472).
+ *
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
@@ -24,6 +31,20 @@ import {
   knownModelContextWindow,
   knownProviderContextWindow,
 } from '../../../server/lib/providerContextWindows.js';
+// The Ollama `num_ctx` ceiling, from the module the server's budgeter and its
+// pre-dispatch gate resolve it through (#7466). Reached at the toolkit's
+// dependency-free `internal/` leaf for the same reason `providerTypes.js`
+// already takes `isOllamaBackedProvider` from there.
+import { clampToRuntimeContextWindow } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
+
+export {
+  // Stamps the window PortOS holds a local Ollama daemon at onto a provider
+  // projection, so the clamp above sees the rung the browser cannot resolve for
+  // itself: the ambient `OLLAMA_CONTEXT_LENGTH` this install launched the daemon
+  // with. The number arrives as `runtimeContextWindow` on the readiness payload,
+  // beside the served windows `mergeObservedContextWindows` folds in (#7472).
+  withRuntimeContextWindow,
+} from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
 
 export {
   DEFAULT_LARGE_CONTEXT_WINDOW,
@@ -65,20 +86,13 @@ export const CONTEXT_WINDOW_SOURCE = Object.freeze({
 });
 
 /**
- * The planning context window for a provider/model AND where it came from.
- * Walks the same rungs, in the same order, as `effectiveContextWindow` in
+ * Which window this provider/model CLAIMS, before the runtime ceiling.
+ * Walks the same rungs, in the same order, as `claimedContextWindow` in
  * server/services/stageRunner.js — the rungs are shared, so the order and the
  * local-endpoint test are what could drift, and the card would then promise a
  * budget the budgeter won't use.
- *
- * `{ tokens: null, source: null }` means nothing is known (an unrecognized model
- * on a local backend); the budgeter applies its own conservative floor there.
- *
- * @param {object|null|undefined} provider
- * @param {string|null|undefined} model
- * @returns {{tokens: number|null, source: string|null}}
  */
-export const resolveModelContextWindow = (provider, model) => {
+const claimedModelContextWindow = (provider, model) => {
   const explicit = Number(provider?.contextWindow);
   if (Number.isFinite(explicit) && explicit > 0) {
     return { tokens: explicit, source: CONTEXT_WINDOW_SOURCE.OVERRIDE };
@@ -98,6 +112,29 @@ export const resolveModelContextWindow = (provider, model) => {
     : { tokens: null, source: null };
 };
 
+/**
+ * The planning context window for a provider/model AND where it came from —
+ * the claimed window held to what an Ollama daemon was LAUNCHED with, exactly
+ * as the server's budgeter and its pre-dispatch gate resolve it.
+ *
+ * `{ tokens: null, source: null }` means nothing is known (an unrecognized model
+ * on a local backend); the budgeter applies its own conservative floor there.
+ *
+ * @param {object|null|undefined} provider
+ * @param {string|null|undefined} model
+ * @returns {{tokens: number|null, source: string|null}}
+ */
+export const resolveModelContextWindow = (provider, model) => {
+  const claimed = claimedModelContextWindow(provider, model);
+  const tokens = clampToRuntimeContextWindow(provider, claimed.tokens);
+  // A clamped window is no longer whichever rung claimed it — what the card is
+  // now printing is the daemon's own `num_ctx`, which is a REPORTED window even
+  // when the number it replaced was a user override or a guess.
+  return tokens === claimed.tokens
+    ? claimed
+    : { tokens, source: CONTEXT_WINDOW_SOURCE.REPORTED };
+};
+
 export const effectiveModelContextWindow = (provider, model) =>
   resolveModelContextWindow(provider, model).tokens;
 
@@ -113,6 +150,11 @@ export const effectiveModelContextWindow = (provider, model) =>
  * purpose: they would stamp the same guessed number onto every option in the
  * list, which says nothing and reads as fact.
  *
+ * The daemon's launch ceiling is NOT one of those guesses — it applies to every
+ * option alike, and the picker is exactly where someone decides which model
+ * "fits", so a `(40K ctx)` option beside a card promising 8K is two numbers
+ * presented as fact in one form. Clamped for that reason (#7466).
+ *
  * Take `provider` rather than a pre-merged map so every picker gets catalog
  * windows for free — merging at the call site is what left the fallback-model
  * and manuscript-override selects labelling a 1M model as if it were unknown.
@@ -123,7 +165,10 @@ export const effectiveModelContextWindow = (provider, model) =>
  * @returns {string}
  */
 export const modelOptionLabel = (id, ctxById, provider) => {
-  const ctx = ctxById?.[id] || catalogModelContextWindow(provider, id) || knownModelContextWindow(id);
+  const ctx = clampToRuntimeContextWindow(
+    provider,
+    ctxById?.[id] || catalogModelContextWindow(provider, id) || knownModelContextWindow(id),
+  );
   const label = formatContextLength(ctx);
   return label ? `${id} (${label})` : id;
 };

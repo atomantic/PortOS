@@ -49,6 +49,7 @@ import { fileURLToPath } from 'url';
 
 import { certPaths } from '../lib/certPaths.js';
 import { commandExists } from '../server/lib/commandExists.js';
+import { isStaleGitLock } from '../server/lib/gitStaleLock.js';
 import { scrubHomePath } from '../server/lib/homePath.js';
 import { MIN_NODE, compareVersions, satisfiesMinNode } from './checkNodeVersion.js';
 import { MIN_NPM, parseNpmUserAgent, readBundledNpmVersion } from './checkNpmVersion.js';
@@ -209,11 +210,24 @@ async function probeNpm() {
     : { available: false, detail: `${version} is below ${MIN_NPM} — installs rewrite package-lock.json (npm install -g npm@${MIN_NPM})` };
 }
 
+/**
+ * An empty `lib/slashdo` usually just means setup never ran — but when a stale
+ * lock sits in the submodule's git dir, the remediation this printed until now
+ * is the exact command that will fail, reporting a git process that exited long
+ * ago. Name the real blocker instead. The lock lives in the PARENT repo's
+ * `.git/modules/`, shared by every worktree, so one dead process explains a
+ * missing checkout in all of them at once.
+ */
 async function probeSubmodule(root) {
-  return probePath(root, join('lib', 'slashdo', 'package.json'), {
+  const probe = probePath(root, join('lib', 'slashdo', 'package.json'), {
     presentDetail: 'lib/slashdo checked out',
     missingDetail: 'lib/slashdo is empty — run: git submodule update --init --recursive',
   });
+  if (probe.available) return probe;
+  const lockPath = join(root, '.git', 'modules', 'lib', 'slashdo', 'index.lock');
+  return isStaleGitLock(lockPath)
+    ? { available: false, detail: `lib/slashdo checkout is blocked by a stale git lock — delete ${lockPath}, then run: git submodule update --init --recursive` }
+    : probe;
 }
 
 async function probeWorkspaceDeps(root, workspace) {

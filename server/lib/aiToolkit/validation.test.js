@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeScreenshotRefs, providerSchema, providerActiveSchema, validate } from './validation.js';
+import { sanitizeScreenshotRefs, providerCreateSchema, providerSchema, providerActiveSchema, PROVIDER_MODE_OVERRIDE_KEYS, validate } from './validation.js';
+import { CLI_ONLY_KEYS, MODE_GROUPED_KEYS } from './internal/providerModes.js';
 
 describe('sanitizeScreenshotRefs — POST /api/runs screenshot hardening (#1870)', () => {
   it('keeps an in-dir image basename unchanged', () => {
@@ -257,5 +258,37 @@ describe('providerSchema.partial() — PUT /api/providers/:id (#2521)', () => {
     expect(validate(providerSchema.partial(), {}).success).toBe(true);
     expect(validate(providerSchema.partial(), { type: 'magic' }).success).toBe(false);
     expect(validate(providerSchema.partial(), { timeout: 'soon' }).success).toBe(false);
+  });
+});
+
+describe('providerCreateSchema — declaring both execution modes of one harness', () => {
+  const body = { name: 'Example Agent', type: 'cli', command: 'example' };
+
+  it('never lets a mode vary a field the pairing rule compares', () => {
+    // The invariant the whole feature rests on: a minted pair has to be one
+    // `providerModeGroups` will GROUP. Widen the per-mode overrides to a key
+    // that grouping compares — `envVars`, say — and each create silently mints
+    // two unrelated routes instead of one harness, with nothing to report it.
+    expect(PROVIDER_MODE_OVERRIDE_KEYS.filter(key => MODE_GROUPED_KEYS.includes(key))).toEqual([]);
+    expect(PROVIDER_MODE_OVERRIDE_KEYS).not.toContain('command');
+    // Same invariant from the other side: `expandModePair` DROPS these from the
+    // TUI half, so listing a grouped key here would split the pair just as
+    // surely as overriding one would.
+    expect(CLI_ONLY_KEYS.filter(key => MODE_GROUPED_KEYS.includes(key))).toEqual([]);
+    expect(CLI_ONLY_KEYS).not.toContain('command');
+  });
+
+  it('holds each mode to the same field rules as a single-mode create', () => {
+    // Derived from `providerSchema.shape`, so a bound can only change for both.
+    const withDelay = (tuiPromptDelayMs) =>
+      validate(providerCreateSchema, { ...body, modes: { cli: {}, tui: { tuiPromptDelayMs } } }).success;
+    expect(withDelay(3000)).toBe(true);
+    expect(withDelay(10)).toBe(validate(providerSchema, { ...body, tuiPromptDelayMs: 10 }).success);
+    expect(validate(providerCreateSchema, { ...body, modes: { cli: {}, tui: { endpoint: 'http://x' } } }).success).toBe(false);
+  });
+
+  it('requires both modes — declaring one is what `type` is for', () => {
+    expect(validate(providerCreateSchema, { ...body, modes: { cli: {} } }).success).toBe(false);
+    expect(validate(providerCreateSchema, body).success).toBe(true);
   });
 });

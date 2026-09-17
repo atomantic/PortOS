@@ -9,6 +9,7 @@ import AgentJobProviderFields from '../../cos/AgentJobProviderFields';
 import JobCard, { AUTONOMY_OPTIONS, PRIORITY_OPTIONS, ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
 import { filterRunnableProviders } from '../../../utils/providers';
 import TaskDataInputs from '../../cos/TaskDataInputs';
+import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from '../../cos/JobFormFields';
 
 export function emptyForm() {
   return {
@@ -26,6 +27,8 @@ export function emptyForm() {
     model: '',
     effort: '',
     dataInputs: [],
+    formFields: [],
+    formValues: {},
     taskMetadata: { useWorktree: true, openPR: true, simplify: true }
   };
 }
@@ -46,6 +49,8 @@ export function formFromJob(job) {
     model: job.model || '',
     effort: job.effort || '',
     dataInputs: job.dataInputs || [],
+    formFields: job.formFields || [],
+    formValues: job.formValues || {},
     taskMetadata: { useWorktree: false, openPR: false, simplify: false, ...(job.taskMetadata || {}) }
   };
 }
@@ -64,6 +69,8 @@ export function toPayload(form, appId) {
     model: form.model || null,
     effort: form.effort || null,
     dataInputs: form.dataInputs || [],
+    formFields: form.formFields || [],
+    formValues: form.formValues || {},
     taskMetadata: form.taskMetadata
   };
   if (form.scheduleMode === 'cron') {
@@ -83,7 +90,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
   const update = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
   return (
-    <div className="space-y-3 bg-port-card border border-port-accent/50 rounded-lg p-4">
+    <div className="space-y-3 bg-port-card border border-port-accent/50 rounded-lg p-4 max-w-4xl">
       <FormField label="Task name *">
         <input
           type="text"
@@ -144,6 +151,17 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
         catalog={dataInputCatalog}
         value={form.dataInputs}
         onChange={dataInputs => update('dataInputs', dataInputs)}
+      />
+
+      <JobFormFieldsEditor
+        fields={form.formFields}
+        onChange={formFields => update('formFields', formFields)}
+      />
+
+      <JobFormValueInputs
+        fields={form.formFields}
+        values={form.formValues}
+        onChange={formValues => update('formValues', formValues)}
       />
 
       <TaskMetadataFields data={form} onChange={patch => setForm(f => ({ ...f, ...patch }))} />
@@ -207,6 +225,14 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     if (form.scheduleMode === 'cron' && !form.cronSchedule && (!form.cronExpression?.trim() || form.cronExpression.trim().split(/\s+/).length !== 5)) {
       toast.error('A valid recurrence or 5-field cron expression is required'); return false;
     }
+    // Required is enforced here rather than in the API schema: a job is
+    // routinely saved before it is aimed, so the server must still accept a
+    // half-filled config — this is the gate that keeps one from being saved by
+    // accident and then dispatched with a blank parameter.
+    const missing = missingRequiredJobFormFields(form.formFields, form.formValues);
+    if (missing.length) {
+      toast.error(`Fill in ${missing.map(field => field.label || field.key).join(', ')}`); return false;
+    }
     return true;
   };
 
@@ -230,11 +256,13 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     setTasks(prev => prev.map(t => t.id === jobId ? { ...t, enabled: result.job.enabled } : t));
   };
 
-  const handleTrigger = async (jobId) => {
+  // `runOptions` carries the card's ad-hoc run configuration, when the task
+  // declares one — the values apply to this run only and are not saved.
+  const handleTrigger = async (jobId, runOptions) => {
     const job = tasks.find(task => task.id === jobId);
     if (!job) return;
     setTriggering(jobId);
-    const result = await api.triggerCosJob(jobId).catch(() => null);
+    const result = await api.triggerCosJob(jobId, runOptions).catch(() => null);
     setTriggering(null);
     if (!result) return; // HTTP/network error already toasted by the api helper
     if (result.status === 'skipped') {
@@ -290,7 +318,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
           </div>
         )
       ) : (
-        <div className="space-y-2">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 items-start">
           {tasks.map(job => (
             <JobCard
               key={job.id}

@@ -42,6 +42,7 @@ vi.mock('./cosToolRegistry.js', () => ({
 }));
 
 import { AGENT_CONTEXT_LIMITS } from '../lib/agentContextValidation.js';
+import { PII_PATTERNS } from '../lib/piiRedactionPatterns.js';
 import {
   callAgentContextTool,
   getAgentContextManifest,
@@ -166,6 +167,10 @@ describe('agentContextMcp service', () => {
     }]);
     const result = await callAgentContextTool('list_context', { scope: 'brain' });
     const serialized = JSON.stringify(result);
+    // The bracketed vocabulary is this tool's OWN observable contract, not an
+    // incidental spelling: the critical `search-redacts-and-omits-fields` case
+    // in test/fixtures/agent-context-eval.json pins these exact markers. #7474
+    // shares the PATTERNS with agentErrorAnalysis, never the output text.
     expect(serialized).toContain('[REDACTED EMAIL]');
     expect(serialized).toContain('[REDACTED IP]');
     expect(serialized).not.toContain('alice@example.com');
@@ -216,5 +221,19 @@ describe('agentContextMcp service', () => {
 
   it('keeps redacted summaries within the advertised cap', () => {
     expect(redactAgentContextText('x'.repeat(1_000))).toHaveLength(AGENT_CONTEXT_LIMITS.maxSummaryChars);
+  });
+
+  it('reaches codes this file never redacted before #7474 (Windows paths, .local hosts)', () => {
+    // redactAgentContextText's own regex chain (pre-#7474) had no Windows
+    // drive-path pattern and only matched `.ts.net`, not `.local` mDNS
+    // hosts — both reached an agent-context summary verbatim. It now
+    // composes lib/piiRedactionPatterns.js's full table via redactPii, so a
+    // later table addition reaches this consumer with no code change here —
+    // this pins that it does today for the codes gained by converging.
+    for (const code of ['windows-path', 'network-host']) {
+      expect(PII_PATTERNS.some((entry) => entry.code === code), `table still declares ${code}`).toBe(true);
+    }
+    expect(redactAgentContextText('checkout at C:\\Users\\exampleuser\\portos')).not.toContain('exampleuser');
+    expect(redactAgentContextText('short-host printer.local timed out')).not.toContain('printer');
   });
 });

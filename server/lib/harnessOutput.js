@@ -4,8 +4,8 @@ import { parsePiModelList } from './aiToolkit/internal/pi.js';
  * banner and its model catalog.
  *
  * A harness is the CLI/TUI binary a provider shells out to (`opencode`,
- * `claude`, `codex`, `agy`, `grok`, `kimi`, `cursor-agent`). PortOS could
- * already answer "is it on PATH?" (`services/providerRuntimeInstaller.js`); the
+ * `kilo`, `openchamber`, `claude`, `codex`, `agy`, `grok`, `kimi`,
+ * `cursor-agent`). PortOS could already answer "is it on PATH?" (`services/providerRuntimeInstaller.js`); the
  * Harnesses page also needs "which version, and which models does THIS install
  * of it know about?" — and every vendor answers both in its own shape.
  *
@@ -115,6 +115,9 @@ const parseGrokModels = (lines) => lines
 const MODEL_PARSERS = {
   pi: (lines) => parsePiModelList(lines.join('\n')),
   opencode: parseOpencodeModels,
+  // Kilo is an OpenCode fork and `kilo models` prints the same one
+  // `provider/model` per line, which is also what its `--model` takes.
+  kilo: parseOpencodeModels,
   grok: parseGrokModels,
   // Delegated — these two vendors' stdout shapes are already owned elsewhere.
   // Both take the raw stdout rather than the pre-split lines, so they are

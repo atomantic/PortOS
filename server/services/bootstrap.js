@@ -37,6 +37,7 @@ import { startIdleReaper, stopIdleReaper } from '../lib/managedDaemon.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { conflictJournalStore } from '../lib/conflictJournal.js';
 import { markHostShuttingDown, writeHostShutdownMarker } from '../lib/hostShutdown.js';
+import { signalDetachedGroups } from '../lib/credentialBootstrap.js';
 import { setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { runMigrations } from '../../scripts/run-migrations.js';
 
@@ -89,6 +90,7 @@ import { startMaintenanceRunScheduler } from './maintenanceRun.js';
 import { startSeriesAutopilotScheduler } from './seriesAutopilotScheduler.js';
 import { startCommissionScheduler } from './creativeCommissions/scheduler.js';
 import { startBeeperScheduler } from './beeperScheduler.js';
+import { startEidoverseControllerSupervisor } from './eidoverseControllerRuntime.js';
 import { reconcileOutboxOnBoot } from './beeperOutbox.js';
 import { startBeeperSocket, stopBeeperSocket } from './beeperSocket.js';
 import { startImessageScheduler } from './imessageScheduler.js';
@@ -163,16 +165,7 @@ import * as fableLoomStore from './fableLoom/store.js';
 import { prerequisitesMetForRouting } from './providerPrerequisites.js';
 import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
-
-/**
- * Keep boot failures actionable when a service rejects during fire-and-forget
- * initialization. The message is useful for a quick scan; the stack identifies
- * the source location when boot is the only time the failure is reproducible.
- */
-const logBootstrapFailure = (prefix, error, logger = console.error) => {
-  const message = error?.message ?? String(error);
-  logger(`${prefix}: ${message}`, error?.stack || '');
-};
+import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';
 
 /**
  * Pre-route boot. Everything a route handler may depend on being ready the
@@ -480,6 +473,13 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
     backfillProjectCommissionIds,
     startCommissionScheduler
   });
+  // Executable Eidoverse world controllers (#7456) — arm the supervisor only
+  // when this install has at least one ARMED controller, so a world nobody has
+  // built in registers nothing and logs nothing. Boot arms a timer and nothing
+  // else: a controller step is synchronous by construction, so the tick path
+  // cannot reach an AI provider at all, and no install steps until its own
+  // cadence elapses.
+  startEidoverseControllerSupervisor().catch(err => logBootstrapFailure('❌ Eidoverse controller supervisor arming failed', err));
   // OpenWorld's historical snapshot scheduler is retired with its UI. The
   // legacy read/capture routes remain available for old clients, but Eidoverse
   // is now the only automatic world projection path.
@@ -1037,6 +1037,20 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     const markerWritten = withGrace('Host-shutdown marker', 1500, ({ finish, finishWithError }) =>
       writeHostShutdownMarker({ agentIds: [...activeAgents.keys()], signal })
         .then(() => finish(), (err) => finishWithError('⚠️ Host-shutdown marker failed', err)));
+
+    // Reach every child spawned into its own process group — agent runs, CLI
+    // runs and vision calls alike. A credential-bootstrap-wrapped child is
+    // spawned `detached: true` so stop/timeout/cancel can signal its whole
+    // group (#7496); that also moves it OUT of this server's process group, and
+    // the one teardown route it thereby loses is a signal aimed at THAT group —
+    // Ctrl-C at an `npm start` terminal, or `kill -<pgid>`. (pm2's TreeKill
+    // walks the pid TREE, so the managed path is unaffected, and every child
+    // already survives a plain SIGTERM to the parent.) This restores exactly
+    // that lost reach rather than orphaning a harness holding a freshly minted
+    // credential. Before the teardown below, while the process still owns its
+    // state; best-effort, like everything else in this window.
+    const detachedGroups = signalDetachedGroups('SIGTERM', logBootstrapFailure);
+    if (detachedGroups) console.log(`🛑 Signalled ${detachedGroups} detached process group(s)`);
 
     // Terminate the Codex app-server child before the socket teardown below.
     // pm2's TreeKill would reap it anyway, but a direct SIGTERM keeps a manual

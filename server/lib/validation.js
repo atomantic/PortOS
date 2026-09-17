@@ -19,6 +19,7 @@ import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
+import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS, SERVICE_SLUG_RE } from './serviceDefinitions.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
 import {
   FEDERATED_MEDIA_ASSET_MAX_COUNT,
@@ -549,6 +550,18 @@ export const providerSchema = z.object({
   // non-allowlisted) endpoint — mirrors the aiToolkit providerSchema. Guards
   // SSRF / key exfiltration (server/lib/aiToolkit/endpointGuard.js).
   allowCustomEndpoint: z.boolean().optional(),
+  // Kept in schema parity with aiToolkit's provider schema. Marks a CLI/TUI
+  // provider whose harness auth is provisioned by an external CLI at spawn
+  // time (a short-lived token for a proxy) rather than a static apiKey.
+  // `setupCommand` is advisory only — PortOS never executes it. Nullable so
+  // the editor can explicitly clear a previously-set bootstrap.
+  credentialBootstrap: z.object({
+    setupCommand: z.string().trim().max(500).optional(),
+    command: z.string().trim().min(1).max(200),
+    args: z.array(z.string().max(200)).max(20).optional(),
+    harnessId: z.string().trim().min(1).max(100).optional(),
+    argsSeparator: z.string().trim().max(20).optional(),
+  }).strict().nullable().optional(),
   envVars: z.record(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
@@ -678,6 +691,44 @@ export const providerConnectionUpdateSchema = z.object({
     z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
   ).optional(),
   credentials: z.record(z.string().trim().min(1).max(128), z.string().max(4096).nullable()).optional(),
+}).strict();
+
+// --- service instances (#7563) ------------------------------------------------
+// The vocabulary comes from `serviceDefinitions.js`, a zero-import leaf this
+// module already reaches, so nothing here can drift from the definitions.
+export const serviceSlugSchema = z.string().trim().min(1).max(64).regex(SERVICE_SLUG_RE, {
+  message: 'A service slug is lowercase letters, digits and dashes, starting with a letter or digit',
+});
+export const servicePlanSchema = z.enum(SERVICE_PLANS);
+export const serviceCredentialViaSchema = z.enum(SERVICE_CREDENTIAL_VIAS);
+
+const serviceTransportsSchema = z.record(
+  z.string().trim().min(1).max(64),
+  z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
+);
+
+// POST /api/providers/services — a NEW instance of a definition. The
+// definition decides which transports and plans are legal (`resolveServiceInstance`
+// in the service), so this bounds shape only. Credentials take no `null`, as
+// on the connection create: nothing exists yet to clear.
+export const providerServiceCreateSchema = z.object({
+  definitionId: z.string().trim().min(1).max(64),
+  slug: serviceSlugSchema.optional(),
+  label: z.string().trim().min(1).max(200).optional(),
+  plan: servicePlanSchema.optional(),
+  enabled: z.boolean().optional(),
+  transports: serviceTransportsSchema.optional(),
+  credentials: z.record(z.string().trim().min(1).max(128), z.string().min(1).max(4096)).optional().default({}),
+  credentialVia: serviceCredentialViaSchema.optional(),
+}).strict();
+
+// PATCH /api/providers/services/:slug — the connection update plus the
+// instance's own plan / enabled / credential mode. Same three-valued
+// credential rule, same required `expectedRevision`.
+export const providerServiceUpdateSchema = providerConnectionUpdateSchema.extend({
+  plan: servicePlanSchema.optional(),
+  enabled: z.boolean().optional(),
+  credentialVia: serviceCredentialViaSchema.optional(),
 }).strict();
 
 // PATCH /api/providers/bindings/:id (#6369). Management state only: no

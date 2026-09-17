@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import * as cos from '../../services/cos.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
+import { toAgentListItems } from '../../lib/cosAgentListProjection.js';
 import { parsePagination } from '../../lib/validation.js';
 import { loadApp } from './shared.js';
 
@@ -51,8 +52,12 @@ router.get('/:id/agents', loadApp, asyncHandler(async (req, res) => {
   const succeeded = combined.filter(a => a.status === 'completed').length;
   const failed = combined.filter(a => a.status === 'failed' || a.status === 'error').length;
 
+  // Same listing projection as `GET /api/cos/agents`: no transcripts, and a
+  // bounded task description. This response can carry up to 500 records, and the
+  // App page's table renders the description as a two-line clamped link label —
+  // it never reuses the text, so nothing here needs hydration.
   res.json({
-    agents: combined,
+    agents: toAgentListItems(combined),
     summary: { total: combined.length, running, succeeded, failed }
   });
 }));

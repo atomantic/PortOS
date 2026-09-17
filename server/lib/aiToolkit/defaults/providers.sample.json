@@ -1,6 +1,57 @@
 {
   "activeProvider": "claude-code-tui",
   "providers": {
+    "kilo-cli": {
+      "id": "kilo-cli",
+      "name": "Kilo Code CLI",
+      "type": "cli",
+      "command": "kilo",
+      "args": [
+        "run",
+        "--auto"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
+    "kilo-tui": {
+      "id": "kilo-tui",
+      "name": "Kilo Code TUI",
+      "type": "tui",
+      "command": "kilo",
+      "args": [
+        "--auto"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500
+    },
+    "openchamber-cli": {
+      "id": "openchamber-cli",
+      "name": "OpenChamber",
+      "type": "cli",
+      "command": "openchamber",
+      "args": [
+        "session",
+        "create",
+        "--wait",
+        "--last-assistant",
+        "--quiet"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
     "pi-cli": {
       "id": "pi-cli",
       "name": "Pi Coding Agent CLI",

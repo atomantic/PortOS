@@ -41,7 +41,8 @@
  *   resolve.
  *
  * Pure leaf (`providerModels.js` + `providerTypes.js`, both already browser-
- * imported) so `client/src/hooks/useReviewerModelOptions.js` takes it verbatim.
+ * imported, and `kilo.js`, which imports nothing but the first) so
+ * `client/src/hooks/useReviewerModelOptions.js` takes it verbatim.
  * Deliberately does NOT import `reviewerConfig.js`: the coverage rule — every
  * MODEL_SELECTABLE_REVIEWERS slug has a row — is a test
  * (`reviewerProviderMatchers.test.js`), not a runtime dependency, which keeps
@@ -55,6 +56,7 @@ import {
   isKimiProvider,
 } from './providerModels.js';
 import { isGrokBuildCli, isProcessProvider } from './providerTypes.js';
+import { isKiloProvider } from './kilo.js';
 import { dedupeByKey } from './arrayUtils.js';
 
 /** Reviewer slug → the provider-record predicates that front its binary, in preference order. */
@@ -68,6 +70,10 @@ export const REVIEWER_PROVIDER_MATCHERS = Object.freeze({
   grok: [(p) => p.id === 'grok-cli', isGrokBuildCli],
   cursor: [(p) => p.id === 'cursor-cli', isCursorProvider],
   pi: [(p) => p.id === 'pi-cli', (p) => isProcessProvider(p) && commandBasename(p.command) === 'pi'],
+  // Kilo's shipped records front the user's OWN `/connect` credentials — there
+  // is no local-backend preset whose ids resolve only under an injected config
+  // (the OpenCode carve-out below), so the broad predicate is safe here.
+  kilo: [(p) => p.id === 'kilo-cli', isKiloProvider],
   kimi: [(p) => p.id === 'kimi-cli', isKimiProvider],
   opencode: [(p) => p.id === 'opencode-zen-cli', (p) => p.id === 'opencode-zen-tui'],
   mtplx: [(p) => p.id === 'mtplx'],

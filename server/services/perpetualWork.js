@@ -30,6 +30,8 @@ import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, e
 import { readOriginRemoteUrl } from '../lib/gitRemote.js';
 import { withGlabJson } from '../lib/glabArgs.js';
 import { githubApiHost, hostFromOriginUrl } from '../lib/workTracker.js';
+import { scrubSecretTokens } from '../lib/secretText.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
 // The workflow markers live with the forge label vocabulary (name + color + the
 // `label create` idiom the prompt bodies interpolate), so the detector and the
 // live claim agent cannot drift on how "already decomposed" or "claimed and
@@ -54,7 +56,9 @@ export const NON_ACTIONABLE_ISSUE_LABELS = new Set([
   IN_PROGRESS_LABEL, 'blocked', 'needs-input', 'future', 'wontfix', 'question', 'discussion'
 ]);
 
-const CLI_TIMEOUT_MS = 15000;
+// Exported so the timeout path is directly testable with fake timers rather
+// than a real 15s wait.
+export const CLI_TIMEOUT_MS = 15000;
 
 // How many actionable work items a detector carries back in `items`. The
 // detectors exist for the perpetual drain (which only needs `actionable`/`count`),
@@ -62,6 +66,29 @@ const CLI_TIMEOUT_MS = 15000;
 // each detector also returns the claimable items themselves. Capped so a repo with
 // hundreds of open issues can't balloon the response the picker renders.
 export const WORK_ITEM_LIMIT = 50;
+
+// Cap on the CLI stderr detail carried into a transient reason — long enough to
+// show the actual fault (an auth message, a rate-limit window, a DNS failure),
+// short enough that a verbose CLI dump never bloats a log line or a toast.
+const CLI_DETAIL_MAX_CHARS = 200;
+
+/**
+ * Redact a raw CLI stderr capture into a short, safe detail string for a
+ * transient reason. Per AGENTS.md "Sensitive Data & Privacy", a forge CLI's
+ * stderr can carry a hostname, tailnet name, or token, so it must be scrubbed
+ * before it can reach a log line or a UI toast — `scrubSecretTokens` for
+ * credential-shaped values, `redactPii` for hosts/paths/IPs/emails/etc. Keeps
+ * only the LAST non-empty line: the actual failure is almost always the tail of
+ * a gh/glab error, not its usage banner. Returns null for empty/blank stderr so
+ * callers can tell "no detail available" apart from a detail that redacted to
+ * an empty string.
+ */
+function redactCliDetail(stderr) {
+  const lines = String(stderr || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+  const detail = redactPii(scrubSecretTokens(lines[lines.length - 1]));
+  return detail.length > CLI_DETAIL_MAX_CHARS ? `${detail.slice(0, CLI_DETAIL_MAX_CHARS)}…` : detail;
+}
 
 /**
  * Best-effort CLI runner mirroring git.js#spawnCli (which isn't exported).
@@ -75,9 +102,13 @@ function runCli(cmd, args, cwd, env) {
     const done = (result) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('error', () => done({ code: -1, stdout: '', stderr: '' }));
+    // Preserve whatever stderr accumulated before the spawn error / timeout —
+    // the CLI's actual fault (expired token, rate limit, network refused, wrong
+    // repo) lives there, and blanking it left every transient reason a bare
+    // fixed literal with no diagnostic content (#7551).
+    child.on('error', () => done({ code: -1, stdout, stderr }));
     child.on('close', (code) => done({ code, stdout, stderr }));
-    const timer = setTimeout(() => { try { child.kill(); } catch { /* noop */ } done({ code: -1, stdout: '', stderr: '' }); }, CLI_TIMEOUT_MS);
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* noop */ } done({ code: -1, stdout, stderr }); }, CLI_TIMEOUT_MS);
     if (timer.unref) timer.unref();
   });
 }
@@ -273,7 +304,7 @@ async function resolveAuthenticatedLogin(cli, args, repoPath, env) {
     ? (await import('../lib/streamJsonParser.js')).safeParse(res.stdout)?.username
     : res.stdout;
   const login = typeof rawLogin === 'string' ? rawLogin.trim() : '';
-  return (res.code !== 0 || !login) ? { error: `${cli}-unavailable` } : { login };
+  return (res.code !== 0 || !login) ? { error: `${cli}-unavailable`, detail: redactCliDetail(res.stderr) } : { login };
 }
 
 /**
@@ -286,13 +317,13 @@ async function resolveAuthenticatedLogin(cli, args, repoPath, env) {
  * carries a `remedy` the caller can surface instead.
  */
 async function resolveTrustedLogins(cfg, repoPath, env) {
-  const { login, error } = await resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, env);
-  if (error) return { error };
+  const { login, error, detail } = await resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, env);
+  if (error) return { error, detail };
   const membersArgs = cfg.cli === 'gh'
     ? await withGithubHost(cfg.membersArgs, repoPath)
     : cfg.membersArgs;
   const res = await runCli(cfg.cli, membersArgs, repoPath, env);
-  if (res.code !== 0) return { error: cfg.membersFail, remedy: cfg.membersRemedy };
+  if (res.code !== 0) return { error: cfg.membersFail, remedy: cfg.membersRemedy, detail: redactCliDetail(res.stderr) };
   const lines = (res.stdout || '').split('\n').filter(line => line.trim());
   // glab api emits raw NDJSON; unlike gh api it has no -q selector.
   const parseMember = cfg.cli === 'glab' ? (await import('../lib/streamJsonParser.js')).safeParse : null;
@@ -403,7 +434,7 @@ const FORGE_ISSUE_CONFIG = {
     // never an issue author, so `--author <org>` is guaranteed to match nothing.
     resolveOwner: async (repoPath, env) => {
       const r = await runCli('gh', ['repo', 'view', '--json', 'owner,isInOrganization'], repoPath, env);
-      if (r.code !== 0) return { error: 'gh-unavailable' };
+      if (r.code !== 0) return { error: 'gh-unavailable', detail: redactCliDetail(r.stderr) };
       let parsed;
       try {
         parsed = JSON.parse(r.stdout || '{}');
@@ -480,8 +511,8 @@ const FORGE_ISSUE_CONFIG = {
     // the self-assignee retry check. It is transient if glab is unauthenticated
     // or unreachable.
     resolveSelf: async (repoPath, env) => {
-      const { login, error } = await resolveAuthenticatedLogin('glab', GLAB_SELF_LOGIN_ARGS, repoPath, env);
-      return error ? { error } : { author: login };
+      const { login, error, detail } = await resolveAuthenticatedLogin('glab', GLAB_SELF_LOGIN_ARGS, repoPath, env);
+      return error ? { error, detail } : { author: login };
     },
     // `collaborators` mode: you + every project member. `members/all` (not
     // `members`) so members INHERITED from the parent group/subgroup count —
@@ -549,8 +580,8 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   // `remedy` rides along when the probe named a fault that won't self-clear (a
   // permission the token doesn't have), so the on-demand toast can print the way
   // out instead of "try again shortly".
-  const transient = (reason, remedy = null) => ({
-    actionable: false, count: 0, cli: cfg.cli, reason, remedy, transient: true
+  const transient = (reason, remedy = null, detail = null) => ({
+    actionable: false, count: 0, cli: cfg.cli, reason, remedy, detail, transient: true
   });
 
   const args = [...cfg.listArgs];
@@ -572,13 +603,13 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   if (issueAuthorFilter === 'any') {
     // no --author filter
   } else if (issueAuthorFilter === 'collaborators') {
-    const { logins, error, remedy } = await resolveTrustedLogins(cfg, repoPath, env);
-    if (error) return transient(error, remedy);
+    const { logins, error, remedy, detail } = await resolveTrustedLogins(cfg, repoPath, env);
+    if (error) return transient(error, remedy, detail);
     trustedLogins = logins;
     authorApplied = true;
   } else if (issueAuthorFilter === 'owner') {
-    const { owner, isOrg, error } = await cfg.resolveOwner(repoPath, env);
-    if (error) return transient(error);
+    const { owner, isOrg, error, detail } = await cfg.resolveOwner(repoPath, env);
+    if (error) return transient(error, null, detail);
     if (isOrg) {
       // The owner filter resolved to a non-authoring owner (a GitHub ORG or a
       // GitLab GROUP), which can never be an issue author — `--author <owner>` is
@@ -592,8 +623,8 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     args.push('--author', owner);
     authorApplied = true;
   } else {
-    const { author, error } = await cfg.resolveSelf(repoPath, env);
-    if (error) return transient(error);
+    const { author, error, detail } = await cfg.resolveSelf(repoPath, env);
+    if (error) return transient(error, null, detail);
     args.push('--author', author);
     authorApplied = true;
   }
@@ -604,7 +635,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   let listingTruncated = false;
   const listIssues = async (extraArgs = []) => {
     const res = await runCli(cfg.cli, [...args, ...extraArgs], repoPath, env);
-    if (res.code !== 0) return { error: cfg.listFail };
+    if (res.code !== 0) return { error: cfg.listFail, detail: redactCliDetail(res.stderr) };
     let parsed;
     try {
       parsed = JSON.parse(res.stdout || '[]');
@@ -633,13 +664,13 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     const merged = new Map();
     for (const login of queried) {
       const out = await listIssues(['--author', login]);
-      if (out.error) return transient(out.error);
+      if (out.error) return transient(out.error, null, out.detail);
       for (const issue of out.issues) merged.set(issue.number, issue);
     }
     issues = [...merged.values()];
   } else {
     const out = await listIssues();
-    if (out.error) return transient(out.error);
+    if (out.error) return transient(out.error, null, out.detail);
     issues = out.issues;
   }
 
@@ -693,7 +724,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
       ? resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, env)
       : Promise.resolve({ login: null })
   ]);
-  if (currentLoginResult.error) return transient(currentLoginResult.error);
+  if (currentLoginResult.error) return transient(currentLoginResult.error, null, currentLoginResult.detail);
   const currentLogin = currentLoginResult.login || null;
   const total = issues.length;
   // How many of the OPEN issues were skipped only because a claim/PR is already
