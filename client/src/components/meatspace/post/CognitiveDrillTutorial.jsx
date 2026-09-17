@@ -97,6 +97,7 @@ export function getDrillTutorial(drill) {
           'Letters appear one at a time, then vanish.',
           `Compare each letter to the one ${step} back in the stream.`,
           'When they match, hit Match right away. If it doesn’t match, do nothing.',
+          'Letters change color as they go so a back-to-back repeat still reads as a new letter. The color never signals a match.',
         ],
         controls: 'Tap Match, or press Space / Enter.',
         nBackExample: buildNBackExample(n),
