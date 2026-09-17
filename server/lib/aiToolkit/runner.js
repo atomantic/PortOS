@@ -846,7 +846,10 @@ export function createRunnerService(config = {}) {
         if (!line.startsWith('data: ')) return;
 
         const data = line.slice(6);
-        if (data === '✅' || data === '[DONE]') return;
+        // `data: ` with an empty payload is a heartbeat on some providers, not a
+        // frame — it must not reach the parse-failure log below, which would
+        // otherwise emit a line per keep-alive for the life of the stream.
+        if (!data.trim() || data === '✅' || data === '[DONE]') return;
 
         // One malformed frame must not discard the tokens around it. Before the
         // buffering above, every truncated frame reached here and its throw

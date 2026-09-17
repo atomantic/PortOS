@@ -1004,6 +1004,44 @@ describe('AI Toolkit runner service', () => {
       .toBe('before after');
   });
 
+  // `data: ` with an empty payload is a keep-alive on some providers. It is not
+  // a frame, so it must not reach the parse-failure log — which would otherwise
+  // emit one line per heartbeat for the life of the stream.
+  it('treats an empty data payload as a heartbeat, not an unparseable frame', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode('data: \n\n'),
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'beat' } }] })}\n`),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-heartbeat', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-heartbeat', 'output.txt'), 'utf-8')).toBe('beat');
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('unparseable stream frame');
+    warn.mockRestore();
+  });
+
   // A reasoning model streams `delta.reasoning` before any content, so a
   // mid-stream failure finds `output` empty and the real work sitting in
   // `reasoning`. The success path already falls back to it; the failure path
