@@ -22,6 +22,7 @@ export { default as useClickOutside } from './useClickOutside.js';
 export { default as useConfirmDelete } from './useConfirmDelete.js';
 export { default as useColorMatch } from './useColorMatch.js';
 export { default as useContainerWidth } from './useContainerWidth.js';
+export { default as useDragToPan } from './useDragToPan.js';
 export { default as useEscapeKey } from './useEscapeKey.js';
 export { default as useFieldDraft } from './useFieldDraft.js';
 export { default as useFableLoomAiRun } from './useFableLoomAiRun.js';

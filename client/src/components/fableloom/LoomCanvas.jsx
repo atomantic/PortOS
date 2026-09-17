@@ -22,6 +22,7 @@
 import { useEffect, useId, useMemo, useRef } from 'react';
 import { Flag, Play } from 'lucide-react';
 import useContainerWidth from '../../hooks/useContainerWidth';
+import useDragToPan from '../../hooks/useDragToPan';
 import { isTapGesture } from '../../lib/graphPicking';
 import {
   layoutLoomGraph, LOOM_EDGE_LABEL_MAX, LOOM_ORIENTATION,
@@ -64,12 +65,19 @@ export default function LoomCanvas({
   // once on release. Routing it through setState re-rendered every node card
   // (each with a foreignObject media surface) ~60×/s. Edges catch up on release.
   const dragRef = useRef(null);
-  // A pan is the same story one level up: scrollLeft/scrollTop are mutated
-  // directly per pointermove so no node re-renders while the view moves.
-  const panRef = useRef(null);
   // Set by whichever gesture actually moved, read once by the surface's
   // click-capture handler — one mechanism for "this click was a drag".
   const draggedRef = useRef(false);
+  // A pan is the same story one level up: scrollLeft/scrollTop are mutated
+  // directly per pointermove so no node re-renders while the view moves. A
+  // card's own drag wins when both could claim the gesture (`canStart`), and
+  // a completed pan folds into `draggedRef` so the shared click-capture below
+  // swallows it exactly like a card drag does.
+  const pan = useDragToPan({
+    slop: DRAG_THRESHOLD_PX,
+    canStart: () => !dragRef.current,
+    onPanEnd: () => { draggedRef.current = true; },
+  });
   const cardRefs = useRef(new Map());
   const mediaRefs = useRef(new Map());
   const [measureRef, measuredWidth] = useContainerWidth();
@@ -137,37 +145,11 @@ export default function LoomCanvas({
   const handleSurfacePointerDown = (event) => {
     // Cleared at the START of every gesture: a drag released outside the canvas
     // (or cancelled) never gets its click, and a stale flag would then swallow
-    // the next genuine select.
+    // the next genuine select. `canStart` (above) already answers "did a scene
+    // card claim this drag?" by asking `dragRef` — on the stacked layout cards
+    // never claim a drag, so a card is pannable surface there.
     draggedRef.current = false;
-    if (event.pointerType !== 'mouse' || event.button !== 0) return;
-    // This runs after the card's own pointerdown, so `dragRef` already answers
-    // "did a scene card claim this drag?" — ask it rather than re-deriving the
-    // card handler's eligibility rules from the event target. On the stacked
-    // layout cards never claim a drag, so a card is pannable surface there.
-    if (dragRef.current) return;
-    const surface = event.currentTarget;
-    surface.setPointerCapture?.(event.pointerId);
-    panRef.current = {
-      start: { x: event.clientX, y: event.clientY },
-      scrollLeft: surface.scrollLeft,
-      scrollTop: surface.scrollTop,
-      moved: false,
-    };
-  };
-
-  const handleSurfacePointerMove = (event) => {
-    const pan = panRef.current;
-    const delta = pan && gestureDelta(pan, event);
-    if (!delta) return;
-    const surface = event.currentTarget;
-    surface.scrollLeft = pan.scrollLeft - delta.dx;
-    surface.scrollTop = pan.scrollTop - delta.dy;
-  };
-
-  const handleSurfacePointerUp = () => {
-    const pan = panRef.current;
-    panRef.current = null;
-    if (pan?.moved) draggedRef.current = true;
+    pan.panProps.onPointerDown(event);
   };
 
   // Either drag still fires a click when it ends — on the card, on an edge, or
@@ -192,14 +174,14 @@ export default function LoomCanvas({
   return (
     <div className="relative h-full w-full">
       <div
-        ref={measureRef}
+        ref={(el) => { measureRef.current = el; pan.surfaceRef.current = el; }}
         className={`overflow-auto h-full w-full overscroll-contain cursor-grab active:cursor-grabbing ${showStrip ? 'pb-28' : ''}`}
         data-testid="loom-canvas"
         data-orientation={orientation}
         onPointerDown={handleSurfacePointerDown}
-        onPointerMove={handleSurfacePointerMove}
-        onPointerUp={handleSurfacePointerUp}
-        onPointerCancel={handleSurfacePointerUp}
+        onPointerMove={pan.panProps.onPointerMove}
+        onPointerUp={pan.panProps.onPointerUp}
+        onPointerCancel={pan.panProps.onPointerCancel}
         onClickCapture={handleSurfaceClickCapture}
       >
         <svg
