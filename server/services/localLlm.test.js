@@ -58,6 +58,14 @@ vi.mock('../lib/fileUtils.js', async () => {
   };
 });
 
+// The model manifest is an IO collaborator of install/delete, not part of the
+// dispatch this file tests — and the fileUtils mock above deliberately omits the
+// JSON readers it needs. Doubled so the recording can be asserted directly.
+vi.mock('./modelManifest.js', () => ({
+  recordModelInstall: vi.fn(async () => null),
+  recordModelUninstall: vi.fn(async () => false),
+}));
+
 // The macOS .app upgrade renames / removes / stats REAL absolute paths under
 // /Applications. Model only those in memory — everything else (the temp dir the
 // download actually writes to) keeps the real implementation — so no test can
@@ -364,6 +372,39 @@ describe('localLlm', () => {
     it('routes Ollama delete to deleteModel', async () => {
       await svc.deleteModel('ollama', 'llama3.2');
       expect(mocks.ollama.deleteModel).toHaveBeenCalledWith('llama3.2');
+    });
+    // The manifest is what Models → Status renders without a disk scan, so a
+    // delete that leaves the row behind offers a delete button for weights that
+    // are gone, and an install that never records one hides the model entirely
+    // until someone rescans. Both directions asserted here because install and
+    // delete each have several exits and the recording sits on only one path.
+    it('records an Ollama install and clears it again on delete', async () => {
+      const { recordModelInstall, recordModelUninstall } = await import('./modelManifest.js');
+
+      await svc.installModel('ollama', 'llama3.2');
+      expect(recordModelInstall).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'ollama:llama3.2',
+        backend: 'ollama',
+        action: { type: 'local-model', backend: 'ollama', modelId: 'llama3.2' },
+        // Ollama tags share layers, so a per-tag size is an upper bound.
+        sizeIsEstimate: true,
+      }));
+
+      await svc.deleteModel('ollama', 'llama3.2');
+      expect(recordModelUninstall).toHaveBeenCalledWith({ backend: 'ollama', key: 'llama3.2' });
+    });
+    it('does not record a refused delete or a merely-queued LM Studio download', async () => {
+      const { recordModelInstall, recordModelUninstall } = await import('./modelManifest.js');
+
+      mocks.ollama.getLoadedModels.mockResolvedValueOnce([{ id: 'llama3.2', name: 'llama3.2' }]);
+      await svc.deleteModel('ollama', 'llama3.2');
+      expect(recordModelUninstall).not.toHaveBeenCalled();
+
+      // The REST fallback only QUEUES the download (`pending`), so the weights are
+      // not on disk yet — recording here would claim an install that may never land.
+      const queued = await svc.installModel('lmstudio', 'unsloth/Qwen3.8-27B-GGUF');
+      expect(queued).toMatchObject({ success: true, pending: true });
+      expect(recordModelInstall).not.toHaveBeenCalled();
     });
     it('refuses to delete a model whose live residency check says loaded', async () => {
       mocks.ollama.getLoadedModels.mockResolvedValueOnce([{ id: 'llama3.2', name: 'llama3.2' }]);

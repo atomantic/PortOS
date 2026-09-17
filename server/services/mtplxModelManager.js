@@ -25,8 +25,10 @@ import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assessDownloadPreflight, assertDownloadFits } from '../lib/downloadPreflight.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { getHfCacheRoot } from '../lib/hfCache.js';
+import { getHfCacheRoot, repoToDirName } from '../lib/hfCache.js';
+import { hfInventoryRow } from '../lib/modelInventory.js';
 import { listMtplxCachedModels } from '../lib/mtplxModels.js';
+import { recordModelInstall, recordModelUninstall } from './modelManifest.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { fetchRepoPublishedDates } from './huggingFaceMetadata.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
@@ -243,6 +245,19 @@ export async function pullMtplxModel({ model = null, onProgress = () => {} } = {
   const cache = await listMtplxCachedModels();
   const cached = (cache.models || []).map((m) => m?.repo_id).filter(Boolean);
   console.log(`✅ MTPLX pull complete for ${label} (${cached.length} checkpoint(s) cached)`);
+  // MTPLX pulls through huggingface_hub into the standard hub cache (see
+  // `mtplxCachePath`), so what lands here is an ordinary `models--org--name`
+  // directory that Models → Status inventories. Recording it HERE rather than at
+  // the callers covers both entry points — the model-pull route and the
+  // readiness checklist's default-checkpoint fetch — with one seam. A named pull
+  // records itself; the default pull has no repo to name, so the cache listing is
+  // the only thing that knows what arrived.
+  for (const repoId of repo ? [repo] : cached) {
+    await recordModelInstall({
+      ...hfInventoryRow({ dirName: repoToDirName(repoId), name: repoId, detail: repoId, sizeBytes: null }),
+      source: 'download',
+    });
+  }
   onProgress({ event: 'complete', model: repo, message: `${label} downloaded` });
   return { success: true, model: repo, cachedModels: cached };
 }
@@ -279,6 +294,7 @@ export async function removeMtplxModel(model) {
     );
   }
 
+  await recordModelUninstall({ backend: 'huggingface', key: repoToDirName(repo) });
   console.log(`🗑️  MTPLX checkpoint removed: ${repo}`);
   return {
     success: true,

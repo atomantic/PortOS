@@ -27,6 +27,7 @@ import { emptyToUndefined, validateRequest } from '../lib/validation.js';
 import { ADDABLE_IMAGE_RUNNERS, ADDABLE_VIDEO_RUNTIMES, searchHuggingfaceModels } from '../lib/huggingfaceModel.js';
 import { addModelFromHuggingface } from '../services/mediaModelInstall.js';
 import { getMediaModelStorage } from '../services/mediaModelStorage.js';
+import { recordModelUninstall } from '../services/modelManifest.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 
 const router = Router();
@@ -175,6 +176,7 @@ router.delete('/hf/:dirName', asyncHandler(async (req, res) => {
   if (!existsSync(fullPath)) throw new ServerError('Model not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🗑️ Deleting HF model cache: ${dirName}`);
   await rmGuarded(fullPath, { recursive: true, force: true });
+  await recordModelUninstall({ backend: 'huggingface', key: dirName });
   res.json({ ok: true });
 }));
 
@@ -187,6 +189,9 @@ router.delete('/lora/:filename', asyncHandler(async (req, res) => {
   if (!existsSync(filePath)) throw new ServerError('LoRA not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🗑️ Deleting LoRA: ${filename}`);
   await rmGuarded(filePath, { force: true });
+  // This route removes the weight file directly rather than going through
+  // `loras.deleteLora`, so it clears the manifest entry itself.
+  await recordModelUninstall({ backend: 'lora', key: filename });
   res.json({ ok: true });
 }));
 

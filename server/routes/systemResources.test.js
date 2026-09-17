@@ -10,6 +10,7 @@ const lifecycle = vi.hoisted(() => ({ onDisconnect: null, stopRun: vi.fn(async (
 
 vi.mock('../services/systemResources.js', () => ({
   getSystemResourceReport: vi.fn(),
+  getTrackedModelInventory: vi.fn(),
   triageSystemResources: vi.fn(),
 }));
 vi.mock('../lib/sseDownload.js', () => ({
@@ -41,6 +42,21 @@ describe('system resources routes', () => {
     const response = await request(makeApp()).post('/api/system-resources/report').send({});
     expect(response.status).toBe(200);
     expect(resources.getSystemResourceReport).toHaveBeenCalledWith({ force: true });
+  });
+
+  // The manifest read is the one route here that runs no scan — that is what lets
+  // Models → Status call it on arrival. A regression that routed it through the
+  // report instead would put a multi-store disk walk on every page load.
+  it('serves the tracked model inventory without touching the scan', async () => {
+    resources.getTrackedModelInventory.mockResolvedValue({
+      inventorySource: 'manifest',
+      reconciledAt: '2026-08-16T00:00:00.000Z',
+      models: { downloaded: [], loaded: [], totals: {} },
+    });
+    const response = await request(makeApp()).get('/api/system-resources/models/manifest');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ inventorySource: 'manifest' });
+    expect(resources.getSystemResourceReport).not.toHaveBeenCalled();
   });
 
   it('rejects report input instead of accepting filesystem hints', async () => {

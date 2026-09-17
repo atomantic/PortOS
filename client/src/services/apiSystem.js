@@ -18,6 +18,10 @@ export const runSystemResourceReport = (options = {}) => request('/system-resour
   method: 'POST',
   ...options,
 });
+// The tracked downloaded-model inventory, read from the manifest PortOS keeps at
+// install/uninstall time. A GET because it runs no scan — that is what makes it
+// safe to call on page load, unlike `runSystemResourceReport`.
+export const getTrackedModelInventory = (options = {}) => request('/system-resources/models/manifest', options);
 export const triageSystemResources = (payload, options = {}) => request('/system-resources/triage', {
   method: 'POST',
   body: JSON.stringify(payload),

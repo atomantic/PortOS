@@ -192,6 +192,7 @@ export * from './installLogger.js';
 export * from './kimi.js';
 export * from './mediaModelBuckets.js';
 export * from './mediaModels.js';
+export * from './modelInventory.js';
 export * from './meetingUrl.js';
 export * from './minimaxH3Memory.js';
 export * from './videoContinuity.js';

@@ -93,6 +93,13 @@ vi.mock('./cos.js', () => ({
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
 }));
+// The manifest is the report's persistence side effect, and its real writer needs
+// JSON helpers the fileUtils mock above deliberately omits. Doubled so the
+// reconcile call can be asserted rather than swallowed by its best-effort catch.
+vi.mock('./modelManifest.js', () => ({
+  getModelManifest: vi.fn(async () => ({ reconciledAt: null, models: [] })),
+  reconcileModelManifest: vi.fn(async () => ({ reconciledAt: '2026-08-16T00:00:00.000Z', added: 0, removed: 0, trusted: [] })),
+}));
 
 const promptRunner = await import('./promptRunner.js');
 const fsPromises = await import('fs/promises');
@@ -104,10 +111,12 @@ const ollamaManager = await import('./ollamaManager.js');
 const lmStudioManager = await import('./lmStudioManager.js');
 const cos = await import('./cos.js');
 const settings = await import('./settings.js');
+const modelManifest = await import('./modelManifest.js');
 const {
   buildCleanupCandidates,
   buildSystemResourceReport,
   buildSystemResourceTriagePrompt,
+  getTrackedModelInventory,
   resetSystemResourceReportCache,
   triageSystemResources,
 } = await import('./systemResources.js');
@@ -316,5 +325,77 @@ describe('system resource reporting', () => {
     }));
     expect(result.triage.recommendations[0].candidate).toMatchObject({ id: 'data:cache' });
     expect(result.triage.recommendations[0].candidateId).toBe('data:cache');
+  });
+});
+
+/**
+ * The manifest side of the report: a scan heals the persisted inventory, and the
+ * persisted inventory is what the Status page renders when no scan has run.
+ */
+describe('tracked model inventory', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetSystemResourceReportCache();
+    modelManifest.reconcileModelManifest.mockResolvedValue({
+      reconciledAt: '2026-08-16T00:00:00.000Z', added: 0, removed: 0, trusted: [],
+    });
+  });
+
+  it('reconciles the manifest from every scan, carrying the scan\'s own trust signals', async () => {
+    settings.getSettings.mockResolvedValue({ localLlm: { lmstudio: { disabled: true } } });
+    const report = await buildSystemResourceReport();
+
+    const [rows, trust] = modelManifest.reconcileModelManifest.mock.calls[0];
+    expect(rows).toBe(report.models.downloaded);
+    // Without these the reconcile would prune a disabled or unreachable backend's
+    // rows against a scan that could never have listed them.
+    expect(trust.disabledSources).toContain('lmstudio');
+    expect(trust.sourceErrors).toEqual(report.sourceErrors);
+    expect(report).toMatchObject({ inventorySource: 'scan', manifestReconciledAt: '2026-08-16T00:00:00.000Z' });
+  });
+
+  it('still returns a report when the manifest could not be written', async () => {
+    modelManifest.reconcileModelManifest.mockResolvedValue(null);
+    const report = await buildSystemResourceReport();
+    expect(report.manifestReconciledAt).toBeNull();
+    expect(report.models.downloaded.length).toBeGreaterThan(0);
+  });
+
+  it('serves the manifest as a scan-shaped report, with the same cleanup candidates', async () => {
+    modelManifest.getModelManifest.mockResolvedValue({
+      reconciledAt: '2026-08-16T00:00:00.000Z',
+      models: [
+        {
+          id: 'hf:models--example--public', backend: 'huggingface', key: 'models--example--public',
+          name: 'example/public', sizeBytes: 700, loaded: false, residencyUnknown: false, inventoryUnknown: false,
+          managePath: '/models/media', action: { type: 'hf-model', dirName: 'models--example--public' },
+        },
+        {
+          id: 'ollama:example:latest', backend: 'ollama', key: 'example:latest', name: 'Example',
+          sizeBytes: 100, loaded: false, residencyUnknown: true, inventoryUnknown: false,
+          managePath: '/models/llms', action: { type: 'local-model', backend: 'ollama', modelId: 'example:latest' },
+        },
+      ],
+    });
+
+    const inventory = await getTrackedModelInventory();
+    expect(inventory).toMatchObject({ inventorySource: 'manifest', reconciledAt: '2026-08-16T00:00:00.000Z' });
+    expect(inventory.models.totals).toMatchObject({ huggingface: 700, ollama: 100, lmstudio: null, all: 800 });
+    // No scan means no residency probe, so the local row must stay un-armed: a
+    // one-click delete offered off the record alone could remove loaded weights.
+    const [hf, ollama] = inventory.cleanupCandidates;
+    expect(hf).toMatchObject({ id: 'hf:models--example--public', manualOnly: false, action: { type: 'hf-model', dirName: 'models--example--public' } });
+    expect(ollama).toMatchObject({ id: 'ollama:example:latest', manualOnly: true, action: null });
+    // And the duplicate-weight scan — the most expensive walk of them all — is
+    // never run for a manifest read.
+    expect(inventory.modelDuplicates).toBeNull();
+  });
+
+  it('reports a never-reconciled install as unverified rather than empty', async () => {
+    modelManifest.getModelManifest.mockResolvedValue({ reconciledAt: null, models: [] });
+    const inventory = await getTrackedModelInventory();
+    expect(inventory.reconciledAt).toBeNull();
+    expect(inventory.models.downloaded).toEqual([]);
+    expect(inventory.models.totals.all).toBeNull();
   });
 });
