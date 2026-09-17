@@ -85,7 +85,7 @@ describe('FormField', () => {
   });
 
   it('associates a hint with the control via aria-describedby', () => {
-    const { container } = render(
+    render(
       <FormField label="Speech Rate" hint="0.5 = slow, 1.0 = normal, 2.0 = fast">
         <input type="number" min="0.5" max="2.0" step="0.1" defaultValue="1.0" />
       </FormField>
@@ -101,7 +101,7 @@ describe('FormField', () => {
   });
 
   it('preserves existing aria-describedby tokens and appends the hint', () => {
-    const { container } = render(
+    render(
       <FormField label="Provider" hint="This service may be unavailable during maintenance">
         <select aria-describedby="provider-note" defaultValue="auto">
           <option value="auto">Auto</option>
@@ -139,7 +139,7 @@ describe('FormField', () => {
   });
 
   it('does not create a dangling hint id when hint is absent', () => {
-    const { container } = render(
+    render(
       <FormField label="Name">
         <input defaultValue="" />
       </FormField>
@@ -151,7 +151,7 @@ describe('FormField', () => {
   });
 
   it('renders hint content without an id when hint prop is falsy', () => {
-    const { container } = render(
+    render(
       <FormField label="Notes">
         <textarea defaultValue="" />
       </FormField>
