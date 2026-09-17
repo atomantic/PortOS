@@ -891,18 +891,18 @@ export function createRunnerService(config = {}) {
           onData?.({ text });
         }
 
-        // The hidden channel has three names in the wild and NO provider sends
-        // more than one: OpenRouter-style endpoints use `reasoning`, while
-        // NVIDIA NIM, vLLM and DeepSeek-R1-compatible servers use
-        // `reasoning_content` and llama.cpp/MTPLX sometimes say `thinking`.
+        // The hidden channel goes by three names: OpenRouter-style endpoints
+        // use `reasoning`, NVIDIA NIM / vLLM / DeepSeek-R1-compatible servers
+        // use `reasoning_content`, and llama.cpp/MTPLX sometimes say
+        // `thinking`. First one present wins — a provider sends one spelling,
+        // and the precedence matches ../openAiChatStream.js so a frame that
+        // somehow carried two would resolve identically on both readers.
         // Reading only `reasoning` silently discarded EVERY reasoning token
         // from NIM — `nvidia/nemotron-3.5-lightning-30b-a3b` sends 126 of 128
         // frames as `reasoning_content` — so the fallback below never fired and
         // a cut-off run reported `outputSize: 0`, indistinguishable from a
-        // provider that answered nothing at all. Same normalization as
-        // ../openAiChatStream.js (`delta?.reasoning || delta?.reasoning_content
-        // || delta?.thinking`), restated rather than imported because this
-        // directory stays self-contained — see ./AGENTS.md.
+        // provider that answered nothing at all. Restated rather than imported
+        // because this directory stays self-contained — see ./AGENTS.md.
         const reasoningDelta = delta?.reasoning || delta?.reasoning_content || delta?.thinking;
         if (reasoningDelta) {
           reasoning += reasoningDelta;
