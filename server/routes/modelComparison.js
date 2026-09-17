@@ -3,10 +3,20 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, modelComparisonImportSchema, modelComparisonDiscoverySchema, modelComparisonSyncSchema } from '../lib/validation.js';
 import { getModelComparison, importModelComparison } from '../services/modelComparison.js';
 import { hasArtificialAnalysisKey, syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
+import { syncSwebenchCatalog } from '../services/swebenchBenchmarks.js';
+import { syncLiveCodeBenchCatalog } from '../services/livecodebenchBenchmarks.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 import { catalogSlugForProviderModel } from '../lib/comparisonModelScope.js';
 import { applyModelAccess } from '../lib/aiToolkit/internal/modelAccess.js';
+
+// The sync sources the page offers, keyed by the route parameter. The AA key
+// presence travels separately on GET — never the key itself.
+const BENCHMARK_SYNC_SOURCES = Object.freeze({
+  'artificial-analysis': { label: 'Artificial Analysis', requiresKey: true, sync: syncArtificialAnalysisCatalog },
+  swebench: { label: 'SWE-bench leaderboards', requiresKey: false, sync: () => syncSwebenchCatalog() },
+  livecodebench: { label: 'LiveCodeBench', requiresKey: false, sync: () => syncLiveCodeBenchCatalog() },
+});
 
 // The endpoint id plus the benchmark-index name it normalizes to. Both travel,
 // because the page needs them for different things: the executable id labels
@@ -40,6 +50,7 @@ export function createModelComparisonRoutes(providerService) {
       ...catalog, inventory, availableModels: [...new Set(inventory.flatMap(p => p.models.map(m => m.catalogModel).filter(Boolean)))].sort(),
       // Presence only, never the key — the page skips its key prompt when set.
       artificialAnalysisKeyConfigured,
+      syncSources: Object.entries(BENCHMARK_SYNC_SOURCES).map(([id, source]) => ({ id, label: source.label, requiresKey: source.requiresKey })),
     });
   }));
   // Explicit read-only catalog discovery: no model inference or provider writes.
@@ -62,6 +73,14 @@ export function createModelComparisonRoutes(providerService) {
   router.post('/sync-aa', asyncHandler(async (req, res) => {
     const { apiKey } = validateRequest(modelComparisonSyncSchema, req.body || {});
     res.json(await syncArtificialAnalysisCatalog({ apiKey }));
+  }));
+  // Generalized benchmark source sync. /sync-aa stays as a back-compat alias —
+  // other installs' UIs and scripts call it directly.
+  router.post('/sync/:source', asyncHandler(async (req, res) => {
+    const source = BENCHMARK_SYNC_SOURCES[req.params.source];
+    if (!source) throw new ServerError(`Unknown benchmark sync source: ${req.params.source}`, { status: 404 });
+    const { apiKey } = validateRequest(modelComparisonSyncSchema, req.body || {});
+    res.json(await source.sync({ apiKey }));
   }));
   return router;
 }

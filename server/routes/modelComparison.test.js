@@ -187,3 +187,65 @@ it('scopes the chart inventory — and a fresh discovery — to the provider mod
   const discovery = await request(app).post('/comparison/discover').send({ providerId: 'nvidia-nim' });
   expect(discovery.body.models.map(m => m.model)).toEqual(['meta/llama-3.1-8b-instruct']);
 });
+
+it('exposes the sync sources and syncs each keyless source without a key', async () => {
+  const listed = (await request(app).get('/comparison')).body.syncSources;
+  expect(listed).toEqual([
+    { id: 'artificial-analysis', label: 'Artificial Analysis', requiresKey: true },
+    { id: 'swebench', label: 'SWE-bench leaderboards', requiresKey: false },
+    { id: 'livecodebench', label: 'LiveCodeBench', requiresKey: false },
+  ]);
+  expect((await request(app).post('/comparison/sync/unknown-source').send({})).status).toBe(404);
+
+  const originalFetch = globalThis.fetch;
+  const swebenchPage = {
+    name: 'Verified',
+    results: [{
+      agent: 'mini-SWE-agent', agent_org: 'Example Org', date: '2026-02-13',
+      folder: '20260213_mini-v2.0.0a0_example-model', instance_cost: 0.35,
+      model_display: 'Example Model', model_org: 'Example Org', name: 'Example Model',
+      reasoning_effort: null, resolved: 52.62, tags: [], warning: null,
+    }],
+  };
+  const lcbData = {
+    performances: [
+      { question_id: '1_A', model: 'Example-Model', date: Date.parse('2024-01-01'), difficulty: 'easy', 'pass@1': 100.0 },
+      { question_id: '2_A', model: 'Example-Model', date: Date.parse('2024-06-01'), difficulty: 'hard', 'pass@1': 50.0 },
+    ],
+    models: [{ model_name: 'example-model', model_repr: 'Example-Model', model_style: 'OpenAIChat', release_date: 1, link: 'https://example.com/model' }],
+  };
+  const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((url, opts) => {
+    if (typeof url === 'string' && url.includes('swebench.com')) {
+      return Promise.resolve({
+        ok: true,
+        text: async () => `<html><script type="application/json" id="leaderboard-data">${JSON.stringify([swebenchPage])}</script></html>`,
+      });
+    }
+    if (typeof url === 'string' && url.includes('livecodebench.github.io')) {
+      return Promise.resolve({ ok: true, json: async () => lcbData });
+    }
+    return originalFetch(url, opts);
+  });
+
+  try {
+    const swe = await request(app).post('/comparison/sync/swebench').send({});
+    expect(swe.status).toBe(200);
+    expect(swe.body.success).toBe(true);
+    expect(swe.body.observations).toBe(1);
+
+    const lcb = await request(app).post('/comparison/sync/livecodebench').send({});
+    expect(lcb.status).toBe(200);
+    expect(lcb.body.success).toBe(true);
+    expect(lcb.body.observations).toBe(1);
+
+    const stored = (await request(app).get('/comparison')).body.observations;
+    expect(stored.find(row => row.id.startsWith('swebench-'))).toMatchObject({
+      benchmark: 'SWE-bench Verified (pass@1, mini-SWE-agent)', billing: 'api',
+    });
+    expect(stored.find(row => row.id.startsWith('lcb-generation-'))).toMatchObject({
+      benchmark: 'LiveCodeBench (generation, pass@1, 2024-01-01 to 2024-06-01)', provider: 'OpenAI',
+    });
+  } finally {
+    spy.mockRestore();
+  }
+});
