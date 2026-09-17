@@ -15,7 +15,7 @@ import {
   runSchema,
 } from './validation.js';
 import { createCosTaskSchema, createTaskTemplateSchema, updateTaskTemplateSchema } from './cosValidation.js';
-import { providerActiveSchema, providerSchema, runSchema as toolkitRunSchema } from './aiToolkit/validation.js';
+import { providerActiveSchema, providerCreateSchema, providerSchema, runSchema as toolkitRunSchema } from './aiToolkit/validation.js';
 
 const ACCEPTED = ['claude-code', 'pi.tui@nvidia-nim-free', 'claude.cli@anthropic+corp-auth', 'direct.api@ollama'];
 const REJECTED = ['pi.tui@Nvidia', 'pi.tui@', 'pi.gui@x', 'direct.api@ollama+corp-auth', '__proto__'];
@@ -73,6 +73,11 @@ describe('preset-only surfaces refuse a composite and name the rule', () => {
     const result = providerSchema.safeParse({ ...base, fallbackProvider: 'pi.tui@nvidia-nim' });
     expect(result.success).toBe(false);
     expect(message(result)).toMatch(/preset provider id/);
+    // '' is the picker's "None (use system default)" option, and ProviderForm
+    // spreads the whole form into the body — so tightening this field to the
+    // preset grammar must not 400 every provider saved without a fallback.
+    expect(providerSchema.safeParse({ ...base, fallbackProvider: '' }).success).toBe(true);
+    expect(providerCreateSchema.safeParse({ ...base, fallbackProvider: '' }).success).toBe(true);
   });
 
   it("an app's taskTypeOverrides pin", () => {

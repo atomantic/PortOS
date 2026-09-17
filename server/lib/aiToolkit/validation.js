@@ -108,8 +108,11 @@ export const providerSchema = z.object({
   heavyModel: z.string().nullable().optional(),
   ultraModel: z.string().nullable().optional(),
   // PRESET-ONLY: the fallback chain reads `providers[fallbackProvider]` off the
-  // stored map, where a composite never exists (#7564).
-  fallbackProvider: z.string().regex(PRESET_ID_RE, PRESET_ONLY_MESSAGE).max(80).nullable().optional(),
+  // stored map, where a composite never exists (#7564). `''` stays accepted: it is
+  // the picker's "None (use system default)" sentinel, and ProviderForm spreads
+  // the whole form into the body, so EVERY provider saved without a fallback
+  // sends it. Refine rather than a union so the refusal keeps naming the rule.
+  fallbackProvider: z.string().max(80).refine((value) => value === '' || PRESET_ID_RE.test(value), PRESET_ONLY_MESSAGE).nullable().optional(),
   // Model to run on the fallback provider. The UI sends '' when no model is
   // pinned (fall back to the fallback provider's own default), so allow empty.
   fallbackModel: z.string().nullable().optional(),
