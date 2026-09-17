@@ -279,6 +279,38 @@ describe('socket.js — initSocket', () => {
     expect(socket.emitted).toContainEqual(['cos:tasks:changed', payload]);
   });
 
+  // The three agent-record events leave through the same listing projection as
+  // `GET /api/cos/agents`. Without it the socket refills the CoS agents list with
+  // unprojected rows — transcript and whole pasted prompt — moments after the
+  // HTTP listing shrank it, and relays that payload on to every peer.
+  it.each(['agent:spawned', 'agent:updated', 'agent:completed'])(
+    'projects the agent record before broadcasting %s',
+    (event) => {
+      const socket = makeSocket(`agent-projection-${event}`);
+      createdSockets.push(socket);
+      io.connect(socket);
+      socket.handlers['cos:subscribe']();
+
+      const long = 'Refactor the queue. '.repeat(5000);
+      const listener = cosEvents.on.mock.calls.find(([name]) => name === event)?.[1];
+      listener({
+        id: 'agent-001',
+        taskId: 'task-1',
+        status: 'running',
+        output: [{ line: 'a transcript line' }],
+        metadata: { taskDescription: long, model: 'opus' }
+      });
+
+      const [, broadcast] = socket.emitted.find(([name]) => name === `cos:${event}`);
+      expect(broadcast).not.toHaveProperty('output');
+      expect(broadcast.metadata.taskDescription.length).toBeLessThan(long.length);
+      expect(broadcast.metadata.taskDescriptionTruncated).toBe(true);
+      // The fields every consumer routes on survive the projection.
+      expect(broadcast).toMatchObject({ id: 'agent-001', taskId: 'task-1', status: 'running' });
+      expect(broadcast.metadata.model).toBe('opus');
+    }
+  );
+
   // ===========================================================================
   // broadcast: two subscribed sockets both receive the event
   // Tested via the subscription ack — the internal Set membership is observable

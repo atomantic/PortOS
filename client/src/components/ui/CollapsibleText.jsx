@@ -1,4 +1,4 @@
-import { Children, useState, useRef, useEffect } from 'react';
+import { Children, useCallback, useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
 // Tailwind scans source for literal class names, so the clamp variants must
@@ -71,6 +71,12 @@ const CLAMP_CLASS = {
  * notification). Without the `|| expanded` term that in-flight callback can
  * measure the now-unclamped element, see no overflow, and drop the toggle.
  *
+ * `onExpand` fires the first time the reader opens the preview, for content the
+ * caller only fetches on demand — a card whose listing payload carries a
+ * truncated copy hydrates the rest here rather than downloading it for every row
+ * up front. It is called once per mount, not on every toggle, so re-collapsing
+ * and re-expanding never re-fetches.
+ *
  * `id` is required: it wires the toggle's `aria-controls` to the content it expands.
  */
 
@@ -87,12 +93,25 @@ export default function CollapsibleText({
   lines = 2,
   expandedContent = null,
   expandedClassName = '',
-  forceToggle = false
+  forceToggle = false,
+  onExpand = null
 }) {
   const [expanded, setExpanded] = useState(false);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const ref = useRef(null);
   const innerRef = useRef(null);
+  const expandedOnceRef = useRef(false);
+
+  // `onExpand` is deliberately NOT fired from inside the `setExpanded` updater:
+  // React may invoke an updater more than once (StrictMode double-invoke), and a
+  // hydration fetch must not ride a function the renderer is free to replay.
+  const open = useCallback(() => {
+    if (!expandedOnceRef.current) {
+      expandedOnceRef.current = true;
+      onExpand?.();
+    }
+    setExpanded(true);
+  }, [onExpand]);
   // An empty list or an empty string is *no* children, not "children that
   // happen to be blank" — a caller doing `<CollapsibleText text={fallback}>
   // {items.map(…)}</CollapsibleText>` over an empty list must get the text
@@ -140,7 +159,7 @@ export default function CollapsibleText({
           // Measured live rather than read off `isOverflowing`: a descendant with
           // `autoFocus` takes focus during commit, before the passive measure
           // effect has run, so the state flag is still false on that first focus.
-          onFocus={() => { if (ref.current && overflows(ref.current)) setExpanded(true); }}
+          onFocus={() => { if (ref.current && overflows(ref.current)) open(); }}
         >
           <div ref={innerRef}>{children}</div>
         </div>
@@ -166,7 +185,7 @@ export default function CollapsibleText({
       {(isOverflowing || expanded || forceToggle) && (
         <button
           type="button"
-          onClick={() => setExpanded(v => !v)}
+          onClick={() => (expanded ? setExpanded(false) : open())}
           className="flex items-center gap-0.5 mt-0.5 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
           aria-expanded={expanded}
           aria-controls={id}

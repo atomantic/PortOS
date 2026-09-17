@@ -36,6 +36,7 @@ export * as cosValidation from './cosValidation.js';
 // check treats an identical identity as a re-export rather than a clash.
 export * from './cronFields.js';
 export * from './cronValidation.js';
+export * from './cosAgentListProjection.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
 // The generation-key spec creativeCommissionValidation.js builds its Zod schema
