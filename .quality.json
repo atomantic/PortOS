@@ -465,17 +465,17 @@
       }
     },
     {
-      "measurementId": "021c3ec72481e94084abab031455e8b60cb46f886a839f81b9d0b8929dcac060",
-      "assessedAt": "2026-09-17T01:01:08.702Z",
+      "measurementId": "037681c40e1981c533014fbabb4956c8add10299b25ca426d33b18a0e76a7110",
+      "assessedAt": "2026-09-17T04:14:14.575Z",
       "report": {
         "version": 1,
         "category": "observability",
-        "score": 55,
+        "score": 68,
         "worstSeverity": 7,
         "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7689,
-        "totalFiles": 7689
+        "confidence": "high",
+        "scannedFiles": 4356,
+        "totalFiles": 4356
       }
     },
     {
