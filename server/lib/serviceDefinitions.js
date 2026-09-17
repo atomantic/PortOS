@@ -56,6 +56,14 @@ export const SERVICE_PLANS = Object.freeze(['free', 'paid', 'subscription', 'loc
  */
 export const CATALOG_STRATEGIES = Object.freeze(['probe', 'daemon', 'harness', 'static']);
 
+/**
+ * How an instance authenticates (#7563). Only `stored` holds a secret on the
+ * row; `env` reads the definition's conventional variable, `cli-login` is
+ * the harness's own sign-in, and `bootstrap` means a launch wrapper supplies
+ * the key at spawn.
+ */
+export const SERVICE_CREDENTIAL_VIAS = Object.freeze(['stored', 'env', 'cli-login', 'bootstrap']);
+
 const METERED = Object.freeze(['free', 'paid']);
 const PAID = Object.freeze(['paid']);
 const SUBSCRIPTION = Object.freeze(['subscription']);
@@ -328,9 +336,7 @@ export function resolveServiceInstance(input) {
   const slug = raw.slug ?? definition.id;
   if (!SERVICE_SLUG_RE.test(slug)) throw serviceError('SERVICE_SLUG_INVALID', `"${slug}" is not a service slug ([a-z0-9][a-z0-9-]*)`);
   const plan = raw.plan ?? definition.plans[0];
-  if (!definition.plans.includes(plan)) {
-    throw serviceError('SERVICE_PLAN_UNSUPPORTED', `${definition.label} has no "${plan}" plan; choose one of ${definition.plans.join(', ')}`);
-  }
+  assertServicePlan(definition, plan);
 
   const transports = {};
   for (const [protocol, transport] of Object.entries(definition.transports)) {
@@ -347,9 +353,21 @@ export function resolveServiceInstance(input) {
   };
 }
 
-/** A typed error every consumer can key on. */
+/** Refuse a plan the definition does not sell — the one rule every instance write shares. */
+export function assertServicePlan(definition, plan) {
+  if (!definition.plans.includes(plan)) {
+    throw serviceError('SERVICE_PLAN_UNSUPPORTED', `${definition.label} has no "${plan}" plan; choose one of ${definition.plans.join(', ')}`);
+  }
+}
+
+/**
+ * A typed error every consumer can key on. Every refusal here is about the
+ * caller's input, so it carries the 400 the error middleware reads — a route
+ * needs no translation layer to publish it.
+ */
 export function serviceError(code, message) {
   const err = new Error(message);
   err.code = code;
+  err.status = 400;
   return err;
 }

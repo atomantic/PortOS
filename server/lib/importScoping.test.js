@@ -681,7 +681,10 @@ describe('deferred imports stay deferred (#6156)', () => {
 // costs +709 over #7513's 109,282), and the ceiling keeps the ~1.5k of real
 // headroom this budget exists to carry rather than being pinned to the
 // measurement.
-const MAX_STATIC_INSTANTIATIONS = 111500;
+// 111,500 → 111,700 (#7563): `routes/providers.js` gained `providerServices.js`
+// and `providerGraph.js` gained `providerServiceInstances.js`, each one file
+// deep, plus two new suites.
+const MAX_STATIC_INSTANTIATIONS = 111700;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

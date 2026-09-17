@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = {
   readGraph: vi.fn(),
+  applyServiceColumnBackfill: vi.fn().mockResolvedValue(undefined),
   applyReconciliation: vi.fn().mockResolvedValue(undefined),
   commitPendingProjection: vi.fn().mockResolvedValue(undefined),
   acknowledgeProjection: vi.fn().mockResolvedValue(undefined),
@@ -276,5 +277,36 @@ describe('deleting an emptied connection', () => {
     store.deleteConnection.mockResolvedValue({ deleted: false, reason: 'referenced-by-binding' });
     await expect(graph.removeConnection(CONN_A))
       .rejects.toMatchObject({ status: 409, code: 'PROVIDER_GRAPH_CONNECTION_IN_USE' });
+  });
+});
+
+describe('service-instance naming (#7563)', () => {
+  it('gives an unlinked clone the next free slug rather than copying the source\'s', async () => {
+    const fixture = graphFixture();
+    fixture.connections[0].slug = 'ollama';
+    fixture.connections[0].definitionId = 'ollama';
+    fixture.connections[1].slug = 'ollama-2';
+    store.readGraph.mockResolvedValue(fixture);
+    await graph.initProviderGraph();
+    await graph.unlinkBinding({ bindingId: BINDING });
+    const [[{ connection }]] = store.detachBindingToConnection.mock.calls;
+    expect(connection.slug).toBe('ollama-3');
+    expect(connection.id).not.toBe(CONN_A);
+    expect(connection.definitionId).toBe('ollama');
+  });
+
+  it('names a boot-imported fragment before it is written, and backfills unnamed rows after', async () => {
+    const fixture = graphFixture();
+    // CONN_A predates the columns; CONN_B is already named.
+    fixture.connections[1].slug = 'ollama';
+    store.readGraph.mockResolvedValue(fixture);
+    providers.getAllProviders.mockResolvedValue({
+      activeProvider: 'claude-ollama',
+      providers: [structuredClone(CLAUDE), { ...structuredClone(CLAUDE), id: 'claude-other', envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:5555', ANTHROPIC_AUTH_TOKEN: 'other' } }],
+    });
+    await graph.initProviderGraph();
+    const [plan] = store.applyReconciliation.mock.calls[0];
+    expect(plan.imports.connections[0]).toMatchObject({ kind: 'ollama', slug: 'ollama-2', definitionId: 'ollama', plan: 'local' });
+    expect(store.applyServiceColumnBackfill).toHaveBeenCalledWith([{ id: CONN_A, slug: 'ollama-3', definitionId: 'ollama', plan: 'local' }]);
   });
 });

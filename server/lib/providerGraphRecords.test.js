@@ -27,6 +27,7 @@ import {
   planGraphReconciliation,
   reconciliationIsNoop,
   toManagementGraphDto,
+  nextConnectionCatalog,
 } from './providerGraphRecords.js';
 
 // A deterministic id minter so a plan can be asserted without matching UUIDs.
@@ -464,5 +465,22 @@ describe('graphFromPreview', () => {
     const variants = graph.bindings.map((binding) =>
       `${binding.connectionId}|${binding.harnessId ?? ''}|${binding.variantKey}`);
     expect(new Set(variants).size).toBe(variants.length);
+  });
+});
+
+describe('nextConnectionCatalog — stamping and capabilities (#7563)', () => {
+  const current = { state: 'known', models: ['a'], capabilities: { a: { contextWindow: 8192 } } };
+
+  it('keeps the known models AND their capabilities through a failed refresh, and stamps the attempt', () => {
+    expect(nextConnectionCatalog(current, { refreshed: false, error: 'timed out' }, { now: () => 'T1' })).toEqual({
+      state: 'failed', models: ['a'], error: 'timed out', capabilities: { a: { contextWindow: 8192 } }, refreshedAt: 'T1',
+    });
+  });
+
+  it('writes what a success saw — including an empty answer — with the windows the listing declared', () => {
+    expect(nextConnectionCatalog(current, { refreshed: true, models: ['b', 'c', 'b'], contextWindows: { b: 32768, zzz: 1 } }, { now: () => 'T2' }))
+      .toEqual({ state: 'known', models: ['b', 'c'], error: null, capabilities: { b: { contextWindow: 32768 } }, refreshedAt: 'T2' });
+    expect(nextConnectionCatalog(current, { refreshed: true, models: [] }, { now: () => 'T3' }))
+      .toEqual({ state: 'known', models: [], error: null, capabilities: {}, refreshedAt: 'T3' });
   });
 });

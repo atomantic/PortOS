@@ -57,7 +57,10 @@ function shortFailureReason(err) {
 
 /**
  * @param {string} baseUrl - an OpenAI-compatible base (…/v1); trailing slashes tolerated
- * @param {{timeoutMs?: number, apiKey?: string}} [opts]
+ * @param {{timeoutMs?: number, apiKey?: string, headers?: Record<string,string>}} [opts] —
+ *   `headers` is for a listing that authenticates some other way than a bearer
+ *   token (the Anthropic API's `x-api-key` + `anthropic-version` pair, #7563);
+ *   it is merged over the bearer header when both are given.
  * @returns {Promise<{reachable:boolean, models:string[]|null, contextWindows:Record<string,number>|null, error:string|null}>}
  *   `contextWindows` carries an entry only for a model whose window the listing
  *   actually declared, so `{}` means "nothing declared one" — never "these
@@ -65,9 +68,10 @@ function shortFailureReason(err) {
  *   parsing (which key, and smallest-wins when a row declares several) is
  *   `catalogContextWindow`'s rule, shared with model refresh.
  */
-export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '' } = {}) {
+export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '', headers = {} } = {}) {
   const url = `${String(baseUrl || '').replace(/\/+$/, '')}/models`;
-  const init = { method: 'GET', ...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}) };
+  const merged = { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), ...headers };
+  const init = { method: 'GET', ...(Object.keys(merged).length > 0 ? { headers: merged } : {}) };
   const res = await fetchWithTimeout(url, init, timeoutMs)
     // undici reports every network failure as a bare `TypeError: fetch failed`;
     // the real reason (ECONNREFUSED vs. ETIMEDOUT — "nothing is listening" vs.

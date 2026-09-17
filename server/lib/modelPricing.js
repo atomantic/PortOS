@@ -263,6 +263,13 @@ export function resolveModelRates(providerId, model) {
 const LOCALHOST_ENDPOINT = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
 const FREE_ID = /ollama|lmstudio|lm-studio/i;
 
+// A record derived from a service instance (#7563) carries the plan the user
+// DECLARED — `free` / `paid` / `subscription` / `local` — which beats every
+// inference below: NVIDIA's free and paid tiers answer on the same endpoint
+// with the same model ids, so nothing about the record could tell them apart.
+// The string form and legacy records keep the id/endpoint rules.
+const FREE_SERVICE_PLANS = new Set(['free', 'local']);
+
 // OpenCode Zen is a free-tier quota, not API billing: the seeded `opencode-zen`
 // providers (API + CLI/TUI wrappers, see scripts/migrations/336-*) spend a
 // weekly/monthly allowance, so their rows resolve to $0 on the cost report and
@@ -334,8 +341,9 @@ export function isFreeModelId(model) {
  * True when a provider's usage is free — local inference (Ollama, LM Studio,
  * any Ollama-/MTPLX-/llama-/vLLM-backed CLI wrapper, or an API provider pointed at localhost),
  * or a free-tier quota (OpenCode Zen: the `opencode-zen*` provider ids or the
- * `opencode.ai/zen` endpoint). Accepts a provider config object or a bare provider-id string
- * (usage records can outlive their provider config).
+ * `opencode.ai/zen` endpoint). A record carrying a declared `servicePlan`
+ * (#7563) answers from that alone. Accepts a provider config object or a bare
+ * provider-id string (usage records can outlive their provider config).
  * @param {object|string|null|undefined} providerOrId
  * @returns {boolean}
  */
@@ -343,6 +351,7 @@ export function isFreeProvider(providerOrId) {
   if (providerOrId == null) return false;
   if (typeof providerOrId === 'string') return FREE_ID.test(providerOrId) || ZEN_PROVIDER_ID.test(providerOrId);
   const p = providerOrId;
+  if (typeof p.servicePlan === 'string') return FREE_SERVICE_PLANS.has(p.servicePlan);
   if (p.ollamaBacked === true || p.lmstudioBacked === true || p.mtplxBacked === true || p.llamaBacked === true || p.vllmBacked === true || p.sglangBacked === true) return true;
   if (FREE_ID.test(p.id || '') || FREE_ID.test(p.command || '')) return true;
   if (ZEN_PROVIDER_ID.test(p.id || '')) return true;

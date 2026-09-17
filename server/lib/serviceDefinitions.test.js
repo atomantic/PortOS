@@ -129,3 +129,4 @@ describe('resolveServiceInstance', () => {
     expect(() => resolveServiceInstance(input)).toThrow(expect.objectContaining({ code }));
   });
 });
+
