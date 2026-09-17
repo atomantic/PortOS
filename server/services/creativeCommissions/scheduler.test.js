@@ -195,6 +195,73 @@ describe('startCommissionScheduler (no cold-boot generation)', () => {
   });
 });
 
+describe('inventory read failure recovery (#7526)', () => {
+  it('preserves armed crons and the signature when the inventory read rejects, and emits an actionable error', async () => {
+    listCommissionsMock.mockResolvedValueOnce([videoCommission()]);
+    await startCommissionScheduler();
+    expect(scheduleMock).toHaveBeenCalledTimes(1);
+    cancelMock.mockClear(); // beforeEach's teardown of the PRIOR test's cron is not under test here
+
+    listCommissionsMock.mockRejectedValueOnce(new Error('connection terminated'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const count = await syncCommissionSchedules();
+
+    // The regression: a rejected read used to be swallowed into `[]`, which
+    // read as "zero commissions" and cancelled every armed cron below.
+    expect(cancelMock).not.toHaveBeenCalled();
+    expect(count).toBe(1); // still-armed count, not zero
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('connection terminated'));
+    // Actionable, not a record dump — no commission payload in the log line.
+    expect(consoleErrorSpy.mock.calls.some((args) => args[0].includes('Nightly Surreal'))).toBe(false);
+    consoleErrorSpy.mockRestore();
+  });
+
+  describe('with fake timers', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('recovers registrations via the coalesced backoff retry once the store recovers, with no further user save', async () => {
+      listCommissionsMock.mockResolvedValueOnce([videoCommission()]);
+      await startCommissionScheduler();
+      cancelMock.mockClear(); // beforeEach's teardown of the PRIOR test's cron is not under test here
+
+      // The commission was actually deleted while the store was unreachable —
+      // the failed read must not have raced ahead and cancelled it early.
+      listCommissionsMock.mockRejectedValueOnce(new Error('connection terminated'));
+      listCommissionsMock.mockResolvedValue([]);
+      await syncCommissionSchedules();
+      expect(cancelMock).not.toHaveBeenCalled();
+
+      // No settings/commission mutation follows — only the scheduler's own
+      // retry should notice the store is back.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(cancelMock).toHaveBeenCalledWith('creative-commission-commission-1');
+    });
+
+    it('coalesces repeated failures onto one pending retry instead of stacking timers', async () => {
+      listCommissionsMock.mockRejectedValue(new Error('connection terminated'));
+      await syncCommissionSchedules(); // failure #1 arms a retry at the first backoff tier
+      await syncCommissionSchedules(); // failure #2 while that retry is pending — must coalesce
+      expect(listCommissionsMock).toHaveBeenCalledTimes(2);
+
+      listCommissionsMock.mockResolvedValueOnce([]);
+      await vi.advanceTimersByTimeAsync(5_000); // first tier only
+      // A stacked second timer would fire an extra attempt at the same tick.
+      expect(listCommissionsMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('shutdown cancels a pending reconciliation retry', async () => {
+      listCommissionsMock.mockRejectedValue(new Error('connection terminated'));
+      await syncCommissionSchedules();
+      stopCommissionScheduler();
+      listCommissionsMock.mockClear();
+
+      await vi.advanceTimersByTimeAsync(300_000); // past every backoff tier
+      expect(listCommissionsMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe('runScheduledCommission gates', () => {
   it('generates through the CD directive pipeline when autonomy is execute + within budget', async () => {
     getCommissionMock.mockResolvedValue(videoCommission());
