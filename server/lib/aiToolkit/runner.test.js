@@ -860,6 +860,259 @@ describe('AI Toolkit runner service', () => {
     expect(second.canceled).toBeUndefined();
     expect(onRunFailed).not.toHaveBeenCalled();
   });
+  // A `data:` frame is NOT guaranteed to arrive whole: the reader hands back
+  // arbitrary byte-sized chunks (~8KB from undici), so a long frame — a
+  // reasoning model's `delta.reasoning`, a big content burst — routinely
+  // straddles two reads. Parsing per-chunk instead of per-LINE fed JSON.parse a
+  // half frame and threw `Unterminated string in JSON at position 8064`,
+  // failing a 220s NVIDIA NIM nemotron run with outputSize 0. Every other SSE
+  // consumer in the tree already carries the remainder forward.
+  it('reassembles a data frame split across two reads instead of failing the run', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const frame = `data: ${JSON.stringify({ choices: [{ delta: { content: 'split-across-reads' } }] })}\n`;
+    const cut = frame.indexOf('split') + 5;
+    const chunks = [
+      encoder.encode(frame.slice(0, cut)),
+      encoder.encode(frame.slice(cut)),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-split-frame', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-split-frame', 'output.txt'), 'utf-8'))
+      .toBe('split-across-reads');
+  });
+
+  // Same boundary, one layer down: a multi-byte character cut in half by the
+  // read boundary needs the decoder's own streaming carry, or it lands as U+FFFD.
+  it('decodes a multi-byte character split across two reads', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const frame = encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'café — 日本' } }] })}\n`);
+    // Cut inside the 3-byte encoding of "—".
+    const cut = frame.indexOf(0xe2) + 1;
+    const chunks = [frame.slice(0, cut), frame.slice(cut), encoder.encode('data: [DONE]\n')];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-split-utf8', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    await completed;
+
+    expect(await readFile(join(dataDir, 'runs', 'run-split-utf8', 'output.txt'), 'utf-8'))
+      .toBe('café — 日本');
+  });
+
+  // A CRLF transport leaves `\r` on every line; `[DONE]\r` missed the terminal
+  // check and reached JSON.parse, and a trailing `\r` rode into the output text.
+  it('tolerates CRLF frame separators', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'crlf' } }] })}\r\n\r\n`),
+      encoder.encode('data: [DONE]\r\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-crlf', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-crlf', 'output.txt'), 'utf-8')).toBe('crlf');
+  });
+
+  // One corrupt frame mid-stream must not throw away the tokens around it — the
+  // old code let a single JSON.parse throw abort the whole run.
+  it('skips an unparseable frame and keeps the surrounding output', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'before ' } }] })}\n`),
+      encoder.encode('data: {"choices":[{"delta":{"content":"oops\n'),
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'after' } }] })}\n`),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-bad-frame', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-bad-frame', 'output.txt'), 'utf-8'))
+      .toBe('before after');
+  });
+
+  // `data: ` with an empty payload is a keep-alive on some providers. It is not
+  // a frame, so it must not reach the parse-failure log — which would otherwise
+  // emit one line per heartbeat for the life of the stream.
+  it('treats an empty data payload as a heartbeat, not an unparseable frame', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode('data: \n\n'),
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'beat' } }] })}\n`),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-heartbeat', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-heartbeat', 'output.txt'), 'utf-8')).toBe('beat');
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('unparseable stream frame');
+    warn.mockRestore();
+  });
+
+  // A reasoning model streams `delta.reasoning` before any content, so a
+  // mid-stream failure finds `output` empty and the real work sitting in
+  // `reasoning`. The success path already falls back to it; the failure path
+  // discarded it, which is how the NVIDIA NIM nemotron run lost 220s of
+  // generation to `outputSize: 0`.
+  it('salvages reasoning-only partial output when the stream fails mid-run', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning: 'thought so far' } }] })}\n`),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : Promise.reject(new Error('socket hang up'))) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-reasoning-salvage', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(false);
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(await readFile(join(dataDir, 'runs', 'run-reasoning-salvage', 'output.txt'), 'utf-8'))
+      .toBe('thought so far');
+  });
+
+  // A stream that ends without [DONE] still has a complete frame sitting in the
+  // carry buffer; dropping it silently truncates the tail of the answer.
+  it('flushes a trailing frame left unterminated by the final read', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'head ' } }] })}\n`),
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'tail' } }] })}`),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true, value: undefined }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-tail-frame', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-tail-frame', 'output.txt'), 'utf-8'))
+      .toBe('head tail');
+  });
+
 });
 
 describe('AI Toolkit runner — declared extension points', () => {
