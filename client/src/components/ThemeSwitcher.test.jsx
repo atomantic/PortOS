@@ -50,4 +50,13 @@ describe('ThemeSwitcher', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Switch theme/ })).toHaveFocus();
   });
+
+  it('keeps 44px mobile touch target while compact on desktop', () => {
+    render(<ThemeSwitcher />);
+    const button = screen.getByRole('button', { name: /Switch theme/ });
+    expect(button.className).toContain('min-w-[44px]');
+    expect(button.className).toContain('min-h-[44px]');
+    expect(button.className).toContain('lg:min-w-0');
+    expect(button.className).toContain('lg:min-h-0');
+  });
 });

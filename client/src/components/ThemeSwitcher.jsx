@@ -93,7 +93,7 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
             setOpen(true);
           }
         }}
-        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-accent transition-colors"
+        className="min-h-[44px] min-w-[44px] lg:min-h-0 lg:min-w-0 inline-flex items-center justify-center p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors"
         title="Switch theme"
         aria-label={`Switch theme. Current theme: ${theme?.label ?? 'Classic Midnight'}`}
         aria-haspopup="menu"
