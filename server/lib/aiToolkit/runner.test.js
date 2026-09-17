@@ -668,6 +668,192 @@ describe('AI Toolkit runner service', () => {
     expect(await runner.isRunActive('run-hung-setup')).toBe(false);
     expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
   });
+
+  // A Stop of an API run reaches the finalizer as Node's bare
+  // `AbortError: This operation was aborted` — a string no error pattern
+  // matches. Classified as UNKNOWN it fired the host's failure hook, which
+  // escalates to a tier-4 investigation task: a post-mortem over a human
+  // pressing Stop. CLI/TUI runs already finalize a Stop as `canceled`.
+  it('finalizes a mid-stream Stop as canceled, without firing the failure hook', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    const fetch = vi.fn(async (_url, opts) => {
+      const { signal } = opts;
+      return {
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: () => new Promise((_resolve, reject) => {
+              // Reject with the signal's own reason, exactly as undici does —
+              // for a reason-less `abort()` that is Node's DOMException whose
+              // message is "This operation was aborted".
+              const fail = () => reject(signal.reason);
+              if (signal.aborted) return fail();
+              signal.addEventListener('abort', fail, { once: true });
+            }),
+            cancel: async () => {}
+          })
+        }
+      };
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    const onRunFailed = vi.fn();
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    await runner.executeApiRun({
+      runId: 'run-stopped',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      // Far beyond the test's lifetime, so a timeout can't be what finalizes it.
+      timeout: 600_000,
+      onData: undefined,
+      onComplete: (m) => done(m)
+    });
+
+    expect(await runner.stopRun('run-stopped')).toBe(true);
+
+    const metadata = await completed;
+    expect(metadata).toMatchObject({
+      success: false,
+      canceled: true,
+      completionReason: 'canceled',
+      errorCategory: 'canceled',
+    });
+    // A cancellation is evidence about the operator, not the provider: no
+    // failure hook, so nothing benches the provider or escalates a task.
+    expect(onRunFailed).not.toHaveBeenCalled();
+    expect(await runner.isRunActive('run-stopped')).toBe(false);
+    // Persisted too — /runs replays the record, not the in-memory result.
+    const persisted = JSON.parse(await readFile(join(dataDir, 'runs', 'run-stopped', 'metadata.json'), 'utf-8'));
+    expect(persisted).toMatchObject({ canceled: true, errorCategory: 'canceled' });
+  });
+
+  it('finalizes a Stop that lands before the response headers as canceled', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    // The provider never sends headers, so the abort rejects `fetch` itself and
+    // the run finalizes through the non-OK branch rather than the stream reader.
+    const fetch = vi.fn((_url, opts) => new Promise((_resolve, reject) => {
+      const { signal } = opts;
+      const fail = () => reject(signal.reason);
+      if (signal.aborted) return fail();
+      signal.addEventListener('abort', fail, { once: true });
+    }));
+    vi.stubGlobal('fetch', fetch);
+
+    const onRunFailed = vi.fn();
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    // `fetch` never settles until the stop, so `executeApiRun` does not return
+    // on its own — the run is registered synchronously before the first await.
+    runner.executeApiRun({
+      runId: 'run-stopped-early',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      timeout: 600_000,
+      onData: undefined,
+      onComplete: (m) => done(m)
+    }).catch(() => {});
+
+    // Let the readiness hook resolve so the run is parked inside `fetch`.
+    await Promise.resolve();
+    expect(await runner.stopRun('run-stopped-early')).toBe(true);
+
+    const metadata = await completed;
+    expect(metadata).toMatchObject({
+      success: false,
+      canceled: true,
+      errorCategory: 'canceled',
+    });
+    expect(onRunFailed).not.toHaveBeenCalled();
+    expect(await runner.isRunActive('run-stopped-early')).toBe(false);
+  });
+
+  // The stop marker is one-shot and describes only the run that was in flight
+  // when Stop was pressed. A Stop that loses the race to the last chunk (it
+  // lands while the final `read()` is still awaited, so the run is registered
+  // but the success path has not released it yet) must neither retro-cancel
+  // the answer that was delivered nor leak into a later run of the same id.
+  it('drops a stop marker that lost the race to the final chunk', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    let runner;
+    let stopDuringFinalRead = true;
+    const frame = (text) => new TextEncoder()
+      .encode(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n`);
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      let sent = false;
+      return {
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (sent) {
+                // Stop lands inside the await boundary that precedes the
+                // success finalizer, while `activeRuns` still holds the run.
+                if (stopDuringFinalRead) {
+                  stopDuringFinalRead = false;
+                  expect(await runner.stopRun('run-reused')).toBe(true);
+                }
+                return { done: true };
+              }
+              sent = true;
+              return { done: false, value: frame('answer') };
+            },
+            cancel: async () => {}
+          })
+        }
+      };
+    }));
+
+    const onRunFailed = vi.fn();
+    runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed }
+    });
+
+    const runOnce = async () => {
+      let done;
+      const completed = new Promise((resolve) => { done = resolve; });
+      await runner.executeApiRun({
+        runId: 'run-reused', provider: runReady(), model: null, prompt: 'hi',
+        workspacePath: process.cwd(), screenshots: [], timeout: 600_000,
+        onData: undefined, onComplete: (m) => done(m)
+      });
+      return completed;
+    };
+
+    // The chunk was already delivered, so the run is a success despite the Stop.
+    const first = await runOnce();
+    expect(first).toMatchObject({ success: true });
+    expect(first.canceled).toBeUndefined();
+
+    // The stale marker must not make the next run of this id report canceled.
+    const second = await runOnce();
+    expect(second).toMatchObject({ success: true });
+    expect(second.canceled).toBeUndefined();
+    expect(onRunFailed).not.toHaveBeenCalled();
+  });
 });
 
 describe('AI Toolkit runner — declared extension points', () => {
