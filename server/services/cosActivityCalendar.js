@@ -53,8 +53,6 @@ import { loadAgentIndex } from './cosAgentIndex.js';
  */
 const dayKey = (date) => date.toISOString().slice(0, 10);
 
-const MS_PER_DAY = 86400000;
-
 /**
  * Completed runs per day, from `sinceStr` forward, across both stores.
  *
@@ -119,7 +117,12 @@ export async function getActivityCalendar(weeks = 12) {
   let totalTasks = 0;
 
   for (let i = 0; i < weeks * 7; i++) {
-    const date = dayKey(new Date(start.getTime() + i * MS_PER_DAY));
+    // Calendar arithmetic, not epoch-ms stepping. Both are exact here (`start`
+    // is UTC midnight and UTC has no DST), but this form says "the i-th day
+    // after start" without asking the reader to know that.
+    const cursor = new Date(start);
+    cursor.setUTCDate(start.getUTCDate() + i);
+    const date = dayKey(cursor);
     const isFuture = date > todayStr;
     const tasks = isFuture ? 0 : (counts.get(date) || 0);
 

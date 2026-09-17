@@ -405,13 +405,14 @@ function ActivityCalendar({ data }) {
           <span className="text-white font-medium">{formatCount(data.summary.totalTasks)}</span> runs,{' '}
           <span className="text-white font-medium">{data.summary.avgTasksPerActiveDay}</span>/active day
         </span>
-        {/* Mini Legend */}
+        {/* Mini Legend — derived from the same table the cells use, so it
+            cannot drift from the scale it claims to explain. */}
         <div className="flex items-center gap-0.5">
           <span className="mr-1 hidden sm:inline">Less</span>
           <div className="w-2 h-2 rounded-xs bg-port-border/20" />
-          <div className="w-2 h-2 rounded-xs bg-emerald-900/50" />
-          <div className="w-2 h-2 rounded-xs bg-emerald-500/70" />
-          <div className="w-2 h-2 rounded-xs bg-emerald-400" />
+          {HEATMAP_SHADES.slice(1).map((shade) => (
+            <div key={shade} className={`w-2 h-2 rounded-xs ${shade}`} />
+          ))}
           <span className="ml-1 hidden sm:inline">More</span>
         </div>
       </div>
