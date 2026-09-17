@@ -143,6 +143,6 @@ describe('ModelStatusTab', () => {
     // The rescan is what drops a model deleted outside PortOS — a row that
     // survived it would still offer a delete button for weights that are gone.
     expect(screen.queryByText('tracked-example')).not.toBeInTheDocument();
-    expect(screen.getByText(/scanned just now/i)).toBeInTheDocument();
+    expect(screen.getByText(/· scanned .*(ago|just now)/i)).toBeInTheDocument();
   });
 });

@@ -108,9 +108,7 @@ export default function ModelsPanel({ report, loading, initializing = false, onR
               </div>
               <p className="mt-1 text-xs text-gray-500">
                 {report.models.downloaded.length} item{report.models.downloaded.length === 1 ? '' : 's'} · {Number.isFinite(report.models.totals.all) ? formatBytes(report.models.totals.all) : 'size unavailable'}
-                {fromManifest
-                  ? ` · tracked, last verified ${timeAgo(report.reconciledAt)}`
-                  : ' · scanned just now'}
+                {` · ${fromManifest ? 'tracked, last verified' : 'scanned'} ${timeAgo(report.reconciledAt || report.generatedAt)}`}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

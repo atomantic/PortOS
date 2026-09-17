@@ -602,8 +602,8 @@ export function getSystemResourceReport({ force = false } = {}) {
  * This is what Models → Status loads on arrival. It is shaped as a PARTIAL system
  * resource report rather than a bespoke payload so the page renders it through the
  * same component that renders a live scan: the two differ in `inventorySource` and
- * in the fields a scan alone can supply (residency, duplicates, per-store totals
- * for stores whose rows the manifest may not cover).
+ * in the fields only a scan can supply — live residency, and the duplicate-weight
+ * report, whose scan is the most expensive walk of them all.
  *
  * `reconciledAt: null` means no scan has ever reconciled this install — the page
  * shows its "run the inventory" prompt rather than claiming an empty machine.

@@ -158,7 +158,10 @@ export async function getModelManifest() {
  * @param {string} [row.source] How PortOS learned about it ('install' by default)
  * @returns {Promise<boolean>} Whether the manifest now holds the entry
  */
-export function recordModelInstall({ source = 'install', ...row }) {
+export function recordModelInstall({ source = 'install', ...row } = {}) {
+  // Guards the whole contract, not just a typo: a row builder answers `id: null`
+  // for a backend or key it could not use, and this function promises never to
+  // fail the install it is describing.
   if (!row.id) return Promise.resolve(false);
   return mutateManifest(`Could not record model install ${row.id}`, (manifest) => {
     const previous = manifest.models[row.id];
@@ -186,7 +189,7 @@ export function recordModelInstall({ source = 'install', ...row }) {
  * @param {string} input.key The backend's own identifier for the weights
  * @returns {Promise<boolean>} Whether an entry was actually removed
  */
-export function recordModelUninstall({ backend, key }) {
+export function recordModelUninstall({ backend, key } = {}) {
   const id = modelInventoryId(backend, key);
   if (!id) return Promise.resolve(false);
   return mutateManifest(`Could not record model uninstall ${id}`, (manifest) => {
