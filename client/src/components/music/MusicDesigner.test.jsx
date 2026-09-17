@@ -157,8 +157,8 @@ describe('<MusicDesigner>', () => {
       });
       renderAt('/music/generate/concept?trackId=track-saved');
 
-      // Wait for the saved track to actually hydrate — on the weaker barrier the
-      // key is trivially untouched because nothing has run yet.
+      // Hydration is what could clobber the unrelated `activeDraft` key, so the
+      // assertion below only means something once it has actually run.
       await awaitDraftLoaded(/what do you want to hear/i);
       expect(window.localStorage.getItem('portos.musicDesigner.activeDraft')).toBe('track-draft');
     });

@@ -134,11 +134,17 @@ const renderTab = (initialPath = '/messages/beeper') => render(
  * #7448 wrong-barrier shape). Worse, the counts race BOTH ways: a test that
  * asserts a count did NOT move passes vacuously when nothing had loaded yet.
  *
- * The rendered conversation title is the end of that chain. `findAllByText`
+ * The rendered conversation title is the end of that chain — it is the default
+ * `conversation()` fixture's own title, hence no parameter. `findAllByText`
  * rather than `findByText` because the title appears in the list row as well as
  * the thread header whenever the list fixture is populated.
+ *
+ * Call this BEFORE arming `vi.useFakeTimers`. Under fake timers Testing
+ * Library's `waitFor` has no MutationObserver and degrades to an act-flush +
+ * advance(50) poll loop: it costs ~20ms of wall clock per test and burns
+ * fake-clock time on the very clock the debounce assertions are measuring.
  */
-const awaitThreadLoaded = (title = 'Example Conversation') => screen.findAllByText(title);
+const awaitThreadLoaded = () => screen.findAllByText('Example Conversation');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -691,7 +697,6 @@ describe('the composer sends', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(await screen.findByText(/first message PortOS has sent to Example Contact on WhatsApp/)).toBeInTheDocument();
     const pendingRow = await screen.findByTestId('beeper-outbox-row');
-    expect(pendingRow).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
@@ -700,7 +705,7 @@ describe('the composer sends', () => {
     // RESOLVES. Wait on the captured NODE rather than re-querying: a
     // `queryBy… toBeNull` wait passes on its first poll, so it would report
     // green against a row that had simply not been torn down yet, while this
-    // form is anchored by the assertion above that the node was really there.
+    // form is anchored by the `findBy` above, which throws if it was never there.
     await waitFor(() => expect(pendingRow).not.toBeInTheDocument());
     // The question closes and the composer text is untouched — Cancel only
     // withdraws the send, it does not clear the draft.
@@ -806,10 +811,10 @@ describe('realtime', () => {
   });
 
   it('refetches the list and the open thread after an invalidation frame', async () => {
+    renderTab(`/messages/beeper/${CONV_A}`);
+    await awaitThreadLoaded(); // settle on REAL timers — see the helper
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      renderTab(`/messages/beeper/${CONV_A}`);
-      await awaitThreadLoaded();
       const listCalls = api.getBeeperConversations.mock.calls.length;
       const threadCalls = api.getBeeperMessages.mock.calls.length;
 
@@ -833,10 +838,10 @@ describe('realtime', () => {
   // networks still refetch unconditionally (their previews/unread counts DO
   // change for any chat); only the thread refetch is now frame-scoped.
   it('does not refetch the open thread on an invalidation frame for another chat', async () => {
+    renderTab(`/messages/beeper/${CONV_A}`);
+    await awaitThreadLoaded(); // settle on REAL timers — see the helper
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      renderTab(`/messages/beeper/${CONV_A}`);
-      await awaitThreadLoaded();
       const listCalls = api.getBeeperConversations.mock.calls.length;
       const threadCalls = api.getBeeperMessages.mock.calls.length;
 
@@ -857,10 +862,10 @@ describe('realtime', () => {
   });
 
   it('refetches the open thread on a frame naming its chat, or with no chatID at all', async () => {
+    renderTab(`/messages/beeper/${CONV_A}`);
+    await awaitThreadLoaded(); // settle on REAL timers — see the helper
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      renderTab(`/messages/beeper/${CONV_A}`);
-      await awaitThreadLoaded();
 
       let threadCalls = api.getBeeperMessages.mock.calls.length;
       act(() => {
@@ -939,10 +944,10 @@ describe('realtime', () => {
   // each one arriving inside the previous frame's 350ms coalescing window —
   // reset it forever and the view never refreshed at all.
   it('still refetches within the bounded max wait despite a sustained stream of invalidation frames', async () => {
+    renderTab(`/messages/beeper/${CONV_A}`);
+    await awaitThreadLoaded(); // settle on REAL timers — see the helper
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      renderTab(`/messages/beeper/${CONV_A}`);
-      await awaitThreadLoaded();
       const listCalls = api.getBeeperConversations.mock.calls.length;
 
       // A frame every 200ms, well inside the 350ms debounce, for 2.4s total —
@@ -1086,14 +1091,10 @@ describe('list pagination (Load more)', () => {
 });
 
 describe('the two wired rail controls', () => {
-  /**
-   * The rail's scope chip and the thread header's action share a name, but only
-   * the chip is on screen before the conversation detail lands. A bare
-   * `findByRole` therefore resolves on the FIRST poll and `.at(-1)` hands back
-   * the RAIL chip — clicking it switches scope instead of writing, the awaited
-   * API call never happens, and the test burns its whole async budget (#7592).
-   * Wait for the second control, which is exactly "the thread has loaded".
-   */
+  // The rail's scope chip and the thread header's action share a name, but only
+  // the chip exists before the conversation detail lands — so `.at(-1)` on a
+  // bare `findByRole` silently hands back the CHIP. Waiting for the second
+  // control is exactly "the thread header has rendered".
   const findThreadAction = (name) => waitFor(() => {
     const controls = screen.getAllByRole('button', { name });
     expect(controls.length).toBeGreaterThan(1);
@@ -1159,7 +1160,6 @@ describe('the local "seen in PortOS" watermark (#83)', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       renderTab(`/messages/beeper/${CONV_A}`);
-      await awaitThreadLoaded();
       await waitFor(() => expect(api.markBeeperConversationSeen).toHaveBeenCalledWith(CONV_A, { silent: true }));
       api.markBeeperConversationSeen.mockClear();
 
@@ -1201,7 +1201,6 @@ describe('the local "seen in PortOS" watermark (#83)', () => {
       api.getBeeperMessages.mockResolvedValue({ messages: [known], nextCursor: null });
 
       renderTab(`/messages/beeper/${CONV_A}`);
-      await awaitThreadLoaded();
       await waitFor(() => expect(api.markBeeperConversationSeen).toHaveBeenCalledWith(CONV_A, { silent: true }));
       api.markBeeperConversationSeen.mockClear();
 
