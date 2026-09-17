@@ -21,6 +21,7 @@ import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/v
 import { auditModelPins, clearModelPin } from '../services/modelPinAudit.js';
 import { providerCreateSchema, providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 import { canRefreshModels, withRefreshCapability } from '../lib/aiToolkit/internal/modelFetchers.js';
+import { applyModelAccess } from '../lib/aiToolkit/internal/modelAccess.js';
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
@@ -175,8 +176,13 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   // `publicReviewEnforcedPostures` is the subset backed by a vendor sandbox
   // recipe. The two booleans are derived from it and kept for existing consumers.
   const publicReviewPostures = publicReviewPosturesForProvider(provider);
+  // Narrow `models` to the install's declared entitlement, LAST, so every
+  // derivation above still reads the provider's full advertised catalog. The
+  // untouched list rides along as `modelCatalog` — the editor seeds its
+  // "Available Models" box from it, so an ordinary Save on a scoped provider
+  // cannot persist the narrowed list over the real one.
   return sanitizeProvider({
-    ...decorated,
+    ...applyModelAccess(decorated),
     // The UNION of the two refresh paths, because the button asks only
     // whether SOME path can serve this record. Which one actually serves it is
     // decided in `POST /:id/refresh-models`, and the two must stay in step or
@@ -188,6 +194,31 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     publicReviewActionsSupported: publicReviewPostures.includes(PUBLIC_REVIEW_ACTIONS_POSTURE),
   });
 };
+
+/**
+ * Carry a gateway-backed wrapper's RESOLVED model-access policy from the read
+ * that preceded a write onto the record the write handed back.
+ *
+ * A write returns the PERSISTED record, and a wrapper stores no policy of its
+ * own — the gateway sibling owns it, and `withGatewayModelAccess` resolves it on
+ * read. Presenting the raw write result would answer that one request with the
+ * unscoped catalog and the next GET with the scoped one, which reads as a bug.
+ * The route already holds a resolved read (it needs it for the 404 and for
+ * secret preservation), so this is a field copy rather than a second load.
+ *
+ * Deliberately not a re-read: several suites drive these routes with a provider
+ * service double whose `getProviderById` answers a different fixture than the
+ * write does, and a write path is the wrong place to depend on a second lookup.
+ *
+ * Safe against a write that CHANGED the policy: `applyModelAccess` reads the
+ * record's own `modelAccess` first and only falls back to the resolved field,
+ * so a freshly written own policy outranks the inherited one copied here.
+ */
+const withResolvedModelAccess = (provider, resolved) => (
+  provider && resolved?.modelAccessEffective
+    ? { ...provider, modelAccessEffective: resolved.modelAccessEffective, modelAccessSource: resolved.modelAccessSource }
+    : provider
+);
 
 /**
  * Create PortOS-specific provider routes
@@ -914,7 +945,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
     }
 
     const provider = await providerService.updateProvider(req.params.id, updates);
-    res.json(presentProvider(provider, await detectSystemCapabilities()));
+    res.json(presentProvider(withResolvedModelAccess(provider, existing), await detectSystemCapabilities()));
   }));
 
   // POST /:id/refresh-models — intercept the toolkit response so the refreshed
@@ -944,7 +975,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
       provider = await providerService.refreshProviderModels(req.params.id);
     }
     if (!provider) throw new ServerError('Provider not found', { status: 404 });
-    res.json(presentProvider(provider, await detectSystemCapabilities()));
+    res.json(presentProvider(withResolvedModelAccess(provider, stored), await detectSystemCapabilities()));
   }));
 
   /**

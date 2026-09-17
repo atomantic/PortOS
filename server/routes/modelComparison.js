@@ -6,6 +6,7 @@ import { hasArtificialAnalysisKey, syncArtificialAnalysisCatalog } from '../serv
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 import { catalogSlugForProviderModel } from '../lib/comparisonModelScope.js';
+import { applyModelAccess } from '../lib/aiToolkit/internal/modelAccess.js';
 
 // The endpoint id plus the benchmark-index name it normalizes to. Both travel,
 // because the page needs them for different things: the executable id labels
@@ -23,7 +24,12 @@ export function createModelComparisonRoutes(providerService) {
     const [catalog, { providers }, artificialAnalysisKeyConfigured] = await Promise.all([
       getModelComparison(), providerService.getAllProviders(), hasArtificialAnalysisKey(),
     ]);
-    const inventory = providers.filter(p => p.enabled !== false).map(p => ({
+    // Scoped by the same model-access policy the provider pickers apply
+    // (aiToolkit/internal/modelAccess.js), so the chart's default pills and its
+    // coverage list describe the models this install can actually dispatch —
+    // not a vendor's whole advertised catalog. Without this the chart would
+    // plot, and offer to research, models an unentitled account cannot run.
+    const inventory = providers.filter(p => p.enabled !== false).map(applyModelAccess).map(p => ({
       id: p.id, name: p.name, type: p.type, canDiscover: canRefreshModels(p),
       models: filterSelectableModels(p.models).filter(m => typeof m === 'string' && m).map(model => inventoryModel(p, model)),
     }));
@@ -44,8 +50,11 @@ export function createModelComparisonRoutes(providerService) {
     if (!provider || !canRefreshModels(provider)) throw new ServerError('Provider is unavailable for model discovery', { status: 400 });
     const catalog = await providerService.fetchProviderModelCatalog(provider.id);
     if (!catalog) throw new ServerError('Provider model discovery returned no catalog', { status: 502 });
-    const discovered = { ...provider, models: catalog.models };
-    res.json({ providerId: provider.id, models: filterSelectableModels(catalog.models).map(model => inventoryModel(discovered, model)) });
+    // A freshly probed catalog is scoped the same way a stored one is: the
+    // policy describes the ACCOUNT, so it applies to whatever the upstream just
+    // advertised, not only to what happens to be on the record.
+    const discovered = applyModelAccess({ ...provider, models: catalog.models });
+    res.json({ providerId: provider.id, models: filterSelectableModels(discovered.models).map(model => inventoryModel(discovered, model)) });
   }));
   router.post('/import', asyncHandler(async (req, res) => {
     res.json(await importModelComparison(validateRequest(modelComparisonImportSchema, req.body)));

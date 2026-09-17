@@ -26,6 +26,7 @@ import { isOllamaBackedProvider, ollamaBaseFromProvider } from './internal/ollam
 import { gatewayForProvider, isGatewayBackedProvider } from './internal/gateways.js';
 import { canRefreshModels, ollamaRefreshGroupKey, resolveModelFetcher } from './internal/modelFetchers.js';
 import { modelCatalogUpdate, modelContextWindowPatch, parseModelCatalog, toModelCatalog } from './internal/modelCatalog.js';
+import { normalizeModelAccess } from './internal/modelAccess.js';
 
 // Re-exported (rather than defined here) so the model-fetcher table can key its
 // ollama row on the same predicate without importing back into this module.
@@ -62,6 +63,42 @@ function withGatewayApiKey(provider, providers) {
     configurable: true,
   });
   return executionProvider;
+}
+
+/**
+ * Resolve the MODEL ACCESS policy a provider read is governed by, stamped as
+ * the derived `modelAccessEffective` (+ `modelAccessSource`) rather than folded
+ * into the persisted `modelAccess` field.
+ *
+ * A gateway-backed OpenCode wrapper front-ends the SAME upstream catalog as the
+ * sibling `api` record whose id equals the gateway id — one NVIDIA NIM
+ * entitlement serves the api provider, its CLI wrapper and its TUI wrapper — so
+ * a wrapper with no policy of its own inherits the gateway's. Exactly the
+ * inheritance {@link withGatewayApiKey} already performs for the key, and for
+ * the same reason: the wrapper stores nothing the gateway record owns.
+ *
+ * Two separate field names, not one, because the resolved value must never be
+ * able to become the wrapper's OWN stored policy: `modelAccess` is in
+ * `providerSchema`, so a client that echoes a GET back on a PUT would persist
+ * whatever it was handed. `modelAccessEffective` is not in the schema and is
+ * stripped by `providerSchema.partial()`, which keeps inheritance live — a
+ * later edit to the gateway still reaches every wrapper.
+ *
+ * Returns the SAME object when no policy applies, so an install that has not
+ * configured this sees no change at all.
+ *
+ * Composition order against {@link withGatewayApiKey} is load-bearing: that one
+ * attaches the sibling key as a NON-ENUMERABLE property, which a spread here
+ * would silently drop. This runs first and the key attach stays outermost.
+ */
+function withGatewayModelAccess(provider, providers) {
+  if (!provider || typeof provider !== 'object') return provider;
+  const own = normalizeModelAccess(provider.modelAccess);
+  if (own) return { ...provider, modelAccessEffective: own, modelAccessSource: 'own' };
+  const gateway = gatewayForProvider(provider);
+  const inherited = gateway ? normalizeModelAccess(providers?.[gateway.id]?.modelAccess) : null;
+  if (!inherited) return provider;
+  return { ...provider, modelAccessEffective: inherited, modelAccessSource: gateway.id };
 }
 
 // Extensions Windows can launch directly, checked in cmd.exe's own resolution
@@ -724,6 +761,12 @@ export function createProviderService(config = {}) {
       ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked
         ? { gatewayBacked: providerData.gatewayBacked } : {}),
       ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
+      // Which of the upstream catalog this install is entitled to run
+      // (internal/modelAccess.js). Normalized on the way in so a stored record
+      // never holds a mode this build does not know, and only persisted when it
+      // says something — an unconfigured provider stays byte-identical.
+      ...(normalizeModelAccess(providerData.modelAccess)
+        ? { modelAccess: normalizeModelAccess(providerData.modelAccess) } : {}),
       // Explicit opt-in to send the API key to an arbitrary (non-local,
       // non-allowlisted) endpoint — see endpointGuard.js. Only
       // persisted when true so existing keyless/local providers stay clean.
@@ -757,23 +800,26 @@ export function createProviderService(config = {}) {
   return {
     async getAllProviders() {
       const data = await loadProviders();
+      // Model-access resolution only — the API key stays OFF the list shape,
+      // which is read by routes that serialize every provider. The envelope
+      // below is pinned by services/providers.shape.test.js; keep it literal.
       return {
         activeProvider: data.activeProvider,
-        providers: Object.values(data.providers)
+        providers: Object.values(data.providers).map(provider => withGatewayModelAccess(provider, data.providers))
       };
     },
 
     async getProviderById(id) {
       const data = await loadProviders();
       const provider = data.providers[id];
-      return provider ? withGatewayApiKey(provider, data.providers) : null;
+      return provider ? withGatewayApiKey(withGatewayModelAccess(provider, data.providers), data.providers) : null;
     },
 
     async getActiveProvider() {
       const data = await loadProviders();
       if (!data.activeProvider) return null;
       const provider = data.providers[data.activeProvider];
-      return provider ? withGatewayApiKey(provider, data.providers) : null;
+      return provider ? withGatewayApiKey(withGatewayModelAccess(provider, data.providers), data.providers) : null;
     },
 
     async setActiveProvider(id) {
@@ -877,6 +923,15 @@ export function createProviderService(config = {}) {
       // stored `null` would no longer read as "never had one".
       const dropClearedBootstrap = (record) => {
         if (record.credentialBootstrap === null) delete record.credentialBootstrap;
+        // Same convention for the model-access policy: an explicit `null` is
+        // "clear it", and a policy that normalizes to nothing (mode `all` with
+        // no patterns) is stored as absent rather than as an inert object, so a
+        // record that was reset reads exactly like one that never had a policy.
+        if (Object.hasOwn(record, 'modelAccess')) {
+          const normalized = normalizeModelAccess(record.modelAccess);
+          if (normalized) record.modelAccess = normalized;
+          else delete record.modelAccess;
+        }
       };
       dropClearedBootstrap(provider);
 

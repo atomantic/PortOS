@@ -6,6 +6,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import { filterSelectableModels, isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isCodexSubscriptionProvider, isLocalEndpoint, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import { copyToClipboard } from '../lib/clipboard';
+import { formatCount } from '../utils/formatters';
 import { isHttpsUrl } from '../utils/urlNormalize';
 import useLocalModels from '../hooks/useLocalModels';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -886,6 +887,17 @@ export default function AIProviders() {
                       )}
                       {filterSelectableModels(provider.models).length > 0 && (
                         <p>Models: {filterSelectableModels(provider.models).slice(0, 3).join(', ')}{filterSelectableModels(provider.models).length > 3 ? ` +${filterSelectableModels(provider.models).length - 3}` : ''}</p>
+                      )}
+                      {/* The card's model line shows the SCOPED list, so say when a
+                          model-access policy is what makes it short — otherwise a
+                          user comparing it against the vendor's catalog reads a
+                          deliberate scope as a failed refresh. */}
+                      {provider.modelAccessHiddenCount > 0 && (
+                        <p className="text-gray-500">
+                          {formatCount(provider.modelAccessHiddenCount)} more hidden by model access
+                          {provider.modelAccessSource && provider.modelAccessSource !== 'own'
+                            ? ` (from ${provider.modelAccessSource})` : ''}
+                        </p>
                       )}
                       {provider.envVars && Object.keys(provider.envVars).length > 0 && (
                         <div className="mt-0.5">

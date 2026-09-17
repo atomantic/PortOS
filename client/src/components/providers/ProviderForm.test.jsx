@@ -253,3 +253,84 @@ describe('ProviderForm planned context window', () => {
     expect(payload).not.toHaveProperty('modelContextWindows');
   });
 });
+
+describe('ProviderForm model access', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.updateProvider.mockResolvedValue({});
+  });
+
+  // A scoped payload carries the narrowed list as `models` and the real one as
+  // `modelCatalog`. The editor saves its model textarea verbatim, so seeding it
+  // from `models` would let an unrelated edit persist the narrowed catalog over
+  // the real one — silently, and recoverable only by a refresh.
+  const scopedProvider = {
+    id: 'nvidia-nim',
+    name: 'NVIDIA NIM',
+    type: 'api',
+    endpoint: 'https://integrate.api.nvidia.com/v1',
+    models: ['meta/llama-3.3-70b-instruct'],
+    modelCatalog: ['meta/llama-3.3-70b-instruct', 'nvidia/nemotron-4-340b-instruct'],
+    modelAccess: { mode: 'allow', patterns: ['meta/*'] },
+    modelAccessHiddenCount: 1,
+  };
+
+  it('saves the full advertised catalog, not the scoped view', async () => {
+    renderForm({ provider: scopedProvider });
+    switchTab('Models');
+    expect(screen.getByRole('textbox', { name: /Available Models/i }))
+      .toHaveValue('meta/llama-3.3-70b-instruct, nvidia/nemotron-4-340b-instruct');
+
+    fireEvent.click(screen.getByRole('button', { name: /Update Provider|Save/i }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalled());
+    const [, payload] = api.updateProvider.mock.calls[0];
+    expect(payload.models).toEqual(['meta/llama-3.3-70b-instruct', 'nvidia/nemotron-4-340b-instruct']);
+    expect(payload.modelAccess).toEqual({ mode: 'allow', patterns: ['meta/*'] });
+  });
+
+  it('previews the scope live and ticks a model into the pattern list', async () => {
+    renderForm({ provider: scopedProvider });
+    switchTab('Models');
+    expect(screen.getByText(/Showing 1 of 2 models \(1 hidden\)/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /nvidia\/nemotron-4-340b-instruct/ }));
+    expect(screen.getByText(/Showing 2 of 2 models \(0 hidden\)/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Update Provider|Save/i }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalled());
+    expect(api.updateProvider.mock.calls[0][1].modelAccess.patterns)
+      .toEqual(['meta/*', 'nvidia/nemotron-4-340b-instruct']);
+  });
+
+  it('switching back to "all" parks the curated list rather than discarding it', async () => {
+    // Re-opening a provider is a mode change, not a decision to throw away the
+    // list the user assembled. The server reads mode `all` as unconstrained, so
+    // the patterns ride along inert and are there when they scope it again.
+    renderForm({ provider: scopedProvider });
+    switchTab('Models');
+    fireEvent.change(screen.getByRole('combobox', { name: /Model Access/i }),
+      { target: { value: 'all' } });
+    expect(screen.queryByText(/Showing 1 of 2 models/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Update Provider|Save/i }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalled());
+    expect(api.updateProvider.mock.calls[0][1].modelAccess).toEqual({ mode: 'all', patterns: ['meta/*'] });
+  });
+
+  it('a provider that never had a policy sends an explicit null, not an omitted key', async () => {
+    // The server merges a PATCH by spread, so an omitted key reads as
+    // "unchanged" — a cleared policy has to arrive as a value.
+    renderForm({ provider: { ...scopedProvider, modelAccess: undefined, modelCatalog: undefined } });
+    switchTab('Models');
+    fireEvent.click(screen.getByRole('button', { name: /Update Provider|Save/i }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalled());
+    expect(api.updateProvider.mock.calls[0][1].modelAccess).toBeNull();
+  });
+
+  it('says so when a mode is selected but nothing is scoped yet', () => {
+    // "Not configured yet" must not read as a working policy — the count line
+    // would otherwise reassure with "Showing 2 of 2".
+    renderForm({ provider: { ...scopedProvider, modelAccess: { mode: 'allow', patterns: [] } } });
+    switchTab('Models');
+    expect(screen.getByText(/No patterns yet/)).toBeInTheDocument();
+  });
+});

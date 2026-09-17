@@ -19,6 +19,8 @@ import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import { GatewayKeyHint } from './ProviderNotices';
+import ProviderModelAccess from './ProviderModelAccess';
+import { normalizeModelAccess, providerModelCatalog } from '../../utils/providerModelAccess';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
@@ -61,7 +63,15 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     apiKey: '',
     allowCustomEndpoint: provider?.allowCustomEndpoint === true,
     ignoreUserConfig: provider?.ignoreUserConfig === true,
-    models: provider?.models || [],
+    // The FULL advertised catalog, never the model-access-scoped `models` the
+    // payload carries. This textarea is saved verbatim, so seeding it from the
+    // scoped list would let an ordinary Save persist the narrowed catalog over
+    // the real one — recoverable only by a refresh, and silently wrong until then.
+    models: providerModelCatalog(provider),
+    // Absent on a record with no policy, which is the shape the server reads as
+    // "unconstrained". `null` (not `undefined`) when cleared, so the PATCH
+    // spread-merge sees a clear rather than "unchanged".
+    modelAccess: provider?.modelAccess || null,
     hardwareRequirements: provider?.hardwareRequirements,
     modelHardwareRequirements: provider?.modelHardwareRequirements,
     defaultModel: provider?.defaultModel || '',
@@ -371,6 +381,10 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     for (const field of ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'fallbackModel']) {
       if (isEmbeddingModel(data[field])) data[field] = '';
     }
+    // An explicit `null` rather than `undefined` when the policy says nothing:
+    // the server merges a PATCH by spread, which reads `undefined` as "unchanged"
+    // and would leave a policy the user just cleared in place.
+    data.modelAccess = normalizeModelAccess(formData.modelAccess);
     // Effort is meaningful only for providers/models that expose an effort
     // ladder. Clear a stale value when an edit switches to an effort-less
     // provider or Antigravity model; narrowed ladders are clamped by the
@@ -906,6 +920,17 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                   Comma-separated list of available models. For API providers, use Refresh to auto-populate.
                 </p>
               </FormField>
+
+              {/* Which of that catalog this install is entitled to run. Fed the
+                  FULL list (`formData.models`, seeded from `modelCatalog`), because
+                  the policy is authored against everything the upstream
+                  advertises — the scoped view is what it produces. */}
+              <ProviderModelAccess
+                catalog={formData.models || []}
+                value={formData.modelAccess}
+                provider={{ ...provider, ...formData, id: provider?.id }}
+                onChange={(modelAccess) => setFormData(prev => ({ ...prev, modelAccess }))}
+              />
 
               <FormField label="Default Model">
                 {availableModels.length > 0 ? (

@@ -2,6 +2,14 @@ import { Router } from 'express';
 import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
 import { providerSchema, providerActiveSchema, validate } from '../validation.js';
 import { withRefreshCapability, withRefreshCapabilityList } from '../internal/modelFetchers.js';
+import { applyModelAccess, applyModelAccessList } from '../internal/modelAccess.js';
+
+// Model-access scoping is the same kind of on-the-way-out derivation as
+// `canRefreshModels`: the stored catalog is what the upstream advertises, and
+// the policy says which of it this install may actually run (internal/modelAccess.js).
+// Narrowing at the route rather than in the service keeps `providers.json` — and
+// every execution path that reads a record directly — holding the real catalog,
+// so clearing the policy restores the full list with no re-probe.
 
 // `canRefreshModels` is DERIVED ON READ and decorated HERE, at the route —
 // never inside `getAllProviders()`. Computing it in the service would put it on
@@ -23,12 +31,12 @@ export function createProvidersRoutes(providerService, options = {}) {
 
   router.get('/', asyncHandler(async (req, res) => {
     const data = await providerService.getAllProviders();
-    res.json({ ...data, providers: withRefreshCapabilityList(data.providers) });
+    res.json({ ...data, providers: applyModelAccessList(withRefreshCapabilityList(data.providers)) });
   }));
 
   router.get('/active', asyncHandler(async (req, res) => {
     const provider = await providerService.getActiveProvider();
-    res.json(withRefreshCapability(provider));
+    res.json(applyModelAccess(withRefreshCapability(provider)));
   }));
 
   router.put('/active', asyncHandler(async (req, res) => {
@@ -44,7 +52,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(withRefreshCapability(provider));
+    res.json(applyModelAccess(withRefreshCapability(provider)));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
@@ -52,7 +60,7 @@ export function createProvidersRoutes(providerService, options = {}) {
     // Samples are provider-shaped and the flag is derived purely from that
     // shape, so decorate them too — a sample's answer is what the provider it
     // becomes will report. PortOS's shadowing `/samples` handler does the same.
-    res.json({ providers: withRefreshCapabilityList(providers) });
+    res.json({ providers: applyModelAccessList(withRefreshCapabilityList(providers)) });
   }));
 
   router.get('/:id', asyncHandler(async (req, res) => {
@@ -62,7 +70,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(withRefreshCapability(provider));
+    res.json(applyModelAccess(withRefreshCapability(provider)));
   }));
 
   router.post('/', asyncHandler(async (req, res) => {
@@ -72,7 +80,7 @@ export function createProvidersRoutes(providerService, options = {}) {
     }
 
     const provider = await providerService.createProvider(result.data);
-    res.status(201).json(withRefreshCapability(provider));
+    res.status(201).json(applyModelAccess(withRefreshCapability(provider)));
   }));
 
   router.put('/:id', asyncHandler(async (req, res) => {
@@ -89,7 +97,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(withRefreshCapability(provider));
+    res.json(applyModelAccess(withRefreshCapability(provider)));
   }));
 
   router.delete('/:id', asyncHandler(async (req, res) => {
@@ -120,7 +128,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(withRefreshCapability(provider));
+    res.json(applyModelAccess(withRefreshCapability(provider)));
   }));
 
   return router;
