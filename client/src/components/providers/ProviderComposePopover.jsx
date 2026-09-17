@@ -85,10 +85,7 @@ export default function ProviderComposePopover({
     const all = catalog.methodsFor(harnessId);
     return allowedMethods ? all.filter((mode) => allowedMethods.includes(mode)) : all;
   }, [catalog, harnessId, allowedMethods]);
-  const services = useMemo(
-    () => catalog.compatiblePairs(harnessId).filter((service) => service.enabled !== false),
-    [catalog, harnessId],
-  );
+  const services = useMemo(() => catalog.compatiblePairs(harnessId), [catalog, harnessId]);
   const selectedService = services.find((service) => service.slug === serviceSlug) || null;
   const models = catalog.modelsFor(serviceSlug);
   const effortLevels = catalog.effortLevelsFor(harnessId, model || null);
@@ -122,8 +119,15 @@ export default function ProviderComposePopover({
     setEffort('');
     setBootstrapSlug('');
   };
+  // Clearing/changing the method hides the Service select (gated on
+  // `harnessId && method`), so every field downstream of it must be reset
+  // too — model/effort are gated on `serviceSlug` alone, not on `method`,
+  // and would otherwise stay rendered with a now-orphaned selection.
   const handleMethodChange = (value) => {
     setMethod(value);
+    setServiceSlug('');
+    setModel('');
+    setEffort('');
     setBootstrapSlug('');
   };
   const handleServiceChange = (value) => {
@@ -131,6 +135,15 @@ export default function ProviderComposePopover({
     setModel('');
     setEffort('');
     setBootstrapSlug('');
+  };
+  // A model's effort ladder narrows (or disappears) per model — clear a stale
+  // effort that the newly-picked model's ladder no longer offers, or a value
+  // the UI no longer shows a control for would still ride into onCompose /
+  // savePreset.
+  const handleModelChange = (value) => {
+    setModel(value);
+    const nextLevels = catalog.effortLevelsFor(harnessId, value || null);
+    if (effort && !nextLevels.includes(effort)) setEffort('');
   };
 
   const harnessSelectId = useId();
@@ -200,7 +213,7 @@ export default function ProviderComposePopover({
 
         {serviceSlug && models.length > 0 && (
           <FormField label="Model" className="mb-0">
-            <select id={modelSelectId} className={SELECT_CLASS} value={model} onChange={(e) => setModel(e.target.value)}>
+            <select id={modelSelectId} className={SELECT_CLASS} value={model} onChange={(e) => handleModelChange(e.target.value)}>
               <option value="">Default model</option>
               {models.map((m) => {
                 const value = typeof m === 'string' ? m : m.id;

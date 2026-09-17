@@ -77,6 +77,43 @@ describe('ProviderComposePopover', () => {
     expect(onCompose).toHaveBeenCalledWith('pi.tui@nvidia-nim-free', { model: 'nvidia/example', effort: 'high' });
   });
 
+  it('clearing the method resets the now-hidden service/model/effort rather than leaving them orphaned', async () => {
+    render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
+    await composePiTui();
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'nvidia/example' } });
+
+    // Method select's blank option clears back to "Choose a method…", which
+    // hides Service (gated on harnessId && method) — but Model/Thinking effort
+    // are gated on serviceSlug alone, so a stale serviceSlug would leave them
+    // rendered with a selection for a service the user can no longer see.
+    fireEvent.change(screen.getByLabelText('Method'), { target: { value: '' } });
+    expect(screen.queryByLabelText('Service')).toBeNull();
+    expect(screen.queryByLabelText('Model')).toBeNull();
+    expect(screen.queryByLabelText('Thinking effort')).toBeNull();
+  });
+
+  it('clears a stale effort when a newly-picked model no longer offers it', async () => {
+    const onCompose = vi.fn();
+    // Give this harness+service a model whose effort ladder narrows to []
+    // when picked, so the previously-selected 'max' has nowhere to live.
+    mocked.useProviderCatalog.mockReturnValue({
+      ...CATALOG,
+      compatiblePairs: () => [{ slug: 'nvidia-nim-free', label: 'NVIDIA NIM', plan: 'free', enabled: true, credentialVia: 'stored', readiness: 'ready', catalog: { models: ['nvidia/example', 'tierless-model'] } }],
+      modelsFor: () => ['nvidia/example', 'tierless-model'],
+      effortLevelsFor: (_harnessId, model) => (model === 'tierless-model' ? [] : ['low', 'medium', 'high', 'xhigh', 'max']),
+    });
+    render(<ProviderComposePopover open onClose={vi.fn()} onCompose={onCompose} />);
+    await composePiTui();
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'nvidia/example' } });
+    fireEvent.change(screen.getByLabelText('Thinking effort'), { target: { value: 'max' } });
+
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'tierless-model' } });
+    expect(screen.queryByLabelText('Thinking effort')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use once' }));
+    expect(onCompose).toHaveBeenCalledWith('pi.tui@nvidia-nim-free', { model: 'tierless-model', effort: '' });
+  });
+
   it('disables "Use once" until harness, method and service are all chosen', () => {
     render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Use once' })).toBeDisabled();

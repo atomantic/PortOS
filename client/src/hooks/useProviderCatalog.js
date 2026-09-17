@@ -96,7 +96,7 @@ export default function useProviderCatalog(enabled = true) {
 
   const compatiblePairs = useCallback((harnessId) => {
     const slugs = new Set(catalog.compatibility?.[harnessId] || []);
-    return (catalog.services || []).filter((service) => slugs.has(service.slug));
+    return (catalog.services || []).filter((service) => slugs.has(service.slug) && service.enabled !== false);
   }, [catalog]);
 
   const methodsFor = useCallback(
@@ -120,6 +120,8 @@ export default function useProviderCatalog(enabled = true) {
     if (preset) return preset;
     const ref = parseProviderRef(id);
     if (ref?.kind !== 'composite') return null;
+    const harness = (catalog.harnesses || []).find((h) => h.id === ref.harnessId);
+    if (!harness) return null;
     const service = (catalog.services || []).find((s) => s.slug === ref.serviceSlug);
     if (!service) return null;
     const label = `${harnessLabel(ref.harnessId)} · ${ref.method.toUpperCase()} · ${service.label}${service.plan === 'free' ? ' (free)' : ''}`;

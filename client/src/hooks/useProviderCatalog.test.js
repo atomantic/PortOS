@@ -59,6 +59,16 @@ describe('useProviderCatalog', () => {
     expect(result.current.compatiblePairs('claude')).toEqual([]);
   });
 
+  it('compatiblePairs excludes a compatible service that has been switched off', async () => {
+    api.getProviderCatalog.mockResolvedValue({
+      ...CATALOG,
+      services: [{ ...CATALOG.services[0], enabled: false }],
+    });
+    const { result } = renderHook(() => useProviderCatalog());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.compatiblePairs('pi')).toEqual([]);
+  });
+
   it('effortLevelsFor prefers a per-model ladder over the harness default', async () => {
     api.getProviderCatalog.mockResolvedValue({
       ...CATALOG,
@@ -98,6 +108,12 @@ describe('useProviderCatalog', () => {
       const { result } = renderHook(() => useProviderCatalog());
       await waitFor(() => expect(result.current.loading).toBe(false));
       expect(result.current.resolveRef('pi.tui@unknown-service')).toBeNull();
+    });
+
+    it('returns null for a composite naming a harness this catalog does not know', async () => {
+      const { result } = renderHook(() => useProviderCatalog());
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      expect(result.current.resolveRef('unknown-harness.tui@nvidia-nim-free')).toBeNull();
     });
 
     it('returns null for neither grammar and for a nullish id', async () => {
