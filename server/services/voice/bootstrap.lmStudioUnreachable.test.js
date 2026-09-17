@@ -82,3 +82,20 @@ it('ensureToolCapableModel aborts the remaining install chain on a connect-class
   expect(result).toEqual({ skipped: 'lmstudio-unreachable' });
   expect(execFile).toHaveBeenCalledTimes(1);
 });
+
+it('ensureToolCapableModel aborts the chain when the post-install health check loses contact with LM Studio', async () => {
+  // The pre-loop snapshot succeeds (reachable, empty); `lms get` itself
+  // reports an unrelated model-specific failure (no connect-error text);
+  // the post-install re-check then fails to reach the API server at all.
+  // The prior `after ?? []` coercion silently treated that as "0 new
+  // models" and kept trying the rest of the chain against a dead server.
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce({ ok: true, json: async () => ({ data: [] }) })
+    .mockRejectedValueOnce(new Error('ECONNREFUSED'));
+  vi.stubGlobal('fetch', fetchMock);
+  whichFirst.mockImplementation(async (bin) => (bin === 'lms' ? '/usr/local/bin/lms' : null));
+  respondWith('Error: model not found on hub');
+  const result = await ensureToolCapableModel(toolCfg());
+  expect(result).toEqual({ skipped: 'lmstudio-unreachable' });
+  expect(execFile).toHaveBeenCalledTimes(1);
+});

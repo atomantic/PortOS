@@ -254,15 +254,19 @@ const isEffectiveLmStudioVoiceProvider = async (cfg) => {
 export const listLmStudioModels = async () => {
   const res = await fetch(`${LMS_BASE()}/v1/models`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
   if (!res?.ok) return null;
-  const body = await res.json().catch(() => ({}));
-  return (body?.data || []).map((m) => m.id);
+  const body = await res.json().catch(() => null);
+  // A 200 with a body that doesn't match the OpenAI-compatible `{data: [...]}`
+  // shape (truncated response, a gateway returning HTML) means we still
+  // couldn't actually ask — treat it the same as unreachable, not "0 models".
+  if (!Array.isArray(body?.data)) return null;
+  return body.data.map((m) => m?.id).filter(Boolean);
 };
 
 // Matches the `lms` CLI's own message when the LM Studio API server itself
 // is unreachable — distinct from a model-specific failure (404, gated repo,
 // bad id). Detecting this lets the install chain abort immediately instead
 // of repeating the identical failure for every remaining entry.
-const isLmStudioConnectError = (message) => /failed to start or connect to\b.*lm studio/i.test(String(message || ''));
+const isLmStudioConnectError = (message) => /failed to (?:start or )?connect to\b.*lm studio/i.test(String(message || ''));
 
 // Approximate parameter count from id, mirroring `sizeRank` in llm.js but
 // hoisted here so bootstrap doesn't need to import it. Returns Infinity for
@@ -319,16 +323,16 @@ export const ensureToolCapableModel = async (cfg) => {
   // trying to escape.
   const before = new Set(installed);
   const chain = DEFAULT_TOOL_MODEL_CHAIN();
+  // Pick the last non-empty line from stderr (LM Studio CLI trails newlines)
+  // so the warning is actionable instead of an empty `()`. Combine with
+  // stdout when stderr is empty — `lms` sometimes routes errors to stdout.
+  const lastMeaningfulLine = (s) => String(s || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
   for (const target of chain) {
     console.log(`🎙️  voice: installing fast tool-capable model ${target} via lms get (this may take a few minutes)`);
     const { stdout, stderr } = await pexec(lms, ['get', '-y', target], {
       maxBuffer: 64 * 1024 * 1024,
       timeout: 30 * 60 * 1000,
     }).catch((err) => ({ stdout: '', stderr: err?.message || String(err) }));
-    // Pick the last non-empty line from stderr (LM Studio CLI trails newlines)
-    // so the warning is actionable instead of an empty `()`. Combine with
-    // stdout when stderr is empty — `lms` sometimes routes errors to stdout.
-    const lastMeaningfulLine = (s) => String(s || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
     const reason = lastMeaningfulLine(stderr) || lastMeaningfulLine(stdout) || 'unknown';
     // The API server going unreachable mid-chain is a shared cause every
     // remaining entry would hit identically — abort instead of repeating it.
@@ -337,7 +341,11 @@ export const ensureToolCapableModel = async (cfg) => {
       return { skipped: 'lmstudio-unreachable' };
     }
     const after = await listLmStudioModels();
-    const newOnes = (after ?? []).filter((id) => !before.has(id));
+    if (after === null) {
+      console.warn(`🎙️  voice: LM Studio API server unreachable at ${LMS_BASE()} — aborting install chain (lost contact after attempting ${target})`);
+      return { skipped: 'lmstudio-unreachable' };
+    }
+    const newOnes = after.filter((id) => !before.has(id));
     const fastNew = newOnes.find(
       (id) => isToolCapable(id) && !isReasoningModel(id) && sizeOf(id) <= FAST_VOICE_MODEL_MAX_B
     );
