@@ -57,7 +57,13 @@ describe('summarizeGateResults', () => {
     expect(summary.verdict).toBe('cancelled');
     const text = summary.lines.join('\n');
     expect(text).toContain('CANCELLED, not failed');
-    expect(text).toContain('no job reported a failure');
+    expect(text).toContain('no job REPORTED a failure');
+    // The gate reads job CONCLUSIONS, and a fail-fast run hides a real
+    // failure behind the same conclusions (#7482, #7571). The summary must
+    // therefore send the reader to the logs, never imply the tree is green.
+    expect(text).toContain('READ THE JOB LOGS FIRST');
+    expect(text).toContain('does NOT mean no test failed');
+    expect(text).not.toMatch(/\bNo test failed\b/);
     expect(summary.lines).toContain('Cancelled jobs: server, client, windows-server');
     expect(summary.lines).toContain('Jobs that finished: impact=success, database=success');
     // The reader needs somewhere to go next, and the doc is the only place the

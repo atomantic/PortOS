@@ -42,7 +42,7 @@ const PASSING_RESULTS = new Set(['success', 'skipped']);
  */
 const STRICT_PASSING_RESULTS = new Set(['success']);
 const DEFAULT_LABEL = 'CI Gate';
-const TROUBLESHOOTING_ANCHOR = '"CI cancelled with no successor run" in docs/TROUBLESHOOTING.md';
+const TROUBLESHOOTING_ANCHOR = '"CI red with every job \'cancelled\'" in docs/TROUBLESHOOTING.md';
 
 const pair = ({ job, result }) => `${job}=${result}`;
 
@@ -108,15 +108,29 @@ export function summarizeGateResults(results, label = DEFAULT_LABEL, requireSucc
     return {
       verdict: 'cancelled',
       lines: [
-        `🚫 ${label}: this run was CANCELLED, not failed — no job reported a failure.`,
+        `🚫 ${label}: this run was CANCELLED, not failed — no job REPORTED a failure.`,
         `Cancelled jobs: ${cancelled.join(', ')}`,
         finished(),
-        'No test failed, so start with why the job STOPPED. A job that hits the'
-          + ' 6-hour limit is recorded as `cancelled`, not `timed_out` — check the'
-          + ' cancelled jobs for a hang first. Otherwise a newer push superseded this'
-          + ' run (cancel-in-progress), or GitHub cancelled it externally while several'
-          + ' runs were in flight.',
-        `Telling those apart, and what to do about each: ${TROUBLESHOOTING_ANCHOR}`,
+        // This wording is load-bearing. The old line said "No test failed", and
+        // twice (#7482, #7571) that sent a reader straight to the billing
+        // dashboard while a real assertion sat unread in a job log: a job that
+        // fails is cancelled by scripts/cancel-current-ci-run.js before its own
+        // reporting step runs, so its conclusion is `cancelled` too and NOTHING
+        // in the run metadata reads `failure`. Only the logs distinguish them.
+        'A cancelled conclusion does NOT mean no test failed. PortOS fail-fasts:'
+          + ' the job that failed is cancelled out from under its own reporting'
+          + ' step, so a real red build looks exactly like this. READ THE JOB LOGS'
+          + ' FIRST — and note that `gh run view --job <id> --log-failed` prints'
+          + ' NOTHING here, because no step is marked failed. Use the full'
+          + ' `--log` and grep for `🛑 Requested cancellation` (written only when'
+          + ' a job really failed), `FAIL `, or `AssertionError`; the culprit is'
+          + ' usually the job that completed EARLIEST.',
+        'Only if no job log shows a failure: a job that hits the 6-hour limit is'
+          + ' recorded as `cancelled` rather than `timed_out` (check for a hang),'
+          + ' a newer push superseded this run (cancel-in-progress leaves a NEWER'
+          + ' run for the branch), or GitHub cancelled it externally — the Actions'
+          + ' spending limit, which is the LAST hypothesis, not the first.',
+        `Working through those in order: ${TROUBLESHOOTING_ANCHOR}`,
       ],
     };
   }
