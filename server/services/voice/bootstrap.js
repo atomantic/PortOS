@@ -247,12 +247,22 @@ const isEffectiveLmStudioVoiceProvider = async (cfg) => {
   return !(provider && provider.type === 'api' && provider.endpoint);
 };
 
-const listLmStudioModels = async () => {
+// Sentinel + validate: `null` = the API server could not be reached or
+// answered with a non-OK status (we could not ask); `[]` = it answered with
+// zero models (we asked, legitimately empty). Callers must branch on `null`
+// explicitly rather than on `.length` — see AGENTS.md "Sentinel + validate".
+export const listLmStudioModels = async () => {
   const res = await fetch(`${LMS_BASE()}/v1/models`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
-  if (!res?.ok) return [];
+  if (!res?.ok) return null;
   const body = await res.json().catch(() => ({}));
   return (body?.data || []).map((m) => m.id);
 };
+
+// Matches the `lms` CLI's own message when the LM Studio API server itself
+// is unreachable — distinct from a model-specific failure (404, gated repo,
+// bad id). Detecting this lets the install chain abort immediately instead
+// of repeating the identical failure for every remaining entry.
+const isLmStudioConnectError = (message) => /failed to start or connect to\b.*lm studio/i.test(String(message || ''));
 
 // Approximate parameter count from id, mirroring `sizeRank` in llm.js but
 // hoisted here so bootstrap doesn't need to import it. Returns Infinity for
@@ -280,6 +290,10 @@ export const ensureToolCapableModel = async (cfg) => {
   if (!(await isEffectiveLmStudioVoiceProvider(cfg))) return { skipped: 'non-lmstudio-provider', provider: cfg?.llm?.provider };
 
   const installed = await listLmStudioModels();
+  if (installed === null) {
+    console.warn(`🎙️  voice: LM Studio API server unreachable at ${LMS_BASE()} — start LM Studio (or set voice.llm.provider) before voice can install a tool-capable model`);
+    return { skipped: 'lmstudio-unreachable' };
+  }
   // Tool-capable AND non-reasoning AND under the size cap. The size cap is
   // important: a user with only `mistral-small-24B` installed gets a model
   // that thrashes VRAM on every turn; we'd rather download Qwen2.5-7B and
@@ -311,8 +325,19 @@ export const ensureToolCapableModel = async (cfg) => {
       maxBuffer: 64 * 1024 * 1024,
       timeout: 30 * 60 * 1000,
     }).catch((err) => ({ stdout: '', stderr: err?.message || String(err) }));
+    // Pick the last non-empty line from stderr (LM Studio CLI trails newlines)
+    // so the warning is actionable instead of an empty `()`. Combine with
+    // stdout when stderr is empty — `lms` sometimes routes errors to stdout.
+    const lastMeaningfulLine = (s) => String(s || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
+    const reason = lastMeaningfulLine(stderr) || lastMeaningfulLine(stdout) || 'unknown';
+    // The API server going unreachable mid-chain is a shared cause every
+    // remaining entry would hit identically — abort instead of repeating it.
+    if (isLmStudioConnectError(reason)) {
+      console.warn(`🎙️  voice: LM Studio API server unreachable at ${LMS_BASE()} — aborting install chain (${target} failed: ${reason.slice(0, 160)})`);
+      return { skipped: 'lmstudio-unreachable' };
+    }
     const after = await listLmStudioModels();
-    const newOnes = after.filter((id) => !before.has(id));
+    const newOnes = (after ?? []).filter((id) => !before.has(id));
     const fastNew = newOnes.find(
       (id) => isToolCapable(id) && !isReasoningModel(id) && sizeOf(id) <= FAST_VOICE_MODEL_MAX_B
     );
@@ -320,11 +345,6 @@ export const ensureToolCapableModel = async (cfg) => {
       console.log(`🎙️  voice: fast tool-capable model ready — ${fastNew}`);
       return { installed: fastNew };
     }
-    // Pick the last non-empty line from stderr (LM Studio CLI trails newlines)
-    // so the warning is actionable instead of an empty `()`. Combine with
-    // stdout when stderr is empty — `lms` sometimes routes errors to stdout.
-    const lastMeaningfulLine = (s) => String(s || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
-    const reason = lastMeaningfulLine(stderr) || lastMeaningfulLine(stdout) || 'unknown';
     console.warn(`🎙️  voice: ${target} unavailable (${reason.slice(0, 160)}) — trying next`);
   }
   console.warn(`🎙️  voice: exhausted install chain ${chain.join(', ')} — set voice.llm.model explicitly in Settings`);
@@ -361,6 +381,7 @@ export const preloadModel = async (cfg) => {
   const lms = await which('lms');
   if (!lms) return { skipped: 'no-lms-cli' };
   const installed = await listLmStudioModels();
+  if (installed === null) return { skipped: 'lmstudio-unreachable' };
   if (!installed.length) return { skipped: 'no-models' };
 
   const sortPreferred = (list) => list.slice().sort((a, b) => {
