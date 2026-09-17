@@ -17,6 +17,9 @@ const api = vi.hoisted(() => ({
   // Declared so the render-path assertion below is real: the picker must read the
   // cached catalog off the provider payload, never fetch one of its own (#6306).
   getCodexModels: vi.fn(),
+  // The shared selector resolves a COMPOSITE pin the caller's preset list cannot
+  // name against this catalog, and fetches it ONLY in that case.
+  getProviderCatalog: vi.fn(),
 }));
 
 // useAssignableInstances reads the instance registry straight off apiSystem, so
@@ -923,3 +926,49 @@ describe('TaskAddForm layout ordering', () => {
   });
 });
 
+
+// A CoS task's `provider` accepts either provider-reference grammar
+// (`providerRefSchema`), so the preset-first picker's "Custom combination…"
+// flow can legitimately put a COMPOSITE id in this field. A composite is never
+// in the preset list, so the "pinned provider is no longer selectable" reset
+// has to exempt it or the selection is wiped the render after it is made.
+describe('TaskAddForm composite provider pins', () => {
+  const COMPOSITE = 'claude.tui@ollama';
+  const preset = { id: 'claude', name: 'Claude Code', enabled: true, type: 'cli', command: 'claude', models: ['claude-opus-4-6'] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.getAppWorkTracker.mockResolvedValue({ resolved: 'github' });
+    api.getOrchestrationProfiles.mockResolvedValue({ profiles: [] });
+    apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
+    api.applyCosTaskTemplate.mockResolvedValue({ success: true });
+    api.addCosTask.mockResolvedValue({ success: true });
+    api.getProviderCatalog.mockResolvedValue({ harnesses: [], services: [], bootstraps: [], presets: [] });
+  });
+
+  const queueWithTemplateProvider = async (provider) => {
+    const user = userEvent.setup();
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'user-pin', name: 'Pinned Template', description: 'Do the thing', isBuiltin: false, provider }],
+    });
+    render(<TaskAddForm providers={[preset]} apps={[]} onTaskAdded={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Quick Templates')).toBeInTheDocument());
+    await user.click(screen.getByText('Quick Templates'));
+    await user.click(screen.getByText('Pinned Template'));
+    await waitFor(() => expect(api.applyCosTaskTemplate).toHaveBeenCalled());
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
+    return api.addCosTask.mock.calls.at(-1)[0];
+  };
+
+  it('keeps a composite pin the preset list cannot name', async () => {
+    expect(await queueWithTemplateProvider(COMPOSITE)).toMatchObject({ provider: COMPOSITE });
+  });
+
+  it('still clears a PRESET pin that is no longer selectable', async () => {
+    expect(await queueWithTemplateProvider('retired-preset')).not.toMatchObject({ provider: 'retired-preset' });
+  });
+});

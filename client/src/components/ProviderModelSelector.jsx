@@ -40,8 +40,14 @@
  *   `emptyProviderOption` is set and the user picks it), or a composite id when
  *   the user composes one.
  * @param {function} [props.onModelChange] - Called with model string. Omit on a
- *   provider-only picker (no `availableModels`); a composed model is then
- *   dropped and the composite runs on its service default.
+ *   provider-only picker; the model select is then not rendered AT ALL — a
+ *   composite resolved from the shared catalog brings its own model list, so
+ *   without this gate a provider-only caller grew a second, dead model select
+ *   the moment the user composed a route. A composed model is dropped and the
+ *   composite runs on its service default.
+ * @param {string} [props.modelLabel] - Label text for the model select
+ *   (default: "Model"). A form with more than one picker needs distinct
+ *   accessible names; the provider select has `label` for the same reason.
  * @param {string} [props.id] - Id for the provider `<select>`, when the caller
  *   owns the `<label htmlFor>` (`FormField` injects one onto its first child).
  *   Defaults to a generated id.
@@ -148,6 +154,7 @@ export default function ProviderModelSelector({
   id: idProp,
   'aria-describedby': describedBy,
   label = 'Provider',
+  modelLabel = 'Model',
   disabled = false,
   loading = false,
   modelDisabled = false,
@@ -270,7 +277,12 @@ export default function ProviderModelSelector({
     && !compatibleModels.some((model) => modelOption(model)?.value === selectedModel)
     ? [selectedModel, ...compatibleModels]
     : compatibleModels;
-  const showModel = alwaysShowModel || modelOptions.length > 0;
+  // A model select with no `onModelChange` is a dead control: its `onChange`
+  // reaches nobody. Provider-only callers keep their own model field (a table
+  // cell, a free-text pin), and a composite's catalog models would otherwise
+  // conjure a second select beside it — so the callback, not the list, is what
+  // decides the select exists at all.
+  const showModel = !!onModelChange && (alwaysShowModel || modelOptions.length > 0);
   // The effort select is opt-in (`onEffortChange`) AND self-hiding: EffortSelect
   // renders null for a provider with no effort control, so gate the label+wrapper
   // on the same predicate or a non-effort provider gets an orphaned label.
@@ -392,14 +404,14 @@ export default function ProviderModelSelector({
       </div>
       {showModel && (
         <div className="flex-1 min-w-0">
-          {!compact && <label htmlFor={modelSelectId} className="block text-xs text-gray-500 mb-1">Model</label>}
+          {!compact && <label htmlFor={modelSelectId} className="block text-xs text-gray-500 mb-1">{modelLabel}</label>}
           <select
             id={modelSelectId}
             value={selectedModel}
             onChange={(e) => handleModelChange(e.target.value)}
             disabled={disabled || modelDisabled || loading}
-            title={compact ? 'Model' : undefined}
-            aria-label={compact ? 'Model' : undefined}
+            title={compact ? modelLabel : undefined}
+            aria-label={compact ? modelLabel : undefined}
             className={SELECT_CLASS}
           >
             {emptyModelOption != null && <option value="">{selectedProvider?.defaultModel ? `${emptyModelOption} — ${selectedProvider.defaultModel}` : emptyModelOption}</option>}

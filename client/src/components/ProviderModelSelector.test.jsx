@@ -541,3 +541,54 @@ describe('ProviderModelSelector — provider list still loading', () => {
     expect(provider.disabled).toBe(false);
   });
 });
+
+// A provider-only picker keeps its own model field (a table cell, a free-text
+// pin the selector has no shape for). Rendering a model select there hands the
+// user a control whose `onChange` reaches nobody — and a COMPOSITE resolved
+// from the shared catalog supplies its own model list, so the list alone could
+// conjure that dead select beside the caller's live one (#7585).
+describe('ProviderModelSelector provider-only mode', () => {
+  it('renders no model select when the caller wired no onModelChange', () => {
+    render(
+      <ProviderModelSelector
+        providers={PROVIDERS}
+        selectedProviderId="p1"
+        availableModels={['m1', 'm2']}
+        onProviderChange={() => {}}
+      />
+    );
+    expect(screen.getByLabelText('Provider')).toBeTruthy();
+    expect(screen.queryByLabelText('Model')).toBeNull();
+  });
+
+  it('honors alwaysShowModel only when the model change is actually wired', () => {
+    const { rerender } = render(
+      <ProviderModelSelector
+        providers={PROVIDERS}
+        selectedProviderId="p1"
+        alwaysShowModel
+        emptyModelOption="Default model"
+        onProviderChange={() => {}}
+      />
+    );
+    expect(screen.queryByLabelText('Model')).toBeNull();
+
+    rerender(
+      <ProviderModelSelector
+        providers={PROVIDERS}
+        selectedProviderId="p1"
+        alwaysShowModel
+        emptyModelOption="Default model"
+        onProviderChange={() => {}}
+        onModelChange={() => {}}
+      />
+    );
+    expect(screen.getByLabelText('Model')).toBeTruthy();
+  });
+
+  it('names the model select for its form, so two pickers on a page stay distinguishable', () => {
+    renderSelector({ modelLabel: 'Embedding Model' });
+    expect(screen.getByLabelText('Embedding Model')).toBeTruthy();
+    expect(screen.queryByLabelText('Model')).toBeNull();
+  });
+});

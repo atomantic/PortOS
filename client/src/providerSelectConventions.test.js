@@ -23,10 +23,10 @@
  * - `src/components/sprites/AnimationProviderPicker.jsx` — sprite ANIMATION
  *   backends (`{ id, label, ready }`), not AI provider records; the name
  *   collides with the detector, the concept does not.
- * - The legacy sites below still carry a bespoke select and are migrated
- *   one PR at a time (#7585). The allowlist is
- *   SHRINK-ONLY: a migrated file must be removed from it (the third test
- *   fails on a stale entry), and no new file may be added.
+ * - `LEGACY_BESPOKE` is EMPTY as of #7585 — every legacy site was migrated.
+ *   It stays declared, and shrink-only, so a future exception has to be
+ *   written down here with a reason rather than smuggled into `ALLOWED`;
+ *   the third test fails the moment an entry stops earning its place.
  *
  * ## What this guard CANNOT see
  *
@@ -49,13 +49,7 @@ const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SHARED_SELECTOR = 'src/components/ProviderModelSelector.jsx';
 const NOT_AI_PROVIDERS = ['src/components/sprites/AnimationProviderPicker.jsx'];
 /** Legacy bespoke selects awaiting migration — shrink-only, never grow. */
-const LEGACY_BESPOKE = [
-  'src/components/brain/tabs/ConfigTab.jsx',
-  'src/components/cos/TaskAddForm.jsx',
-  'src/components/creative-director/CreativeDirectorModelsDrawer.jsx',
-  'src/components/quotaBurn/StepSettings.jsx',
-  'src/components/settings/AiAssignmentsTab.jsx',
-];
+const LEGACY_BESPOKE = [];
 const ALLOWED = [SHARED_SELECTOR, ...NOT_AI_PROVIDERS, ...LEGACY_BESPOKE];
 
 const SELECT_BLOCK = /<select\b[\s\S]*?<\/select>/g;

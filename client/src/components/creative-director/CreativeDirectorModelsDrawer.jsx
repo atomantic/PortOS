@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Bot, Save } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
+import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import EffortSelect from '../cos/EffortSelect.jsx';
 import toast from '../ui/Toast';
 import ToolUseWarning from '../ui/ToolUseWarning.jsx';
@@ -289,26 +290,34 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div className="flex flex-col gap-1">
                     <span className="text-[11px] uppercase tracking-wide text-gray-500">Provider</span>
-                    <select
-                      value={draft.providerId}
-                      aria-label={`${stage.label} provider`}
+                    {/* Provider-only: the model control below is a select OR a
+                        free-text pin depending on what the stage's filter left
+                        to offer, which the shared selector has no shape for. */}
+                    <ProviderModelSelector
+                      compact
+                      label={`${stage.label} provider`}
+                      providers={providerOptions}
+                      selectedProviderId={draft.providerId}
                       disabled={visionUnknown}
-                      onChange={(e) => {
-                        const providerId = e.target.value;
+                      onProviderChange={(providerId) => {
                         // Vision-filtered stages (scene evaluation) seed the first
-                        // eligible VLM when the provider's default is text-only.
+                        // eligible VLM when the provider's default is text-only;
+                        // clearing the provider clears the model too.
                         const nextDefault = providerId
                           ? assignmentDefaultModel(entry, providers, providerId, visionIdsByProvider)
                           : '';
-                        // Seed the provider's default model on switch; clearing the
-                        // provider clears the model too.
                         setStage(stage.key, { providerId, model: nextDefault, ...(stage.key !== 'evaluation' ? { effort: '' } : {}) });
                       }}
-                      className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
-                    >
-                      <option value="">{isGlobal ? 'System default' : 'Inherit default'}</option>
-                      {providerOptions.map((p) => <option key={p.id} value={p.id} disabled={p.enabled === false}>{p.name}</option>)}
-                    </select>
+                      emptyProviderOption={isGlobal ? 'System default' : 'Inherit default'}
+                      // The compose flow builds a route this list cannot name,
+                      // so `assignmentDefaultModel` has nothing to seed from and
+                      // the stage would run on the service's own default model.
+                      // For a vision stage that default may be text-only — the
+                      // exact silent downgrade the seeding exists to prevent —
+                      // so composing is offered only where a blank model is safe.
+                      compose={entry?.modelFilter !== 'vision'}
+                      composeMethods={entry?.providerTypes}
+                    />
                   </div>
 
                   <div className="flex flex-col gap-1">

@@ -312,6 +312,52 @@ describe('AiAssignmentsTab assignment management', () => {
     expect(await screen.findByLabelText('Effort for Scheduled job: Audit')).toHaveValue('high');
   });
 
+  // The row's provider picker went through the shared ProviderModelSelector in
+  // #7585; the seeding rule it triggers is the caller's, so it needs its own
+  // assertion rather than riding on the bulk-replace path above.
+  it('seeds the new provider default into the row when its provider changes', async () => {
+    getAiAssignments.mockResolvedValue(payload([entry({ id: 'settings.creativeDirector.plan', providerId: 'openai', model: 'gpt-4o' })]));
+    renderTab();
+
+    await userEvent.selectOptions(
+      await screen.findByLabelText('Provider for Production planning model'),
+      'ollama',
+    );
+
+    expect(screen.getByLabelText('Model for Production planning model')).toHaveValue('gemma2:9b');
+  });
+
+  it('seeds the first vision-capable model, not the text-only provider default', async () => {
+    getAiAssignments.mockResolvedValue(payload([entry({
+      id: 'settings.creativeDirector.evaluation',
+      label: 'Scene evaluation vision model',
+      modelFilter: 'vision',
+    })]));
+    getVisionModels.mockResolvedValue({ models: [{ providerId: 'ollama', backend: 'ollama', id: 'qwen3.6:35b', vision: true }] });
+    renderTab();
+
+    const picker = await screen.findByLabelText('Provider for Scene evaluation vision model');
+    // The picker is held until the capability scan settles — seeding from a
+    // stale answer is what would leave a text-only default on a vision row.
+    await waitFor(() => expect(picker).not.toBeDisabled());
+    await userEvent.selectOptions(picker, 'ollama');
+
+    expect(screen.getByLabelText('Model for Scene evaluation vision model')).toHaveValue('qwen3.6:35b');
+  });
+
+  // `sourceProviders` synthesizes an `{ id, name }` stand-in for an assigned
+  // provider the install no longer carries. The shared selector groups its
+  // options by harness, and a record with no type resolves to none — it has to
+  // land in the catch-all group rather than vanish, or a rotted pin becomes
+  // unreachable from the one control that could retarget it.
+  it('still offers an assigned provider the install no longer carries', async () => {
+    getAiAssignments.mockResolvedValue(payload([entry({ providerId: 'retired-provider', model: 'old-model' })]));
+    renderTab();
+
+    const from = await screen.findByLabelText('Replace from provider');
+    expect([...from.querySelectorAll('option')].map((o) => o.value)).toContain('retired-provider');
+  });
+
   it('seeds a compatible model when bulk-replacing a vision assignment with the target default', async () => {
     const providers = [
       ...PROVIDERS,

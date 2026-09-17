@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
+import ProviderModelSelector from '../../ProviderModelSelector';
 import { formatDateTime } from '../../../utils/formatters';
 import {Settings,
   Save,
@@ -97,6 +98,28 @@ export default function ConfigTab({ onRefresh }) {
     if (!embeddingProvider) return [];
     const provider = providers.find(p => p.id === embeddingProvider);
     return filterSelectableModels(provider?.models);
+  };
+
+  // Picking a provider re-seeds the model, because a model from the previous
+  // provider would not resolve. Held here rather than inline in the selector's
+  // `onProviderChange` so the two pickers' seeding rules read side by side:
+  // classification takes the provider's own default, embeddings prefer an
+  // embedding-named model over it.
+  const handleProviderChange = (providerId) => {
+    setSelectedProvider(providerId);
+    const provider = providers.find(p => p.id === providerId);
+    const models = filterSelectableModels(provider?.models);
+    setSelectedModel(provider?.defaultModel || models[0] || '');
+  };
+
+  const handleEmbeddingProviderChange = (providerId) => {
+    setEmbeddingProvider(providerId);
+    const provider = providers.find(p => p.id === providerId);
+    const models = filterSelectableModels(provider?.models);
+    // A provider's own default is usually a CHAT model — embedding it returns
+    // nothing usable — so an embedding-named model in the list wins over it.
+    const embed = models.find(m => /embed|nomic|bge|minilm|mxbai/i.test(m));
+    setEmbeddingModel(embed || provider?.defaultModel || models[0] || '');
   };
 
   const embeddingDirty = () =>
@@ -219,67 +242,25 @@ export default function ConfigTab({ onRefresh }) {
         </div>
 
         <div className="space-y-4">
-          {/* Provider Selection */}
           <div>
-            <label htmlFor="provider" className="block text-sm font-medium text-gray-300 mb-2">
-              Default Provider
-            </label>
-            <select
+            <ProviderModelSelector
               id="provider"
-              value={selectedProvider}
-              onChange={(e) => {
-                setSelectedProvider(e.target.value);
-                // Reset model when provider changes
-                const newProvider = providers.find(p => p.id === e.target.value);
-                if (newProvider?.defaultModel) {
-                  setSelectedModel(newProvider.defaultModel);
-                } else if (filterSelectableModels(newProvider?.models).length > 0) {
-                  setSelectedModel(filterSelectableModels(newProvider.models)[0]);
-                } else {
-                  setSelectedModel('');
-                }
-              }}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-            >
-              <option value="">Select a provider...</option>
-              {providers.map(provider => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name} ({provider.type})
-                </option>
-              ))}
-            </select>
+              providers={providers}
+              selectedProviderId={selectedProvider}
+              selectedModel={selectedModel}
+              availableModels={getAvailableModels()}
+              onProviderChange={handleProviderChange}
+              onModelChange={setSelectedModel}
+              label="Default Provider"
+              modelLabel="Default Model"
+              emptyProviderOption="Select a provider..."
+              emptyModelOption="Select a model..."
+              alwaysShowModel
+              modelDisabled={!selectedProvider || getAvailableModels().length === 0}
+              layout="stacked"
+            />
             <p className="mt-1 text-xs text-gray-500">
               Used for thought classification, digests, and reviews
-            </p>
-          </div>
-
-          {/* Model Selection */}
-          <div>
-            <label htmlFor="model" className="block text-sm font-medium text-gray-300 mb-2">
-              Default Model
-            </label>
-            <select
-              id="model"
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              disabled={!selectedProvider || getAvailableModels().length === 0}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {getAvailableModels().length === 0 ? (
-                <option value="">No models available</option>
-              ) : (
-                <>
-                  <option value="">Select a model...</option>
-                  {getAvailableModels().map(model => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </>
-              )}
-            </select>
-            <p className="mt-1 text-xs text-gray-500">
-              Select the model for AI operations
             </p>
           </div>
         </div>
@@ -318,60 +299,25 @@ export default function ConfigTab({ onRefresh }) {
         )}
 
         <div className="space-y-4">
-          {/* Embedding Provider */}
           <div>
-            <label htmlFor="embeddingProvider" className="block text-sm font-medium text-gray-300 mb-2">
-              Embedding Provider
-            </label>
-            <select
+            <ProviderModelSelector
               id="embeddingProvider"
-              value={embeddingProvider}
-              onChange={(e) => {
-                setEmbeddingProvider(e.target.value);
-                const np = providers.find(p => p.id === e.target.value);
-                const models = filterSelectableModels(np?.models);
-                // Prefer an embedding-named model if the provider lists one.
-                const embed = models.find(m => /embed|nomic|bge|minilm|mxbai/i.test(m));
-                setEmbeddingModel(embed || np?.defaultModel || models[0] || '');
-              }}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-            >
-              <option value="">Select a provider...</option>
-              {providers.map(provider => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name} ({provider.type})
-                </option>
-              ))}
-            </select>
+              providers={providers}
+              selectedProviderId={embeddingProvider}
+              selectedModel={embeddingModel}
+              availableModels={getEmbeddingModels()}
+              onProviderChange={handleEmbeddingProviderChange}
+              onModelChange={setEmbeddingModel}
+              label="Embedding Provider"
+              modelLabel="Embedding Model"
+              emptyProviderOption="Select a provider..."
+              emptyModelOption="Select a model..."
+              alwaysShowModel
+              modelDisabled={!embeddingProvider || getEmbeddingModels().length === 0}
+              layout="stacked"
+            />
             <p className="mt-1 text-xs text-gray-500">
-              Backend that generates vector embeddings (must serve an OpenAI-compatible <span className="font-mono">/v1/embeddings</span>)
-            </p>
-          </div>
-
-          {/* Embedding Model */}
-          <div>
-            <label htmlFor="embeddingModel" className="block text-sm font-medium text-gray-300 mb-2">
-              Embedding Model
-            </label>
-            <select
-              id="embeddingModel"
-              value={embeddingModel}
-              onChange={(e) => setEmbeddingModel(e.target.value)}
-              disabled={!embeddingProvider || getEmbeddingModels().length === 0}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {getEmbeddingModels().length === 0 ? (
-                <option value="">No models available</option>
-              ) : (
-                <>
-                  <option value="">Select a model...</option>
-                  {getEmbeddingModels().map(model => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </>
-              )}
-            </select>
-            <p className="mt-1 text-xs text-gray-500">
+              Backend that generates vector embeddings (must serve an OpenAI-compatible <span className="font-mono">/v1/embeddings</span>).
               Changing the model can change vector dimensions — reprocess after switching so all entries share one space.
             </p>
           </div>
