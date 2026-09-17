@@ -7,20 +7,37 @@
 // provider is missing, not API-type, or the toolkit hasn't warmed yet.
 
 import { getProviderById } from '../providers.js';
+import { DEFAULT_VOICE_BACKEND } from './config.js';
+import { normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';
 import { assertSecretEndpoint } from '../../lib/aiToolkit/endpointGuard.js';
 
 // Legacy env-based LM Studio default. Returns the OpenAI-compatible API base
 // INCLUDING the version path, so callers append `/models` / `/chat/completions`.
-const LM_STUDIO_API_BASE = () => `${(process.env.LM_STUDIO_URL || 'http://localhost:1234')
-  .replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`;
+const LM_STUDIO_API_BASE = () => normalizeOpenAiBaseUrl(process.env.LM_STUDIO_URL || 'http://localhost:1234');
+
+// Ollama's OpenAI-compatible surface. `OLLAMA_HOST` is conventionally a BARE
+// `host:port` with no scheme (that is how .env.example documents it), so this
+// must go through the shared normalizer rather than string-concatenating
+// `/v1` onto it — `localhost:11434/v1` is not a fetchable URL.
+const OLLAMA_API_BASE = () => normalizeOpenAiBaseUrl(
+  process.env.OLLAMA_URL || process.env.OLLAMA_HOST || 'http://localhost:11434'
+);
+
+// Last-resort endpoints when the configured provider resolves to nothing
+// usable. Keyed by the built-in local backends so the fallback follows
+// `DEFAULT_VOICE_BACKEND` instead of being pinned to one vendor.
+const LOCAL_FALLBACKS = {
+  ollama: () => ({ apiBase: OLLAMA_API_BASE(), providerName: 'Ollama' }),
+  lmstudio: () => ({ apiBase: LM_STUDIO_API_BASE(), providerName: 'LM Studio' }),
+};
 
 /**
  * Resolve the OpenAI-compatible endpoint for the voice text LLM.
- * @param {string} [providerId='lmstudio']
+ * @param {string} [providerId=DEFAULT_VOICE_BACKEND]
  * @returns {Promise<{ apiBase: string, apiKey: string, defaultModel: string|null, providerName: string }>}
  */
-export const resolveLlmEndpoint = async (providerId = 'lmstudio') => {
-  const provider = await getProviderById(providerId || 'lmstudio').catch(() => null);
+export const resolveLlmEndpoint = async (providerId = DEFAULT_VOICE_BACKEND) => {
+  const provider = await getProviderById(providerId || DEFAULT_VOICE_BACKEND).catch(() => null);
   if (provider && provider.type === 'api' && provider.endpoint) {
     // Back-compat: the LM_STUDIO_URL env override still wins for the built-in
     // lmstudio provider, so installs that pointed it at another host keep
@@ -47,8 +64,12 @@ export const resolveLlmEndpoint = async (providerId = 'lmstudio') => {
     };
   }
   // No usable API provider (CLI/TUI, missing, or toolkit not warmed) — fall
-  // back to the env-based LM Studio default so voice still works out of the box.
-  return { apiBase: LM_STUDIO_API_BASE(), apiKey: '', defaultModel: null, providerName: 'LM Studio' };
+  // back to the env-based local default so voice still works out of the box.
+  // Falls back to the backend the user NAMED when that is a known local one,
+  // so a `provider: 'lmstudio'` install whose provider record is missing still
+  // lands on LM Studio rather than being silently redirected to Ollama.
+  const fallback = (LOCAL_FALLBACKS[providerId] || LOCAL_FALLBACKS[DEFAULT_VOICE_BACKEND])();
+  return { apiBase: fallback.apiBase, apiKey: '', defaultModel: null, providerName: fallback.providerName };
 };
 
 export const authHeaders = (apiKey) => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {});

@@ -1361,6 +1361,33 @@ async function unloadModel(modelName) {
 }
 
 /**
+ * Make `modelName` resident so the next request doesn't pay a cold load.
+ * The inverse of `unloadModel`: an empty-prompt `/api/generate` with a
+ * non-zero `keep_alive` loads the weights and returns without generating
+ * tokens (Ollama answers with `done_reason: "load"`).
+ *
+ * Unlike the unload path there is deliberately NO "already resident" guard
+ * here — the caller checks `/api/ps` first because re-warming is merely
+ * wasteful, whereas an unguarded UNLOAD-shaped request against a cold model
+ * would load many GB just to evict it.
+ * @returns {Promise<{ warmed: true, model: string } | { warmed: false, reason: string }>}
+ */
+async function warmModel(modelName, keepAlive = '30m') {
+  if (typeof modelName !== 'string' || modelName.length === 0) {
+    return { warmed: false, reason: 'missing model name' }
+  }
+  if (!(await checkOllamaAvailable())) {
+    return { warmed: false, reason: 'Ollama unreachable' }
+  }
+  const body = JSON.stringify({ model: modelName, prompt: '', keep_alive: keepAlive, stream: false })
+  const result = await ollamaRequest('/api/generate', { method: 'POST', body }).catch((err) => ({ _err: err }))
+  if (result && result._err) {
+    return { warmed: false, reason: result._err.message || 'request failed' }
+  }
+  return { warmed: true, model: modelName }
+}
+
+/**
  * Pull a model, streaming progress. Resolves once the pull finishes.
  * Non-percent frames carry a reason flag so the UI can show why the banner is
  * paused instead of stalling: `retrying: true` during a transient-error backoff,
@@ -2001,6 +2028,7 @@ export {
   getLastInstalledModelsError,
   getLastLoadedModelsError,
   unloadModel,
+  warmModel,
   pullModel,
   importModelFromHfSafetensors,
   deleteModel,
