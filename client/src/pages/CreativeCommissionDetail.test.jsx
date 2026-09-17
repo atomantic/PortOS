@@ -25,8 +25,12 @@ vi.mock('../services/api', async (importOriginal) => ({
 // The config form loads model catalogs on mount — out of scope here, and it
 // would put real requests behind the assertions about which projects load.
 vi.mock('../components/creative-commission/CommissionConfigForm.jsx', () => ({ default: () => null }));
+// Callable: the degraded run-history warning (#7529) is a render-prop toast,
+// so the double has to be a function with the named helpers hung off it.
 vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
+  default: Object.assign(vi.fn(), {
+    success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn(), dismiss: vi.fn(),
+  }),
 }));
 // ProjectPreview reaches into the media/job graph; the assertions here are about
 // which projects resolved (and, for #4149, which snapshot of a project is on
@@ -232,6 +236,37 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
       .toHaveBeenCalledWith(['cd-new'], { silent: true }));
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('appears below'));
     expect(toast.success).toHaveBeenCalledWith(expect.not.stringContaining('reload'));
+  });
+
+  // #7529: the started fire whose run-history write was lost. The project is
+  // real and running, but nothing was persisted, so the gallery this page
+  // derives from persisted run ids stays empty — promising a render 'appears
+  // below' is the one thing the page must not do here.
+  it('does not promise a gallery render when the run-history write was lost', async () => {
+    api.getCommission.mockResolvedValue({ ...COMMISSION, runs: [] });
+    api.runCommissionNow.mockResolvedValue({
+      status: 'started',
+      projectId: 'cd-orphan',
+      run: null,
+      historyWarning: {
+        code: 'run-history-unavailable', outcome: 'started', trigger: 'manual',
+        commissionId: 'cc-1', projectId: 'cd-orphan', detail: 'write-failed:ETIMEDOUT',
+      },
+      commission: { ...COMMISSION, runs: [] },
+    });
+    render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
+    await screen.findByRole('heading', { name: COMMISSION.name });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Run commission .* now/i }));
+    });
+
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining('appears below'));
+    const [content] = toast.mock.calls[0];
+    render(<MemoryRouter>{content({ id: 't1' })}</MemoryRouter>);
+    expect(screen.getByRole('link', { name: /open the project/i }))
+      .toHaveAttribute('href', '/creative-director/cd-orphan');
   });
 });
 

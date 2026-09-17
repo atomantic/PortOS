@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 // eventScheduler is mocked so no real timers arm and isValidCron is deterministic.
@@ -92,6 +92,7 @@ const {
   stopCommissionScheduler,
   runScheduledCommission,
   runCommissionNow,
+  HISTORY_UNAVAILABLE,
 } = await import('./scheduler.js');
 
 const videoCommission = (over = {}) => ({
@@ -544,5 +545,97 @@ describe('runCommissionNow (manual "Run Now")', () => {
   it('propagates NOT_FOUND for an unknown commission (route maps it to 404)', async () => {
     getCommissionMock.mockRejectedValue(Object.assign(new Error('gone'), { code: 'NOT_FOUND' }));
     await expect(runCommissionNow('missing')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+// A lost run-history write is the failure mode that used to be invisible (#7529):
+// the run row never landed, so the commission's gallery (derived from persisted
+// run ids) stayed empty, no rating control appeared, and surfacing — gated on a
+// real run — never fired. The outcome still said `started` with `run: null`,
+// which is byte-identical to "the commission was deleted mid-fire".
+describe('run-history write failures are observable (#7529)', () => {
+  let consoleErrorSpy;
+  beforeEach(() => {
+    getCommissionMock.mockResolvedValue(videoCommission());
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => { consoleErrorSpy.mockRestore(); });
+
+  it('reports a started fire whose history write failed, keeping the created project id', async () => {
+    recordRunMock.mockRejectedValueOnce(Object.assign(new Error('write timeout'), { code: 'ETIMEDOUT' }));
+    const outcome = await runCommissionNow('commission-1');
+    // Generation genuinely started — the project id stays authoritative.
+    expect(outcome).toMatchObject({ status: 'started', projectId: 'cd-xyz', run: null });
+    expect(outcome.historyWarning).toEqual({
+      code: HISTORY_UNAVAILABLE,
+      outcome: 'started',
+      trigger: 'manual',
+      commissionId: 'commission-1',
+      projectId: 'cd-xyz',
+      detail: 'write-failed:ETIMEDOUT',
+    });
+    // No duplicate project and no replayed provider work to "repair" history.
+    expect(createProjectMock).toHaveBeenCalledTimes(1);
+    expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
+  });
+
+  it('does NOT warn when the commission was deleted mid-fire (an honest absent run, not a degraded write)', async () => {
+    recordRunMock.mockResolvedValueOnce(null);
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'started', projectId: 'cd-xyz', run: null });
+    expect(outcome.historyWarning).toBeUndefined();
+  });
+
+  it('omits the warning entirely on a clean fire', async () => {
+    recordRunMock.mockResolvedValueOnce({ id: 'run-1', status: 'started' });
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome.historyWarning).toBeUndefined();
+  });
+
+  it('emits a scheduled diagnostic naming trigger and local ids, never the prompt or the raw driver message', async () => {
+    recordRunMock.mockRejectedValueOnce(Object.assign(new Error('relation "commissions" does not exist'), { code: '42P01' }));
+    await runScheduledCommission('commission-1');
+    const line = consoleErrorSpy.mock.calls.map(([l]) => l).find((l) => l.includes('run history write failed'));
+    expect(line).toContain('commission-1');
+    expect(line).toContain('cd-xyz');
+    expect(line).toContain('schedule');
+    expect(line).toContain('write-failed:42P01');
+    // Bounded classification only — no record contents, prompts or feedback.
+    expect(line).not.toContain('relation "commissions" does not exist');
+    expect(line).not.toContain('surreal');
+  });
+
+  it('reports a SKIPPED outcome whose history write failed', async () => {
+    creativeModeMock.mockReturnValue('off');
+    recordRunMock.mockRejectedValueOnce(new Error('disk full'));
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'skipped', reason: 'autonomy-off', run: null });
+    expect(outcome.historyWarning).toMatchObject({
+      code: HISTORY_UNAVAILABLE, outcome: 'skipped', trigger: 'manual', projectId: null, detail: 'write-failed:Error',
+    });
+  });
+
+  it('reports a FAILED outcome whose history write failed, still naming the orphaned project', async () => {
+    advanceMock.mockRejectedValueOnce(new Error('advance kick failed'));
+    recordRunMock
+      .mockResolvedValueOnce({ id: 'run-1', status: 'started' }) // the started row landed
+      .mockRejectedValueOnce(new Error('write timeout'));        // the failure row did not
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'failed', error: 'advance kick failed', projectId: 'cd-xyz', run: null });
+    expect(outcome.historyWarning).toMatchObject({
+      code: HISTORY_UNAVAILABLE, outcome: 'failed', trigger: 'manual', projectId: 'cd-xyz',
+    });
+  });
+
+  it('still refuses to advance a taste-aware fire whose authoritative run was lost to a write failure', async () => {
+    recordRunMock.mockRejectedValueOnce(new Error('write timeout'));
+    getCommissionMock.mockResolvedValue(videoCommission({
+      targetAbility: 'music',
+      brief: { intent: 'ambient', musicTaste: { source: 'digital-twin' } },
+      generation: { lengthSeconds: 45 },
+    }));
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'failed', error: 'taste-run-persistence-unavailable' });
+    expect(advanceMock).not.toHaveBeenCalled();
   });
 });

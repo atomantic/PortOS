@@ -29,6 +29,7 @@ import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { timeAgo } from '../utils/formatters';
 import CommissionConfigForm from '../components/creative-commission/CommissionConfigForm.jsx';
 import RenderHistory from '../components/creative-commission/RenderHistory.jsx';
+import { toastRunOutcome } from '../components/creative-commission/runOutcomeToast.jsx';
 import {
   toForm, toPayload, patchFormState, validateForm, describeSchedule, describeAssignment,
   COMMISSION_STOP_COPY,
@@ -262,9 +263,7 @@ export default function CreativeCommissionDetail() {
         const fresh = result.commission;
         setCommission((prev) => (prev ? { ...prev, runs: fresh.runs, feedback: fresh.feedback } : fresh));
       }
-      if (result?.status === 'started') toast.success('Run started — its render appears below once generation finishes');
-      else if (result?.status === 'skipped') toast.error(`Run skipped: ${result.reason}`);
-      else toast.error(`Run failed: ${result?.error || 'unknown error'}`);
+      toastRunOutcome(result, 'Run started — its render appears below once generation finishes');
     } catch (e) {
       toast.error(e?.message || 'Run failed');
     } finally {
