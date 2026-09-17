@@ -57,6 +57,13 @@ const { createRunnerService } = await import('../lib/aiToolkit/runner.js');
 const { createProviderStatusService } = await import('../lib/aiToolkit/providerStatus.js');
 const { allowedModesFor } = await import('../lib/callerModePolicy.js');
 
+// A shell launch line is quoted for the SESSION shell, and this suite runs on
+// the Windows CI shard too, where PowerShell renders every token quoted and the
+// command with the call operator (`& 'pi' '--provider' 'nvidia' …`). Strip the
+// dialect so the assertion below is about the flags, not the quoting — the
+// quoting itself is covered by shellCd.test.js.
+const unquoteShellLine = (line) => line.replace(/^& /, '').replace(/'/g, '');
+
 const uuid = (n) => `${n}${n}${n}${n}${n}${n}${n}${n}-${n}${n}${n}${n}-4${n}${n}${n}-8${n}${n}${n}-${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}${n}`;
 const connection = (n, row) => ({ id: uuid(n), revision: 1, enabled: true, credentialVia: 'stored', bindings: [], catalog: { state: 'known', models: [] }, ...row });
 
@@ -108,7 +115,7 @@ describe('materializeComposite — the run paths', () => {
     expect(invocation.args).toEqual(expect.arrayContaining(['--approve', '--provider', 'nvidia', '--model', 'nvidia/example-nemotron']));
     // The Shell page's launch line and PTY env — what `shell:start { providerId }` runs.
     const launch = buildTuiShellLaunch(provider);
-    expect(launch.commandLine).toMatch(/^pi\b.*--provider nvidia.*--model nvidia\/example-nemotron/);
+    expect(unquoteShellLine(launch.commandLine)).toMatch(/^pi\b.*--provider nvidia.*--model nvidia\/example-nemotron/);
     expect(launch.env.NVIDIA_API_KEY).toBe('nim-key');
   });
 
