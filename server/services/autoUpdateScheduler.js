@@ -106,6 +106,47 @@ export function repairDispatchDue(runtime, minIntervalMs, now = Date.now()) {
  */
 const isRepairableOnly = (verdict) => verdict.reasons.length === 0 && verdict.repairable.length > 0;
 
+/**
+ * Runtime-write failure tracking (bounded, transition-based).
+ *
+ * `recordAutoUpdateRuntime` persists to the same `update.json` every write
+ * below lands in, so it fails for reasons that have nothing to do with what
+ * the update pipeline is waiting on (a full disk, a permissions change under
+ * `data/`, a corrupted state file). Every call site here used to discard that
+ * rejection with `.catch(() => undefined)`, which made a real persistence
+ * outage indistinguishable from "nothing to report" — the defect this module
+ * exists to close. Tracked per OPERATION so one stuck write doesn't drown a
+ * healthy one, and logged only on the transition into/out of failure so a
+ * broken disk doesn't flood the log every five-minute tick.
+ */
+const failingRuntimeWrites = new Set();
+
+/**
+ * Write a patch to the auto-update runtime record. Never throws — logs (once
+ * per operation, not per tick) on failure and on recovery.
+ *
+ * @returns {Promise<boolean>} whether the write landed.
+ */
+async function writeRuntime(patch, operation) {
+  return updateChecker.recordAutoUpdateRuntime(patch).then(
+    () => {
+      if (failingRuntimeWrites.delete(operation)) {
+        console.log(`✅ Auto-update runtime write recovered (${operation})`);
+      }
+      return true;
+    },
+    (err) => {
+      if (!failingRuntimeWrites.has(operation)) {
+        failingRuntimeWrites.add(operation);
+        // `err.code` (ENOSPC, EACCES, …) over `err.message`, which for an fs
+        // error embeds the full local path. Guard against a non-Error reject.
+        console.error(`❌ Auto-update runtime write failed (${operation}): ${err?.code || err?.message || String(err)}`);
+      }
+      return false;
+    },
+  );
+}
+
 /** Record the skip and log it once per distinct reason, not once per tick. */
 let lastLoggedSkip = null;
 async function standDown(reason, detail) {
@@ -114,9 +155,9 @@ async function standDown(reason, detail) {
     console.log(`🕒 Auto-update standing by — ${line}`);
     lastLoggedSkip = line;
   }
-  await updateChecker.recordAutoUpdateRuntime({
+  await writeRuntime({
     lastSkip: { reason, detail: detail || null, at: new Date().toISOString() },
-  }).catch(() => undefined);
+  }, 'skip');
   return { ran: false, reason, detail: detail || null };
 }
 
@@ -159,14 +200,25 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
   // walks every file under client/src, and the cooldown discards the answer on
   // 71 of every 72 ticks at the default interval.
   const { runtime, lastUpdateResult, updateInProgress } = await updateChecker.getAutoUpdateGateState();
+  // Checked BEFORE the arming write below: an update already running is a
+  // real, useful reason to stand down on its own, and it must not be masked
+  // by a coincidental persistence failure on the very tick the feature was
+  // enabled (an install has both flags open only in that one window).
+  if (updateInProgress) return standDown('update-in-progress', 'an update is already running');
+
   // Stamp the arming point on the first tick after the feature goes on, so the
   // interval has something to measure from on an install that has never
   // updated. Written once — a re-stamp on every boot would move the deadline.
   if (!runtime.armedAt) {
-    await updateChecker.recordAutoUpdateRuntime({ armedAt: new Date().toISOString() }).catch(() => undefined);
+    const armed = await writeRuntime({ armedAt: new Date().toISOString() }, 'arm');
+    // Without a persisted arming point, `updateBaselineAt` falls back to `now`
+    // on every tick (see its own doc comment) — a broken write here would
+    // otherwise report the full configured cooldown, indistinguishable from a
+    // freshly-armed install, on every tick forever. Stop outright instead.
+    if (!armed) {
+      return standDown('runtime-persistence-unavailable', 'could not persist the arming timestamp');
+    }
   }
-
-  if (updateInProgress) return standDown('update-in-progress', 'an update is already running');
 
   const now = Date.now();
   const baselineAt = updateBaselineAt(runtime, lastUpdateResult, now);
@@ -202,7 +254,7 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
       // where `task` is null) would lock out every retry for the same
       // window while nothing was actually queued.
       if (task?.id) {
-        await updateChecker.recordAutoUpdateRuntime({ repairQueuedAt: new Date().toISOString() }).catch(() => undefined);
+        await writeRuntime({ repairQueuedAt: new Date().toISOString() }, 'repair-queued');
       }
     }
     return standDown('repo-not-ready', read.summary);
@@ -234,15 +286,15 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
 
   lastLoggedSkip = null;
   console.log(`⬆️ Auto-update starting (${config.channel} channel) — ${availability.detail}`);
-  await updateChecker.recordAutoUpdateRuntime({
+  await writeRuntime({
     lastAttemptAt: new Date().toISOString(),
     lastSkip: null,
-  }).catch(() => undefined);
+  }, 'attempt');
 
   const outcome = await launchUpdateFor(config.channel, io).catch((err) => ({ ok: false, message: err.message }));
   if (!outcome.ok) {
     console.error(`❌ Auto-update could not start: ${outcome.message}`);
-    await updateChecker.recordAutoUpdateRuntime({ lastOutcome: `failed: ${outcome.message}` }).catch(() => undefined);
+    await writeRuntime({ lastOutcome: `failed: ${outcome.message}` }, 'outcome');
     return { ran: false, reason: 'launch-failed', detail: outcome.message, channel: config.channel };
   }
 
@@ -250,11 +302,23 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
   // not live to see: update.sh pm2-deletes this server partway through. Without
   // it, a restart that lands before the update result is recorded would find
   // the interval already elapsed and immediately launch a second update.
-  await updateChecker.recordAutoUpdateRuntime({
+  //
+  // The launch has already happened by this point — `setUpdateInProgress`'s
+  // persisted lock (acquired inside `launchUpdateFor`, not here) is what
+  // actually prevents a second dispatch, not this bookkeeping write. If IT
+  // fails, the launch itself must not be undone or retried; the tick result
+  // just carries a degradation flag so callers know the runtime record may be
+  // stale until a later write succeeds.
+  const recorded = await writeRuntime({
     lastRunAt: new Date().toISOString(),
     lastOutcome: `started (${config.channel})`,
-  }).catch(() => undefined);
-  return { ran: true, channel: config.channel, detail: availability.detail };
+  }, 'launch-record');
+  return {
+    ran: true,
+    channel: config.channel,
+    detail: availability.detail,
+    ...(recorded ? {} : { persistenceWarning: 'launched, but could not record it — cooldown timing may be stale until the next successful write' }),
+  };
 }
 
 /**
@@ -332,4 +396,5 @@ export function __resetAutoUpdateSchedulerForTests() {
   registrationSignature = null;
   lastLoggedSkip = null;
   ioRef = null;
+  failingRuntimeWrites.clear();
 }

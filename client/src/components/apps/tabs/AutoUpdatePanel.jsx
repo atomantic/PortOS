@@ -17,6 +17,7 @@ const SKIP_LABELS = {
   'status-unavailable': 'Could not read the update status',
   'activity-unknown': 'Could not read the activity snapshot',
   'launch-failed': 'The last launch was refused',
+  'runtime-persistence-unavailable': 'Could not save the updater state',
 };
 
 const CHANNELS = [
