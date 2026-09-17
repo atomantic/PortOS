@@ -60,3 +60,61 @@ export async function surfaceCommissionRun(commission, run) {
     console.error(`❌ Commission notification surface failed (${commission.id}): ${err?.message || err}`);
   }
 }
+
+/**
+ * Surface a run-history write that FAILED (#7529) — the degraded twin of
+ * surfaceCommissionRun above.
+ *
+ * Why this exists rather than the console line alone: a cron tick has no HTTP
+ * response to carry the outcome's `historyWarning` home in, so for the
+ * unattended case this fix is actually about, a log entry nobody reads would be
+ * the only signal. `surfaceCommissionRun` is already the persisted, machine-local
+ * channel for "your commission did something while you weren't looking" — it is
+ * just gated on a real run, which is precisely what a lost write does not have.
+ *
+ * MEDIUM rather than the fired-run LOW: this one needs a human. Nothing will
+ * retry it and the run row is gone for good, so the deep link to the Creative
+ * Director project is the only remaining route to work that is genuinely running.
+ *
+ * Same best-effort contract: never throws into the scheduler's fire handler. It
+ * names the commission exactly as surfaceCommissionRun above does — the
+ * notifications store is a machine-local file that never federates, so the name
+ * is what makes the alert identifiable to the one user who sees it. What it
+ * still must NOT carry, on this path or any other, is the directive, the prompt
+ * or any feedback: the metadata is local ids plus the bounded classification.
+ *
+ * @param {object} commission sanitized commission record, or `{ id }` when the
+ *   record itself could not be read (a pre-fire storage failure)
+ * @param {object} warning the `historyWarning` persistRun produced
+ */
+export async function surfaceCommissionHistoryLoss(commission, warning) {
+  if (!commission?.id || !warning) return;
+  const name = commission.name || 'A commission';
+  const link = warning.projectId
+    ? `/creative-director/${encodeURIComponent(warning.projectId)}`
+    : `/creative-commission/${encodeURIComponent(commission.id)}`;
+  const body = warning.projectId
+    ? 'The project is running, but this run was not saved to the commission’s history — it will not appear there or be ratable. Open the project to find the work.'
+    : 'The outcome of this fire was not saved to the commission’s history.';
+
+  try {
+    const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('../notifications.js');
+    await addNotification({
+      type: NOTIFICATION_TYPES.CREATIVE_COMMISSION,
+      title: `“${name}” could not save its run history`,
+      description: body,
+      priority: PRIORITY_LEVELS.MEDIUM,
+      link,
+      metadata: {
+        commissionId: commission.id,
+        projectId: warning.projectId || null,
+        historyWarning: warning.code,
+        outcome: warning.outcome,
+        trigger: warning.trigger,
+        detail: warning.detail,
+      },
+    });
+  } catch (err) {
+    console.error(`❌ Commission history-loss surface failed (${commission.id}): ${err?.message || err}`);
+  }
+}

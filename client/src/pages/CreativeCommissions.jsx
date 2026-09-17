@@ -25,6 +25,7 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { timeAgo } from '../utils/formatters';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import CommissionConfigForm from '../components/creative-commission/CommissionConfigForm.jsx';
+import { toastRunOutcome } from '../components/creative-commission/runOutcomeToast.jsx';
 import {
   blankForm, toPayload, patchFormState, validateForm, describeSchedule, describeAssignment,
   COMMISSION_STOP_COPY,
@@ -101,9 +102,7 @@ export default function CreativeCommissions() {
         const fresh = result.commission;
         setCommissions((prev) => prev.map((c) => (c.id === fresh.id ? { ...c, runs: fresh.runs, feedback: fresh.feedback } : c)));
       }
-      if (result?.status === 'started') toast.success('Run started — open the commission to watch the render');
-      else if (result?.status === 'skipped') toast.error(`Run skipped: ${result.reason}`);
-      else toast.error(`Run failed: ${result?.error || 'unknown error'}`);
+      toastRunOutcome(result, 'Run started — open the commission to watch the render');
     } catch (err) {
       toast.error(err?.message || 'Run failed');
     } finally {

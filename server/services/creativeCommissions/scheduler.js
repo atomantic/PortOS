@@ -36,7 +36,7 @@ import { listCommissions, getCommission, recordCommissionRun, commissionEvents, 
 import { commissionToCron, commissionToRecurrence } from './directive.js';
 import { buildCommissionDirective, getAbilityAdapter } from './abilityAdapters.js';
 import { buildMusicTasteRecipe } from './musicTasteRecipe.js';
-import { surfaceCommissionRun } from './surface.js';
+import { surfaceCommissionRun, surfaceCommissionHistoryLoss } from './surface.js';
 import { registerCommissionProjectReconciler } from './projectControl.js';
 
 const eventId = (commissionId) => `creative-commission-${commissionId}`;
@@ -207,17 +207,63 @@ export function stopCommissionScheduler() {
   clearReconcileRetry();
 }
 
-// Sentinel + validate (AGENTS.md): a pre-fire read failure must never persist
-// with the same shape as a legitimately-empty one. Never store the raw error
-// message — it can originate from a DB driver and, per this fix's acceptance
-// criteria, run history must exclude record contents, prompts and private
-// feedback. A short, bounded classification (an error `code` when the failure
-// supplies one, else its constructor name) is enough to distinguish outage
-// types on the commission's run history without repeating this file's log.
-function classifyPrefireReadError(err) {
-  if (typeof err?.code === 'string' && err.code) return `read-failed:${err.code}`;
-  if (typeof err?.name === 'string' && err.name) return `read-failed:${err.name}`;
-  return 'read-failed';
+// Sentinel + validate (AGENTS.md): a storage failure must never persist with the
+// same shape as a legitimately-empty result. Never store the raw error message —
+// it can originate from a DB driver and, per #7529's acceptance criteria, run
+// history and any client-visible warning must exclude record contents, prompts
+// and private feedback. A short, bounded classification (an error `code` when the
+// failure supplies one, else its constructor name) is enough to distinguish
+// outage types without repeating this file's log.
+function classifyBoundedError(err, prefix) {
+  if (typeof err?.code === 'string' && err.code) return `${prefix}:${err.code}`;
+  if (typeof err?.name === 'string' && err.name) return `${prefix}:${err.name}`;
+  return prefix;
+}
+
+// The machine-readable code every degraded-history outcome carries. A caller
+// branches on this, never on prose.
+export const HISTORY_UNAVAILABLE = 'run-history-unavailable';
+
+/**
+ * Persist one run entry, separating three outcomes that a bare
+ * `.catch(() => null)` used to collapse into one (#7529, AGENTS.md's
+ * sentinel + validate rule):
+ *
+ *   - written          → { run }                                (no warning key)
+ *   - commission gone  → { run: null, historyWarning: null }  (honest absence)
+ *   - write FAILED     → { run: null, historyWarning: {...} }  (degradation)
+ *
+ * The third case is the one that used to disappear: generation had already
+ * started, the project existed, and the caller still got `run: null` — which
+ * reads exactly like "the commission was deleted mid-fire". The commission's
+ * gallery is derived from persisted run ids, so a lost write leaves a project
+ * running with no history row, no rating control, and no surfaced notification
+ * (surfacing is gated on a real run), with nothing anywhere saying so.
+ *
+ * Never throws: every caller is outside the Express request lifecycle. The
+ * console.error IS the scheduled path's diagnostic — it does not depend on the
+ * ledger that just failed. It carries only local ids and a bounded class, never
+ * names, prompts or feedback.
+ */
+async function persistRun(commissionId, entry) {
+  try {
+    return { run: await recordCommissionRun(commissionId, entry) };
+  } catch (err) {
+    const detail = classifyBoundedError(err, 'write-failed');
+    const projectNote = entry.projectId ? ` — project ${entry.projectId} is running unrecorded` : '';
+    console.error(`❌ Creative commission ${commissionId} ${entry.trigger} ${entry.status} run history write failed (${detail})${projectNote}`);
+    return {
+      run: null,
+      historyWarning: {
+        code: HISTORY_UNAVAILABLE,
+        outcome: entry.status,
+        trigger: entry.trigger,
+        commissionId,
+        projectId: entry.projectId || null,
+        detail,
+      },
+    };
+  }
 }
 
 /**
@@ -241,16 +287,20 @@ export async function runScheduledCommission(commissionId) {
   } catch (err) {
     if (err?.code === ERR_NOT_FOUND) return; // confirmed deletion — quiet no-op
     console.error(`❌ Creative commission ${commissionId} pre-fire read failed: ${err?.message || err}`);
-    await recordCommissionRun(commissionId, {
+    const { historyWarning } = await persistRun(commissionId, {
       status: 'failed',
       trigger: 'schedule',
-      error: classifyPrefireReadError(err),
-    }).catch((ledgerErr) => {
-      // The failed-run write above ITSELF failed — nothing landed on the
-      // commission's history, so this is the only surviving record of the
-      // outage. Its own diagnostic, per this fix's acceptance criteria.
-      console.error(`❌ Creative commission ${commissionId} pre-fire read failed AND its failure could not be recorded: ${ledgerErr?.message || ledgerErr}`);
+      error: classifyBoundedError(err, 'read-failed'),
     });
+    if (historyWarning) {
+      // The failed-run write above ITSELF failed — nothing landed on the
+      // commission's history, so these two lines are the only surviving record
+      // of the outage. The joint one names the compound failure that neither
+      // half states on its own; the notification is what actually reaches a
+      // user who was not watching the logs at 02:00.
+      console.error(`❌ Creative commission ${commissionId} pre-fire read failed AND its failure could not be recorded: ${historyWarning.detail}`);
+      await surfaceCommissionHistoryLoss({ id: commissionId }, historyWarning).catch(() => {});
+    }
     throw err; // propagate to eventScheduler's runEvent, which contains it
   }
   if (commission.enabled === false) return; // paused — quiet no-op
@@ -329,10 +379,19 @@ async function fireCommission(commission, trigger) {
   let startedProjectId = null;
   let startedTasteRecipe = null;
   let startedMusicGeneration = null;
-  const skip = async (reason) => {
-    const run = await recordCommissionRun(commissionId, { status: 'skipped', reason, trigger }).catch(() => null);
-    return { status: 'skipped', reason, run };
+  // Every degraded ledger write raises the SAME persisted notification, whatever
+  // the trigger. A cron tick has no HTTP response to carry `historyWarning` home
+  // in, so without this the unattended case — the one this fix is actually about
+  // — would be a console line nobody reads. Manual callers get both.
+  const outcome = async (base, persisted) => {
+    // .catch like the surfaceCommissionRun call below: fireCommission promises
+    // its callers an outcome and never a throw, and one of them is a cron tick
+    // outside the request lifecycle where an escaping rejection kills the process.
+    if (persisted.historyWarning) await surfaceCommissionHistoryLoss(commission, persisted.historyWarning).catch(() => {});
+    return { ...base, ...persisted };
   };
+  const skip = async (reason) =>
+    outcome({ status: 'skipped', reason }, await persistRun(commissionId, { status: 'skipped', reason, trigger }));
   try {
     // Gate on creative autonomy mode + daily cos budget BEFORE spawning anything
     // (the planner is itself an LLM call) — honors "off ⇒ no generation" and the
@@ -431,14 +490,15 @@ async function fireCommission(commission, trigger) {
     });
 
     startedProjectId = project.id;
-    const run = await recordCommissionRun(commissionId, {
+    const persisted = await persistRun(commissionId, {
       status: 'started',
       trigger,
       projectId: project.id,
       promptUsed: directive.goal,
       ...(startedTasteRecipe ? { tasteRecipe: startedTasteRecipe } : {}),
       ...(startedMusicGeneration ? { musicGeneration: startedMusicGeneration } : {}),
-    }).catch(() => null);
+    });
+    const { run } = persisted;
     // A taste-aware audio enqueue resolves its authoritative prompt/renderer
     // from this local run. If the write failed, advancing would make that lookup
     // look legitimately absent and silently release planner defaults instead.
@@ -454,15 +514,18 @@ async function fireCommission(commission, trigger) {
     // Kick the planner → plan → execute loop. Fire-and-forget within this
     // try/catch (already outside the request lifecycle).
     await advanceAfterPlanStepSettled(project.id);
-    return { status: 'started', projectId: project.id, run };
+    // The project IS running and its id is authoritative — the warning says only
+    // that this fire's bookkeeping was lost, so a caller reports degraded history
+    // instead of promising the render will appear in the commission's gallery.
+    return outcome({ status: 'started', projectId: project.id }, persisted);
   } catch (err) {
     console.error(`❌ Creative commission ${commissionId} ${trigger} fire failed: ${err?.message || err}`);
     const error = err?.message || String(err);
-    const run = await recordCommissionRun(commissionId, {
+    const persisted = await persistRun(commissionId, {
       status: 'failed', error, trigger, projectId: startedProjectId,
       ...(startedTasteRecipe ? { tasteRecipe: startedTasteRecipe } : {}),
       ...(startedMusicGeneration ? { musicGeneration: startedMusicGeneration } : {}),
-    }).catch(() => null);
-    return { status: 'failed', error, projectId: startedProjectId, run };
+    });
+    return outcome({ status: 'failed', error, projectId: startedProjectId }, persisted);
   }
 }
