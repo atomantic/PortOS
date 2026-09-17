@@ -187,7 +187,13 @@ const ERROR_PATTERNS = [
     suggestedFix: 'Check model name and availability in provider settings'
   },
   {
-    pattern: /ECONNREFUSED|ENOTFOUND|network error|connection refused|timeout|ETIMEDOUT/i,
+    // `GOAWAY` / `UND_ERR_SOCKET` are undici's connection-level failures, which
+    // reach here as the flattened cause chain `describeTransportError` builds
+    // (the bare `TypeError: fetch failed` matches nothing). Without them a
+    // remote gateway retiring a pooled connection classified as UNKNOWN and was
+    // escalated to an open-ended tier-4 investigation, when the honest reading
+    // is a transient connectivity fault with a 2m bench.
+    pattern: /ECONNREFUSED|ENOTFOUND|network error|connection refused|timeout|ETIMEDOUT|GOAWAY|UND_ERR_SOCKET/i,
     category: ERROR_CATEGORIES.NETWORK_ERROR,
     requiresFallback: false,
     actionable: false,

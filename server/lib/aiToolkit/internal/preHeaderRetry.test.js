@@ -5,6 +5,7 @@ import {
   isReplaySafeTransportError,
   isReplaySafeLocalRequest,
   isTransientGatewayStatus,
+  isUnprocessedGoawayError,
 } from './preHeaderRetry.js';
 
 const response = (status, cancel = vi.fn()) => ({ status, body: { cancel } });
@@ -72,6 +73,45 @@ describe('pre-header retry policy', () => {
     controller.abort(new Error('stopped'));
     await expect(pending).rejects.toThrow('stopped');
     expect(fetchAttempt).toHaveBeenCalledOnce();
+  });
+
+  it('replays a GOAWAY once even for a billable remote provider', async () => {
+    // The regression: a gateway recycling an idle pooled connection failed the
+    // run in ~0ms because GOAWAY was gated behind the local-and-keyless proof.
+    const goaway = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('HTTP/2: "GOAWAY" frame received with code 0'), { code: 'UND_ERR_SOCKET' }),
+    });
+    const ok = response(200);
+    const fetchAttempt = vi.fn().mockRejectedValueOnce(goaway).mockResolvedValueOnce(ok);
+
+    await expect(fetchWithPreHeaderRetry(fetchAttempt, { delay: vi.fn() })).resolves.toBe(ok);
+    expect(fetchAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after the single GOAWAY replay a remote provider is allowed', async () => {
+    const goaway = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('HTTP/2: "GOAWAY" frame received with code 0'), { code: 'UND_ERR_SOCKET' }),
+    });
+    const fetchAttempt = vi.fn().mockRejectedValue(goaway);
+
+    await expect(fetchWithPreHeaderRetry(fetchAttempt, { delay: vi.fn() })).rejects.toBe(goaway);
+    expect(fetchAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the rest of the transport family behind the local-and-keyless proof', async () => {
+    // A reset may land after the upstream accepted the request, so replaying it
+    // against a billable provider could bill a second generation.
+    const reset = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+    });
+    const fetchAttempt = vi.fn().mockRejectedValue(reset);
+
+    await expect(fetchWithPreHeaderRetry(fetchAttempt, { delay: vi.fn() })).rejects.toBe(reset);
+    expect(fetchAttempt).toHaveBeenCalledOnce();
+    expect(isUnprocessedGoawayError(reset)).toBe(false);
+    expect(isUnprocessedGoawayError(Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('HTTP/2: "GOAWAY" frame received with code 0'), { code: 'UND_ERR_SOCKET' }),
+    }))).toBe(true);
   });
 
   it('returns the final retryable response intact when the attempt budget is exhausted', async () => {

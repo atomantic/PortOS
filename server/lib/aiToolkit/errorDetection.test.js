@@ -169,6 +169,14 @@ describe('Error Detection', () => {
       expect(result.category).toBe(ERROR_CATEGORIES.NETWORK_ERROR);
     });
 
+    it('classifies an HTTP/2 GOAWAY that survived its replay as a network error', () => {
+      // A remote gateway retiring a pooled connection used to land in UNKNOWN,
+      // which escalated to an open-ended tier-4 investigation task.
+      const result = analyzeError('fetch failed: UND_ERR_SOCKET: HTTP/2: "GOAWAY" frame received with code 0');
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.NETWORK_ERROR);
+    });
+
     it('should detect timeout errors', () => {
       const result = analyzeError('Process timed out after 300000ms');
       expect(result.hasError).toBe(true);
