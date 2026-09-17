@@ -193,10 +193,9 @@ function adoptPtySession(sessionId, ptyProcess, options = {}) {
   const outputBuffer = [];
   let bufferSize = 0;
   const MAX_BUFFER = 50 * 1024;
-  // A full-screen TUI announces alternate screen and mouse tracking once, in its
-  // first few hundred bytes — which the ring buffer drops on any run long enough
-  // to overflow it. Following the WHOLE stream lets attachSession re-announce the
-  // modes still in force. See lib/terminalReplay.js.
+  // Terminal modes are declared once, at TUI startup, so the ring buffer drops
+  // them on any run long enough to overflow it. This follows the WHOLE stream so
+  // attachSession can re-declare them. See lib/terminalReplay.js.
   const modeTracker = createTerminalModeTracker();
 
   // Store session info
@@ -227,7 +226,6 @@ function adoptPtySession(sessionId, ptyProcess, options = {}) {
 
   // Handle pty output
   ptyProcess.onData((data) => {
-    // Before the ring buffer can evict it: mode state is stream-wide, not recent.
     modeTracker.observe(data);
     // Buffer output for re-attach
     outputBuffer.push(data);
@@ -644,16 +642,9 @@ export function attachSession(sessionId, socket, { claim = false } = {}) {
   broadcastSessionList();
   return {
     sessionId,
-    // Two corrections to the raw ring buffer, both in lib/terminalReplay.js:
-    //
-    //  - the mode preamble LEADS, because a long-running TUI's `ESC[?1049h` /
-    //    `ESC[?1003h` announcements scrolled out of the 50KB window hours ago, and
-    //    the attaching terminal is reset() before this is painted — without it the
-    //    client thinks a watched OpenCode run is a plain scrollback shell and
-    //    cannot scroll it at all;
-    //  - queries stripped, not raw: a replayed `ESC[6n` is a question the attaching
-    //    terminal answers as INPUT, and the TUI that asked it is long gone — the
-    //    reply lands on the shell prompt.
+    // Mode preamble, then the stripped buffer — both explained in
+    // lib/terminalReplay.js. The order is load-bearing: the modes have to be in
+    // force before the frames that were drawn under them are painted.
     bufferedOutput: session.modeTracker.preamble()
       + stripTerminalQueries(session.outputBuffer.join(''))
   };

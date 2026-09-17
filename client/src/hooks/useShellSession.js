@@ -728,12 +728,10 @@ export function useShellSession({ isFullscreen } = {}) {
         // before repainting this one's buffer, so a previously-viewed full-screen
         // TUI's lingering mouse/focus tracking can't inject garbage here. The
         // freshly-painted bufferedOutput re-establishes whatever modes THIS
-        // session legitimately uses — the server leads it with a mode preamble
-        // precisely so that holds for a run whose startup announcements have long
-        // since scrolled out of the replay window (server/lib/terminalReplay.js).
-        // Without it a watched OpenCode run repaints as a normal-buffer terminal
-        // and lib/terminalScroll.js can't route a scroll to the app at all.
-        // See startSession for the full rationale.
+        // session legitimately uses — the server leads it with a mode preamble so
+        // that holds even once the session's own declaration has scrolled out of
+        // the replay window (server/lib/terminalReplay.js). See startSession for
+        // the full rationale.
         resetTerminalWheelScroll(termInstanceRef.current);
         termInstanceRef.current.reset();
         if (bufferedOutput) {

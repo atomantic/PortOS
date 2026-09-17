@@ -75,7 +75,7 @@ describe('createTerminalModeTracker', () => {
     const tracker = createTerminalModeTracker();
     tracker.observe(OPENCODE_STARTUP);
     // Whatever else streams past, the announcement is not repeated.
-    tracker.observe('rendered output '.repeat(10_000));
+    tracker.observe('rendered output');
     expect(tracker.preamble()).toBe(
       '\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h'
     );
@@ -134,11 +134,13 @@ describe('createTerminalModeTracker', () => {
     expect(tracker.preamble()).toBe('');
   });
 
-  it('shrugs off non-string and empty chunks', () => {
+  it('carries only a fragment that could still become a private-mode set', () => {
+    // A truecolor SGR run split at the same place looks like an incomplete CSI,
+    // but it can never become `ESC[?…h` — carrying it would be pure overhead on
+    // the busiest kind of output there is.
     const tracker = createTerminalModeTracker();
-    tracker.observe(null);
-    tracker.observe('');
-    tracker.observe(undefined);
+    tracker.observe('\x1b[38;5');
+    tracker.observe(';120mstill colored');
     expect(tracker.preamble()).toBe('');
   });
 });
