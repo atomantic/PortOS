@@ -139,8 +139,8 @@ async function writeRuntime(patch, operation) {
       if (!failingRuntimeWrites.has(operation)) {
         failingRuntimeWrites.add(operation);
         // `err.code` (ENOSPC, EACCES, …) over `err.message`, which for an fs
-        // error embeds the full local path.
-        console.error(`❌ Auto-update runtime write failed (${operation}): ${err.code || err.message}`);
+        // error embeds the full local path. Guard against a non-Error reject.
+        console.error(`❌ Auto-update runtime write failed (${operation}): ${err?.code || err?.message || String(err)}`);
       }
       return false;
     },
@@ -200,6 +200,12 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
   // walks every file under client/src, and the cooldown discards the answer on
   // 71 of every 72 ticks at the default interval.
   const { runtime, lastUpdateResult, updateInProgress } = await updateChecker.getAutoUpdateGateState();
+  // Checked BEFORE the arming write below: an update already running is a
+  // real, useful reason to stand down on its own, and it must not be masked
+  // by a coincidental persistence failure on the very tick the feature was
+  // enabled (an install has both flags open only in that one window).
+  if (updateInProgress) return standDown('update-in-progress', 'an update is already running');
+
   // Stamp the arming point on the first tick after the feature goes on, so the
   // interval has something to measure from on an install that has never
   // updated. Written once — a re-stamp on every boot would move the deadline.
@@ -213,8 +219,6 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
       return standDown('runtime-persistence-unavailable', 'could not persist the arming timestamp');
     }
   }
-
-  if (updateInProgress) return standDown('update-in-progress', 'an update is already running');
 
   const now = Date.now();
   const baselineAt = updateBaselineAt(runtime, lastUpdateResult, now);

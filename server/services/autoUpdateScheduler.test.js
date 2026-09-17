@@ -308,43 +308,64 @@ describe('runtime-write failure handling', () => {
   // outcome (the read never sees a persisted armedAt), not silently drift
   // back into a normal cooldown once the "first tick after enabling" framing
   // no longer applies.
-  it('keeps reporting persistence-unavailable across repeated ticks while the write stays broken', async () => {
+  it('keeps reporting persistence-unavailable across repeated ticks while the write stays broken, without flooding the log', async () => {
     deps.gateState.mockResolvedValue({
       runtime: { armedAt: null, lastRunAt: null, repairQueuedAt: null },
       lastUpdateResult: null,
       updateInProgress: false,
     });
     deps.recordRuntime.mockRejectedValue(new Error('disk full'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const first = await runAutoUpdateTick({ io: {} });
     const second = await runAutoUpdateTick({ io: {} });
+    const third = await runAutoUpdateTick({ io: {} });
     expect(first).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
     expect(second).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+    expect(third).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+    // One log line for the 'arm' operation, no matter how many ticks it fails
+    // on — dedup is per operation, not per call.
+    const armFailures = errorSpy.mock.calls.filter(([line]) => line.includes('runtime write failed (arm)'));
+    expect(armFailures).toHaveLength(1);
+    errorSpy.mockRestore();
   });
 
   // Once the write actually lands, the tick must fall through to ordinary
   // gating again — a transient outage must not wedge the scheduler forever.
   it('resumes normal cooldown behavior once the arming write recovers', async () => {
-    deps.gateState.mockResolvedValueOnce({
+    deps.gateState.mockResolvedValue({
       runtime: { armedAt: null, lastRunAt: null, repairQueuedAt: null },
       lastUpdateResult: null,
       updateInProgress: false,
     });
     deps.recordRuntime.mockRejectedValueOnce(new Error('disk full'));
     deps.recordRuntime.mockResolvedValue({});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const first = await runAutoUpdateTick({ io: {} });
     expect(first).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
 
-    // The next read reflects what a real disk read would now show: the write
-    // above landed, so `armedAt` is persisted from well outside the cooldown.
+    // The write now lands (recovery), stamping `armedAt` at "now" — correctly
+    // still a fresh cooldown, since this install has never updated before.
+    const second = await runAutoUpdateTick({ io: {} });
+    expect(second).toMatchObject({ ran: false, reason: 'cooldown' });
+    expect(logSpy.mock.calls.some(([line]) => line.includes('runtime write recovered (arm)'))).toBe(true);
+    const [{ armedAt }] = deps.recordRuntime.mock.calls.find(([patch]) => typeof patch.armedAt === 'string');
+    logSpy.mockRestore();
+
+    // A later tick reads that now-persisted `armedAt`, well outside the
+    // interval — ordinary gating resumes with no lingering persistence flag.
     deps.gateState.mockResolvedValue({
-      runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt: null },
+      runtime: { armedAt, lastRunAt: null, repairQueuedAt: null },
       lastUpdateResult: null,
       updateInProgress: false,
     });
-    const second = await runAutoUpdateTick({ io: {} });
-    expect(second).toMatchObject({ ran: true, channel: 'release' });
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse(armedAt) + 7 * HOUR);
+    const third = await runAutoUpdateTick({ io: {} });
+    vi.useRealTimers();
+    expect(third).toMatchObject({ ran: true, channel: 'release' });
+    expect(third.persistenceWarning).toBeUndefined();
   });
 
   // A write failure recording an ORDINARY stand-down (cooldown, busy, …) must
