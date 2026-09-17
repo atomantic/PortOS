@@ -299,7 +299,7 @@ export async function runScheduledCommission(commissionId) {
       // half states on its own; the notification is what actually reaches a
       // user who was not watching the logs at 02:00.
       console.error(`❌ Creative commission ${commissionId} pre-fire read failed AND its failure could not be recorded: ${historyWarning.detail}`);
-      await surfaceCommissionHistoryLoss({ id: commissionId }, historyWarning);
+      await surfaceCommissionHistoryLoss({ id: commissionId }, historyWarning).catch(() => {});
     }
     throw err; // propagate to eventScheduler's runEvent, which contains it
   }
@@ -384,7 +384,10 @@ async function fireCommission(commission, trigger) {
   // in, so without this the unattended case — the one this fix is actually about
   // — would be a console line nobody reads. Manual callers get both.
   const outcome = async (base, persisted) => {
-    if (persisted.historyWarning) await surfaceCommissionHistoryLoss(commission, persisted.historyWarning);
+    // .catch like the surfaceCommissionRun call below: fireCommission promises
+    // its callers an outcome and never a throw, and one of them is a cron tick
+    // outside the request lifecycle where an escaping rejection kills the process.
+    if (persisted.historyWarning) await surfaceCommissionHistoryLoss(commission, persisted.historyWarning).catch(() => {});
     return { ...base, ...persisted };
   };
   const skip = async (reason) =>

@@ -76,9 +76,12 @@ export async function surfaceCommissionRun(commission, run) {
  * retry it and the run row is gone for good, so the deep link to the Creative
  * Director project is the only remaining route to work that is genuinely running.
  *
- * Same best-effort contract: never throws into the scheduler's fire handler, and
- * carries only local ids plus the bounded classification — never the prompt,
- * the directive or any feedback.
+ * Same best-effort contract: never throws into the scheduler's fire handler. It
+ * names the commission exactly as surfaceCommissionRun above does — the
+ * notifications store is a machine-local file that never federates, so the name
+ * is what makes the alert identifiable to the one user who sees it. What it
+ * still must NOT carry, on this path or any other, is the directive, the prompt
+ * or any feedback: the metadata is local ids plus the bounded classification.
  *
  * @param {object} commission sanitized commission record, or `{ id }` when the
  *   record itself could not be read (a pre-fire storage failure)
