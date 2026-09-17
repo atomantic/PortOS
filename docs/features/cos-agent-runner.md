@@ -41,6 +41,24 @@ A separate `portos-cos` PM2 process that:
 - A disconnect does **not** demote. In runner mode the runner owns every agent process, so while it is down new tasks are **held** as `pending` (logged once, not per task) and resume on reconnect. Demoting would spawn them as children of `portos-server` — the orphaning this app exists to prevent.
 - Agents already spawned directly keep completing through the direct path across a promotion; reconciliation only adopts agents this server does not already own.
 
+## Unattended recovery gates
+
+Nobody is watching a CoS TUI session, so nothing types into it when the model stops early. Five gates in `server/services/agentTuiSpawning.js` watch the PTY stream and act on one shared 5s poll. Four of them prefer a nudge into the live session over a kill, because the TUI still holds the whole conversation; only the retry stall ends the run, since a request the provider never answers will not answer the next one either. No gate reaps a run on the clock alone — the wall-clock ceiling was removed deliberately, after it killed agents 30 seconds past a merged PR.
+
+| Gate | What it sees | What it does |
+| --- | --- | --- |
+| Self-clearing provider signal | agy's "verifying your account eligibility" banner, which REJECTS the submission | Re-pastes the whole prompt while a grace window is open, then fails over |
+| Local-runtime OOM | a Metal/CUDA out-of-memory box that killed the turn | Pastes `continue` once the session is quiet; fails over to a fallback provider after 3 |
+| Retry stall | the TUI retrying one request past attempt 3, ten minutes on | Fails the run over to a fallback provider |
+| Tool-permission dialog | Claude Code asking to approve a call nobody can approve | Declines it, then explains why and sends the session back to work |
+| **Stall** | **nothing at all — the session went quiet with the task unfinished** | **Pastes a `continue` nudge after 3 minutes of silence, up to 3 times; then badges the agent card `Stalled`** |
+
+The stall gate is the one with no signal to match on: the model narrates its next step ("Next: /do:pr"), ends its turn, and the TUI returns to its idle composer. Since the wall-clock ceiling was removed, nothing else would ever touch that session. It reads pure silence rather than provider chrome, because in-flight chrome is per-TUI vocabulary while bytes on the PTY are universal. Claude Code repaints its working counter about once a second for as long as any tool or API call is in flight; OpenCode barely repaints its chrome at all, but streams megabytes of transcript through the same stream. Three unbroken minutes of NOTHING is a composer at rest under both.
+
+It stays out of the way of the other four: it is polled last, it waits for the prompt to actually be in, and it skips a run that already wrote its completion sentinel or is mid-`finish()`. Its post-nudge wait is measured from the nudge rather than from output, because a session wedged below its composer never echoes the paste. A session that prints for 30s past a nudge took the hint and gets its full budget back, so a long run that stalls again hours later is not treated as a second strike.
+
+A session that ignores all three nudges is wedged below its composer, and no paste will reach it. Rather than give up silently — leaving a run holding its execution lane with nothing to show for it — the spawner logs the verdict and sets `metadata.phase = 'stalled'`, which the agent card renders as a non-pulsing **Stalled** badge pointing at the Shell tab. The badge clears itself on the session's next byte of output. Prevention lives on the other side of the same problem: `UNATTENDED_RUN_RULE` (`server/services/agentPromptBuilder.js`) tells every agent that naming its next step is not doing it. Constants: `STALL_NUDGE_*` in `server/lib/tuiHandshake.js`.
+
 ## Features
 
 - **Process Isolation**: Agent processes survive server restarts

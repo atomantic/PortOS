@@ -221,6 +221,7 @@ PortOS launched you autonomously. Nobody is watching this session and nothing ca
 - **Never ask the user to choose or approve.** Make the call yourself, state the assumption in your summary, and proceed.
 - **Invoke commands and skills in their non-interactive form.** If one drafts something and gates on approval before acting, pass the flag that skips that gate (\`--yes\` for the slashdo commands that have one).
 - **Ambiguous task?** Pick the most reasonable reading, do the work, and note the alternatives you rejected in your completion summary.
+- **Never end a turn with the task unfinished.** Naming your next step is not doing it — if you write "Next: open the PR", open it in that same turn. Nothing will type "continue" for you, and a turn that ends early strands the run.
 - **Genuinely blocked** (missing credential, contradictory requirements)? Write why to the completion sentinel and stop. Do NOT wait for a reply.`;
 
 /** Load and safely stage the review recipe shared by full and light prompts. */

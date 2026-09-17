@@ -14,6 +14,10 @@ import {
   OOM_NUDGE_ARM_WINDOW_MS,
   OOM_NUDGE_COOLDOWN_MS,
   OOM_NUDGE_MAX_ATTEMPTS,
+  createStallNudgeGate,
+  STALL_NUDGE_IDLE_MS,
+  STALL_NUDGE_RECOVERY_MS,
+  STALL_NUDGE_MAX_ATTEMPTS,
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
   SELF_CLEARING_RESUBMIT_ECHO_MS,
   MCP_BOOT_PASTE_DEADLINE_MS,
@@ -2028,5 +2032,66 @@ describe('answerStartupDialogs', () => {
     const second = answerOnce(reAsking, answers);
     expect(second.result).toBeNull();
     expect(second.written).toEqual([]);
+  });
+});
+
+describe('createStallNudgeGate', () => {
+  it('nudges a session that went quiet with its task unfinished', () => {
+    const gate = createStallNudgeGate();
+    const quietSince = 0;
+    // Still inside the threshold: a slow tool call is not a stall.
+    expect(gate.takeNudge(STALL_NUDGE_IDLE_MS - 1, quietSince)).toBe(0);
+    expect(gate.takeNudge(STALL_NUDGE_IDLE_MS, quietSince)).toBe(1);
+  });
+
+  it('waits out the threshold from the NUDGE, not from output', () => {
+    // The case this exists for: a session wedged below its composer never
+    // echoes the paste, so lastOutputAt stays put. Measuring from output alone
+    // would re-fire on the very next 5s poll and spend the whole budget in
+    // seconds.
+    const gate = createStallNudgeGate();
+    const quietSince = 0;
+    const firstNudgeAt = STALL_NUDGE_IDLE_MS;
+    expect(gate.takeNudge(firstNudgeAt, quietSince)).toBe(1);
+    expect(gate.takeNudge(firstNudgeAt + 5000, quietSince)).toBe(0);
+    expect(gate.takeNudge(firstNudgeAt + STALL_NUDGE_IDLE_MS - 1, quietSince)).toBe(0);
+    expect(gate.takeNudge(firstNudgeAt + STALL_NUDGE_IDLE_MS, quietSince)).toBe(2);
+  });
+
+  it('reports exhaustion once after STALL_NUDGE_MAX_ATTEMPTS unanswered nudges, then goes quiet', () => {
+    const gate = createStallNudgeGate();
+    let now = 0;
+    for (let i = 1; i <= STALL_NUDGE_MAX_ATTEMPTS; i += 1) {
+      now += STALL_NUDGE_IDLE_MS;
+      expect(gate.takeNudge(now, 0)).toBe(i);
+    }
+    // Wedged below the composer: pasting into it forever only fills raw.txt, so
+    // the verdict is handed back ONCE and the consumer says it out loud.
+    expect(gate.takeNudge(now + STALL_NUDGE_IDLE_MS, 0)).toBe('exhausted');
+    expect(gate.takeNudge(now + STALL_NUDGE_IDLE_MS * 2, 0)).toBe(0);
+    expect(gate.takeNudge(now + STALL_NUDGE_IDLE_MS * 10, 0)).toBe(0);
+  });
+
+  it('does not read the nudge\'s own paste echo as recovery', () => {
+    const gate = createStallNudgeGate();
+    const firstNudgeAt = STALL_NUDGE_IDLE_MS;
+    expect(gate.takeNudge(firstNudgeAt, 0)).toBe(1);
+    // The bracketed-paste echo lands a beat later and is the ONLY output the
+    // wedged session produces. Counting it would reset the streak forever.
+    const echoAt = firstNudgeAt + 1000;
+    expect(gate.takeNudge(echoAt + STALL_NUDGE_IDLE_MS, echoAt)).toBe(2);
+  });
+
+  it('clears an exhausted streak — and re-arms the verdict — once the session comes back to life', () => {
+    const gate = createStallNudgeGate();
+    let now = 0;
+    for (let i = 1; i <= STALL_NUDGE_MAX_ATTEMPTS; i += 1) {
+      now += STALL_NUDGE_IDLE_MS;
+      gate.takeNudge(now, 0);
+    }
+    // It printed well past the paste echo, so the nudges landed after all. A
+    // stall hours later is a fresh one, with the whole budget available again.
+    const revivedAt = now + STALL_NUDGE_RECOVERY_MS + 1;
+    expect(gate.takeNudge(revivedAt + STALL_NUDGE_IDLE_MS, revivedAt)).toBe(1);
   });
 });
