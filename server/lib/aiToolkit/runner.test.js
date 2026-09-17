@@ -1079,6 +1079,120 @@ describe('AI Toolkit runner service', () => {
       .toBe('thought so far');
   });
 
+  // The hidden channel is named `reasoning_content` by NVIDIA NIM, vLLM and the
+  // DeepSeek-R1-compatible servers — only OpenRouter-style endpoints say
+  // `reasoning`. Reading the one name discarded every reasoning token from NIM
+  // (`nvidia/nemotron-3.5-lightning-30b-a3b` sends 126 of 128 frames that way),
+  // so the salvage below never fired and a cut-off run reported `outputSize: 0`
+  // — indistinguishable from a provider that answered nothing.
+  it.each([
+    ['reasoning', 'openrouter-style'],
+    ['reasoning_content', 'nvidia-nim/vllm-style'],
+    ['thinking', 'llama.cpp-style'],
+  ])('salvages a %s-named reasoning channel (%s)', async (field) => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { [field]: 'deliberating' } }] })}\n`),
+      encoder.encode('data: [DONE]\n'),
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : { done: true }) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: `run-reasoning-${field}`, provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(await readFile(join(dataDir, 'runs', `run-reasoning-${field}`, 'output.txt'), 'utf-8'))
+      .toBe('deliberating');
+  });
+
+  // The wall-clock ceiling is the THIRD terminal path, and the only one that
+  // discarded the reasoning it cut off. A reasoning model spends its whole
+  // budget in the hidden channel before the first content token, so a run the
+  // timer ends has an empty `output` and minutes of generation in `reasoning`;
+  // writing `output` alone stamped `outputSize: 0`, which reads downstream as
+  // "the provider sent nothing" and escalates a healthy-but-slow model as dead.
+  it('salvages streamed reasoning when the wall-clock timeout ends the run', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    // One reasoning frame, then a read that never settles — the timer wins.
+    const frame = encoder.encode(
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'partial thinking' } }] })}\n`);
+    let sent = false;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => {
+        if (sent) return new Promise(() => {});
+        sent = true;
+        return { done: false, value: frame };
+      } }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-timeout-reasoning', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 50,
+      onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
+    // The salvage, not a zero-byte "provider said nothing" record.
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(metadata.hadReasoning).toBe(true);
+    expect(metadata.usedReasoningAsFallback).toBe(true);
+    expect(await readFile(join(dataDir, 'runs', 'run-timeout-reasoning', 'output.txt'), 'utf-8'))
+      .toBe('partial thinking');
+  });
+
+  // The timeout closure is built before the stream reader that fills
+  // `reasoning`, so a timer that fires before the response arrives must not
+  // read it through the temporal dead zone — a ReferenceError there would
+  // abandon the finalizer and leak the very run slot the ceiling reclaims.
+  it('finalizes a timeout that fires before any response, with no reasoning to salvage', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: () => new Promise(() => {}) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    runner.executeApiRun({
+      runId: 'run-timeout-pre-response', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 20,
+      onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
+    expect(metadata.outputSize).toBe(0);
+    expect(metadata.hadReasoning).toBe(false);
+    expect(metadata.usedReasoningAsFallback).toBe(false);
+    expect(await runner.isRunActive('run-timeout-pre-response')).toBe(false);
+  });
+
   // A stream that ends without [DONE] still has a complete frame sitting in the
   // carry buffer; dropping it silently truncates the tail of the answer.
   it('flushes a trailing frame left unterminated by the final read', async () => {

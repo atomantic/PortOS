@@ -601,6 +601,20 @@ export function createRunnerService(config = {}) {
 
       const startTime = Date.now();
       let output = '';
+      // Declared beside `output` rather than next to the stream reader that
+      // fills it, because all THREE terminal paths read it — clean finish,
+      // mid-stream throw, and the wall-clock timeout, whose `finalizeTimeout`
+      // closure is built further up than the reader is. A `let` further down
+      // would leave that closure reading it through the temporal dead zone: a
+      // timer firing before the response arrives (a hung `ensureProviderReady`,
+      // headers that never come) would throw ReferenceError instead of
+      // finalizing, leaking the run slot the timeout exists to reclaim.
+      let reasoning = '';
+
+      // Asked on ALL THREE terminal paths, so it is stated once: a reasoning
+      // model that produced no content still produced an answer, and the run's
+      // text is its reasoning. Restating the test at each site is how they drift.
+      const reasoningIsTheOutput = () => !output.trim() && reasoning.trim().length > 0;
 
       const headers = {
         'Content-Type': 'application/json'
@@ -672,13 +686,27 @@ export function createRunnerService(config = {}) {
         consumeActiveStop(runId);
         const error = `API execution timed out after ${effectiveTimeout}ms`;
         try {
-          if (output) await atomicWrite(outputPath, output).catch(() => {});
+          // A reasoning model spends its whole budget in the hidden channel
+          // before the first content token, so a run the ceiling cuts off
+          // routinely has an empty `output` and minutes of generation sitting
+          // in `reasoning`. The other two terminal paths already salvage it;
+          // this one wrote `output` alone and stamped `outputSize: 0`, which
+          // reads downstream as "the provider sent nothing" and escalates a
+          // healthy-but-slow model as a dead one.
+          const usedReasoningAsFallback = reasoningIsTheOutput();
+          const partialOutput = usedReasoningAsFallback ? reasoning : output;
+          if (partialOutput) await atomicWrite(outputPath, partialOutput).catch(() => {});
           const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
           metadata.endTime = new Date().toISOString();
           metadata.duration = Date.now() - startTime;
           metadata.success = false;
           metadata.error = error;
           metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
+          // Same two diagnostic flags the mid-stream-throw path sets, so a
+          // timeout that streamed is distinguishable from one that never got a
+          // byte without reading the output file back.
+          metadata.hadReasoning = reasoning.length > 0;
+          metadata.usedReasoningAsFallback = usedReasoningAsFallback;
           // Hosts classify a failure from `errorAnalysis`, not `errorCategory`
           // (PortOS's onRunFailed hook reads only the former), so setting the
           // category alone left every API-run timeout looking like an
@@ -686,13 +714,16 @@ export function createRunnerService(config = {}) {
           // instead of recognized as the timeout it is. Build it from the same
           // pattern table the other failure paths use so the two can't drift.
           metadata.errorAnalysis = analyzeError(error);
-          metadata.outputSize = Buffer.byteLength(output);
+          metadata.outputSize = Buffer.byteLength(partialOutput);
           await atomicWrite(metadataPath, metadata);
-          safeSettle(() => hooks.onRunFailed?.(metadata, error, output), `Run ${runId} onRunFailed hook`);
+          // The hook's third arg is the output tail the host quotes into an
+          // investigation task, so it gets the salvaged text too.
+          safeSettle(() => hooks.onRunFailed?.(metadata, error, partialOutput), `Run ${runId} onRunFailed hook`);
           safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
         } catch (finalErr) {
           console.error(`❌ API run ${runId} timeout finalize error: ${finalErr.message}`);
-          safeSettle(() => onComplete?.({ success: false, error, endTime: new Date().toISOString(), duration: Date.now() - startTime, outputSize: Buffer.byteLength(output) }), `Run ${runId} onComplete`);
+          const salvaged = reasoningIsTheOutput() ? reasoning : output;
+          safeSettle(() => onComplete?.({ success: false, error, endTime: new Date().toISOString(), duration: Date.now() - startTime, outputSize: Buffer.byteLength(salvaged) }), `Run ${runId} onComplete`);
         }
       };
       apiTimeoutHandle = setTimeout(() => {
@@ -817,21 +848,13 @@ export function createRunnerService(config = {}) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
 
-      let reasoning = '';
-
-      // Asked on BOTH terminal paths (a clean finish and a mid-stream throw),
-      // so it is stated once: a reasoning model that produced no content still
-      // produced an answer, and the run's text is its reasoning. Restating the
-      // test at each site is how the two drift.
-      const reasoningIsTheOutput = () => !output.trim() && reasoning.trim().length > 0;
-
       // A read returns an arbitrary SLICE of bytes, never a whole SSE frame, so
       // both boundaries have to be carried across iterations:
       //  - `buffer` holds the partial trailing LINE. Parsing per-chunk instead
       //    fed JSON.parse a frame cut in half at the ~8KB read boundary, which
       //    threw `Unterminated string in JSON at position 8064` and failed a
       //    220s NVIDIA NIM nemotron run with outputSize 0 — a reasoning model's
-      //    `delta.reasoning` frames are big enough to straddle a read routinely.
+      //    hidden-channel frames are big enough to straddle a read routinely.
       //  - `{ stream: true }` holds the partial trailing CHARACTER, so a
       //    multi-byte rune split across reads doesn't decode to U+FFFD.
       // This mirrors every other SSE consumer in the tree (openAiChatStream.js,
@@ -868,8 +891,21 @@ export function createRunnerService(config = {}) {
           onData?.({ text });
         }
 
-        if (delta?.reasoning) {
-          reasoning += delta.reasoning;
+        // The hidden channel goes by three names: OpenRouter-style endpoints
+        // use `reasoning`, NVIDIA NIM / vLLM / DeepSeek-R1-compatible servers
+        // use `reasoning_content`, and llama.cpp/MTPLX sometimes say
+        // `thinking`. First one present wins — a provider sends one spelling,
+        // and the precedence matches ../openAiChatStream.js so a frame that
+        // somehow carried two would resolve identically on both readers.
+        // Reading only `reasoning` silently discarded EVERY reasoning token
+        // from NIM — `nvidia/nemotron-3.5-lightning-30b-a3b` sends 126 of 128
+        // frames as `reasoning_content` — so the fallback below never fired and
+        // a cut-off run reported `outputSize: 0`, indistinguishable from a
+        // provider that answered nothing at all. Restated rather than imported
+        // because this directory stays self-contained — see ./AGENTS.md.
+        const reasoningDelta = delta?.reasoning || delta?.reasoning_content || delta?.thinking;
+        if (reasoningDelta) {
+          reasoning += reasoningDelta;
         }
       };
 
@@ -972,7 +1008,7 @@ export function createRunnerService(config = {}) {
 
           activeRuns.delete(runId);
 
-          // A reasoning model emits `delta.reasoning` well before its first
+          // A reasoning model emits its hidden channel well before its first
           // content token, so a mid-stream failure routinely finds `output`
           // empty while the generation so far sits in `reasoning`. The success
           // path already falls back to it; doing the same here is the
