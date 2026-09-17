@@ -83,11 +83,16 @@ const TONAL_TEXT_PAIRS = [
 
 const TONAL_ALPHA_STEPS = [0.05, 0.08, 0.1, 0.15, 0.2, 0.25, 0.3];
 
+// Linear alpha blend of a foreground color over a background color, both
+// as [r, g, b] arrays — the shared math behind every "what does this
+// translucent layer actually render as" surface below.
+const blendOver = (fg, alpha, bg) => fg.map((channel, index) => alpha * channel + (1 - alpha) * bg[index]);
+
 const minimumCardSurface = (theme) => {
   const bg = parseRgb(theme.colors['--port-bg']);
   const card = parseRgb(theme.colors['--port-card']);
   const floor = Number(theme.tokens['--port-card-min-alpha']);
-  return card.map((channel, index) => floor * channel + (1 - floor) * bg[index]);
+  return blendOver(card, floor, bg);
 };
 
 // `--port-input-bg` is a raw CSS color (not a bare "R G B" token like the
@@ -102,9 +107,8 @@ const inputSurface = (theme) => {
   const match = raw.match(/rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*(?:\/\s*([\d.]+))?\s*\)/);
   expect(match, `--port-input-bg not parseable: ${raw}`).toBeTruthy();
   const [, r, g, b, alphaText] = match;
-  const rgb = [r, g, b].map(Number);
   const alpha = alphaText === undefined ? 1 : Number(alphaText);
-  return rgb.map((channel, index) => alpha * channel + (1 - alpha) * page[index]);
+  return blendOver([r, g, b].map(Number), alpha, page);
 };
 
 describe('portosThemes warning token contrast', () => {
@@ -336,8 +340,13 @@ describe('keyboard focus indicator on form fields (#7524)', () => {
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf8');
 
   it('does not reintroduce a translucent :focus-visible outline for form fields', () => {
+    // Matches any selector list that both targets a form-field element type
+    // and :focus-visible, whose rule body puts an alpha channel on
+    // --port-focus-ring — regardless of :is()-wrapping or the exact alpha
+    // spelling (0.35, .35, 35%), so a differently-worded reintroduction of
+    // the pre-fix rule still trips this.
     expect(css).not.toMatch(
-      /:is\([^)]*\b(?:input|textarea|select|contenteditable)\b[^)]*\):focus-visible\s*{[^}]*outline:\s*1px solid rgb\(var\(--port-focus-ring\)\s*\/\s*0\.\d+\)/,
+      /(?:input|textarea|select|\[contenteditable[^\]]*\])[^{]*:focus-visible[^{]*{[^}]*--port-focus-ring\)\s*\/\s*[\d.]+%?\)/,
     );
   });
 
