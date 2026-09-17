@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TaskAddForm from './TaskAddForm';
+import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
 
 const api = vi.hoisted(() => ({
   getCosPopularTemplates: vi.fn(),
@@ -25,6 +26,12 @@ const api = vi.hoisted(() => ({
 // useAssignableInstances reads the instance registry straight off apiSystem, so
 // the picker (#4520) has to be driven from there rather than the `api` barrel.
 const apiSystem = vi.hoisted(() => ({ getAssignableInstances: vi.fn() }));
+// `highlightToolUse` on the main picker (#7588) pulls in the authoritative
+// tool-use capability fetch — mock it so the suite never issues a real request.
+// Resolved to empty here (not just in the top describe's beforeEach) so every
+// describe below that clears mocks without re-seeding it still renders without
+// unhandled fetch, since `vi.clearAllMocks()` clears calls but keeps this default.
+const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn().mockResolvedValue({ models: [] }) }));
 const toast = vi.hoisted(() => {
   const toastFn = vi.fn();
   toastFn.success = vi.fn();
@@ -34,6 +41,7 @@ const toast = vi.hoisted(() => {
 });
 vi.mock('../../services/apiSystem', () => apiSystem);
 vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiLocalLlm', () => apiLocalLlm);
 vi.mock('../ui/Toast', () => ({ default: toast }));
 
 const worktreeToggle = () => screen.getByTitle(/isolated git worktree/i).closest('label').querySelector('input');
@@ -43,6 +51,7 @@ const planOnlyToggle = () => screen.getByLabelText(/Plan & file issue/i);
 describe('TaskAddForm responsive layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetToolUseModelIdsCache();
     api.getCosPopularTemplates.mockResolvedValue({ templates: [] });
     api.getCodeReviewDefaults.mockResolvedValue(null);
     api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
@@ -59,6 +68,8 @@ describe('TaskAddForm responsive layout', () => {
     api.applyCosTaskTemplate.mockResolvedValue({ success: true });
     api.getOrchestrationProfiles.mockResolvedValue({ profiles: [] });
     apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
+    // Nothing authoritative by default, so the id regex alone decides.
+    apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
   });
 
   it('keeps PR completion controls full-width on mobile', async () => {
@@ -970,5 +981,50 @@ describe('TaskAddForm composite provider pins', () => {
 
   it('still clears a PRESET pin that is no longer selectable', async () => {
     expect(await queueWithTemplateProvider('retired-preset')).not.toMatchObject({ provider: 'retired-preset' });
+  });
+});
+
+// #7588: the main picker skipped `highlightToolUse`, so a task queued onto a
+// local model that can't call tools got no marker and no warning — the failure
+// is silent, since the agent narrates instead of writing anything.
+describe('TaskAddForm tool-use warning', () => {
+  const WARNING = /recognized tool-calling model/i;
+  const ollamaProvider = {
+    id: 'opencode-ollama', name: 'OpenCode Ollama', enabled: true, type: 'tui',
+    command: 'opencode', ollamaBacked: true, models: ['gemma2:9b', 'qwen3.6:35b'],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetToolUseModelIdsCache();
+    api.getCosPopularTemplates.mockResolvedValue({ templates: [] });
+    api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.getAppWorkTracker.mockResolvedValue({ resolved: 'github' });
+    api.getOrchestrationProfiles.mockResolvedValue({ profiles: [] });
+    apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
+    apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
+  });
+
+  it('warns when pinned to a local model with no known tool use', async () => {
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[ollamaProvider]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'opencode-ollama');
+    await user.selectOptions(screen.getByLabelText('AI model'), 'gemma2:9b');
+
+    expect(await screen.findByText(WARNING)).toBeInTheDocument();
+  });
+
+  it('does not warn when pinned to a tool-capable local model', async () => {
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[ollamaProvider]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'opencode-ollama');
+    await user.selectOptions(screen.getByLabelText('AI model'), 'qwen3.6:35b');
+
+    await waitFor(() => expect(apiLocalLlm.getToolUseModels).toHaveBeenCalled());
+    expect(screen.queryByText(WARNING)).not.toBeInTheDocument();
   });
 });

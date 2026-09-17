@@ -1160,6 +1160,10 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               // filters the presets, and this is what stops the user composing
               // the `api` route the server would refuse.
               selectionPolicy={AGENT_HARNESS_POLICY}
+              // A queued CoS task IS an agent run: a task pinned to a local model
+              // that can't call tools narrates instead of working (#7588), same
+              // rationale as TaskModelQuickControls.
+              highlightToolUse
             />
             {availableModels.length > 0
               ? modelSourceNote && <p className="text-xs text-gray-400">{modelSourceNote}</p>
