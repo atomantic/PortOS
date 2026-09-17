@@ -21,7 +21,7 @@
  */
 
 import { readResponseJson } from './readResponseJson.js';
-import { fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './aiToolkit/internal/preHeaderRetry.js';
+import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './aiToolkit/internal/preHeaderRetry.js';
 
 /**
  * Parse one OpenAI-style SSE `data:` line into its content/reasoning delta and,
@@ -294,7 +294,10 @@ export async function* iterateOpenAiChat({
   }), {
     signal: requestSignal,
     allowReplay: isReplaySafeLocalRequest({ endpoint, apiKey }),
-  }).catch((err) => ({ ok: false, status: 0, error: err.message }));
+    // `describeTransportError`, not `err.message`: undici reports every transport
+    // failure as the same opaque `TypeError: fetch failed`, with the actionable
+    // reason (a GOAWAY that survived its replay) only on the nested cause chain.
+  }).catch((err) => ({ ok: false, status: 0, error: describeTransportError(err) }));
 
   try {
     let response = await post(includeUsage);
