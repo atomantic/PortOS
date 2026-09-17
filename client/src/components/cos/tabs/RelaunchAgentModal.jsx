@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { RefreshCw, Loader2, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
@@ -44,7 +44,17 @@ const RELAUNCH_MESSAGES = {
  */
 export default function RelaunchAgentModal({ agent, providers, providersLoaded = true, apps, onDone, onClose }) {
   const currentProvider = agent?.metadata?.providerId || agent?.metadata?.provider || '';
-  const taskDescription = agent?.metadata?.taskDescription || agent?.taskId || 'Current task';
+  // The listing bounds this text (server/lib/cosAgentListProjection.js). The
+  // dialog only DISPLAYS it — the relaunch call sends provider/model/effort/app
+  // and a note, never the description — so the rest is fetched only if the reader
+  // opens it, instead of blocking this dialog on a request.
+  const [hydrated, setHydrated] = useState(null);
+  const clipped = Boolean(agent?.metadata?.taskDescriptionTruncated);
+  const taskDescription = hydrated || agent?.metadata?.taskDescription || agent?.taskId || 'Current task';
+  const hydrateDescription = useCallback(async () => {
+    const full = await api.hydrateCosAgentDescription(agent);
+    setHydrated(full.metadata?.taskDescription ?? null);
+  }, [agent]);
 
   const [formData, setFormData] = useState(() => {
     // Seeded from the stalled run so the dialog opens on what it was using —
@@ -128,6 +138,8 @@ export default function RelaunchAgentModal({ agent, providers, providersLoaded =
           className="text-white"
           expandedContent={taskDescription}
           expandedClassName="max-h-48 overflow-y-auto whitespace-pre-wrap"
+          forceToggle={clipped}
+          onExpand={clipped ? hydrateDescription : null}
         />
         <div className="text-sm text-gray-400 mt-2">
           This stops the running agent and restarts the same task on the worktree it leaves

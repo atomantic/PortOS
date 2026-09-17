@@ -1,4 +1,5 @@
 import { cosEvents } from './cosEvents.js';
+import { toAgentListItem } from '../lib/cosAgentListProjection.js';
 import { appsEvents } from './apps.js';
 import { errorEvents, sanitizeContext } from '../lib/errorHandler.js';
 import { handleErrorRecovery } from './autoFixer.js';
@@ -353,10 +354,17 @@ function setupCosEventForwarding() {
 
   cosEvents.on('maintenance:updated', (data) => broadcastToCos('cos:maintenance:updated', data));
 
-  // Agent events
-  cosEvents.on('agent:spawned', (data) => broadcastToCos('cos:agent:spawned', data));
-  cosEvents.on('agent:updated', (data) => broadcastToCos('cos:agent:updated', data));
-  cosEvents.on('agent:completed', (data) => broadcastToCos('cos:agent:completed', data));
+  // Agent events. These three carry a whole agent RECORD, and every consumer —
+  // the CoS agents list, the task-update hook, the peer relay — treats it as a
+  // list row. So they leave through the same projection as `GET /api/cos/agents`:
+  // no transcript (that is the separate `agent:output` stream) and a bounded task
+  // description. Without it the socket refills the very list the listing
+  // projection just shrank, and ships a 50 KB pasted prompt to every subscriber —
+  // including, through the relay, a peer. Projected HERE rather than at the emit
+  // because the server-side `cosEvents` listeners need the whole record.
+  cosEvents.on('agent:spawned', (data) => broadcastToCos('cos:agent:spawned', toAgentListItem(data)));
+  cosEvents.on('agent:updated', (data) => broadcastToCos('cos:agent:updated', toAgentListItem(data)));
+  cosEvents.on('agent:completed', (data) => broadcastToCos('cos:agent:completed', toAgentListItem(data)));
   cosEvents.on('agent:output', (data) => broadcastToCos('cos:agent:output', data));
   cosEvents.on('agent:btw', (data) => broadcastToCos('cos:agent:btw', data));
   cosEvents.on('persistent-mind:status', (data) => broadcastToCos('cos:mind:status', data));

@@ -597,6 +597,34 @@ describe('CoS Routes', () => {
     });
   });
 
+  describe('GET /api/cos/agents listing projection', () => {
+    it('strips the transcript and bounds a pasted-prompt description', async () => {
+      const long = 'Refactor the queue. '.repeat(5000);
+      cos.getAgents.mockResolvedValue([
+        { id: 'agent-001', status: 'completed', output: ['a', 'b'], metadata: { taskDescription: long, model: 'opus' } }
+      ]);
+
+      const response = await request(app).get('/api/cos/agents');
+
+      expect(response.status).toBe(200);
+      expect(response.body[0]).not.toHaveProperty('output');
+      expect(response.body[0].metadata.taskDescription.length).toBeLessThan(long.length);
+      expect(response.body[0].metadata.taskDescriptionTruncated).toBe(true);
+      expect(response.body[0].metadata.model).toBe('opus');
+    });
+
+    it('leaves a normal description unflagged so the client never hydrates for nothing', async () => {
+      cos.getAgents.mockResolvedValue([
+        { id: 'agent-001', status: 'running', metadata: { taskDescription: 'Fix the thing' } }
+      ]);
+
+      const response = await request(app).get('/api/cos/agents');
+
+      expect(response.body[0].metadata.taskDescription).toBe('Fix the thing');
+      expect(response.body[0].metadata.taskDescriptionTruncated).toBeUndefined();
+    });
+  });
+
   describe('GET /api/cos/agents/history', () => {
     it('should return available date buckets', async () => {
       cos.getAgentDates.mockResolvedValue([
@@ -609,6 +637,37 @@ describe('CoS Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.dates).toHaveLength(2);
       expect(response.body.dates[0]).toEqual({ date: '2026-02-25', count: 5 });
+      expect(response.body).not.toHaveProperty('latest');
+      expect(cos.getAgentsByDate).not.toHaveBeenCalled();
+    });
+
+    it('?hydrate=1 also returns the newest bucket, so the tab needs one round trip', async () => {
+      cos.getAgentDates.mockResolvedValue([
+        { date: '2026-02-25', count: 5 },
+        { date: '2026-02-24', count: 3 }
+      ]);
+      cos.getAgentsByDate.mockResolvedValue([
+        { id: 'agent-001', status: 'completed', output: ['a'], metadata: { taskDescription: 'Short' } }
+      ]);
+
+      const response = await request(app).get('/api/cos/agents/history?hydrate=1');
+
+      expect(response.status).toBe(200);
+      expect(cos.getAgentsByDate).toHaveBeenCalledWith('2026-02-25');
+      expect(response.body.latest.date).toBe('2026-02-25');
+      expect(response.body.latest.agents).toHaveLength(1);
+      // The hydrated bucket goes through the same listing projection.
+      expect(response.body.latest.agents[0]).not.toHaveProperty('output');
+    });
+
+    it('hydrates to null on an install with no archived runs', async () => {
+      cos.getAgentDates.mockResolvedValue([]);
+
+      const response = await request(app).get('/api/cos/agents/history?hydrate=1');
+
+      expect(response.status).toBe(200);
+      expect(response.body.latest).toBeNull();
+      expect(cos.getAgentsByDate).not.toHaveBeenCalled();
     });
   });
 

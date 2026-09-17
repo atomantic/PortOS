@@ -356,4 +356,35 @@ describe('CollapsibleText children (max-height) variant', () => {
 
     expect(screen.getByRole('button', { name: /Show less/ })).toBeInTheDocument();
   });
+
+  // The hook a caller uses to fetch content it deliberately did not download for
+  // every collapsed row — see AgentCard's clipped task description.
+  it('calls onExpand the first time the reader opens it, and not again', () => {
+    const onExpand = vi.fn();
+    forceOverflow();
+    render(<CollapsibleText id="c12" text={'long '.repeat(500)} onExpand={onExpand} />);
+
+    expect(onExpand).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
+    expect(onExpand).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Show less/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
+    expect(onExpand).toHaveBeenCalledTimes(1);
+  });
+
+  // The children path expands on focus too, and that is a genuine open — content
+  // reached by tabbing into the preview must be hydrated like any other.
+  it('calls onExpand when focus expands the capped children', () => {
+    const onExpand = vi.fn();
+    forceOverflow();
+    render(
+      <CollapsibleText id="c13" onExpand={onExpand}>
+        <a href="/somewhere">buried link</a>
+      </CollapsibleText>
+    );
+
+    fireEvent.focus(screen.getByRole('link', { name: 'buried link' }));
+    expect(onExpand).toHaveBeenCalledTimes(1);
+  });
 });

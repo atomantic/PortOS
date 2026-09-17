@@ -8,6 +8,7 @@ import * as cos from '../services/cos.js';
 // Lifecycle transitions go through the facade (#3450), not the `cos.js` barrel.
 import * as agentOrchestrator from '../services/agentOrchestrator.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { toAgentListItems } from '../lib/cosAgentListProjection.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema } from '../lib/validation.js';
 
 const router = Router();
@@ -36,7 +37,8 @@ router.post('/health/check', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/cos/agents - Get state-resident agents (running + recently completed, auto-cleans zombies)
-// Strips output arrays from listing — output is loaded on demand via GET /agents/:id
+// Output arrays and over-long task descriptions are stripped from every listing
+// here — both are loaded on demand via GET /agents/:id. See cosAgentListProjection.js.
 router.get('/agents', asyncHandler(async (req, res) => {
   // Zombie cleanup probes the standalone runner and can wait up to its
   // transport timeout when that optional process is restarting or offline.
@@ -47,13 +49,31 @@ router.get('/agents', asyncHandler(async (req, res) => {
     console.error(`🧹 Background zombie cleanup failed: ${err.message}`);
   });
   const agents = await cos.getAgents();
-  res.json(agents.map(({ output, ...rest }) => rest));
+  res.json(toAgentListItems(agents));
 }));
 
 // GET /api/cos/agents/history - Get available date buckets with counts
+//
+// `?hydrate=1` also returns the newest bucket's agents. The Agents tab always
+// wants them, but it cannot ask for them until this response names the date —
+// so without this the tab pays two SERIAL round trips before a single archived
+// card appears, which is the whole visible delay on a high-latency link.
+// It stays opt-in because hydrating reads a whole date bucket off disk, which a
+// caller that only wants the counts should not pay for.
+const historyQuerySchema = z.object({ hydrate: z.literal('1').optional() });
+
 router.get('/agents/history', asyncHandler(async (req, res) => {
+  const { hydrate } = validateRequest(historyQuerySchema, req.query);
   const dates = await cos.getAgentDates();
-  res.json({ dates });
+  if (!hydrate) return res.json({ dates });
+  // `latest: null` is the answer for an install with no archived runs at all —
+  // distinct from a bucket that read back empty, which the client must not
+  // mistake for "not hydrated" and re-request.
+  const latestDate = dates[0]?.date;
+  const latest = latestDate
+    ? { date: latestDate, agents: toAgentListItems(await cos.getAgentsByDate(latestDate)) }
+    : null;
+  res.json({ dates, latest });
 }));
 
 // GET /api/cos/agents/history/:date - Get completed agents for a date
@@ -63,7 +83,7 @@ router.get('/agents/history/:date', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid date format (expected YYYY-MM-DD)', { status: 400, code: 'VALIDATION_ERROR' });
   }
   const agents = await cos.getAgentsByDate(date);
-  res.json(agents);
+  res.json(toAgentListItems(agents));
 }));
 
 // GET /api/cos/agents/:id - Get agent by ID (transcript hydrated as a capped tail)
