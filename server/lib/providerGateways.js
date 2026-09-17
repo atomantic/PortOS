@@ -21,8 +21,9 @@
  *     thinking toggle (`THINKING_STYLE[<gateway>] === null`).
  *
  * Dependency-light on purpose (mirrors `providerVendors.js` / `cliProviderArgs.js`):
- * it imports nothing, so it stays importable from `providerModels.js`, which the
- * standalone autofixer process pulls in.
+ * it imports only the dependency-free `serviceDefinitions.js` leaf it is derived
+ * from, so it stays importable from `providerModels.js`, which the standalone
+ * autofixer process pulls in.
  *
  * **Two copies of this table exist, by architecture, and must stay in lockstep:**
  *   1. this file — the PortOS server;
@@ -32,6 +33,8 @@
  * The browser is not a third: this leaf is pure, so
  * `client/src/utils/providerGateways.js` re-exports it.
  */
+
+import { SERVICE_DEFINITIONS } from './serviceDefinitions.js';
 
 /**
  * @typedef {object} ProviderGateway
@@ -52,30 +55,26 @@
  *   own key field.
  */
 
-/** @type {readonly ProviderGateway[]} */
-export const PROVIDER_GATEWAYS = Object.freeze([
-  Object.freeze({
-    id: 'orcarouter',
-    label: 'OrcaRouter',
-    baseURL: 'https://api.orcarouter.ai/v1',
-    apiKeyEnv: 'ORCAROUTER_API_KEY',
-    legacyMarker: 'orcarouterBacked',
-    legacyApiKeyField: 'orcarouterApiKey',
-  }),
-  Object.freeze({
-    id: 'openrouter',
-    label: 'OpenRouter',
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKeyEnv: 'OPENROUTER_API_KEY',
-  }),
-  Object.freeze({
-    id: 'nvidia-nim',
-    label: 'NVIDIA NIM',
-    baseURL: 'https://integrate.api.nvidia.com/v1',
-    apiKeyEnv: 'NVIDIA_API_KEY',
-    keyUrl: 'https://build.nvidia.com',
-  }),
-]);
+/**
+ * @type {readonly ProviderGateway[]}
+ *
+ * DERIVED from the service definitions carrying a `gateway` column
+ * (`serviceDefinitions.js`, #7562) rather than typed here: a gateway is a
+ * service a harness can be pointed at, and the epic composes routes from that
+ * table. The projection keeps this row shape byte-for-byte, so every consumer
+ * and the toolkit mirror (`aiToolkit/internal/gateways.js`) are untouched.
+ */
+export const PROVIDER_GATEWAYS = Object.freeze(SERVICE_DEFINITIONS
+  .filter((service) => service.gateway)
+  .map((service) => Object.freeze({
+    id: service.id,
+    label: service.label,
+    baseURL: service.transports.openai.defaultBaseUrl,
+    apiKeyEnv: service.gateway.apiKeyEnv,
+    ...(service.credential.keyUrl ? { keyUrl: service.credential.keyUrl } : {}),
+    ...(service.gateway.legacyMarker ? { legacyMarker: service.gateway.legacyMarker } : {}),
+    ...(service.gateway.legacyApiKeyField ? { legacyApiKeyField: service.gateway.legacyApiKeyField } : {}),
+  })));
 
 /** Every gateway id — the namespace key space `opencodeConfig.js` extends. */
 export const PROVIDER_GATEWAY_IDS = Object.freeze(PROVIDER_GATEWAYS.map((g) => g.id));
