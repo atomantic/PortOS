@@ -903,10 +903,10 @@ export default function Layout() {
         </nav>
 
         {/* Footer with version and notifications */}
-        <div className={`border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center lg:p-2 p-4' : 'p-4'}`}>
-          <div className={`flex flex-col items-center gap-2 sm:flex-row sm:gap-0 ${collapsed ? 'lg:flex-col lg:justify-center lg:gap-1' : 'sm:justify-between'}`}>
+        <div className={`border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center lg:p-2 px-3 py-2.5' : 'px-3 py-2.5'}`}>
+          <div className={`flex flex-col items-center gap-2 ${collapsed ? 'lg:flex-col lg:justify-center lg:gap-1' : 'lg:flex-row lg:items-center lg:justify-between lg:gap-0'}`}>
             <span
-              className={`text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}
+              className={`text-xs text-gray-500 shrink-0 font-medium select-none ${collapsed ? 'lg:hidden' : ''}`}
               // The version is identical across every development commit (it
               // reflects the last RELEASE), so hovering it gives the one fact it
               // cannot carry: which commit is actually running (#4694). This is
@@ -919,7 +919,7 @@ export default function Layout() {
             >
               v{__APP_VERSION__}
             </span>
-            <div className={`flex items-center gap-1 ${collapsed ? 'lg:flex-col' : ''}`}>
+            <div className={`flex items-center gap-0.5 ${collapsed ? 'lg:flex-col lg:gap-1' : ''}`}>
               <NavLink
                 to="/ambient"
                 className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${

@@ -441,6 +441,28 @@ describe('Layout — persistent mobile touch targets', () => {
   });
 });
 
+describe('Layout — nav footer', () => {
+  it('renders a compact footer layout preventing controls from overflowing the sidebar', async () => {
+    await renderLayout();
+
+    const version = screen.getByText(/^vtest$/);
+    expect(version.className).toContain('text-xs');
+    expect(version.className).toContain('shrink-0');
+
+    const footer = version.closest('.border-t');
+    expect(footer).toBeTruthy();
+    expect(footer.className).toContain('px-3');
+    expect(footer.className).toContain('py-2.5');
+
+    const row = version.parentElement;
+    expect(row.className).toContain('lg:flex-row');
+    expect(row.className).toContain('lg:justify-between');
+
+    const iconsContainer = row.querySelector('.flex.items-center');
+    expect(iconsContainer.className).toContain('gap-0.5');
+  });
+});
+
 describe('Layout — Game workspace scroll mode', () => {
   it('makes only the Game detail route full-bleed', async () => {
     const detail = await renderLayout('/game/example-game');

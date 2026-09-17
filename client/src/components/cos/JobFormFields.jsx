@@ -166,7 +166,7 @@ export function JobFormFieldsEditor({ fields = [], onChange }) {
                   aria-label={`Move ${field.label || field.key || 'field'} up`}
                   onClick={() => move(index, -1)}
                   disabled={index === 0}
-                  className="p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
                 >
                   <ChevronUp size={14} />
                 </button>
@@ -175,7 +175,7 @@ export function JobFormFieldsEditor({ fields = [], onChange }) {
                   aria-label={`Move ${field.label || field.key || 'field'} down`}
                   onClick={() => move(index, 1)}
                   disabled={index === fields.length - 1}
-                  className="p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
+                  className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
                 >
                   <ChevronDown size={14} />
                 </button>
