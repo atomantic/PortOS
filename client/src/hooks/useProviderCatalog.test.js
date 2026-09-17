@@ -148,3 +148,30 @@ describe('useProviderCatalog', () => {
     expect(second.result.current.harnesses).toHaveLength(2);
   });
 });
+
+describe('invalidateProviderCatalog', () => {
+  // The AI Providers page toggles a harness or writes a service and every open
+  // picker's compose flow must reflect it without a reload (#7567): one
+  // invalidation re-reads the catalog in every mounted hook, keeping the
+  // stale rows rendered until the new ones land.
+  it('re-reads the catalog in every mounted hook and keeps the stale rows until it lands', async () => {
+    const { invalidateProviderCatalog } = await import('./useProviderCatalog.js');
+    const { result: a } = renderHook(() => useProviderCatalog());
+    const { result: b } = renderHook(() => useProviderCatalog());
+    await waitFor(() => expect(a.current.loading).toBe(false));
+    await waitFor(() => expect(b.current.loading).toBe(false));
+
+    const next = { ...CATALOG, harnesses: CATALOG.harnesses.map((h) => ({ ...h, enabled: true })) };
+    let release;
+    api.getProviderCatalog.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(next); }));
+    act(() => { invalidateProviderCatalog(); });
+    // In flight: the old rows are still what renders, not an empty catalog.
+    expect(a.current.harnesses.find((h) => h.id === 'claude').enabled).toBe(false);
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(2);
+    await act(async () => { release(); });
+    await waitFor(() => expect(a.current.harnesses.find((h) => h.id === 'claude').enabled).toBe(true));
+    await waitFor(() => expect(b.current.harnesses.find((h) => h.id === 'claude').enabled).toBe(true));
+    // One shared fetch served both hooks, as on the first read.
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(2);
+  });
+});

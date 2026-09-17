@@ -1,10 +1,13 @@
 # AI provider model tiers
 
-Tiers are active routing configuration, not display-only labels. Each provider maps
+Tiers are active routing configuration, not display-only labels. Each **preset**
+(a stored provider record — see [AI_PROVIDERS.md](./AI_PROVIDERS.md)) maps
 Light (mechanical work), Medium (routine work), Heavy (complex work), and Ultra
-(exceptional frontier reasoning) to its own model. Configure them in Models →
-Providers. Astra and Fable are examples of Ultra choices; use a model supported
-by the selected provider and account.
+(exceptional frontier reasoning) to its own model. Tiers live on presets, not on
+harnesses or services: configure them in Models → Providers → Presets, on the
+preset's editor, and a tier name resolves on whichever preset a task names. Astra
+and Fable are examples of Ultra choices; use a model supported by the selected
+preset's service and plan.
 
 CoS selects Light/Heavy from task heuristics and can learn tier preferences from
 outcomes. Explicit thinking levels have their own routing precedence. Prompt

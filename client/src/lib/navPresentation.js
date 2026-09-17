@@ -98,6 +98,8 @@ import {
   Drama,
   UserRound,
   Video,
+  Plug,
+  TerminalSquare,
 } from 'lucide-react';
 
 // NAV_COMMANDS owns every structural field shared with the sidebar. This map
@@ -250,7 +252,9 @@ export const NAV_PRESENTATION = {
   '/openclaw': { icon: MessagesSquare },
   '/settings/orchestration': { icon: Cpu },
   '/prompts': { icon: FileText },
-  '/ai': { icon: Bot },
+  '/ai/presets': { icon: Bot },
+  '/ai/harnesses': { icon: TerminalSquare },
+  '/ai/services': { icon: Plug },
   '/settings/security': { icon: Lock },
   '/settings/sharing': { icon: Share2 },
   '/settings/telegram': { icon: MessageSquare },

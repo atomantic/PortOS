@@ -694,7 +694,14 @@ describe('deferred imports stay deferred (#6156)', () => {
 // graph-store closure stays off every suite that does not test it. Measured
 // after the change: 112,576, with five new suites; the ceiling keeps the same
 // ~300 of headroom the previous number carried.
-const MAX_STATIC_INSTANTIATIONS = 112900;
+// 112,900 → 113,300 (#7567 rebase): three suites merged in parallel — the
+// SWE-bench and LiveCodeBench benchmark sources (#7590, 154-module closures
+// each, self-contained) and the CoS activity calendar (#7591, 44) — each fit
+// under the ceiling alone and overshot it together by 82. No widely-reached
+// module gained an eager import (the per-module closure diff against the
+// pre-merge tree shows only those three new entries growing). Measured after
+// the merge: 112,982; the ceiling keeps the same ~300 of headroom.
+const MAX_STATIC_INSTANTIATIONS = 113300;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

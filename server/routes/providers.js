@@ -511,6 +511,24 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.set('Cache-Control', 'no-store').json(await listServices());
   }));
 
+  /**
+   * Every `SERVICE_DEFINITIONS` row an "Add service" flow may instantiate
+   * (#7567): family, plans, transports with default base URLs, and where a key
+   * is obtained. Code-only data — no instance, no credential — so it is
+   * cacheable for the process lifetime. Declared above `/services/:slug` by
+   * name rather than position: its own segment can never be read as a slug.
+   * Deferred imports like the catalog handler below: a suite that mocks
+   * `providerServices.js` would otherwise instantiate the instance/definition
+   * subtree through this route file alone (server/AGENTS.md "Import scoping").
+   */
+  router.get('/service-definitions', asyncHandler(async (_req, res) => {
+    const [{ SERVICE_DEFINITIONS }, { presentServiceDefinition }] = await Promise.all([
+      import('../lib/serviceDefinitions.js'),
+      import('../lib/providerServiceInstances.js'),
+    ]);
+    res.json({ definitions: SERVICE_DEFINITIONS.map(presentServiceDefinition) });
+  }));
+
   // Create an instance from a definition. Nothing is probed and no route is
   // minted; the catalog starts `unknown` until the explicit refresh below.
   router.post('/services', asyncHandler(async (req, res) => {

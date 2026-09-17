@@ -341,10 +341,29 @@ describe('ProviderForm model access', () => {
   describe('preset structure', () => {
     const legacy = { id: 'claude-local', name: 'Claude', type: 'cli', command: 'claude', presetKind: 'legacy', presetDerivable: true };
 
-    it('explains a derived preset and offers no conversion', () => {
+    it('explains a derived preset, links its service, hides the connection-owned fields and offers no conversion', () => {
       renderForm({ provider: { ...legacy, presetKind: 'derived', presetDerivable: false, harnessId: 'claude', method: 'cli', serviceId: 'ollama' } });
       expect(screen.getByText(/Derived from service/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'ollama' })).toHaveAttribute('href', '/ai/services/ollama');
       expect(screen.queryByRole('button', { name: /Convert to derived preset/ })).not.toBeInTheDocument();
+      // The service owns type, command and the inline bootstrap (#7567); the
+      // preset keeps its name and arguments.
+      expect(screen.queryByLabelText('Type *')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Command *')).not.toBeInTheDocument();
+      expect(screen.queryByText('Credential Bootstrap (optional)')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Name *')).toHaveValue('Claude');
+      expect(screen.getByLabelText('Arguments (space-separated)')).toBeInTheDocument();
+    });
+
+    it('hides the endpoint and key of a derived API preset, keeping them on a legacy one', () => {
+      const apiRecord = { id: 'nvidia', name: 'NVIDIA', type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1', presetKind: 'legacy', presetDerivable: false };
+      const { unmount } = renderForm({ provider: apiRecord });
+      expect(screen.getByLabelText('Endpoint *')).toHaveValue('https://integrate.api.nvidia.com/v1');
+      expect(screen.getByLabelText('API Key')).toBeInTheDocument();
+      unmount();
+      renderForm({ provider: { ...apiRecord, presetKind: 'derived', harnessId: 'direct', method: 'api', serviceId: 'nvidia-nim' } });
+      expect(screen.queryByLabelText('Endpoint *')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
     });
 
     it('converts a derivable legacy preset through the API and hands back to the page', async () => {

@@ -15,9 +15,10 @@
  * @param {object} props
  * @param {boolean} props.open
  * @param {function} props.onClose
- * @param {function} props.onCompose - `(compositeId, { model, effort }) => void`.
+ * @param {function} [props.onCompose] - `(compositeId, { model, effort }) => void`.
  *   Called for "Use once" — the caller stores the composite id in its existing
  *   `{ providerId, model, effort }` field; nothing is persisted server-side.
+ *   Omit it with `useOnce={false}`.
  * @param {function} [props.onPresetSaved] - `(presetRecord) => void`. Called
  *   after "Save as preset" succeeds, so the caller can select the new preset
  *   id in place of the composite.
@@ -25,6 +26,13 @@
  *   harnesses offered) to this caller's mode policy, e.g. `['tui']` for
  *   `ShellProviderLauncher`. Omit for no restriction.
  * @param {string} [props.title] - Panel heading (default: "Compose a custom combination").
+ * @param {{harnessId?: string, method?: string, serviceSlug?: string}} [props.initial] -
+ *   Pre-select these steps on open — the compatibility matrix on the AI
+ *   Providers page (#7567) opens the flow on the pair the user clicked. Each
+ *   later step stays open for the user to narrow.
+ * @param {boolean} [props.useOnce] - Offer the "Use once" button (default
+ *   true). The AI Providers page has no selection to hand a composite to, so
+ *   it offers only "Save as preset".
  */
 import { useEffect, useId, useMemo, useState } from 'react';
 import Modal from '../ui/Modal.jsx';
@@ -32,17 +40,9 @@ import { FormField } from '../ui/FormField.jsx';
 import EffortSelect from '../cos/EffortSelect.jsx';
 import useProviderCatalog from '../../hooks/useProviderCatalog.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { serviceReadinessCopy } from '../../lib/providerManagement.js';
 
 const SELECT_CLASS = 'w-full px-3 py-1.5 min-h-[36px] bg-port-bg border border-port-border rounded-lg text-white text-sm';
-
-/** The readiness line under the service select: harness detection + service credential/daemon state. */
-const READINESS_LABEL = {
-  ready: 'ready to run',
-  'needs-credential': 'needs a credential',
-  'needs-endpoint': 'needs an endpoint',
-  disabled: 'switched off',
-  'unknown-definition': 'unknown service definition',
-};
 
 export default function ProviderComposePopover({
   open,
@@ -51,6 +51,8 @@ export default function ProviderComposePopover({
   onPresetSaved,
   allowedMethods,
   title = 'Compose a custom combination',
+  initial = null,
+  useOnce = true,
 }) {
   const catalog = useProviderCatalog(open);
   const [harnessId, setHarnessId] = useState('');
@@ -66,15 +68,15 @@ export default function ProviderComposePopover({
   // previous "Use once" choice never lingers into the next open.
   useEffect(() => {
     if (!open) return;
-    setHarnessId('');
-    setMethod('');
-    setServiceSlug('');
+    setHarnessId(initial?.harnessId || '');
+    setMethod(initial?.method || '');
+    setServiceSlug(initial?.serviceSlug || '');
     setModel('');
     setEffort('');
     setBootstrapSlug('');
     setPresetName('');
     setShowPresetField(false);
-  }, [open]);
+  }, [open, initial]);
 
   const harnesses = useMemo(
     () => (catalog.harnesses || []).filter((harness) => harness.enabled
@@ -205,7 +207,7 @@ export default function ProviderComposePopover({
             {selectedService && (
               <p className="text-xs text-gray-500 mt-1">
                 {selectedHarness?.detected === false ? `${selectedHarness.label} not detected on this machine — ` : ''}
-                {READINESS_LABEL[selectedService.readiness] || selectedService.readiness}
+                {serviceReadinessCopy(selectedService.readiness).reason}
               </p>
             )}
           </FormField>
@@ -271,14 +273,16 @@ export default function ProviderComposePopover({
         )}
 
         <div className="flex flex-col sm:flex-row gap-2 mt-1">
-          <button
-            type="button"
-            className="flex-1 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:bg-port-border disabled:opacity-50"
-            disabled={!canCompose}
-            onClick={() => { onCompose(compositeId, { model, effort }); onClose(); }}
-          >
-            Use once
-          </button>
+          {useOnce && (
+            <button
+              type="button"
+              className="flex-1 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:bg-port-border disabled:opacity-50"
+              disabled={!canCompose}
+              onClick={() => { onCompose?.(compositeId, { model, effort }); onClose(); }}
+            >
+              Use once
+            </button>
+          )}
           {!showPresetField ? (
             <button
               type="button"

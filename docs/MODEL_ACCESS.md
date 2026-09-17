@@ -21,7 +21,7 @@ PortOS cannot detect it. It is declared instead, per provider, in
 | `deny` | Everything except models matching the pattern list. |
 
 Once set, the scope applies to **every model picker in PortOS** — provider cards,
-the Settings > AI assignment page, the Backend Connections model menus, CoS agent
+the Settings > AI assignment page, the AI Providers → Services catalog summaries, CoS agent
 and task pickers, pipeline stage pickers, reviewer model selection — and to the
 **model comparison chart**, whose default pills and coverage list are built from
 the models your providers can dispatch.

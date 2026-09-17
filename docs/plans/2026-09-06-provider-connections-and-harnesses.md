@@ -2,6 +2,15 @@
 
 Status: proposed implementation decision for #6359; this PR changes documentation only.
 
+> **Superseded by epic #7561** (Harness × Method × Service × Model × Effort). The
+> durable graph this record introduced stays the persistence layer, but records
+> are no longer authoritative over it: a run is composed from enabled parts, an
+> `ai_connections` row is a **service instance** with its own plan and catalog,
+> a stored record is a **preset** derived from one, and the Backend Connections
+> drawer became the Services view of the AI Providers page (#7567). Current
+> contract: [PROVIDER_COMPOSITION.md](../PROVIDER_COMPOSITION.md) and
+> [AI_PROVIDERS.md](../AI_PROVIDERS.md).
+
 ## Decision and scope
 
 Introduce durable, machine-local connection and harness-binding IDs for management,

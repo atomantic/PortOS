@@ -55,7 +55,7 @@ Fallback selection admits a composite only where a stored candidate would be adm
 | `GET /api/providers/composites/:id` | One composite's verdict and sanitized record |
 | `GET /api/providers/readiness?providerId=<composite>` | Readiness for one composition |
 
-`GET /api/providers` stays presets-only, so existing consumers are unaffected until the UI slices of the epic (#7561) land; each record now also carries its preset structure (see **Presets**).
+`GET /api/providers` stays presets-only, so existing consumers are unaffected; each record now also carries its preset structure (see **Presets**). The management surface over these axes is the AI Providers page — [AI_PROVIDERS.md](./AI_PROVIDERS.md) (#7567). `GET /api/providers/service-definitions` lists every definition an instance can be created from, with its plans, transports (and default base URLs) and where a key is obtained.
 
 ## Presets
 

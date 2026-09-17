@@ -10,6 +10,15 @@ variants:
   (`claude --dangerously-skip-permissions`), the interactive harness CoS agents
   drive in TUI mode.
 
+> **Since #7561 this is a preset example.** Claude Ollama is what the composed model
+> calls `claude.cli@ollama` / `claude.tui@ollama`: the Claude Code **harness**
+> pointed at the Ollama **service** instance. The shipped records below are
+> **presets** of that pair, derived from the Ollama service where the boot
+> backfill can prove it, so editing the service's endpoint reaches both. Any
+> other enabled harness × service pair is composed the same way — see
+> [AI_PROVIDERS.md](../AI_PROVIDERS.md). The rest of this page still describes
+> how the pair works and how to set it up.
+
 ## Why a special provider?
 
 PortOS has two provider classes:

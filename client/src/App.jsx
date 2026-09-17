@@ -1,6 +1,6 @@
 import { Suspense, useEffect } from 'react';
 import { isPublicGuestRoute } from './lib/publicGuestRoutes';
-import { Routes, Route, Navigate, useLocation } from 'react-router';
+import { Routes, Route, Navigate, useLocation, useParams } from 'react-router';
 import Layout from './components/Layout';
 import { getSettings, updateSettings, getSelfInstance, PORTOS_APP_ID } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
@@ -192,6 +192,19 @@ function PrefixRedirect({ from, to }) {
   return <Navigate to={`${to}${rest}${search}${hash}`} state={state} replace />;
 }
 
+// The retired /ai/harnesses/:harnessId/connections[/:connectionId] drawer
+// (#6369 → #7567): a connection id names a service, so a deep link into one
+// lands on that service; the bare harness-scoped list lands on the harness.
+function HarnessConnectionsRedirect() {
+  const { harnessId, connectionId } = useParams();
+  const { search, hash } = useLocation();
+  const target = connectionId
+    ? `/ai/services/${encodeURIComponent(connectionId)}`
+    : `/ai/harnesses/${encodeURIComponent(harnessId)}`;
+  return <Navigate to={`${target}${search}${hash}`} replace />;
+}
+
+const AI_CONNECTIONS_PREFIX = /^\/ai\/connections/;
 const VIDEO_PROJECT_PREFIX = /^\/video/;
 const MEDIA_CREATIVE_DIRECTOR_PREFIX = /^\/media\/creative-director/;
 const MEDIA_SPRITES_PREFIX = /^\/media\/sprites/;
@@ -288,25 +301,37 @@ export default function App() {
           <Route path="devtools/processes" element={<ProcessesPage />} />
           <Route path="devtools/agents" element={<AgentsPage />} />
           <Route path="eidoverse" element={<Eidoverse />} />
-          <Route path="ai" element={<AIProviders />} />
-          {/* Provider overlays are deep-linkable over the same page: /ai/new
-              creates, /ai/fleet walks through a remote GPU host, and
-              /ai/edit/:providerId edits. The id sits under its own `edit`
-              segment rather than directly under /ai so the create route can't
-              be shadowed by a real provider: ids are slugified from the display
-              name, so a provider named "New" gets the id `new` and /ai/new
-              would otherwise match the static create route instead. */}
-          <Route path="ai/new" element={<AIProviders />} />
-          <Route path="ai/fleet" element={<AIProviders />} />
+          {/* AI Providers is three views over one page (#7567): Presets (the
+              stored records — the index /ai lands on), Harnesses and Services.
+              Every overlay is deep-linkable over the same page: /ai/presets/new
+              creates, /ai/presets/:presetId edits, /ai/services/new adds a
+              service, /ai/services/:serviceSlug opens one, /ai/harnesses/:harnessId
+              opens one harness card, and /ai/fleet walks through a remote GPU
+              host. A preset id is slugified from its display name, so a preset
+              named "New" gets the id `new` and is shadowed by the static create
+              route under /ai/presets — the legacy /ai/edit/:providerId alias is
+              kept as a WORKING route (not a redirect) so that one record stays
+              reachable; the page's own edit links use it for that id only. */}
+          <Route path="ai" element={<RedirectWithSearch to="/ai/presets" />} />
+          <Route path="ai/presets" element={<AIProviders />} />
+          <Route path="ai/presets/new" element={<AIProviders />} />
+          <Route path="ai/presets/:presetId" element={<AIProviders />} />
+          <Route path="ai/new" element={<RedirectWithSearch to="/ai/presets/new" />} />
           <Route path="ai/edit/:providerId" element={<AIProviders />} />
-          {/* Backend connection management (#6369). The selected connection is
-              a route param, not local state, so a shared link reopens the same
-              row — and the harness-scoped form is what a "Harnesses → Claude →
-              Connections" walk deep-links to. */}
-          <Route path="ai/connections" element={<AIProviders />} />
-          <Route path="ai/connections/:connectionId" element={<AIProviders />} />
-          <Route path="ai/harnesses/:harnessId/connections" element={<AIProviders />} />
-          <Route path="ai/harnesses/:harnessId/connections/:connectionId" element={<AIProviders />} />
+          <Route path="ai/fleet" element={<AIProviders />} />
+          <Route path="ai/harnesses" element={<AIProviders />} />
+          <Route path="ai/harnesses/:harnessId" element={<AIProviders />} />
+          <Route path="ai/services" element={<AIProviders />} />
+          <Route path="ai/services/new" element={<AIProviders />} />
+          <Route path="ai/services/:serviceSlug" element={<AIProviders />} />
+          {/* The Backend Connections drawer (#6369) is retired: a connection IS
+              a service instance, addressed by the same UUID or slug, so its
+              deep links land on the Services view. The harness-scoped forms
+              land on that harness's card. */}
+          <Route path="ai/connections" element={<PrefixRedirect from={AI_CONNECTIONS_PREFIX} to="/ai/services" />} />
+          <Route path="ai/connections/:connectionId" element={<PrefixRedirect from={AI_CONNECTIONS_PREFIX} to="/ai/services" />} />
+          <Route path="ai/harnesses/:harnessId/connections" element={<HarnessConnectionsRedirect />} />
+          <Route path="ai/harnesses/:harnessId/connections/:connectionId" element={<HarnessConnectionsRedirect />} />
           <Route path="prompts" element={<PromptManager />} />
           <Route path="cos" element={<Navigate to="/cos/tasks" replace />} />
           <Route path="cos/mind/tools" element={<Navigate to="/cos/mind?panel=tools" replace />} />

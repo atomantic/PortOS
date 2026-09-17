@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import { Bot, Cpu, Gauge, Link2, Network, Package } from 'lucide-react';
+import { Bot, Cpu, Gauge, Network, Package, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import { filterSelectableModels, isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isCodexSubscriptionProvider, isLocalEndpoint, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
+import { OTHER_HARNESS_GROUP, groupProvidersByHarness, presetEditPath } from '../utils/providerHarnesses';
+import useProviderCatalog from '../hooks/useProviderCatalog';
 import { copyToClipboard } from '../lib/clipboard';
 import { formatCount } from '../utils/formatters';
 import { isHttpsUrl } from '../utils/urlNormalize';
@@ -24,61 +26,48 @@ import CollapsibleSection from '../components/ui/CollapsibleSection';
 import FleetProviderSetup from '../components/providers/FleetProviderSetup';
 import FleetHostSetup from '../components/providers/FleetHostSetup';
 import LocalPersistentMindSetupCard from '../components/settings/LocalPersistentMindSetupCard.jsx';
-import ProviderConnections from '../components/providers/ProviderConnections';
 import RetiredModelPinsPanel from '../components/providers/RetiredModelPinsPanel';
+import ProviderPageTabs, { providerPageTabForPath } from '../components/providers/ProviderPageTabs';
+import ProviderHarnessesTab from '../components/providers/ProviderHarnessesTab';
+import ProviderServicesTab from '../components/providers/ProviderServicesTab';
+import ProviderCompatibilityMatrix from '../components/providers/ProviderCompatibilityMatrix';
+import ProviderComposePopover from '../components/providers/ProviderComposePopover';
 
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
 // links there instead of offering an install of its own.
 const LOCAL_APP_LABELS = { ollama: 'Ollama', lmstudio: 'LM Studio' };
 
-// The buckets the cards are grouped into, in the order they render.
-// "Needs setup" sits second because it is the page's only outstanding-task list,
-// and it is short: it holds ONLY providers the user switched ON that still can't
-// run. A switched-off one files under "Disabled" whatever it is missing — see
-// the precedence note on `providerCardState`.
+// Presets are grouped by HARNESS (#7567) — the program that drives them — and
+// within a group ordered by readiness: what can run first, what the user
+// switched on but cannot run yet second, what is switched off last. The
+// readiness is still on every card as its color and badge; it just no longer
+// decides which section a card lands in.
 //
-// The last bucket is the machine's own veto: a provider the server has marked
-// hardware-`unavailable` can never run here no matter what the user toggles, so
-// it is pulled out of the three readiness buckets and parked in a section that
-// stays COLLAPSED. Deleting it outright is not an option — the record is shared
-// across a user's federated machines, and one that is unavailable here may be
-// the workhorse on another — so it stays editable/deletable one click away
-// instead of adding noise to the three sections that describe real choices.
-export const PROVIDER_SECTIONS = [
-  {
-    key: 'enabled',
-    title: 'Enabled',
-    hint: 'Switched on and available to run',
-    dot: 'bg-port-success',
-    states: [PROVIDER_CARD_STATE.READY, PROVIDER_CARD_STATE.BENCHED],
-  },
-  {
-    key: 'blocked',
-    title: 'Needs setup',
-    hint: 'Switched on but missing a CLI or an API key — these cannot run yet',
-    dot: 'bg-port-warning',
-    states: [PROVIDER_CARD_STATE.BLOCKED, PROVIDER_CARD_STATE.UNKNOWN],
-  },
-  {
-    key: 'disabled',
-    title: 'Disabled',
-    hint: 'Switched off — optional, nothing to do unless you want one',
-    dot: 'bg-gray-500',
-    states: [PROVIDER_CARD_STATE.DISABLED],
-  },
-  {
-    key: 'incompatible',
-    title: 'Unavailable on this machine',
-    hint: 'This hardware cannot run them — kept for your other machines',
-    dot: 'bg-port-error',
-    // Matched by hardware, not by card state: `states` stays empty so the
-    // readiness filter never claims one of these cards back.
-    states: [],
-    hardwareIncompatible: true,
-    defaultOpen: false,
-  },
-];
+// A hardware-`unavailable` preset is pulled out of the groups altogether and
+// parked in a section that stays COLLAPSED. Deleting it outright is not an
+// option — the record is shared across a user's federated machines, and one
+// that is unavailable here may be the workhorse on another — so it stays
+// editable/deletable one click away instead of adding noise to the groups.
+export const PRESET_STATE_ORDER = Object.freeze([
+  PROVIDER_CARD_STATE.READY,
+  PROVIDER_CARD_STATE.BENCHED,
+  PROVIDER_CARD_STATE.BLOCKED,
+  PROVIDER_CARD_STATE.UNKNOWN,
+  PROVIDER_CARD_STATE.DISABLED,
+]);
+
+/** The two states a card can run in: what a section's "N of M can run" counts. */
+const RUNNABLE_STATES = new Set([PROVIDER_CARD_STATE.READY, PROVIDER_CARD_STATE.BENCHED]);
+
+const UNAVAILABLE_SECTION = Object.freeze({
+  key: 'incompatible',
+  title: 'Unavailable on this machine',
+  hint: 'This hardware cannot run them — kept for your other machines',
+  dot: 'bg-port-error',
+  link: null,
+  defaultOpen: false,
+});
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -206,24 +195,25 @@ export default function AIProviders() {
   // create route shadow its editor.
   const navigate = useNavigate();
   const location = useLocation();
-  const { providerId: editingProviderId, connectionId, harnessId } = useParams();
-  const creatingProvider = location.pathname.replace(/\/+$/, '').endsWith('/ai/new');
-  const fleetSetupOpen = location.pathname.replace(/\/+$/, '').endsWith('/ai/fleet');
-  const closeForm = useCallback(() => navigate('/ai'), [navigate]);
-  const openForm = useCallback((target) => navigate(target ? `/ai/edit/${target.id}` : '/ai/new'), [navigate]);
+  // `presetId` is the canonical editor route; `providerId` is the legacy
+  // /ai/edit/:providerId alias App.jsx keeps for a preset whose id collides
+  // with the create route (see `presetEditPath`).
+  const { presetId, providerId, harnessId, serviceSlug } = useParams();
+  const editingProviderId = presetId ?? providerId;
+  const barePath = location.pathname.replace(/\/+$/, '');
+  const activeTab = providerPageTabForPath(barePath);
+  const creatingProvider = barePath.endsWith('/ai/presets/new');
+  const creatingService = barePath.endsWith('/ai/services/new');
+  const fleetSetupOpen = barePath.endsWith('/ai/fleet');
+  const closeForm = useCallback(() => navigate('/ai/presets'), [navigate]);
+  const openForm = useCallback((target) => navigate(target ? presetEditPath(target.id) : '/ai/presets/new'), [navigate]);
 
-  // Backend connection management (#6369). Open state and the selected
-  // connection are both route segments, so `/ai/connections/<id>` and the
-  // harness-scoped `/ai/harnesses/<harness>/connections/<id>` are shareable and
-  // reachable from ⌘K and voice — same rule as the provider editor above.
-  const connectionsOpen = /\/ai(?:\/harnesses\/[^/]+)?\/connections(?:\/|$)/.test(
-    `${location.pathname.replace(/\/+$/, '')}`,
-  );
-  const connectionsBase = harnessId ? `/ai/harnesses/${harnessId}/connections` : '/ai/connections';
-  const selectConnection = useCallback(
-    (id) => navigate(id ? `${connectionsBase}/${id}` : connectionsBase, { replace: true }),
-    [navigate, connectionsBase],
-  );
+  // The compatibility matrix and the "Compose custom…" action open the shared
+  // compose flow (#7566) on this page with "Save as preset" as its only exit:
+  // there is no selection here to hand a one-off composite to. `null` =
+  // closed; an object (possibly empty) = open, prefilled with those steps.
+  const [composeInitial, setComposeInitial] = useState(null);
+  const compositionCatalog = useProviderCatalog(activeTab === 'presets');
 
   useEffect(() => {
     loadData();
@@ -336,7 +326,8 @@ export default function AIProviders() {
     loadReadiness(),
     hasCodexSubscriptionProvider ? loadCodexAccount() : Promise.resolve(),
   ]), [refreshStatuses, loadReadiness, hasCodexSubscriptionProvider, loadCodexAccount]);
-  useAutoRefetch(pollCards, 20000, { pollOnly: true });
+  // The Harnesses view renders none of what the poll refreshes, so it pauses there.
+  useAutoRefetch(pollCards, 20000, { pollOnly: true, enabled: activeTab !== 'harnesses' });
 
   // Clear a provider's bench (runtime unavailability) so the next call retries it.
   // Note: if the underlying cause persists (e.g. an invalid model id), the very
@@ -676,7 +667,7 @@ export default function AIProviders() {
   // section), and the id lookup the cards use for fallback/sibling references.
   // Memoized because this page re-renders on the 20s status poll and on every
   // keystroke in the ad-hoc runner's prompt box.
-  const { providersById, runtimeByProviderId, cardStateByProviderId, providersBySection } = useMemo(() => {
+  const { providersById, runtimeByProviderId, cardStateByProviderId, presetSections } = useMemo(() => {
     const byId = Object.fromEntries(providers.map(p => [p.id, p]));
     const runtimeById = Object.fromEntries(providers.map(p => [p.id, runtimeForProvider(p)]));
     const readinessById = Object.fromEntries(providers.map((provider) => [provider.id, providerCardState(provider, {
@@ -692,14 +683,15 @@ export default function AIProviders() {
         return typeof referenced.hasApiKey === 'boolean' ? referenced.hasApiKey : null;
       },
     })]));
-    // The default provider floats to the top of whichever section it sits in, so
-    // "which one runs by default" stays a one-glance answer after grouping.
-    const defaultFirst = (list) => {
-      const idx = list.findIndex(p => p.id === activeProviderId);
-      return idx <= 0 ? list : [list[idx], ...list.slice(0, idx), ...list.slice(idx + 1)];
-    };
+    // Within a group: the default provider first (so "which one runs by
+    // default" stays a one-glance answer), then by readiness, then input order.
+    const rank = (p) => PRESET_STATE_ORDER.indexOf(readinessById[p.id].state);
+    const ordered = (list) => list
+      .map((p, index) => ({ p, index }))
+      .sort((a, b) => (b.p.id === activeProviderId) - (a.p.id === activeProviderId) || rank(a.p) - rank(b.p) || a.index - b.index)
+      .map(({ p }) => p);
     // The hardware veto is decided first: what this machine cannot run never
-    // reaches the readiness buckets, so a card lands in exactly one section.
+    // reaches the harness groups, so a card lands in exactly one section.
     const cards = providers.filter(provider => {
       const modes = provider.executionModes || [{ id: provider.id }];
       const representative = modes.find(mode => mode.id === activeProviderId) || modes[0];
@@ -707,16 +699,27 @@ export default function AIProviders() {
     });
     const runnable = cards.filter(isProviderHardwareCompatible);
     const unrunnable = cards.filter(p => !isProviderHardwareCompatible(p));
+    // One section per harness group, then the parked hardware-unavailable
+    // records; `ready` is what the header's "N of M can run" reports.
+    const section = (base, list) => {
+      const sectionProviders = ordered(list);
+      return { ...base, providers: sectionProviders, ready: sectionProviders.filter((p) => RUNNABLE_STATES.has(readinessById[p.id].state)).length };
+    };
+    const sections = [
+      ...groupProvidersByHarness(runnable).map((group) => section({
+        key: group.harnessId,
+        title: group.label,
+        hint: null,
+        link: group.harnessId === OTHER_HARNESS_GROUP ? null : `/ai/harnesses/${encodeURIComponent(group.harnessId)}`,
+        defaultOpen: true,
+      }, group.providers)),
+      section(UNAVAILABLE_SECTION, unrunnable),
+    ].filter((entry) => entry.providers.length > 0);
     return {
       providersById: byId,
       runtimeByProviderId: runtimeById,
       cardStateByProviderId: readinessById,
-      providersBySection: Object.fromEntries(PROVIDER_SECTIONS.map(section => [
-        section.key,
-        defaultFirst(section.hardwareIncompatible
-          ? unrunnable
-          : runnable.filter(p => section.states.includes(readinessById[p.id].state))),
-      ])),
+      presetSections: sections.map((entry) => ({ ...entry, dot: entry.dot || (entry.ready > 0 ? 'bg-port-success' : 'bg-gray-500') })),
     };
   }, [providers, statuses, activeProviderId, runtimeForProvider, codexAccount]);
 
@@ -734,7 +737,7 @@ export default function AIProviders() {
   useEffect(() => {
     if (loading || loadError || !editingProviderId || editingProvider) return;
     toast.error(`No provider with id "${editingProviderId}"`);
-    navigate('/ai', { replace: true });
+    navigate('/ai/presets', { replace: true });
   }, [loading, loadError, editingProviderId, editingProvider, navigate]);
 
   const selectedRunProvider = providers.find(p => p.id === activeProviderId);
@@ -757,11 +760,11 @@ export default function AIProviders() {
   // stays one row tall on a 360px viewport and the first provider card is
   // reachable without scrolling (issue #5653).
   const secondaryActions = [
+    // A named combination of enabled parts, saved without hand-typing a record.
+    { id: 'compose-custom', label: 'Compose custom preset…', icon: Wand2, onSelect: () => setComposeInitial({}) },
     { id: 'orchestration-profiles', label: 'Orchestration profiles', icon: Cpu, to: '/settings/orchestration' },
     { id: 'compare-models', label: 'Compare local models', icon: Gauge, to: '/models/performance' },
     { id: 'fleet-setup', label: 'Fleet setup', icon: Network, to: '/ai/fleet' },
-    // One backend, edited once, for every harness pointed at it (#6369).
-    { id: 'backend-connections', label: 'Backend connections', icon: Link2, to: '/ai/connections' },
     {
       id: 'load-samples',
       label: loadingSamples ? 'Loading samples…' : 'Load Samples',
@@ -771,33 +774,68 @@ export default function AIProviders() {
     },
   ];
 
+  // The header's actions belong to the open view: the presets view runs and
+  // adds presets, the services view adds services, the harnesses view has
+  // nothing to create (its rows are the registry).
+  const headerActions = activeTab === 'presets' ? (
+    <>
+      <button
+        onClick={() => setShowRunPanel(!showRunPanel)}
+        className="inline-flex min-h-[40px] items-center rounded-lg bg-port-accent px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-accent/80"
+      >
+        {showRunPanel ? 'Hide Runner' : 'Run Prompt'}
+      </button>
+      <button
+        onClick={() => openForm(null)}
+        className="inline-flex min-h-[40px] items-center rounded-lg bg-port-border px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-border/80"
+      >
+        Add Preset
+      </button>
+      <OverflowMenu label="More provider actions" items={secondaryActions} />
+    </>
+  ) : activeTab === 'services' ? (
+    <button
+      onClick={() => navigate('/ai/services/new')}
+      className="inline-flex min-h-[40px] items-center rounded-lg bg-port-accent px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-accent/80"
+    >
+      Add Service
+    </button>
+  ) : null;
+
   return (
     <div className="flex flex-col h-full">
-      <PageHeader
-        icon={Bot}
-        title="AI Providers"
-        actions={(
-          <>
-            <button
-              onClick={() => setShowRunPanel(!showRunPanel)}
-              className="inline-flex min-h-[40px] items-center rounded-lg bg-port-accent px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-accent/80"
-            >
-              {showRunPanel ? 'Hide Runner' : 'Run Prompt'}
-            </button>
-            <button
-              onClick={() => openForm(null)}
-              className="inline-flex min-h-[40px] items-center rounded-lg bg-port-border px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-border/80"
-            >
-              Add Provider
-            </button>
-            <OverflowMenu label="More provider actions" items={secondaryActions} />
-          </>
-        )}
-      />
+      <PageHeader icon={Bot} title="AI Providers" actions={headerActions} />
 
       <ModelsTabsHeader activeTab="providers" />
+      <div className="px-4 pt-3">
+        <ProviderPageTabs activeTab={activeTab} />
+      </div>
 
-      <div className="flex-1 overflow-auto p-4 space-y-6">
+      <div className={`flex-1 overflow-auto p-4 ${activeTab === 'presets' ? 'space-y-6' : ''}`}>
+      {activeTab === 'harnesses' && (
+        <ProviderHarnessesTab
+          selectedHarnessId={harnessId || null}
+          runtimes={runtimes}
+          onInstallRuntime={setInstallingRuntime}
+        />
+      )}
+
+      {activeTab === 'services' && (
+        <ProviderServicesTab
+          selectedServiceSlug={serviceSlug || null}
+          creating={creatingService}
+          presets={providers}
+          readiness={readiness}
+          onAutoSetup={setSettingUpRuntime}
+          onUseServedModel={handleUseServedModel}
+          onServeWantedModel={handleServeWantedModel}
+          servingModel={servingModel}
+          onChanged={loadData}
+        />
+      )}
+
+      {activeTab === 'presets' && (
+      <>
 
       {/* A retirement only becomes observable when a catalog refresh lands, so
           the panel re-reads on every refresh — see RetiredModelPinsPanel. */}
@@ -1038,7 +1076,18 @@ export default function AIProviders() {
         </div>
       )}
 
-      {/* Provider List, grouped by readiness (see PROVIDER_SECTIONS) */}
+      {/* Every harness × service pair the server would offer, and a click into
+          the compose flow on it. Derived from the same catalog every picker
+          reads, so it can never disagree with what compose lists. */}
+      <ProviderCompatibilityMatrix
+        harnesses={compositionCatalog.harnesses}
+        services={compositionCatalog.services}
+        compatibility={compositionCatalog.compatibility}
+        loading={compositionCatalog.loading}
+        onCompose={setComposeInitial}
+      />
+
+      {/* Preset list, grouped by harness (see PRESET_STATE_ORDER) */}
       <div className="grid gap-6">
         {loadError ? (
           <Banner
@@ -1059,14 +1108,13 @@ export default function AIProviders() {
           </Banner>
         ) : (
           <>
-            {PROVIDER_SECTIONS.map(section => {
-              const sectionProviders = providersBySection[section.key];
-              if (sectionProviders.length === 0) return null;
+            {presetSections.map(section => {
+              const sectionProviders = section.providers;
               return (
                 <CollapsibleSection
                   key={section.key}
                   size="lg"
-                  defaultOpen={section.defaultOpen !== false}
+                  defaultOpen={section.defaultOpen}
                   buttonClassName="flex-wrap border-b border-port-border/60 pb-1.5"
                   bodyClassName="grid gap-4 pt-3"
                   label={(
@@ -1074,7 +1122,14 @@ export default function AIProviders() {
                       <span className={`w-2 h-2 rounded-full shrink-0 ${section.dot}`} aria-hidden="true" />
                       <span className="text-sm font-semibold uppercase tracking-wide text-white">{section.title}</span>
                       <span className="text-xs px-1.5 py-0.5 rounded bg-port-bg text-gray-400">{sectionProviders.length}</span>
-                      <span className="text-xs text-gray-500">{section.hint}</span>
+                      <span className="text-xs text-gray-500">
+                        {section.hint || `${formatCount(section.ready)} of ${formatCount(sectionProviders.length)} can run`}
+                      </span>
+                      {section.link && (
+                        <Link to={section.link} onClick={(e) => e.stopPropagation()} className="text-xs text-port-accent hover:underline">
+                          harness →
+                        </Link>
+                      )}
                     </span>
                   )}
                 >
@@ -1127,9 +1182,9 @@ export default function AIProviders() {
 
             {providers.length === 0 && (
               <EmptyState
-                title="No providers configured"
-                message="Configure at least one API provider to enable autonomous CoS, voice, and AI-assisted features across PortOS."
-                actionLabel="Add Provider"
+                title="No presets configured"
+                message="A preset is a named harness × service combination. Add a service, then compose a preset on it — or add a legacy record by hand — to enable autonomous CoS, voice, and AI-assisted features across PortOS."
+                actionLabel="Add Preset"
                 onAction={() => openForm(null)}
               />
             )}
@@ -1171,16 +1226,18 @@ export default function AIProviders() {
         flushMs={250}
         description={`Installing ${installingRuntime?.label} from ${installingRuntime?.method === 'script' ? "the vendor's official install script" : 'its global npm package'}.`}
       />
-      {connectionsOpen && (
-        <ProviderConnections
-          open
-          connectionId={connectionId || null}
-          harnessId={harnessId || null}
-          onClose={closeForm}
-          onSelectConnection={selectConnection}
-          onGraphChanged={loadData}
-        />
-      )}
+      <ProviderComposePopover
+        open={composeInitial !== null}
+        initial={composeInitial}
+        useOnce={false}
+        title="Compose a new preset"
+        onClose={() => setComposeInitial(null)}
+        onPresetSaved={(preset) => {
+          toast.success(`${preset.name} saved as a preset`);
+          loadData();
+          navigate(presetEditPath(preset.id));
+        }}
+      />
       {fleetSetupOpen && (
         <FleetProviderSetup
           peers={fleetPeers}
@@ -1210,6 +1267,8 @@ export default function AIProviders() {
           ? `${settingUpRuntime.actionLabel} — model weights are a multi-gigabyte download, so this can run for a long time.`
           : `${settingUpRuntime?.actionLabel || 'Setting up'} — this can take several minutes on a first install.`}
       />
+      </>
+      )}
       </div>
     </div>
   );

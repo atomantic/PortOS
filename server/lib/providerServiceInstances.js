@@ -244,7 +244,33 @@ const definitionDtoSchema = z.object({
   plans: z.array(z.enum(SERVICE_PLANS)).min(1),
   catalogStrategy: z.enum(CATALOG_STRATEGIES),
   harnessOnly: z.string().nullable(),
+  // Where a key is obtained and which variables it is conventionally held
+  // under — what a Services card's "get a key" link and env hint read (#7567).
+  keyUrl: z.string().nullable(),
+  envVars: z.array(z.string()),
+  // The transports a definition speaks with their default base URLs, so an
+  // "Add service" form can pre-fill an endpoint or demand one where the
+  // definition declares none.
+  transports: z.record(z.string(), z.object({ defaultBaseUrl: z.string().nullable() }).strict()),
 }).strict();
+
+/**
+ * One definition as the wire publishes it — the `definition` half of the
+ * service DTO and each row of `GET /api/providers/service-definitions`.
+ * Code-only data: no instance, no credential.
+ */
+export const presentServiceDefinition = (definition) => ({
+  id: definition.id,
+  label: definition.label,
+  family: definition.family,
+  plans: [...definition.plans],
+  catalogStrategy: definition.catalog.strategy,
+  harnessOnly: definition.harnessOnly ?? null,
+  keyUrl: definition.credential.keyUrl ?? null,
+  envVars: [...definition.credential.envVars],
+  transports: Object.fromEntries(Object.entries(definition.transports)
+    .map(([protocol, transport]) => [protocol, { defaultBaseUrl: transport.defaultBaseUrl ?? null }])),
+});
 
 /**
  * One instance as `GET /api/providers/services` publishes it: the connection
@@ -283,14 +309,7 @@ export function toServiceDto(connection, { bindingCount = 0, credentialSource = 
   const resolved = definition === undefined ? (base.definitionId ? serviceDefinitionById(base.definitionId) : null) : definition;
   return serviceDtoSchema.parse({
     ...base,
-    definition: resolved ? {
-      id: resolved.id,
-      label: resolved.label,
-      family: resolved.family,
-      plans: [...resolved.plans],
-      catalogStrategy: resolved.catalog.strategy,
-      harnessOnly: resolved.harnessOnly ?? null,
-    } : null,
+    definition: resolved ? presentServiceDefinition(resolved) : null,
     credentialSource,
     bindingCount,
     readiness: serviceReadiness(base, resolved, credentialSource),

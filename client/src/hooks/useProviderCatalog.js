@@ -13,6 +13,12 @@ import { parseProviderRef } from '../utils/providerRef.js';
  */
 let inFlight = null;
 
+// Mounted hooks, notified when the shared cache is dropped so they re-read.
+// The AI Providers page (#7567) toggles a harness, edits a service or saves a
+// bootstrap app and every open picker's compose flow must reflect it without a
+// reload — one invalidation reaches all of them.
+const subscribers = new Set();
+
 const EMPTY_CATALOG = Object.freeze({
   harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {}, presets: [],
 });
@@ -30,6 +36,16 @@ function fetchCatalog() {
 /** Test seam — drop the shared cache so each case starts from "never fetched". */
 export function __resetProviderCatalogCache() {
   inFlight = null;
+}
+
+/**
+ * Drop the shared catalog and make every mounted `useProviderCatalog` re-read
+ * it. Call after a write that changes what compose offers: a harness
+ * enablement toggle, a service create/edit/delete/refresh, a bootstrap save.
+ */
+export function invalidateProviderCatalog() {
+  inFlight = null;
+  for (const notify of subscribers) notify();
 }
 
 /**
@@ -94,6 +110,15 @@ export default function useProviderCatalog(enabled = true) {
     // the first fetch already succeeded, since the shared cache still has it.
     return () => { canceled = true; };
   }, [enabled, state.loaded]);
+
+  // An invalidation flips `loaded` off; the fetch effect above then re-reads.
+  // The stale catalog stays rendered until the new one lands — a picker never
+  // blanks mid-toggle.
+  useEffect(() => {
+    const notify = () => setState((current) => ({ ...current, loaded: false }));
+    subscribers.add(notify);
+    return () => { subscribers.delete(notify); };
+  }, []);
 
   const catalog = state.catalog || EMPTY_CATALOG;
 

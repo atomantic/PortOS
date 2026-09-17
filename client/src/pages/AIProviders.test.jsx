@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -29,6 +29,15 @@ const api = vi.hoisted(() => ({
   getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),
   stopRun: vi.fn().mockResolvedValue({}),
+  // The compatibility matrix reads the composition catalog (#7567). Empty by
+  // default so the preset list renders exactly as before; the matrix has its
+  // own cases below.
+  getProviderCatalog: vi.fn().mockResolvedValue({
+    harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {}, presets: [],
+  }),
+  createProviderPreset: vi.fn(),
+  // The Services view lists instances; empty by default.
+  getProviderServices: vi.fn().mockResolvedValue({ services: [] }),
 }));
 
 const localModels = vi.hoisted(() => ({ value: { ctxById: {}, installed: { ollama: null, lmstudio: null } } }));
@@ -70,20 +79,29 @@ vi.mock('../components/install/RuntimeInstallModal', () => ({
     : null,
 }));
 
-import AIProviders, { PROVIDER_SECTIONS } from './AIProviders';
+import AIProviders, { PRESET_STATE_ORDER } from './AIProviders';
+import { __resetProviderCatalogCache } from '../hooks/useProviderCatalog';
 import { CARD_STATE_STYLES } from '../components/providers/ProviderCard';
 import { PROVIDER_CARD_STATE } from '../utils/providers';
 
-// The editor is route-driven (/ai/new · /ai/edit/:providerId over the same
-// page), so the tests mount the real route table rather than a bare page —
-// clicking Edit navigates, and a deep link can be rendered directly.
-const renderPage = (initialPath = '/ai') => render(
+// The editor is route-driven (/ai/presets/new · /ai/presets/:presetId over
+// the same page, plus the legacy /ai/edit/:providerId alias), so the tests
+// mount the real route table rather than a bare page — clicking Edit
+// navigates, and a deep link can be rendered directly. The three views are
+// route prefixes of the same page (#7567).
+const renderPage = (initialPath = '/ai/presets') => render(
   <MemoryRouter initialEntries={[initialPath]}>
     <Routes>
-      <Route path="/ai" element={<AIProviders />} />
-      <Route path="/ai/new" element={<AIProviders />} />
-      <Route path="/ai/fleet" element={<AIProviders />} />
+      <Route path="/ai/presets" element={<AIProviders />} />
+      <Route path="/ai/presets/new" element={<AIProviders />} />
+      <Route path="/ai/presets/:presetId" element={<AIProviders />} />
       <Route path="/ai/edit/:providerId" element={<AIProviders />} />
+      <Route path="/ai/fleet" element={<AIProviders />} />
+      <Route path="/ai/harnesses" element={<AIProviders />} />
+      <Route path="/ai/harnesses/:harnessId" element={<AIProviders />} />
+      <Route path="/ai/services" element={<AIProviders />} />
+      <Route path="/ai/services/new" element={<AIProviders />} />
+      <Route path="/ai/services/:serviceSlug" element={<AIProviders />} />
     </Routes>
   </MemoryRouter>
 );
@@ -315,7 +333,7 @@ describe('AIProviders page load error handling', () => {
     renderPage();
 
     expect(await screen.findByText('OpenAI')).toBeInTheDocument();
-    expect(screen.queryByText('No providers configured')).not.toBeInTheDocument();
+    expect(screen.queryByText('No presets configured')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
 
     // Demoted to the overflow menu, but still a real anchor so it can be
@@ -380,10 +398,10 @@ describe('AIProviders page load error handling', () => {
 
     renderPage();
 
-    expect(await screen.findByText('No providers configured')).toBeInTheDocument();
+    expect(await screen.findByText('No presets configured')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
-    // With nothing to group, no readiness section renders either.
-    expect(screen.queryByRole('button', { name: new RegExp('^Enabled') })).not.toBeInTheDocument();
+    // With nothing to group, no harness section renders either.
+    expect(screen.queryByRole('button', { name: new RegExp('^Claude Code') })).not.toBeInTheDocument();
   });
 
   it('renders Banner with Retry button when api.getProviders rejects and does not show EmptyState', async () => {
@@ -393,7 +411,7 @@ describe('AIProviders page load error handling', () => {
 
     expect(await screen.findByText('Failed to load AI providers')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
-    expect(screen.queryByText('No providers configured')).not.toBeInTheDocument();
+    expect(screen.queryByText('No presets configured')).not.toBeInTheDocument();
   });
 
   it('re-fetches when Retry button is clicked and displays providers upon success', async () => {
@@ -413,7 +431,7 @@ describe('AIProviders page load error handling', () => {
 
     expect(await screen.findByText('Claude')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
-    expect(screen.queryByText('No providers configured')).not.toBeInTheDocument();
+    expect(screen.queryByText('No presets configured')).not.toBeInTheDocument();
     expect(api.getProviders).toHaveBeenCalledTimes(2);
   });
 });
@@ -1076,7 +1094,7 @@ describe('Codex subscription text read-risk gate', () => {
   });
 
   it('requires the read-risk acknowledgement before enabling generic text calls', async () => {
-    renderPage('/ai/edit/codex');
+    renderPage('/ai/presets/codex');
 
     const acknowledgement = await screen.findByLabelText(/Codex may read local files/i);
     const enable = screen.getByLabelText(/serve generic text calls/i);
@@ -1111,7 +1129,7 @@ describe('Codex subscription text read-risk gate', () => {
       }],
       activeProvider: 'codex',
     });
-    renderPage('/ai/edit/codex');
+    renderPage('/ai/presets/codex');
 
     const acknowledgement = await screen.findByLabelText(/Codex may read local files/i);
     const enable = screen.getByLabelText(/serve generic text calls/i);
@@ -1143,14 +1161,14 @@ describe('provider editor deep links', () => {
   });
 
   it('opens the editor for the provider named in the URL', async () => {
-    renderPage('/ai/edit/codex');
+    renderPage('/ai/presets/codex');
 
     expect(await screen.findByRole('heading', { name: 'Edit Provider' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('Codex')).toBeInTheDocument();
   });
 
   it('opens the create form on /ai/new', async () => {
-    renderPage('/ai/new');
+    renderPage('/ai/presets/new');
 
     expect(await screen.findByRole('heading', { name: 'Add Provider' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
@@ -1159,7 +1177,7 @@ describe('provider editor deep links', () => {
   // A deleted/hand-edited id must bounce back to the list rather than leaving a
   // blank editor open over it.
   it('sends an unknown provider id back to the list', async () => {
-    renderPage('/ai/edit/does-not-exist');
+    renderPage('/ai/presets/does-not-exist');
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No provider with id "does-not-exist"'));
     expect(screen.queryByRole('heading', { name: 'Edit Provider' })).toBeNull();
@@ -1168,14 +1186,14 @@ describe('provider editor deep links', () => {
   // The id comes off the URL, so a prototype key must not resolve to
   // Object.prototype and open the editor on it.
   it('does not open the editor for a prototype-chain id', async () => {
-    renderPage('/ai/edit/__proto__');
+    renderPage('/ai/presets/__proto__');
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No provider with id "__proto__"'));
     expect(screen.queryByRole('heading', { name: 'Edit Provider' })).toBeNull();
   });
 
   it('honors the ?providerTab deep link', async () => {
-    renderPage('/ai/edit/codex?providerTab=models');
+    renderPage('/ai/presets/codex?providerTab=models');
 
     expect(await screen.findByLabelText('Default Model')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Models' })).toHaveAttribute('aria-selected', 'true');
@@ -1184,7 +1202,7 @@ describe('provider editor deep links', () => {
   // Only the active tab renders, so the browser can't run its own required-field
   // check for a Save triggered from another tab.
   it('sends the user back to the field a cross-tab Save left empty', async () => {
-    renderPage('/ai/edit/codex');
+    renderPage('/ai/presets/codex');
 
     fireEvent.change(await screen.findByDisplayValue('Codex'), { target: { value: '  ' } });
     await openEditorTab('Models');
@@ -1221,7 +1239,7 @@ describe('provider editor deep links', () => {
       activeProvider: 'codex',
     });
 
-    renderPage('/ai/edit/codex?providerTab=models');
+    renderPage('/ai/presets/codex?providerTab=models');
 
     await screen.findByLabelText('Default Model');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -1232,7 +1250,7 @@ describe('provider editor deep links', () => {
   });
 
   it('closes back to the list', async () => {
-    renderPage('/ai/edit/codex');
+    renderPage('/ai/presets/codex');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
 
@@ -1405,7 +1423,7 @@ describe('OpenCode OrcaRouter key hint', () => {
    });
 });
 
-describe('readiness grouping', () => {
+describe('harness grouping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getApps.mockResolvedValue([]);
@@ -1414,7 +1432,7 @@ describe('readiness grouping', () => {
     localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
   });
 
-  it('sorts each provider into the section its readiness implies', async () => {
+  it('groups presets by harness and orders each group by readiness', async () => {
     api.getProviders.mockResolvedValue({
       providers: [
         { id: 'ready', name: 'Ready CLI', type: 'cli', command: 'claude', enabled: true },
@@ -1426,25 +1444,29 @@ describe('readiness grouping', () => {
 
     renderPage();
 
-    expect(await screen.findByRole('button', { name: new RegExp('^Enabled') })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: new RegExp('^Needs setup') })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: new RegExp('^Disabled') })).toBeInTheDocument();
+    // Two Claude Code records share one group whatever their readiness; the
+    // API record lands under the Direct API harness.
+    const claude = await screen.findByRole('button', { name: new RegExp('^Claude Code') });
+    expect(claude).toHaveTextContent('2');
+    expect(claude).toHaveTextContent('1 of 2 can run');
+    expect(screen.getByRole('button', { name: new RegExp('^Direct API') })).toHaveTextContent('0 of 1 can run');
+    // Readiness is still on every card as its badge …
     expect(screen.getByText('READY')).toBeInTheDocument();
     expect(screen.getByText('DISABLED')).toBeInTheDocument();
     expect(screen.getByText('NEEDS SETUP')).toBeInTheDocument();
     // The blocker itself stays where its fix is — the card's API-key row.
     expect(screen.getByText(/not set — Edit this provider to paste one/)).toBeInTheDocument();
-    // "Needs setup" is the only outstanding-task bucket, so it reads before the
-    // long optional catalog rather than being buried under it. Sections render
-    // in `PROVIDER_SECTIONS` order, so the array is what pins it.
-    expect(PROVIDER_SECTIONS.findIndex((s) => s.key === 'blocked'))
-      .toBeLessThan(PROVIDER_SECTIONS.findIndex((s) => s.key === 'disabled'));
+    // … and decides the order within the group: what can run reads first.
+    const ready = screen.getByText('Ready CLI');
+    const off = screen.getByText('Switched Off');
+    expect(ready.compareDocumentPosition(off) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(PRESET_STATE_ORDER.indexOf(PROVIDER_CARD_STATE.BLOCKED))
+      .toBeLessThan(PRESET_STATE_ORDER.indexOf(PROVIDER_CARD_STATE.DISABLED));
   });
 
-  // "Needs setup" is the outstanding-task list, so only providers the user has
-  // switched ON belong in it. A switched-off one is optional — it files under
-  // Disabled and merely notes what enabling it would take.
-  it('files a switched-off provider with a missing CLI under Disabled, noting the setup', async () => {
+  // A switched-off provider is optional — its badge says so and merely notes
+  // what enabling it would take, rather than reading as an outstanding task.
+  it('badges a switched-off provider with a missing CLI as Disabled, noting the setup', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'opencode-ollama', name: 'OpenCode Ollama', type: 'cli', command: 'opencode', enabled: false }],
       activeProvider: null,
@@ -1453,7 +1475,7 @@ describe('readiness grouping', () => {
 
     renderPage();
 
-    expect(await screen.findByRole('button', { name: new RegExp('^Disabled') })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: new RegExp('^OpenCode') })).toBeInTheDocument();
     expect(screen.getByText('DISABLED')).toBeInTheDocument();
     expect(screen.getByText('SETUP TO ENABLE')).toBeInTheDocument();
     // The missing CLI is still named — that IS the note about enabling it — but
@@ -1461,12 +1483,12 @@ describe('readiness grouping', () => {
     const runtimePill = screen.getByText('OpenCode CLI not installed');
     expect(runtimePill).toBeInTheDocument();
     expect(runtimePill.className).not.toMatch(/port-warning/);
-    expect(screen.queryByRole('button', { name: new RegExp('^Needs setup') })).not.toBeInTheDocument();
+    expect(screen.queryByText('NEEDS SETUP')).not.toBeInTheDocument();
   });
 
   // The provider list is authoritative: no sibling means the wrapper has no key
   // to inherit at spawn time, which is a missing prerequisite, not "unknown".
-  it('files an OrcaRouter wrapper whose sibling was deleted under Needs setup', async () => {
+  it('badges an OrcaRouter wrapper whose sibling was deleted as Needs setup', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{
         id: 'opencode-orcarouter',
@@ -1482,7 +1504,6 @@ describe('readiness grouping', () => {
     renderPage();
 
     expect(await screen.findByText('NEEDS SETUP')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: new RegExp('^Needs setup') })).toBeInTheDocument();
   });
 
   it('badges an enabled-but-benched provider with its reason', async () => {
@@ -1497,12 +1518,12 @@ describe('readiness grouping', () => {
     renderPage();
 
     expect(await screen.findByText('BENCHED · usage-limit')).toBeInTheDocument();
-    // Benched providers stay in the Enabled group — nothing is missing on them.
-    expect(screen.getByRole('button', { name: new RegExp('^Enabled') })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: new RegExp('^Needs setup') })).not.toBeInTheDocument();
+    // A benched provider still counts as runnable — nothing is missing on it.
+    expect(screen.getByRole('button', { name: new RegExp('^Claude Code') })).toHaveTextContent('1 of 1 can run');
+    expect(screen.queryByText('NEEDS SETUP')).not.toBeInTheDocument();
   });
 
-  it('badges a Codex provider whose ChatGPT quota is exhausted as Benched under Enabled', async () => {
+  it('badges a Codex provider whose ChatGPT quota is exhausted as Benched, still runnable', async () => {
     api.getCodexAccount.mockResolvedValue({
       readiness: {
         status: 'quota-exhausted',
@@ -1524,8 +1545,8 @@ describe('readiness grouping', () => {
     renderPage();
 
     expect(await screen.findByText('BENCHED · usage-limit')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: new RegExp('^Enabled') })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: new RegExp('^Needs setup') })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: new RegExp('^Codex') })).toHaveTextContent('1 of 1 can run');
+    expect(screen.queryByText('NEEDS SETUP')).not.toBeInTheDocument();
   });
 
   it('folds a section away when its header is clicked', async () => {
@@ -1536,7 +1557,7 @@ describe('readiness grouping', () => {
 
     renderPage();
 
-    const header = await screen.findByRole('button', { name: /Disabled/ });
+    const header = await screen.findByRole('button', { name: /^Claude Code/ });
     expect(screen.getByText('Switched Off')).toBeInTheDocument();
 
     fireEvent.click(header);
@@ -1561,7 +1582,7 @@ describe('hardware-incompatible providers', () => {
   // A provider this machine cannot run is not a choice the user can act on, so
   // it must not sit among the enabled cards adding a HARDWARE MISMATCH badge to
   // a section that otherwise lists live providers.
-  it('parks an unrunnable provider in a collapsed section instead of Enabled', async () => {
+  it('parks an unrunnable provider in a collapsed section instead of its harness group', async () => {
     api.getProviders.mockResolvedValue({
       providers: [
         { id: 'ok', name: 'Runs Here', type: 'cli', command: 'claude', enabled: true },
@@ -1579,9 +1600,11 @@ describe('hardware-incompatible providers', () => {
 
     renderPage();
 
-    const enabled = await screen.findByRole('button', { name: new RegExp('^Enabled') });
-    expect(enabled).toHaveTextContent('1');
+    const claude = await screen.findByRole('button', { name: new RegExp('^Claude Code') });
+    expect(claude).toHaveTextContent('1');
     expect(screen.getByText('Runs Here')).toBeInTheDocument();
+    // The unrunnable API record does not surface as a Direct API group.
+    expect(screen.queryByRole('button', { name: new RegExp('^Direct API') })).not.toBeInTheDocument();
 
     // Collapsed by default: neither the card nor its badge is on screen.
     const parked = screen.getByRole('button', { name: /Unavailable on this machine/ });
@@ -1657,13 +1680,14 @@ describe('hardware-incompatible providers', () => {
 });
 
 // Both tables are keyed off PROVIDER_CARD_STATE, and a state missing from either
-// fails quietly: no PROVIDER_SECTIONS row and those cards vanish from the page,
-// no CARD_STATE_STYLES row and the card throws on `style.border`.
+// fails quietly: no PRESET_STATE_ORDER rank sorts those cards to the front of
+// every group (indexOf = -1), no CARD_STATE_STYLES row and the card throws on
+// `style.border`.
 describe('readiness table coverage', () => {
-  it('gives every readiness state a card style and exactly one section', () => {
+  it('gives every readiness state a card style and exactly one rank', () => {
     for (const state of Object.values(PROVIDER_CARD_STATE)) {
       expect(CARD_STATE_STYLES[state]).toBeDefined();
-      expect(PROVIDER_SECTIONS.filter(section => section.states.includes(state))).toHaveLength(1);
+      expect(PRESET_STATE_ORDER.filter((rank) => rank === state)).toHaveLength(1);
     }
   });
 });
@@ -1993,5 +2017,98 @@ describe('AIProviders model refresh', () => {
       providers: mtplxProviders().providers.map(p => ({ ...p, enabled: false })),
     });
     expect(await screen.findByRole('button', { name: 'Enable' })).toBeInTheDocument();
+  });
+});
+
+// The compatibility matrix (#7567) is rendered from the composition catalog
+// every picker reads, so a cell can only disagree with what compose offers
+// by the catalog being stale — never by a second predicate in the browser.
+describe('compatibility matrix', () => {
+  const catalog = {
+    harnesses: [
+      { id: 'claude', label: 'Claude Code', modes: ['cli', 'tui'], enabled: true, detected: true },
+      { id: 'pi', label: 'Pi', modes: ['cli', 'tui'], enabled: false, detected: false },
+      { id: 'direct', label: 'Direct API', modes: ['api'], enabled: true, detected: true },
+    ],
+    services: [
+      { slug: 'ollama', label: 'Ollama', plan: 'local', enabled: true, readiness: 'ready', catalog: { models: ['qwen3:8b'] } },
+      { slug: 'nvidia-nim', label: 'NVIDIA NIM', plan: 'free', enabled: true, readiness: 'needs-credential', catalog: { models: [] } },
+    ],
+    bootstraps: [],
+    compatibility: { claude: ['ollama'], pi: ['ollama', 'nvidia-nim'], direct: ['ollama', 'nvidia-nim'] },
+    effortLevels: { claude: ['low', 'medium', 'high'], pi: [], direct: [] },
+    effortLevelsByModel: {},
+    presets: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetProviderCatalogCache();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getProviderCatalog.mockResolvedValue(catalog);
+  });
+
+  it('renders the server verdict per cell: offered, blocked with its reason, or unreachable', async () => {
+    renderPage();
+    const header = await screen.findByRole('button', { name: /Compatibility matrix/ });
+    await waitFor(() => expect(header).toHaveTextContent('2 combinations offered'));
+    fireEvent.click(header);
+    // Claude × Ollama: compatible, both on, ready → a click target.
+    expect(screen.getByRole('button', { name: 'New preset: Claude Code on Ollama' })).toBeInTheDocument();
+    // Claude × NVIDIA: not in the compatibility map → unreachable, not blocked.
+    expect(screen.getByRole('img', { name: 'Claude Code cannot reach NVIDIA NIM' })).toBeInTheDocument();
+    // Pi is switched off → blocked with that reason, even on a ready service.
+    expect(screen.getByRole('img', { name: 'Pi on Ollama: Pi is switched off' })).toBeInTheDocument();
+    // Direct × NVIDIA: compatible and on, but the service still needs a key.
+    expect(screen.getByRole('img', { name: 'Direct API on NVIDIA NIM: NVIDIA NIM needs a credential' })).toBeInTheDocument();
+  });
+
+  it('opens the compose flow on the clicked pair with only "Save as preset" as its exit, then lands on the new preset', async () => {
+    api.createProviderPreset.mockResolvedValue({ id: 'claude-cli-ollama', name: 'Claude Code · Ollama' });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /Compatibility matrix/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'New preset: Claude Code on Ollama' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Compose a new preset' });
+    expect(within(dialog).getByLabelText('Harness')).toHaveValue('claude');
+    expect(within(dialog).getByLabelText('Method')).toHaveValue('cli');
+    expect(within(dialog).getByLabelText('Service')).toHaveValue('ollama');
+    expect(within(dialog).queryByRole('button', { name: 'Use once' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save as preset…' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm save' }));
+    await waitFor(() => expect(api.createProviderPreset).toHaveBeenCalledWith(expect.objectContaining({ compositeId: 'claude.cli@ollama' })));
+    // The page reloads its presets and opens the editor on the one just saved.
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
+    expect(toast.success).toHaveBeenCalledWith('Claude Code · Ollama saved as a preset');
+  });
+});
+
+describe('page views', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetProviderCatalogCache();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+  });
+
+  it('offers the three views as routed tabs and swaps the header action per view', async () => {
+    renderPage('/ai/services');
+    expect(await screen.findByRole('button', { name: 'Add Service' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run Prompt' })).not.toBeInTheDocument();
+    const tabs = screen.getByRole('tablist', { name: 'AI provider views' });
+    expect(within(tabs).getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Presets', 'Harnesses', 'Services']);
+    fireEvent.click(within(tabs).getByRole('tab', { name: 'Presets' }));
+    expect(await screen.findByRole('button', { name: 'Run Prompt' })).toBeInTheDocument();
+    // The header action plus the empty state's own — both create a preset.
+    expect(screen.getAllByRole('button', { name: 'Add Preset' }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: 'Add Service' })).not.toBeInTheDocument();
   });
 });
