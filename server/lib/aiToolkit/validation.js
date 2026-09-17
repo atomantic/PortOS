@@ -248,7 +248,24 @@ export const providerSchema = z.object({
   secretEnvVars: z.array(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
-  tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional()
+  tuiIdleTimeoutMs: z.number().int().min(1000).max(86400000).optional(),
+  // PRESET structure (#7565): a record carrying all three of `harnessId`,
+  // `method` and `serviceId` is a DERIVED preset — its connection-owned values
+  // are re-materialized from the named service instance on every save by the
+  // host (`server/lib/providerPresets.js`). A record without them is a legacy
+  // preset, executed exactly as before. Additive and nullable so an editor can
+  // clear them; `method` must equal `type` (the host enforces it, since a
+  // refinement here would not survive `.partial()` / `.extend()`). The ids are
+  // slugs rather than enums because this directory stays self-contained.
+  harnessId: z.string().regex(/^[a-z0-9-]+$/, 'harnessId must be a harness id').max(64).nullable().optional(),
+  method: z.enum(['cli', 'tui', 'api']).nullable().optional(),
+  serviceId: z.string().regex(PRESET_ID_RE, 'serviceId must be a service slug').max(64).nullable().optional(),
+  // The subset of the service catalog this preset offers; `null` = the whole catalog.
+  catalogNarrowing: z.array(z.string().trim().min(1).max(512)).max(1000).nullable().optional(),
+  // The configured credential-bootstrap app (`settings.credentialBootstraps`
+  // slug) a derived cli/tui preset spawns through; materialization writes the
+  // inline `credentialBootstrap` object from it.
+  credentialBootstrapId: z.string().regex(PRESET_ID_RE, 'credentialBootstrapId must be a bootstrap slug').max(64).nullable().optional(),
 });
 
 /**

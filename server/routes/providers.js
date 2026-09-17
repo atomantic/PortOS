@@ -49,6 +49,7 @@ import {
   providerServiceUpdateSchema,
   providerRouteModelAliasSchema,
   providerRouteSettingsUpdateSchema,
+  providerPresetCreateSchema,
   credentialBootstrapsSettingsSchema,
   harnessEnablementUpdateSchema,
   harnessIdParamSchema,
@@ -82,6 +83,7 @@ import {
   PUBLIC_REVIEW_ACTIONS_POSTURE,
 } from '../lib/providerVendors.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
+import { presetDerivable, presetKind } from '../lib/providerPresets.js';
 import {
   captureSystemCapabilities,
   detectSystemCapabilities,
@@ -209,8 +211,18 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
     publicReviewActionsSupported: publicReviewPostures.includes(PUBLIC_REVIEW_ACTIONS_POSTURE),
+    // Preset structure (#7565): `derived` when the record names the service it
+    // is materialized from, else `legacy`; and whether a legacy record is a
+    // candidate for "Convert to derived preset" (pure over the record — the
+    // conversion itself still proves the fixpoint against the service).
+    presetKind: presetKind(provider),
+    presetDerivable: presetDerivable(provider),
   });
 };
+
+// Deferred: the preset service reaches the graph store and the composite
+// resolver, which every suite that mounts these routes would otherwise pay for.
+const presetService = () => import('../services/providerPresets.js');
 
 /**
  * Carry a gateway-backed wrapper's RESOLVED model-access policy from the read
@@ -686,6 +698,21 @@ export function createPortOSProviderRoutes(aiToolkit) {
   }));
 
   /**
+   * "Save as preset" (#7565): store the record a composite id resolves to, as
+   * an enabled derived preset the picker can name like any other. The
+   * resolver's verdict gates it — an ineligible composite is a 400 with its
+   * code and reason, never a stored record that cannot run. `model` and
+   * `effort` become the preset's defaults; a `+<bootstrap>` suffix becomes
+   * its `credentialBootstrapId`.
+   */
+  router.post('/presets', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerPresetCreateSchema, req.body ?? {});
+    const { createPresetFromComposite } = await presetService();
+    const created = await createPresetFromComposite(input);
+    res.status(201).json(presentProvider(created, await detectSystemCapabilities()));
+  }));
+
+  /**
    * Is a ChatGPT subscription signed in, and is it usable right now?
    *
    * The Codex CLI/TUI cards could already say whether the `codex` binary
@@ -1044,6 +1071,19 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(result);
   }));
 
+  /**
+   * "Convert to derived preset" (#7565): stamp one legacy record with the
+   * harness, method and service instance it already runs on — only when
+   * re-deriving it from that service reproduces every connection-owned value
+   * it carries (the same fixpoint the boot backfill applies). Refused with the
+   * reason otherwise; nothing about how the record runs is changed either way.
+   */
+  router.post('/:id/derive', asyncHandler(async (req, res) => {
+    const { derivePreset } = await presetService();
+    const provider = await derivePreset(req.params.id);
+    res.json(presentProvider(provider, await detectSystemCapabilities()));
+  }));
+
   // Sanitized GET /:id — must be after specific /:id/* routes above
   router.get('/:id', asyncHandler(async (req, res) => {
     const provider = await providerService.getProviderById(req.params.id);
@@ -1082,7 +1122,15 @@ export function createPortOSProviderRoutes(aiToolkit) {
       }
     }
 
-    const provider = await providerService.updateProvider(req.params.id, updates);
+    // A DERIVED preset (#7565) stores what its service derives: the record is
+    // re-materialized from the instance it names, a connection-owned value the
+    // client moved is refused with a pointer at the service, and a `models`
+    // edit is read as a narrowing of the service catalog.
+    const { savesAsDerivedPreset, materializeStoredPreset } = await presetService();
+    const candidate = { ...existing, ...updates, id: req.params.id };
+    const stored = savesAsDerivedPreset(candidate) ? await materializeStoredPreset(candidate, { updates }) : updates;
+
+    const provider = await providerService.updateProvider(req.params.id, stored);
     res.json(presentProvider(withResolvedModelAccess(provider, existing), await detectSystemCapabilities()));
   }));
 
@@ -1168,7 +1216,13 @@ export function createPortOSProviderRoutes(aiToolkit) {
       res.status(201).json({ providers: created.map(provider => presentProvider(provider, capabilities)) });
       return;
     }
-    const provider = await providerService.createProvider(validation.data);
+    // A body naming a harness, method and service is a DERIVED preset (#7565)
+    // and is stored as the service derives it — see PUT /:id.
+    const { savesAsDerivedPreset, materializeStoredPreset } = await presetService();
+    const body = savesAsDerivedPreset(validation.data)
+      ? await materializeStoredPreset(validation.data, { updates: validation.data })
+      : validation.data;
+    const provider = await providerService.createProvider(body);
     res.status(201).json(presentProvider(provider, await detectSystemCapabilities()));
   }));
 

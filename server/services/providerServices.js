@@ -14,7 +14,13 @@ import {
 } from '../lib/providerServiceInstances.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { resolveServiceInstance, serviceDefinitionById } from '../lib/serviceDefinitions.js';
-import { findConnectionByRef, requireProviderGraph, serializeProviderGraph, updateConnectionSettings } from './providerGraph.js';
+import {
+  findConnectionByRef,
+  rematerializeDerivedPresets,
+  requireProviderGraph,
+  serializeProviderGraph,
+  updateConnectionSettings,
+} from './providerGraph.js';
 import { readGraph, saveConnectionSettings, writeGraph } from './providerGraphStore.js';
 
 /**
@@ -246,6 +252,9 @@ export function refreshServiceCatalog(ref, deps = {}) {
       error: outcome.error == null ? null : sanitizeCatalogError(outcome.error, connection.credentials),
     }, { now });
     const revision = await saveConnectionSettings({ ...connection, catalog });
+    // A derived preset's `models` is this catalog narrowed (#7565): a listing
+    // that changed reaches every preset on the instance in the same request.
+    await rematerializeDerivedPresets({ ...connection, catalog, revision: revision ?? connection.revision });
 
     console.log(`🔗 Refreshed service ${connection.slug ?? connection.id} catalog via ${definition.catalog.strategy}: `
       + `${catalog.state}, ${catalog.models.length} models`);

@@ -803,7 +803,15 @@ export function createProviderService(config = {}) {
       secretEnvVars: providerData.secretEnvVars || [],
       headlessArgs: providerData.headlessArgs || [],
       tuiPromptDelayMs: providerData.tuiPromptDelayMs || 2500,
-      ...(providerData.tuiIdleTimeoutMs != null ? { tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs } : {})
+      ...(providerData.tuiIdleTimeoutMs != null ? { tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs } : {}),
+      // Preset structure (#7565) — only persisted when named, so every record
+      // created without it stays byte-identical and reads as a legacy preset.
+      ...(typeof providerData.harnessId === 'string' && providerData.harnessId ? { harnessId: providerData.harnessId } : {}),
+      ...(typeof providerData.method === 'string' && providerData.method ? { method: providerData.method } : {}),
+      ...(typeof providerData.serviceId === 'string' && providerData.serviceId ? { serviceId: providerData.serviceId } : {}),
+      ...(Array.isArray(providerData.catalogNarrowing) ? { catalogNarrowing: [...providerData.catalogNarrowing] } : {}),
+      ...(typeof providerData.credentialBootstrapId === 'string' && providerData.credentialBootstrapId
+        ? { credentialBootstrapId: providerData.credentialBootstrapId } : {})
     };
 
     return provider;

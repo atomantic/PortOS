@@ -1,3 +1,4 @@
+import { bootstrapInputFor } from '../lib/providerPresets.js';
 import { credentialBootstrapsSettingsSchema } from '../lib/validation.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getSettings, updateSettingsWith } from './settings.js';
@@ -51,17 +52,9 @@ export function normalizeCredentialBootstraps(raw) {
   }));
 }
 
-/**
- * The bootstrap input `materializeRoute` takes for an app: its slug as `id`
- * (so the composite id it stamps carries `+<slug>`) plus the spawn columns.
- */
-export const bootstrapInputFor = (slug, app) => ({
-  id: slug,
-  command: app.command,
-  ...(Array.isArray(app.args) ? { args: [...app.args] } : {}),
-  ...(app.argsSeparator ? { argsSeparator: app.argsSeparator } : {}),
-  ...(app.harnessNames ? { harnessNames: { ...app.harnessNames } } : {}),
-});
+// The bootstrap input `materializeRoute` takes for an app is a pure shape the
+// preset library also needs (#7565); it lives there and is re-exported here.
+export { bootstrapInputFor };
 
 /** The catalog's sanitized view of the table: never a command line, only what a picker names. */
 export const presentCredentialBootstraps = (apps) => Object.entries(apps).map(([slug, app]) => ({

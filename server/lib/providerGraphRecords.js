@@ -402,6 +402,62 @@ export function graphFromPreview(preview, mintId = randomUUID) {
 export const importGraphFromProviders = (data, mintId = randomUUID) =>
   graphFromPreview(buildProviderGraphPreview(data), mintId);
 
+// --- derived presets (#7565) ---------------------------------------------------
+
+/**
+ * Whether a record is a DERIVED preset: one carrying the three structural keys
+ * — `harnessId`, `method`, `serviceId` — that name the service instance its
+ * connection-owned values are materialized from. Lives here (not in
+ * `providerPresets.js`, which imports this module) because reconciliation is
+ * the first reader.
+ */
+export const isDerivedPreset = (record) => Boolean(record)
+  && typeof record === 'object'
+  && typeof record.harnessId === 'string' && record.harnessId !== ''
+  && typeof record.method === 'string' && record.method !== ''
+  && typeof record.serviceId === 'string' && record.serviceId !== '';
+
+/**
+ * Whether a derived preset DECLARES it sits on this connection — its
+ * `serviceId` is the row's slug. A declaration outranks the profile
+ * containment test: "derived from service X" is a fact the record states, not
+ * one reconciliation infers, so a direct-API preset on a gateway instance
+ * (whose profile reads back as kind `api`, not `gateway:<id>`) stays on the row
+ * it names instead of being cloned onto a fragment of its own every pass.
+ */
+export const presetDeclaresConnection = (record, connection) =>
+  isDerivedPreset(record) && typeof connection?.slug === 'string' && connection.slug === record.serviceId;
+
+/**
+ * Import derived presets ONTO the connections they declare, rather than as
+ * fragments of their own. The preview's own grouping (mode siblings, identity
+ * buckets) still decides which records share one binding; only the connection
+ * edge is retargeted, and the binding takes the first free variant key on its
+ * target so the database's uniqueness rules hold.
+ *
+ * A declared preset whose profile the preview isolates (a reason on it) gets
+ * no route row, exactly as any other isolated record.
+ */
+function importDeclaredPresets(records, graph, mintId) {
+  const bySlug = new Map(graph.connections.filter((connection) => connection.slug).map((connection) => [connection.slug, connection]));
+  const byId = new Map(records.map((record) => [record.id, record]));
+  const fragment = importGraphFromProviders({ providers: records }, mintId);
+  const variantKey = (connectionId, harnessId, key) => JSON.stringify([connectionId, harnessId ?? null, key]);
+  const taken = new Set(graph.bindings.map((binding) => variantKey(binding.connectionId, binding.harnessId, binding.variantKey)));
+  const bindings = [];
+  const routes = [];
+  for (const binding of fragment.bindings) {
+    const own = fragment.routes.filter((route) => route.bindingId === binding.id);
+    const target = bySlug.get(byId.get(own[0]?.providerId)?.serviceId);
+    if (!target) continue;
+    const key = taken.has(variantKey(target.id, binding.harnessId, 'default')) ? `variant:${own[0].providerId}` : 'default';
+    taken.add(variantKey(target.id, binding.harnessId, key));
+    bindings.push({ ...binding, connectionId: target.id, variantKey: key });
+    routes.push(...own);
+  }
+  return { connections: [], bindings, routes };
+}
+
 // --- reconciliation ----------------------------------------------------------
 
 /**
@@ -504,7 +560,7 @@ export function planGraphReconciliation(graph, providers, { mintId = randomUUID 
     const onStored = [];
     const moved = new Map();
     for (const entry of entries) {
-      if (routeBelongsOnConnection(entry.profile, stored)) {
+      if (presetDeclaresConnection(entry.provider, stored) || routeBelongsOnConnection(entry.profile, stored)) {
         onStored.push(entry);
         continue;
       }
@@ -569,7 +625,20 @@ export function planGraphReconciliation(graph, providers, { mintId = randomUUID 
 
   const mapped = new Set(graph.routes.map((route) => route.providerId));
   const unmapped = [...records.values()].filter((provider) => !mapped.has(provider.id));
-  if (unmapped.length > 0) plan.imports = importGraphFromProviders({ providers: unmapped }, mintId);
+  // A derived preset naming an existing instance is imported ONTO it (#7565);
+  // everything else is its own fragment, never auto-linked.
+  const slugs = new Set(graph.connections.map((connection) => connection.slug).filter(Boolean));
+  const declared = unmapped.filter((provider) => isDerivedPreset(provider) && slugs.has(provider.serviceId));
+  const fragments = unmapped.filter((provider) => !declared.includes(provider));
+  if (fragments.length > 0) plan.imports = importGraphFromProviders({ providers: fragments }, mintId);
+  if (declared.length > 0) {
+    const onto = importDeclaredPresets(declared, graph, mintId);
+    plan.imports = {
+      connections: plan.imports.connections,
+      bindings: [...plan.imports.bindings, ...onto.bindings],
+      routes: [...plan.imports.routes, ...onto.routes],
+    };
+  }
 
   return plan;
 }
