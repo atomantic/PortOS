@@ -29,39 +29,38 @@ export function FormField({
   compact = false,
 }) {
   const generatedId = useId();
-  // Only generate hintId if hint is present and non-empty to avoid orphan IDREFs.
-  const hintId = hint != null && hint !== '' && hint !== false ? `${generatedId}-hint` : null;
+  // A hint only earns an id when it will actually render; otherwise
+  // aria-describedby would point at an element that is never in the DOM.
+  const hasHint = hint != null && hint !== '' && hint !== false;
+  const hintId = hasHint ? `${generatedId}-hint` : null;
 
   // The label must point at whatever id the first control actually has: reuse
   // the child's own id when present, otherwise inject the generated one.
+  //
+  // Keep the `cloneElement(child, { id: controlId, ... })` literal intact: the
+  // tree-wide scanner in a11yConventions.test.js proves this wrapper names its
+  // child by matching that exact shape, and a props object built in a variable
+  // is invisible to it (#7525).
   let controlId = generatedId;
   const augmented = Children.map(children, (child, i) => {
     if (i !== 0 || !isValidElement(child)) return child;
-
-    // Build props for the child, starting with ID assignment.
-    const childProps = {};
+    // Preserve any description the caller already declared and append ours.
+    const existingDescribedBy = child.props['aria-describedby'];
+    const describedBy = hintId
+      ? [existingDescribedBy?.trim(), hintId].filter(Boolean).join(' ')
+      : existingDescribedBy;
     if (child.props.id) {
       controlId = child.props.id;
-    } else {
-      controlId = generatedId;
-      childProps.id = controlId;
+      if (describedBy === existingDescribedBy) return child;
+      return cloneElement(child, { 'aria-describedby': describedBy });
     }
-
-    // Handle aria-describedby: preserve existing tokens and append hint id.
-    if (hintId) {
-      const existingDescribedBy = child.props['aria-describedby'];
-      const tokens = existingDescribedBy ? [existingDescribedBy.trim(), hintId] : [hintId];
-      childProps['aria-describedby'] = tokens.join(' ');
-    }
-
-    // Only clone if we have props to assign; otherwise return the original child.
-    return Object.keys(childProps).length > 0 ? cloneElement(child, childProps) : child;
+    return cloneElement(child, { id: controlId, 'aria-describedby': describedBy });
   });
 
   return (
     <div className={className}>
       {label != null && <label htmlFor={controlId} className={compact ? 'block text-xs uppercase tracking-wider text-gray-500 mb-1' : labelClassName}>{label}</label>}
-      {hint != null && hint !== '' && hint !== false && <p id={hintId} className={compact ? 'block text-[11px] text-gray-500 mt-1' : 'text-xs text-gray-500 mb-1'}>{hint}</p>}
+      {hasHint && <p id={hintId} className={compact ? 'block text-[11px] text-gray-500 mt-1' : 'text-xs text-gray-500 mb-1'}>{hint}</p>}
       {augmented}
     </div>
   );
