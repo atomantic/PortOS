@@ -293,7 +293,13 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // `null` for every other provider, reads a local cache rather than calling
       // a model, and imports each runtime's cache reader lazily so neither subtree
       // reaches the boot closure (see `services/localCachedModels.js`).
-      cachedModelIds: localCachedModelIds
+      cachedModelIds: localCachedModelIds,
+      // A composite id (`harness.method@service[+bootstrap]`, #7564) names no
+      // stored record: the toolkit hands it here, and the host materializes it
+      // from the harness registry, the service instance and settings. Imported
+      // lazily so the graph store's subtree stays off the boot closure until a
+      // composite is actually asked for.
+      resolveCompositeProvider: async (id) => (await import('./compositeProviders.js')).resolveCompositeProvider(id)
     }),
 
     // Compatibility shims for services that import from the old service files.
@@ -764,7 +770,12 @@ const runDatabaseBootPhase = () => runDatabasePhase({
   // Provider connection graph (#6367): first run imports every provider record
   // into ai_connections / ai_harness_bindings / ai_route_bindings; later runs
   // reconcile against providers.json. Reads and writes local state only.
-  reconcileProviderGraph: async () => (await import('./providerGraph.js')).initProviderGraph(),
+  reconcileProviderGraph: async () => {
+    await (await import('./providerGraph.js')).initProviderGraph();
+    // Per-harness enablement (#7564): normalize the settings slice and prime
+    // the composite cache's revision. Settings-only — no provider is contacted.
+    await (await import('./harnessEnablement.js')).reconcileHarnessEnablement();
+  },
 
   reconcileStackerNews: reconcileStackerNewsSchedulers
 });

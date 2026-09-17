@@ -471,52 +471,116 @@ npm test -- lib/taskParser.test.js
 npm run test:watch
 ```
 
-### CI cancelled with no successor run
+### CI red with every job "cancelled"
 
-**Symptom**: A pull request's `CI Gate` / `Full CI Gate` goes red while several
-PRs are building at once. Opening the run shows no failing assertion — jobs
-report `##[error]The operation was canceled.` mid-step, often inside
-`actions/checkout`, and the in-workflow `Cancel sibling CI jobs after failure`
-step is `skipped` in every job. Re-running is usually cancelled the same way
-until the queue empties; the identical SHA then passes on an idle queue.
+**Symptom**: A pull request's `CI Gate` / `Full CI Gate` goes red. Opening the
+run shows no failing assertion — jobs report `##[error]The operation was
+canceled.` mid-step, the run's top-level conclusion is `cancelled` rather than
+`failure`, and `gh pr checks` lists the long-running shards as `fail` with
+nothing saying why.
 
-**What it is not**: this is *not* `cancel-in-progress` doing its job. The
-concurrency group is per-PR (`.github/workflows/ci.yml`), and a legitimate
-supersession always leaves a **newer run** for the same PR. An external cancel
-leaves none.
+**Two very different causes produce that identical surface**, and the run
+and job conclusions do not tell them apart:
 
-**The likely cause is the Actions spending limit, not the concurrent-job cap.**
-Exceeding the job cap makes GitHub *queue* runs; cancelling in-flight runs is
-the spending-limit behaviour. So the billing reading below is the primary
-diagnostic, not a footnote. Full runs are expensive because the three Windows
-shards bill at a 2× minute multiplier.
+1. **A real test failure.** `scripts/cancel-current-ci-run.js` cancels the
+   sibling jobs the moment one job fails, so the failing job is cancelled out
+   from under its own reporting step and its conclusion reads `cancelled` too.
+   Nothing in the run reads `failure`.
+2. **An external cancel** — the Actions spending limit, or a human pressing
+   cancel.
 
-**Tell the two apart** — list the runs for the branch and look for a successor:
+**Always rule out (1) first.** It is the common case, it is the one you can fix,
+and assuming billing sends you to a dashboard instead of the one-line assertion
+that is actually red. Two PortOS incidents were misdiagnosed as billing this way
+(#7482 on 2026-09-16, #7571 on 2026-09-17) and burned full-matrix re-runs before
+anyone read a job log.
+
+#### Step 1 — ask whether a STEP failed (this is the primary diagnostic)
+
+A cancelled job keeps its steps' conclusions, so the failing step survives even
+though the job that owns it reads `cancelled`. **`gh run view --json jobs` does
+not expose steps** — that omission is precisely why both incidents above were
+misread. Go to the REST API instead:
 
 ```bash
-# Every run for one PR branch, newest first. A supersession has a run NEWER
-# than the cancelled one; an external cancel does not.
-gh run list --branch "<head-branch>" --workflow CI \
-  --json databaseId,headSha,status,conclusion,createdAt,attempt
-
-# Did any job actually fail, or were they all cancelled?
-gh run view <run-id> --json jobs \
-  --jq '.jobs[] | {name, conclusion, startedAt, completedAt}'
+gh api "/repos/atomantic/PortOS/actions/runs/<run-id>/jobs?per_page=100" \
+  --jq '.jobs[] | select(any(.steps[]?; .conclusion=="failure"))
+        | "\(.name)  job=\(.conclusion)  failedStep=\([.steps[] | select(.conclusion=="failure") | .name] | join(", "))"'
 ```
 
-All jobs `cancelled` or `success`, none `failure`, and no newer run for the
-branch → external cancel. One job `failure` → a real red run that
-`scripts/cancel-current-ci-run.js` then stopped on purpose.
+On a run where every job read `cancelled`, that printed:
 
-**Account-level confirmation** (needs a scope the unattended agent cannot
-grant itself — run it yourself):
+```
+Windows server unit tests (3/3)  job=cancelled  failedStep=Run server tests on Windows
+CI Gate                          job=failure    failedStep=Require every selected job to pass
+Full CI Gate                     job=failure    failedStep=Require the aggregate gate to have passed
+```
+
+Ignore the two gate rows — they always fail downstream of a red run. **Any other
+row is your culprit.** This is the same signal
+`scripts/ci-retry-cancelled-run.js` uses (`jobFailed` reads step conclusions,
+not just the job's), which is why the recovery workflow correctly refuses to
+retry a fail-fast run.
+
+Then read the assertion out of that job's log. **`--log-failed` prints nothing
+here** — GitHub populates it only for steps GitHub itself marked failed on a
+job that concluded `failure`, so a self-cancelled job yields an empty result
+and the failure looks absent. Use the full log:
+
+```bash
+gh run view --job <job-id> --log 2>&1 \
+  | grep -nE '🛑 Requested cancellation|FAIL |AssertionError|✕ |Test Files .*failed'
+```
+
+The `🛑 Requested cancellation` line is written by
+`scripts/cancel-current-ci-run.js` and exists **only** when a job really failed
+— it is the confirming tell if the step query is ever inconclusive.
+
+If no job has a failed step and no log shows a failure, go to step 2.
+
+A Windows-only failure is a recurring shape: a test that hardcodes a POSIX
+answer for platform-dependent behaviour (shell quoting, path separators,
+process-group flags) is green locally and on Linux, and red only on the Windows
+shard. See "Windows server unit tests fail but macOS/Linux pass" below.
+
+#### Step 2 — only now consider an external cancel
+
+Confirm there is no successor run. `cancel-in-progress` is per-PR
+(`.github/workflows/ci.yml`), and a legitimate supersession always leaves a
+**newer** run for the same branch; an external cancel leaves none.
+
+```bash
+gh run list --branch "<head-branch>" --workflow CI \
+  --json databaseId,headSha,status,conclusion,createdAt,attempt
+```
+
+Supporting signals for the spending-limit case, none of them sufficient alone:
+
+- Every runner is cancelled within a short window of one another, rather than
+  one job finishing ~30–60 s ahead of the rest.
+- The logs show tests still passing right up to the cancel.
+- Nothing in `scripts/ci-gate-report.js`'s output helps here — it prints
+  `CANCELLED, not failed` for a fail-fast run too, because it reads job
+  conclusions. Do not count it as a signal either way.
+
+Exceeding the concurrent-**job cap** makes GitHub queue runs; cancelling
+in-flight runs is the **spending-limit** behaviour. Full runs are expensive
+because the three Windows shards bill at a 2× minute multiplier.
+
+**Account-level confirmation** (needs a scope an unattended agent cannot grant
+itself — run it yourself):
 
 ```bash
 gh auth refresh -s user
 gh api /users/<your-login>/settings/billing/actions
 ```
 
-**What PortOS already does about it**:
+Only the account owner can raise or clear the limit. If that is the cause,
+re-running spends more of the budget the limit is protecting — stop after one
+manual retry, arm auto-merge (`gh pr merge <n> --merge --auto --delete-branch`,
+which branch protection still gates), and leave the PR for the owner.
+
+#### What PortOS already does about it
 
 - One automatic retry. `.github/workflows/ci-cancel-recovery.yml` watches for a
   completed CI run and re-dispatches it exactly once when it was cancelled on a
@@ -524,15 +588,19 @@ gh api /users/<your-login>/settings/billing/actions
   The budget is the run attempt: `POST /rerun` produces attempt 2, and attempt
   2 is never retried. A supersession and a self-cancel after a real failure are
   both skipped, and the recovery run's own summary page states which of those
-  applied. This is the layer that explains a run-wide cancel, because it is the
-  only one that survives it.
+  applied. Its "no job failed" test reads **step** conclusions as well as the
+  job's (`jobFailed` in `scripts/ci-retry-cancelled-run.js`), which is what
+  keeps it from burning an attempt on a fail-fast run — the same signal step 1
+  above uses by hand.
 - The gate reports the difference **when the gate itself runs**.
   `scripts/ci-gate-report.js` prints `this run was CANCELLED, not failed`,
   names the cancelled jobs, and points back here — instead of the old
-  undifferentiated "did not pass". Note the limit: `if: always()` defeats an
+  undifferentiated "did not pass". Two limits: `if: always()` defeats an
   upstream failure, not a run-wide cancellation, so in the full external-cancel
-  case the gate job is cancelled too and prints nothing. It covers a partial
-  cancel; the recovery run covers the rest.
+  case the gate job is cancelled too and prints nothing; and the wording is
+  about job conclusions, so it says `CANCELLED, not failed` for a fail-fast run
+  as well. **Never read that line as proof of an external cancel** — it is a
+  statement about conclusions, not about causes.
 
 **A caveat worth knowing**: the retry re-runs the whole suite, Windows shards
 included, so if the cause really is the spending limit then recovery spends
@@ -540,13 +608,45 @@ more of it. That is the same cost as the manual re-run it replaces, but it
 means recovery is not a substitute for reducing billable minutes — tracked in
 issue #7440.
 
-If a PR is still stuck after that one retry, the queue was busy for longer than
-one attempt — re-run it by hand once the other runs have drained.
-
 One deliberate rough edge: a run **you** cancel by hand looks identical to an
 external cancel from the API, so it gets the same single retry. Push a new
 commit (or close the PR) rather than cancelling if you want the run to stay
 stopped.
+
+### Windows server unit tests fail but macOS/Linux pass
+
+**Symptom**: `Windows server unit tests (n/3)` is the only shard with a real
+assertion failure. Because that shard fail-fasts, the run then reads as a
+run-wide cancel — see the section above for how to find the assertion at all.
+
+The cause is almost always a **test** that hardcodes the POSIX answer to a
+platform-dependent question, not a production bug. Three recurring shapes:
+
+- **Shell quoting.** `formatShellCommandLine` (`server/lib/shellCd.js`) quotes
+  for the session's shell, so a line that reads `pi --provider nvidia` under
+  `zsh` reads `& 'pi' '--provider' 'nvidia'` under PowerShell. Assert on the
+  flags, not the dialect — strip the quoting first, the way
+  `server/services/compositeProviders.test.js` and
+  `server/lib/tuiShellLaunch.test.js` do. Reproduce locally with
+  `PORTOS_SHELL=pwsh`, which yields the exact Windows string with no runner:
+
+  ```bash
+  cd server && PORTOS_SHELL=pwsh node_modules/.bin/vitest run <suite>
+  ```
+
+- **Path separators.** A suite that mocks `node:os` `platform()` still gets the
+  host's `path.join`, so POSIX-style fixtures diverge from the `C:\…` the module
+  builds. Simulate it by mocking `node:path` to `path.win32` in a throwaway copy
+  of the suite, and prefer `dirname`/`join` over separator regexes in the code
+  under test.
+
+- **Platform-gated behaviour flags.** When production deliberately decides
+  something per platform (`needsProcessGroup(...)` returning `false` on Windows
+  because `taskkill /T` already covers the tree), assert the *policy* in the
+  helper's own unit test with an injected platform, and derive the call-site
+  expectation from `process.platform` rather than writing the POSIX literal.
+  An assertion with no Windows meaning at all belongs behind
+  `it.skipIf(process.platform === 'win32')`.
 
 ## Known Issues
 

@@ -9,7 +9,7 @@
  * (flat); the barrel surfaces it as the `cosValidation` namespace.
  */
 import { z } from 'zod';
-import { emptyToUndefined, emptyToNull } from './zodCompat.js';
+import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
 import { isPlainObject } from './objects.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
@@ -138,7 +138,7 @@ const claimOverrideContextSchema = z.preprocess(
 // on update ''/null survives as null so the store can clear the pin
 // (absent-vs-cleared, AGENTS.md).
 const orchestrationRoleSchema = z.object({
-  provider: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(120).optional()),
+  provider: z.preprocess(emptyToUndefined, providerRefSchema.optional()),
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(300).optional()),
   // Per-role reasoning effort. The architect's own rung for its planning pass;
   // for the implementer it is the DEFAULT a spec's `REASONING:` line overrides.
@@ -200,7 +200,7 @@ export const createCosTaskSchema = z.object({
   context: z.string().optional(),
   prompt: z.string().optional(),
   model: z.string().optional(),
-  provider: z.string().optional(),
+  provider: providerRefFieldSchema.optional(),
   effort: effortInputSchema,
   orchestrationMode: orchestrationModeInputSchema,
   orchestrationProfile: orchestrationProfileSchema.optional(),
@@ -339,7 +339,7 @@ export const updateCosTaskSchema = z.object({
   context: z.string().optional(),
   prompt: z.string().optional(),
   model: z.string().optional(),
-  provider: z.string().optional(),
+  provider: providerRefFieldSchema.optional(),
   effort: effortUpdateSchema,
   orchestrationMode: orchestrationModeUpdateSchema,
   orchestrationProfile: orchestrationProfileSchema.nullable().optional(),
@@ -592,7 +592,7 @@ export const createTaskTemplateSchema = z.object({
   icon: z.string().max(16).optional(),
   context: z.string().max(4000).optional(),
   category: z.string().max(60).optional(),
-  provider: z.string().max(120).optional(),
+  provider: providerRefFieldSchema.optional(),
   model: z.string().max(200).optional(),
   effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
   app: z.string().max(200).optional(),
@@ -609,7 +609,7 @@ export const taskTemplateFromTaskSchema = z.object({
   task: z.object({
     description: z.string().min(1).max(4000),
     context: z.string().max(4000).optional(),
-    provider: z.string().max(120).optional(),
+    provider: providerRefFieldSchema.optional(),
     model: z.string().max(200).optional(),
     effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
     app: z.string().max(200).optional(),

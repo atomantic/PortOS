@@ -49,6 +49,9 @@ import {
   providerServiceUpdateSchema,
   providerRouteModelAliasSchema,
   providerRouteSettingsUpdateSchema,
+  credentialBootstrapsSettingsSchema,
+  harnessEnablementUpdateSchema,
+  harnessIdParamSchema,
 } from '../lib/validation.js';
 import {
   getProviderRuntimeStatus,
@@ -192,6 +195,11 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   // cannot persist the narrowed list over the real one.
   return sanitizeProvider({
     ...applyModelAccess(decorated),
+    // The RAW record's key: an inherited or materialized one rides
+    // NON-enumerably (`withGatewayApiKey`, the composite resolver), so the
+    // decorating spreads above dropped it — re-carried here so `hasApiKey`
+    // reports the key the run would actually use (#7564).
+    apiKey: provider?.apiKey,
     // The UNION of the two refresh paths, because the button asks only
     // whether SOME path can serve this record. Which one actually serves it is
     // decided in `POST /:id/refresh-models`, and the two must stay in step or
@@ -605,9 +613,76 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * probe at the wrong endpoint. The response carries booleans, labels, and the
    * provider's own already-displayed endpoint — never a resolved binary path.
    */
-  router.get('/readiness', asyncHandler(async (_req, res) => {
+  router.get('/readiness', asyncHandler(async (req, res) => {
+    // `?providerId=<composite>` answers for ONE composition (#7564): the
+    // materialized record is what the readiness probe reads, so a composite
+    // that resolves is judged exactly as a stored record on the same daemon.
+    const compositeId = typeof req.query.providerId === 'string' ? req.query.providerId : null;
+    if (compositeId) {
+      const provider = await providerService.getProviderById(compositeId);
+      res.json({ readiness: provider ? await getProviderReadinessMap([provider]) : {} });
+      return;
+    }
     const data = await providerService.getAllProviders();
     res.json({ readiness: await getProviderReadinessMap(data.providers) });
+  }));
+
+  /**
+   * The composition catalog (#7564): every axis a `{ providerId, model, effort }`
+   * picker composes over — harnesses with their enablement, service instances,
+   * bootstrap apps, which harness reaches which service, the effort ladder per
+   * harness (and per model where a model narrows it), and the stored presets.
+   * Derived from cache and settings only: harness detection is the runtime
+   * probe's cache, nothing is spawned, no provider is contacted.
+   *
+   * `GET /api/providers` stays presets-only — every existing `useProviderModels`
+   * consumer keeps its shape; this is the additive surface for composing.
+   */
+  router.get('/catalog', asyncHandler(async (_req, res) => {
+    const { buildProviderCatalog } = await import('../services/compositeProviders.js');
+    const [catalog, data, capabilities] = await Promise.all([buildProviderCatalog(), providerService.getAllProviders(), detectSystemCapabilities()]);
+    res.json({ ...catalog, presets: data.providers.map((provider) => presentProvider(provider, capabilities)) });
+  }));
+
+  /** Per-harness enablement (#7564): the user's word, else PATH detection, `direct` always on. */
+  router.get('/harnesses', asyncHandler(async (_req, res) => {
+    const { listHarnessEnablement } = await import('../services/harnessEnablement.js');
+    res.json({ harnesses: await listHarnessEnablement() });
+  }));
+
+  router.put('/harnesses/:id', asyncHandler(async (req, res) => {
+    const harnessId = validateRequest(harnessIdParamSchema, req.params.id);
+    const { enabled } = validateRequest(harnessEnablementUpdateSchema, req.body || {});
+    const { setHarnessEnabled } = await import('../services/harnessEnablement.js');
+    res.json({ harness: { id: harnessId, ...(await setHarnessEnabled(harnessId, enabled)) } });
+  }));
+
+  /**
+   * Credential-bootstrap apps (#7564): the wrapper CLIs a composite's
+   * `+<slug>` suffix names. Saving never spawns anything — `setupCommand` is
+   * advisory text, and the wrapper runs only when a composite is executed.
+   */
+  router.get('/bootstraps', asyncHandler(async (_req, res) => {
+    const { listCredentialBootstraps } = await import('../services/credentialBootstrapApps.js');
+    res.json({ bootstraps: await listCredentialBootstraps() });
+  }));
+
+  router.put('/bootstraps', asyncHandler(async (req, res) => {
+    const bootstraps = validateRequest(credentialBootstrapsSettingsSchema, req.body?.bootstraps ?? req.body ?? {});
+    const { saveCredentialBootstraps } = await import('../services/credentialBootstrapApps.js');
+    res.json({ bootstraps: await saveCredentialBootstraps(bootstraps) });
+  }));
+
+  /**
+   * One composite's verdict (#7564): eligible or not, with the reason a picker
+   * shows beside a saved selection that names it, and — when eligible — the
+   * materialized record sanitized exactly as a stored one (`presentProvider`:
+   * `apiKey` → `hasApiKey`, secret env values redacted).
+   */
+  router.get('/composites/:id', asyncHandler(async (req, res) => {
+    const { describeCompositeProvider } = await import('../services/compositeProviders.js');
+    const { record, ...verdict } = await describeCompositeProvider(req.params.id);
+    res.json({ ...verdict, provider: record ? presentProvider(record, await detectSystemCapabilities()) : null });
   }));
 
   /**

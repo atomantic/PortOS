@@ -2,6 +2,15 @@ import { z } from 'zod';
 import { MAX_MODEL_ACCESS_PATTERNS, MAX_MODEL_ACCESS_PATTERN_LENGTH, MODEL_ACCESS_MODES } from './internal/modelAccess.js';
 import { basename, extname } from 'path';
 import { MAX_TIMEOUT, MIN_TIMEOUT } from './constants.js';
+import { MAX_PROVIDER_REF_LENGTH, PRESET_ID_RE, PRESET_ONLY_MESSAGE, parseProviderRef } from './internal/providerRef.js';
+
+/**
+ * A run's provider selection: a preset record id or a composite reference the
+ * host resolves through `resolveCompositeProvider` (#7564). Mirrors the host's
+ * `providerRefSchema` (`server/lib/zodCompat.js`) over the vendored grammar.
+ */
+export const providerRefSchema = z.string().trim().min(1).max(MAX_PROVIDER_REF_LENGTH)
+  .refine((value) => parseProviderRef(value) !== null, 'providerId must be a preset id or a composite <harness>.<cli|tui|api>@<service-slug>[+<bootstrap-slug>]');
 
 // Image extensions a vision screenshot may carry. Mirrors the runner's
 // getMimeType keys — anything else (or a no-extension path like `passwd`) is
@@ -98,7 +107,12 @@ export const providerSchema = z.object({
   mediumModel: z.string().nullable().optional(),
   heavyModel: z.string().nullable().optional(),
   ultraModel: z.string().nullable().optional(),
-  fallbackProvider: z.string().nullable().optional(),
+  // PRESET-ONLY: the fallback chain reads `providers[fallbackProvider]` off the
+  // stored map, where a composite never exists (#7564). `''` stays accepted: it is
+  // the picker's "None (use system default)" sentinel, and ProviderForm spreads
+  // the whole form into the body, so EVERY provider saved without a fallback
+  // sends it. Refine rather than a union so the refusal keeps naming the rule.
+  fallbackProvider: z.string().max(80).refine((value) => value === '' || PRESET_ID_RE.test(value), PRESET_ONLY_MESSAGE).nullable().optional(),
   // Model to run on the fallback provider. The UI sends '' when no model is
   // pinned (fall back to the fallback provider's own default), so allow empty.
   fallbackModel: z.string().nullable().optional(),
@@ -292,14 +306,14 @@ export const providerCreateSchema = providerSchema.extend({
 // setActiveProvider (which walks the prototype chain and would otherwise treat
 // `__proto__` as an existing provider and persist it as active).
 export const providerActiveSchema = z.object({
-  id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'id must be lowercase alphanumeric with hyphens').max(80)
+  id: z.string().regex(PRESET_ID_RE, PRESET_ONLY_MESSAGE).max(80)
 });
 
 export const runSchema = z.object({
   // `type` defaults to 'ai' so the common case (AI run via /api/runs from
   // RunnerPage / AIProviders / etc.) doesn't have to send it explicitly.
   type: z.enum(['ai', 'command']).optional().default('ai'),
-  providerId: z.string().optional(),
+  providerId: providerRefSchema.optional(),
   model: z.string().optional(),
   workspacePath: z.string().optional(),
   workspaceName: z.string().optional(),

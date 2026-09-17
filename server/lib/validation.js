@@ -2,7 +2,7 @@ import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON } from './backupConfig.js';
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
-import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap } from './zodCompat.js';
+import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
@@ -152,7 +152,7 @@ export const LAYERED_INTELLIGENCE_SCOPES = ['app-improvement', 'app-data-gap', '
 export const layeredIntelligenceConfigSchema = z.object({
   enabled: z.boolean().optional(),
   intervalMs: z.number().int().min(60_000).optional(),
-  providerId: z.string().nullable().optional(),
+  providerId: providerRefSchema.nullable().optional(),
   model: z.string().nullable().optional(),
   sources: z.object({
     goals: z.boolean().optional(),
@@ -279,7 +279,10 @@ export const appSchema = z.object({
     // Declared here so a generic PUT /api/apps/:id can't silently strip them (Zod drops
     // unknown keys and updateApp replaces taskTypeOverrides wholesale).
     intervalMs: z.number().positive().nullable().optional(),
-    providerId: z.string().nullable().optional(),
+    // PRESET-ONLY: an app pin is read straight off `providers.json` by the task
+    // walker, so a composite (`harness.method@service`) would name a record
+    // that never exists there (#7564).
+    providerId: presetProviderIdSchema.nullable().optional(),
     model: z.string().nullable().optional(),
     taskMetadata: z.record(z.any()).nullable().optional()
   })).optional(), // Per-task overrides: { [taskType]: { enabled, interval, intervalMs, providerId, model, taskMetadata } }
@@ -830,7 +833,7 @@ export const attachmentUploadRequestSchema = base64FileUploadSchema;
 // Run command schema
 export const runSchema = z.object({
   type: z.enum(['ai', 'command']),
-  providerId: z.string().optional(),
+  providerId: providerRefSchema.optional(),
   model: z.string().optional(),
   workspaceId: z.string(),
   command: z.string().optional(),
@@ -879,7 +882,7 @@ export const githubSecretSchema = z.object({
 // =============================================================================
 
 export const insightRefreshSchema = z.object({
-  providerId: z.string().optional(),
+  providerId: providerRefSchema.optional(),
   model: z.string().optional()
 });
 
@@ -890,7 +893,7 @@ export const scorecardComputeSchema = z.object({
 
 export const scorecardSettingsSchema = z.object({
   enabled: z.boolean().optional(),
-  provider: z.string().nullable().optional(),
+  provider: providerRefSchema.nullable().optional(),
   model: z.string().nullable().optional(),
   feedBrainDigest: z.boolean().optional(),
   weekStartsOn: z.number().int().min(1).max(7).optional()
@@ -1018,7 +1021,7 @@ export const seriesAutopilotScheduleSchema = z.object({
   enabled: z.boolean().optional().default(false),
   cron: z.string().min(1).max(120).refine(isValidCronExpression, 'invalid cron expression'),
   timezone: z.string().min(1).max(64).optional(),
-  provider: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(120).optional()),
+  provider: z.preprocess((v) => (v === '' ? undefined : v), providerRefSchema.optional()),
   model: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(200).optional()),
   // Optional per-schedule reasoning effort (#3641), mapped to the run's
   // `effortOverride`. Validated against the union of accepted levels across
@@ -1122,7 +1125,7 @@ export const restoreDbRequestSchema = z.object({
 // use it without a cycle through this module) — re-exported for deep imports.
 export { emptyToUndefined };
 export const featureProviderConfigSchema = z.object({
-  providerId: z.preprocess(emptyToUndefined, z.string().optional()),
+  providerId: z.preprocess(emptyToUndefined, providerRefSchema.optional()),
   model: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
@@ -2110,7 +2113,7 @@ export const subscriptionCreateSchema = z.object({
 // routes and pipeline arc-planning routes. Optional so callers that omit the
 // llm field fall back to the server's active provider.
 export const llmSchema = z.object({
-  provider: z.string().trim().max(80).nullable().optional(),
+  provider: providerRefSchema.nullable().optional(),
   model: z.string().trim().max(200).nullable().optional(),
 }).optional();
 
@@ -2236,3 +2239,47 @@ export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.f
 export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(2000) }).strict();
 
 export const modelComparisonSyncSchema = z.object({ apiKey: z.string().min(1).max(200).optional() }).strict();
+
+// =============================================================================
+// HARNESS ENABLEMENT + CREDENTIAL BOOTSTRAP APPS (#7564)
+// =============================================================================
+
+/**
+ * `settings.harnesses` — per-harness enablement: `{ [harnessId]: { enabled } }`.
+ * Keyed by a registry id only, so a typo cannot store a rule nothing reads. A
+ * harness with no entry is enabled when its binary is detected on PATH
+ * (`services/harnessEnablement.js`); `direct` is always enabled.
+ */
+// `partialRecord`: a Zod 4 `record` over an enum key is EXHAUSTIVE and would
+// demand an entry for every harness.
+export const harnessSettingsSchema = z.partialRecord(
+  z.enum(PROVIDER_HARNESS_IDS),
+  z.object({ enabled: z.boolean() }).strict(),
+);
+
+/**
+ * One credential-bootstrap APP (#7564): the wrapper CLI that mints a harness's
+ * credential at spawn (`<command> <args...> <harnessName> [<separator>] <harness args>`).
+ * Same field limits as the inline `credentialBootstrap` a record carries
+ * (`aiToolkit/validation.js`); `harnessNames` maps a harness id to the name the
+ * wrapper knows it by when that differs from the binary (`claude` → `claude-code`).
+ * `setupCommand` is advisory text — PortOS never runs it.
+ */
+export const credentialBootstrapSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  command: z.string().trim().min(1).max(200),
+  args: z.array(z.string().max(200)).max(20).optional(),
+  argsSeparator: z.string().trim().max(20).optional(),
+  setupCommand: z.string().trim().max(500).optional(),
+  harnessNames: z.partialRecord(z.enum(PROVIDER_HARNESS_IDS), z.string().trim().min(1).max(100)).optional(),
+}).strict();
+
+/** `settings.credentialBootstraps` — apps keyed by the slug a composite id's `+<slug>` suffix names. */
+export const credentialBootstrapsSettingsSchema = z.record(
+  z.string().regex(SERVICE_SLUG_RE, 'bootstrap slug must be lowercase alphanumeric with hyphens').max(64),
+  credentialBootstrapSchema,
+);
+
+/** `PUT /api/providers/harnesses/:id` — flip one harness's enablement. */
+export const harnessEnablementUpdateSchema = z.object({ enabled: z.boolean() }).strict();
+export const harnessIdParamSchema = z.enum(PROVIDER_HARNESS_IDS);

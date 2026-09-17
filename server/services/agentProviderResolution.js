@@ -1,4 +1,5 @@
 import { isProcessProvider } from '../lib/providerTypes.js';
+import { isCompositeProviderId } from '../lib/providerRef.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 import { supportsPublicReviewProvider } from '../lib/providerVendors.js';
 /**
@@ -222,6 +223,14 @@ async function resolveOrdinaryProviderAndModel(task) {
     const providersMap = Object.fromEntries(providerList.map((p) => [p.id, p]));
     const taskFallbackId = task.metadata?.fallbackProvider;
     const taskFallbackModel = task.metadata?.fallbackModel;
+    // A composite (`harness.method@service`, #7564) is never in the stored map.
+    // Materialize the ones this pick can name — the primary (for the toolkit's
+    // self-loop guard) and the task-level fallback — so `getFallbackProvider`
+    // judges a composite candidate under the SAME `allowedModes` policy as every
+    // stored one, and admits it only when its method is allowed.
+    if ([provider.id, taskFallbackId].some(isCompositeProviderId)) {
+      await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, [provider.id, taskFallbackId]);
+    }
     // The caller's mode policy travels WITH the fallback request, so an
     // ineligible candidate is skipped during selection rather than picked and
     // then rejected below — which used to burn the one retry the cascade had.

@@ -27,6 +27,7 @@ import { gatewayForProvider, isGatewayBackedProvider } from './internal/gateways
 import { canRefreshModels, ollamaRefreshGroupKey, resolveModelFetcher } from './internal/modelFetchers.js';
 import { modelCatalogUpdate, modelContextWindowPatch, parseModelCatalog, toModelCatalog } from './internal/modelCatalog.js';
 import { normalizeModelAccess } from './internal/modelAccess.js';
+import { isCompositeProviderId } from './internal/providerRef.js';
 
 // Re-exported (rather than defined here) so the model-fetcher table can key its
 // ollama row on the same predicate without importing back into this module.
@@ -537,7 +538,16 @@ export function createProviderService(config = {}) {
     // because reading a cache means host I/O and this directory stays
     // self-contained (see AGENTS.md); PortOS supplies MTPLX's `mtplx models
     // --json` listing from `services/mtplxServerManager.js`.
-    cachedModelIds = null
+    cachedModelIds = null,
+    // Host resolver for a COMPOSITE provider id (`harness.method@service
+    // [+bootstrap]`, #7564): `(id) => Promise<object|null>`, returning an
+    // executable record materialized from the host's harness registry, service
+    // instances and settings — never a stored one. Consulted by `getProviderById`
+    // only for an id the composite grammar recognizes and the stored map does
+    // not hold, so a preset lookup is byte-identical to before and a composite
+    // can never shadow a record. Injected rather than imported because the
+    // registries live host-side (see AGENTS.md). Unset standalone.
+    resolveCompositeProvider = null
   } = config;
 
   const PROVIDERS_PATH = join(dataDir, providersFile);
@@ -822,7 +832,9 @@ export function createProviderService(config = {}) {
 
     async getProviderById(id) {
       const data = await loadProviders();
-      return readProvider(data.providers[id], data.providers);
+      const stored = readProvider(data.providers[id], data.providers);
+      if (stored || typeof resolveCompositeProvider !== 'function' || !isCompositeProviderId(id)) return stored;
+      return (await resolveCompositeProvider(id)) ?? null;
     },
 
     async getActiveProvider() {
