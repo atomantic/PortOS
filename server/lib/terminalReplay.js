@@ -199,3 +199,41 @@ export const createTerminalModeTracker = () => {
     }
   };
 };
+
+/**
+ * The re-attach ring buffer itself: the recorded bytes plus BOTH corrections
+ * above, behind one object. They are properties of the replay rather than of
+ * any caller, so they belong to whatever owns the bytes — `render()` is what
+ * guarantees the preamble leads, instead of an attach site having to remember
+ * it.
+ *
+ * Eviction keeps the NEWEST chunk unconditionally: a single chunk larger than
+ * the cap is the live screen, and dropping it would hand an attaching client an
+ * empty terminal.
+ *
+ * @param {{ maxBytes?: number }} [options]
+ * @returns {{ push: (data: string) => void, render: () => string }}
+ */
+export const createReplayBuffer = ({ maxBytes = 50 * 1024 } = {}) => {
+  const chunks = [];
+  const modes = createTerminalModeTracker();
+  let bytes = 0;
+
+  return {
+    /** Record one chunk of raw PTY output, in stream order. */
+    push(data) {
+      // Observed before eviction can drop the startup chunk that declared them.
+      modes.observe(data);
+      chunks.push(data);
+      bytes += data.length;
+      while (bytes > maxBytes && chunks.length > 1) {
+        bytes -= chunks.shift().length;
+      }
+    },
+
+    /** What a newly attached client is handed. */
+    render() {
+      return modes.preamble() + stripTerminalQueries(chunks.join(''));
+    }
+  };
+};

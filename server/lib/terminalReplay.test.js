@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTerminalModeTracker, stripTerminalQueries } from './terminalReplay.js';
+import { createReplayBuffer, createTerminalModeTracker, stripTerminalQueries } from './terminalReplay.js';
 
 // The exact replies @xterm/xterm sends for each query, captured from a real
 // terminal. These are what used to reach the PTY — and land on the shell prompt.
@@ -142,5 +142,52 @@ describe('createTerminalModeTracker', () => {
     tracker.observe('\x1b[38;5');
     tracker.observe(';120mstill colored');
     expect(tracker.preamble()).toBe('');
+  });
+});
+
+// The whole re-attach contract, with no shell service and no PTY. These are the
+// only home for replay semantics: `services/shell.test.js` asserts the wiring
+// (attachSession hands back render()), not what render() decides.
+describe('createReplayBuffer', () => {
+  it('evicts oldest chunks past the cap, keeping the newest whole', () => {
+    const replay = createReplayBuffer({ maxBytes: 50 });
+    replay.push('A'.repeat(20));
+    replay.push('B'.repeat(20));
+    replay.push('C'.repeat(20));
+    expect(replay.render()).toBe('B'.repeat(20) + 'C'.repeat(20));
+  });
+
+  it('keeps a single chunk that alone exceeds the cap — it is the live screen', () => {
+    const replay = createReplayBuffer({ maxBytes: 10 });
+    const screen = 'X'.repeat(50);
+    replay.push(screen);
+    expect(replay.render()).toBe(screen);
+  });
+
+  it('leads with the modes still in force, then the frames drawn under them', () => {
+    const replay = createReplayBuffer({ maxBytes: 20 });
+    // The TUI declares its modes once at startup, then renders until the ring
+    // buffer has evicted that declaration entirely.
+    replay.push(OPENCODE_STARTUP);
+    replay.push('f'.repeat(20));
+    replay.push('g'.repeat(20));
+    const preamble = '\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h';
+    expect(replay.render()).toBe(preamble + 'g'.repeat(20));
+    // The preamble is the ONLY place those modes still appear — the declaration
+    // itself was evicted, which is why it has to be re-asserted at all.
+    expect(replay.render().slice(preamble.length)).not.toContain('\x1b[?');
+  });
+
+  it('strips a query split across two recorded chunks', () => {
+    // node-pty hands over whatever the read returned; stripping runs over the
+    // JOINED buffer so a sequence straddling two chunks still matches.
+    const replay = createReplayBuffer();
+    replay.push('before\x1b[');
+    replay.push('6nafter');
+    expect(replay.render()).toBe('beforeafter');
+  });
+
+  it('starts empty', () => {
+    expect(createReplayBuffer().render()).toBe('');
   });
 });
