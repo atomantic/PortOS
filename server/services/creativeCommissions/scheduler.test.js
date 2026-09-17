@@ -27,6 +27,9 @@ vi.mock('./store.js', () => ({
   getCommission: (...a) => getCommissionMock(...a),
   recordCommissionRun: (...a) => recordRunMock(...a),
   commissionEvents,
+  // Real value from store.js — the scheduler branches on this to keep a
+  // confirmed deletion a quiet no-op (#7528).
+  ERR_NOT_FOUND: 'NOT_FOUND',
   // projectControl (the commission:changed reconciler the scheduler subscribes)
   // reads the raw record to find the projects a commission spawned. Empty here —
   // the reconciler is covered by projectControl.test.js; these tests are about
@@ -344,9 +347,9 @@ describe('runScheduledCommission gates', () => {
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'skipped', reason: 'budget' }));
   });
 
-  it('does nothing when the commission is missing or disabled', async () => {
-    getCommissionMock.mockResolvedValue(null);
-    await runScheduledCommission('gone');
+  it('does nothing when the commission is disabled (paused)', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({ enabled: false }));
+    await runScheduledCommission('commission-1');
     expect(createProjectMock).not.toHaveBeenCalled();
     expect(recordRunMock).not.toHaveBeenCalled();
   });
@@ -429,6 +432,54 @@ describe('runScheduledCommission gates', () => {
     getCommissionMock.mockResolvedValue(videoCommission());
     await runScheduledCommission('commission-1');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', trigger: 'schedule' }));
+  });
+});
+
+describe('runScheduledCommission pre-fire read failures (#7528)', () => {
+  it('confirmed deletion (ERR_NOT_FOUND) stays a quiet no-op — no failed run, nothing thrown', async () => {
+    getCommissionMock.mockRejectedValue(Object.assign(new Error('Commission not found: commission-1'), { code: 'NOT_FOUND' }));
+    await expect(runScheduledCommission('commission-1')).resolves.toBeUndefined();
+    expect(recordRunMock).not.toHaveBeenCalled();
+    expect(createProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('a non-NOT_FOUND pre-fire read failure (e.g. a storage timeout, or the deliberately-propagated federated feedback read) records a failed run and propagates', async () => {
+    const readErr = Object.assign(new Error('storage timeout'), { code: 'ETIMEDOUT' });
+    getCommissionMock.mockRejectedValue(readErr);
+
+    await expect(runScheduledCommission('commission-1')).rejects.toBe(readErr);
+
+    // Never a successful no-op: the ledger shows a failed scheduled attempt.
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', {
+      status: 'failed', trigger: 'schedule', error: 'read-failed:ETIMEDOUT',
+    });
+    // Never substitutes empty feedback / launches generation on an unreadable read.
+    expect(createProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('classifies an error with no `.code` by constructor name, never by its raw message', async () => {
+    getCommissionMock.mockRejectedValue(new TypeError('cannot read property of undefined'));
+    await expect(runScheduledCommission('commission-1')).rejects.toThrow('cannot read property of undefined');
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ error: 'read-failed:TypeError' }));
+  });
+
+  it('falls back to a bare classification when the error carries neither a code nor a name', async () => {
+    getCommissionMock.mockRejectedValue(Object.assign(Object.create(null), { message: 'opaque failure' }));
+    await expect(runScheduledCommission('commission-1')).rejects.toBeTruthy();
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ error: 'read-failed' }));
+  });
+
+  it('emits an independent diagnostic and still propagates the original error when the failure ledger write ALSO fails', async () => {
+    const readErr = Object.assign(new Error('storage timeout'), { code: 'ETIMEDOUT' });
+    getCommissionMock.mockRejectedValue(readErr);
+    const ledgerErr = new Error('ledger write timeout');
+    recordRunMock.mockRejectedValueOnce(ledgerErr);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(runScheduledCommission('commission-1')).rejects.toBe(readErr);
+
+    expect(consoleErrorSpy.mock.calls.some(([line]) => line.includes('pre-fire read failed AND its failure could not be recorded'))).toBe(true);
+    consoleErrorSpy.mockRestore();
   });
 });
 
