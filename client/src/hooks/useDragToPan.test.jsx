@@ -96,6 +96,35 @@ it('never carries a swallowed-click flag into the next unrelated click', () => {
   expect(onClick).toHaveBeenCalledTimes(1);
 });
 
+it('ignores every gesture while disabled', () => {
+  render(<Harness slop={4} enabled={false} onButtonClick={vi.fn()} />);
+  const surface = screen.getByTestId('surface');
+  surface.scrollLeft = 0;
+
+  fireEvent.pointerDown(surface, { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 200, clientY: 200 });
+  fireEvent.pointerMove(surface, { pointerId: 1, pointerType: 'mouse', clientX: 100, clientY: 200 });
+  fireEvent.pointerUp(surface, { pointerId: 1, pointerType: 'mouse' });
+
+  expect(surface.scrollLeft).toBe(0);
+});
+
+it('fires onPanEnd only for a gesture that actually dragged', () => {
+  const onPanEnd = vi.fn();
+  render(<Harness slop={4} onPanEnd={onPanEnd} onButtonClick={vi.fn()} />);
+  const surface = screen.getByTestId('surface');
+
+  // A tap under the slop threshold never counts as a pan.
+  fireEvent.pointerDown(surface, { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 200, clientY: 200 });
+  fireEvent.pointerMove(surface, { pointerId: 1, pointerType: 'mouse', clientX: 201, clientY: 200 });
+  fireEvent.pointerUp(surface, { pointerId: 1, pointerType: 'mouse' });
+  expect(onPanEnd).not.toHaveBeenCalled();
+
+  fireEvent.pointerDown(surface, { pointerId: 2, pointerType: 'mouse', button: 0, clientX: 200, clientY: 200 });
+  fireEvent.pointerMove(surface, { pointerId: 2, pointerType: 'mouse', clientX: 150, clientY: 200 });
+  fireEvent.pointerUp(surface, { pointerId: 2, pointerType: 'mouse' });
+  expect(onPanEnd).toHaveBeenCalledExactlyOnceWith(true);
+});
+
 it('ignores non-mouse pointers so touch scrolling is left to the browser', () => {
   render(<Harness slop={4} onButtonClick={vi.fn()} />);
   const surface = screen.getByTestId('surface');
