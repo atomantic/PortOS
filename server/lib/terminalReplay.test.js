@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createTerminalModeTracker, stripTerminalQueries } from './terminalReplay.js';
+import { createReplayBuffer, createTerminalModeTracker, stripTerminalQueries } from './terminalReplay.js';
 
 // The exact replies @xterm/xterm sends for each query, captured from a real
 // terminal. These are what used to reach the PTY — and land on the shell prompt.
@@ -142,5 +142,63 @@ describe('createTerminalModeTracker', () => {
     tracker.observe('\x1b[38;5');
     tracker.observe(';120mstill colored');
     expect(tracker.preamble()).toBe('');
+  });
+});
+
+// The whole re-attach contract, with no shell service and no PTY: what a client
+// that attaches late is handed, and what the ring buffer had to drop to stay
+// bounded.
+describe('createReplayBuffer', () => {
+  it('replays what was recorded', () => {
+    const replay = createReplayBuffer();
+    replay.push('first ');
+    replay.push('second');
+    expect(replay.render()).toBe('first second');
+  });
+
+  it('evicts oldest chunks past the cap, keeping the newest whole', () => {
+    const replay = createReplayBuffer({ maxBytes: 50 });
+    replay.push('A'.repeat(20));
+    replay.push('B'.repeat(20));
+    replay.push('C'.repeat(20));
+    expect(replay.size()).toBeLessThanOrEqual(50);
+    const rendered = replay.render();
+    expect(rendered).not.toContain('A');
+    expect(rendered).toBe('B'.repeat(20) + 'C'.repeat(20));
+  });
+
+  it('keeps a single chunk that alone exceeds the cap — it is the live screen', () => {
+    const replay = createReplayBuffer({ maxBytes: 10 });
+    const screen = 'X'.repeat(50);
+    replay.push(screen);
+    expect(replay.render()).toBe(screen);
+    expect(replay.size()).toBe(50);
+  });
+
+  it('leads with the modes still in force, then the frames drawn under them', () => {
+    const replay = createReplayBuffer({ maxBytes: 20 });
+    // The TUI declares its modes once at startup, then renders until the ring
+    // buffer has evicted that declaration entirely.
+    replay.push(OPENCODE_STARTUP);
+    replay.push('f'.repeat(20));
+    replay.push('g'.repeat(20));
+    const rendered = replay.render();
+    expect(rendered).toBe(
+      '\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h'
+      + 'g'.repeat(20)
+    );
+  });
+
+  it('strips a query split across two recorded chunks', () => {
+    const replay = createReplayBuffer();
+    replay.push('before\x1b[');
+    replay.push('6nafter');
+    expect(replay.render()).toBe('beforeafter');
+  });
+
+  it('starts empty', () => {
+    const replay = createReplayBuffer();
+    expect(replay.size()).toBe(0);
+    expect(replay.render()).toBe('');
   });
 });

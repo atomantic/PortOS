@@ -155,7 +155,7 @@ describe('createShellSession', () => {
     ptyInstances[0].emitData(newest);
 
     const session = shell.getSession(id);
-    expect(session.bufferSize()).toBeLessThanOrEqual(50 * 1024);
+    expect(session.replay.size()).toBeLessThanOrEqual(50 * 1024);
     const result = shell.attachSession(id, makeSocket('sock-B'));
     expect(result.bufferedOutput).not.toContain('A');
     expect(result.bufferedOutput).toContain(middle);
