@@ -3,7 +3,7 @@ import { PROVIDER_HARNESSES, harnessById, isCompatible } from '../lib/providerHa
 import { materializeRouteOutcome } from '../lib/providerRouteRecipes.js';
 import { applyServicePlanFilter, instanceApiKeyFor } from '../lib/providerServiceInstances.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
-import { resolveServiceInstance, serviceDefinitionById } from '../lib/serviceDefinitions.js';
+import { SERVICE_SLUG_RE, resolveServiceInstance, serviceDefinitionById } from '../lib/serviceDefinitions.js';
 import { bootstrapInputFor, listCredentialBootstraps, presentCredentialBootstraps } from './credentialBootstrapApps.js';
 import { harnessEnablementFrom, harnessSettingsRevision, listHarnessEnablement } from './harnessEnablement.js';
 import { findConnectionByRef, providerGraphEnabled } from './providerGraph.js';
@@ -85,6 +85,15 @@ async function graphWithinTtl() {
 export function instanceForConnection(connection, env = process.env) {
   const definition = connection?.definitionId ? serviceDefinitionById(connection.definitionId) : null;
   if (!definition || !connection.slug) return null;
+  // A stored row OUTLIVES the definition it names: installs upgrade on their own
+  // schedule, so a release that drops or renames a plan leaves existing rows on
+  // the old one. `resolveServiceInstance` THROWS on a plan the definition no
+  // longer sells (and on a slug that predates SERVICE_SLUG_RE), and the catalog
+  // maps this over EVERY connection — so one stale row would take down the whole
+  // composition surface instead of dropping the single service it describes.
+  // Answer `null` for it, exactly as for a definition this build does not have.
+  const plan = connection.plan ?? definition.plans[0];
+  if (!definition.plans.includes(plan) || !SERVICE_SLUG_RE.test(connection.slug)) return null;
   const apiKey = instanceApiKeyFor(connection, definition, env);
   return resolveServiceInstance({
     definition,

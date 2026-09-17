@@ -226,6 +226,17 @@ describe('materializeComposite — refusals carry a reason and never substitute'
     expect(outcome.reason).toEqual(expect.any(String));
   });
 
+  it('refuses — rather than throwing — a row whose stored plan the definition no longer sells', () => {
+    // Installs upgrade independently, so a row can outlive the plan it was
+    // written with. That must drop the one service, not throw out of the whole
+    // composition surface (the catalog resolves EVERY row in one pass).
+    const stale = { ...GRAPH, connections: GRAPH.connections.map((row) => (row.slug === 'nvidia-nim' ? { ...row, plan: 'retired-tier' } : row)) };
+    expect(composite.instanceForConnection(stale.connections.find((row) => row.slug === 'nvidia-nim'))).toBeNull();
+    expect(resolve('pi.tui@nvidia-nim', { graph: stale })).toMatchObject({ record: null, code: 'service-undefined' });
+    // A sibling row on a plan that still exists is unaffected.
+    expect(resolve('pi.tui@openrouter', { graph: stale }).record).not.toBeNull();
+  });
+
   it('refuses a slug that only matches a connection UUID, so an id is never resolved by row identity', () => {
     const byUuid = { ...GRAPH, connections: [{ ...GRAPH.connections[0], slug: 'nvidia-nim-renamed' }] };
     expect(resolve('pi.tui@nvidia-nim', { graph: byUuid }).code).toBe('service-unknown');
