@@ -18,6 +18,7 @@ import { isAuthEnabled } from '../services/auth.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 import { getActiveProcessing } from '../services/activeProcessing.js';
 import { getMediaCapacity } from '../services/mediaCapacity.js';
+import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
 
 // Defaults are tuned for a real dev machine: memory routinely sits in the
@@ -132,10 +133,16 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, appStatusSummary, cosStatus, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity] = await Promise.all([
+  const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
     cos.getStatus().catch(() => null),
+    // Queue depth is read here rather than taken off `getStatus()`, which has no
+    // such field — `cosStatus.queueLength` never existed, so the widget's
+    // "N queued" was dead and always rendered 0. Both reads ride the same
+    // `loadState()`/parse caches `getStatus()` above already warmed.
+    cos.getPendingTaskIds().catch(() => null),
+    cos.getAgents().catch(() => null),
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
     getCurrentVersion().catch(() => null),
@@ -288,12 +295,20 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     ? 'critical'
     : warnings.length > 0 ? 'warning' : 'healthy';
 
-  // CoS status
+  // CoS status. Active and queued BOTH come off the one agent read when it is
+  // readable — mixing `getStatus()`'s tally with a separately-read queue lets the
+  // two skew, which is the defect one layer down (services/activeProcessing.js).
+  // A task a live agent already holds is active, not queued (lib/cosSpawnWindow.js).
+  // An unreadable list degrades to null — unknown, which the widget hides —
+  // rather than to a manufactured zero.
+  const heldByRunningAgent = runningAgentsByTaskId(cosAgents);
   const cosInfo = cosStatus ? {
     running: cosStatus.running,
     paused: cosStatus.paused,
-    activeAgents: cosStatus.activeAgents || 0,
-    queuedTasks: cosStatus.queueLength || 0
+    activeAgents: cosAgents
+      ? cosAgents.filter((agent) => agent?.status === 'running').length
+      : (cosStatus.activeAgents || 0),
+    queuedTasks: cosPendingTaskIds ? unclaimedTaskIds(cosPendingTaskIds, heldByRunningAgent).length : null
   } : null;
 
   const uptime = process.uptime();

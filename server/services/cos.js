@@ -20,6 +20,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
+import { runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../lib/cosSpawnWindow.js';
 import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
 import { clearStaleActiveAgents } from './appActivity.js';
 // The single Priority-0 on-demand loop body, shared with the evaluateTasks
@@ -101,12 +102,6 @@ const POST_STARTUP_QUEUE_DELAY_MS = 30_000;
 // A task whose agent reported completed within this window is treated as
 // "recently completed" and protected from resetOrphanedTasks's reaper.
 const RECENT_COMPLETION_GRACE_MS = 60_000;
-
-// How long an agent registered against a still-`pending` task is treated as
-// legitimately mid-spawn rather than a zombie. spawnAgentForTask registers the
-// agent then flips the task within the same function, so the real window is
-// sub-second; this is generous cover for a slow worktree/JIRA provisioning step.
-const SPAWN_CLAIM_GRACE_MS = 60_000;
 
 // Boot can reach the auto-start path from more than one initializer while the
 // server and runner settle. A boolean check is not sufficient: both callers
@@ -697,20 +692,22 @@ export async function forceSpawnTask(taskId) {
   // withSpawnDedupGuard then silently drops. Refuse it here instead, where every
   // caller (UI, voice, API) sees the same honest answer.
   //
-  // Bounded to the spawn window on purpose. Outside it, a `pending` task carrying
-  // a `running` agent is a BROKEN state — a zombie record whose process died
-  // before cleanupZombieAgents (which this route does not run) swept it — and
-  // "Run now" is the user's recovery for exactly that. Refusing indefinitely
-  // would turn the guard into a trap: the task is visibly stuck and nothing in
-  // the UI can restart it. So refuse only while the holder is young enough to
-  // plausibly still be mid-spawn, and let an older one be superseded.
-  const holder = running.find(agent => agent.taskId === taskId);
-  const holderAgeMs = holder ? Date.now() - new Date(holder.startedAt || 0).getTime() : Infinity;
-  if (holder && holderAgeMs < SPAWN_CLAIM_GRACE_MS) {
+  // Bounded to the spawn window on purpose, via the same age-bounded settlement
+  // the status counters and task lists use (lib/cosSpawnWindow.js):
+  // outside it, a `pending` task carrying a `running` agent is a BROKEN state —
+  // a zombie record whose process died before cleanupZombieAgents (which this
+  // route does not run) swept it — and "Run now" is the user's recovery for
+  // exactly that. Refusing indefinitely would turn the guard into a trap: the
+  // task is visibly stuck and nothing in the UI can restart it. Sharing the
+  // bound is what keeps the pending LIST that renders this button in agreement
+  // with the refusal behind it.
+  const runningAgents = runningAgentsByTaskId(running);
+  const holder = runningAgents.get(taskId);
+  if (spawningAgentForTask(taskId, runningAgents)) {
     return { error: `Agent ${holder.id} is already running this task` };
   }
   if (holder) {
-    emitLog('warn', `⚠️ Force-spawning ${taskId} over stale agent ${holder.id} (running for ${Math.round(holderAgeMs / 1000)}s on a still-pending task)`, { taskId, agentId: holder.id });
+    emitLog('warn', `⚠️ Force-spawning ${taskId} over stale agent ${holder.id} (running for ${Math.round(spawnClaimAgeMs(holder) / 1000)}s on a still-pending task)`, { taskId, agentId: holder.id });
   }
   if (running.length >= state.config.maxConcurrentAgents) {
     return { error: `No available agent slots (${running.length}/${state.config.maxConcurrentAgents})` };

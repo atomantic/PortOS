@@ -13,6 +13,7 @@ import { prepareAppIssueClaim } from '../services/appIssues.js';
 import { getAssignableInstances } from '../services/instances.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
+import { runningAgentsByTaskId, settleTaskSourceSpawnWindow } from '../lib/cosSpawnWindow.js';
 import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } from '../lib/slashdoCatalog.js';
 import { NON_PM2_TYPES } from '../services/streamingDetect.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
@@ -131,6 +132,15 @@ const router = Router();
 
 // GET /api/cos/tasks - Get all tasks (user + internal), grouped by source.
 //
+// Settled for the spawn window (lib/cosSpawnWindow.js): an agent registers as
+// `running` a beat before its task leaves `pending`, so a caller that counted
+// `grouped.pending` raw reported the one task it was already working as queued
+// too. Settling HERE rather than in `getAllTasks()` keeps the dispatch readers
+// (task generation, retry revival, dedup) on the raw truth they need, while
+// every API consumer gets an honest queue depth without knowing the window
+// exists. `cos.getAgents()` is free at this point — `getAllTasks()` has already
+// warmed the same `loadState()` snapshot it reads.
+//
 // Backward-compatible by default: with no pagination params it returns the full
 // `{ user, cos }` structure every existing consumer expects (tasks + grouped
 // buckets + awaiting/auto-approved derived lists). When a client passes
@@ -141,7 +151,16 @@ const router = Router();
 // caller asked to page through, defeating the bound. A `pagination` block with
 // the true per-source totals is added so the caller can page.
 router.get('/tasks', asyncHandler(async (req, res) => {
-  const tasks = await cos.getAllTasks();
+  const [allTasks, agents] = await Promise.all([
+    cos.getAllTasks(),
+    cos.getAgents().catch(() => []),
+  ]);
+  const runningAgents = runningAgentsByTaskId(agents);
+  const tasks = {
+    ...allTasks,
+    user: settleTaskSourceSpawnWindow(allTasks?.user, runningAgents),
+    cos: settleTaskSourceSpawnWindow(allTasks?.cos, runningAgents),
+  };
   if (!isPaginationRequested(req.query)) {
     return res.json(tasks);
   }

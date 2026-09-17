@@ -4,6 +4,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
 import { listProcesses } from '../services/pm2.js';
+import { getStatus, getPendingTaskIds, getAgents } from '../services/cos.js';
 import { getSelf } from '../services/instanceIdentity.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { checkGhHealth } from '../services/github.js';
@@ -59,7 +60,9 @@ vi.mock('../services/apps.js', () => ({
 }));
 
 vi.mock('../services/cos.js', () => ({
-  getStatus: vi.fn().mockResolvedValue(null)
+  getStatus: vi.fn().mockResolvedValue(null),
+  getPendingTaskIds: vi.fn().mockResolvedValue([]),
+  getAgents: vi.fn().mockResolvedValue([])
 }));
 
 vi.mock('../lib/db.js', () => ({
@@ -485,6 +488,69 @@ describe('System Health Routes', () => {
         const response = await request(app).delete('/api/system/health/warnings/bogus/dismiss');
         expect(response.status).toBe(400);
       });
+    });
+  });
+
+  describe('GET /health/details — CoS queue depth', () => {
+    const live = (taskId) => ({ id: `agent-${taskId}`, taskId, status: 'running', startedAt: new Date().toISOString() });
+
+    beforeEach(() => {
+      getStatus.mockResolvedValue({ running: true, paused: false, activeAgents: 1 });
+    });
+
+    it('reports the pending tasks no live agent is already working', async () => {
+      // Regression: this read `cosStatus.queueLength`, a field getStatus has never
+      // returned, so the dashboard's "N queued" was dead and always rendered 0.
+      getPendingTaskIds.mockResolvedValueOnce(['user/42', 'sys-7']);
+      getAgents.mockResolvedValueOnce([live('user/99')]);
+
+      const response = await request(app).get('/api/system/health/details');
+
+      expect(response.status).toBe(200);
+      expect(response.body.cos).toMatchObject({ activeAgents: 1, queuedTasks: 2 });
+    });
+
+    it('does not also count the task its running agent already holds', async () => {
+      // The spawn window: the agent registers as running a beat before its task
+      // leaves 'pending', and the widget read "1 agent · 1 queued" for one task.
+      getPendingTaskIds.mockResolvedValueOnce(['user/42']);
+      getAgents.mockResolvedValueOnce([live('user/42')]);
+
+      const response = await request(app).get('/api/system/health/details');
+
+      expect(response.body.cos).toMatchObject({ activeAgents: 1, queuedTasks: 0 });
+    });
+
+    it('takes active and queued off the SAME agent read, so the two cannot skew', async () => {
+      // Pairing getStatus()'s own tally with a separately-read queue is the
+      // defect one layer down (services/activeProcessing.js) — here it would
+      // report the daemon's stale count beside a freshly-settled queue.
+      getStatus.mockResolvedValue({ running: true, paused: false, activeAgents: 7 });
+      getPendingTaskIds.mockResolvedValueOnce(['user/42']);
+      getAgents.mockResolvedValueOnce([live('user/99'), live('user/98')]);
+
+      const response = await request(app).get('/api/system/health/details');
+
+      expect(response.body.cos).toMatchObject({ activeAgents: 2, queuedTasks: 1 });
+    });
+
+    it('falls back to the daemon tally when the agent list cannot be read', async () => {
+      getPendingTaskIds.mockResolvedValueOnce(['user/42']);
+      getAgents.mockRejectedValueOnce(new Error('state unreadable'));
+
+      const response = await request(app).get('/api/system/health/details');
+
+      // No claim set to subtract, so the queue over-reports rather than hiding
+      // work — the safe direction — and active falls back rather than reading 0.
+      expect(response.body.cos).toMatchObject({ activeAgents: 1, queuedTasks: 1 });
+    });
+
+    it('reports an unreadable pending list as unknown rather than as an empty queue', async () => {
+      getPendingTaskIds.mockRejectedValueOnce(new Error('task file unreadable'));
+
+      const response = await request(app).get('/api/system/health/details');
+
+      expect(response.body.cos.queuedTasks).toBeNull();
     });
   });
 });

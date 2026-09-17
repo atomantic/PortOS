@@ -10,6 +10,7 @@ import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parsePagination } from '../lib/validation.js';
+import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
 
 const router = Router();
@@ -26,14 +27,17 @@ router.get('/activity-calendar', asyncHandler(async (req, res) => {
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
-  const [tasksData, learningSummary, healthCheck, notificationsModule, pendingFeedbackCount, leftoverFindings] = await Promise.all([
+  const [tasksData, learningSummary, healthCheck, notificationsModule, pendingFeedbackCount, leftoverFindings, agents] = await Promise.all([
     cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
     cos.runHealthCheck().catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return { issues: [] }; }),
     import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
     cos.getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; }),
-    detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; })
+    detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; }),
+    // Settles the pending list against live agents — see lib/cosSpawnWindow.js.
+    cos.getAgents().catch(err => { console.error(`❌ Failed to load agents: ${err.message}`); return []; })
   ]);
+  const runningAgents = runningAgentsByTaskId(agents);
 
   const notificationsData = notificationsModule ? await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []) : [];
 
@@ -175,7 +179,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   }
 
   // 7. Pending user tasks (informational)
-  const pendingUserTasks = tasksData.user?.grouped?.pending || [];
+  const pendingUserTasks = withoutSpawningTasks(tasksData.user?.grouped?.pending, runningAgents);
   if (pendingUserTasks.length > 0 && insights.length < 4) {
     insights.push({
       type: 'tasks',
@@ -211,16 +215,22 @@ router.get('/recent-tasks', asyncHandler(async (req, res) => {
 // GET /api/cos/quick-summary - Get at-a-glance dashboard summary
 // Combines today's activity and queue counts into one efficient call.
 router.get('/quick-summary', asyncHandler(async (req, res) => {
-  const [todayActivity, tasksData] = await Promise.all([
+  const [todayActivity, tasksData, agents] = await Promise.all([
     cos.getTodayActivity(),
-    cos.getAllTasks()
+    cos.getAllTasks(),
+    // The dashboard widget renders this queue total beside its own "N agents
+    // running" line, so a raw pending count showed the one task already being
+    // worked on both — see lib/cosSpawnWindow.js.
+    cos.getAgents().catch(() => [])
   ]);
+  const runningAgents = runningAgentsByTaskId(agents);
 
-  // Count pending approvals from system tasks
+  // Count pending approvals from system tasks. Not settled: approval is a
+  // pre-spawn gate, so no live agent can hold one.
   const pendingApprovals = tasksData.cos?.awaitingApproval?.length || 0;
 
   // Count pending user tasks
-  const pendingUserTasks = tasksData.user?.grouped?.pending?.length || 0;
+  const pendingUserTasks = withoutSpawningTasks(tasksData.user?.grouped?.pending, runningAgents).length;
 
   res.json({
     today: {

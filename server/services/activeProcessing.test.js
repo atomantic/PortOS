@@ -160,7 +160,9 @@ describe('queued agent count', () => {
 
   it('does not count a pending task a running agent already holds', async () => {
     deps.tasks.mockResolvedValue(['task-spawning', 'task-waiting']);
-    deps.agents.mockResolvedValue([{ id: 'agent-1', status: 'running', taskId: 'task-spawning' }]);
+    // `startedAt` is what tells a live spawn from a zombie record — registerAgent
+    // always stamps it (see lib/cosSpawnWindow.js's grace window).
+    deps.agents.mockResolvedValue([{ id: 'agent-1', status: 'running', taskId: 'task-spawning', startedAt: new Date().toISOString() }]);
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ trusted: true, active: 1, queued: 1 });
   });

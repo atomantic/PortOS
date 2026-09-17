@@ -5,6 +5,7 @@ import insightRoutes from './cosInsightRoutes.js';
 
 vi.mock('../services/cos.js', () => ({
   getAllTasks: vi.fn(),
+  getAgents: vi.fn(async () => []),
   runHealthCheck: vi.fn(),
   getPendingAgentFeedbackCount: vi.fn(),
   getTodayActivity: vi.fn(),
@@ -302,6 +303,29 @@ describe('CoS Insight Routes', () => {
       expect(response.body.today).not.toHaveProperty('accomplishments');
       expect(response.body.queue).not.toHaveProperty('estimate');
       expect(response.body).not.toHaveProperty('velocity');
+    });
+
+    it('does not count a task its agent is already running as queued', async () => {
+      // The dashboard widget renders this payload's queue total beside its own
+      // "N agents running" line, so the one task being worked read as BOTH.
+      cos.getTodayActivity.mockResolvedValue({
+        stats: { completed: 0, succeeded: 0, failed: 0, running: 1, successRate: 0 },
+        time: { combined: '0s' },
+        isRunning: true,
+        isPaused: false,
+        lastEvaluation: Date.now()
+      });
+      cos.getAllTasks.mockResolvedValue({
+        user: { grouped: { pending: [{ id: 'user/42', status: 'pending' }] } },
+        cos: { awaitingApproval: [], grouped: { pending: [] } }
+      });
+      cos.getAgents.mockResolvedValue([{ id: 'agent-1', taskId: 'user/42', status: 'running', startedAt: new Date().toISOString() }]);
+
+      const response = await request(app).get('/api/cos/quick-summary');
+
+      expect(response.status).toBe(200);
+      expect(response.body.queue).toMatchObject({ pendingUserTasks: 0, total: 0 });
+      expect(response.body.today.running).toBe(1);
     });
   });
 

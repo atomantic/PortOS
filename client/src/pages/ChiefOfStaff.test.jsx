@@ -769,6 +769,35 @@ describe('ChiefOfStaff stale queue-read guard', () => {
     expect(screen.queryByText('STALE pending copy')).not.toBeInTheDocument();
     expect(screen.getByText('FRESH in-progress copy')).toBeInTheDocument();
   });
+
+  // The header's Active/Pending pair is the surface the "1 pending and 1 active"
+  // report named. `activeAgentCount` reads the SOCKET-fed agent array, which lands
+  // on 'cos:agent:spawned'; the task payload is only settled for the spawn window
+  // once the next GET /api/cos/tasks returns. Between the two, counting the
+  // payload raw showed the one task on both cards.
+  it('does not count a task on both header cards while its spawn event outruns the queue read', async () => {
+    const pendingTask = { id: 'task-1', description: 'Example queued task', status: 'pending', metadata: {} };
+    api.getCosTasks.mockResolvedValue({
+      user: { tasks: [pendingTask], grouped: { pending: [pendingTask], in_progress: [] } },
+      cos: { tasks: [], grouped: { pending: [], in_progress: [] } },
+    });
+    await renderSettledAt('config');
+
+    const statValue = (label) => screen.getAllByText(label)
+      .map((node) => node.parentElement?.parentElement?.textContent)
+      .filter(Boolean);
+    expect(statValue('Pending').some((text) => text.includes('1'))).toBe(true);
+
+    // The agent registers as running; the task list has not been refetched yet,
+    // so it still reads `pending` — exactly the window the settlement covers.
+    api.getCosAgents.mockResolvedValue([
+      { id: 'agent-1', taskId: 'task-1', status: 'running', startedAt: new Date().toISOString() },
+    ]);
+    await act(async () => { getSocketHandler('cos:agent:spawned')({ agentId: 'agent-1', metadata: {} }); });
+
+    await waitFor(() => expect(statValue('Active').some((text) => text.includes('1'))).toBe(true));
+    expect(statValue('Pending').every((text) => !/Pending\s*1/.test(text.replace(/\s+/g, ' ')))).toBe(true);
+  });
 });
 
 // A single warning-level health issue parked the avatar on "Investigating

@@ -166,6 +166,8 @@ describe('CoS Routes', () => {
 
     // Reset all mocks
     vi.clearAllMocks();
+    // GET /tasks settles its payload against the live agent list (#spawn window).
+    cos.getAgents.mockResolvedValue([]);
   });
 
   describe('GET /api/cos', () => {

@@ -87,7 +87,9 @@ function HealthSummary({ health, version }) {
       {health.cos && (
         <div className="flex items-center gap-1.5 text-gray-400 col-span-2">
           <Bot size={12} />
-          <span>{health.cos.activeAgents ?? 0} agents, {health.cos.queuedTasks ?? 0} queued</span>
+          {/* `queuedTasks: null` means the pending list could not be read, not that
+              nothing is waiting — render it as unknown rather than a confident zero. */}
+          <span>{health.cos.activeAgents ?? 0} agents, {health.cos.queuedTasks ?? '?'} queued</span>
         </div>
       )}
     </div>

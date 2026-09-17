@@ -43,6 +43,7 @@ vi.mock('../services/cos.js', () => ({
   addTask: vi.fn(),
   updateTask: vi.fn(),
   getAllTasks: vi.fn(),
+  getAgents: vi.fn(),
   getUserTasks: vi.fn(),
   getCosTasks: vi.fn(),
   getTaskById: vi.fn(),
@@ -98,6 +99,7 @@ beforeEach(() => {
   ]);
   cos.addTask.mockImplementation(async (taskData) => ({ id: 'task-1', ...taskData }));
   cos.getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+  cos.getAgents.mockResolvedValue([]);
   // The producer's storm counter is module state shared across this file's cases.
   __resetInvestigationCircuit();
   cos.updateTask.mockResolvedValue({ id: 'task-1' });
@@ -467,5 +469,46 @@ describe('CoS task routes write operator-action rows (#5594)', () => {
     cos.updateTask.mockResolvedValueOnce({ error: 'Task not found' });
     expect((await request(buildApp()).put('/api/cos/tasks/ghost').send({ priority: 'HIGH' })).status).toBe(404);
     expect(await listUserActions()).toEqual([]);
+  });
+});
+
+// An agent registers as `running` a beat before `spawnAgentForTask` flips its
+// task off `pending`, so every consumer that counted `grouped.pending` raw
+// reported the one task already being worked as queued too — "1 pending and 1
+// active" for a queue of one. The route settles that once, here, so no consumer
+// has to know the window exists.
+describe('GET /api/cos/tasks — the spawn window (lib/cosSpawnWindow.js)', () => {
+  const live = (taskId) => ({ id: `agent-${taskId}`, taskId, status: 'running', startedAt: new Date().toISOString() });
+  const source = () => ({
+    tasks: [{ id: 'user/42', status: 'pending' }, { id: 'user/43', status: 'pending' }],
+    grouped: { pending: [{ id: 'user/42', status: 'pending' }, { id: 'user/43', status: 'pending' }], in_progress: [] },
+  });
+
+  beforeEach(() => {
+    cos.getAllTasks.mockResolvedValue({ user: source(), cos: { tasks: [], grouped: { pending: [], in_progress: [] } } });
+  });
+
+  it('regroups a task its agent already holds and stamps it spawning', async () => {
+    cos.getAgents.mockResolvedValue([live('user/42')]);
+
+    const res = await request(buildApp()).get('/api/cos/tasks');
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.grouped.pending.map((t) => t.id)).toEqual(['user/43']);
+    expect(res.body.user.grouped.in_progress.map((t) => t.id)).toEqual(['user/42']);
+    // `status` stays the persisted truth — a client may PATCH against it, and the
+    // row renders its mid-spawn state from `spawning`.
+    expect(res.body.user.tasks.find((t) => t.id === 'user/42')).toMatchObject({ status: 'pending', spawning: true });
+  });
+
+  it('leaves the queue alone when the agent list cannot be read', async () => {
+    // Over-reporting the queue is the safe direction: a failed probe may not be
+    // what hides a task the user is waiting on.
+    cos.getAgents.mockRejectedValue(new Error('state unreadable'));
+
+    const res = await request(buildApp()).get('/api/cos/tasks');
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.grouped.pending.map((t) => t.id)).toEqual(['user/42', 'user/43']);
   });
 });
