@@ -44,6 +44,7 @@ it.each([
   ['/ai/connections/abc-123', '/ai/services/abc-123'],
   ['/ai/harnesses/claude/connections', '/ai/harnesses/claude'],
   ['/ai/harnesses/claude/connections/abc-123', '/ai/services/abc-123'],
+  ['/models/harnesses', '/ai/harnesses'],
 ])('redirects the retired %s to %s', async (from, to) => {
   render(<MemoryRouter initialEntries={[from]}><App /></MemoryRouter>);
   expect(await screen.findByTestId('ai-location')).toHaveTextContent(to);

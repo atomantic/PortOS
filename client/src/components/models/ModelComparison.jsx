@@ -1596,7 +1596,7 @@ export default function ModelComparison() {
         <p className="text-sm text-port-text-muted my-2">
           Model-name matches are references only, not measurements of this endpoint. Quantization, local hardware, harnesses
           and billing may differ. Refresh model lists in{' '}
-          <Link className="text-port-accent-text underline" to="/models/harnesses">
+          <Link className="text-port-accent-text underline" to="/ai/harnesses">
             Harnesses
           </Link>{' '}
           or{' '}

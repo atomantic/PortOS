@@ -392,6 +392,9 @@ export default function App() {
               a bookmark on the old pill lands on the new page instead of LLMs
               rendering an unknown sub-view. */}
           <Route path="models/llms/runtimes" element={<Navigate to="/models/llms-runtimes" replace />} />
+          {/* Harnesses folded into the AI Providers harnesses view (/ai/harnesses);
+              retires the duplicate /models/harnesses page while keeping bookmarks working. */}
+          <Route path="models/harnesses" element={<Navigate to="/ai/harnesses" replace />} />
           {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
               Models itself, so it keeps the section header and tab bar — see
               TAB_DETAIL there. */}
