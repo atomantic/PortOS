@@ -64,9 +64,10 @@ describe('PUT /api/providers/active', () => {
 
 describe('GET /api/providers/catalog', () => {
   it('hands the sanitized presets to the catalog builder and returns its answer', async () => {
-    compositeService.buildProviderCatalog.mockImplementation(async ({ presets }) => ({ harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {}, presets }));
+    compositeService.buildProviderCatalog.mockResolvedValue({ harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {}, presets: [] });
     const res = await request(app()).get('/api/providers/catalog');
     expect(res.status).toBe(200);
+    expect(compositeService.buildProviderCatalog).toHaveBeenCalledWith();
     expect(res.body.presets).toHaveLength(1);
     expect(res.body.presets[0]).toMatchObject({ id: 'claude-code', hasApiKey: true });
     expect(JSON.stringify(res.body)).not.toContain('preset-secret');

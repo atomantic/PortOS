@@ -2,12 +2,7 @@ import { z } from 'zod';
 import { MAX_MODEL_ACCESS_PATTERNS, MAX_MODEL_ACCESS_PATTERN_LENGTH, MODEL_ACCESS_MODES } from './internal/modelAccess.js';
 import { basename, extname } from 'path';
 import { MAX_TIMEOUT, MIN_TIMEOUT } from './constants.js';
-import { MAX_PROVIDER_REF_LENGTH, PRESET_ID_RE, parseProviderRef } from './internal/providerRef.js';
-
-// The preset-only rule, named once so every surface that refuses a composite
-// (`harness.method@service`, #7564) says the same thing: the active provider,
-// a record's fallback, and anything else keyed on `providers.json`.
-const PRESET_ONLY_MESSAGE = 'must be a preset provider id (lowercase alphanumeric with hyphens); a composite harness.method@service selection is not accepted here';
+import { MAX_PROVIDER_REF_LENGTH, PRESET_ID_RE, PRESET_ONLY_MESSAGE, parseProviderRef } from './internal/providerRef.js';
 
 /**
  * A run's provider selection: a preset record id or a composite reference the

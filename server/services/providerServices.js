@@ -134,10 +134,13 @@ function describe(connection, graph, envFile) {
   });
 }
 
-/** Every instance, sanitized: never a credential value, never a projection snapshot. */
-export async function listServices() {
+/**
+ * Every instance, sanitized: never a credential value, never a projection
+ * snapshot. A caller holding a fresh graph read passes it to skip a second.
+ */
+export async function listServices({ graph: preread = null } = {}) {
   requireProviderGraph();
-  const [graph, envFile] = await Promise.all([readGraph(), loadInstallEnvFile()]);
+  const [graph, envFile] = await Promise.all([preread ?? readGraph(), loadInstallEnvFile()]);
   return { services: graph.connections.map((connection) => describe(connection, graph, envFile)) };
 }
 

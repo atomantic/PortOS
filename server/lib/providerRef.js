@@ -25,9 +25,6 @@
 /** A preset record id — the slug `createProvider` assigns. */
 export const PRESET_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
-/** The execution methods a composite may name; mirrors a record's `type`. */
-export const COMPOSITE_METHODS = Object.freeze(['cli', 'tui', 'api']);
-
 /**
  * `<harness>.<method>@<service-slug>[+<bootstrap-slug>]`. Groups: harness id,
  * method, service slug, optional bootstrap slug.

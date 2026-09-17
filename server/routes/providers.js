@@ -118,12 +118,12 @@ let runtimeSetupInFlight = false;
  * distinguish "configured but blank" from an unknown redacted value when it
  * paints provider readiness.
  */
-const sanitizeProvider = (provider, { hasApiKey = Boolean(provider?.apiKey) } = {}) => {
+const sanitizeProvider = (provider) => {
   if (!provider) return provider;
   const { apiKey, envVars, secretEnvVars, ...rest } = provider;
   const sanitized = {
     ...rest,
-    hasApiKey,
+    hasApiKey: Boolean(apiKey),
     envVars: envVars ? { ...envVars } : {},
     secretEnvVars: secretEnvVars || []
   };
@@ -193,12 +193,13 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   // untouched list rides along as `modelCatalog` — the editor seeds its
   // "Available Models" box from it, so an ordinary Save on a scoped provider
   // cannot persist the narrowed list over the real one.
-  // `hasApiKey` is read off the RAW record: an inherited or materialized key
-  // rides NON-enumerably (`withGatewayApiKey`, the composite resolver), and the
-  // decorating spreads above have already dropped it by the time the sanitizer
-  // looks — a composite with a key would otherwise read as keyless (#7564).
   return sanitizeProvider({
     ...applyModelAccess(decorated),
+    // The RAW record's key: an inherited or materialized one rides
+    // NON-enumerably (`withGatewayApiKey`, the composite resolver), so the
+    // decorating spreads above dropped it — re-carried here so `hasApiKey`
+    // reports the key the run would actually use (#7564).
+    apiKey: provider?.apiKey,
     // The UNION of the two refresh paths, because the button asks only
     // whether SOME path can serve this record. Which one actually serves it is
     // decided in `POST /:id/refresh-models`, and the two must stay in step or
@@ -208,7 +209,7 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
     publicReviewActionsSupported: publicReviewPostures.includes(PUBLIC_REVIEW_ACTIONS_POSTURE),
-  }, { hasApiKey: Boolean(provider?.apiKey) });
+  });
 };
 
 /**
@@ -639,8 +640,8 @@ export function createPortOSProviderRoutes(aiToolkit) {
    */
   router.get('/catalog', asyncHandler(async (_req, res) => {
     const { buildProviderCatalog } = await import('../services/compositeProviders.js');
-    const [data, capabilities] = await Promise.all([providerService.getAllProviders(), detectSystemCapabilities()]);
-    res.json(await buildProviderCatalog({ presets: data.providers.map((provider) => presentProvider(provider, capabilities)) }));
+    const [catalog, data, capabilities] = await Promise.all([buildProviderCatalog(), providerService.getAllProviders(), detectSystemCapabilities()]);
+    res.json({ ...catalog, presets: data.providers.map((provider) => presentProvider(provider, capabilities)) });
   }));
 
   /** Per-harness enablement (#7564): the user's word, else PATH detection, `direct` always on. */

@@ -24,12 +24,6 @@ export async function listCredentialBootstraps() {
   return normalizeCredentialBootstraps(raw);
 }
 
-/** One app by slug, or `null`. */
-export async function credentialBootstrapBySlug(slug) {
-  const apps = await listCredentialBootstraps();
-  return Object.hasOwn(apps, slug) ? apps[slug] : null;
-}
-
 /**
  * Replace the whole table. Validated against the settings-slice schema so a
  * bad entry 400s here instead of surfacing as a spawn that cannot start.

@@ -23,6 +23,9 @@ export const COMPOSITE_ID_RE = /^([a-z0-9-]+)\.(cli|tui|api)@([a-z0-9][a-z0-9-]*
 /** Longest reference any selection field accepts. */
 export const MAX_PROVIDER_REF_LENGTH = 200;
 
+/** The message a PRESET-ONLY field reports when handed a composite. */
+export const PRESET_ONLY_MESSAGE = 'must be a preset provider id (lowercase alphanumeric with hyphens); a composite harness.method@service selection is not accepted here';
+
 /**
  * @param {unknown} id
  * @returns {{kind: 'preset', id: string}

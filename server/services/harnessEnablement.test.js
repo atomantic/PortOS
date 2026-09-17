@@ -89,7 +89,8 @@ describe('listHarnessEnablement / setHarnessEnabled', () => {
 
 describe('reconcileHarnessEnablement', () => {
   it('drops entries nothing reads, keeps the rest, and is a no-op on the second pass', async () => {
-    settingsState.current = { harnesses: { pi: { enabled: false, stray: 1 }, direct: { enabled: false }, bogus: { enabled: true }, codex: { enabled: 'yes' } } };
+    // A stray key rejects its entry (the slice is strict, as the PUT validator is), an unknown id and a non-boolean are dropped, `direct` is never stored.
+    settingsState.current = { harnesses: { pi: { enabled: false }, claude: { enabled: true, stray: 1 }, direct: { enabled: false }, bogus: { enabled: true }, codex: { enabled: 'yes' } } };
     await expect(enablement.reconcileHarnessEnablement()).resolves.toEqual({ changed: true, harnesses: { pi: { enabled: false } } });
     expect(settingsState.current.harnesses).toEqual({ pi: { enabled: false } });
     settingsMock.updateSettingsWith.mockClear();

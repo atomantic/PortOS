@@ -19,6 +19,7 @@ describe('providerRef ↔ aiToolkit/internal/providerRef parity', () => {
     expect(toolkit.PRESET_ID_RE.source).toBe(server.PRESET_ID_RE.source);
     expect(toolkit.COMPOSITE_ID_RE.source).toBe(server.COMPOSITE_ID_RE.source);
     expect(toolkit.MAX_PROVIDER_REF_LENGTH).toBe(server.MAX_PROVIDER_REF_LENGTH);
+    expect(toolkit.PRESET_ONLY_MESSAGE).toBe(server.PRESET_ONLY_MESSAGE);
   });
 
   it.each(SAMPLES)('parses %j identically', (id) => {

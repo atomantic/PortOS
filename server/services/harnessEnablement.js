@@ -1,6 +1,6 @@
-import { EventEmitter } from 'node:events';
 import { DIRECT_HARNESS_ID, PROVIDER_HARNESSES, harnessById } from '../lib/providerHarnesses.js';
 import { isPlainObject } from '../lib/objects.js';
+import { harnessSettingsSchema } from '../lib/validation.js';
 import { PROVIDER_RUNTIMES, peekProviderRuntimeStatuses } from './providerRuntimeInstaller.js';
 import { getSettings, settingsEvents, updateSettingsWith } from './settings.js';
 
@@ -23,19 +23,10 @@ import { getSettings, settingsEvents, updateSettingsWith } from './settings.js';
  * holds (AGENTS.md "No cold-bootstrap LLM calls").
  */
 
-/** Emits `changed` whenever the enablement inputs move (a settings save). */
-export const harnessEnablementEvents = new EventEmitter();
-
 /** Bumped on every settings write; the composite resolver keys its cache on it. */
 let settingsRevision = 0;
-settingsEvents.on('settings:updated', () => {
-  settingsRevision += 1;
-  harnessEnablementEvents.emit('changed');
-});
-settingsEvents.on('settings:invalidated', () => {
-  settingsRevision += 1;
-  harnessEnablementEvents.emit('changed');
-});
+settingsEvents.on('settings:updated', () => { settingsRevision += 1; });
+settingsEvents.on('settings:invalidated', () => { settingsRevision += 1; });
 
 /** The revision the composite cache compares against. */
 export const harnessSettingsRevision = () => settingsRevision;
@@ -84,11 +75,6 @@ export function harnessEnablementFrom(harnessId, { settings = {}, runtimes = und
   return { enabled: detected, source: 'detected', detected, version };
 }
 
-/** Whether `harnessId` may compose into a runnable composite right now. */
-export async function harnessEnabled(harnessId) {
-  return harnessEnablementFrom(harnessId, { settings: await getSettings() })?.enabled === true;
-}
-
 /**
  * Every registry harness with its enablement verdict — the `harnesses` half
  * of `GET /api/providers/catalog`. Cache-only detection; no probe is started.
@@ -124,14 +110,18 @@ export async function setHarnessEnabled(harnessId, enabled) {
 }
 
 /**
- * The slice with every entry that names no registry harness — or carries no
- * boolean — dropped. Pure; `reconcileHarnessEnablement` persists the result.
+ * The slice with every entry the settings schema rejects dropped — one
+ * definition of "a valid harnesses slice", the schema's. `direct` is dropped
+ * too: it cannot be disabled, so its entry would be a rule nothing reads.
+ * Pure; `reconcileHarnessEnablement` persists the result.
  */
 export function normalizeHarnessSettings(raw) {
   if (!isPlainObject(raw)) return {};
-  return Object.fromEntries(Object.entries(raw)
-    .filter(([id, entry]) => harnessById(id) && id !== DIRECT_HARNESS_ID && typeof entry?.enabled === 'boolean')
-    .map(([id, entry]) => [id, { enabled: entry.enabled }]));
+  return Object.fromEntries(Object.entries(raw).flatMap(([id, entry]) => {
+    if (id === DIRECT_HARNESS_ID) return [];
+    const result = harnessSettingsSchema.safeParse({ [id]: entry });
+    return result.success ? [[id, result.data[id]]] : [];
+  }));
 }
 
 /**

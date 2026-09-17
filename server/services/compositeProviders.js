@@ -11,6 +11,7 @@ import { readGraph } from './providerGraphStore.js';
 import { listServices } from './providerServices.js';
 import { peekProviderRuntimeStatuses } from './providerRuntimeInstaller.js';
 import { getSettings } from './settings.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
 
 /**
  * COMPOSITE provider resolution (#7564, epic #7561): turning a
@@ -49,8 +50,15 @@ import { getSettings } from './settings.js';
 const GRAPH_SNAPSHOT_TTL_MS = 1000;
 let graphSnapshot = null;
 let graphSnapshotAt = -Infinity;
+// One read per cold window even when N callers miss it together.
+const graphReads = createSingleFlight();
 
-/** id → { key, record } — one entry per composite, replaced when its inputs move. */
+/**
+ * id → { key, outcome } — one entry per composite, replaced when its inputs
+ * move. The key is the graph snapshot's timestamp plus the settings revision:
+ * a service edit lands on the next snapshot, a settings save bumps the
+ * revision, and a warm hit costs no I/O at all.
+ */
 const materialized = new Map();
 
 /** Drop every cached derivation. Exported for tests and for a caller that just changed a service row. */
@@ -60,11 +68,13 @@ export function invalidateCompositeCache() {
   materialized.clear();
 }
 
-async function graphWithinTtl(now = Date.now()) {
-  if (graphSnapshot && now - graphSnapshotAt < GRAPH_SNAPSHOT_TTL_MS) return graphSnapshot;
-  graphSnapshot = await readGraph();
-  graphSnapshotAt = now;
-  return graphSnapshot;
+async function graphWithinTtl() {
+  if (graphSnapshot && Date.now() - graphSnapshotAt < GRAPH_SNAPSHOT_TTL_MS) return graphSnapshot;
+  return graphReads.run('graph', async () => {
+    graphSnapshot = await readGraph();
+    graphSnapshotAt = Date.now();
+    return graphSnapshot;
+  });
 }
 
 /**
@@ -86,8 +96,6 @@ export function instanceForConnection(connection, env = process.env) {
   });
 }
 
-const refusal = (code, reason) => ({ record: null, code, reason });
-
 /**
  * Resolve, with the reason for a refusal. Pure over its inputs so the tests
  * pin the policy without a store: the graph, the settings and the bootstrap
@@ -99,31 +107,29 @@ const refusal = (code, reason) => ({ record: null, code, reason });
  */
 export function materializeComposite(id, { graph, settings, bootstraps, runtimes = undefined, env = process.env }) {
   const ref = parseProviderRef(id);
-  if (ref?.kind !== 'composite') return { ...refusal('not-composite', `"${id}" is not a composite provider id`), parts: null };
+  if (ref?.kind !== 'composite') return { record: null, code: 'not-composite', reason: `"${id}" is not a composite provider id`, parts: null };
   const parts = { harnessId: ref.harnessId, method: ref.method, serviceSlug: ref.serviceSlug, bootstrapSlug: ref.bootstrapSlug };
-  const withParts = (outcome) => ({ ...outcome, parts });
+  const refuse = (code, reason) => ({ record: null, code, reason, parts });
 
   const harness = harnessById(ref.harnessId);
-  if (!harness) return withParts(refusal('harness-unknown', `No harness "${ref.harnessId}"`));
+  if (!harness) return refuse('harness-unknown', `No harness "${ref.harnessId}"`);
   const enablement = harnessEnablementFrom(ref.harnessId, { settings, runtimes });
   if (!enablement?.enabled) {
-    return withParts(refusal('harness-disabled', `${harness.label} is ${enablement?.source === 'setting' ? 'switched off' : 'not detected on this machine'}`));
+    return refuse('harness-disabled', `${harness.label} is ${enablement?.source === 'setting' ? 'switched off' : 'not detected on this machine'}`);
   }
-  if (!harness.modes.includes(ref.method)) return withParts(refusal('method-unsupported', `${harness.label} has no ${ref.method} mode`));
+  if (!harness.modes.includes(ref.method)) return refuse('method-unsupported', `${harness.label} has no ${ref.method} mode`);
 
   const connection = findConnectionByRef(graph, ref.serviceSlug);
-  if (!connection || connection.slug !== ref.serviceSlug) return withParts(refusal('service-unknown', `No service is addressed as "${ref.serviceSlug}"`));
-  if (connection.enabled === false) return withParts(refusal('service-disabled', `Service "${ref.serviceSlug}" is switched off`));
+  if (!connection || connection.slug !== ref.serviceSlug) return refuse('service-unknown', `No service is addressed as "${ref.serviceSlug}"`);
+  if (connection.enabled === false) return refuse('service-disabled', `Service "${ref.serviceSlug}" is switched off`);
   const instance = instanceForConnection(connection, env);
-  if (!instance) return withParts(refusal('service-undefined', `Service "${ref.serviceSlug}" has no definition this build composes onto`));
-  if (!isCompatible(harness, instance)) {
-    return withParts(refusal('incompatible', `${harness.label} cannot be pointed at ${instance.definition.label}`));
-  }
+  if (!instance) return refuse('service-undefined', `Service "${ref.serviceSlug}" has no definition this build composes onto`);
+  if (!isCompatible(harness, instance)) return refuse('incompatible', `${harness.label} cannot be pointed at ${instance.definition.label}`);
 
   let bootstrap = null;
   if (ref.bootstrapSlug) {
     const app = bootstraps?.[ref.bootstrapSlug];
-    if (!app) return withParts(refusal('bootstrap-unknown', `No credential bootstrap app is addressed as "${ref.bootstrapSlug}"`));
+    if (!app) return refuse('bootstrap-unknown', `No credential bootstrap app is addressed as "${ref.bootstrapSlug}"`);
     bootstrap = bootstrapInputFor(ref.bootstrapSlug, app);
   }
 
@@ -143,8 +149,8 @@ export function materializeComposite(id, { graph, settings, bootstraps, runtimes
   });
   // A refusal is a REASON on this composite, not a failure of the lookup: the
   // caller asked "is this runnable?", and "no, because…" is the answer.
-  if (error) return withParts(refusal(error.code, error.message));
-  return withParts({ record: withHiddenCredential(record), code: null, reason: null });
+  if (error) return refuse(error.code, error.message);
+  return { record: withHiddenCredential(record), code: null, reason: null, parts };
 }
 
 /**
@@ -157,11 +163,6 @@ function withHiddenCredential(record) {
   const { apiKey, ...rest } = record;
   if (apiKey) Object.defineProperty(rest, 'apiKey', { value: apiKey, enumerable: false, configurable: true });
   return rest;
-}
-
-async function resolveInputs() {
-  const [graph, settings, bootstraps] = await Promise.all([graphWithinTtl(), getSettings(), listCredentialBootstraps()]);
-  return { graph, settings, bootstraps, runtimes: peekProviderRuntimeStatuses() };
 }
 
 /**
@@ -179,12 +180,12 @@ export async function describeCompositeProvider(id) {
   if (!providerGraphEnabled()) {
     return { id, eligible: false, code: 'graph-unavailable', reason: 'Service instances are unavailable on this install', parts: null, record: null };
   }
-  const inputs = await resolveInputs();
-  const connection = findConnectionByRef(inputs.graph, ref.serviceSlug);
-  const key = `${connection?.revision ?? 'none'}|${harnessSettingsRevision()}`;
+  const graph = await graphWithinTtl();
+  const key = `${graphSnapshotAt}|${harnessSettingsRevision()}`;
   const cached = materialized.get(id);
   if (cached && cached.key === key) return { id, ...cached.outcome };
-  const { record, code, reason, parts } = materializeComposite(id, inputs);
+  const [settings, bootstraps] = await Promise.all([getSettings(), listCredentialBootstraps()]);
+  const { record, code, reason, parts } = materializeComposite(id, { graph, settings, bootstraps, runtimes: peekProviderRuntimeStatuses() });
   const outcome = { eligible: record !== null, code, reason, parts, record };
   materialized.set(id, { key, outcome });
   return { id, ...outcome };
@@ -238,31 +239,31 @@ const harnessEffortLevels = (harness, model = null) => effortLevelsForProvider(
  * @param {{presets?: object[]}} [input]
  */
 export async function buildProviderCatalog({ presets = [] } = {}) {
+  const graphEnabled = providerGraphEnabled();
+  const graph = graphEnabled ? await graphWithinTtl() : { connections: [] };
   const [harnesses, bootstraps, services] = await Promise.all([
     listHarnessEnablement(),
     listCredentialBootstraps(),
-    providerGraphEnabled() ? listServices().then((result) => result.services) : [],
+    graphEnabled ? listServices({ graph }).then((result) => result.services) : [],
   ]);
-  const graph = providerGraphEnabled() ? await graphWithinTtl() : { connections: [] };
   const instances = graph.connections.map((connection) => ({ connection, instance: instanceForConnection(connection) }))
     .filter(({ instance }) => instance !== null);
 
-  const compatibility = Object.fromEntries(PROVIDER_HARNESSES.map((harness) => [
-    harness.id,
-    instances.filter(({ instance }) => isCompatible(harness, instance)).map(({ instance }) => instance.slug),
-  ]));
+  // One compatibility pass, read by both the slug map and the per-model ladders.
+  const compatible = new Map(PROVIDER_HARNESSES.map((harness) => [harness.id, instances.filter(({ instance }) => isCompatible(harness, instance))]));
+  const compatibility = Object.fromEntries([...compatible].map(([harnessId, rows]) => [harnessId, rows.map(({ instance }) => instance.slug)]));
   const effortLevels = Object.fromEntries(PROVIDER_HARNESSES.map((harness) => [harness.id, harnessEffortLevels(harness)]));
+  const sameLadder = (a, b) => a === b || (Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((rung, i) => rung === b[i]));
   // Per-model ladders, only where a model narrows or widens the harness's own
   // (Codex's Ultra-capable models, Antigravity's per-model rungs): every
   // catalog model of a compatible service, keyed under the harness.
   const effortLevelsByModel = Object.fromEntries(PROVIDER_HARNESSES.map((harness) => {
-    const base = JSON.stringify(effortLevels[harness.id]);
-    const models = new Set(instances
-      .filter(({ instance }) => isCompatible(harness, instance))
+    const base = effortLevels[harness.id];
+    const models = new Set(compatible.get(harness.id)
       .flatMap(({ connection, instance }) => applyServicePlanFilter(instance.definition, instance.plan, connection.catalog?.models || [])));
     const perModel = [...models]
       .map((model) => [model, harnessEffortLevels(harness, model)])
-      .filter(([, ladder]) => JSON.stringify(ladder) !== base);
+      .filter(([, ladder]) => !sameLadder(ladder, base));
     return [harness.id, Object.fromEntries(perModel)];
   }));
 
