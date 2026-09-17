@@ -224,9 +224,15 @@ export async function withCompositeCandidates(providersMap, ids) {
   return providersMap;
 }
 
-/** The ladder a harness accepts, read through the same function every route uses. */
-const harnessEffortLevels = (harness, model = null) => effortLevelsForProvider(
-  { harnessId: harness.id, command: harness.recipe?.command ?? null, type: harness.modes[0] },
+/**
+ * The ladder a harness accepts, read through the same function every route uses.
+ * `models` is the catalog the ladder is narrowed against: Antigravity publishes
+ * one entry per rung (`<base>-low|medium|high`), so `effortLevelsForProvider`
+ * needs the surrounding catalog to tell which rungs a model actually offers.
+ * Omitting it collapsed every per-model ladder onto the harness default.
+ */
+const harnessEffortLevels = (harness, model = null, models = []) => effortLevelsForProvider(
+  { harnessId: harness.id, command: harness.recipe?.command ?? null, type: harness.modes[0], models },
   model,
 );
 
@@ -261,8 +267,9 @@ export async function buildProviderCatalog({ presets = [] } = {}) {
     const base = effortLevels[harness.id];
     const models = new Set(compatible.get(harness.id)
       .flatMap(({ connection, instance }) => applyServicePlanFilter(instance.definition, instance.plan, connection.catalog?.models || [])));
-    const perModel = [...models]
-      .map((model) => [model, harnessEffortLevels(harness, model)])
+    const catalogModels = [...models];
+    const perModel = catalogModels
+      .map((model) => [model, harnessEffortLevels(harness, model, catalogModels)])
       .filter(([, ladder]) => !sameLadder(ladder, base));
     return [harness.id, Object.fromEntries(perModel)];
   }));

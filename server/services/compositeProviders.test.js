@@ -79,6 +79,10 @@ const GRAPH = {
       transports: { anthropic: { baseUrl: 'https://api.anthropic.com' } }, credentials: {}, credentialVia: 'bootstrap' }),
     connection(6, { kind: 'gateway:nvidia-nim', label: 'NIM (off)', slug: 'nvidia-nim-off', definitionId: 'nvidia-nim', plan: 'paid',
       transports: { openai: { baseUrl: 'https://integrate.api.nvidia.com/v1' } }, credentials: { apiKey: 'other' }, enabled: false }),
+    // Antigravity publishes one catalog entry PER RUNG (`<base>-low|medium|high`),
+    // which is what the per-model effort ladders are derived from.
+    connection(7, { kind: 'subscription', label: 'Antigravity', slug: 'antigravity', definitionId: 'antigravity', plan: 'subscription',
+      credentials: {}, catalog: { state: 'known', models: ['gemini-3.8-flash-low', 'gemini-3.8-flash-high', 'gemini-3.1-pro-high'] } }),
   ],
 };
 const BOOTSTRAPS = { 'corp-auth': { label: 'Corp auth', command: 'corp-auth', args: ['run'], argsSeparator: '--', harnessNames: { claude: 'claude-code' } } };
@@ -297,6 +301,15 @@ describe('describeCompositeProvider / resolveCompositeProvider over the live sto
     expect(catalog.bootstraps).toEqual([{ slug: 'corp-auth', label: 'Corp auth', harnessNames: { claude: 'claude-code' } }]);
     expect(catalog.effortLevels).toMatchObject({ pi: ['low', 'medium', 'high', 'xhigh', 'max'], direct: null, claude: ['low', 'medium', 'high', 'xhigh', 'max'] });
     expect(catalog.effortLevelsByModel).toMatchObject({ pi: {}, direct: {} });
+    // A per-model ladder is NARROWED by the surrounding catalog: Antigravity
+    // offers a rung only where `<base>-<rung>` is itself a catalog entry. Without
+    // the catalog every model collapsed onto the harness default and this map
+    // came back empty, silently dropping the whole per-model axis.
+    expect(catalog.effortLevelsByModel.antigravity).toEqual({
+      'gemini-3.8-flash-low': ['low', 'high'],
+      'gemini-3.8-flash-high': ['low', 'high'],
+      'gemini-3.1-pro-high': ['high'],
+    });
     // Nothing in the catalog carries a credential.
     expect(JSON.stringify(catalog)).not.toMatch(/nim-key|or-key|corp-auth run/);
     expect(store.readGraph).toHaveBeenCalledTimes(1);
