@@ -941,8 +941,6 @@ export default function AIProviders() {
                 label="Active provider"
                 providers={providers}
                 selectedProviderId={activeProviderId || ''}
-                selectedModel=""
-                availableModels={[]}
                 emptyProviderOption="Select Provider"
                 onProviderChange={handleSetActive}
               />

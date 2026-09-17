@@ -88,7 +88,6 @@ export default function ProviderRouteRow({
   const patch = useMemo(() => routeOverridePatch(route.settings, draft), [route.settings, draft]);
   const dirty = Object.keys(patch).length > 0;
   const fields = useMemo(() => orderedFields(route.settings), [route.settings]);
-  const efforts = Array.isArray(route.effortLevels) ? route.effortLevels : [];
 
   const set = (key, value) => setDraft((prev) => ({ ...prev, [key]: value }));
   const fieldId = (key) => `route-${route.providerId}-${key}`;
@@ -147,27 +146,20 @@ export default function ProviderRouteRow({
                     onChange={(e) => set(key, e.target.value)}
                   />
                 ) : key === 'effort' ? (
-                  efforts.length === 0 ? (
-                    // A harness with no effort ladder gets a DISABLED control
-                    // rather than a hidden field (EffortSelect renders nothing),
-                    // so "this program takes no effort flag" is visible instead
-                    // of reading as "unset".
-                    <select id={fieldId(key)} className={INPUT_CLASS} disabled value="">
-                      <option value="">This harness takes no effort setting</option>
-                    </select>
-                  ) : (
-                    // The route publishes its own ladder (`effortLevels`), which
-                    // the shared select reads off the record; a stored level the
-                    // ladder no longer lists stays selectable and says what it
-                    // runs as, the same way a model pin outside the catalog does.
-                    <EffortSelect
-                      id={fieldId(key)}
-                      className={INPUT_CLASS}
-                      provider={{ effortLevels: efforts }}
-                      value={draft[key] ?? ''}
-                      onChange={(value) => set(key, value)}
-                    />
-                  )
+                  // The route publishes its own ladder (`effortLevels`), which
+                  // the shared select reads off the record; a stored level the
+                  // ladder no longer lists stays selectable and says what it
+                  // runs as, the same way a model pin outside the catalog does.
+                  // A harness with no ladder keeps a DISABLED control so "this
+                  // program takes no effort flag" is visible, not read as "unset".
+                  <EffortSelect
+                    id={fieldId(key)}
+                    className={INPUT_CLASS}
+                    provider={route}
+                    value={draft[key] ?? ''}
+                    onChange={(value) => set(key, value)}
+                    emptyLadderLabel="This harness takes no effort setting"
+                  />
                 ) : (
                   <input
                     id={fieldId(key)}

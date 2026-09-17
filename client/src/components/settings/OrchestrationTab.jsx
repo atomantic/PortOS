@@ -272,8 +272,6 @@ export default function OrchestrationTab() {
                         label={`${label} Provider`}
                         providers={providers}
                         selectedProviderId={roleData.provider || ''}
-                        selectedModel=""
-                        availableModels={[]}
                         onProviderChange={(id) => updateRoleField(key, 'provider', id)}
                         emptyProviderOption="Default (Auto / Inherit)"
                       />

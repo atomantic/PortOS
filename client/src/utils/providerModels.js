@@ -323,9 +323,7 @@ export const seedModelEffort = (provider, model, effort) => {
 export const effortLevelsForProvider = (provider, model = null) => {
   if (!provider) return null;
   const known = serverEffortLevelsForProvider(provider, model);
-  // A composite/derived record names its harness outright (#7564), so honor
-  // that the same way the command sniff is honored — the null must stay final.
-  if (known || isAntigravityProvider(provider) || provider.harnessId === 'antigravity') return known;
+  if (known || isAntigravityProvider(provider)) return known;
   const modelLevels = model ? provider.effortLevelsByModel?.[model] : null;
   if (Array.isArray(modelLevels)) return modelLevels.length ? modelLevels : null;
   if (Array.isArray(provider.effortLevels)) return provider.effortLevels.length ? provider.effortLevels : null;

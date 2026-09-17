@@ -922,8 +922,6 @@ export default function PipelineManuscriptEditor() {
                   label="AI provider — Generate fix & Editorial review"
                   providers={providers}
                   selectedProviderId={overrideProviderId}
-                  selectedModel=""
-                  availableModels={[]}
                   onProviderChange={changeOverrideProvider}
                   emptyProviderOption="System default"
                 />

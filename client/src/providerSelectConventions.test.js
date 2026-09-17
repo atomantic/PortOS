@@ -42,6 +42,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedJsxFiles } from './test/trackedFiles.js';
+import { stripComments } from './test/stripComments.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -56,11 +57,6 @@ const LEGACY_BESPOKE = [
   'src/components/settings/AiAssignmentsTab.jsx',
 ];
 const ALLOWED = [SHARED_SELECTOR, ...NOT_AI_PROVIDERS, ...LEGACY_BESPOKE];
-
-const stripComments = (src) => src
-  .replace(/\/\*[\s\S]*?\*\//g, ' ')
-  .replace(/\{\/\*[\s\S]*?\*\/\}/g, ' ')
-  .replace(/(^|[^:\\])\/\/[^\n]*/g, '$1');
 
 const SELECT_BLOCK = /<select\b[\s\S]*?<\/select>/g;
 const PROVIDER_MAP = /\b(\w*[pP]roviders?\w*)\.map\(/;

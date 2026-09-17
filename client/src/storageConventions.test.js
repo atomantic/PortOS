@@ -53,6 +53,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedSourceFiles } from './test/trackedFiles.js';
+import { stripComments } from './test/stripComments.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -73,9 +74,7 @@ const isAllowed = (file) =>
  * before `//` keeps `https://…` inside a comment or string from eating the rest
  * of the line.
  */
-const stripComments = (src) => src
-  .replace(/\/\*[\s\S]*?\*\//g, ' ')
-  .replace(/(^|[^:\\])\/\/[^\n]*/g, '$1');
+// Shared with the sibling guards: `./test/stripComments.js`.
 
 /**
  * `localStorage.foo`, `window.sessionStorage.foo`, `globalThis.localStorage[…]`.

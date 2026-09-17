@@ -45,18 +45,11 @@ const optionsIn = (select, groupLabel) =>
 
 function renderSelector(props = {}) {
   const handlers = { onProviderChange: vi.fn(), onModelChange: vi.fn(), onEffortChange: vi.fn() };
-  render(
-    <ProviderModelSelector
-      providers={PRESETS}
-      selectedProviderId="claude-code"
-      selectedModel=""
-      availableModels={[]}
-      effort=""
-      {...handlers}
-      {...props}
-    />,
+  const element = (next) => (
+    <ProviderModelSelector providers={PRESETS} selectedProviderId="claude-code" effort="" {...handlers} {...props} {...next} />
   );
-  return handlers;
+  const { rerender } = render(element());
+  return { ...handlers, rerender: (next) => rerender(element(next)) };
 }
 
 const providerSelect = () => screen.getByRole('combobox', { name: 'Provider' });
@@ -155,42 +148,26 @@ describe('ProviderModelSelector — preset-first', () => {
 
   it('shows the saved preset under its harness group once the caller reflects the selection', async () => {
     api.createProviderPreset.mockResolvedValue({ id: 'pi-nim', name: 'Pi on NIM', type: 'tui', harnessId: 'pi', enabled: true, models: [] });
-    const onProviderChange = vi.fn();
-    const { rerender } = render(
-      <ProviderModelSelector providers={PRESETS} selectedProviderId="claude-code" selectedModel="" availableModels={[]}
-        onProviderChange={onProviderChange} onModelChange={() => {}} />,
-    );
+    const { onProviderChange, rerender } = renderSelector();
     await composeVia({ harness: 'pi', method: 'tui', service: 'nvidia-nim-free' });
     fireEvent.click(screen.getByRole('button', { name: 'Save as preset…' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm save' }));
     await waitFor(() => expect(onProviderChange).toHaveBeenCalledWith('pi-nim'));
-    rerender(
-      <ProviderModelSelector providers={PRESETS} selectedProviderId="pi-nim" selectedModel="" availableModels={[]}
-        onProviderChange={onProviderChange} onModelChange={() => {}} />,
-    );
+    rerender({ selectedProviderId: 'pi-nim' });
     expect(optgroupLabels(providerSelect())).toContain('Pi');
     expect(optionsIn(providerSelect(), 'Pi')).toEqual(['Pi on NIM']);
     expect(providerSelect().value).toBe('pi-nim');
   });
 
   it('switches the effort ladder with the harness: codex is per-model, antigravity disappears for a tier-less model', async () => {
-    const { rerender } = render(
-      <ProviderModelSelector providers={PRESETS} selectedProviderId="codex.cli@openai" selectedModel="gpt-5" availableModels={[]}
-        effort="" onProviderChange={() => {}} onModelChange={() => {}} onEffortChange={() => {}} />,
-    );
+    const { rerender } = renderSelector({ selectedProviderId: 'codex.cli@openai', selectedModel: 'gpt-5' });
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Thinking effort' })).toBeTruthy());
     const codexLadder = [...screen.getByRole('combobox', { name: 'Thinking effort' }).options].map((o) => o.value);
     expect(codexLadder).toContain('high');
-    rerender(
-      <ProviderModelSelector providers={PRESETS} selectedProviderId="antigravity.cli@google" selectedModel="claude-sonnet-4-6" availableModels={[]}
-        effort="" onProviderChange={() => {}} onModelChange={() => {}} onEffortChange={() => {}} />,
-    );
+    rerender({ selectedProviderId: 'antigravity.cli@google', selectedModel: 'claude-sonnet-4-6' });
     await waitFor(() => expect(screen.getByRole('option', { name: 'Antigravity · CLI · Google' })).toBeTruthy());
     expect(screen.queryByRole('combobox', { name: 'Thinking effort' })).toBeNull();
-    rerender(
-      <ProviderModelSelector providers={PRESETS} selectedProviderId="antigravity.cli@google" selectedModel="gemini-3.6-flash" availableModels={[]}
-        effort="" onProviderChange={() => {}} onModelChange={() => {}} onEffortChange={() => {}} />,
-    );
+    rerender({ selectedProviderId: 'antigravity.cli@google', selectedModel: 'gemini-3.6-flash' });
     expect([...screen.getByRole('combobox', { name: 'Thinking effort' }).options].map((o) => o.value)).toEqual(['', 'low', 'high']);
   });
 

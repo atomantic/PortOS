@@ -627,8 +627,6 @@ export function VoiceTab() {
             label="LLM provider"
             providers={providerOptions}
             selectedProviderId={llmProvider}
-            selectedModel=""
-            availableModels={[]}
             composeMethods={['api']}
             onProviderChange={(id) => {
               // Switching provider invalidates the old model — reset to 'auto'
@@ -808,8 +806,6 @@ export function VoiceTab() {
                 label="Coding agent"
                 providers={codeProviderOptions}
                 selectedProviderId={codeProvider}
-                selectedModel=""
-                availableModels={[]}
                 emptyProviderOption="System default"
                 composeMethods={['cli', 'tui']}
                 onProviderChange={(id) => {

@@ -1071,8 +1071,6 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                         label={`${label} provider`}
                         providers={enabledProviders}
                         selectedProviderId={roleData.provider || ''}
-                        selectedModel=""
-                        availableModels={[]}
                         onProviderChange={(id) => updateOrchestrationRoleField(key, 'provider', id)}
                         emptyProviderOption="Auto / Default"
                       />

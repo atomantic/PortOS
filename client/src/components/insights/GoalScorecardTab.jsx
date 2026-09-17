@@ -319,8 +319,6 @@ export default function GoalScorecardTab() {
                 label="Narrative provider"
                 providers={providers}
                 selectedProviderId={settings?.provider || ''}
-                selectedModel=""
-                availableModels={[]}
                 disabled={savingSettings}
                 onProviderChange={(id) => saveSettings({ provider: id || null })}
                 emptyProviderOption="Active provider"

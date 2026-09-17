@@ -129,8 +129,6 @@ function CreateLoopForm({ providers, onCreated, promptRef }) {
             label="AI Provider"
             providers={providers}
             selectedProviderId={providerId}
-            selectedModel=""
-            availableModels={[]}
             emptyProviderOption="Active provider (default)"
             onProviderChange={setProviderId}
           />

@@ -11,7 +11,6 @@
  */
 
 import {
-  DIRECT_HARNESS_ID,
   PROVIDER_HARNESS_IDS,
   harnessById,
   harnessForProvider,
@@ -45,8 +44,9 @@ export const providerHarnessId = (provider) =>
 /**
  * Presets bucketed by harness for the preset-first `ProviderModelSelector`
  * (#7566): one `{ harnessId, label, providers }` per harness in registry
- * order, `direct` (API providers) after the agent harnesses, and a final
- * "Other" bucket for records no harness claims. Empty buckets are omitted and
+ * order (`direct`, the API providers, is the registry's last row), then any
+ * harness id this build's registry does not know (a derived preset written by
+ * a newer install), and a final "Other" bucket for records no harness claims. Empty buckets are omitted and
  * each record's position within its bucket is the input order, so a caller's
  * own ordering survives the grouping.
  *
@@ -61,8 +61,7 @@ export const groupProvidersByHarness = (providers) => {
     buckets.get(harnessId).push(provider);
   }
   const order = [
-    ...PROVIDER_HARNESS_IDS.filter((id) => id !== DIRECT_HARNESS_ID),
-    DIRECT_HARNESS_ID,
+    ...PROVIDER_HARNESS_IDS,
     ...[...buckets.keys()].filter((id) => !PROVIDER_HARNESS_IDS.includes(id) && id !== OTHER_HARNESS_GROUP),
     OTHER_HARNESS_GROUP,
   ];

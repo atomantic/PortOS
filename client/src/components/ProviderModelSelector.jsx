@@ -29,8 +29,8 @@
  *   tool-use warning and effort ladder resolve against this — otherwise "no
  *   provider pinned" would also mean "no model or effort can be picked".
  *   Defaults to `selectedProviderId`. See `resolveEffectiveProvider`.
- * @param {string} props.selectedModel - Currently selected model
- * @param {Array} props.availableModels - Models for the selected provider. Entries
+ * @param {string} [props.selectedModel] - Currently selected model (default `''`)
+ * @param {Array} [props.availableModels] - Models for the selected provider. Entries
  *   may be plain strings, or `{ id, name }` objects (the world builder passes the
  *   raw provider `models` array, which can be object-shaped). Omit or leave
  *   empty for a provider the caller's list does not carry (a composite, or a
@@ -139,8 +139,8 @@ export default function ProviderModelSelector({
   providers,
   selectedProviderId,
   effectiveProviderId,
-  selectedModel,
-  availableModels,
+  selectedModel = '',
+  availableModels = [],
   onProviderChange,
   onModelChange,
   id: idProp,
@@ -174,9 +174,10 @@ export default function ProviderModelSelector({
   const providerAllowed = selectionPolicy?.provider;
   const modelAllowed = selectionPolicy?.model;
   const effortAllowed = selectionPolicy?.effort;
+  const callerProviders = Array.isArray(providers) ? providers : [];
   const providerList = [
-    ...(Array.isArray(providers) ? providers : []),
-    ...savedPresets.filter((preset) => !(providers || []).some((p) => p?.id === preset.id)),
+    ...callerProviders,
+    ...savedPresets.filter((preset) => !callerProviders.some((p) => p?.id === preset.id)),
   ];
   // Resolve against the effective provider (the pin, or what a blank selection
   // falls back to) — everything below describes what a run would actually use.
@@ -189,6 +190,10 @@ export default function ProviderModelSelector({
   const catalog = useProviderCatalog(needsCatalog);
   const selectedProvider = listedProvider || (needsCatalog ? catalog.resolveRef(lookupId) : undefined) || undefined;
   const providerFromCatalog = Boolean(selectedProvider) && !listedProvider;
+  // The record behind the select's own value (the pin itself, not what a blank
+  // one resolves to), for the Custom group below.
+  const selectedRecord = providerList.find((p) => p.id === selectedProviderId)
+    ?? (selectedProvider?.id === selectedProviderId ? selectedProvider : null);
   // A blank model ("Default model") isn't a no-op: the agent resolver then runs
   // the provider's own defaultModel — which for an Ollama-backed provider can be
   // a non-tool model that silently wedges the stage. So evaluate the EFFECTIVE
@@ -218,11 +223,9 @@ export default function ProviderModelSelector({
   // appended the resolved pin) belongs to the "Custom" group instead.
   const presetGroups = groupProvidersByHarness(visibleProviders.filter((p) => !isCompositeProviderId(p.id)));
   const selectedComposite = isCompositeProviderId(selectedProviderId)
-    ? (visibleProviders.find((p) => p.id === selectedProviderId)
-      || (selectedProvider?.id === selectedProviderId ? selectedProvider : null)
-      // Unresolvable (catalog unknown, or still loading): keep the raw id on
-      // screen rather than blanking a stored selection.
-      || { id: selectedProviderId, name: selectedProviderId, unavailableReason: catalog.loading ? null : 'not available on this install' })
+    // Unresolvable (catalog unknown, or still loading): keep the raw id on
+    // screen rather than blanking a stored selection.
+    ? selectedRecord ?? { id: selectedProviderId, name: selectedProviderId, unavailableReason: catalog.loading ? null : 'not available on this install' }
     : null;
   const allowedComposeMethods = composeMethods ?? selectionPolicy?.modes;
   // Fail closed under a provider policy the compose flow cannot honor: a
@@ -297,24 +300,22 @@ export default function ProviderModelSelector({
     }
     onProviderChange(value);
   };
-  // "Use once": the composite lands in the caller's existing provider field;
-  // the model/effort the user composed follow through the same callbacks a
-  // pick in the sibling selects would use, so the caller's own clearing rules
-  // (a provider change resetting the model) run first and are then overridden
-  // by the explicit choice.
-  const handleCompose = (compositeId, { model, effort: composedEffort }) => {
-    onProviderChange(compositeId);
+  // A composed route lands in the caller's existing provider field; the
+  // model/effort follow through the same callbacks a pick in the sibling
+  // selects would use, so the caller's own clearing rules (a provider change
+  // resetting the model) run first and are then overridden by the explicit
+  // choice. "Use once" passes the composite id; "Save as preset" passes the
+  // minted preset (whose defaults are the composed model and effort) after
+  // carrying it locally until the caller's list catches up.
+  const selectRoute = (id, model, routeEffort) => {
+    onProviderChange(id);
     onModelChange?.(model || '');
-    onEffortChange?.(composedEffort || '');
+    onEffortChange?.(routeEffort || '');
   };
-  // "Save as preset": the stored preset already carries the composed model and
-  // effort as its defaults, so select it and pin exactly those — the same
-  // outcome as "Use once", with a preset id in the field instead.
+  const handleCompose = (compositeId, { model, effort: composedEffort }) => selectRoute(compositeId, model, composedEffort);
   const handlePresetSaved = (preset) => {
     setSavedPresets((prev) => [...prev.filter((p) => p.id !== preset.id), preset]);
-    onProviderChange(preset.id);
-    onModelChange?.(preset.defaultModel || '');
-    onEffortChange?.(preset.effort || '');
+    selectRoute(preset.id, preset.defaultModel, preset.effort);
   };
   const optionFor = (p) => {
     const hardwareUnavailable = !isProviderHardwareCompatible(p);

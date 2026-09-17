@@ -173,7 +173,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
     if (!compositeSelected) return providers;
     const resolved = catalog.resolveRef(selectedProviderId);
     return resolved ? [...providers, resolved] : providers;
-  }, [providers, compositeSelected, selectedProviderId, catalog]);
+  }, [providers, compositeSelected, selectedProviderId, catalog.resolveRef]);
 
   const currentProvider = useMemo(
     () => providersWithSelection.find(p => p.id === selectedProviderId),

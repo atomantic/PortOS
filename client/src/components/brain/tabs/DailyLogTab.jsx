@@ -694,8 +694,6 @@ export default function DailyLogTab() {
                 label="AI provider (optional — narrative summary)"
                 providers={providers}
                 selectedProviderId={digestSettings?.provider || ''}
-                selectedModel=""
-                availableModels={[]}
                 onProviderChange={(id) => saveDigestSettings({ provider: id || null })}
                 emptyProviderOption="None — structured summary only (no AI)"
               />

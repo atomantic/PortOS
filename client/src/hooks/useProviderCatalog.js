@@ -47,10 +47,13 @@ export function __resetProviderCatalogCache() {
  * - `effortLevelsFor(harnessId, model)` — the per-model ladder when one
  *   narrows the harness's own (Codex, Antigravity), else the harness ladder.
  * - `resolveRef(id)` — a preset record for a preset id, or a SYNTHESIZED
- *   display record for a composite id (`{ id, name, harnessId, method,
- *   serviceSlug, bootstrapId, models, enabled: true, composite: true }`,
- *   named `"<harness label> · <METHOD> · <service label>"`, `" (free)"`
- *   suffixed for a free-plan service) — `null` when the id resolves to
+ *   display record for a composite id (`{ id, name, type, harnessId, method,
+ *   serviceSlug, bootstrapId, models, effortLevels, effortLevelsByModel,
+ *   enabled, unavailableReason, composite: true }` — `enabled` is false and
+ *   `unavailableReason` names the switched-off harness or service so a saved
+ *   pin renders with its reason; the ladders are the catalog's for that
+ *   harness), named `"<harness label> · <METHOD> · <service label>"`,
+ *   `" (free)"` suffixed for a free-plan service — `null` when the id resolves to
  *   neither grammar or the composite names a harness/service this catalog
  *   doesn't know. Never contacts the server: unlike
  *   `GET /providers/composites/:id`, this is a pure lookup over the fetched

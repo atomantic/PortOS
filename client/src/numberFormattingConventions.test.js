@@ -53,6 +53,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedSourceFiles } from './test/trackedFiles.js';
+import { stripComments } from './test/stripComments.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -63,14 +64,6 @@ const ALLOWED = [
 ];
 
 const isAllowed = (file) => ALLOWED.includes(file);
-
-/**
- * Block and line comments removed, the same way `storageConventions.test.js`
- * does it — see that file for why the `[^:]` guard before `//` matters.
- */
-const stripComments = (src) => src
-  .replace(/\/\*[\s\S]*?\*\//g, ' ')
-  .replace(/(^|[^:\\])\/\/[^\n]*/g, '$1');
 
 /**
  * `.toLocaleString(` preceded by a member-access dot or `?.`. Matches with or

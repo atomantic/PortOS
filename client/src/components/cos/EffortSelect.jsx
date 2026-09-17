@@ -33,6 +33,10 @@ import { FormField } from '../ui/FormField';
  * @param {string} [props.fieldClassName] - Classes for the FormField wrapper.
  * @param {string} [props.labelClassName] - Classes for the FormField label.
  * @param {boolean} [props.disabled] - Disable the select (e.g. while saving).
+ * @param {string} [props.emptyLadderLabel] - Render a DISABLED select carrying
+ *   this one option when the provider has no effort ladder, instead of
+ *   nothing — for a settings row where "this program takes no effort flag"
+ *   must stay visible rather than read as "unset".
  */
 export default function EffortSelect({
   provider,
@@ -46,13 +50,13 @@ export default function EffortSelect({
   className = '',
   fieldClassName,
   labelClassName,
-  disabled = false
+  disabled = false,
+  emptyLadderLabel,
 }) {
   const generatedId = useId();
   const id = idProp || generatedId;
   const allLevels = effortLevelsForProvider(provider, model);
-  if (!allLevels) return null;
-  const levels = allLevels?.filter((level) => !optionFilter || optionFilter(level, provider, model));
+  const levels = (allLevels || []).filter((level) => !optionFilter || optionFilter(level, provider, model));
 
   // A stored effort can sit outside this provider's ladder — a task/stage
   // pinned to claude `max` whose provider was later switched to Antigravity
@@ -64,7 +68,14 @@ export default function EffortSelect({
   // stage's Model select already renders.
   const outOfLadder = value && !levels.includes(value) ? value : null;
   const outOfLadderAllowed = !outOfLadder || !optionFilter || optionFilter(outOfLadder, provider, model);
-  if (!levels.length && !outOfLadder) return null;
+  if (!levels.length && !outOfLadder) {
+    if (!emptyLadderLabel) return null;
+    return (
+      <select id={id} className={className} disabled value="" title="Thinking effort — how hard the model reasons per turn" aria-label={label ? undefined : 'Thinking effort'}>
+        <option value="">{emptyLadderLabel}</option>
+      </select>
+    );
+  }
   const clamped = outOfLadder ? resolveCliEffort(outOfLadder, provider, model) : null;
 
   const select = (

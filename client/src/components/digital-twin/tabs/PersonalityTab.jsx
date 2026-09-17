@@ -427,8 +427,6 @@ export default function PersonalityTab() {
               label="Alignment scorer provider"
               providers={providers}
               selectedProviderId={scorerProviderId}
-              selectedModel=""
-              availableModels={[]}
               onProviderChange={(id) => { setScorerProviderId(id); setScorerModel(''); }}
               emptyProviderOption="Same as tested provider"
             />

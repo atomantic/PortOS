@@ -445,6 +445,9 @@ export function isKimiProvider(provider) {
  */
 export function isAntigravityProvider(provider) {
   if (!provider) return false;
+  // A composite/derived record names its harness outright (#7564) and may
+  // carry no command at all, so the harness id is the first word.
+  if (provider.harnessId === 'antigravity') return true;
   const id = String(provider.id || '').toLowerCase();
   if (id === 'antigravity-cli' || id === 'antigravity-tui') return true;
   const base = commandBasename(provider.command);
