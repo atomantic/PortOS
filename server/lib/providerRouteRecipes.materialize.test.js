@@ -103,6 +103,23 @@ describe('materializeRoute writes what each binding shape says', () => {
     expect(record).not.toHaveProperty('endpoint');
   });
 
+  // The reviewer's catch: OpenCode's key binding names the gateway's env var,
+  // which a keyed non-gateway service does not have — the key must not vanish.
+  it('keeps a keyed non-gateway service\'s key on the OpenCode record', () => {
+    const record = materializeRoute({ harness: 'opencode', method: 'cli', serviceInstance: { definitionId: 'cerebras', credentials: { apiKey: 'cb' } } });
+    expect(record.apiKey).toBe('cb');
+    expect(record.secretEnvVars).toEqual([]);
+    expect(JSON.parse(record.envVars.OPENCODE_CONFIG_CONTENT).provider.cerebras.options.baseURL).toBe('https://api.cerebras.ai/v1');
+  });
+
+  it('records only an OpenAI-compatible URL as endpoint', () => {
+    const anthropicOnly = materializeRoute({ harness: 'claude', method: 'cli', serviceInstance: { definitionId: 'anthropic', credentials: { apiKey: 'k' } } });
+    expect(anthropicOnly.envVars.ANTHROPIC_BASE_URL).toBe('https://api.anthropic.com');
+    expect(anthropicOnly).not.toHaveProperty('endpoint');
+    const both = materializeRoute({ harness: 'claude', method: 'cli', serviceInstance: { definitionId: 'ollama', transports: LOCAL_TRANSPORTS, credentials: { apiKey: 'k' } } });
+    expect(both.endpoint).toBe(LOCAL_TRANSPORTS.openai.baseUrl);
+  });
+
   it('declares OpenCode Zen as the provider OpenCode ships, permissions only', () => {
     const record = materializeRoute({ harness: 'opencode', method: 'cli', serviceInstance: { definitionId: 'opencode-zen', credentials: { apiKey: 'zen' } } });
     expect(record.envVars.OPENCODE_CONFIG_CONTENT).toBe(SAMPLES['opencode-zen-cli'].envVars.OPENCODE_CONFIG_CONTENT);

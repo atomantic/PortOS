@@ -419,21 +419,28 @@ export function materializeRoute({
   // inline config or provider name as every shipped wrapper sample does — the
   // readiness probe and the catalog refresh read it off the record. A binding
   // that writes none (the program signs in itself) records none.
+  // `endpoint` is the OpenAI-compatible URL everywhere it is read (catalog
+  // probes, the local-runtime classifier), so an Anthropic-only service records
+  // none.
   const endpoint = !binding.baseUrl ? null
-    : binding.baseUrl.via === 'field' ? baseUrl : instance.transports.openai?.baseUrl ?? baseUrl;
+    : binding.baseUrl.via === 'field' ? baseUrl : instance.transports.openai?.baseUrl ?? null;
   if (endpoint) fields.endpoint = endpoint;
 
   // --- credential ------------------------------------------------------------
   const credential = binding.credential || null;
-  const credentialEnvName = credential?.via === 'gatewayEnv'
-    ? definition.gateway?.apiKeyEnv ?? null
-    : credential?.via === 'env' ? credential.name ?? definition.credential.envVars[0] ?? null : null;
+  // A `gatewayEnv` credential lands under the gateway's own variable (what the
+  // spawner exports for OpenCode); on a service that is not a gateway it lands
+  // on the record's `apiKey`, which the inline-config builder attaches at spawn.
+  const credentialVia = credential?.via === 'gatewayEnv' && !definition.gateway ? 'field' : credential?.via;
+  const credentialEnvName = credentialVia === 'gatewayEnv'
+    ? definition.gateway.apiKeyEnv
+    : credentialVia === 'env' ? credential.name ?? definition.credential.envVars[0] ?? null : null;
   const credentialRequired = credential?.required === true && instance.credentialVia !== 'bootstrap';
   if (credentialRequired && apiKey === '') {
     throw serviceError('SERVICE_CREDENTIAL_REQUIRED',
       `${harness.label} will not start without a ${credentialEnvName || 'key'} for ${definition.label}. Set one first — any non-empty value works for a local daemon that ignores it.`);
   }
-  if (credential?.via === 'field') fields.apiKey = apiKey;
+  if (credentialVia === 'field') fields.apiKey = apiKey;
   if (credentialEnvName && (apiKey !== '' || credentialRequired)) {
     envVars[credentialEnvName] = apiKey;
     secretEnvVars.push(credentialEnvName);
