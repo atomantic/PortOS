@@ -383,7 +383,13 @@ export const updateCosJob = (id, data, options = {}) => request(`/cos/jobs/${id}
   ...options
 });
 export const toggleCosJob = (id, options = {}) => request(`/cos/jobs/${id}/toggle`, { method: 'POST', ...options });
-export const triggerCosJob = (id, options = {}) => request(`/cos/jobs/${id}/trigger`, { method: 'POST', ...options });
+// `formValues` re-aims this ONE run (the server merges them over the job's
+// stored values and writes nothing back); omit it to run the job as saved.
+export const triggerCosJob = (id, { formValues = null, ...options } = {}) => request(`/cos/jobs/${id}/trigger`, {
+  method: 'POST',
+  ...(formValues ? { body: JSON.stringify({ formValues }) } : {}),
+  ...options
+});
 export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { method: 'DELETE', ...options });
 
 // Workflow visualizer — canonical scheduled-task ordering across tasks + jobs

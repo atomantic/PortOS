@@ -535,6 +535,15 @@ export const updateCosJobSchema = createCosJobSchema.partial().extend({
   weekdaysOnly: z.boolean().optional(),
 });
 
+// Manual "Run now", with an optional one-off configuration. The values are
+// merged over the job's stored `formValues` for THAT RUN ONLY — nothing is
+// written back to the job — which is the whole point of an on-demand job: it is
+// re-aimed per trigger without an edit to its saved design. An absent body (the
+// historical shape of this endpoint) runs the job exactly as stored.
+export const triggerCosJobSchema = z.object({
+  formValues: jobFormValuesSchema.optional(),
+});
+
 // =============================================================================
 // COS LEARNING SCHEMAS
 // =============================================================================

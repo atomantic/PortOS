@@ -18,6 +18,7 @@
  * `cosValidation.js` can validate against it without a lib → services inversion.
  */
 
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 /**
@@ -150,6 +151,74 @@ export function formatJobFormValues(fields, values) {
     parts.push(`### ${label}\n\n${text}`);
   }
   return parts.join('\n\n');
+}
+
+// Bounds for the re-aim tag below. A description is a one-line human label, so a
+// pasted brief has to be clipped rather than inlined whole.
+const REAIM_MAX_FIELDS = 3;
+const REAIM_VALUE_CHARS = 40;
+
+/** The comparable form of a value: absent, null, and blank all read the same. */
+const comparableValue = (field, value) => (isSupplied(value) ? renderValue(field, value) : '');
+
+/**
+ * Name the run-configuration values that differ from the job's stored ones, as a
+ * one-line suffix for the task description. Returns `''` when nothing differs.
+ *
+ * This exists because `addTask` rejects a task whose FIRST DESCRIPTION LINE and
+ * target app match one already pending/in_progress/blocked, while
+ * `formatJobFormValues` appends the configuration to the END of the prompt — and
+ * the description is the prompt's first line. Without a discriminator, two
+ * differently-aimed manual runs of one on-demand job produce an identical first
+ * line, so the second is silently rejected as a duplicate of the first and the
+ * caller is told the run was queued. Re-aiming per trigger is the whole point of
+ * an on-demand job, so a re-aimed run is genuinely different work and its
+ * identity has to say so — the same reason that dedupe scopes on the target app.
+ *
+ * Returning `''` for an unchanged configuration is deliberate: running a job
+ * exactly as saved keeps the plain description it has always had, and so still
+ * dedupes against a queued twin (a double-clicked "Run now" is one piece of work).
+ */
+export function describeReaimedValues(fields, savedValues, runValues) {
+  if (!Array.isArray(fields) || fields.length === 0) return '';
+  const changed = fields.filter((field) => field?.key
+    && comparableValue(field, runValues?.[field.key]) !== comparableValue(field, savedValues?.[field.key]));
+  if (changed.length === 0) return '';
+
+  const parts = changed.slice(0, REAIM_MAX_FIELDS).map((field) => {
+    // Collapsed like the value below: a label may legitimately contain a newline
+    // (the schema only bounds its length), and one newline anywhere in the tag
+    // pushes the digest onto line 2, where firstLine() drops it.
+    const label = String(field.label || field.key).replace(/\s+/g, ' ').trim();
+    const raw = comparableValue(field, runValues?.[field.key]).trim();
+    // Collapse newlines: this rides on the description's FIRST line, and a
+    // multi-line value would push the rest out of the dedupe key entirely.
+    const text = raw.replace(/\s+/g, ' ');
+    if (!text) return `${label}: (cleared)`;
+    if (text.length > REAIM_VALUE_CHARS) return `${label}: ${text.slice(0, REAIM_VALUE_CHARS)}…`;
+    return `${label}: ${text}`;
+  });
+  if (changed.length > REAIM_MAX_FIELDS) parts.push(`+${changed.length - REAIM_MAX_FIELDS} more`);
+
+  // ALWAYS carry a digest of the WHOLE effective configuration — the readable
+  // part above is for the human, this is the identity. The whole configuration
+  // rather than just the delta, because the delta is relative to a baseline that
+  // itself moves: re-aiming one field, then editing the job's saved value for a
+  // DIFFERENT field and re-aiming the first the same way, yields an identical
+  // changed set for two materially different runs. The dedupe key is
+  // `firstLine(description).toLowerCase()`, and the readable form is a
+  // case-folded, separator-ambiguous, clipped encoding: `Subject: acme` and
+  // `Subject: Acme` collide, as do one value containing `, ` and two fields that
+  // reassemble the same string, as do two long values sharing a clipped prefix.
+  // Any of those is a run silently rejected as a duplicate while the caller is
+  // told it was queued — the exact failure this function exists to prevent — so
+  // the digest is unconditional rather than gated on a guess about which
+  // renderings happened to lose information.
+  // JSON rather than a joined string: any separator character can itself occur
+  // inside a value, which would let two different changed sets encode alike.
+  const full = JSON.stringify(fields.filter((field) => field?.key).map((field) => [field.key, comparableValue(field, runValues?.[field.key])]));
+  parts.push(createHash('sha1').update(full).digest('hex').slice(0, 8));
+  return parts.join(', ');
 }
 
 /**

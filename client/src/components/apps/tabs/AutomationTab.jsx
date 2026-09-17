@@ -166,7 +166,7 @@ export default function AutomationTab({ appId, appName }) {
   };
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="space-y-4">
       <div className="border-b border-port-border pb-4">
         <CustomTasksSection
           appId={appId}
@@ -194,11 +194,11 @@ export default function AutomationTab({ appId, appName }) {
           </button>
         </div>
       )}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="min-w-0">
             <h3 className="text-lg font-semibold text-white">Scheduled Task Options</h3>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-gray-500 max-w-3xl">
               Each toggle turns that CoS scheduled task on or off for this app. The controls beside it are optional —
               leave one on <em>Inherit</em> and it follows the global schedule defaults.
             </p>
@@ -219,7 +219,7 @@ export default function AutomationTab({ appId, appName }) {
           No task types configured in the schedule
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 items-start">
           {taskTypes.map(taskType => {
             const override = overrides[taskType] || {};
             const globalConfig = schedule.tasks[taskType] || {};

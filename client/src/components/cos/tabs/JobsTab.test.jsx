@@ -79,8 +79,9 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     const editButton = screen.getByRole('button', { name: 'Edit' });
     fireEvent.click(editButton);
 
-    // Now Run now button should be disabled with updated title & aria-label
-    const disabledRunNowButton = screen.getByRole('button', { name: 'Save changes before running job' });
+    // The name stays the visible "Run now" (an aria-label would hide it from a
+    // speech-input user); the reason it is disabled lives in the title.
+    const disabledRunNowButton = screen.getByRole('button', { name: 'Run now' });
     expect(disabledRunNowButton).toBeDisabled();
     expect(disabledRunNowButton).toHaveAttribute('title', 'Save changes before running job');
 
@@ -103,7 +104,9 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     const editButton = screen.getByRole('button', { name: 'Edit' });
     fireEvent.click(editButton);
 
-    expect(screen.getByRole('button', { name: 'Save changes before running job' })).toBeDisabled();
+    const editingRunNow = screen.getByRole('button', { name: 'Run now' });
+    expect(editingRunNow).toBeDisabled();
+    expect(editingRunNow).toHaveAttribute('title', 'Save changes before running job');
 
     // Click Cancel button
     const cancelButton = screen.getByRole('button', { name: 'Cancel' });

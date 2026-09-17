@@ -5,6 +5,7 @@ import {
   jobFormValuesSchema,
   formatJobFormValues,
   appendJobFormValues,
+  describeReaimedValues,
 } from './jobFormFields.js';
 
 const textField = { key: 'topic', label: 'Topic', type: 'text' };
@@ -112,5 +113,90 @@ describe('appendJobFormValues', () => {
     expect(prompt.startsWith('do the thing')).toBe(true);
     expect(prompt).toContain('## Run configuration');
     expect(prompt).toContain('- Topic: tides');
+  });
+});
+
+describe('describeReaimedValues', () => {
+  const subject = { key: 'subject', label: 'Subject', type: 'text' };
+  const brief = { key: 'brief', label: 'Brief', type: 'textarea' };
+  const depth = { key: 'depth', label: 'Depth', type: 'select', options: [{ value: 'deep', label: 'Deep dive' }] };
+
+  it('returns nothing when the run matches what is saved', () => {
+    expect(describeReaimedValues([subject], { subject: 'a' }, { subject: 'a' })).toBe('');
+    expect(describeReaimedValues([], {}, { subject: 'a' })).toBe('');
+    expect(describeReaimedValues(undefined, {}, {})).toBe('');
+  });
+
+  it('names a changed value by its label, and a cleared one as cleared', () => {
+    expect(describeReaimedValues([subject], { subject: 'old' }, { subject: 'new' })).toContain('Subject: new');
+    expect(describeReaimedValues([subject], { subject: 'old' }, { subject: '' })).toContain('Subject: (cleared)');
+  });
+
+  it('renders a select by its option label, not its stored value', () => {
+    expect(describeReaimedValues([depth], { depth: '' }, { depth: 'deep' })).toContain('Depth: Deep dive');
+  });
+
+  it('never emits a newline, so the whole tag stays inside the deduped first line', () => {
+    const tag = describeReaimedValues([brief], { brief: '' }, { brief: 'line one\nline two' });
+    expect(tag).not.toContain('\n');
+    expect(tag).toContain('line one line two');
+  });
+
+  it('summarizes past the field cap', () => {
+    const fields = ['a', 'b', 'c', 'd'].map(key => ({ key, label: key.toUpperCase(), type: 'text' }));
+    const tag = describeReaimedValues(fields, {}, { a: '1', b: '2', c: '3', d: '4' });
+    expect(tag).toContain('+1 more');
+  });
+
+  // The point of the tag: two different aims must never render identically, or
+  // the second is rejected as a duplicate and silently never runs.
+  // The dedupe key is lowercased, so a tag that differs only by case is not a
+  // difference at all by the time addTask compares it.
+  it('stays distinct when two aims differ only in letter case', () => {
+    const first = describeReaimedValues([subject], { subject: 'x' }, { subject: 'ACME' });
+    const second = describeReaimedValues([subject], { subject: 'x' }, { subject: 'acme' });
+    expect(first.toLowerCase()).not.toBe(second.toLowerCase());
+  });
+
+  it('stays distinct when one value reassembles the separator of two fields', () => {
+    const two = [subject, { key: 'note', label: 'C', type: 'text' }];
+    const first = describeReaimedValues(two, {}, { subject: 'B', note: 'D' });
+    const second = describeReaimedValues(two, {}, { subject: 'B, C: D' });
+    expect(first.toLowerCase()).not.toBe(second.toLowerCase());
+  });
+
+  it('stays distinct when the same delta sits on a different saved baseline', () => {
+    const two = [subject, { key: 'depth', label: 'Depth', type: 'text' }];
+    // Same changed field, same new value — but the run genuinely differs,
+    // because the value it inherits for the other field has moved.
+    const first = describeReaimedValues(two, { subject: 'x', depth: 'shallow' }, { subject: 'A', depth: 'shallow' });
+    const second = describeReaimedValues(two, { subject: 'x', depth: 'deep' }, { subject: 'A', depth: 'deep' });
+    expect(first.toLowerCase()).not.toBe(second.toLowerCase());
+  });
+
+  it('keeps the tag on one line even when a label contains a newline', () => {
+    const odd = { key: 'subject', label: 'Sub\nject', type: 'text' };
+    expect(describeReaimedValues([odd], { subject: 'x' }, { subject: 'A' })).not.toContain('\n');
+  });
+
+  it('stays distinct when the readable form clips a long value', () => {
+    const shared = 'x'.repeat(60);
+    const first = describeReaimedValues([brief], { brief: '' }, { brief: `${shared}AAA` });
+    const second = describeReaimedValues([brief], { brief: '' }, { brief: `${shared}BBB` });
+    expect(first).toContain('…');
+    expect(first).not.toBe(second);
+  });
+
+  it('stays distinct when the difference is past the field cap', () => {
+    const fields = ['a', 'b', 'c', 'd'].map(key => ({ key, label: key.toUpperCase(), type: 'text' }));
+    const first = describeReaimedValues(fields, {}, { a: '1', b: '2', c: '3', d: '4' });
+    const second = describeReaimedValues(fields, {}, { a: '1', b: '2', c: '3', d: '9' });
+    expect(first).not.toBe(second);
+  });
+
+  it('stays distinct when two values collapse to the same single line', () => {
+    const first = describeReaimedValues([brief], { brief: '' }, { brief: 'a\nb' });
+    const second = describeReaimedValues([brief], { brief: '' }, { brief: 'a b' });
+    expect(first).not.toBe(second);
   });
 });

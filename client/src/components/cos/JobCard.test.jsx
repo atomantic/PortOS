@@ -62,7 +62,7 @@ describe('JobCard machine output', () => {
       lastExitCode: 1,
       lastOutput
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
 
     const pre = screen.getByText(lastOutput);
     expect(pre.tagName).toBe('PRE');
@@ -107,6 +107,45 @@ describe('JobCard on-demand cadence', () => {
   it('labels the cadence from the shared option list', () => {
     renderCard(ON_DEMAND_JOB);
     expect(screen.getByText('On Demand')).toBeTruthy();
+  });
+
+  it('hands the configuration form to the editor while editing, never showing two copies', () => {
+    renderCard({
+      ...ON_DEMAND_JOB,
+      formFields: [{ key: 'subject', label: 'Subject', type: 'text' }],
+      formValues: { subject: 'Saved subject' }
+    });
+
+    // The card's ad-hoc panel edits THIS RUN; the editor's copy edits what the
+    // task is saved with. Two live copies of one form is a merge nobody wins, so
+    // exactly one is on screen at a time.
+    expect(screen.getAllByLabelText('Subject')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getAllByLabelText('Subject')).toHaveLength(1);
+  });
+
+  it('keeps in-progress run values across a refetch, but follows a real saved change', () => {
+    const withValues = (formValues) => (
+      <JobCard
+        job={{ ...ON_DEMAND_JOB, formFields: [{ key: 'subject', label: 'Subject', type: 'text' }], formValues }}
+        onToggle={noop}
+        onTrigger={noop}
+        onDelete={noop}
+        onUpdate={noop}
+      />
+    );
+    const { rerender } = render(withValues({ subject: 'Saved' }));
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'One-off' } });
+
+    // A poll hands back an equal-but-new object every time. Keying the reset on
+    // object identity instead of the value signature would wipe what the user
+    // is still typing on each one.
+    rerender(withValues({ subject: 'Saved' }));
+    expect(screen.getByLabelText('Subject')).toHaveValue('One-off');
+
+    // A genuine change to the saved value does reset the dial onto it.
+    rerender(withValues({ subject: 'Edited elsewhere' }));
+    expect(screen.getByLabelText('Subject')).toHaveValue('Edited elsewhere');
   });
 
   it('offers the cadence and hides the time input once it is selected', () => {
