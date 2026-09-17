@@ -189,8 +189,8 @@ function ptyTerminalOptions({ cwd, cols, rows }) {
  * spawned them, which ends the session through `unregisterExternalSession`.
  */
 function adoptPtySession(sessionId, ptyProcess, options = {}) {
-  // The last 50KB of output, replayed to a client that attaches later. The
-  // buffer owns its own eviction, query-stripping and mode tracking — see
+  // Recent output, replayed to a client that attaches later. The buffer owns
+  // its own window, eviction, query-stripping and mode tracking — see
   // lib/terminalReplay.js.
   const replay = createReplayBuffer();
 

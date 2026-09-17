@@ -202,23 +202,17 @@ export const createTerminalModeTracker = () => {
 
 /**
  * The re-attach ring buffer itself: the recorded bytes plus BOTH corrections
- * this module exists for, behind one object.
- *
- * Both corrections above are properties of the replay, not of the caller, so
- * they belong to whatever owns the bytes. Held apart — as a chunk array, a byte
- * count, a mode tracker and an expression that composes them at attach time —
- * each new correction had to be threaded through two functions hundreds of
- * lines apart in `services/shell.js`, and "the preamble leads" was an ordering
- * an unrelated caller had to remember rather than something the buffer
- * guarantees. Here `render()` guarantees it, and the whole replay contract is
- * testable with no PTY.
+ * above, behind one object. They are properties of the replay rather than of
+ * any caller, so they belong to whatever owns the bytes — `render()` is what
+ * guarantees the preamble leads, instead of an attach site having to remember
+ * it.
  *
  * Eviction keeps the NEWEST chunk unconditionally: a single chunk larger than
  * the cap is the live screen, and dropping it would hand an attaching client an
  * empty terminal.
  *
  * @param {{ maxBytes?: number }} [options]
- * @returns {{ push: (data: string) => void, render: () => string, size: () => number }}
+ * @returns {{ push: (data: string) => void, render: () => string }}
  */
 export const createReplayBuffer = ({ maxBytes = 50 * 1024 } = {}) => {
   const chunks = [];
@@ -228,8 +222,7 @@ export const createReplayBuffer = ({ maxBytes = 50 * 1024 } = {}) => {
   return {
     /** Record one chunk of raw PTY output, in stream order. */
     push(data) {
-      // Modes are observed over the WHOLE stream, before eviction can drop the
-      // startup chunk that declared them — that is the point of the tracker.
+      // Observed before eviction can drop the startup chunk that declared them.
       modes.observe(data);
       chunks.push(data);
       bytes += data.length;
@@ -238,15 +231,9 @@ export const createReplayBuffer = ({ maxBytes = 50 * 1024 } = {}) => {
       }
     },
 
-    /**
-     * What a newly attached client should be handed. The modes in force lead:
-     * they have to be set before the frames drawn under them are painted.
-     */
+    /** What a newly attached client is handed. */
     render() {
       return modes.preamble() + stripTerminalQueries(chunks.join(''));
-    },
-
-    /** Bytes currently retained — at most `maxBytes`, unless one chunk exceeds it. */
-    size: () => bytes
+    }
   };
 };

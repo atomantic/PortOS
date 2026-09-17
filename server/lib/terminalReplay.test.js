@@ -145,26 +145,16 @@ describe('createTerminalModeTracker', () => {
   });
 });
 
-// The whole re-attach contract, with no shell service and no PTY: what a client
-// that attaches late is handed, and what the ring buffer had to drop to stay
-// bounded.
+// The whole re-attach contract, with no shell service and no PTY. These are the
+// only home for replay semantics: `services/shell.test.js` asserts the wiring
+// (attachSession hands back render()), not what render() decides.
 describe('createReplayBuffer', () => {
-  it('replays what was recorded', () => {
-    const replay = createReplayBuffer();
-    replay.push('first ');
-    replay.push('second');
-    expect(replay.render()).toBe('first second');
-  });
-
   it('evicts oldest chunks past the cap, keeping the newest whole', () => {
     const replay = createReplayBuffer({ maxBytes: 50 });
     replay.push('A'.repeat(20));
     replay.push('B'.repeat(20));
     replay.push('C'.repeat(20));
-    expect(replay.size()).toBeLessThanOrEqual(50);
-    const rendered = replay.render();
-    expect(rendered).not.toContain('A');
-    expect(rendered).toBe('B'.repeat(20) + 'C'.repeat(20));
+    expect(replay.render()).toBe('B'.repeat(20) + 'C'.repeat(20));
   });
 
   it('keeps a single chunk that alone exceeds the cap — it is the live screen', () => {
@@ -172,7 +162,6 @@ describe('createReplayBuffer', () => {
     const screen = 'X'.repeat(50);
     replay.push(screen);
     expect(replay.render()).toBe(screen);
-    expect(replay.size()).toBe(50);
   });
 
   it('leads with the modes still in force, then the frames drawn under them', () => {
@@ -182,14 +171,16 @@ describe('createReplayBuffer', () => {
     replay.push(OPENCODE_STARTUP);
     replay.push('f'.repeat(20));
     replay.push('g'.repeat(20));
-    const rendered = replay.render();
-    expect(rendered).toBe(
-      '\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h'
-      + 'g'.repeat(20)
-    );
+    const preamble = '\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?2004h';
+    expect(replay.render()).toBe(preamble + 'g'.repeat(20));
+    // The preamble is the ONLY place those modes still appear — the declaration
+    // itself was evicted, which is why it has to be re-asserted at all.
+    expect(replay.render().slice(preamble.length)).not.toContain('\x1b[?');
   });
 
   it('strips a query split across two recorded chunks', () => {
+    // node-pty hands over whatever the read returned; stripping runs over the
+    // JOINED buffer so a sequence straddling two chunks still matches.
     const replay = createReplayBuffer();
     replay.push('before\x1b[');
     replay.push('6nafter');
@@ -197,8 +188,6 @@ describe('createReplayBuffer', () => {
   });
 
   it('starts empty', () => {
-    const replay = createReplayBuffer();
-    expect(replay.size()).toBe(0);
-    expect(replay.render()).toBe('');
+    expect(createReplayBuffer().render()).toBe('');
   });
 });
