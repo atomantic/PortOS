@@ -12,7 +12,6 @@ import {
   SERVICE_DEFINITION_IDS,
   SERVICE_FAMILIES,
   SERVICE_PLANS,
-  SERVICE_SLUG_RE,
   resolveServiceInstance,
   serviceDefinitionById,
   serviceDefinitionForLocalRuntime,
@@ -20,8 +19,6 @@ import {
 import { LOCAL_RUNTIMES } from './localProviderRuntime.js';
 import { PROVIDER_GATEWAYS } from './providerGateways.js';
 import { CREDENTIALS } from './credentialRegistry.js';
-import { SERVICE_CREDENTIAL_VIAS } from './providerServiceInstances.js';
-import { serviceCredentialViaSchema, servicePlanSchema, serviceSlugSchema } from './validation.js';
 
 /** Epic D2, verbatim: the ids the rest of the epic composes from. */
 const D2_IDS = [
@@ -133,14 +130,3 @@ describe('resolveServiceInstance', () => {
   });
 });
 
-describe('the route schemas mirror the definition vocabulary (#7563)', () => {
-  // `lib/validation.js` spells these as literals to stay off this module's
-  // import path; this is what keeps the two from drifting.
-  it('accepts exactly the plans, credential modes and slug shape the definitions declare', () => {
-    expect(servicePlanSchema.options).toEqual([...SERVICE_PLANS]);
-    expect(serviceCredentialViaSchema.options).toEqual([...SERVICE_CREDENTIAL_VIAS]);
-    for (const slug of ['nvidia-nim', 'a', 'x9-y', 'Nope', '-lead', 'under_score', 'sp ace', '']) {
-      expect(serviceSlugSchema.safeParse(slug).success).toBe(SERVICE_SLUG_RE.test(slug) && slug.length <= 64);
-    }
-  });
-});

@@ -1,16 +1,15 @@
 import { z } from 'zod';
 import { harnessById } from './providerHarnesses.js';
+import { connectionDtoSchema, connectionHasCredentials, toConnectionDto } from './providerGraphRecords.js';
 import { isNonBlankStr } from './textUtils.js';
 import {
   CATALOG_STRATEGIES,
   SERVICE_FAMILIES,
   SERVICE_PLANS,
   SERVICE_SLUG_RE,
-  resolveServiceInstance,
   serviceDefinitionById,
   serviceDefinitionForLocalRuntime,
 } from './serviceDefinitions.js';
-import { nextConnectionCatalog } from './providerGraphRecords.js';
 
 /**
  * The pure half of "a connection IS a service instance" (#7563, epic #7561).
@@ -21,18 +20,15 @@ import { nextConnectionCatalog } from './providerGraphRecords.js';
  * the bridge — how an existing row learns its definition, its default plan and
  * an addressable slug (the backfill the boot reconcile pass runs), how a new
  * instance created FROM a definition gets the `kind` reconciliation expects,
- * how a refresh outcome becomes the stored catalog, and the sanitized DTO
- * `GET /api/providers/services` publishes.
+ * which models a plan may list, where an instance's credential comes from, and
+ * the sanitized DTO `GET /api/providers/services` publishes.
  *
- * Pure on purpose: no DB handle, no probe, no clock beyond the injected `now`,
- * so the backfill rule and the plan filter are pinned without a Postgres.
+ * Pure on purpose: no DB handle, no probe, no clock, so the backfill rule and
+ * the plan filter are pinned without a Postgres.
  */
 
-/** How an instance authenticates. Only `stored` means a secret is on the row. */
-export const SERVICE_CREDENTIAL_VIAS = Object.freeze(['stored', 'env', 'cli-login', 'bootstrap']);
-
-/** Where the credential an instance runs under was found; mirrors `credentialInventory`'s vocabulary. */
-export const SERVICE_CREDENTIAL_SOURCES = Object.freeze(['settings', 'env-file', 'env', 'cli', 'config', 'none']);
+/** Where a credential was found; `credentialInventory`'s vocabulary, so the two surfaces agree. */
+const CREDENTIAL_SOURCES = Object.freeze(['settings', 'env-file', 'env', 'cli', 'config', 'none']);
 
 const GATEWAY_KIND = 'gateway:';
 
@@ -71,7 +67,9 @@ export function definitionIdForKind(kind, { harnessId = null } = {}) {
 /**
  * The connection `kind` a definition's instances carry — the inverse of
  * {@link definitionIdForKind}, so a row created from a definition is judged by
- * reconciliation on exactly the terms an imported record would be.
+ * reconciliation on exactly the terms an imported record would be. (Not
+ * `providerRouteRecipes`' `serviceConnectionKind`, which answers a different
+ * question — the OpenCode namespace — and falls back to the slug.)
  */
 export function kindForDefinition(definition) {
   if (definition.localRuntime) return definition.localRuntime;
@@ -79,6 +77,9 @@ export function kindForDefinition(definition) {
   if (definition.family === 'subscription' || definition.harnessOnly) return 'vendor';
   return 'api';
 }
+
+/** The slugs a graph already uses — what every allocation must avoid. */
+export const takenServiceSlugs = (connections) => new Set(connections.map((connection) => connection.slug).filter(Boolean));
 
 /**
  * A slug not yet in `taken`: `base`, then `base-2`, `base-3`, …
@@ -121,15 +122,15 @@ export function serviceColumnsForConnection(connection, { harnessId = null, take
 
 /**
  * The backfill one reconcile pass applies: every connection with no `slug`
- * gets its service columns, allocated against the slugs the graph already
- * holds. Rows that have one are untouched, so a second pass plans nothing —
- * the "re-run is a no-op" half of the migration contract.
+ * gets its service columns, allocated against `taken`. Rows that have one are
+ * untouched, so a second pass plans nothing — the "re-run is a no-op" half of
+ * the migration contract.
  *
  * @param {{connections: object[], bindings: object[]}} graph
- * @param {Set<string>} [taken] - slugs already allocated in this pass; defaults to the graph's own
+ * @param {Set<string>} taken - slugs already allocated in this pass
  * @returns {{id: string, slug: string, definitionId: string|null, plan: string}[]}
  */
-export function planServiceColumnBackfill(graph, taken = new Set(graph.connections.map((connection) => connection.slug).filter(Boolean))) {
+export function planServiceColumnBackfill(graph, taken) {
   return graph.connections
     .filter((connection) => !connection.slug)
     .map((connection) => {
@@ -139,15 +140,12 @@ export function planServiceColumnBackfill(graph, taken = new Set(graph.connectio
 }
 
 /**
- * The transports map a stored row carries for a definition: the instance's
- * own overrides, else the definition's default base URL, and NO entry for a
- * protocol with neither — a `{ baseUrl: null }` row would read as an endpoint.
+ * The transports map a stored row carries for a resolved instance: only the
+ * protocols with an endpoint — a `{ baseUrl: null }` row would read as one.
  */
-export function transportsForDefinition(definition, overrides = {}) {
-  return Object.fromEntries(Object.entries(resolveServiceInstance({ definition, transports: overrides }).transports)
-    .filter(([, transport]) => typeof transport.baseUrl === 'string' && transport.baseUrl !== '')
-    .map(([protocol, transport]) => [protocol, { baseUrl: transport.baseUrl }]));
-}
+export const storedTransports = (instance) => Object.fromEntries(Object.entries(instance.transports)
+  .filter(([, transport]) => isNonBlankStr(transport.baseUrl))
+  .map(([protocol, transport]) => [protocol, { baseUrl: transport.baseUrl }]));
 
 /** The models a plan may list, per the definition's own filter. Identity when it has none. */
 export const applyServicePlanFilter = (definition, plan, models) => (
@@ -155,51 +153,26 @@ export const applyServicePlanFilter = (definition, plan, models) => (
 );
 
 /**
- * The catalog a service refresh leaves behind — `nextConnectionCatalog`'s
- * rule (a failure keeps what was known, a success writes what it saw) plus
- * `refreshedAt` and the per-model `capabilities` a listing declared. A failed
- * refresh keeps the previous capabilities with the previous models.
- *
- * @param {object} current - the stored catalog
- * @param {{refreshed: boolean, models?: string[], error?: string|null, contextWindows?: Record<string, number>|null}} outcome
- * @param {{now?: () => string}} [options]
- */
-export function nextServiceCatalog(current, outcome, { now = () => new Date().toISOString() } = {}) {
-  const next = nextConnectionCatalog(current, outcome);
-  if (!outcome?.refreshed) {
-    return { ...next, ...(current?.capabilities ? { capabilities: current.capabilities } : {}), refreshedAt: now() };
-  }
-  const windows = outcome.contextWindows && typeof outcome.contextWindows === 'object' ? outcome.contextWindows : {};
-  const capabilities = Object.fromEntries(next.models
-    .filter((model) => Number.isFinite(windows[model]))
-    .map((model) => [model, { contextWindow: windows[model] }]));
-  return { ...next, capabilities, refreshedAt: now() };
-}
-
-/** Whether a stored secret is on the row — the only `credentialVia` that holds one. */
-export const serviceHasCredentials = (connection) => (
-  (connection.credentialVia ?? 'stored') === 'stored' && Object.keys(connection.credentials || {}).length > 0
-);
-
-/**
  * Where the credential this instance runs under comes from, in
- * `credentialInventory`'s vocabulary — so a subscription instance can report
- * "signed in via CLI" without holding a key, and a `bootstrap` one "supplied by
- * the launch wrapper" (`config`). Never the value itself.
+ * `credentialInventory`'s vocabulary and with its precedence — so a
+ * subscription instance can report "signed in via CLI" without holding a key,
+ * and a `bootstrap` one "supplied by the launch wrapper" (`config`). Never
+ * the value itself.
  *
- * @param {{credentialVia?: string, credentials?: object, definition?: object|null}} instance
- * @param {{env?: Record<string, string|undefined>, envFile?: Map<string, string>|null}} [sources]
+ * @param {{credentialVia?: string, credentials?: object}} connection
+ * @param {{definition?: object|null, env?: Record<string, string|undefined>, envFile?: Map<string, string>|null}} [sources]
  */
-export function credentialSourceFor(instance, { env = {}, envFile = null } = {}) {
-  const via = instance.credentialVia ?? 'stored';
+export function credentialSourceFor(connection, { definition = null, env = {}, envFile = null } = {}) {
+  const via = connection.credentialVia ?? 'stored';
   if (via === 'cli-login') return 'cli';
   if (via === 'bootstrap') return 'config';
-  if (via === 'stored' && serviceHasCredentials(instance)) return 'settings';
-  for (const name of instance.definition?.credential?.envVars ?? []) {
-    if (isNonBlankStr(envFile?.get?.(name))) return 'env-file';
-    if (isNonBlankStr(env[name])) return 'env';
-  }
-  return 'none';
+  if (via === 'stored' && connectionHasCredentials(connection)) return 'settings';
+  const names = definition?.credential?.envVars ?? [];
+  const processKey = names.find((name) => isNonBlankStr(env[name]));
+  const fileKey = names.find((name) => isNonBlankStr(envFile?.get?.(name)));
+  if (processKey && fileKey && env[processKey] === envFile.get(fileKey)) return 'env-file';
+  if (processKey) return 'env';
+  return fileKey ? 'env-file' : 'none';
 }
 
 // --- the sanitized service DTO ---------------------------------------------------
@@ -214,31 +187,14 @@ const definitionDtoSchema = z.object({
 }).strict();
 
 /**
- * One instance as `GET /api/providers/services` publishes it. `.strict()` like
- * every graph DTO: a column added to the row must never ride out because a
- * mapper forgot to drop it, and `credentials` never appears at all.
+ * One instance as `GET /api/providers/services` publishes it: the connection
+ * DTO (so a column is mapped in exactly one place and `credentials` never
+ * appears) plus what only the service reading adds. `.strict()` like every
+ * graph DTO.
  */
-export const serviceDtoSchema = z.object({
-  id: z.string().min(1),
-  slug: z.string().nullable(),
-  revision: z.number().int().positive(),
-  label: z.string(),
-  kind: z.string().min(1),
-  definitionId: z.string().nullable(),
+export const serviceDtoSchema = connectionDtoSchema.extend({
   definition: definitionDtoSchema.nullable(),
-  plan: z.enum(SERVICE_PLANS),
-  enabled: z.boolean(),
-  transports: z.record(z.string(), z.object({ baseUrl: z.string().min(1) }).strict()),
-  hasCredentials: z.boolean(),
-  credentialVia: z.enum(SERVICE_CREDENTIAL_VIAS),
-  credentialSource: z.enum(SERVICE_CREDENTIAL_SOURCES),
-  catalog: z.object({
-    state: z.enum(['unknown', 'known', 'failed']),
-    models: z.array(z.string()),
-    error: z.string().nullable().optional(),
-    capabilities: z.record(z.string(), z.object({ contextWindow: z.number().optional() }).strict()).optional(),
-    refreshedAt: z.string().optional(),
-  }).strict(),
+  credentialSource: z.enum(CREDENTIAL_SOURCES),
   bindingCount: z.number().int().nonnegative(),
   // One word a card can act on. `unknown-definition` is a row nothing composes
   // onto (a kind this release has no definition for), not a broken one.
@@ -247,7 +203,7 @@ export const serviceDtoSchema = z.object({
 
 function serviceReadiness(connection, definition, credentialSource) {
   if (!definition) return 'unknown-definition';
-  if (connection.enabled === false) return 'disabled';
+  if (!connection.enabled) return 'disabled';
   const declares = Object.keys(definition.transports);
   const reachable = declares.length === 0 || declares.some((protocol) => connection.transports?.[protocol]?.baseUrl);
   if (!reachable) return 'needs-endpoint';
@@ -259,33 +215,24 @@ function serviceReadiness(connection, definition, credentialSource) {
 
 /**
  * @param {object} connection - a store row
- * @param {{bindingCount?: number, credentialSource?: string}} [context]
+ * @param {{bindingCount?: number, credentialSource?: string, definition?: object|null}} [context] —
+ *   `definition` may be passed by a caller that already resolved it.
  */
-export function toServiceDto(connection, { bindingCount = 0, credentialSource = 'none' } = {}) {
-  const definition = connection.definitionId ? serviceDefinitionById(connection.definitionId) : null;
+export function toServiceDto(connection, { bindingCount = 0, credentialSource = 'none', definition } = {}) {
+  const base = toConnectionDto(connection);
+  const resolved = definition === undefined ? (base.definitionId ? serviceDefinitionById(base.definitionId) : null) : definition;
   return serviceDtoSchema.parse({
-    id: connection.id,
-    slug: connection.slug ?? null,
-    revision: connection.revision,
-    label: connection.label ?? '',
-    kind: connection.kind,
-    definitionId: connection.definitionId ?? null,
-    definition: definition ? {
-      id: definition.id,
-      label: definition.label,
-      family: definition.family,
-      plans: [...definition.plans],
-      catalogStrategy: definition.catalog.strategy,
-      harnessOnly: definition.harnessOnly ?? null,
+    ...base,
+    definition: resolved ? {
+      id: resolved.id,
+      label: resolved.label,
+      family: resolved.family,
+      plans: [...resolved.plans],
+      catalogStrategy: resolved.catalog.strategy,
+      harnessOnly: resolved.harnessOnly ?? null,
     } : null,
-    plan: connection.plan ?? 'paid',
-    enabled: connection.enabled ?? true,
-    transports: connection.transports || {},
-    hasCredentials: serviceHasCredentials(connection),
-    credentialVia: connection.credentialVia ?? 'stored',
     credentialSource,
-    catalog: connection.catalog || { state: 'unknown', models: [] },
     bindingCount,
-    readiness: serviceReadiness(connection, definition, credentialSource),
+    readiness: serviceReadiness(base, resolved, credentialSource),
   });
 }

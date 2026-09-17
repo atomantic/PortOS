@@ -17,8 +17,8 @@ import {
   credentialSourceFor,
   definitionIdForKind,
   kindForDefinition,
-  nextServiceCatalog,
   planServiceColumnBackfill,
+  takenServiceSlugs,
   toServiceDto,
 } from './providerServiceInstances.js';
 import { SERVICE_DEFINITIONS, serviceDefinitionById } from './serviceDefinitions.js';
@@ -87,7 +87,7 @@ describe('planServiceColumnBackfill', () => {
       ],
       bindings: [{ id: 'bind-e', connectionId: 'e', harnessId: 'claude' }],
     };
-    expect(planServiceColumnBackfill(graph)).toEqual([
+    expect(planServiceColumnBackfill(graph, takenServiceSlugs(graph.connections))).toEqual([
       { id: 'b', slug: 'ollama-2', definitionId: 'ollama', plan: 'local' },
       { id: 'c', slug: 'ollama-3', definitionId: 'ollama', plan: 'local' },
       // The first plan, exactly as `resolveServiceInstance` defaults it.
@@ -100,10 +100,10 @@ describe('planServiceColumnBackfill', () => {
 
   it('plans nothing on a second pass — the re-run is a no-op', () => {
     const graph = { connections: [row({ id: 'a', kind: 'ollama' }), row({ id: 'b', kind: 'api' })], bindings: [] };
-    const first = planServiceColumnBackfill(graph);
+    const first = planServiceColumnBackfill(graph, takenServiceSlugs(graph.connections));
     const named = { connections: graph.connections.map((connection) => ({ ...connection, ...first.find((entry) => entry.id === connection.id) })), bindings: [] };
-    expect(planServiceColumnBackfill(named)).toEqual([]);
-    expect(planServiceColumnBackfill({ connections: [], bindings: [] })).toEqual([]);
+    expect(planServiceColumnBackfill(named, takenServiceSlugs(named.connections))).toEqual([]);
+    expect(planServiceColumnBackfill({ connections: [], bindings: [] }, new Set())).toEqual([]);
   });
 
   it('allocates against slugs a caller already handed out in the same pass', () => {
@@ -114,7 +114,7 @@ describe('planServiceColumnBackfill', () => {
   });
 });
 
-describe('plan filter and refresh outcome', () => {
+describe('applyServicePlanFilter', () => {
   const zen = serviceDefinitionById('opencode-zen');
   const nim = serviceDefinitionById('nvidia-nim');
   const listing = ['big-pickle', 'mimo-v2.5-free', 'deepseek-v4-flash-free'];
@@ -126,36 +126,26 @@ describe('plan filter and refresh outcome', () => {
     expect(applyServicePlanFilter(nim, 'free', listing)).toEqual(listing);
     expect(applyServicePlanFilter(nim, 'paid', listing)).toEqual(listing);
   });
-
-  it('keeps the known models AND their capabilities through a failed refresh, and stamps the attempt', () => {
-    const current = { state: 'known', models: ['a'], capabilities: { a: { contextWindow: 8192 } } };
-    expect(nextServiceCatalog(current, { refreshed: false, error: 'timed out' }, { now: () => 'T1' })).toEqual({
-      state: 'failed', models: ['a'], error: 'timed out', capabilities: { a: { contextWindow: 8192 } }, refreshedAt: 'T1',
-    });
-  });
-
-  it('writes what a success saw — including an empty answer — with the windows the listing declared', () => {
-    const current = { state: 'known', models: ['a'], capabilities: { a: { contextWindow: 8192 } } };
-    expect(nextServiceCatalog(current, { refreshed: true, models: ['b', 'c'], contextWindows: { b: 32768, zzz: 1 } }, { now: () => 'T2' }))
-      .toEqual({ state: 'known', models: ['b', 'c'], error: null, capabilities: { b: { contextWindow: 32768 } }, refreshedAt: 'T2' });
-    expect(nextServiceCatalog(current, { refreshed: true, models: [] }, { now: () => 'T3' }))
-      .toEqual({ state: 'known', models: [], error: null, capabilities: {}, refreshedAt: 'T3' });
-  });
 });
 
 describe('credentialSourceFor', () => {
   const nim = serviceDefinitionById('nvidia-nim');
   it('reports where the key comes from, never the key', () => {
-    expect(credentialSourceFor({ credentialVia: 'stored', credentials: { apiKey: 'example-key' }, definition: nim })).toBe('settings');
-    expect(credentialSourceFor({ credentialVia: 'cli-login', credentials: {}, definition: serviceDefinitionById('claude-subscription') })).toBe('cli');
-    expect(credentialSourceFor({ credentialVia: 'bootstrap', credentials: {}, definition: nim })).toBe('config');
-    expect(credentialSourceFor({ credentialVia: 'env', credentials: {}, definition: nim }, { env: { NVIDIA_API_KEY: 'example' } })).toBe('env');
-    expect(credentialSourceFor({ credentialVia: 'env', credentials: {}, definition: nim },
-      { env: {}, envFile: new Map([['NVIDIA_API_KEY', 'example']]) })).toBe('env-file');
-    expect(credentialSourceFor({ credentialVia: 'env', credentials: {}, definition: nim }, { env: { NVIDIA_API_KEY: '' } })).toBe('none');
+    const from = (via, sources = {}) => credentialSourceFor({ credentialVia: via, credentials: {} }, { definition: nim, ...sources });
+    expect(credentialSourceFor({ credentialVia: 'stored', credentials: { apiKey: 'example-key' } }, { definition: nim })).toBe('settings');
+    expect(from('cli-login')).toBe('cli');
+    expect(from('bootstrap')).toBe('config');
+    expect(from('env', { env: { NVIDIA_API_KEY: 'example' } })).toBe('env');
+    expect(from('env', { env: {}, envFile: new Map([['NVIDIA_API_KEY', 'example']]) })).toBe('env-file');
+    expect(from('env', { env: { NVIDIA_API_KEY: '' } })).toBe('none');
+    // The same precedence as the credential inventory: a process value that
+    // matches the install file is reported as the file; one that differs is
+    // the environment's own.
+    expect(from('env', { env: { NVIDIA_API_KEY: 'same' }, envFile: new Map([['NVIDIA_API_KEY', 'same']]) })).toBe('env-file');
+    expect(from('env', { env: { NVIDIA_API_KEY: 'other' }, envFile: new Map([['NVIDIA_API_KEY', 'same']]) })).toBe('env');
     // A stored instance with nothing stored is still checked against the
     // environment: the key may simply live there.
-    expect(credentialSourceFor({ credentialVia: 'stored', credentials: {}, definition: nim }, { env: { NVIDIA_API_KEY: 'x' } })).toBe('env');
+    expect(from('stored', { env: { NVIDIA_API_KEY: 'x' } })).toBe('env');
   });
 });
 

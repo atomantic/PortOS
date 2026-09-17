@@ -1,16 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
-import { sanitizeCatalogError } from '../lib/providerGraphRecords.js';
+import { nextConnectionCatalog, sanitizeCatalogError } from '../lib/providerGraphRecords.js';
 import {
   allocateServiceSlug,
   applyServicePlanFilter,
   credentialSourceFor,
   kindForDefinition,
-  nextServiceCatalog,
+  storedTransports,
+  takenServiceSlugs,
   toServiceDto,
-  transportsForDefinition,
 } from '../lib/providerServiceInstances.js';
+import { isNonBlankStr } from '../lib/textUtils.js';
 import { resolveServiceInstance, serviceDefinitionById } from '../lib/serviceDefinitions.js';
 import { findConnectionByRef, requireProviderGraph, serializeProviderGraph, updateConnectionSettings } from './providerGraph.js';
 import { readGraph, saveConnectionSettings, writeGraph } from './providerGraphStore.js';
@@ -35,6 +36,11 @@ import { readGraph, saveConnectionSettings, writeGraph } from './providerGraphSt
 const CATALOG_PROBE_TIMEOUT_MS = 10_000;
 const ANTHROPIC_VERSION = '2023-06-01';
 
+// Deferred: `credentialInventory.js` is otherwise unreachable from the
+// providers route tree, and every suite that reaches the tree would pay its
+// closure for a file read only when a service is described (server/AGENTS.md
+// "Import scoping").
+const loadInstallEnvFile = async () => (await import('./credentialInventory.js')).loadInstallEnvFile();
 
 /**
  * The key an instance runs under, or `''`. A `stored` instance holds it on the
@@ -42,10 +48,10 @@ const ANTHROPIC_VERSION = '2023-06-01';
  * `env` one reads the definition's conventional variable from the process.
  */
 function instanceApiKey(connection, definition, env) {
-  const names = definition.credential.envVars;
-  if (connection.credentialVia === 'env') return names.map((name) => env[name]).find((value) => typeof value === 'string' && value !== '') ?? '';
+  const firstNamed = (bag) => definition.credential.envVars.map((name) => bag[name]).find(isNonBlankStr) ?? '';
+  if (connection.credentialVia === 'env') return firstNamed(env);
   const stored = connection.credentials || {};
-  return stored.apiKey ?? names.map((name) => stored[name]).find((value) => typeof value === 'string' && value !== '') ?? '';
+  return stored.apiKey ?? firstNamed(stored);
 }
 
 /**
@@ -108,12 +114,6 @@ async function listByStrategy(connection, definition, deps) {
   }
 }
 
-// Deferred: `credentialInventory.js` is otherwise unreachable from the
-// providers route tree, and every suite that reaches the tree would pay its
-// closure for a file read only when a service is described (server/AGENTS.md
-// "Import scoping").
-const loadInstallEnvFile = async () => (await import('./credentialInventory.js')).loadInstallEnvFile();
-
 const defaultDeps = () => ({
   env: process.env,
   probe: probeOpenAiModels,
@@ -136,70 +136,64 @@ function requireService(graph, ref) {
 }
 
 /** The sanitized DTO for one row, with the derived fields the list also carries. */
-function describe(connection, graph, { env, envFile }) {
+function describe(connection, graph, envFile) {
   const definition = connection.definitionId ? serviceDefinitionById(connection.definitionId) : null;
   return toServiceDto(connection, {
+    definition,
     bindingCount: graph.bindings.filter((binding) => binding.connectionId === connection.id).length,
-    credentialSource: credentialSourceFor({ ...connection, definition }, { env, envFile }),
+    credentialSource: credentialSourceFor(connection, { definition, env: process.env, envFile }),
   });
 }
 
 /** Every instance, sanitized: never a credential value, never a projection snapshot. */
-export async function listServices({ env = process.env } = {}) {
+export async function listServices() {
   requireProviderGraph();
   const [graph, envFile] = await Promise.all([readGraph(), loadInstallEnvFile()]);
-  return { services: graph.connections.map((connection) => describe(connection, graph, { env, envFile })) };
+  return { services: graph.connections.map((connection) => describe(connection, graph, envFile)) };
 }
 
 /** One instance by slug or UUID, sanitized like the list. */
-export async function getService(ref, { env = process.env } = {}) {
+export async function getService(ref) {
   requireProviderGraph();
   const [graph, envFile] = await Promise.all([readGraph(), loadInstallEnvFile()]);
-  return { service: describe(requireService(graph, ref), graph, { env, envFile }) };
+  return { service: describe(requireService(graph, ref), graph, envFile) };
 }
 
 /**
  * Create an instance FROM a definition — the counterpart of
  * `createConnection`, which takes a bare kind and transports.
  *
- * The definition decides what is legal (`resolveServiceInstance`: a plan it
- * sells, transports it speaks, a well-formed slug), and the row is stored with
- * the `kind` reconciliation derives for that definition's records, so the
- * next pass judges it exactly as an imported route would be. A `bootstrap`
- * instance stores no secret whatever was sent: the launch wrapper supplies it.
+ * The definition decides what is legal (`resolveServiceInstance`: a known
+ * definition, a plan it sells, transports it speaks — each a typed 400), and
+ * the row is stored with the `kind` reconciliation derives for that
+ * definition's records, so the next pass judges it exactly as an imported
+ * route would be. A `bootstrap` instance stores no secret whatever was sent:
+ * the launch wrapper supplies it.
  *
  * Nothing is probed. The catalog starts `unknown`; discovery is the explicit
  * `POST /services/:slug/refresh-catalog`.
  */
 export function createService({
   definitionId, slug, label, plan, enabled = true, transports = {}, credentials = {}, credentialVia = 'stored',
-}, { env = process.env } = {}) {
+}) {
   return serializeProviderGraph(async () => {
     requireProviderGraph();
-    const definition = serviceDefinitionById(definitionId);
-    if (!definition) throw new ServerError(`No service definition "${definitionId}"`, { status: 400, code: 'SERVICE_DEFINITION_UNKNOWN' });
-
-    const graph = await readGraph();
-    const taken = new Set(graph.connections.map((connection) => connection.slug).filter(Boolean));
+    const [graph, envFile] = await Promise.all([readGraph(), loadInstallEnvFile()]);
+    const taken = takenServiceSlugs(graph.connections);
     if (slug && taken.has(slug)) {
       throw new ServerError(`A service is already addressed as "${slug}"`, { status: 409, code: 'SERVICE_SLUG_TAKEN' });
     }
-    // The schema bounded the slug's shape and the plan's vocabulary; the one
-    // refusal left to the definition is a plan it does not sell.
-    if (plan !== undefined && !definition.plans.includes(plan)) {
-      throw new ServerError(`${definition.label} has no "${plan}" plan; choose one of ${definition.plans.join(', ')}`,
-        { status: 400, code: 'SERVICE_PLAN_UNSUPPORTED' });
-    }
     const instance = resolveServiceInstance({
-      definition, slug: slug ?? allocateServiceSlug(definition.id, taken), plan, transports, credentials, credentialVia,
+      definitionId, slug: slug ?? allocateServiceSlug(definitionId, taken), plan, transports, credentials, credentialVia,
     });
+    const { definition } = instance;
 
     const connection = {
       id: randomUUID(),
       revision: 1,
       kind: kindForDefinition(definition),
       label: label ?? definition.label,
-      transports: transportsForDefinition(definition, transports),
+      transports: storedTransports(instance),
       credentials: credentialVia === 'bootstrap' ? {} : credentials,
       catalog: { state: 'unknown', models: [] },
       slug: instance.slug,
@@ -210,22 +204,22 @@ export function createService({
     };
     await writeGraph({ connections: [connection], bindings: [], routes: [] });
     console.log(`🔗 Created service instance ${connection.slug} (${definition.id}, plan ${connection.plan})`);
-    return { service: describe(connection, graph, { env, envFile: await loadInstallEnvFile() }) };
+    return { service: describe(connection, graph, envFile) };
   });
 }
 
 /**
  * Edit an instance: the shared-backend edit (`updateConnectionSettings`, which
- * owns the revision gate, the credential merge and the route projection) plus
- * plan / enabled / credential mode, then the row read back as a DTO.
+ * owns the availability guard, the revision gate, the credential merge and the
+ * route projection) plus plan / enabled / credential mode, then the row read
+ * back as a DTO.
  *
  * Not wrapped in a second `serialize`: the inner call already runs on the
  * queue, and queueing behind it from inside would wait on itself.
  */
-export async function updateService(ref, input, { env = process.env } = {}) {
-  requireProviderGraph();
+export async function updateService(ref, input) {
   await updateConnectionSettings({ connectionId: ref, ...input });
-  return getService(ref, { env });
+  return getService(ref);
 }
 
 /**
@@ -244,7 +238,7 @@ export function refreshServiceCatalog(ref, deps = {}) {
   const { env, probe, harnessModels, now } = { ...defaultDeps(), ...deps };
   return serializeProviderGraph(async () => {
     requireProviderGraph();
-    const graph = await readGraph();
+    const [graph, envFile] = await Promise.all([readGraph(), loadInstallEnvFile()]);
     const connection = requireService(graph, ref);
     const definition = connection.definitionId ? serviceDefinitionById(connection.definitionId) : null;
     if (!definition) {
@@ -254,7 +248,7 @@ export function refreshServiceCatalog(ref, deps = {}) {
 
     const outcome = await listByStrategy(connection, definition, { env, probe, harnessModels })
       .catch((err) => ({ refreshed: false, error: err }));
-    const catalog = nextServiceCatalog(connection.catalog, {
+    const catalog = nextConnectionCatalog(connection.catalog, {
       ...outcome,
       models: outcome.refreshed ? applyServicePlanFilter(definition, connection.plan, outcome.models || []) : undefined,
       error: outcome.error == null ? null : sanitizeCatalogError(outcome.error, connection.credentials),
@@ -263,7 +257,6 @@ export function refreshServiceCatalog(ref, deps = {}) {
 
     console.log(`🔗 Refreshed service ${connection.slug ?? connection.id} catalog via ${definition.catalog.strategy}: `
       + `${catalog.state}, ${catalog.models.length} models`);
-    const refreshed = { ...connection, catalog, revision: revision ?? connection.revision };
-    return { service: describe(refreshed, graph, { env, envFile: await loadInstallEnvFile() }) };
+    return { service: describe({ ...connection, catalog, revision: revision ?? connection.revision }, graph, envFile) };
   });
 }

@@ -41,12 +41,12 @@ import {
 } from '../lib/providerRouteSettings.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
-  SERVICE_CREDENTIAL_VIAS,
   allocateServiceSlug,
   planServiceColumnBackfill,
   serviceColumnsForConnection,
+  takenServiceSlugs,
 } from '../lib/providerServiceInstances.js';
-import { serviceDefinitionById } from '../lib/serviceDefinitions.js';
+import { SERVICE_CREDENTIAL_VIAS, assertServicePlan, serviceDefinitionById } from '../lib/serviceDefinitions.js';
 import { requireToolkit } from '../lib/aiToolkitState.js';
 import {
   acknowledgeProjection,
@@ -96,11 +96,16 @@ let graphEnabled = false;
 let reconciling = false;
 let queue = Promise.resolve();
 
-/** One-at-a-time execution. A rejected pass must not poison the next one. */
+/**
+ * One-at-a-time execution. A rejected pass must not poison the next one.
+ * Exported (as `serializeProviderGraph`) for the service-instance operations
+ * in `providerServices.js`, which mutate the same rows.
+ */
 const serialize = (fn) => {
   queue = queue.then(() => undefined, () => undefined).then(fn);
   return queue;
 };
+export { serialize as serializeProviderGraph };
 
 export const providerGraphEnabled = () => graphEnabled;
 
@@ -112,13 +117,6 @@ export function resetProviderGraphState() {
 }
 
 const providerService = () => requireToolkit().services.providers;
-
-/**
- * Run `fn` on the graph's one serialization queue. Exported for the
- * service-instance operations in `providerServices.js`, which mutate the same
- * rows and must not interleave with a reconcile pass.
- */
-export const serializeProviderGraph = (fn) => serialize(fn);
 
 /**
  * A connection addressed by UUID or by service slug (#7563). Every
@@ -168,14 +166,15 @@ async function reconcilePass(reason) {
   // the pre-existing unnamed rows are backfilled after. Row-derived (never a
   // seed) and idempotent, so it rides every pass rather than a one-shot
   // migration. Local I/O only; nothing here contacts a provider.
-  const taken = new Set(graph.connections.map((connection) => connection.slug).filter(Boolean));
-  const harnessOf = (connectionId, bindings) => bindings.find((binding) => binding.connectionId === connectionId)?.harnessId ?? null;
+  const taken = takenServiceSlugs(graph.connections);
+  const harnessOf = (bindings, test) => bindings.find(test)?.harnessId ?? null;
   for (const connection of plan.imports.connections) {
-    Object.assign(connection, serviceColumnsForConnection(connection, { harnessId: harnessOf(connection.id, plan.imports.bindings), taken }));
+    const harnessId = harnessOf(plan.imports.bindings, (binding) => binding.connectionId === connection.id);
+    Object.assign(connection, serviceColumnsForConnection(connection, { harnessId, taken }));
   }
   for (const regroup of plan.regroups) {
     if (regroup.connectionAction !== 'clone') continue;
-    const harnessId = regroup.binding?.harnessId ?? graph.bindings.find((binding) => binding.id === regroup.bindingId)?.harnessId ?? null;
+    const harnessId = regroup.binding?.harnessId ?? harnessOf(graph.bindings, (binding) => binding.id === regroup.bindingId);
     Object.assign(regroup.connection, serviceColumnsForConnection(regroup.connection, { harnessId, taken }));
   }
   const backfill = planServiceColumnBackfill(graph, taken);
@@ -264,7 +263,7 @@ function describeRoute(provider) {
 
 /** The sanitized `GET /api/providers/management` body. */
 export async function getManagementGraph() {
-  requireGraph();
+  requireProviderGraph();
   const [graph, data] = await Promise.all([readGraph(), providerService().getAllProviders()]);
   // Only the records the graph actually routes: an unmapped legacy provider has
   // no row to decorate, and resolving a shell invocation for it would be work
@@ -278,12 +277,11 @@ export async function getManagementGraph() {
 
 // --- link / unlink -----------------------------------------------------------
 
-const requireGraph = () => {
+export const requireProviderGraph = () => {
   if (!graphEnabled) {
     throw new ServerError('Provider connection graph is unavailable on this install', { status: 503, code: 'PROVIDER_GRAPH_UNAVAILABLE' });
   }
 };
-export const requireProviderGraph = requireGraph;
 
 const requireConnection = (graph, ref) => {
   const connection = findConnectionByRef(graph, ref);
@@ -304,7 +302,7 @@ const stale = (what) => new ServerError(
  * a 409 requiring a fresh preview rather than a last-writer merge.
  */
 async function resolveLink({ bindingId, targetConnectionId = null, expectedRevisions = {} }) {
-  requireGraph();
+  requireProviderGraph();
   const graph = await readGraph();
   const binding = graph.bindings.find((candidate) => candidate.id === bindingId);
   if (!binding) throw new ServerError('Binding not found', { status: 404, code: 'BINDING_NOT_FOUND' });
@@ -417,7 +415,7 @@ export function unlinkBinding(input) {
     // A clone is a second INSTANCE of the same service, so it takes the next
     // free slug rather than the source's — `uq_ai_connections_slug` would
     // refuse the copy, and two rows answering to one address is the bug.
-    const taken = new Set(graph.connections.map((candidate) => candidate.slug).filter(Boolean));
+    const taken = takenServiceSlugs(graph.connections);
     const connection = {
       ...source,
       id: randomUUID(),
@@ -440,7 +438,7 @@ export function unlinkBinding(input) {
  * still names the row: unlink first, so no binding is ever silently orphaned.
  */
 export async function removeConnection(connectionRef) {
-  requireGraph();
+  requireProviderGraph();
   return serialize(async () => {
     const connectionId = requireConnection(await readGraph(), connectionRef).id;
     const result = await deleteConnection(connectionId);
@@ -535,20 +533,6 @@ function requireSettledRoutes(routes) {
   }
 }
 
-/**
- * A plan must be one the instance's definition sells (#7563). A row with no
- * definition takes any plan: there is nothing to check it against, and refusing
- * would strand a legacy row a human is trying to label.
- */
-function requireServicePlan(connection, plan) {
-  if (plan === undefined) return;
-  const definition = connection.definitionId ? serviceDefinitionById(connection.definitionId) : null;
-  if (definition && !definition.plans.includes(plan)) {
-    throw new ServerError(`${definition.label} has no "${plan}" plan; choose one of ${definition.plans.join(', ')}`,
-      { status: 400, code: 'SERVICE_PLAN_UNSUPPORTED' });
-  }
-}
-
 /** Every binding on a connection, and the executable routes those bindings own. */
 function connectionFanout(graph, connectionId) {
   const bindings = graph.bindings.filter((binding) => binding.connectionId === connectionId);
@@ -576,11 +560,14 @@ export function updateConnectionSettings({
   connectionId, expectedRevision, label, transports, credentials, plan, enabled, credentialVia,
 }) {
   return serialize(async () => {
-    requireGraph();
+    requireProviderGraph();
     const graph = await readGraph();
     const connection = requireConnection(graph, connectionId);
     if (connection.revision !== expectedRevision) throw stale('The connection');
-    requireServicePlan(connection, plan);
+    const definition = connection.definitionId ? serviceDefinitionById(connection.definitionId) : null;
+    // A row with no definition takes any plan: there is nothing to check it
+    // against, and refusing would strand a legacy row a human is labelling.
+    if (plan !== undefined && definition) assertServicePlan(definition, plan);
     if (credentialVia !== undefined && !SERVICE_CREDENTIAL_VIAS.includes(credentialVia)) {
       throw new ServerError(`credentialVia must be one of ${SERVICE_CREDENTIAL_VIAS.join(', ')}`,
         { status: 400, code: 'PROVIDER_SERVICE_CREDENTIAL_VIA_INVALID' });
@@ -625,7 +612,7 @@ export function updateConnectionSettings({
  */
 export function updateBindingSettings({ bindingId, expectedRevision, label, selectedModels }) {
   return serialize(async () => {
-    requireGraph();
+    requireProviderGraph();
     const graph = await readGraph();
     const binding = requireRow(graph.bindings, bindingId, 'Binding', 'BINDING_NOT_FOUND');
     if (binding.revision !== expectedRevision) throw stale('The binding');
@@ -657,7 +644,7 @@ export function updateBindingSettings({ bindingId, expectedRevision, label, sele
  */
 export function refreshConnectionCatalog(connectionRef) {
   return serialize(async () => {
-    requireGraph();
+    requireProviderGraph();
     const graph = await readGraph();
     const connection = requireConnection(graph, connectionRef);
     const { routes } = connectionFanout(graph, connection.id);
@@ -731,7 +718,7 @@ export function refreshConnectionCatalog(connectionRef) {
  */
 export function updateRouteSettings({ providerId, expectedRevision, settings }) {
   return serialize(async () => {
-    requireGraph();
+    requireProviderGraph();
     const graph = await readGraph();
     const route = graph.routes.find((candidate) => candidate.providerId === providerId);
     if (!route) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
@@ -810,7 +797,7 @@ export function updateRouteSettings({ providerId, expectedRevision, settings }) 
  */
 export function updateRouteModelAliases({ providerId, expectedRevision, aliases }) {
   return serialize(async () => {
-    requireGraph();
+    requireProviderGraph();
     const graph = await readGraph();
     const route = graph.routes.find((candidate) => candidate.providerId === providerId);
     if (!route) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
@@ -869,11 +856,10 @@ export function updateRouteModelAliases({ providerId, expectedRevision, aliases 
  */
 export function createConnection({ kind, label, transports, credentials }) {
   return serialize(async () => {
-    requireGraph();
+    requireProviderGraph();
     const blocker = connectionBlocker({ kind, transports });
     if (blocker) throw new ServerError(blocker.message, { status: 400, code: blocker.code });
     const graph = await readGraph();
-    const taken = new Set(graph.connections.map((candidate) => candidate.slug).filter(Boolean));
     const connection = {
       id: randomUUID(),
       revision: 1,
@@ -884,7 +870,7 @@ export function createConnection({ kind, label, transports, credentials }) {
       catalog: { state: 'unknown', models: [] },
       // Named as a service instance from the start (#7563), so the row is
       // addressable without waiting for the next reconcile pass.
-      ...serviceColumnsForConnection({ kind }, { taken }),
+      ...serviceColumnsForConnection({ kind }, { taken: takenServiceSlugs(graph.connections) }),
       enabled: true,
       credentialVia: 'stored',
     };
@@ -927,7 +913,7 @@ export function createConnection({ kind, label, transports, credentials }) {
  */
 export function createBinding({ connectionId, harnessId, modes, label }) {
   return serialize(async () => {
-    requireGraph();
+    requireProviderGraph();
     const graph = await readGraph();
     const connection = requireConnection(graph, connectionId);
 

@@ -19,6 +19,7 @@ import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
+import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS, SERVICE_SLUG_RE } from './serviceDefinitions.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
 import {
   FEDERATED_MEDIA_ASSET_MAX_COUNT,
@@ -693,17 +694,13 @@ export const providerConnectionUpdateSchema = z.object({
 }).strict();
 
 // --- service instances (#7563) ------------------------------------------------
-//
-// The literals below mirror `serviceDefinitions.js` (`SERVICE_SLUG_RE`,
-// `SERVICE_PLANS`) and `providerServiceInstances.js` (`SERVICE_CREDENTIAL_VIAS`)
-// rather than importing them: this module is reached by nearly every route
-// (`lib/importScoping.test.js`), and `serviceDefinitions.test.js` pins the
-// mirror so the two cannot drift.
-export const serviceSlugSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]*$/, {
+// The vocabulary comes from `serviceDefinitions.js`, a zero-import leaf this
+// module already reaches, so nothing here can drift from the definitions.
+export const serviceSlugSchema = z.string().trim().min(1).max(64).regex(SERVICE_SLUG_RE, {
   message: 'A service slug is lowercase letters, digits and dashes, starting with a letter or digit',
 });
-export const servicePlanSchema = z.enum(['free', 'paid', 'subscription', 'local']);
-export const serviceCredentialViaSchema = z.enum(['stored', 'env', 'cli-login', 'bootstrap']);
+export const servicePlanSchema = z.enum(SERVICE_PLANS);
+export const serviceCredentialViaSchema = z.enum(SERVICE_CREDENTIAL_VIAS);
 
 const serviceTransportsSchema = z.record(
   z.string().trim().min(1).max(64),
