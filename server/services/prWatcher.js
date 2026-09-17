@@ -11,6 +11,8 @@
  */
 
 import { execGh, ensureForgeReachable } from './github.js';
+import { resolveForgeExecOptions } from './forgeExecOptions.js';
+import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { getAppById, updateApp, getActiveApps } from './apps.js';
 import * as git from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
@@ -98,16 +100,23 @@ export function __resetSelfLoginCache() {
  * `HOST/OWNER/REPO` selector (see checkPullRequests) — pinning the host makes
  * this work on GitHub Enterprise (a bare `OWNER/REPO` defaults to github.com)
  * while staying deterministic on a multi-remote (fork + upstream) checkout that
- * cwd-based auto-detection would resolve ambiguously. Returns null on failure.
+ * cwd-based auto-detection would resolve ambiguously. `forgeExec` is the
+ * per-repo gh credential overlay (`{cwd, env}`) — without it this runs as gh's
+ * ambient active login and permanently 404s on a private repo owned by another
+ * account (#7540). Returns null on failure.
  */
-async function getDefaultBranch(repoSpec) {
+async function getDefaultBranch(repoSpec, { cwd, env } = {}) {
   const name = await execGh(
     ['repo', 'view', repoSpec, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'],
     undefined,
-    { backoffKey: repoSpec }
+    { cwd, env, backoffKey: repoSpec }
   )
     .catch((err) => {
-      console.error(`❌ pr-watcher: could not resolve the default branch for ${repoSpec}: ${err.message}`);
+      if (isForgeNoAccessError(err)) {
+        logForgeNoAccessOnce('pr-watcher', repoSpec, err.message);
+      } else {
+        console.error(`❌ pr-watcher: could not resolve the default branch for ${repoSpec}: ${err.message}`);
+      }
       return null;
     });
   return name ? name.trim() : null;
@@ -119,14 +128,18 @@ async function getDefaultBranch(repoSpec) {
  * and fork-safe — see getDefaultBranch. Returns an array of normalized PR
  * objects, or null on failure.
  */
-async function listOpenPullRequests(repoSpec, baseBranch) {
+async function listOpenPullRequests(repoSpec, baseBranch, { cwd, env } = {}) {
   const raw = await execGh([
     'pr', 'list', '--repo', repoSpec,
     '--base', baseBranch, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
     '--json', 'number,title,author,url,createdAt,updatedAt,isDraft,headRefName,headRefOid,mergeStateStatus,statusCheckRollup'
-  ], undefined, { backoffKey: repoSpec }).catch((err) => {
-    console.error(`❌ pr-watcher: gh pr list failed for ${repoSpec}: ${err.message}`);
+  ], undefined, { cwd, env, backoffKey: repoSpec }).catch((err) => {
+    if (isForgeNoAccessError(err)) {
+      logForgeNoAccessOnce('pr-watcher', repoSpec, err.message);
+    } else {
+      console.error(`❌ pr-watcher: gh pr list failed for ${repoSpec}: ${err.message}`);
+    }
     return null;
   });
   if (raw === null) return null;
@@ -285,11 +298,11 @@ export function isPendingMergeReady(prView) {
   });
 }
 
-async function readPendingPullRequest(repoSpec, prNumber) {
+async function readPendingPullRequest(repoSpec, prNumber, { cwd, env } = {}) {
   const raw = await execGh([
     'pr', 'view', String(prNumber), '--repo', repoSpec,
     '--json', 'state,mergeStateStatus,statusCheckRollup'
-  ], undefined, { backoffKey: repoSpec }).catch(() => null);
+  ], undefined, { cwd, env, backoffKey: repoSpec }).catch(() => null);
   const parsed = raw === null ? null : safeJSONParse(raw, null);
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
 }
@@ -321,8 +334,15 @@ export async function processPendingMergePrs(app) {
   const repoSpec = githubRepoSpec(origin);
   if (!repoSpec) return { ok: false, reason: 'not-a-github-repo' };
 
+  // Run gh as the account THIS app's repo needs, not gh's ambient active login
+  // (#7540) — mirrors appPullRequests.fetchGithubPullRequests.
+  const forgeExec = await resolveForgeExecOptions(app?.repoPath, { forgeAccount: app?.forgeAccount });
+
   // Skip rather than poll every pending PR into an `errors` count we can't act on.
-  const forge = await ensureForgeReachable('pr-watcher pending-merge', { hostname: githubApiHost(origin.host) });
+  const forge = await ensureForgeReachable('pr-watcher pending-merge', {
+    hostname: githubApiHost(origin.host),
+    ...(forgeExec.customEnv ? { env: forgeExec.customEnv } : {}),
+  });
   if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status };
 
   const outcomes = new Map();
@@ -330,7 +350,7 @@ export async function processPendingMergePrs(app) {
 
   for (const entry of pending) {
     const key = pendingMergeKey(entry);
-    const prView = await readPendingPullRequest(repoSpec, entry.prNumber);
+    const prView = await readPendingPullRequest(repoSpec, entry.prNumber, forgeExec);
     if (!prView) {
       // An unreadable PR is still a cycle this entry spent pending, so it has to
       // tick. A PR whose `gh pr view` fails PERMANENTLY (deleted PR, renamed
@@ -384,7 +404,8 @@ export async function processPendingMergePrs(app) {
     }
 
     if (isPendingMergeReady(prView)) {
-      const merge = await git.mergePR(app.repoPath, entry.prNumber).catch((err) => ({ success: false, error: err.message }));
+      const merge = await git.mergePR(app.repoPath, entry.prNumber, { forgeAccount: app?.forgeAccount || null })
+        .catch((err) => ({ success: false, error: err.message }));
       if (merge.success) {
         outcomes.set(key, null);
         result.merged += 1;
@@ -492,28 +513,40 @@ export async function checkPullRequests(app, { authorFilter = 'trusted' } = {}) 
   }
   const repoFullName = origin.fullName;
 
+  // Same per-repo credential resolution as the pending-merge sweep above — an
+  // app whose repo belongs to another GitHub account is invisible to the ambient
+  // login, and every gh read below would 404 forever (#7540).
+  const forgeExec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
+
   // Probe before any gh read (#3358). Without this an unreachable gh returns an
   // empty PR page, the high-water mark stays put, and the watcher reports a
   // quiet repo forever with nothing in the log naming the real cause. Probed
   // against THIS repo's API host, not gh's default — an enterprise app must not
   // be gated on github.com's health (and vice versa).
-  const forge = await ensureForgeReachable('pr-watcher', { hostname: githubApiHost(origin.host) });
+  const forge = await ensureForgeReachable('pr-watcher', {
+    hostname: githubApiHost(origin.host),
+    ...(forgeExec.customEnv ? { env: forgeExec.customEnv } : {}),
+  });
   if (!forge.ok) return { ok: false, reason: 'forge-unreachable', forgeStatus: forge.status, repoFullName };
 
-  const defaultBranch = await getDefaultBranch(repoSpec);
+  const defaultBranch = await getDefaultBranch(repoSpec, forgeExec);
   if (!defaultBranch) {
     return { ok: false, reason: 'default-branch-unresolved', repoFullName };
   }
 
   const trust = await createGithubActorTrust({
-    runGh: execGh, host: githubApiHost(origin.host), repoFullName,
+    // Bound to the same overlay: the collaborator-permission reads below are
+    // `gh api` calls against this repo, so they need its credential too.
+    runGh: (args, timeoutMs) => execGh(args, timeoutMs, { cwd: forgeExec.cwd, env: forgeExec.env }),
+    host: githubApiHost(origin.host),
+    repoFullName,
   });
   const selfLogin = trust.currentUser;
   if (filter === 'self' && !selfLogin) {
     return { ok: false, reason: 'self-login-unavailable', repoFullName, defaultBranch };
   }
 
-  const prs = await listOpenPullRequests(repoSpec, defaultBranch);
+  const prs = await listOpenPullRequests(repoSpec, defaultBranch, forgeExec);
   if (prs === null) {
     return { ok: false, reason: 'pr-list-failed', repoFullName, defaultBranch };
   }

@@ -192,6 +192,46 @@ describe('execGh backoffKey', () => {
     expect(spawn).toHaveBeenCalledTimes(1); // second call never spawned a child
   });
 
+  it('exempts a no-access 404 from the backoff and flags it ghNoAccess', async () => {
+    // #7540: `Could not resolve to a Repository` is GitHub's 404-for-no-access —
+    // permanent until credentials change, so parking the SHARED repoSpec key on
+    // it would starve every other caller of that repo over a condition retrying
+    // can never clear. The caller de-dups the LOG instead.
+    const failing = makeChild();
+    spawn.mockReturnValue(failing);
+    const first = execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' });
+    first.catch(() => {});
+    failing.stderr.emit('data', Buffer.from(
+      "GraphQL: Could not resolve to a Repository with the name 'o/r'. (repository)"
+    ));
+    failing.emit('close', 1);
+    await expect(first).rejects.toMatchObject({ ghNoAccess: true, ghExitCode: 1 });
+
+    // The very next call still SPAWNS — no cooldown was armed.
+    const second = execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' });
+    second.catch(() => {});
+    failing.emit('close', 1);
+    // A real second attempt (gh's own exit), never the backoff short-circuit.
+    await expect(second).rejects.toThrow(/exited with code 1/);
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves an existing cooldown intact when a no-access failure follows a transient one', async () => {
+    // `settle(null)` preserves prior backoff rather than clearing it: a repo that
+    // blipped and then answered 404 must still serve out the transient cooldown.
+    const blip = makeChild();
+    spawn.mockReturnValueOnce(blip);
+    const first = execGh(['pr', 'list'], 5000, { backoffKey: 'mixed-repo' });
+    first.catch(() => {});
+    blip.stderr.emit('data', Buffer.from('connect: connection reset'));
+    blip.emit('close', 1);
+    await expect(first).rejects.toThrow(/connection reset/);
+
+    await expect(execGh(['pr', 'list'], 5000, { backoffKey: 'mixed-repo' }))
+      .rejects.toThrow(/backing off/);
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('records a child error only once when close follows it', async () => {
     const failing = makeChild();
     spawn.mockReturnValueOnce(failing);

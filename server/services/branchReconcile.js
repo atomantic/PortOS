@@ -29,6 +29,8 @@ import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees } from './worktreeManager.js';
 import { isAgentWorktreeId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
+import { resolveForgeExecOptions } from './forgeExecOptions.js';
+import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { issueNumberFromRef } from './issueReconcile.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
@@ -227,9 +229,15 @@ export function classifyBranches(inputs) {
  * @param {object|null} [providedOrigin] - `getOriginInfo`'s answer when the caller
  *   already resolved it (gatherBranchState needs the same record for `hasOrigin`);
  *   omitted, this reads it itself so a standalone call still works.
+ * @param {object} [opts]
+ * @param {{cwd?:string, env?:object}|null} [opts.forgeExec] - The per-repo gh
+ *   credential overlay `reconcile` already resolved; omitted, this resolves it
+ *   itself so a standalone call still authenticates correctly.
+ * @param {string|null} [opts.forgeAccount] - The app record's explicit gh pin,
+ *   used only when `forgeExec` was not supplied.
  * @returns {Promise<Map<string, {number:number, mergeable:string, isDraft:boolean, url:string}>|null>}
  */
-async function getOpenPrsByHead(repoPath, providedOrigin) {
+async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, forgeAccount = null } = {}) {
   const origin = providedOrigin === undefined
     ? await getOriginInfo(repoPath).catch(() => null)
     : providedOrigin;
@@ -239,17 +247,27 @@ async function getOpenPrsByHead(repoPath, providedOrigin) {
   // the host-qualified `HOST/OWNER/REPO` selector (null for a non-GitHub origin).
   const repoSpec = githubRepoSpec(origin);
   if (!repoSpec) return new Map();
+  // Run gh with the credential THIS repo needs, not gh's ambient active login
+  // (#7540) — an app whose repo belongs to another GitHub account otherwise 404s
+  // on every tick forever. Mirrors appPullRequests.fetchGithubPullRequests.
+  const { cwd, env } = forgeExec || await resolveForgeExecOptions(repoPath, { forgeAccount });
   // `backoffKey: repoSpec` opts this polling read into execGh's consecutive-
   // failure backoff — this call is retried on every scheduler tick with no
   // parking cooldown (resolveBranchReconcileBlock treats `prStateUnavailable`
   // as transient), so a `gh` blip must not turn into every managed repo
-  // re-firing this same expensive call on its very next tick.
+  // re-firing this same expensive call on its very next tick. A no-access 404 is
+  // deliberately exempted inside execGh: it is permanent, so backing off on it
+  // would park the shared key for every other caller of this repo.
   const raw = await execGh([
     'pr', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
     '--json', 'number,headRefName,mergeable,isDraft,url'
-  ], undefined, { backoffKey: repoSpec }).catch((err) => {
-    if (!isHostShuttingDown() && err.name !== 'AbortError') {
+  ], undefined, { cwd, env, backoffKey: repoSpec }).catch((err) => {
+    if (isForgeNoAccessError(err)) {
+      // Permanent until credentials change — one actionable line naming the
+      // remedy, not one per scheduler tick.
+      logForgeNoAccessOnce('branch-reconcile', repoSpec, err.message);
+    } else if (!isHostShuttingDown() && err.name !== 'AbortError') {
       console.error(`❌ branch-reconcile: gh pr list failed for ${repoSpec}: ${err.message}`);
     }
     return null;
@@ -709,11 +727,14 @@ async function worktreeAgeMs(worktreePath) {
  *   `hasOrigin` is `getOriginInfo`'s verdict when the caller already has it (same
  *   rationale); omitted, this reads it itself, so a standalone caller still gets a
  *   truthful answer rather than the fail-closed default.
+ *   `forgeExec` is the per-repo gh credential overlay (`{cwd, env}`) when the
+ *   caller already resolved it; `forgeAccount` is the app record's explicit gh
+ *   pin for the standalone case. Both feed `getOpenPrsByHead` — see #7540.
  * @returns {Promise<object[]>} one entry per candidate branch:
  *   { branch, tip, hasUpstream, hasOrigin, tracking, upstreamGone, isMerged, hasWorktree, worktreePath,
  *     worktreeDirty, dirtyPaths, behind, ahead, collisionPaths, abandonedAgentWorktree, openPr }
  */
-export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin } = {}) {
+export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin, forgeExec = null, forgeAccount = null } = {}) {
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
   // Read origin ONCE and use it for both facts below — `hasOrigin` (the gate on
   // classifyBranch's ahead-based NEEDS_PR arm, so an origin-less repo's local work
@@ -739,7 +760,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   const [branches, worktrees, prsByHeadOrNull, remoteHeads] = await Promise.all([
     getBranches(repoPath),
     listWorktrees(repoPath).catch(() => []),
-    getOpenPrsByHead(repoPath, origin),
+    getOpenPrsByHead(repoPath, origin, { forgeExec, forgeAccount }),
     providedRemoteHeads !== undefined ? providedRemoteHeads
       : hasOrigin ? listRemoteHeads(repoPath)
       : null
@@ -1081,7 +1102,10 @@ async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClai
  *   explicitly. `reapRemotes` (default false) additionally deletes merged
  *   branches left on `origin` that nothing local points at; off, they are only
  *   reported — see `reapOrphanedRemotes`. `activeAgentIds` protects in-use CoS
- *   agent worktrees.
+ *   agent worktrees. `forgeAccount` is the managed app record's explicit gh
+ *   account pin, so an app whose repo belongs to another GitHub account is
+ *   polled with a credential that can actually see it (#7540); unset, the
+ *   owner-match in `forgeAuth.resolveForgeForRepo` still applies.
  * @returns {Promise<{ defaultBranch:string, cleaned:string[], inFlight:object[], wip:object[], skipped:{branch:string,reason:string}[], orphanRemotes:{reaped:string[],reported:object[]}, forgeUnavailable?:boolean, prStateUnavailable?:boolean }>}
  *   A `wip` entry with a `liveOwnerReason` is held because a live agent/claim/lock
  *   owns it — the "leave it alone, this reconcile IS done" case. `superseded` holds
@@ -1093,7 +1117,7 @@ async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClai
  *   failed mid-cycle. Either way an empty `inFlight` says nothing about the repo
  *   and the caller must retry rather than park on it (#3358).
  */
-export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set() } = {}) {
+export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSuperseded = cleanup, reapRemotes = false, activeAgentIds = new Set(), forgeAccount = null } = {}) {
   // Worktree cleanup is the first reconcile step, before any forge probe. It
   // only removes a tree after proving both that it is completely clean and
   // that every branch commit is already in the default branch (including
@@ -1117,8 +1141,17 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   // and gating it on a `gh` probe that will never pass would permanently block
   // the git-only merged-branch cleanup those repos still benefit from.
   const origin = await getOriginInfo(repoPath).catch(() => null);
-  if (githubRepoSpec(origin)) {
-    const forge = await ensureForgeReachable('branch-reconcile', { hostname: githubApiHost(origin.host) });
+  // Resolve the per-repo gh credential ONCE per cycle and reuse it for the
+  // reachability probe and the PR read — a second resolve would re-run the same
+  // bounded git+gh probes for an answer that cannot have changed mid-cycle.
+  const forgeExec = githubRepoSpec(origin)
+    ? await resolveForgeExecOptions(repoPath, { forgeAccount })
+    : null;
+  if (forgeExec) {
+    const forge = await ensureForgeReachable('branch-reconcile', {
+      hostname: githubApiHost(origin.host),
+      ...(forgeExec?.customEnv ? { env: forgeExec.customEnv } : {}),
+    });
     if (!forge.ok) {
       return { defaultBranch: null, cleaned: cleanedWorktrees, inFlight: [], wip: [], skipped: [], forgeUnavailable: true, forgeStatus: forge.status };
     }
@@ -1137,7 +1170,8 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
   // per cycle is the cost of each destructive step reading the remote itself.
   const remoteHeads = origin?.hasOrigin ? await listRemoteHeads(repoPath) : null;
   const inputs = await gatherBranchState(repoPath, {
-    defaultBranch, activeAgentIds, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin), origin
+    defaultBranch, activeAgentIds, remoteHeads, hasOrigin: Boolean(origin?.hasOrigin), origin,
+    forgeExec, forgeAccount
   });
   // A gh failure AFTER a passing probe (a blip mid-cycle, or an unparseable
   // page) is still "we could not ask" — surface it so the caller retries next

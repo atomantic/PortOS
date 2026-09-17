@@ -397,7 +397,10 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   };
   const result = await reconcile(app.repoPath, {
     cleanup: actions.cleanupMerged !== false,
-    activeAgentIds: new Set(getActiveAgentIds())
+    activeAgentIds: new Set(getActiveAgentIds()),
+    // The app's gh account pin, so a repo owned by another GitHub account is
+    // polled with a credential that can see it (#7540).
+    forgeAccount: app.forgeAccount || null
   }).catch((err) => {
     emitLog('warn', `branch-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
     return null;
@@ -650,9 +653,15 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   if (result.forge === 'github') {
     const { screenForgeMaintenance } = await import('./forgeMaintenanceEvidence.js');
     const { execGh } = await import('./github.js');
+    const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
+    // The screening `gh api` reads hit the SAME private repo the poll just read,
+    // so they need the same per-repo credential — ambient gh 404s on a repo owned
+    // by another account and the whole dispatch is held every tick (#7540).
+    const { cwd, env } = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
+    const runGh = (args, timeoutMs) => execGh(args, timeoutMs, { cwd, env });
     const screened = await screenForgeMaintenance({
       records: result.zombies, kind: 'issue', host: result.repoSpec.split('/')[0],
-      repoFullName: result.fullName, runGh: execGh,
+      repoFullName: result.fullName, runGh,
     });
     if (!screened.ok) {
       emitLog('warn', `issue-reconcile held: ${screened.code}`, { appId: app.id });
@@ -753,14 +762,20 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
 
   let screeningError = null;
   if (!check.firstRun && check.newPrs.length) {
-    const { screenForgeMaintenance } = await import('./forgeMaintenanceEvidence.js');
-    const { execGh } = await import('./github.js');
     const { getOriginInfo } = await import('../lib/gitRemote.js');
     const { githubApiHost } = await import('../lib/workTracker.js');
     const origin = await getOriginInfo(app.repoPath);
+    const { screenForgeMaintenance } = await import('./forgeMaintenanceEvidence.js');
+    const { execGh } = await import('./github.js');
+    const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
+    // The screening `gh api` reads hit the SAME private repo the poll just read,
+    // so they need the same per-repo credential — ambient gh 404s on a repo owned
+    // by another account and the whole dispatch is held every tick (#7540).
+    const { cwd, env } = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
+    const runGh = (args, timeoutMs) => execGh(args, timeoutMs, { cwd, env });
     const screened = await screenForgeMaintenance({
       records: check.newPrs, kind: 'pr', host: githubApiHost(origin.host),
-      repoFullName: check.repoFullName, runGh: execGh,
+      repoFullName: check.repoFullName, runGh,
     });
     if (!screened.ok) {
       await prWatcher.persistPrWatcherState(app.id, { lastCheckedAt: checkedAt, lastError: screened.code });

@@ -25,7 +25,7 @@
 
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
-import { resolveForgeForRepo } from './forgeAuth.js';
+import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { CONTRIBUTOR_LABELS } from '../lib/dispatchLabels.js';
@@ -156,12 +156,7 @@ function toIssueResult(rows, normalize) {
  * unreachable `gh` returns an empty page that reads as "no open issues".
  */
 async function fetchGithubIssues(repoSpec, apiHost, { repoPath = null, forgeAccount = null } = {}) {
-  const forgeAuth = repoPath
-    ? await resolveForgeForRepo(repoPath, { forgeAccount }).catch(() => null)
-    : null;
-  const customEnv = forgeAuth?.env && forgeAuth.env !== process.env ? forgeAuth.env : null;
-  const env = customEnv || process.env;
-  const cwd = repoPath || undefined;
+  const { cwd, env, customEnv } = await resolveForgeExecOptions(repoPath, { forgeAccount });
 
   const forge = await ensureForgeReachable('app-issues', {
     hostname: apiHost,
@@ -293,11 +288,10 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   if (!target || resolvedTracker !== tracker || target.forge !== tracker) {
     throw new ServerError('Could not resolve the issue tracker for this claim', { status: 400, code: 'CLAIM_TRACKER_MISMATCH' });
   }
-  const forgeAuth = (tracker === 'github' && app?.repoPath)
-    ? await resolveForgeForRepo(app.repoPath, { forgeAccount: app.forgeAccount }).catch(() => null)
-    : null;
-  const env = forgeAuth?.env || process.env;
-  const cwd = app?.repoPath || undefined;
+  const { cwd, env } = await resolveForgeExecOptions(
+    tracker === 'github' ? app?.repoPath : null,
+    { forgeAccount: app?.forgeAccount }
+  );
 
   const readLabels = async () => {
     const raw = tracker === 'github'
