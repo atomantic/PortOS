@@ -1,9 +1,9 @@
 import { isDeepStrictEqual } from 'node:util';
 import { isDerivedPreset } from './providerGraphRecords.js';
-import { providerConnectionProfile } from './providerConnections.js';
+import { providerConnectionProfile, withoutConnectionOwnedFields } from './providerConnections.js';
 import { harnessForProvider } from './providerHarnesses.js';
 import { parseOpencodeConfigContent } from './providerModels.js';
-import { materializeRouteOutcome } from './providerRouteRecipes.js';
+import { BACKEND_MARKER_KEYS, materializeRouteOutcome } from './providerRouteRecipes.js';
 import { applyServicePlanFilter, instanceForConnection } from './providerServiceInstances.js';
 
 /**
@@ -33,9 +33,6 @@ import { applyServicePlanFilter, instanceForConnection } from './providerService
 /** The additive keys that make a record a derived preset (plus its two per-preset choices). */
 export const PRESET_STRUCTURAL_KEYS = Object.freeze(['harnessId', 'method', 'serviceId', 'catalogNarrowing', 'credentialBootstrapId']);
 
-/** The backend markers a service definition writes (`serviceMarkers` in providerRouteRecipes.js). */
-const BACKEND_MARKER_KEYS = Object.freeze(['ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked', 'gatewayBacked', 'orcarouterBacked']);
-
 /**
  * The record keys the SERVICE owns on a derived preset — written by
  * materialization, refused as a direct edit (`refusedDerivedEdits`). `envVars`
@@ -55,14 +52,25 @@ export const presetKind = (record) => (isDerivedPreset(record) ? 'derived' : 'le
  * with no isolation reason. The conversion itself still has to prove the
  * fixpoint against the service — this is the editor's "offer the button" test.
  */
+/**
+ * Whether the record spawns the recipe's own binary. A path-configured
+ * `command` is a deliberate choice materialization would overwrite, so it
+ * keeps a record legacy; a harness with no recipe (`direct`) has nothing to check.
+ */
+const spawnsRecipeBinary = (record, harness) => !harness.recipe || harness.recipe.command === record.command;
+
 export function presetDerivable(record) {
   if (!record || typeof record !== 'object' || isDerivedPreset(record)) return false;
   const harness = harnessForProvider(record);
   // A harness with no capability bindings (Kilo, OpenChamber) composes onto nothing.
-  if (!harness || harness.bindings.length === 0) return false;
-  if (harness.recipe && harness.recipe.command !== record.command) return false;
+  if (!harness || harness.bindings.length === 0 || !spawnsRecipeBinary(record, harness)) return false;
   return providerConnectionProfile(record).reasons.length === 0;
 }
+
+/** The instance's catalog as this plan lists it — empty until the service has been asked. */
+export const listedModels = (instance, catalog) => (catalog?.state === 'known'
+  ? applyServicePlanFilter(instance.definition, instance.plan, Array.isArray(catalog.models) ? catalog.models : [])
+  : []);
 
 /**
  * The models a derived preset offers: the instance's plan-filtered catalog,
@@ -75,9 +83,7 @@ export function presetDerivable(record) {
  * must not lose the list it was running with.
  */
 export function derivedPresetModels(record, instance, catalog) {
-  const listed = catalog?.state === 'known'
-    ? applyServicePlanFilter(instance.definition, instance.plan, Array.isArray(catalog.models) ? catalog.models : [])
-    : [];
+  const listed = listedModels(instance, catalog);
   if (listed.length === 0) return Array.isArray(record.models) ? [...record.models] : [];
   if (!Array.isArray(record.catalogNarrowing)) return [...listed];
   const known = new Set(listed);
@@ -110,12 +116,10 @@ function opencodeTransportShape(raw) {
  * base URLs the service would write: rewriting it would discard permissions
  * and agent settings the user typed into it.
  */
-function mergeDerivedEnv(record, materialized) {
-  const stored = record.envVars && typeof record.envVars === 'object' ? record.envVars : {};
-  const owned = providerConnectionProfile(record).owned.envVars;
-  const routeOwned = Object.fromEntries(Object.entries(stored).filter(([name]) => !Object.hasOwn(owned, name)));
+function mergeDerivedEnv(record, owned, materialized) {
+  const routeOwned = withoutConnectionOwnedFields(record, owned).envVars || {};
   const next = { ...routeOwned, ...materialized.envVars };
-  const keep = stored.OPENCODE_CONFIG_CONTENT;
+  const keep = record.envVars?.OPENCODE_CONFIG_CONTENT;
   const written = materialized.envVars.OPENCODE_CONFIG_CONTENT;
   if (keep && written && isDeepStrictEqual(opencodeTransportShape(keep), opencodeTransportShape(written))) {
     next.OPENCODE_CONFIG_CONTENT = keep;
@@ -164,7 +168,7 @@ const bootstrapShape = (bootstrap, harness) => (bootstrap?.command ? {
 export function matchBootstrapApp(inline, harness, apps = {}) {
   const wanted = bootstrapShape(inline, harness);
   if (!wanted) return null;
-  for (const [slug, app] of Object.entries(apps || {})) {
+  for (const [slug, app] of Object.entries(apps)) {
     const shape = bootstrapShape({ ...app, harnessId: app.harnessNames?.[harness.id] }, harness);
     if (isDeepStrictEqual(shape, wanted)) return { slug, app };
   }
@@ -207,8 +211,9 @@ export function materializeDerivedPreset({ record, harness, instance, catalog = 
   });
   if (outcome.error) return { record: null, error: outcome.error, ownedEnvNames: null };
   const materialized = outcome.record;
+  const { owned } = providerConnectionProfile(record);
 
-  const envVars = mergeDerivedEnv(record, materialized);
+  const envVars = mergeDerivedEnv(record, owned, materialized);
   const stored = new Set(Array.isArray(record.secretEnvVars) ? record.secretEnvVars : []);
   const secretEnvVars = [...new Set([
     ...materialized.secretEnvVars,
@@ -217,11 +222,9 @@ export function materializeDerivedPreset({ record, harness, instance, catalog = 
 
   const derived = {
     ...record,
-    id: record.id,
     name: record.name ?? materialized.name,
     type: record.method,
     harnessId: harness.id,
-    method: record.method,
     serviceId: instance.slug,
     command: materialized.command ?? null,
     // A direct API preset spawns nothing; `args` is written only where a program reads it.
@@ -233,8 +236,10 @@ export function materializeDerivedPreset({ record, harness, instance, catalog = 
     models: derivedPresetModels(record, instance, catalog),
     timeout: record.timeout ?? materialized.timeout,
   };
-  for (const key of BACKEND_MARKER_KEYS) delete derived[key];
-  for (const key of BACKEND_MARKER_KEYS) if (Object.hasOwn(materialized, key)) derived[key] = materialized[key];
+  for (const key of BACKEND_MARKER_KEYS) {
+    if (Object.hasOwn(materialized, key)) derived[key] = materialized[key];
+    else delete derived[key];
+  }
   // `servicePlan` is a fact about the instance, read from it — never a stored snapshot.
   delete derived.servicePlan;
   if (record.method === 'cli' && !Array.isArray(record.headlessArgs)) derived.headlessArgs = materialized.headlessArgs ?? [];
@@ -251,10 +256,7 @@ export function materializeDerivedPreset({ record, harness, instance, catalog = 
     delete derived.credentialBootstrap;
     delete derived.credentialBootstrapId;
   }
-  const ownedEnvNames = new Set([
-    ...Object.keys(providerConnectionProfile(record).owned.envVars),
-    ...Object.keys(materialized.envVars),
-  ]);
+  const ownedEnvNames = new Set([...Object.keys(owned.envVars), ...Object.keys(materialized.envVars)]);
   return { record: derived, error: null, ownedEnvNames };
 }
 
@@ -300,13 +302,12 @@ export function refusedDerivedEdits(updates, derived, ownedEnvNames) {
   const refused = [];
   for (const key of DERIVED_PRESET_OWNED_KEYS) {
     if (!Object.hasOwn(updates, key)) continue;
-    const sent = key === 'apiKey' ? (updates[key] ?? '') : key === 'secretEnvVars' ? null : orNull(updates[key]);
-    const kept = key === 'apiKey' ? (derived[key] ?? '') : key === 'secretEnvVars' ? null : orNull(derived[key]);
     if (key === 'secretEnvVars') {
       if (!sameSet(Array.isArray(updates[key]) ? updates[key] : [], derived[key])) refused.push(key);
       continue;
     }
-    if (!isDeepStrictEqual(sent, kept)) refused.push(key);
+    const normalize = key === 'apiKey' ? (value) => value ?? '' : orNull;
+    if (!isDeepStrictEqual(normalize(updates[key]), normalize(derived[key]))) refused.push(key);
   }
   if (updates.envVars && typeof updates.envVars === 'object') {
     for (const name of ownedEnvNames) {
@@ -327,11 +328,6 @@ export function derivedPresetPatch(record, derived) {
   }
   return patch;
 }
-
-/** The catalog listing a backfill compares a record's models against — the same rule as {@link derivedPresetModels}. */
-const listedModels = (instance, catalog) => (catalog?.state === 'known'
-  ? applyServicePlanFilter(instance.definition, instance.plan, Array.isArray(catalog.models) ? catalog.models : [])
-  : []);
 
 /**
  * The boot-time backfill (#7565): every LEGACY record the graph already routes
@@ -358,6 +354,12 @@ export function planPresetBackfill({ graph, providers, bootstraps = {}, env = pr
   const connections = new Map(graph.connections.map((connection) => [connection.id, connection]));
   const patches = {};
   const skipped = [];
+  // Mode siblings share one row; resolve its instance once.
+  const instances = new Map();
+  const instanceFor = (connection) => {
+    if (!instances.has(connection.id)) instances.set(connection.id, instanceForConnection(connection, env));
+    return instances.get(connection.id);
+  };
 
   for (const record of providers) {
     if (!record || typeof record !== 'object' || !record.id || isDerivedPreset(record)) continue;
@@ -366,11 +368,11 @@ export function planPresetBackfill({ graph, providers, bootstraps = {}, env = pr
     if (!route) { skip('unmapped'); continue; }
     const connection = connections.get(bindings.get(route.bindingId)?.connectionId);
     if (!connection?.slug) { skip('service-unnamed'); continue; }
-    const instance = instanceForConnection(connection, env);
+    const instance = instanceFor(connection);
     if (!instance) { skip('service-undefined'); continue; }
     const harness = harnessForProvider(record);
     if (!harness) { skip('harness-unknown'); continue; }
-    if (harness.recipe && harness.recipe.command !== record.command) { skip('command-differs'); continue; }
+    if (!spawnsRecipeBinary(record, harness)) { skip('command-differs'); continue; }
 
     const match = matchBootstrapApp(record.credentialBootstrap, harness, bootstraps);
     if (record.credentialBootstrap?.command && !match) { skip('bootstrap-unmatched'); continue; }

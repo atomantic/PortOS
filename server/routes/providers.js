@@ -1122,13 +1122,10 @@ export function createPortOSProviderRoutes(aiToolkit) {
       }
     }
 
-    // A DERIVED preset (#7565) stores what its service derives: the record is
-    // re-materialized from the instance it names, a connection-owned value the
-    // client moved is refused with a pointer at the service, and a `models`
-    // edit is read as a narrowing of the service catalog.
-    const { savesAsDerivedPreset, materializeStoredPreset } = await presetService();
-    const candidate = { ...existing, ...updates, id: req.params.id };
-    const stored = savesAsDerivedPreset(candidate) ? await materializeStoredPreset(candidate, { updates }) : updates;
+    // A DERIVED preset (#7565) stores what its service derives — see
+    // `storableProviderRecord` for what is refused and what is read as a narrowing.
+    const { storableProviderRecord } = await presetService();
+    const stored = await storableProviderRecord({ ...existing, ...updates, id: req.params.id }, updates);
 
     const provider = await providerService.updateProvider(req.params.id, stored);
     res.json(presentProvider(withResolvedModelAccess(provider, existing), await detectSystemCapabilities()));
@@ -1216,13 +1213,9 @@ export function createPortOSProviderRoutes(aiToolkit) {
       res.status(201).json({ providers: created.map(provider => presentProvider(provider, capabilities)) });
       return;
     }
-    // A body naming a harness, method and service is a DERIVED preset (#7565)
-    // and is stored as the service derives it — see PUT /:id.
-    const { savesAsDerivedPreset, materializeStoredPreset } = await presetService();
-    const body = savesAsDerivedPreset(validation.data)
-      ? await materializeStoredPreset(validation.data, { updates: validation.data })
-      : validation.data;
-    const provider = await providerService.createProvider(body);
+    // A body naming a harness, method and service is a DERIVED preset (#7565).
+    const { storableProviderRecord } = await presetService();
+    const provider = await providerService.createProvider(await storableProviderRecord(validation.data, validation.data));
     res.status(201).json(presentProvider(provider, await detectSystemCapabilities()));
   }));
 

@@ -16,6 +16,7 @@ import {
 import { routeSettingsRevision, routeSettingsSchema } from './providerRouteSettings.js';
 import { CREATABLE_CONNECTION_KINDS, connectionKindLabel } from './providerRouteRecipes.js';
 import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS } from './serviceDefinitions.js';
+import { isNonBlankStr } from './textUtils.js';
 
 // `PROVIDER_GRAPH_SCHEMA_VERSION` is deliberately NOT re-exported: it is one
 // wire version shared with the preview, and two flat `export *` modules in this
@@ -411,11 +412,8 @@ export const importGraphFromProviders = (data, mintId = randomUUID) =>
  * `providerPresets.js`, which imports this module) because reconciliation is
  * the first reader.
  */
-export const isDerivedPreset = (record) => Boolean(record)
-  && typeof record === 'object'
-  && typeof record.harnessId === 'string' && record.harnessId !== ''
-  && typeof record.method === 'string' && record.method !== ''
-  && typeof record.serviceId === 'string' && record.serviceId !== '';
+export const isDerivedPreset = (record) => Boolean(record) && typeof record === 'object'
+  && [record.harnessId, record.method, record.serviceId].every(isNonBlankStr);
 
 /**
  * Whether a derived preset DECLARES it sits on this connection — its
@@ -438,8 +436,7 @@ export const presetDeclaresConnection = (record, connection) =>
  * A declared preset whose profile the preview isolates (a reason on it) gets
  * no route row, exactly as any other isolated record.
  */
-function importDeclaredPresets(records, graph, mintId) {
-  const bySlug = new Map(graph.connections.filter((connection) => connection.slug).map((connection) => [connection.slug, connection]));
+function importDeclaredPresets(records, graph, bySlug, mintId) {
   const byId = new Map(records.map((record) => [record.id, record]));
   const fragment = importGraphFromProviders({ providers: records }, mintId);
   const variantKey = (connectionId, harnessId, key) => JSON.stringify([connectionId, harnessId ?? null, key]);
@@ -627,17 +624,17 @@ export function planGraphReconciliation(graph, providers, { mintId = randomUUID 
   const unmapped = [...records.values()].filter((provider) => !mapped.has(provider.id));
   // A derived preset naming an existing instance is imported ONTO it (#7565);
   // everything else is its own fragment, never auto-linked.
-  const slugs = new Set(graph.connections.map((connection) => connection.slug).filter(Boolean));
-  const declared = unmapped.filter((provider) => isDerivedPreset(provider) && slugs.has(provider.serviceId));
-  const fragments = unmapped.filter((provider) => !declared.includes(provider));
+  const bySlug = new Map(graph.connections.filter((connection) => connection.slug).map((connection) => [connection.slug, connection]));
+  const declared = [];
+  const fragments = [];
+  for (const provider of unmapped) {
+    (isDerivedPreset(provider) && bySlug.has(provider.serviceId) ? declared : fragments).push(provider);
+  }
   if (fragments.length > 0) plan.imports = importGraphFromProviders({ providers: fragments }, mintId);
   if (declared.length > 0) {
-    const onto = importDeclaredPresets(declared, graph, mintId);
-    plan.imports = {
-      connections: plan.imports.connections,
-      bindings: [...plan.imports.bindings, ...onto.bindings],
-      routes: [...plan.imports.routes, ...onto.routes],
-    };
+    const onto = importDeclaredPresets(declared, graph, bySlug, mintId);
+    plan.imports.bindings.push(...onto.bindings);
+    plan.imports.routes.push(...onto.routes);
   }
 
   return plan;

@@ -1,4 +1,3 @@
-import { bootstrapInputFor } from '../lib/providerPresets.js';
 import { credentialBootstrapsSettingsSchema } from '../lib/validation.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getSettings, updateSettingsWith } from './settings.js';
@@ -51,10 +50,6 @@ export function normalizeCredentialBootstraps(raw) {
     return result.success ? [[slug, result.data[slug]]] : [];
   }));
 }
-
-// The bootstrap input `materializeRoute` takes for an app is a pure shape the
-// preset library also needs (#7565); it lives there and is re-exported here.
-export { bootstrapInputFor };
 
 /** The catalog's sanitized view of the table: never a command line, only what a picker names. */
 export const presentCredentialBootstraps = (apps) => Object.entries(apps).map(([slug, app]) => ({

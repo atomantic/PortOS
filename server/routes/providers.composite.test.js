@@ -28,7 +28,7 @@ vi.mock('../services/credentialBootstrapApps.js', () => bootstrapService);
 const readinessService = vi.hoisted(() => ({ getProviderReadinessMap: vi.fn(), resetProviderReadinessCache: vi.fn() }));
 vi.mock('../services/providerReadiness.js', async (importOriginal) => ({ ...(await importOriginal()), ...readinessService }));
 const presetService = vi.hoisted(() => ({
-  createPresetFromComposite: vi.fn(), derivePreset: vi.fn(), materializeStoredPreset: vi.fn(), savesAsDerivedPreset: vi.fn(),
+  createPresetFromComposite: vi.fn(), derivePreset: vi.fn(), materializeStoredPreset: vi.fn(), savesAsDerivedPreset: vi.fn(), storableProviderRecord: vi.fn(),
 }));
 vi.mock('../services/providerPresets.js', () => presetService);
 import { createPortOSProviderRoutes } from './providers.js';
@@ -65,6 +65,9 @@ beforeEach(() => {
   providerService.createProvider.mockImplementation(async (body) => ({ ...body }));
   presetService.savesAsDerivedPreset.mockImplementation((candidate) => Boolean(candidate.harnessId && candidate.method && candidate.serviceId));
   presetService.materializeStoredPreset.mockImplementation(async (candidate) => ({ ...candidate, rederived: true }));
+  // The real one-liner, over the doubles above, so the route's choice of path stays observable.
+  presetService.storableProviderRecord.mockImplementation((candidate, updates) =>
+    (presetService.savesAsDerivedPreset(candidate) ? presetService.materializeStoredPreset(candidate, { updates }) : Promise.resolve(updates)));
 });
 
 describe('PUT /api/providers/active', () => {

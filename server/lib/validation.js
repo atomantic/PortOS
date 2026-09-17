@@ -512,6 +512,9 @@ const providerHardwareRequirementsSchema = z.object({
   minCudaComputeCapability: z.number().positive().max(20).optional(),
 }).strict();
 
+/** A service or bootstrap slug on a preset (#7565), clearable with `null`. */
+const presetSlugField = z.string().trim().min(1).max(64).regex(SERVICE_SLUG_RE).nullable().optional();
+
 export const providerSchema = z.object({
   name: z.string().min(1).max(100),
   type: z.enum(['cli', 'api', 'tui']),
@@ -575,9 +578,9 @@ export const providerSchema = z.object({
   // optional catalog narrowing, and the bootstrap app it spawns through.
   harnessId: z.enum(PROVIDER_HARNESS_IDS).nullable().optional(),
   method: z.enum(ROUTE_MODES).nullable().optional(),
-  serviceId: z.string().trim().min(1).max(64).regex(SERVICE_SLUG_RE).nullable().optional(),
+  serviceId: presetSlugField,
   catalogNarrowing: z.array(z.string().trim().min(1).max(512)).max(1000).nullable().optional(),
-  credentialBootstrapId: z.string().trim().min(1).max(64).regex(SERVICE_SLUG_RE).nullable().optional(),
+  credentialBootstrapId: presetSlugField,
 });
 
 // POST /api/providers/:id/test-vision.

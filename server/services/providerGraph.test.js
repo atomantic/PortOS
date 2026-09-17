@@ -238,8 +238,8 @@ describe('linking', () => {
       ANTHROPIC_BASE_URL: 'http://127.0.0.1:12345',
       ANTHROPIC_AUTH_TOKEN: 'token-for-22222222-2222-4222-8222-222222222222',
     });
-    // The derived preset on the moved binding now names the instance it landed on (#7565).
-    expect(providers.applyProviderPatches.mock.calls[1][0]).toEqual({ 'claude-ollama': { serviceId: 'ollama-2' } });
+    // The derived preset on the moved binding is re-derived from the instance it landed on (#7565).
+    expect(providers.applyProviderPatches.mock.calls[1][0]['claude-ollama']).toMatchObject({ serviceId: 'ollama-2' });
   });
 
   it.each([
@@ -290,10 +290,15 @@ describe('unlinking', () => {
     const [{ connection: clone }] = store.detachBindingToConnection.mock.calls[0];
     expect(clone.transports).toEqual({ anthropic: { baseUrl: 'http://127.0.0.1:11434' } });
     expect(clone.credentials).toEqual({ ANTHROPIC_AUTH_TOKEN: `token-for-${CONN_A}` });
-    // Nothing about execution changes: the one write re-addresses the derived
-    // preset to the clone's slug (#7565) and touches no executable value.
+    // Nothing about execution changes: the one write re-derives the preset from
+    // the clone (#7565), which re-addresses it and moves no executable value.
     expect(providers.applyProviderPatches).toHaveBeenCalledTimes(1);
-    expect(providers.applyProviderPatches).toHaveBeenCalledWith({ 'claude-ollama': { serviceId: clone.slug } });
+    const [patches] = providers.applyProviderPatches.mock.calls[0];
+    expect(patches['claude-ollama']).toMatchObject({ serviceId: clone.slug });
+    // The env and program are the same on the clone; only empty normalizations ride along.
+    for (const key of ['envVars', 'command', 'models']) expect(patches['claude-ollama']).not.toHaveProperty(key);
+    expect(patches['claude-ollama'].apiKey ?? '').toBe('');
+    expect(patches['claude-ollama'].endpoint ?? null).toBeNull();
     expect(clone.slug).toBe('ollama-3');
   });
 

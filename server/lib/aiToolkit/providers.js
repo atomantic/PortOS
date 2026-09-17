@@ -806,12 +806,10 @@ export function createProviderService(config = {}) {
       ...(providerData.tuiIdleTimeoutMs != null ? { tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs } : {}),
       // Preset structure (#7565) — only persisted when named, so every record
       // created without it stays byte-identical and reads as a legacy preset.
-      ...(typeof providerData.harnessId === 'string' && providerData.harnessId ? { harnessId: providerData.harnessId } : {}),
-      ...(typeof providerData.method === 'string' && providerData.method ? { method: providerData.method } : {}),
-      ...(typeof providerData.serviceId === 'string' && providerData.serviceId ? { serviceId: providerData.serviceId } : {}),
-      ...(Array.isArray(providerData.catalogNarrowing) ? { catalogNarrowing: [...providerData.catalogNarrowing] } : {}),
-      ...(typeof providerData.credentialBootstrapId === 'string' && providerData.credentialBootstrapId
-        ? { credentialBootstrapId: providerData.credentialBootstrapId } : {})
+      ...Object.fromEntries(['harnessId', 'method', 'serviceId', 'credentialBootstrapId']
+        .filter((key) => typeof providerData[key] === 'string' && providerData[key])
+        .map((key) => [key, providerData[key]])),
+      ...(Array.isArray(providerData.catalogNarrowing) ? { catalogNarrowing: [...providerData.catalogNarrowing] } : {})
     };
 
     return provider;

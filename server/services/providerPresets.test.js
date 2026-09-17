@@ -117,7 +117,7 @@ describe('materializeStoredPreset', () => {
 
     await expect(presets.materializeStoredPreset({ ...stored, envVars: { ...stored.envVars, ANTHROPIC_BASE_URL: 'http://elsewhere.test' } }, { updates: { envVars: { ...stored.envVars, ANTHROPIC_BASE_URL: 'http://elsewhere.test' } } }))
       .rejects.toMatchObject({ status: 400, code: 'PRESET_FIELD_DERIVED', context: { fields: ['envVars.ANTHROPIC_BASE_URL'], serviceId: 'ollama' } });
-    await expect(presets.materializeStoredPreset({ ...stored, serviceId: 'nowhere' })).rejects.toMatchObject({ status: 400, code: 'PRESET_SERVICE_UNKNOWN' });
+    await expect(presets.materializeStoredPreset({ ...stored, serviceId: 'nowhere' })).rejects.toMatchObject({ status: 400, code: 'service-unknown' });
   });
 });
 
@@ -126,10 +126,10 @@ describe('derivePreset', () => {
     const legacy = { id: 'claude-ollama', name: 'Claude on Ollama', type: 'cli', command: 'claude', args: ['--print'], ollamaBacked: true, enabled: true, models: ['example-llama'],
       envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434', ANTHROPIC_AUTH_TOKEN: 'ollama' }, secretEnvVars: ['ANTHROPIC_AUTH_TOKEN'] };
     await providerService().createProvider(legacy);
-    // The record is unmapped, so the derive pass imports it first — as its own
-    // fragment, a second instance of the daemon (import never auto-links), which
-    // is the service it is then derived from. The store double records the
-    // plan and the next read serves it back.
+    // The record is unmapped, so the pass its save fires imports it — as its
+    // own fragment, a second instance of the daemon (import never auto-links),
+    // which is the service it is then derived from in that same pass. The store
+    // double records the plan and the next read serves it back.
     store.applyReconciliation.mockImplementation(async (plan) => {
       const imported = plan.imports;
       graphState.current = {
