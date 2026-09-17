@@ -17,8 +17,19 @@ const api = vi.hoisted(() => ({
   setProviderHarnessEnabled: vi.fn(),
   getProviderBootstraps: vi.fn(),
   saveProviderBootstraps: vi.fn(),
+  getHarnesses: vi.fn(),
+  refreshHarnessModels: vi.fn(),
 }));
 vi.mock('../../services/api', () => api);
+
+vi.mock('../install/RuntimeInstallModal', () => ({
+  default: ({ open, runtime, params, title, onComplete }) => (open ? (
+    <div data-testid="install-modal">
+      {title} · {runtime} · {params?.action}
+      <button type="button" data-testid="complete" onClick={onComplete}>complete</button>
+    </div>
+  ) : null),
+}));
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: toast }));
@@ -77,6 +88,8 @@ beforeEach(() => {
   __resetProviderCatalogCache();
   api.getProviderCatalog.mockResolvedValue(CATALOG);
   api.getProviderBootstraps.mockResolvedValue({ bootstraps: {} });
+  api.getHarnesses.mockResolvedValue({ harnesses: [] });
+  api.refreshHarnessModels.mockResolvedValue({ models: [], updated: [] });
 });
 
 describe('ProviderHarnessesTab', () => {
@@ -146,6 +159,106 @@ describe('ProviderHarnessesTab', () => {
     renderTab('/ai/harnesses/nope', { selectedHarnessId: 'nope' });
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No harness with id "nope"'));
     expect(screen.getByTestId('location')).toHaveTextContent('/ai/harnesses');
+  });
+
+  it('shows the installed and latest versions, and package name from details', async () => {
+    api.getHarnesses.mockResolvedValue({
+      harnesses: [{
+        id: 'claude',
+        vendor: 'claude',
+        label: 'Claude Code CLI',
+        command: 'claude',
+        installed: true,
+        version: '2.1.0',
+        latestVersion: '2.2.0',
+        package: '@anthropic-ai/claude-code',
+        updateAvailable: true,
+        updatable: true,
+        removable: true,
+        listsModels: true,
+        providers: [{ id: 'claude-code', name: 'Claude Code', enabled: true }],
+      }],
+    });
+    renderTab();
+    const claude = await screen.findByRole('article', { name: /Claude Code/ });
+    expect(await within(claude).findByText(/Installed 2\.1\.0/)).toBeInTheDocument();
+    expect(within(claude).getByText(/Latest 2\.2\.0/)).toBeInTheDocument();
+    expect(within(claude).getByText(/@anthropic-ai\/claude-code/)).toBeInTheDocument();
+    expect(within(claude).getByText('Update available')).toBeInTheDocument();
+  });
+
+  it('opens the shared install modal for update action', async () => {
+    api.getHarnesses.mockResolvedValue({
+      harnesses: [{
+        id: 'claude',
+        vendor: 'claude',
+        label: 'Claude Code CLI',
+        command: 'claude',
+        installed: true,
+        version: '2.1.0',
+        latestVersion: '2.2.0',
+        updateAvailable: true,
+        updatable: true,
+      }],
+    });
+    renderTab();
+    const claude = await screen.findByRole('article', { name: /Claude Code/ });
+    fireEvent.click(await within(claude).findByRole('button', { name: /Update/ }));
+    expect(await screen.findByTestId('install-modal')).toHaveTextContent('claude · update');
+  });
+
+  it('confirms a removal inline before opening the stream with uninstall', async () => {
+    api.getHarnesses.mockResolvedValue({
+      harnesses: [{
+        id: 'claude',
+        vendor: 'claude',
+        label: 'Claude Code CLI',
+        command: 'claude',
+        installed: true,
+        version: '2.1.0',
+        removable: true,
+        providers: [{ id: 'claude-code', name: 'Claude Code', enabled: true }],
+      }],
+    });
+    renderTab();
+    const claude = await screen.findByRole('article', { name: /Claude Code/ });
+    fireEvent.click(await within(claude).findByRole('button', { name: /Remove/ }));
+    expect(screen.queryByTestId('install-modal')).not.toBeInTheDocument();
+    expect(within(claude).getByText(/1 provider use `claude`/)).toBeInTheDocument();
+
+    const [, confirm] = within(claude).getAllByRole('button', { name: 'Remove' });
+    fireEvent.click(confirm);
+    expect(await screen.findByTestId('install-modal')).toHaveTextContent('claude · uninstall');
+  });
+
+  it('refreshes harness models and renders the report banner', async () => {
+    api.getHarnesses.mockResolvedValue({
+      harnesses: [{
+        id: 'claude',
+        vendor: 'claude',
+        label: 'Claude Code CLI',
+        command: 'claude',
+        installed: true,
+        listsModels: true,
+      }],
+    });
+    api.refreshHarnessModels.mockResolvedValue({
+      models: ['claude-3-7-sonnet', 'claude-3-5-haiku'],
+      updated: ['claude-code'],
+    });
+    renderTab();
+    const claude = await screen.findByRole('article', { name: /Claude Code/ });
+    fireEvent.click(await within(claude).findByRole('button', { name: /Refresh models/ }));
+
+    expect(await within(claude).findByText(/2 models from claude → 1 provider updated/)).toBeInTheDocument();
+  });
+
+  it('re-checks with fresh: true and invalidates catalog cache', async () => {
+    renderTab();
+    await screen.findByRole('heading', { name: /Claude Code/ });
+    fireEvent.click(screen.getByRole('button', { name: /Re-check/ }));
+    await waitFor(() => expect(api.getHarnesses).toHaveBeenCalledWith(expect.objectContaining({ fresh: true })));
+    await waitFor(() => expect(api.getProviderCatalog).toHaveBeenCalledTimes(2));
   });
 });
 
