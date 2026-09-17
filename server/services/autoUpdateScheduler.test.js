@@ -283,6 +283,104 @@ describe('checkout readiness gate', () => {
   });
 });
 
+describe('runtime-write failure handling', () => {
+  // The core regression (#7530): a persistence outage on the FIRST tick
+  // after enabling was reported as an ordinary, freshly-armed cooldown
+  // (`updateBaselineAt` falls back to `now` with no `armedAt`), forever —
+  // indistinguishable from nothing to report. It must surface as its own
+  // reason and never fall through to the update/repair checks.
+  it('reports a persistence-unavailable outcome when the initial arming write fails, without reaching the update gates', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: null, lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.recordRuntime.mockRejectedValue(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+    expect(deps.status).not.toHaveBeenCalled();
+    expect(deps.selfUpdate).not.toHaveBeenCalled();
+    expect(deps.appUpdate).not.toHaveBeenCalled();
+  });
+
+  // Repeated ticks against a still-broken write must keep reporting the same
+  // outcome (the read never sees a persisted armedAt), not silently drift
+  // back into a normal cooldown once the "first tick after enabling" framing
+  // no longer applies.
+  it('keeps reporting persistence-unavailable across repeated ticks while the write stays broken', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: null, lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.recordRuntime.mockRejectedValue(new Error('disk full'));
+
+    const first = await runAutoUpdateTick({ io: {} });
+    const second = await runAutoUpdateTick({ io: {} });
+    expect(first).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+    expect(second).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+  });
+
+  // Once the write actually lands, the tick must fall through to ordinary
+  // gating again — a transient outage must not wedge the scheduler forever.
+  it('resumes normal cooldown behavior once the arming write recovers', async () => {
+    deps.gateState.mockResolvedValueOnce({
+      runtime: { armedAt: null, lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.recordRuntime.mockRejectedValueOnce(new Error('disk full'));
+    deps.recordRuntime.mockResolvedValue({});
+
+    const first = await runAutoUpdateTick({ io: {} });
+    expect(first).toMatchObject({ ran: false, reason: 'runtime-persistence-unavailable' });
+
+    // The next read reflects what a real disk read would now show: the write
+    // above landed, so `armedAt` is persisted from well outside the cooldown.
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now() - 48 * HOUR), lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    const second = await runAutoUpdateTick({ io: {} });
+    expect(second).toMatchObject({ ran: true, channel: 'release' });
+  });
+
+  // A write failure recording an ORDINARY stand-down (cooldown, busy, …) must
+  // not be discarded silently — it still has to log something a person can
+  // find, distinct from the tick's own reported reason.
+  it('logs, but does not otherwise change, a runtime write failure while recording an ordinary skip', async () => {
+    deps.gateState.mockResolvedValue({
+      runtime: { armedAt: iso(Date.now() - 2 * HOUR), lastRunAt: null, repairQueuedAt: null },
+      lastUpdateResult: null,
+      updateInProgress: false,
+    });
+    deps.recordRuntime.mockRejectedValue(new Error('disk full'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: false, reason: 'cooldown' });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('runtime write failed (skip)'));
+    errorSpy.mockRestore();
+  });
+
+  // The launch itself must never be treated as undone or retried because its
+  // OWN bookkeeping write failed afterward — `setUpdateInProgress`'s
+  // persisted lock, not this write, is what guards against a second launch.
+  // The caller instead gets an explicit degradation flag.
+  it('preserves the launched outcome and flags a post-launch record failure without retrying', async () => {
+    deps.recordRuntime.mockImplementation((patch) => {
+      if (patch && typeof patch.lastRunAt === 'string') return Promise.reject(new Error('disk full'));
+      return Promise.resolve({});
+    });
+
+    const result = await runAutoUpdateTick({ io: {} });
+    expect(result).toMatchObject({ ran: true, channel: 'release', persistenceWarning: expect.any(String) });
+    expect(deps.selfUpdate).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('poll registration', () => {
   it('registers nothing while the feature is off, and cancels a live poll', async () => {
     deps.settings.mockResolvedValue({ autoUpdate: { enabled: false } });
