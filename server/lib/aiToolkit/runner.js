@@ -22,11 +22,32 @@ const IS_WIN32 = process.platform === 'win32';
 // wrappers (for Git Bash/WSL), and that stub is not natively launchable here.
 const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
 
-// Wall-clock ceiling for an API run when neither the caller nor the provider
+// No-progress ceiling for an API run when neither the caller nor the provider
 // sets one. Mirrors aiProvider's DEFAULT_PROVIDER_TIMEOUT_MS / askService's
 // `provider.timeout || 300000` so a hung upstream can't hold `activeRuns`
 // (and thus the run slot) open forever.
 const DEFAULT_API_RUN_TIMEOUT_MS = 300000;
+
+// Absolute runtime cap for a STREAMING API run, used when the configured
+// no-progress bound is the shorter of the two.
+//
+// `executeApiRun` used to bound a run with ONE wall-clock timer, which could
+// not tell a provider that opened the stream and STALLED (the leak the ceiling
+// exists to prevent) from one that is actively streaming and simply needs
+// longer. Both died at the same 300s. A reasoning model spends nearly its whole
+// budget in the hidden channel before the first content token — NVIDIA NIM's
+// `nvidia/nemotron-3.5-lightning-30b-a3b` sends 126 of 128 frames as
+// `reasoning_content` on a TRIVIAL prompt — so a ~26K-token prompt was killed
+// mid-generation while healthy and producing (#7560).
+//
+// The two bounds are now separate, and `provider.timeout` keeps the job the
+// single timer was actually written for: catching a provider that went quiet.
+// Read as a NO-PROGRESS bound it kills a hung upstream at exactly the moment it
+// always did — zero regression in that protection — while a stream that keeps
+// yielding bytes is no longer cut off for being slow. This cap is what still
+// bounds total runtime, so a provider that trickles one byte per minute cannot
+// hold a run slot forever.
+const DEFAULT_API_RUN_MAX_RUNTIME_MS = 1800000;
 const DEFAULT_OUTPUT_RESERVE_TOKENS = 8000;
 const CHARS_PER_TOKEN = 4;
 
@@ -630,26 +651,45 @@ export function createRunnerService(config = {}) {
       activeStopRequests.delete(runId);
       activeRuns.set(runId, controller);
 
-      // Wall-clock timeout with a single-settlement gate. Without a ceiling a
-      // hung provider (opens the stream then stalls, never responds, or — via
-      // the `ensureProviderReady` hook — never even reaches the abortable
-      // fetch) holds the AbortController in `activeRuns` forever, leaking the
-      // run slot. `markSettled()` ensures exactly one of {timer, response
-      // paths} finalizes the run: whoever wins clears the timer and flips the
-      // flag; the losers no-op. When the timer wins it aborts the fetch/reader
-      // AND independently finalizes the run as a TIMEOUT (so a hung setup hook
-      // that never reaches the fetch is still bounded, and the failure is
-      // classified as a timeout instead of the AbortError's UNKNOWN/HTTP-0).
-      const effectiveTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
+      // TWO bounds with a single-settlement gate. Without a ceiling a hung
+      // provider (opens the stream then stalls, never responds, or — via the
+      // `ensureProviderReady` hook — never even reaches the abortable fetch)
+      // holds the AbortController in `activeRuns` forever, leaking the run
+      // slot. But one wall-clock ceiling cannot tell that hang apart from a
+      // healthy model that is streaming and simply slow, so it killed both
+      // (#7560). They are split:
+      //
+      //  - `stallTimeout` — the NO-PROGRESS bound, re-armed by
+      //    `noteStreamProgress()` on every read that yields bytes. This is the
+      //    one that catches a genuinely hung upstream. It takes the caller's /
+      //    provider's configured value, so a provider that goes quiet is still
+      //    cut off at exactly the moment it was before this split.
+      //  - `absoluteTimeout` — total runtime, never extended, so a provider
+      //    trickling one byte per minute still cannot hold the slot forever.
+      //    `Math.max` keeps it from ever landing BELOW the configured bound: an
+      //    install that deliberately raised `provider.timeout` past the default
+      //    cap keeps running exactly as long as it asked to.
+      //
+      // `markSettled()` ensures exactly one of {either timer, response paths}
+      // finalizes the run: whoever wins clears BOTH timers and flips the flag;
+      // the losers no-op. When a timer wins it aborts the fetch/reader AND
+      // independently finalizes the run as a TIMEOUT (so a hung setup hook that
+      // never reaches the fetch is still bounded, and the failure is classified
+      // as a timeout instead of the AbortError's UNKNOWN/HTTP-0).
+      const stallTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
+      const absoluteTimeout = Math.max(DEFAULT_API_RUN_MAX_RUNTIME_MS, stallTimeout);
       let settled = false;
-      let apiTimeoutHandle = null;
+      let stallTimeoutHandle = null;
+      let absoluteTimeoutHandle = null;
       const markSettled = () => {
         if (settled) return false;
         settled = true;
-        if (apiTimeoutHandle) {
-          clearTimeout(apiTimeoutHandle);
-          apiTimeoutHandle = null;
-        }
+        // BOTH, or the survivor keeps the event loop alive past the run and
+        // fires an abort at a controller nobody is reading any more.
+        clearTimeout(stallTimeoutHandle);
+        clearTimeout(absoluteTimeoutHandle);
+        stallTimeoutHandle = null;
+        absoluteTimeoutHandle = null;
         return true;
       };
       // A Stop is a lifecycle outcome, not a failed AI attempt. Finalize it as
@@ -678,13 +718,24 @@ export function createRunnerService(config = {}) {
         });
         safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
       };
-      const finalizeTimeout = async () => {
+      // `bound` is 'stall' or 'absolute'. The two mean different things — one
+      // says the provider went quiet, the other says it was productive but ran
+      // past its budget — so the message names which fired and the metadata
+      // carries it as a field, letting a host's failure classifier branch on it
+      // without parsing prose. Neither message may contain the literal
+      // "timeout": `analyzeError`'s NETWORK_ERROR pattern matches that
+      // substring and is tested BEFORE the timeout pattern, so it would
+      // misclassify the run as a connectivity fault. "timed out" is the phrase
+      // that reaches ERROR_CATEGORIES.TIMEOUT.
+      const finalizeTimeout = async (bound) => {
         if (!markSettled()) return;
         activeRuns.delete(runId);
         // The timer's own abort caused this, so TIMEOUT stays authoritative
         // even if a Stop raced it — just drop the marker so it can't leak.
         consumeActiveStop(runId);
-        const error = `API execution timed out after ${effectiveTimeout}ms`;
+        const error = bound === 'absolute'
+          ? `API execution timed out after ${absoluteTimeout}ms: absolute runtime cap reached`
+          : `API execution timed out after ${stallTimeout}ms with no stream progress`;
         try {
           // A reasoning model spends its whole budget in the hidden channel
           // before the first content token, so a run the ceiling cuts off
@@ -702,6 +753,11 @@ export function createRunnerService(config = {}) {
           metadata.success = false;
           metadata.error = error;
           metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
+          // Which ceiling ended the run: 'stall' (the provider went quiet) or
+          // 'absolute' (it stayed productive past the total-runtime cap). A
+          // stalled provider is a candidate for benching; a productive one that
+          // outran its budget is not.
+          metadata.timeoutBound = bound;
           // Same two diagnostic flags the mid-stream-throw path sets, so a
           // timeout that streamed is distinguishable from one that never got a
           // byte without reading the output file back.
@@ -726,11 +782,25 @@ export function createRunnerService(config = {}) {
           safeSettle(() => onComplete?.({ success: false, error, endTime: new Date().toISOString(), duration: Date.now() - startTime, outputSize: Buffer.byteLength(salvaged) }), `Run ${runId} onComplete`);
         }
       };
-      apiTimeoutHandle = setTimeout(() => {
-        console.log(`⏱️ API run ${runId} timed out after ${effectiveTimeout}ms`);
+      const fireTimeout = (bound) => {
+        console.log(`⏱️ API run ${runId} timed out: ${bound} bound of ${bound === 'absolute' ? absoluteTimeout : stallTimeout}ms`);
         controller.abort();
-        finalizeTimeout().catch((err) => console.error(`❌ API run ${runId} timeout handler error: ${err.message}`));
-      }, effectiveTimeout);
+        finalizeTimeout(bound).catch((err) => console.error(`❌ API run ${runId} timeout handler error: ${err.message}`));
+      };
+      const armStallTimer = () => {
+        stallTimeoutHandle = setTimeout(() => fireTimeout('stall'), stallTimeout);
+      };
+      // Re-arm the no-progress bound from the read loop. Guarded on `settled`
+      // so a chunk that lands in the same tick a terminal path claimed the run
+      // cannot resurrect a timer nobody will ever clear — that would hold the
+      // event loop open past the run and fire an abort at a dead controller.
+      const noteStreamProgress = () => {
+        if (settled) return;
+        if (stallTimeoutHandle) clearTimeout(stallTimeoutHandle);
+        armStallTimer();
+      };
+      armStallTimer();
+      absoluteTimeoutHandle = setTimeout(() => fireTimeout('absolute'), absoluteTimeout);
 
       hooks.onRunStarted?.({ runId, provider: provider.name, model });
 
@@ -913,6 +983,14 @@ export function createRunnerService(config = {}) {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+
+          // Bytes arrived, so the upstream is alive: push the no-progress bound
+          // out. An EMPTY chunk is deliberately not progress — it proves the
+          // reader woke, not that the provider produced anything, and treating
+          // it as a heartbeat would let a reader spinning on zero-length reads
+          // hold the stall bound open indefinitely. The absolute cap is what
+          // bounds a provider that DOES trickle real bytes forever.
+          if (value?.byteLength > 0) noteStreamProgress();
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');

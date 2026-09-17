@@ -27,6 +27,10 @@ describe('AI Toolkit runner service', () => {
   const tempDirs = [];
 
   afterEach(async () => {
+    // Before restoreAllMocks: a spy restored while the clock is still faked is
+    // reinstalled onto the faked globals, so the next test inherits a timer
+    // that never fires. No-op when the test used real timers.
+    vi.useRealTimers();
     vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) {
       await rm(dir, { recursive: true, force: true });
@@ -628,6 +632,11 @@ describe('AI Toolkit runner service', () => {
     // every API timeout reached the host's failure hook as an uncategorized
     // failure and was escalated for investigation instead of read as a timeout.
     expect(metadata.errorAnalysis).toMatchObject({ hasError: true, category: 'timeout' });
+    // Which of the two ceilings ended it. A provider that went quiet is a
+    // bench candidate; one that outran the absolute cap while producing is not,
+    // so the host's classifier must be able to tell them apart without prose.
+    expect(metadata.timeoutBound).toBe('stall');
+    expect(metadata.error).toMatch(/no stream progress/i);
   });
 
   it('bounds a run whose provider-readiness hook never resolves (fetch never reached)', async () => {
@@ -1191,6 +1200,149 @@ describe('AI Toolkit runner service', () => {
     expect(metadata.hadReasoning).toBe(false);
     expect(metadata.usedReasoningAsFallback).toBe(false);
     expect(await runner.isRunActive('run-timeout-pre-response')).toBe(false);
+  });
+
+  // A SSE reader whose chunks arrive on the (fake) clock, so a test can hold a
+  // stream open across the timeout bounds without sleeping. Rejects on abort
+  // the way a real reader does, so a timer that wins the race still unwinds
+  // `processStream` instead of leaving it parked on a read forever.
+  const clockDrivenReader = ({ intervalMs, frames = Infinity, signal }) => {
+    const encoder = new TextEncoder();
+    let sent = 0;
+    return {
+      read: () => new Promise((resolve, reject) => {
+        const fail = () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+        if (signal?.aborted) return fail();
+        signal?.addEventListener('abort', fail, { once: true });
+        setTimeout(() => {
+          if (signal?.aborted) return fail();
+          if (sent >= frames) return resolve({ done: true, value: undefined });
+          sent += 1;
+          resolve({
+            done: false,
+            value: encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'tok' } }] })}\n`),
+          });
+        }, intervalMs);
+      }),
+      cancel: async () => {},
+    };
+  };
+
+  // The regression #7560 reports. A single wall-clock ceiling cannot tell a
+  // provider that opened the stream and STALLED from one that is actively
+  // streaming and simply needs longer, so both died at the same 300s — an
+  // NVIDIA NIM nemotron run spending its whole budget in the hidden reasoning
+  // channel was killed mid-generation while healthy and producing. Every chunk
+  // must push the no-progress bound out, so a run that keeps producing outlives
+  // that bound by any multiple.
+  it('lets a steadily streaming run outlive the configured no-progress bound', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.useFakeTimers();
+
+    const FRAMES = 20;
+    const INTERVAL_MS = 400;
+    const STALL_MS = 1000;
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+      ok: true,
+      body: { getReader: () => clockDrivenReader({ intervalMs: INTERVAL_MS, frames: FRAMES, signal: opts.signal }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-slow-stream', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: STALL_MS,
+      onData: undefined, onComplete: complete,
+    });
+
+    // 8000ms of streaming against a 1000ms no-progress bound: the old single
+    // ceiling ended this run at 1000ms with `success: false`.
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS * (FRAMES + 1));
+    const metadata = await completed;
+
+    expect(metadata).toMatchObject({ success: true, exitCode: 0 });
+    expect(metadata.duration).toBeGreaterThan(STALL_MS);
+    expect(await readFile(join(dataDir, 'runs', 'run-slow-stream', 'output.txt'), 'utf-8'))
+      .toBe('tok'.repeat(FRAMES));
+    expect(await runner.isRunActive('run-slow-stream')).toBe(false);
+  });
+
+  // The other half of the split: relaxing the no-progress bound must not let a
+  // provider that trickles bytes forever hold its `activeRuns` slot for good.
+  // The absolute cap never extends, and it says so — a run that outran its
+  // total budget while producing is a different diagnosis from one that stalled.
+  it('caps a run that never stops trickling, naming the absolute bound', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.useFakeTimers();
+
+    // 55s between frames keeps the 120s no-progress bound permanently re-armed
+    // (and never lands on the same tick as the 30-minute cap).
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+      ok: true,
+      body: { getReader: () => clockDrivenReader({ intervalMs: 55_000, signal: opts.signal }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-trickle', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 120_000,
+      onData: undefined, onComplete: complete,
+    });
+
+    await vi.advanceTimersByTimeAsync(1_800_000);
+    const metadata = await completed;
+
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout', timeoutBound: 'absolute' });
+    expect(metadata.error).toMatch(/absolute runtime cap/i);
+    // The cap is a ceiling on total runtime, not on the no-progress bound: it
+    // fired while the stream was still producing, so the partial output is
+    // salvaged rather than reported as a zero-byte "provider said nothing".
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    expect(await runner.isRunActive('run-trickle')).toBe(false);
+  });
+
+  // `Math.max` against the default cap: an install that deliberately raised
+  // `provider.timeout` past 30 minutes keeps running exactly as long as it
+  // asked to, rather than being silently clamped DOWN by the new ceiling.
+  it('never caps a run below its configured no-progress bound', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    vi.useFakeTimers();
+
+    vi.stubGlobal('fetch', vi.fn(async (_url, opts) => ({
+      ok: true,
+      body: { getReader: () => clockDrivenReader({ intervalMs: 600_000, signal: opts.signal }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    // A 45-minute bound, past the 30-minute default cap.
+    await runner.executeApiRun({
+      runId: 'run-long-bound', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 2_700_000,
+      onData: undefined, onComplete: complete,
+    });
+
+    // Past the default cap, before the configured bound — still running.
+    await vi.advanceTimersByTimeAsync(1_900_000);
+    expect(await runner.isRunActive('run-long-bound')).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    const metadata = await completed;
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout', timeoutBound: 'absolute' });
+    expect(metadata.error).toMatch(/2700000ms/);
   });
 
   // A stream that ends without [DONE] still has a complete frame sitting in the
