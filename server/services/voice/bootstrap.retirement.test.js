@@ -24,7 +24,7 @@ const { execPm2 } = await import('../pm2.js');
 const { execFile } = await import('../../lib/childProcess.js');
 const { getProviderById } = await import('../providers.js');
 const { VOICE_DEFAULTS } = await import('./config.js');
-const { reconcile } = await import('./bootstrap.js');
+const { reconcile, ensureToolCapableModel } = await import('./bootstrap.js');
 
 it('does not download or preload anything when an upgraded install boots before Piper setup', async () => {
   const cfg = { ...VOICE_DEFAULTS, enabled: true, tts: { ...VOICE_DEFAULTS.tts, retiredEngine: 'kokoro' } };
@@ -43,6 +43,18 @@ it('starts provisioned Whisper while deferring missing Piper setup and LLM prelo
   const result = await reconcile(cfg, { allowSetup: false });
   expect(result).toMatchObject({ name: 'portos-whisper', setupRequired: 'piper' });
   expect(execPm2).toHaveBeenCalledWith(expect.arrayContaining(['start', '/usr/bin/whisper-server']));
+  expect(execFile).not.toHaveBeenCalled();
+  expect(getProviderById).not.toHaveBeenCalled();
+});
+
+// Voice OFF must never reach `lms get`. `reconcile` already returns early, so
+// this pins the guard on ensureToolCapableModel ITSELF — the export is what
+// shells out to a multi-GB download, and a future caller that forgets the
+// reconcile gate would otherwise arm it on an install that never opted in.
+it('does not probe or download a tool-capable model when voice is disabled', async () => {
+  vi.clearAllMocks();
+  const cfg = { ...VOICE_DEFAULTS, enabled: false, llm: { ...VOICE_DEFAULTS.llm, provider: 'lmstudio', model: 'auto', tools: { enabled: true } } };
+  await expect(ensureToolCapableModel(cfg)).resolves.toEqual({ skipped: 'voice-disabled' });
   expect(execFile).not.toHaveBeenCalled();
   expect(getProviderById).not.toHaveBeenCalled();
 });

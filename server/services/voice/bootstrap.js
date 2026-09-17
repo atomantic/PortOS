@@ -286,9 +286,16 @@ const sizeOf = (id) => {
 const FAST_VOICE_MODEL_MAX_B = 10;
 
 export const ensureToolCapableModel = async (cfg) => {
-  // Only intervene when the user opted in: tools on AND model is 'auto'.
-  // An explicit model id means they know what they want — respect it even
-  // if incompatible.
+  // Only intervene when the user opted in: voice on, tools on AND model is
+  // 'auto'. An explicit model id means they know what they want — respect it
+  // even if incompatible.
+  //
+  // The `enabled` gate is deliberately duplicated from `reconcile`'s early
+  // return rather than left to the caller: this function shells out to
+  // `lms get`, a multi-GB download the user never asked for, so an install
+  // with voice OFF must never reach it even if a future caller forgets the
+  // gate. `preloadModel` guards itself the same way for the same reason.
+  if (!cfg?.enabled) return { skipped: 'voice-disabled' };
   if (!cfg?.llm?.tools?.enabled) return { skipped: 'tools-disabled' };
   if (cfg?.llm?.model && cfg.llm.model !== 'auto') return { skipped: 'explicit-model' };
   if (!(await isEffectiveLmStudioVoiceProvider(cfg))) return { skipped: 'non-lmstudio-provider', provider: cfg?.llm?.provider };
