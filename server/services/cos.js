@@ -389,13 +389,19 @@ async function runStart() {
   // already mutated the on-disk agents map.
   const freshState = await loadState();
   const liveAgentIds = new Set(Object.keys(freshState.agents || {}));
-  const { cleared: clearedActiveAgents } = await clearStaleActiveAgents(liveAgentIds).catch(() => ({ cleared: [] }));
+  const { cleared: clearedActiveAgents } = await clearStaleActiveAgents(liveAgentIds).catch(err => {
+    console.warn(`⚠️ clearStaleActiveAgents failed: ${err?.message || err}`, err?.stack || '');
+    return { cleared: [] };
+  });
   if (clearedActiveAgents.length > 0) {
     emitLog('info', `🧹 Cleared ${clearedActiveAgents.length} stale activeAgentId pointer(s) from app-activity`);
   }
 
   // Archive stale completed agents from state.json on startup
-  const { archived } = await _archiveStaleAgents().catch(() => ({ archived: 0 }));
+  const { archived } = await _archiveStaleAgents().catch(err => {
+    console.warn(`⚠️ _archiveStaleAgents failed: ${err?.message || err}`, err?.stack || '');
+    return { archived: 0 };
+  });
   if (archived > 0) {
     emitLog('info', `📦 Startup: archived ${archived} stale agent(s) from state`);
   }
@@ -417,7 +423,10 @@ async function runStart() {
         emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
       }
       await resetOrphanedTasks();
-      const { archived } = await _archiveStaleAgents().catch(() => ({ archived: 0 }));
+      const { archived } = await _archiveStaleAgents().catch(err => {
+        console.warn(`⚠️ _archiveStaleAgents failed: ${err?.message || err}`, err?.stack || '');
+        return { archived: 0 };
+      });
       if (archived > 0) {
         emitLog('info', `📦 Auto-archived ${archived} stale agent(s) from state`);
       }
@@ -489,7 +498,10 @@ async function runStart() {
     handler: async () => {
       const s = await loadState();
       const gracePeriodMs = (s.config.rehabilitationGracePeriodDays || 7) * 24 * 60 * 60 * 1000;
-      const result = await checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(() => ({ count: 0 }));
+      const result = await checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(err => {
+        emitLog('warn', `⚠️ checkAndRehabilitateSkippedTasks failed: ${err?.message || err}`, { stack: err?.stack || '' });
+        return { count: 0 };
+      });
       if (result.count > 0) {
         emitLog('success', `Auto-rehabilitated ${result.count} skipped task type(s)`, {
           rehabilitated: result.rehabilitated?.map(r => r.taskType) || []
@@ -832,7 +844,9 @@ async function resetOrphanedTasks({ bootRecovery = false } = {}) {
           // scan's possibly-stale copy) is redundant and would risk clobbering a
           // concurrent content edit. It also keeps the heartbeat a claim-only
           // patch so it never bumps the updatedAt LWW stamp (#1714).
-          await updateTask(task.id, { metadata: renewal }, taskType).catch(() => {});
+          await updateTask(task.id, { metadata: renewal }, taskType).catch(err => {
+            emitLog('warn', `⚠️ Lease renewal failed for task ${task.id}: ${err?.message || err}`, { taskId: task.id, stack: err?.stack || '' });
+          });
         }
         continue;
       }
