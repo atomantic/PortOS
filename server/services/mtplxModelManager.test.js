@@ -13,6 +13,7 @@ import * as streamingSpawn from '../lib/streamingSpawn.js';
 import * as hfMetadata from './huggingFaceMetadata.js';
 import * as huggingfaceLora from '../lib/huggingfaceLora.js';
 import * as hfToken from './hfToken.js';
+import * as modelManifest from './modelManifest.js';
 
 const BINARY = '/opt/homebrew/bin/mtplx';
 
@@ -29,6 +30,10 @@ describe('mtplxModelManager', () => {
     vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue({ usedStorage: 0 });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The manifest write is real file IO against the install's data root; doubled
+    // so it can be asserted rather than reaching disk.
+    vi.spyOn(modelManifest, 'recordModelInstall').mockResolvedValue(true);
+    vi.spyOn(modelManifest, 'recordModelUninstall').mockResolvedValue(true);
   });
 
   describe('isMtplxRepoId', () => {
@@ -225,6 +230,57 @@ describe('mtplxModelManager', () => {
         success: false, code: 1, stdout: '', stderr: 'error: model not cached', timedOut: false,
       });
       await expect(removeMtplxModel('Example/Qwen-MTP')).rejects.toThrow(/error: model not cached/);
+    });
+  });
+  // MTPLX pulls through huggingface_hub into the standard HF hub cache, so a
+  // checkpoint it fetches shows up in the Models → Status inventory like any other
+  // `models--org--name` directory. Recording lives in this manager because BOTH
+  // entry points reach it — the model-pull route and the readiness checklist's
+  // default-checkpoint fetch — and neither would have recorded on its own.
+  describe('model manifest', () => {
+    it('records a named pull under its HF cache directory', async () => {
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
+
+      await pullMtplxModel({ model: 'Example/Qwen-MTP' });
+
+      expect(modelManifest.recordModelInstall).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'hf:models--Example--Qwen-MTP',
+        backend: 'huggingface',
+        action: { type: 'hf-model', dirName: 'models--Example--Qwen-MTP' },
+        source: 'download',
+      }));
+    });
+
+    it('records what actually landed when the default checkpoint was pulled by no name', async () => {
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
+      mtplxModels.listMtplxCachedModels.mockResolvedValue({
+        models: [{ repo_id: 'Example/Default-MTP' }], error: null,
+      });
+
+      await pullMtplxModel({});
+
+      expect(modelManifest.recordModelInstall).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'hf:models--Example--Default-MTP',
+      }));
+    });
+
+    it('records nothing when the pull failed', async () => {
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: false, error: 'network' });
+
+      await pullMtplxModel({ model: 'Example/Qwen-MTP' });
+
+      expect(modelManifest.recordModelInstall).not.toHaveBeenCalled();
+    });
+
+    it('clears the entry when a checkpoint is removed', async () => {
+      vi.spyOn(bufferedSpawnModule, 'bufferedSpawn').mockResolvedValue(spawnOk(JSON.stringify({ removed: true, size_bytes_removed: 10 })));
+
+      await removeMtplxModel('Example/Qwen-MTP');
+
+      expect(modelManifest.recordModelUninstall).toHaveBeenCalledWith({
+        backend: 'huggingface',
+        key: 'models--Example--Qwen-MTP',
+      });
     });
   });
 });

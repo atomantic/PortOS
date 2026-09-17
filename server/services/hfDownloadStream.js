@@ -11,9 +11,11 @@
 // SSE plumbing it builds on (`openSseStream`, `onClientDisconnect`) stays in
 // `lib/sseDownload.js` (issue #4901).
 
-import { findCachedRepoFile, inspectModelCache } from '../lib/hfCache.js';
+import { findCachedRepoFile, inspectModelCache, repoToDirName } from '../lib/hfCache.js';
+import { hfInventoryRow } from '../lib/modelInventory.js';
 import { openSseStream, onClientDisconnect } from '../lib/sseDownload.js';
 import { downloadHfRepo } from './hfDownload.js';
+import { recordModelInstall } from './modelManifest.js';
 
 const inFlight = new Map(); // repo -> { promise, kill }
 
@@ -190,6 +192,22 @@ export async function startHfDownloadStream({ req, res, repo, revision = null, r
       result = await handle.promise;
       if (result?.ok) {
         console.log(`✅ HuggingFace download complete: ${r} (${result.sizeBytes || 0} bytes)`);
+        // Every HF weight pull in PortOS lands here — image gen, video gen and
+        // music all drive this one stream — so this is the single place the model
+        // manifest learns a Hub repo is now on disk. A single-file pull reports
+        // only the bytes IT moved, which is a floor rather than the directory's
+        // size, hence the estimate flag; the next reconcile replaces it with the
+        // measured total.
+        await recordModelInstall({
+          ...hfInventoryRow({
+            dirName: repoToDirName(r),
+            name: r,
+            detail: r,
+            sizeBytes: result.sizeBytes,
+            sizeIsEstimate: singleFile,
+          }),
+          source: 'download',
+        });
       } else if (result?.errorKind !== 'cancelled') {
         console.error(`❌ HuggingFace download failed: ${r} — ${result?.errorMessage || 'unknown error'}`);
       }

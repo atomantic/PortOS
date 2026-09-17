@@ -157,6 +157,11 @@ export const DEFAULT_EXCLUDES = [
   { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
   { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true },
   { path: '/cache/', reason: 'Remote-API metadata and licensed reading caches — regenerable on demand, and stale on restore anyway', overridable: false },
+  // Anchored with a leading `/`, like every entry here. The manifest describes
+  // which model weights are on THIS machine's disks; restoring it onto another
+  // would claim gigabytes of models that machine does not have, and offer delete
+  // buttons for them. It is fully re-derivable by a rescan from Models → Status.
+  { path: '/model-manifest.json', reason: 'Tracked downloaded-model inventory — machine-local and re-derivable by rescanning the model stores; a restored copy would describe another machine\'s disks', overridable: false },
   // Sprite animation-run raw intermediates: 30–96 ffmpeg-extracted PNGs per
   // run, byte-for-byte regenerable from the archived source video by the
   // deterministic postprocess (walkPostprocess.js). The source video, packaged

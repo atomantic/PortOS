@@ -25,6 +25,13 @@ import * as lmStudioManager from './lmStudioManager.js';
 import { getQueueCapacity } from './mediaJobQueue/index.js';
 import * as cos from './cos.js';
 import { getSettings } from './settings.js';
+import {
+  hfInventoryRow,
+  localModelInventoryRow,
+  loraInventoryRow,
+  modelInventoryId,
+} from '../lib/modelInventory.js';
+import { getModelManifest, reconcileModelManifest } from './modelManifest.js';
 
 export const REPORT_CACHE_TTL_MS = 30_000;
 
@@ -99,7 +106,18 @@ function dataCleanupCandidates(categories) {
     });
 }
 
-function modelCleanupCandidates(downloaded) {
+/**
+ * The cleanup candidate for each downloaded-model row.
+ *
+ * Exported because the manifest-backed inventory (`getTrackedModelInventory`)
+ * has to describe its rows exactly as a scan would — the Status page renders both
+ * through one component, and a second copy of this risk/`manualOnly` logic is how
+ * a delete button ends up armed on a tracked row the scan would have refused.
+ *
+ * @param {Array<Object>} downloaded Downloaded-model inventory rows
+ * @returns {Array<Object>}
+ */
+export function modelCleanupCandidates(downloaded) {
   return downloaded.map((model) => ({
     id: model.id,
     label: model.name,
@@ -178,29 +196,23 @@ function downloadedModelInventory({
     normalizeLmStudioRepo(model.id),
   ]).filter(Boolean));
 
+  // The durable half of every row comes from the shared builders in
+  // `lib/modelInventory.js`, which the install chokepoints call too — so a row's
+  // risk, manage path, delete action and cleanup sentence cannot drift between the
+  // scan and the manifest. Only the LIVE half (residency, whether the on-disk
+  // folder could be verified) is added here, because only a scan can know it.
   const huggingFace = (hf?.models || []).map((model) => ({
-    id: `hf:${model.id}`,
-    backend: 'huggingface',
-    name: model.label || model.repo,
-    detail: model.repo,
-    sizeBytes: model.size,
-    sizeIsEstimate: false,
+    ...hfInventoryRow({
+      dirName: model.id,
+      name: model.label || model.repo,
+      detail: model.repo,
+      sizeBytes: model.size,
+    }),
     loaded: false,
-    managePath: '/models/media',
-    action: { type: 'hf-model', dirName: model.id },
   }));
   const loras = (loraStorage?.loras || []).map((model) => ({
-    id: `lora:${model.filename}`,
-    backend: 'lora',
-    name: model.name,
-    detail: 'LoRA adapter',
-    sizeBytes: model.size,
-    sizeIsEstimate: false,
-    risk: 'high',
-    cleanupReason: 'A trained or imported LoRA adapter may be the only copy and can take hours to reproduce.',
+    ...loraInventoryRow({ filename: model.filename, name: model.name, sizeBytes: model.size }),
     loaded: false,
-    managePath: '/models/loras',
-    action: { type: 'lora', filename: model.filename },
   }));
   const ollamaApi = new Map((ollamaStatus?.models || []).map((model) => [model.id, model]));
   const ollamaDiskModels = Array.isArray(ollamaStored) ? ollamaStored : [];
@@ -212,21 +224,18 @@ function downloadedModelInventory({
   const ollama = ollamaRows.map((stored) => {
     const model = ollamaApi.get(stored.id) || stored;
     return {
-      id: `ollama:${stored.id}`,
-      backend: 'ollama',
-      name: model.name || stored.name || stored.id,
-      detail: [model.params, model.quantization, model.family].filter(Boolean).join(' · '),
-      sizeBytes: finiteOrNull(stored.size ?? model.size),
-      // Ollama layers can be shared between tags, so the per-model size is an
-      // upper-bound estimate rather than guaranteed reclaimed bytes.
-      sizeIsEstimate: true,
+      ...localModelInventoryRow({
+        backend: 'ollama',
+        modelId: stored.id,
+        name: model.name || stored.name || stored.id,
+        detail: [model.params, model.quantization, model.family].filter(Boolean).join(' · '),
+        sizeBytes: finiteOrNull(stored.size ?? model.size),
+        // A backend that is not running cannot be asked to delete anything.
+        deletable: Boolean(ollamaStatus?.available),
+      }),
       loaded: !ollamaResidencyError && ollamaLoadedIds.has(stored.id),
       residencyUnknown: Boolean(ollamaResidencyError),
       inventoryUnknown: !Array.isArray(ollamaStored) || Boolean(stored.inventoryUnknown),
-      managePath: '/models/llms',
-      action: ollamaStatus?.available
-        ? { type: 'local-model', backend: 'ollama', modelId: stored.id }
-        : null,
     };
   });
 
@@ -261,21 +270,22 @@ function downloadedModelInventory({
       || group?.models.some((model) => model.state === 'loaded')
     );
     return {
-      id: `lmstudio:${stored.id}`,
-      backend: 'lmstudio',
-      name: stored.name || stored.id,
-      detail: [
-        quantizations.length ? `${quantizations.length} quantization${quantizations.length === 1 ? '' : 's'}: ${quantizations.join(', ')}` : null,
-        'removes the whole model folder',
-      ].filter(Boolean).join(' · '),
-      sizeBytes: finiteOrNull(stored.size),
+      ...localModelInventoryRow({
+        backend: 'lmstudio',
+        modelId: stored.id,
+        name: stored.name || stored.id,
+        detail: [
+          quantizations.length ? `${quantizations.length} quantization${quantizations.length === 1 ? '' : 's'}: ${quantizations.join(', ')}` : null,
+          'removes the whole model folder',
+        ].filter(Boolean).join(' · '),
+        sizeBytes: finiteOrNull(stored.size),
+      }),
+      // A row the API reported but the disk listing did not is sized from the
+      // API's own number, which is a claim rather than a measurement.
       sizeIsEstimate: Boolean(stored.inventoryUnknown),
       loaded,
       residencyUnknown: Boolean(lmStudioResidencyError),
       inventoryUnknown: !Array.isArray(lmStudioStored) || Boolean(stored.inventoryUnknown),
-      cleanupReason: 'Deleting this entry removes the whole LM Studio model folder, including every downloaded quantization in it.',
-      managePath: '/models/llms',
-      action: { type: 'local-model', backend: 'lmstudio', modelId: stored.id },
     };
   });
   return [...huggingFace, ...loras, ...ollama, ...lmstudio]
@@ -285,14 +295,14 @@ function downloadedModelInventory({
 function loadedModelInventory({ ollamaLoaded, lmStudioLoaded }) {
   return [
     ...(ollamaLoaded || []).map((model) => ({
-      id: `ollama:${model.id}`,
+      id: modelInventoryId('ollama', model.id),
       backend: 'ollama',
       name: model.name || model.id,
       memoryBytes: finiteOrNull(model.sizeVram ?? model.size),
       expiresAt: model.expiresAt || null,
     })),
     ...(lmStudioLoaded || []).map((model) => ({
-      id: `lmstudio:${model.id}`,
+      id: modelInventoryId('lmstudio', model.id),
       backend: 'lmstudio',
       name: model.id,
       memoryBytes: null,
@@ -504,8 +514,17 @@ export async function buildSystemResourceReport() {
     ? agentQueue.pendingUser + agentQueue.pendingSystem
     : 0;
 
+  // Every full scan heals the persisted manifest, so Models → Status has a fresh
+  // answer to fall back on next time without walking the model stores again, and
+  // weights installed or deleted outside PortOS get picked up. Scoped to the
+  // backends this scan could actually see — `reconcileModelManifest` will not
+  // prune against a disabled or unreachable one.
+  const manifest = await reconcileModelManifest(downloadedModels, { sourceErrors, disabledSources });
+
   return {
     generatedAt: new Date().toISOString(),
+    inventorySource: 'scan',
+    manifestReconciledAt: manifest?.reconciledAt || null,
     filesystem,
     summary: {
       knownFootprintBytes: sumKnownBytes(storageAreas.map((area) => area.sizeBytes)),
@@ -575,6 +594,52 @@ export function getSystemResourceReport({ force = false } = {}) {
     );
   }
   return reportInFlight;
+}
+
+/**
+ * The downloaded-model inventory as the manifest already knows it — no disk scan.
+ *
+ * This is what Models → Status loads on arrival. It is shaped as a PARTIAL system
+ * resource report rather than a bespoke payload so the page renders it through the
+ * same component that renders a live scan: the two differ in `inventorySource` and
+ * in the fields a scan alone can supply (residency, duplicates, per-store totals
+ * for stores whose rows the manifest may not cover).
+ *
+ * `reconciledAt: null` means no scan has ever reconciled this install — the page
+ * shows its "run the inventory" prompt rather than claiming an empty machine.
+ *
+ * @returns {Promise<Object>} Partial report: `{ inventorySource: 'manifest', … }`
+ */
+export async function getTrackedModelInventory() {
+  const manifest = await getModelManifest();
+  const downloaded = manifest.models;
+  // `sumKnownBytes` already answers null for a list with no finite sizes, which
+  // covers a backend with no tracked rows at all.
+  const backendTotal = (backend) => sumKnownBytes(
+    downloaded.filter((model) => model.backend === backend).map((model) => model.sizeBytes),
+  );
+  return {
+    inventorySource: 'manifest',
+    generatedAt: manifest.reconciledAt,
+    reconciledAt: manifest.reconciledAt,
+    models: {
+      downloaded,
+      loaded: [],
+      totals: {
+        huggingface: backendTotal('huggingface'),
+        loras: backendTotal('lora'),
+        ollama: backendTotal('ollama'),
+        lmstudio: backendTotal('lmstudio'),
+        all: sumKnownBytes(downloaded.map((model) => model.sizeBytes)),
+      },
+    },
+    cleanupCandidates: modelCleanupCandidates(downloaded),
+    // A duplicate-weight scan is exactly the expensive walk this endpoint exists to
+    // avoid, so the panel renders nothing for it until the user asks for a refresh.
+    modelDuplicates: null,
+    sourceErrors: [],
+    disabledSources: [],
+  };
 }
 
 export function buildSystemResourceTriagePrompt(report) {

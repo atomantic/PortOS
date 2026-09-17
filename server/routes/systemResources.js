@@ -12,7 +12,7 @@ import { validateRequest } from '../lib/validation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { onClientDisconnect } from '../lib/sseDownload.js';
 import { stopRun } from '../services/runner.js';
-import { getSystemResourceReport, triageSystemResources } from '../services/systemResources.js';
+import { getSystemResourceReport, getTrackedModelInventory, triageSystemResources } from '../services/systemResources.js';
 import { rectifyModelDuplicates } from '../services/modelDeduplication.js';
 
 const router = Router();
@@ -41,6 +41,14 @@ export const systemResourceTriageSchema = z.object({
   effort: z.string().max(64).optional().transform(blankToUndefined)
     .refine((value) => value === undefined || EFFORT_LEVELS.includes(value), 'Unsupported effort level'),
 }).strict();
+
+// GET, unlike everything else here, because it performs NO scan: it reads the
+// model manifest PortOS maintains at install/uninstall time. That is the whole
+// point — Models → Status can show the downloaded-model inventory on arrival,
+// and a scan (POST /report) becomes the explicit "re-check the disk" action.
+router.get('/models/manifest', asyncHandler(async (_req, res) => {
+  res.json(await getTrackedModelInventory());
+}));
 
 router.post('/report', asyncHandler(async (req, res) => {
   validateRequest(emptyBodySchema, req.body || {});

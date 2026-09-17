@@ -659,7 +659,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/avatar` | Avatar rendering/config |
 | `/api/system` | System health metrics |
 | `/api/system/capabilities` | Local hardware capabilities for model/provider selection |
-| `/api/system-resources` | System storage report and AI-assisted cleanup triage |
+| `/api/system-resources` | System storage report, the tracked downloaded-model manifest, and AI-assisted cleanup triage |
 | `/api/remote-desktop`, `/remote-desktop` | PortDeck remote desktop session broker and viewer |
 | `/api/capabilities` | Feature capability flags |
 | `/api/agent-context` | Opt-in, loopback-only MCP context plus separately granted semantic PortOS actions |

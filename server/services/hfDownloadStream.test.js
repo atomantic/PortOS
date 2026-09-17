@@ -6,7 +6,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // never pull the deleted shard back. Mock the IO-bound cache inspect + HF fetch
 // so the pure stream-control logic is exercised in isolation.
 
-vi.mock('../lib/hfCache.js', () => ({
+vi.mock('../lib/hfCache.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   inspectModelCache: vi.fn(async () => ({ cached: true, sizeBytes: 100, snapshotPath: '/snap' })),
   findCachedRepoFile: vi.fn(async () => null),
 }));
@@ -17,9 +18,17 @@ vi.mock('./hfDownload.js', () => ({
   downloadHfRepo: vi.fn(() => ({ promise: Promise.resolve({ ok: true, sizeBytes: 100 }), kill: vi.fn() })),
 }));
 
+// The manifest write is the same class of IO collaborator as the two above: this
+// suite exercises stream control, and a real write would land in the developer's
+// own `data/`. Doubled so the recording can be ASSERTED instead of merely allowed.
+vi.mock('./modelManifest.js', () => ({
+  recordModelInstall: vi.fn(async () => null),
+}));
+
 import { startHfDownloadStream } from './hfDownloadStream.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import { downloadHfRepo } from './hfDownload.js';
+import { recordModelInstall } from './modelManifest.js';
 
 // Minimal req/res doubles. Disconnect detection lives on `res` (see
 // onClientDisconnect), so `res.on` records handlers and `disconnect()` fires
@@ -138,6 +147,31 @@ describe('startHfDownloadStream server-side logging', () => {
     expect(lines.some((l) => l.includes('org/flux-fresh: model-00001-of-00002.safetensors (1/2)'))).toBe(true);
     expect(lines.some((l) => l.includes('download complete: org/flux-fresh (4096 bytes)'))).toBe(true);
     expect(errorSpy).not.toHaveBeenCalled();
+    // Every HF weight pull in PortOS comes through here, so this is the one place
+    // the model manifest learns a repo landed — keyed by the cache directory the
+    // scan and the delete route both address it by, not by the repo string.
+    expect(recordModelInstall).toHaveBeenCalledWith(expect.objectContaining({
+      backend: 'huggingface',
+      id: 'hf:models--org--flux-fresh',
+      sizeBytes: 4096,
+      action: { type: 'hf-model', dirName: 'models--org--flux-fresh' },
+    }));
+  });
+
+  it('does not record a repo that was already cached, or one whose download failed', async () => {
+    inspectModelCache.mockResolvedValue({ cached: true, sizeBytes: 100 });
+    const cachedRun = makeLoggingReqRes();
+    await startHfDownloadStream({ req: cachedRun.req, res: cachedRun.res, repo: 'org/already-here' });
+    expect(recordModelInstall).not.toHaveBeenCalled();
+
+    inspectModelCache.mockResolvedValue({ cached: false });
+    downloadHfRepo.mockImplementation(() => ({
+      promise: Promise.resolve({ ok: false, errorKind: 'gated_repo', errorMessage: 'gated' }),
+      kill: vi.fn(),
+    }));
+    const failedRun = makeLoggingReqRes();
+    await startHfDownloadStream({ req: failedRun.req, res: failedRun.res, repo: 'org/gated' });
+    expect(recordModelInstall).not.toHaveBeenCalled();
   });
 
   it('does not log every byte-progress tick', async () => {

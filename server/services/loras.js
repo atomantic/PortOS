@@ -35,6 +35,8 @@ import { isPlainObject } from '../lib/objects.js';
 import { readCachedLoraEffectReport } from '../lib/loraEffect.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
+import { loraInventoryRow } from '../lib/modelInventory.js';
+import { recordModelInstall, recordModelUninstall } from './modelManifest.js';
 import {
   applyDownloadToken,
   baseModelToRunner,
@@ -355,6 +357,7 @@ export const deleteLora = async (filename) => {
     }
     invalidateLoraMetadataCache(filename);
   });
+  await recordModelUninstall({ backend: 'lora', key: filename });
   console.log(`🗑️ Deleted LoRA: ${filename}`);
   return { ok: true, filename };
 };
@@ -375,12 +378,27 @@ export const deleteLora = async (filename) => {
 const queueSidecarWrite = createKeyedFileWriteQueue();
 
 // Replace a sidecar wholesale (the install paths), serialized against patches.
+//
+// This is also where the model manifest learns about a new adapter: all three
+// installers (Civitai, Hugging Face, and a finished training run) finish by
+// writing the sidecar wholesale, and none of them shares another step. Recording
+// here rather than in each installer is what keeps a fourth one from arriving
+// untracked — and a re-install over an existing filename keeps its original
+// `installedAt`, so it does not read as newly downloaded.
 export const writeLoraSidecar = (filename, sidecar) => queueSidecarWrite(filename, async () => {
-  if (!existsSync(join(PATHS.loras, filename))) {
+  const loraPath = join(PATHS.loras, filename);
+  if (!existsSync(loraPath)) {
     throw new ServerError(`LoRA not found: ${filename}`, { status: 404, code: 'NOT_FOUND' });
   }
   await atomicWrite(sidecarPath(filename), JSON.stringify(sidecar, null, 2) + '\n');
   invalidateLoraMetadataCache(filename);
+  await recordModelInstall(loraInventoryRow({
+    filename,
+    name: sidecar?.name || filename.replace(/^lora-/, '').replace(/\.safetensors$/, ''),
+    // Measured, not claimed: the Civitai sidecar carries the API's `sizeKB` and the
+    // HF one carries nothing, so the file itself is the only uniform source.
+    sizeBytes: await stat(loraPath).then((info) => info.size, () => null),
+  }));
 });
 
 export const patchLoraSidecar = async (filename, patch) => {
