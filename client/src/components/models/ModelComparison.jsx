@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
   ArrowUpRight,
@@ -30,10 +30,12 @@ import {
   discoverComparisonModels,
   syncBenchmarkSource,
 } from '../../services/apiModelComparison';
+import useDragToPan from '../../hooks/useDragToPan';
 import Modal from '../ui/Modal';
 import toast from '../ui/Toast';
 import ComparisonResearch from './ComparisonResearch';
 import { EFFORT_LADDER, withEstimatedCosts } from '../../lib/effortCostEstimate';
+import { TAP_SLOP_PX } from '../../lib/graphPicking';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const SETTINGS_STORAGE_KEY = 'portos-model-comparison-settings';
@@ -150,10 +152,16 @@ export default function ModelComparison() {
   const [inputYMax, setInputYMax] = useState(yMaxParam ?? '');
   const [showAxisInputs, setShowAxisInputs] = useState(false);
 
-  const scrollContainerRef = useRef(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [startX, setStartX] = useState(0);
-  const [scrollLeft, setScrollLeft] = useState(0);
+  // x-only: the stretched chart only ever overflows horizontally. Opts out on
+  // an interactive child so a click on a real control still reaches it. Must
+  // sit above the `!catalog` early return below with every other hook.
+  const stretch = Math.min(4, Math.max(1, parseFloat(params.get('stretch')) || 1));
+  const pan = useDragToPan({
+    enabled: stretch > 1,
+    axis: 'x',
+    slop: TAP_SLOP_PX,
+    canStart: e => !e.target.closest('button, input, select, a, [role="button"]'),
+  });
 
   useEffect(() => {
     setInputXMin(xMinParam ?? '');
@@ -381,29 +389,7 @@ export default function ModelComparison() {
   // stacks every affordable model on the y-axis. Log is the readable default.
   const scale = params.get('scale') === 'log' || (!params.has('scale') && xAxis === 'cost') ? 'log' : 'linear';
   const showAllModels = params.get('allModels') === '1' || availableSet.size === 0;
-  const stretch = Math.min(4, Math.max(1, parseFloat(params.get('stretch')) || 1));
   const chartHeight = Math.min(1000, Math.max(380, parseInt(params.get('height'), 10) || 480));
-
-
-  const handleMouseDown = e => {
-    if (stretch <= 1 || !scrollContainerRef.current) return;
-    if (e.target.closest('button, input, select, a, [role="button"]')) return;
-    setIsDragging(true);
-    setStartX(e.pageX - scrollContainerRef.current.offsetLeft);
-    setScrollLeft(scrollContainerRef.current.scrollLeft);
-  };
-
-  const handleMouseMove = e => {
-    if (!isDragging || !scrollContainerRef.current) return;
-    e.preventDefault();
-    const x = e.pageX - scrollContainerRef.current.offsetLeft;
-    const walk = x - startX;
-    scrollContainerRef.current.scrollLeft = scrollLeft - walk;
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
 
   // Scope once, then derive every list from the scoped rows — so the provider
   // and effort pills can't offer values that have nothing left to plot.
@@ -1271,14 +1257,11 @@ export default function ModelComparison() {
               </div>
             )}
             <div
-              ref={scrollContainerRef}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
+              ref={pan.surfaceRef}
+              {...pan.panProps}
               style={{ height: `${chartHeight}px` }}
               className={`overflow-x-auto px-1 sm:px-4 pt-4 scrollbar-thin ${
-                stretch > 1 ? (isDragging ? 'cursor-grabbing select-none' : 'cursor-grab') : ''
+                stretch > 1 ? (pan.isPanning ? 'cursor-grabbing select-none' : 'cursor-grab') : ''
               }`}
               role="img"
               aria-label={`${AXES[yAxis].label} versus ${AXES[xAxis].label}. Exact values and source links are in the table below.`}
