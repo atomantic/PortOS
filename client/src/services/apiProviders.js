@@ -28,12 +28,27 @@ export const addProviderTuiMode = (id, options = {}) => request(`/providers/${id
   ...options,
 });
 export const getSampleProviders = () => request('/providers/samples');
+// The composition catalog (#7564/#7566): harnesses with enablement, service
+// instances, bootstrap apps, per-harness (and per-model) effort ladders, the
+// harness/service compatibility map, and the sanitized presets — everything
+// `useProviderCatalog` composes a preset-first picker and the compose popover
+// over. `GET /providers` above stays presets-only for every existing
+// `useProviderModels` consumer.
+export const getProviderCatalog = (options) => request('/providers/catalog', options);
 // Presets (#7565): "Convert to derived preset" stamps a legacy record with the
 // service it already runs on — refused (409) when re-deriving it would change
-// how it runs. ("Save as preset", `POST /providers/presets`, gets its wrapper
-// with the compose popover that calls it, #7566.)
+// how it runs.
 export const deriveProviderPreset = (id, options = {}) => request(`/providers/${encodeURIComponent(id)}/derive`, {
   method: 'POST',
+  ...options,
+});
+// "Save as preset" (#7565/#7566): the compose popover's own wrapper — turn the
+// composite id (plus the model/effort the user picked while composing) into a
+// stored, enabled derived preset. A 400 names the composite's own ineligibility
+// code/reason; never a stored record that cannot run.
+export const createProviderPreset = (body, options) => request('/providers/presets', {
+  method: 'POST',
+  body: JSON.stringify(body),
   ...options,
 });
 export const testProvider = (id) => request(`/providers/${id}/test`, { method: 'POST' });

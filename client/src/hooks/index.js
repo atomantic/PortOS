@@ -78,6 +78,8 @@ export { default as useVisionModelIds } from './useVisionModelIds.js';
 export { default as useToolUseModelIds } from './useToolUseModelIds.js';
 export * from './useToolUseModelIds.js';
 export { default as usePreviewRoute } from './usePreviewRoute.js';
+export { default as useProviderCatalog } from './useProviderCatalog.js';
+export * from './useProviderCatalog.js';
 export { default as useProviderModels } from './useProviderModels.js';
 export * from './useRecentImageGallery.js';
 export { default as useReviewerModelOptions } from './useReviewerModelOptions.js';
