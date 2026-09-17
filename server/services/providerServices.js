@@ -6,6 +6,7 @@ import {
   allocateServiceSlug,
   applyServicePlanFilter,
   credentialSourceFor,
+  instanceApiKeyFor,
   kindForDefinition,
   storedTransports,
   takenServiceSlugs,
@@ -43,18 +44,6 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const loadInstallEnvFile = async () => (await import('./credentialInventory.js')).loadInstallEnvFile();
 
 /**
- * The key an instance runs under, or `''`. A `stored` instance holds it on the
- * row (under `apiKey`, or under the env var name a route-derived row kept); an
- * `env` one reads the definition's conventional variable from the process.
- */
-function instanceApiKey(connection, definition, env) {
-  const firstNamed = (bag) => definition.credential.envVars.map((name) => bag[name]).find(isNonBlankStr) ?? '';
-  if (connection.credentialVia === 'env') return firstNamed(env);
-  const stored = connection.credentials || {};
-  return stored.apiKey ?? firstNamed(stored);
-}
-
-/**
  * GET `/models` on the instance's own endpoint with its own key.
  *
  * Serves both `probe` (a hosted API) and `daemon` (a local runtime): the
@@ -67,7 +56,7 @@ function instanceApiKey(connection, definition, env) {
  * "answered nothing" and "could not answer" stay apart.
  */
 async function listByProbe(connection, definition, { env, probe }) {
-  const apiKey = instanceApiKey(connection, definition, env);
+  const apiKey = instanceApiKeyFor(connection, definition, env);
   const openai = connection.transports?.openai?.baseUrl;
   const anthropic = connection.transports?.anthropic?.baseUrl;
   if (!openai && !anthropic) return { refreshed: false, error: 'This service declares no endpoint to list models from' };

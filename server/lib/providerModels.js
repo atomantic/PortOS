@@ -526,6 +526,11 @@ export function foldCursorEffortIntoModel(model, effort) {
  */
 export function effortLevelsForProvider(provider, model = null) {
   if (!provider) return null;
+  // A record materialized from a composite id carries its harness by name
+  // (#7564); read it before sniffing the command, which a bootstrap-wrapped
+  // spawn or a path-configured binary can obscure.
+  const byHarness = effortLevelsForHarness(provider.harnessId, provider, model);
+  if (byHarness !== undefined) return byHarness;
   if (isOpencodeLocalProvider(provider)) return OPENCODE_LOCAL_EFFORT_LEVELS;
   if (isCodexProvider(provider)) return codexEffortLevelsForModel(model);
   if (isAntigravityProvider(provider)) {
@@ -533,11 +538,38 @@ export function effortLevelsForProvider(provider, model = null) {
     if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
     return perModel.length ? perModel : null;
   }
-  if (commandBasename(provider.command) === 'pi') return ['low', 'medium', 'high', 'xhigh', 'max'];
+  if (commandBasename(provider.command) === 'pi') return PI_EFFORT_LEVELS;
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
   if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
   return null;
+}
+
+/** Pi's reasoning ladder (`pi --effort`), shared by the harness table and command sniffing. */
+const PI_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+
+/**
+ * The effort ladder a HARNESS id names, or `undefined` when the id is absent
+ * or names no harness this table knows — the signal for
+ * {@link effortLevelsForProvider} to fall through to command sniffing.
+ * `null` is a real answer ("this harness takes no effort flag").
+ */
+function effortLevelsForHarness(harnessId, provider, model) {
+  switch (harnessId) {
+    case 'claude': return CLAUDE_EFFORT_LEVELS;
+    case 'codex': return codexEffortLevelsForModel(model);
+    case 'antigravity': {
+      const perModel = model ? antigravityModelEffortLevels(model, provider?.models) : null;
+      if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
+      return perModel.length ? perModel : null;
+    }
+    case 'pi': return PI_EFFORT_LEVELS;
+    case 'cursor': return CURSOR_EFFORT_LEVELS;
+    case 'grok': return GROK_EFFORT_LEVELS;
+    case 'opencode': return isOpencodeLocalProvider(provider) ? OPENCODE_LOCAL_EFFORT_LEVELS : null;
+    case 'direct': case 'kimi': case 'kilo': case 'openchamber': return null;
+    default: return undefined;
+  }
 }
 
 // Every effort value any CLI accepts, ordered weakest→strongest. The clamp

@@ -29,6 +29,7 @@
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
+import { isCompositeProviderId } from '../lib/providerRef.js';
 // `./tuiPromptRunner.js` (which drags node-pty in through `./shell.js`) and
 // `./providerExecutionReadiness.js` are imported lazily on the branches that
 // actually execute a run — see their call sites below. promptRunner.js is reached
@@ -1171,6 +1172,14 @@ async function pickFallbackProvider(failed, requestCapabilities) {
   if (!all?.providers) return null;
   const providersMap = {};
   for (const p of all.providers) providersMap[p.id] = p;
+  // A composite (`harness.method@service`, #7564) never sits in the stored map;
+  // the failed provider's own id may be one, and it must be in the map for the
+  // toolkit's self-loop guard and `fallbackProvider` read to see it. Lazy: the
+  // resolver's closure reaches the graph store, which this request-path module
+  // must not drag in for the preset-only common case.
+  if (isCompositeProviderId(failed.id)) {
+    await (await import('./compositeProviders.js')).withCompositeCandidates(providersMap, [failed.id]);
+  }
 
   const picked = providerStatus.getFallbackProvider(failed.id, providersMap, null, null, requestCapabilities);
   if (!picked?.provider) return null;

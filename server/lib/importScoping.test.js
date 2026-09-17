@@ -684,7 +684,17 @@ describe('deferred imports stay deferred (#6156)', () => {
 // 111,500 → 111,700 (#7563): `routes/providers.js` gained `providerServices.js`
 // and `providerGraph.js` gained `providerServiceInstances.js`, each one file
 // deep, plus two new suites.
-const MAX_STATIC_INSTANTIATIONS = 111700;
+// 111,700 → 112,900 (#7564): the composite provider-id grammar is ONE
+// dependency-free leaf (`lib/providerRef.js`) reached through `zodCompat.js`
+// by every suite that validates a selection field, and its mirror
+// (`aiToolkit/internal/providerRef.js`) by every suite that reaches the
+// toolkit's provider service or validation — one node each on ~700 closures,
+// no subtree. The resolver itself (`services/compositeProviders.js`) is
+// reached only by `await import()` from the run paths and the routes, so its
+// graph-store closure stays off every suite that does not test it. Measured
+// after the change: 112,576, with five new suites; the ceiling keeps the same
+// ~300 of headroom the previous number carried.
+const MAX_STATIC_INSTANTIATIONS = 112900;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { harnessById } from './providerHarnesses.js';
+import { CONNECTION_CREDENTIAL_ENV_VARS } from './providerConnections.js';
 import { connectionDtoSchema, connectionHasCredentials, toConnectionDto } from './providerGraphRecords.js';
 import { isNonBlankStr } from './textUtils.js';
 import {
@@ -76,6 +77,32 @@ export function kindForDefinition(definition) {
   if (definition.gateway) return `${GATEWAY_KIND}${definition.id}`;
   if (definition.family === 'subscription' || definition.harnessOnly) return 'vendor';
   return 'api';
+}
+
+/**
+ * The key an instance runs under, or `''`. A `stored` instance holds it on the
+ * row (under `apiKey`, or under the env var name a route-derived row kept); an
+ * `env` one reads the definition's conventional variable from the process; a
+ * `cli-login` or `bootstrap` instance holds none — the program signs in, or the
+ * launch wrapper supplies it.
+ *
+ * @param {{credentialVia?: string, credentials?: object}} connection
+ * @param {{credential: {envVars: readonly string[]}}} definition
+ * @param {Record<string, string|undefined>} env
+ */
+export function instanceApiKeyFor(connection, definition, env) {
+  const firstNamed = (bag, names) => names.map((name) => bag?.[name]).find(isNonBlankStr) ?? '';
+  const via = connection.credentialVia ?? 'stored';
+  if (via === 'env') return firstNamed(env, definition.credential.envVars);
+  if (via !== 'stored') return '';
+  const stored = connection.credentials || {};
+  if (isNonBlankStr(stored.apiKey)) return stored.apiKey;
+  // A route-derived row keeps its key under the env var the record carried
+  // (`ANTHROPIC_AUTH_TOKEN` on a Claude-Ollama import), which a local daemon's
+  // definition names no conventional variable for — so every credential
+  // variable the profile reads is a place the key may sit, after the
+  // definition's own.
+  return firstNamed(stored, [...definition.credential.envVars, ...CONNECTION_CREDENTIAL_ENV_VARS]);
 }
 
 /** The slugs a graph already uses — what every allocation must avoid. */

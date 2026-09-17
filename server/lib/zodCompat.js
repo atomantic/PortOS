@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_PROVIDER_REF_LENGTH, PRESET_ID_RE, PRESET_ONLY_MESSAGE, PROVIDER_REF_MESSAGE, parseProviderRef } from './providerRef.js';
 
 /**
  * Zod 4 compatibility helpers.
@@ -98,3 +99,31 @@ export const optionalBooleanMap = (keys) =>
  * override). Pair with `z.string().nullable().optional()`.
  */
 export const emptyToNull = (v) => (v === '' ? null : v);
+
+/**
+ * A provider SELECTION reference (#7564): a preset record id OR a composite
+ * `<harness>.<method>@<service-slug>[+<bootstrap-slug>]`, as `parseProviderRef`
+ * reads it. This is the schema every "which provider runs this?" field takes —
+ * CoS task metadata, orchestration roles, feature pins, scheduled prompts —
+ * so a `{ providerId, model, effort }` selection keeps its string shape while
+ * accepting either spelling.
+ *
+ * `providerRefFieldSchema` also admits the empty string a picker sends for
+ * "use the default"; pair it with the caller's own `emptyToUndefined` /
+ * `emptyToNull` preprocess when the field must distinguish clear from absent.
+ *
+ * `presetProviderIdSchema` is the PRESET-ONLY form for the surfaces a composite
+ * must never reach: `PUT /api/providers/active`, a record's `fallbackProvider`,
+ * and an app's `taskTypeOverrides` pin — a materialized composite is never a
+ * stored record, so nothing keyed on `providers.json` may name one.
+ *
+ * Here rather than in validation.js for the same TDZ-cycle reason as
+ * `emptyToUndefined`: `cosValidation.js` needs it and must not import
+ * validation.js.
+ */
+export const providerRefSchema = z.string().trim().min(1).max(MAX_PROVIDER_REF_LENGTH)
+  .refine((value) => parseProviderRef(value) !== null, PROVIDER_REF_MESSAGE);
+
+export const providerRefFieldSchema = z.union([z.literal(''), providerRefSchema]);
+
+export const presetProviderIdSchema = z.string().regex(PRESET_ID_RE, PRESET_ONLY_MESSAGE).max(80);
