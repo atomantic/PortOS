@@ -327,6 +327,36 @@ describe('CoS Job Routes', () => {
       );
     });
 
+    it('forwards the configuration form to createJob', async () => {
+      // The handler destructures an allowlist rather than spreading the parsed
+      // body, so a schema field it does not name is dropped with a 200 and a
+      // created job that silently lost it — which is how this one first shipped.
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+      const formFields = [
+        { key: 'topic', label: 'Topic', type: 'textarea' },
+        { key: 'size', label: 'Size', type: 'select', options: [{ value: 'sq', label: 'Square' }] },
+      ];
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Parameterized', type: 'agent', promptTemplate: 'test', formFields, formValues: { topic: 'tides', size: 'sq' } });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ formFields, formValues: { topic: 'tides', size: 'sq' } })
+      );
+    });
+
+    it('rejects a malformed configuration form', async () => {
+      const bad = [{ key: 'size', label: 'Size', type: 'select' }]; // a choice field with no choices
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Parameterized', type: 'agent', promptTemplate: 'test', formFields: bad });
+
+      expect(response.status).toBe(400);
+      expect(autonomousJobs.createJob).not.toHaveBeenCalled();
+    });
+
     it('should reject unknown data input ids', async () => {
       const response = await request(app)
         .post('/api/cos/jobs')
@@ -366,6 +396,22 @@ describe('CoS Job Routes', () => {
         .send({ name: 'Fail' });
 
       expect(response.status).toBe(404);
+    });
+
+    it('re-aims a job by sending values alone, without restating the field design', async () => {
+      // `updateJob` skips only `undefined`, so the stored definitions survive an
+      // update that names just the values — which is what editing one knob sends.
+      autonomousJobs.updateJob.mockResolvedValue({ id: 'j1' });
+
+      const response = await request(app)
+        .put('/api/cos/jobs/j1')
+        .send({ formValues: { topic: 'a different subject' } });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.updateJob).toHaveBeenCalledWith('j1', expect.objectContaining({
+        formValues: { topic: 'a different subject' },
+        formFields: undefined,
+      }));
     });
 
     it('un-scopes a job to global when the client sends empty appId', async () => {

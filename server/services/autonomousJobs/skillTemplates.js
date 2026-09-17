@@ -2,8 +2,9 @@
  * Autonomous Jobs — skill templates and effective-prompt assembly.
  *
  * Reads/writes the per-job skill template markdown files, assembles a job's
- * effective prompt (skill template + briefing-config enrichments), and turns a
- * due job into a CoS task payload (`generateTaskFromJob`).
+ * effective prompt (skill template + per-job enrichments, including the values
+ * set in the job's own configuration form), and turns a due job into a CoS task
+ * payload (`generateTaskFromJob`).
  */
 
 import { join } from 'path'
@@ -11,6 +12,7 @@ import { ensureDir, PATHS, tryReadFile, writeFileGuarded } from '../../lib/fileU
 import { JOBS_SKILLS_DIR, JOB_SKILL_MAP } from './constants.js'
 import { getAppById } from '../apps.js'
 import { appendTaskDataInputs, resolveTaskDataInputs } from '../taskDataInputs.js'
+import { appendJobFormValues } from '../../lib/jobFormFields.js'
 import { FILE_ISSUES_DELIVERY_SETTINGS, isExplicitFileIssuesRequest } from '../../lib/auditCatalog.js'
 
 /**
@@ -90,6 +92,15 @@ function appendBriefingConfig(job, prompt) {
 }
 
 /**
+ * Apply every per-job enrichment that turns a stored template into the prompt a
+ * run actually receives. The job's own configuration form goes LAST so its
+ * values read as the final word on this run, after any generic enrichment.
+ */
+function enrichJobPrompt(job, prompt) {
+  return appendJobFormValues(job, appendBriefingConfig(job, prompt))
+}
+
+/**
  * Get the effective prompt for a job, using skill template if available
  * Extracts the prompt from the skill template's structured format
  * @param {Object} job - The job object
@@ -97,10 +108,10 @@ function appendBriefingConfig(job, prompt) {
  */
 async function getJobEffectivePrompt(job) {
   const skillName = JOB_SKILL_MAP[job.id]
-  if (!skillName) return appendBriefingConfig(job, job.promptTemplate)
+  if (!skillName) return enrichJobPrompt(job, job.promptTemplate)
 
   const template = await loadJobSkillTemplate(skillName)
-  if (!template) return appendBriefingConfig(job, job.promptTemplate)
+  if (!template) return enrichJobPrompt(job, job.promptTemplate)
 
   // Extract structured sections from the skill template and build a prompt
   // The skill template has: Prompt Template header, Steps, Expected Outputs, Success Criteria
@@ -135,7 +146,7 @@ async function getJobEffectivePrompt(job) {
     prompt += '\n\nSuccess criteria:\n' + sections.successCriteria.trim()
   }
 
-  return prompt
+  return appendJobFormValues(job, prompt)
 }
 
 /**
@@ -217,6 +228,7 @@ export {
   listJobSkillTemplates,
   buildBriefingConfigInstructions,
   appendBriefingConfig,
+  enrichJobPrompt,
   getJobEffectivePrompt,
   generateTaskFromJob
 }

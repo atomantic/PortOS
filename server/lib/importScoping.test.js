@@ -659,14 +659,29 @@ describe('deferred imports stay deferred (#6156)', () => {
 // carry: the previous number had drifted to ONE above the measured total, the
 // zero-headroom state #6305 raised it out of, where any addition at all fails.
 //
-// Raised to 110700 for the stale git lock fix (#7513). Measured after the
+// Raised to 110,700 for the stale git lock fix (#7513). Measured after the
 // change: 109,282, so its own cost is +82 — one new test file
 // (`services/git.staleLock.test.js`) reaching `services/git.js`'s existing
 // closure to cover `pull`/`syncBranch`/`ensureLatest`'s lock-clearing paths.
 // No new heavy edge: `git.js` was already reached by a dozen other server
 // test files. The remainder restores headroom the previous number had worn
 // down to zero.
-const MAX_STATIC_INSTANTIATIONS = 110700;
+//
+// Raised to 111,500 for `lib/jobFormFields.js`, the per-job configuration-form
+// vocabulary + schemas: a NEW leaf on `lib/cosValidation.js` — one node on each
+// of the ~131 closures that already reach the job schema, dragging no subtree
+// with it (its only import is `zod`, which every one of those closures already
+// carries). That is the shape this budget is meant to allow: the cost is one
+// module, not a new heavy edge.
+//
+// This raise and the #7513 one above landed on INDEPENDENT branches, so the
+// ceiling is re-measured against the combined tree rather than resolved by
+// taking the larger of the two competing numbers — that would bank headroom
+// neither branch ever verified. Measured after both: 109,991 (so jobFormFields
+// costs +709 over #7513's 109,282), and the ceiling keeps the ~1.5k of real
+// headroom this budget exists to carry rather than being pinned to the
+// measurement.
+const MAX_STATIC_INSTANTIATIONS = 111500;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

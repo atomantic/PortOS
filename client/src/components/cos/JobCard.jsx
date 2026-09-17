@@ -11,6 +11,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import FormField from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import TaskDataInputs from './TaskDataInputs';
+import { JobFormFieldsEditor, JobFormValueInputs, JobFormValuesSummary, missingRequiredJobFormFields } from './JobFormFields';
 
 const SCHEDULE_MODE_OPTIONS = [
   { value: 'interval', label: 'Interval' },
@@ -75,6 +76,11 @@ export function normalizeJobPayload(formData) {
     payload.model = null;
     payload.effort = null;
     payload.dataInputs = [];
+    // The configuration form exists to parameterize a PROMPT. A shell/script job
+    // has none, so its values would reach nothing — clear them rather than leave
+    // a saved job advertising knobs that do nothing.
+    payload.formFields = [];
+    payload.formValues = {};
   }
   // Empty app picker selection ('') → null so a PUT actively un-scopes the job
   // back to global (undefined would be dropped from JSON and updateJob would
@@ -304,6 +310,8 @@ export default function JobCard({
       model: job.model || '',
       effort: job.effort || '',
       dataInputs: job.dataInputs || [],
+      formFields: job.formFields || [],
+      formValues: job.formValues || {},
       taskMetadata: showTaskMetadata
         ? { useWorktree: false, openPR: false, simplify: false, ...(job.taskMetadata || {}) }
         : job.taskMetadata || {}
@@ -325,6 +333,14 @@ export default function JobCard({
     if (isAgentJobType(editData.type) && providerResolutionKnown
       && !hasRunnableAgentProvider(providers, editData.providerId, activeProviderId)) {
       toast.error('Select a CLI/TUI provider before saving an agent job');
+      return;
+    }
+    // The API schema deliberately accepts a half-filled configuration form (a
+    // job is routinely saved before it is aimed), so the "required" marker is
+    // only real if the form that collects the values enforces it.
+    const missingFields = missingRequiredJobFormFields(editData.formFields, editData.formValues);
+    if (missingFields.length) {
+      toast.error(`Fill in ${missingFields.map(field => field.label || field.key).join(', ')}`);
       return;
     }
     const constrained = {
@@ -520,6 +536,19 @@ export default function JobCard({
                   onChange={dataInputs => setEditData(d => ({ ...d, dataInputs }))}
                 />
               )}
+              {isAgentJobType(editData.type) && (
+                <JobFormFieldsEditor
+                  fields={editData.formFields}
+                  onChange={formFields => setEditData(d => ({ ...d, formFields }))}
+                />
+              )}
+              {isAgentJobType(editData.type) && (
+                <JobFormValueInputs
+                  fields={editData.formFields}
+                  values={editData.formValues}
+                  onChange={formValues => setEditData(d => ({ ...d, formValues }))}
+                />
+              )}
               {showTaskMetadata && isAgentJobType(editData.type) && <TaskMetadataFields data={editData} onChange={patch => setEditData(d => ({ ...d, ...patch }))} />}
               {editData.config && (
                 <BriefingConfig
@@ -606,6 +635,7 @@ export default function JobCard({
                   <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto">{job.lastOutput}</pre>
                 </details>
               )}
+              {!isShell && !isScript && <JobFormValuesSummary fields={job.formFields || []} values={job.formValues || {}} />}
               {!isShell && !isScript && (
                 <details className="group">
                   <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 transition-colors">View prompt template</summary>

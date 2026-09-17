@@ -9,6 +9,7 @@ import AgentJobProviderFields from '../../cos/AgentJobProviderFields';
 import JobCard, { AUTONOMY_OPTIONS, PRIORITY_OPTIONS, ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
 import { filterRunnableProviders } from '../../../utils/providers';
 import TaskDataInputs from '../../cos/TaskDataInputs';
+import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from '../../cos/JobFormFields';
 
 export function emptyForm() {
   return {
@@ -26,6 +27,8 @@ export function emptyForm() {
     model: '',
     effort: '',
     dataInputs: [],
+    formFields: [],
+    formValues: {},
     taskMetadata: { useWorktree: true, openPR: true, simplify: true }
   };
 }
@@ -46,6 +49,8 @@ export function formFromJob(job) {
     model: job.model || '',
     effort: job.effort || '',
     dataInputs: job.dataInputs || [],
+    formFields: job.formFields || [],
+    formValues: job.formValues || {},
     taskMetadata: { useWorktree: false, openPR: false, simplify: false, ...(job.taskMetadata || {}) }
   };
 }
@@ -64,6 +69,8 @@ export function toPayload(form, appId) {
     model: form.model || null,
     effort: form.effort || null,
     dataInputs: form.dataInputs || [],
+    formFields: form.formFields || [],
+    formValues: form.formValues || {},
     taskMetadata: form.taskMetadata
   };
   if (form.scheduleMode === 'cron') {
@@ -146,6 +153,17 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
         onChange={dataInputs => update('dataInputs', dataInputs)}
       />
 
+      <JobFormFieldsEditor
+        fields={form.formFields}
+        onChange={formFields => update('formFields', formFields)}
+      />
+
+      <JobFormValueInputs
+        fields={form.formFields}
+        values={form.formValues}
+        onChange={formValues => update('formValues', formValues)}
+      />
+
       <TaskMetadataFields data={form} onChange={patch => setForm(f => ({ ...f, ...patch }))} />
 
       <div className="flex justify-end gap-2">
@@ -206,6 +224,14 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     if (!form.promptTemplate.trim()) { toast.error('Prompt is required'); return false; }
     if (form.scheduleMode === 'cron' && !form.cronSchedule && (!form.cronExpression?.trim() || form.cronExpression.trim().split(/\s+/).length !== 5)) {
       toast.error('A valid recurrence or 5-field cron expression is required'); return false;
+    }
+    // Required is enforced here rather than in the API schema: a job is
+    // routinely saved before it is aimed, so the server must still accept a
+    // half-filled config — this is the gate that keeps one from being saved by
+    // accident and then dispatched with a blank parameter.
+    const missing = missingRequiredJobFormFields(form.formFields, form.formValues);
+    if (missing.length) {
+      toast.error(`Fill in ${missing.map(field => field.label || field.key).join(', ')}`); return false;
     }
     return true;
   };

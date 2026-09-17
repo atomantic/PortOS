@@ -267,6 +267,29 @@ describe('autonomousJobs', () => {
       const task = await generateTaskFromJob(mockJobsData.jobs[0])
       expect(task.metadata.effort).toBeUndefined()
     })
+
+    it('appends the configuration form values to the dispatched prompt', async () => {
+      const task = await generateTaskFromJob({
+        ...mockJobsData.jobs[0],
+        formFields: [
+          { key: 'subject', label: 'Subject', type: 'text' },
+          { key: 'skipped', label: 'Skipped', type: 'text' },
+        ],
+        formValues: { subject: 'tides', skipped: '' },
+      })
+      expect(task.metadata.prompt).toContain('Do the test thing')
+      expect(task.metadata.prompt).toContain('## Run configuration')
+      expect(task.metadata.prompt).toContain('- Subject: tides')
+      // A blank field must not reach the agent as an empty parameter.
+      expect(task.metadata.prompt).not.toContain('Skipped')
+      // The row summary is still the prompt's first line, not the appended block.
+      expect(task.description).toBe('Do the test thing')
+    })
+
+    it('leaves the prompt untouched when the job declares no configuration form', async () => {
+      const task = await generateTaskFromJob(mockJobsData.jobs[0])
+      expect(task.metadata.prompt).toBe('Do the test thing')
+    })
   })
 
   describe('createJob with resolveIntervalMs', () => {

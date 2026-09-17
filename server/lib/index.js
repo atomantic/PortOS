@@ -437,6 +437,7 @@ export * from './songCraftRef.js';
 export * from './appIdentity.js';
 export * from './appResolver.js';
 export * from './autonomousJobIntervals.js';
+export * from './jobFormFields.js';
 export * from './capabilityMap.js';
 export * from './claimFlowTaskTypes.js';
 export * from './chiptuneRender.js';

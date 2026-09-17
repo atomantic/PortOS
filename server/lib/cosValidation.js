@@ -23,6 +23,7 @@ import { recurrenceRuleSchema } from './recurrenceValidation.js';
 import { AUDIT_TASK_TYPE_LIST } from './auditCatalog.js';
 import { CLAIM_DRAIN_TASK_TYPES } from './qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from './autonomousJobIntervals.js';
+import { jobFormFieldsSchema, jobFormValuesSchema } from './jobFormFields.js';
 import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
 import {
   EFFORT_SELECTABLE_REVIEWERS,
@@ -467,6 +468,12 @@ export const createCosJobSchema = z.object({
   // An empty array actively clears every selection on update; absent preserves
   // the stored selection.
   dataInputs: taskDataInputsSchema.optional(),
+  // The job's own configuration form: `formFields` declares the inputs, and
+  // `formValues` carries what they are currently set to. They are validated —
+  // and stored — separately so re-aiming a job (a new value) is not an edit to
+  // its design (a new field), and an empty array/object actively clears each.
+  formFields: jobFormFieldsSchema.optional(),
+  formValues: jobFormValuesSchema.optional(),
   // Null actively clears the field: the jobs UI emits `command: null` /
   // `triggerAction: null` whenever a job is saved as an AI-agent type (the two
   // keys only apply to shell/script jobs), so rejecting null 400'd every edit of

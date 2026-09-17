@@ -142,6 +142,75 @@ describe('CustomTasksSection trigger outcomes', () => {
     }), { silent: true }));
   });
 
+  it('declares a configuration field, fills it in, and saves both halves', async () => {
+    api.createCosJob.mockResolvedValue({ success: true, job: task });
+
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+    await screen.findByText('Example Task');
+    fireEvent.click(screen.getByRole('button', { name: /New Custom Task/ }));
+    fireEvent.change(screen.getByPlaceholderText('Task name *'), { target: { value: 'Parameterized Task' } });
+    fireEvent.change(screen.getByPlaceholderText('Prompt for the agent *'), { target: { value: 'Do the thing' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Add field/ }));
+    fireEvent.change(screen.getByPlaceholderText('What the agent reads, e.g. Topic'), { target: { value: 'Subject' } });
+    fireEvent.change(screen.getByPlaceholderText('topic'), { target: { value: 'subject' } });
+    // The value input appears only once the definition exists, and is bound by key.
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'tides' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(api.createCosJob).toHaveBeenCalledWith(expect.objectContaining({
+      formFields: [expect.objectContaining({ key: 'subject', label: 'Subject', type: 'text' })],
+      formValues: { subject: 'tides' }
+    })));
+  });
+
+  it('lets a multi-line choice list be typed without eating the newlines', async () => {
+    // parse→serialize is lossy, so echoing the re-serialized value back into the
+    // textarea erased each newline as it was typed and a second choice could
+    // never be entered. The editor keeps the raw text; only the parse leaves it.
+    api.createCosJob.mockResolvedValue({ success: true, job: task });
+
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+    await screen.findByText('Example Task');
+    fireEvent.click(screen.getByRole('button', { name: /New Custom Task/ }));
+    fireEvent.change(screen.getByPlaceholderText('Task name *'), { target: { value: 'Choice Task' } });
+    fireEvent.change(screen.getByPlaceholderText('Prompt for the agent *'), { target: { value: 'Do the thing' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Add field/ }));
+    fireEvent.change(screen.getByPlaceholderText('What the agent reads, e.g. Topic'), { target: { value: 'Size' } });
+    fireEvent.change(screen.getByPlaceholderText('topic'), { target: { value: 'size' } });
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'select' } });
+
+    const choices = screen.getByLabelText('Choices');
+    fireEvent.change(choices, { target: { value: 'sq\n' } });
+    expect(choices.value).toBe('sq\n'); // the newline survives the round trip
+    fireEvent.change(choices, { target: { value: 'sq|Square\ntall' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(api.createCosJob).toHaveBeenCalledWith(expect.objectContaining({
+      formFields: [expect.objectContaining({
+        type: 'select',
+        options: [{ value: 'sq', label: 'Square' }, { value: 'tall' }]
+      })]
+    })));
+  });
+
+  it('refuses to save while a required configuration field is blank', async () => {
+    api.updateCosJob.mockResolvedValue({ success: true, job: task });
+    api.getCosJobs.mockResolvedValue({
+      jobs: [{ ...task, formFields: [{ key: 'subject', label: 'Subject', type: 'text', required: true }], formValues: {} }],
+      dataInputCatalog: []
+    });
+
+    render(<CustomTasksSection appId="app-1" appName="Example App" />);
+    await screen.findByText('Example Task');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Fill in Subject'));
+    expect(api.updateCosJob).not.toHaveBeenCalled();
+  });
+
   it('keeps required prompt validation when editing the shared card', async () => {
     render(<CustomTasksSection appId="app-1" appName="Example App" />);
     await screen.findByText('Example Task');
