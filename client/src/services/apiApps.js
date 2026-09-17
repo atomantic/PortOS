@@ -123,6 +123,17 @@ export const doReviewAppPullRequest = (id, number, settings = {}, options = {}) 
     silent: true,
     ...options,
   });
+// Merge ONE open PR/MR right now with no agent and no model spend — the forge's
+// own merge button, for a change the user has already read. `deleteBranch` is a
+// request, not a promise: the server keeps a long-lived head (a `main → release`
+// request) and answers with the `deletedBranch` it actually did.
+export const mergeAppPullRequest = (id, number, { method, deleteBranch } = {}, options = {}) =>
+  request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/merge`, {
+    method: 'POST',
+    body: JSON.stringify({ method, deleteBranch }),
+    silent: true,
+    ...options,
+  });
 // Effective Layered Intelligence config (self-improvement loop) for an app —
 // stored partial merged over the shipped defaults. Read-only; saved through
 // updateApp (the `layeredIntelligence` key routes to the merge helper server-
