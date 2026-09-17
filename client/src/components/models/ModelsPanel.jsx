@@ -108,7 +108,14 @@ export default function ModelsPanel({ report, loading, initializing = false, onR
               </div>
               <p className="mt-1 text-xs text-gray-500">
                 {report.models.downloaded.length} item{report.models.downloaded.length === 1 ? '' : 's'} · {Number.isFinite(report.models.totals.all) ? formatBytes(report.models.totals.all) : 'size unavailable'}
-                {` · ${fromManifest ? 'tracked, last verified' : 'scanned'} ${timeAgo(report.reconciledAt || report.generatedAt)}`}
+                {' · '}
+                {fromManifest
+                  // A manifest with no `reconciledAt` is the reachable state where
+                  // PortOS recorded installs but no scan has ever corroborated them
+                  // against the disk. "last verified never" is accurate but reads
+                  // like a defect; name the state instead.
+                  ? (report.reconciledAt ? `tracked, last verified ${timeAgo(report.reconciledAt)}` : 'tracked, not yet verified against disk')
+                  : `scanned ${timeAgo(report.generatedAt)}`}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">

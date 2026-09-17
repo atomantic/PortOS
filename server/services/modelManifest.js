@@ -248,15 +248,20 @@ export function reconcileModelManifest(downloadedModels, { sourceErrors = [], di
     const now = new Date().toISOString();
     // A row the backend listed but whose on-disk folder could not be verified is
     // not evidence of anything: it must neither be adopted as a tracked install
-    // nor counted as absent when pruning.
-    const scanned = new Map((downloadedModels || [])
-      .filter((row) => trusted.has(row.backend) && !row.inventoryUnknown)
-      .map((row) => [row.id, row]));
+    // NOR counted as absent when pruning. Those are two separate exclusions, and
+    // filtering such a row out of `scanned` alone only buys the first — it makes
+    // the row look like it was never reported at all, so the pruning loop reads a
+    // model the backend positively listed as deleted and drops its manifest entry.
+    // `unverified` is what keeps the second half: the id was seen, just not
+    // corroborated on disk, so the existing row stands unchanged.
+    const reported = (downloadedModels || []).filter((row) => trusted.has(row.backend));
+    const scanned = new Map(reported.filter((row) => !row.inventoryUnknown).map((row) => [row.id, row]));
+    const unverified = new Set(reported.filter((row) => row.inventoryUnknown).map((row) => row.id));
 
     const models = {};
     let removed = 0;
     for (const [id, entry] of Object.entries(manifest.models)) {
-      if (trusted.has(entry.backend) && !scanned.has(id)) removed += 1;
+      if (trusted.has(entry.backend) && !scanned.has(id) && !unverified.has(id)) removed += 1;
       else models[id] = entry;
     }
     let added = 0;

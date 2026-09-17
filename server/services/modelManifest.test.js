@@ -156,6 +156,24 @@ describe('reconciliation against a scan', () => {
     expect((await getModelManifest()).models).toEqual([]);
   });
 
+  // The other half of that rule, and the one that costs data. An unverified row is
+  // excluded from the scanned set, which on its own makes it indistinguishable from
+  // a model the backend never mentioned — so the pruning loop would read a model
+  // Ollama positively listed as deleted and drop the manifest entry for it.
+  it('keeps a tracked row the scan reported but could not verify on disk', async () => {
+    await recordModelInstall(localModelInventoryRow({ backend: 'ollama', modelId: 'qwen3:8b' }));
+    await recordModelInstall(loraInventoryRow({ filename: 'gone.safetensors', name: 'Gone' }));
+
+    // Ollama's API lists qwen3:8b but the disk listing did not corroborate it; the
+    // LoRA store was read cleanly and simply no longer holds gone.safetensors.
+    const result = await reconcileModelManifest([
+      { ...localModelInventoryRow({ backend: 'ollama', modelId: 'qwen3:8b' }), inventoryUnknown: true },
+    ], {});
+
+    expect(result).toMatchObject({ added: 0, removed: 1 });
+    expect((await getModelManifest()).models.map((model) => model.id)).toEqual(['ollama:qwen3:8b']);
+  });
+
   it('maps every scan source error to the backend it actually invalidates', () => {
     expect([...trustedInventoryBackends({})]).toEqual(['huggingface', 'lora', 'ollama', 'lmstudio']);
     expect([...trustedInventoryBackends({ sourceErrors: ['huggingface'] })]).not.toContain('huggingface');
