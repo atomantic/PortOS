@@ -25,6 +25,10 @@ const contrastRatio = (a, b) => {
 
 const AA_SMALL_TEXT = 4.5;
 const MAX_COMFORTABLE_TEXT_CONTRAST = 15.5;
+// WCAG 2.x 1.4.11 non-text contrast floor for UI components / focus
+// indicators — lower than the 4.5:1 text floor above on purpose; a focus
+// ring only needs to be locatable, not read as prose.
+const NON_TEXT_CONTRAST = 3;
 
 const REQUIRED_COLOR_TOKENS = [
   '--port-bg',
@@ -84,6 +88,23 @@ const minimumCardSurface = (theme) => {
   const card = parseRgb(theme.colors['--port-card']);
   const floor = Number(theme.tokens['--port-card-min-alpha']);
   return card.map((channel, index) => floor * channel + (1 - floor) * bg[index]);
+};
+
+// `--port-input-bg` is a raw CSS color (not a bare "R G B" token like the
+// others), either a same-value reference to the page background or a literal
+// `rgb(r g b [/ alpha])`. Composite it over the page the way a real <input>
+// renders, so the contrast check below matches what a user actually sees
+// under the field, not the token's own (possibly translucent) color alone.
+const inputSurface = (theme) => {
+  const page = parseRgb(theme.colors['--port-bg']);
+  const raw = theme.tokens['--port-input-bg'];
+  if (raw.includes('var(--port-bg)')) return page;
+  const match = raw.match(/rgb\(\s*(\d+)\s+(\d+)\s+(\d+)\s*(?:\/\s*([\d.]+))?\s*\)/);
+  expect(match, `--port-input-bg not parseable: ${raw}`).toBeTruthy();
+  const [, r, g, b, alphaText] = match;
+  const rgb = [r, g, b].map(Number);
+  const alpha = alphaText === undefined ? 1 : Number(alphaText);
+  return rgb.map((channel, index) => alpha * channel + (1 - alpha) * page[index]);
 };
 
 describe('portosThemes warning token contrast', () => {
@@ -293,6 +314,47 @@ describe('the theme-scoped focus glow only matches themes that declare it', () =
     '%s: declares --port-focus-glow',
     (_id, theme) => {
       expect(theme.tokens['--port-focus-glow']).toBeTruthy();
+    },
+  );
+});
+
+// #7524: a `:focus-visible` exception dropped the keyboard indicator on
+// input/textarea/select/contenteditable to a 1px outline at 35% alpha —
+// composited over a themed field background that measured ~1.7-1.8:1,
+// well under the 3:1 WCAG non-text contrast floor, so keyboard users lost
+// their ONLY focus cue on every form field in every theme (text fields fire
+// `:focus-visible` on pointer focus too, so the low-alpha ring was not a
+// mouse-only fallback with a stronger keyboard variant elsewhere — it was
+// the whole indicator). Fixed by removing the exception so form fields fall
+// through to the same solid, opaque `*:focus-visible` ring as everything
+// else. These tests would have failed against the pre-fix CSS and guard
+// both the specific regression (the low-alpha carve-out returning) and the
+// general contract (a future theme shipping a --port-focus-ring too weak to
+// clear 3:1 once the CSS applies it to a real field).
+describe('keyboard focus indicator on form fields (#7524)', () => {
+  const entries = Object.values(THEMES);
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf8');
+
+  it('does not reintroduce a translucent :focus-visible outline for form fields', () => {
+    expect(css).not.toMatch(
+      /:is\([^)]*\b(?:input|textarea|select|contenteditable)\b[^)]*\):focus-visible\s*{[^}]*outline:\s*1px solid rgb\(var\(--port-focus-ring\)\s*\/\s*0\.\d+\)/,
+    );
+  });
+
+  it.each(entries.map((theme) => [theme.id, theme]))(
+    '%s: --port-focus-ring clears the 3:1 non-text floor against page, card, and input surfaces',
+    (_id, theme) => {
+      const ring = parseRgb(theme.colors['--port-focus-ring']);
+      const surfaces = {
+        page: parseRgb(theme.colors['--port-bg']),
+        card: parseRgb(theme.colors['--port-card']),
+        minCard: minimumCardSurface(theme),
+        input: inputSurface(theme),
+      };
+      for (const [label, surface] of Object.entries(surfaces)) {
+        const ratio = contrastRatio(ring, surface);
+        expect(ratio, `--port-focus-ring vs ${label} in ${theme.id}`).toBeGreaterThanOrEqual(NON_TEXT_CONTRAST);
+      }
     },
   );
 });
