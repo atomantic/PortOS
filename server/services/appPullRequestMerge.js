@@ -64,26 +64,25 @@ const classifyFailure = detail => ({
   error: detail,
 });
 
-async function mergeGithub(app, target, number, method, deleteBranch) {
-  if (!target.repoSpec) {
-    return { ok: false, code: 'unsupported-forge', error: "This app's GitHub origin could not be resolved to an OWNER/REPO" };
-  }
-  // Same owner-pinned gh environment the listing uses: an app whose repo belongs
-  // to a different logged-in account 404s without it (#7540).
-  const { cwd, env } = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
-  const args = ['pr', 'merge', String(number), '--repo', target.repoSpec, `--${method}`];
-  // `--repo` puts gh in remote mode, so `--delete-branch` deletes the REMOTE
-  // branch only — it never runs a local checkout in the user's working tree.
+async function mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranch, timeoutMs }) {
+  const args = ['pr', 'merge', String(number)];
+  // A `repoSpec` puts gh in `--repo` remote mode; omitting it runs the merge
+  // against whatever repo `cwd` is already checked out to (the automated
+  // sweep's mode — no forge read needed to name the repo it is already in).
+  if (repoSpec) args.push('--repo', repoSpec);
+  args.push(`--${method}`);
+  // `--repo` mode: `--delete-branch` deletes the REMOTE branch only — it never
+  // runs a local checkout in the user's working tree. Local mode: it deletes
+  // the branch in `cwd`'s checkout, same as `gh pr merge` does unassisted.
   if (deleteBranch) args.push('--delete-branch');
 
-  const error = await execGh(args, MERGE_TIMEOUT_MS, { cwd, env }).then(() => null, err => err);
+  const error = await execGh(args, timeoutMs, { cwd, env }).then(() => null, err => err);
   return error ? classifyFailure(error.ghStderr || error.message || 'gh pr merge failed') : { ok: true };
 }
 
-async function mergeGitlab(app, number, method, deleteBranch) {
-  const { env } = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
+async function mergeGitlabCore({ cwd, env, number, method, deleteBranch, timeoutMs }) {
   const tail = [...GLAB_METHOD_ARGS[method], ...(deleteBranch ? ['--remove-source-branch'] : [])];
-  const run = args => execGlab(args, app.repoPath, MERGE_TIMEOUT_MS, { env, rejectOnError: true })
+  const run = args => execGlab(args, cwd, timeoutMs, { env, rejectOnError: true })
     .then(() => null, err => err);
 
   // glab has historically defaulted to "merge when the pipeline succeeds", which
@@ -95,6 +94,37 @@ async function mergeGitlab(app, number, method, deleteBranch) {
     error = await run(['mr', 'merge', String(number), '--yes', ...tail]);
   }
   return error ? classifyFailure(error.message || 'glab mr merge failed') : { ok: true };
+}
+
+/**
+ * The one caller of `gh pr merge` / `glab mr merge`. Dir/target-shaped rather
+ * than app-shaped, so both the direct-merge button (`--repo` remote mode,
+ * whichever method the user picked) and the automated merge sweep (local
+ * checkout mode, gh only, hardcoded `--merge --delete-branch`) share the same
+ * argv construction and forge-failure classification (issue #7580).
+ *
+ * `timeoutMs` is intentionally NOT defaulted here: `mergeAppPullRequest` passes
+ * `MERGE_TIMEOUT_MS`, but `git.js#mergePR` omits it so `execGh`'s own default
+ * keeps applying — changing that default is not this function's call.
+ *
+ * @param {object} options
+ * @param {string} [options.cwd] - working directory `gh`/`glab` runs in
+ * @param {object} [options.env] - resolved forge env (owner-pinned token, etc.)
+ * @param {'github'|'gitlab'} options.forge
+ * @param {string|null} [options.repoSpec] - `OWNER/REPO` for gh's `--repo` remote mode; null runs against `cwd`'s local checkout
+ * @param {number|string} options.number
+ * @param {'merge'|'squash'|'rebase'} [options.method='merge']
+ * @param {boolean} [options.deleteBranch=false]
+ * @param {number} [options.timeoutMs]
+ * @returns {Promise<{ok:boolean, code?:string, error?:string}>}
+ */
+export async function runForgeMerge({ cwd, env, forge, repoSpec = null, number, method = DEFAULT_MERGE_METHOD, deleteBranch = false, timeoutMs } = {}) {
+  if (!MERGE_METHODS.includes(method)) {
+    return { ok: false, code: 'invalid-method', error: `Unsupported merge method '${method}'` };
+  }
+  return forge === 'gitlab'
+    ? mergeGitlabCore({ cwd, env, number, method, deleteBranch, timeoutMs })
+    : mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranch, timeoutMs });
 }
 
 /**
@@ -121,11 +151,24 @@ export async function mergeAppPullRequest(app, pullRequest, { method = DEFAULT_M
   if (!target) {
     return { ok: false, code: 'unsupported-forge', error: "This app's git origin is not a GitHub or GitLab repository" };
   }
+  if (target.forge !== 'gitlab' && !target.repoSpec) {
+    return { ok: false, code: 'unsupported-forge', error: "This app's GitHub origin could not be resolved to an OWNER/REPO" };
+  }
 
+  // Same owner-pinned gh environment the listing uses: an app whose repo belongs
+  // to a different logged-in account 404s without it (#7540).
+  const { cwd, env } = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount });
   const deleting = deleteBranch && !isLongLivedSourceBranch(pullRequest.headBranch, pullRequest.baseBranch);
-  const result = target.forge === 'gitlab'
-    ? await mergeGitlab(app, pullRequest.number, method, deleting)
-    : await mergeGithub(app, target, pullRequest.number, method, deleting);
+  const result = await runForgeMerge({
+    cwd,
+    env,
+    forge: target.forge,
+    repoSpec: target.repoSpec,
+    number: pullRequest.number,
+    method,
+    deleteBranch: deleting,
+    timeoutMs: MERGE_TIMEOUT_MS,
+  });
   if (!result.ok) return result;
 
   console.log(`🔀 Merged ${target.forge === 'gitlab' ? 'MR' : 'PR'} #${pullRequest.number} for app ${app.id} via ${method}${deleting ? ' (source branch deleted)' : ''}`);
