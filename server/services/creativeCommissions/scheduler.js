@@ -40,6 +40,39 @@ const registered = new Set();
 let lastSignature = null;
 let syncTail = Promise.resolve(); // serializes concurrent re-syncs (see syncCommissionSchedules)
 
+// Bounded-backoff retry for a failed inventory read (#7526). A rejected
+// `listCommissions()` must not cancel every armed cron — see
+// `doSyncCommissionSchedules` — but the install still needs to notice once the
+// store recovers, without a settings/commission save to nudge it. One
+// coalesced timer only: a second failure while a retry is already pending
+// reuses it rather than stacking another, so a burst of `commission:changed`/
+// `settings:updated` events during an outage can't multiply timers or spam
+// logs faster than the backoff interval.
+const RECONCILE_RETRY_TIERS_MS = [5_000, 15_000, 60_000, 300_000]; // 5s, 15s, 1m, capped at 5m
+let reconcileRetryTimer = null;
+let reconcileRetryTier = 0;
+
+function scheduleReconcileRetry() {
+  if (reconcileRetryTimer) return; // already coalesced onto a pending retry
+  const delay = RECONCILE_RETRY_TIERS_MS[Math.min(reconcileRetryTier, RECONCILE_RETRY_TIERS_MS.length - 1)];
+  reconcileRetryTier = Math.min(reconcileRetryTier + 1, RECONCILE_RETRY_TIERS_MS.length - 1);
+  reconcileRetryTimer = setTimeout(() => {
+    reconcileRetryTimer = null;
+    // Registration only — never a catch-up fire/generation. `runScheduledCommission`
+    // re-checks enabled/schedule validity fresh on every tick regardless of when it
+    // was armed, so a retry that lands after a commission was paused or deleted
+    // cannot run it.
+    syncCommissionSchedules().catch((err) =>
+      console.error(`❌ Creative commission schedule reconciliation retry failed: ${err.message}`));
+  }, delay);
+  if (typeof reconcileRetryTimer.unref === 'function') reconcileRetryTimer.unref();
+}
+
+function clearReconcileRetry() {
+  if (reconcileRetryTimer) { clearTimeout(reconcileRetryTimer); reconcileRetryTimer = null; }
+  reconcileRetryTier = 0;
+}
+
 function triggerResync() {
   syncCommissionSchedules().catch((err) =>
     console.error(`❌ Creative commission schedule re-sync failed: ${err.message}`));
@@ -124,7 +157,25 @@ export function syncCommissionSchedules(commissions) {
 }
 
 async function doSyncCommissionSchedules(commissions) {
-  const list = commissions || await listCommissions().catch(() => []);
+  let list;
+  if (commissions) {
+    list = commissions;
+  } else {
+    try {
+      list = await listCommissions();
+    } catch (err) {
+      // Sentinel + validate (AGENTS.md): a REJECTED inventory read is not the
+      // same value as a genuinely empty one, and must not collapse into it.
+      // The old `.catch(() => [])` here made a transient DB error look like
+      // "zero commissions" and cancelled every armed cron below — preserve
+      // `registered`/`lastSignature` instead and let the retry below notice
+      // when the store recovers.
+      console.error(`❌ Creative commission inventory read failed — preserving ${registered.size} armed cron(s): ${err.message}`);
+      scheduleReconcileRetry();
+      return registered.size;
+    }
+  }
+  clearReconcileRetry(); // a successful read is itself evidence of recovery
   const active = activeCommissions(list);
   const timezone = await getUserTimezone().catch(() => 'UTC');
 
@@ -149,6 +200,7 @@ export async function startCommissionScheduler() {
 export function stopCommissionScheduler() {
   for (const id of [...registered]) { cancel(eventId(id)); registered.delete(id); }
   lastSignature = null;
+  clearReconcileRetry();
 }
 
 /**
