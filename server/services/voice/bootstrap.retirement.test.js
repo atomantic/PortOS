@@ -14,6 +14,10 @@ vi.mock('net', () => ({ createServer: () => {
   return server;
 } }));
 vi.mock('./llm.js', () => ({ isToolCapable: vi.fn(), isReasoningModel: vi.fn() }));
+vi.mock('./modelProvisioners.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, getVoiceProvisioner: vi.fn() };
+});
 vi.mock('../providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn() }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
@@ -24,7 +28,26 @@ const { execPm2 } = await import('../pm2.js');
 const { execFile } = await import('../../lib/childProcess.js');
 const { getProviderById } = await import('../providers.js');
 const { VOICE_DEFAULTS } = await import('./config.js');
-const { reconcile, ensureToolCapableModel } = await import('./bootstrap.js');
+const { getVoiceProvisioner } = await import('./modelProvisioners.js');
+const { reconcile, ensureToolCapableModel, preloadModel } = await import('./bootstrap.js');
+
+// A provisioner double: every primitive is a spy so a test can assert that an
+// unreachable backend short-circuits BEFORE any install is attempted.
+const fakeBackend = (overrides = {}) => ({
+  id: 'ollama', label: 'Ollama', remedy: 'start Ollama',
+  listModels: vi.fn(async () => []),
+  isToolCapable: vi.fn(async () => false),
+  chain: vi.fn(() => ['small:1b', 'bigger:3b']),
+  install: vi.fn(async () => ({ ok: true, reason: '' })),
+  loadedModels: vi.fn(async () => new Set()),
+  load: vi.fn(async () => ({ ok: true, reason: '' })),
+  ...overrides,
+});
+
+const toolsOn = (cfg = {}) => ({
+  ...VOICE_DEFAULTS, enabled: true, ...cfg,
+  llm: { ...VOICE_DEFAULTS.llm, model: 'auto', tools: { enabled: true }, ...(cfg.llm || {}) },
+});
 
 it('does not download or preload anything when an upgraded install boots before Piper setup', async () => {
   const cfg = { ...VOICE_DEFAULTS, enabled: true, tts: { ...VOICE_DEFAULTS.tts, retiredEngine: 'kokoro' } };
@@ -57,4 +80,67 @@ it('does not probe or download a tool-capable model when voice is disabled', asy
   await expect(ensureToolCapableModel(cfg)).resolves.toEqual({ skipped: 'voice-disabled' });
   expect(execFile).not.toHaveBeenCalled();
   expect(getProviderById).not.toHaveBeenCalled();
+});
+
+// #7541: an unreachable backend is ONE shared cause. Walking the whole install
+// chain against it spawned four futile multi-GB downloads on every boot.
+it('stops at one message instead of walking the chain when the backend is unreachable', async () => {
+  vi.clearAllMocks();
+  const backend = fakeBackend({ listModels: vi.fn(async () => null) });
+  getVoiceProvisioner.mockReturnValue(backend);
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  await expect(ensureToolCapableModel(toolsOn())).resolves.toEqual({ skipped: 'backend-unreachable', backend: 'ollama' });
+
+  expect(backend.install).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(warn.mock.calls[0][0]).toContain('not reachable');
+  warn.mockRestore();
+});
+
+it('installs from the chain when the backend is reachable with nothing capable', async () => {
+  vi.clearAllMocks();
+  const backend = fakeBackend({
+    listModels: vi.fn().mockResolvedValueOnce([]).mockResolvedValue(['small:1b']),
+    isToolCapable: vi.fn(async () => true),
+  });
+  getVoiceProvisioner.mockReturnValue(backend);
+  await expect(ensureToolCapableModel(toolsOn())).resolves.toEqual({ installed: 'small:1b' });
+  expect(backend.install).toHaveBeenCalledWith('small:1b');
+});
+
+it('aborts the chain when the backend disappears mid-install', async () => {
+  vi.clearAllMocks();
+  const backend = fakeBackend({
+    listModels: vi.fn().mockResolvedValueOnce([]).mockResolvedValue(null),
+  });
+  getVoiceProvisioner.mockReturnValue(backend);
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  await expect(ensureToolCapableModel(toolsOn())).resolves.toEqual({ skipped: 'backend-unreachable', backend: 'ollama' });
+  // One attempt, then stop — not one per remaining chain entry.
+  expect(backend.install).toHaveBeenCalledTimes(1);
+  vi.restoreAllMocks();
+});
+
+// A remote OpenAI-compatible provider serves its own models: nothing to pull,
+// nothing to pre-warm, and certainly nothing to provision on a local daemon.
+it('provisions nothing for a remote API provider', async () => {
+  vi.clearAllMocks();
+  getVoiceProvisioner.mockReturnValue(null);
+  getProviderById.mockResolvedValue({ id: 'openai', type: 'api', endpoint: 'https://api.openai.com/v1' });
+  const cfg = toolsOn({ llm: { provider: 'openai' } });
+  await expect(ensureToolCapableModel(cfg)).resolves.toEqual({ skipped: 'remote-provider', provider: 'openai' });
+  await expect(preloadModel(cfg)).resolves.toEqual({ skipped: 'remote-provider', provider: 'openai' });
+});
+
+it('skips the preload when the chosen model is already resident', async () => {
+  vi.clearAllMocks();
+  const backend = fakeBackend({
+    listModels: vi.fn(async () => ['small:1b']),
+    isToolCapable: vi.fn(async () => true),
+    loadedModels: vi.fn(async () => new Set(['small:1b'])),
+  });
+  getVoiceProvisioner.mockReturnValue(backend);
+  await expect(preloadModel(toolsOn())).resolves.toEqual({ skipped: 'already-loaded', model: 'small:1b' });
+  expect(backend.load).not.toHaveBeenCalled();
 });

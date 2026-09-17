@@ -9,7 +9,10 @@ import { createServer } from 'net';
 import { PATHS } from '../../lib/fileUtils.js';
 import { execPm2, getAppStatus } from '../pm2.js';
 import { expandPath, piperVoiceTildePath, voiceHome, IS_WIN, PIPER_BIN_NAME } from './config.js';
-import { isToolCapable, isReasoningModel } from './llm.js';
+import { isReasoningModel } from './llm.js';
+import {
+  getVoiceProvisioner, DEFAULT_VOICE_BACKEND, sortPreferred, sizeOf, FAST_VOICE_MODEL_MAX_B,
+} from './modelProvisioners.js';
 import { getProviderById } from '../providers.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { whichFirst } from '../../lib/processEnv.js';
@@ -209,227 +212,159 @@ export const stopWhisper = async () => {
   return { stopped: true };
 };
 
-// Default tool-capable model to auto-install via `lms get` when the user has
-// voice.enabled + tools.enabled + model='auto' but LM Studio has no model that
-// speaks OpenAI structured tool_calls. We try a small list in order — first
-// one resolved successfully wins. Picks favor: small (≤8B), explicitly
-// non-reasoning ("instruct"/"2507" non-thinking variants), and currently
-// available in the LM Studio Hub catalog under the un-gated
-// `lmstudio-community/...-GGUF` form (`lms get` needs an actual fetchable HF
-// repo; gated repos like `meta-llama/*` and MLX-only ids fail silently).
-// Ids mirror the curated catalog in `server/lib/localLlmCatalog.js` so the
-// "recommended installs" UI stays consistent with what voice auto-installs.
-// Override the entire chain with PORTOS_VOICE_DEFAULT_TOOL_MODEL (single id).
-const DEFAULT_TOOL_MODEL_CHAIN = () => {
-  const override = process.env.PORTOS_VOICE_DEFAULT_TOOL_MODEL;
-  if (override) return [override];
-  return [
-    'lmstudio-community/Qwen2.5-3B-Instruct-GGUF',            // 3B, ~2 GB, no thinking phase at all
-    'lmstudio-community/functiongemma-270m-it-GGUF',          // 270M, ~300 MB, function-calling specialist
-    'lmstudio-community/granite-4.1-8b-GGUF',                 // 8B, ~5.3 GB, tools without a thinking mode
-    'lmstudio-community/Ministral-3-8B-Instruct-2512-GGUF',   // 8B, ~6 GB, Instruct (not the Reasoning build)
-  ];
+/**
+ * The first model in `ids` that is fast, non-reasoning and tool-capable.
+ *
+ * Sequential on purpose. The capability check can be a per-model HTTP probe
+ * (Ollama's /api/show), and we only need the FIRST match — a `Promise.all`
+ * here would probe every installed model on an install with dozens of them to
+ * answer a question the first hit already settles.
+ */
+const firstFastCapable = async (backend, ids) => {
+  for (const id of ids) {
+    if (isReasoningModel(id) || sizeOf(id) > FAST_VOICE_MODEL_MAX_B) continue;
+    if (await backend.isToolCapable(id)) return id;
+  }
+  return null;
 };
 
-const LMS_BASE = () => (process.env.LM_STUDIO_URL || 'http://localhost:1234')
-  .replace(/\/+$/, '').replace(/\/v1$/, '');
-
-// The auto-install + preload paths only know how to talk to LM Studio
-// (`lms get`, `lms load`, `/v1/models`). Mirror `resolveLlmEndpoint` in
-// `llm.js`: voice falls back to LM Studio whenever the configured provider
-// is missing, not api-type, or has no endpoint — so we still want to
-// provision in those cases. Only skip when the configured provider really
-// resolves to a usable non-lmstudio backend (e.g. a working Ollama).
-const isEffectiveLmStudioVoiceProvider = async (cfg) => {
-  const providerId = cfg?.llm?.provider || 'lmstudio';
-  if (providerId === 'lmstudio') return true;
+/**
+ * The local backend voice should PROVISION models against for `cfg`, or null
+ * when this provider needs no provisioning.
+ *
+ * Mirrors `resolveLlmEndpoint` in llm.js: voice falls back to the default
+ * backend whenever the configured provider is missing, not api-type, or has no
+ * endpoint — so a half-configured install still gets a working local model.
+ * A provider that DOES resolve to a usable api-type endpoint serves its own
+ * models (OpenAI, Groq, a remote vLLM), so there is nothing to install or
+ * pre-warm and we return null rather than provisioning the wrong backend.
+ */
+const resolveVoiceProvisioner = async (cfg) => {
+  const providerId = cfg?.llm?.provider || DEFAULT_VOICE_BACKEND;
+  const local = getVoiceProvisioner(providerId);
+  if (local) return local;
   const provider = await getProviderById(providerId).catch(() => null);
-  return !(provider && provider.type === 'api' && provider.endpoint);
+  // A usable remote provider needs no local provisioning.
+  if (provider && provider.type === 'api' && provider.endpoint) return null;
+  return getVoiceProvisioner(DEFAULT_VOICE_BACKEND);
 };
 
-// Sentinel + validate: `null` = the API server could not be reached or
-// answered with a non-OK status (we could not ask); `[]` = it answered with
-// zero models (we asked, legitimately empty). Callers must branch on `null`
-// explicitly rather than on `.length` — see AGENTS.md "Sentinel + validate".
-export const listLmStudioModels = async () => {
-  const res = await fetch(`${LMS_BASE()}/v1/models`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
-  if (!res?.ok) return null;
-  const body = await res.json().catch(() => null);
-  // A 200 with a body that doesn't match the OpenAI-compatible `{data: [...]}`
-  // shape (truncated response, a gateway returning HTML) means we still
-  // couldn't actually ask — treat it the same as unreachable, not "0 models".
-  if (!Array.isArray(body?.data)) return null;
-  return body.data.map((m) => m?.id).filter(Boolean);
-};
-
-// Matches the `lms` CLI's own message when the LM Studio API server itself
-// is unreachable — distinct from a model-specific failure (404, gated repo,
-// bad id). Detecting this lets the install chain abort immediately instead
-// of repeating the identical failure for every remaining entry.
-const isLmStudioConnectError = (message) => /failed to (?:start or )?connect to\b.*lm studio/i.test(String(message || ''));
-
-// Approximate parameter count from id, mirroring `sizeRank` in llm.js but
-// hoisted here so bootstrap doesn't need to import it. Returns Infinity for
-// model ids without a `<n>B` suffix (utility models, embeddings, etc.).
-const sizeOf = (id) => {
-  const n = String(id).toLowerCase();
-  const moe = n.match(/(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*b\b/);
-  if (moe) return parseFloat(moe[1]) * parseFloat(moe[2]);
-  const m = n.match(/(\d+(?:\.\d+)?)\s*b\b/);
-  return m ? parseFloat(m[1]) : Infinity;
-};
-
-// Above this rough parameter count (in B), a model is too heavy for a
-// snappy single-user voice agent on Apple Silicon — TTFT balloons and
-// it competes for VRAM with anything else loaded. We treat "tool-capable
-// but huge" as effectively missing and install a small one alongside.
-const FAST_VOICE_MODEL_MAX_B = 10;
-
+/**
+ * Ensure a fast, tool-capable model exists on the configured local backend,
+ * installing one from the catalog-derived chain when none does.
+ *
+ * Only intervenes when the user opted in: voice on, tools on AND model is
+ * 'auto'. An explicit model id means they know what they want — respect it
+ * even if incompatible.
+ *
+ * The `enabled` gate is deliberately duplicated from `reconcile`'s early
+ * return rather than left to the caller: this function downloads multi-GB
+ * weights, so an install with voice OFF must never reach it even if a future
+ * caller forgets the gate. `preloadModel` guards itself the same way.
+ */
 export const ensureToolCapableModel = async (cfg) => {
-  // Only intervene when the user opted in: voice on, tools on AND model is
-  // 'auto'. An explicit model id means they know what they want — respect it
-  // even if incompatible.
-  //
-  // The `enabled` gate is deliberately duplicated from `reconcile`'s early
-  // return rather than left to the caller: this function shells out to
-  // `lms get`, a multi-GB download the user never asked for, so an install
-  // with voice OFF must never reach it even if a future caller forgets the
-  // gate. `preloadModel` guards itself the same way for the same reason.
   if (!cfg?.enabled) return { skipped: 'voice-disabled' };
   if (!cfg?.llm?.tools?.enabled) return { skipped: 'tools-disabled' };
   if (cfg?.llm?.model && cfg.llm.model !== 'auto') return { skipped: 'explicit-model' };
-  if (!(await isEffectiveLmStudioVoiceProvider(cfg))) return { skipped: 'non-lmstudio-provider', provider: cfg?.llm?.provider };
 
-  const installed = await listLmStudioModels();
+  const backend = await resolveVoiceProvisioner(cfg);
+  if (!backend) return { skipped: 'remote-provider', provider: cfg?.llm?.provider };
+
+  const installed = await backend.listModels();
+  // `null` = the backend could not be reached. Every entry in the install
+  // chain would fail for that one shared reason, so say so ONCE and stop —
+  // walking the chain here is what spawned four futile multi-GB downloads on
+  // every boot of a machine whose local server simply wasn't running.
   if (installed === null) {
-    console.warn(`🎙️  voice: LM Studio API server unreachable at ${LMS_BASE()} — start LM Studio (or set voice.llm.provider) before voice can install a tool-capable model`);
-    return { skipped: 'lmstudio-unreachable' };
-  }
-  // Tool-capable AND non-reasoning AND under the size cap. The size cap is
-  // important: a user with only `mistral-small-24B` installed gets a model
-  // that thrashes VRAM on every turn; we'd rather download Qwen2.5-7B and
-  // give them snappy responses out of the box.
-  const fastCapable = installed.find(
-    (id) => isToolCapable(id) && !isReasoningModel(id) && sizeOf(id) <= FAST_VOICE_MODEL_MAX_B
-  );
-  if (fastCapable) {
-    return { skipped: 'already-capable', model: fastCapable };
+    console.warn(`🎙️  voice: ${backend.label} is not reachable — ${backend.remedy}`);
+    return { skipped: 'backend-unreachable', backend: backend.id };
   }
 
-  const lms = await which('lms');
-  if (!lms) {
-    console.warn(`🎙️  voice: no fast tool-capable model installed and 'lms' CLI not on PATH — install LM Studio CLI or set voice.llm.model explicitly.`);
-    return { skipped: 'no-lms-cli' };
-  }
+  // Tool-capable AND non-reasoning AND under the size cap. The size cap
+  // matters: a user with only `mistral-small-24B` installed gets a model that
+  // thrashes VRAM on every turn; we'd rather pull a small one and give them
+  // snappy responses out of the box.
+  const fastCapable = await firstFastCapable(backend, installed);
+  if (fastCapable) return { skipped: 'already-capable', model: fastCapable };
 
-  // Snapshot the model set BEFORE install so we can detect which id LM Studio
-  // actually registered the new download under (LM Studio sometimes
-  // normalizes case or appends quant suffix). Without this snapshot we
-  // mis-attributed success to whichever existing tool-capable model
-  // happened to match — including the slow 14B reasoning model we were
-  // trying to escape.
+  // Snapshot the model set BEFORE install so we can detect which id the
+  // backend actually registered the download under (ids get case-normalized or
+  // gain a quant suffix). Without this snapshot we mis-attributed success to
+  // whichever existing tool-capable model happened to match — including the
+  // slow reasoning model we were trying to escape.
   const before = new Set(installed);
-  const chain = DEFAULT_TOOL_MODEL_CHAIN();
-  // Pick the last non-empty line from stderr (LM Studio CLI trails newlines)
-  // so the warning is actionable instead of an empty `()`. Combine with
-  // stdout when stderr is empty — `lms` sometimes routes errors to stdout.
-  const lastMeaningfulLine = (s) => String(s || '').split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
+  const chain = backend.chain();
+  if (!chain.length) {
+    console.warn(`🎙️  voice: no catalog model with tool support is installable on ${backend.label} — set voice.llm.model explicitly in Settings`);
+    return { skipped: 'no-install-target', backend: backend.id };
+  }
+
   for (const target of chain) {
-    console.log(`🎙️  voice: installing fast tool-capable model ${target} via lms get (this may take a few minutes)`);
-    const { stdout, stderr } = await pexec(lms, ['get', '-y', target], {
-      maxBuffer: 64 * 1024 * 1024,
-      timeout: 30 * 60 * 1000,
-    }).catch((err) => ({ stdout: '', stderr: err?.message || String(err) }));
-    const reason = lastMeaningfulLine(stderr) || lastMeaningfulLine(stdout) || 'unknown';
-    // The API server going unreachable mid-chain is a shared cause every
-    // remaining entry would hit identically — abort instead of repeating it.
-    if (isLmStudioConnectError(reason)) {
-      console.warn(`🎙️  voice: LM Studio API server unreachable at ${LMS_BASE()} — aborting install chain (${target} failed: ${reason.slice(0, 160)})`);
-      return { skipped: 'lmstudio-unreachable' };
-    }
-    const after = await listLmStudioModels();
+    console.log(`🎙️  voice: installing fast tool-capable model ${target} via ${backend.label} (this may take a few minutes)`);
+    const outcome = await backend.install(target);
+    const after = await backend.listModels();
+    // The backend going away mid-chain is the same shared cause as above —
+    // stop rather than retrying every remaining entry against a dead server.
     if (after === null) {
-      console.warn(`🎙️  voice: LM Studio API server unreachable at ${LMS_BASE()} — aborting install chain (lost contact after attempting ${target})`);
-      return { skipped: 'lmstudio-unreachable' };
+      console.warn(`🎙️  voice: ${backend.label} became unreachable during install — ${backend.remedy}`);
+      return { skipped: 'backend-unreachable', backend: backend.id };
     }
-    const newOnes = after.filter((id) => !before.has(id));
-    const fastNew = newOnes.find(
-      (id) => isToolCapable(id) && !isReasoningModel(id) && sizeOf(id) <= FAST_VOICE_MODEL_MAX_B
-    );
+    const fastNew = await firstFastCapable(backend, after.filter((id) => !before.has(id)));
     if (fastNew) {
       console.log(`🎙️  voice: fast tool-capable model ready — ${fastNew}`);
       return { installed: fastNew };
     }
-    console.warn(`🎙️  voice: ${target} unavailable (${reason.slice(0, 160)}) — trying next`);
+    console.warn(`🎙️  voice: ${target} unavailable (${String(outcome?.reason || 'unknown').slice(0, 160)}) — trying next`);
   }
-  console.warn(`🎙️  voice: exhausted install chain ${chain.join(', ')} — set voice.llm.model explicitly in Settings`);
+  console.warn(`🎙️  voice: exhausted ${backend.label} install chain ${chain.join(', ')} — set voice.llm.model explicitly in Settings`);
   return { failed: chain };
 };
 
-// Returns the set of model keys currently loaded in LM Studio (per `lms ps`).
-// `lms load` is NOT idempotent in practice — re-loading an already-loaded
-// model spawns a SECOND instance of it, doubling VRAM. Worse, when VRAM is
-// full the second load fails with "Model loading was stopped due to
-// insufficient system resources" and our preload reports as failed even
-// though the original instance is fine. Always check `lms ps` first.
-const listLoadedModelKeys = async () => {
-  const lms = await which('lms');
-  if (!lms) return new Set();
-  const { stdout } = await pexec(lms, ['ps', '--json'], { timeout: 10_000 })
-    .catch(() => ({ stdout: '' }));
-  try {
-    const arr = JSON.parse(stdout || '[]');
-    return new Set(arr.map((m) => m.modelKey).filter(Boolean));
-  } catch {
-    return new Set();
-  }
-};
-
 // Pre-warm the model that 'auto' will pick on the first turn so the user
-// doesn't pay a 5–30 s cold-load on their first question. Skip when the
-// chosen model is already loaded — see `listLoadedModelKeys` for why "skip
-// if loaded" matters more than just being efficient.
+// doesn't pay a 5–30 s cold-load on their first question. Skip when the chosen
+// model is already resident: on LM Studio a second `lms load` spawns another
+// INSTANCE of the same model (3 copies of qwen3-4b reported in the wild),
+// eating multiples of its VRAM and producing "Model loading was stopped due to
+// insufficient system resources" when nothing is actually wrong.
 export const preloadModel = async (cfg) => {
   if (!cfg?.enabled) return { skipped: 'voice-disabled' };
   if (cfg?.llm?.model && cfg.llm.model !== 'auto') return { skipped: 'explicit-model' };
-  if (!(await isEffectiveLmStudioVoiceProvider(cfg))) return { skipped: 'non-lmstudio-provider', provider: cfg?.llm?.provider };
-  const lms = await which('lms');
-  if (!lms) return { skipped: 'no-lms-cli' };
-  const installed = await listLmStudioModels();
-  if (installed === null) return { skipped: 'lmstudio-unreachable' };
-  if (!installed.length) return { skipped: 'no-models' };
 
-  const sortPreferred = (list) => list.slice().sort((a, b) => {
-    const ar = isReasoningModel(a) ? 1 : 0;
-    const br = isReasoningModel(b) ? 1 : 0;
-    if (ar !== br) return ar - br;
-    return sizeOf(a) - sizeOf(b);
-  });
+  const backend = await resolveVoiceProvisioner(cfg);
+  if (!backend) return { skipped: 'remote-provider', provider: cfg?.llm?.provider };
 
-  const wantsTools = !!cfg.llm?.tools?.enabled;
-  const candidates = wantsTools ? installed.filter(isToolCapable) : installed;
-  const target = sortPreferred(candidates)[0] || sortPreferred(installed)[0];
+  const installed = await backend.listModels();
+  if (installed === null) return { skipped: 'backend-unreachable', backend: backend.id };
+  if (!installed.length) return { skipped: 'no-models', backend: backend.id };
+
+  // Rank first, then walk — so the tool-capability probe runs on the models we
+  // would actually pick and stops at the winner, rather than on every model.
+  const ranked = sortPreferred(installed);
+  let target = ranked[0] || null;
+  if (cfg.llm?.tools?.enabled) {
+    for (const id of ranked) {
+      if (await backend.isToolCapable(id)) { target = id; break; }
+    }
+  }
   if (!target) return { skipped: 'no-candidate' };
 
-  // CRITICAL: skip the load if the model is already in `lms ps`. Otherwise
-  // every server restart spawns another instance of the same model in
-  // LM Studio (3 copies of qwen3-4b reported in the wild), eating multiples
-  // of its VRAM and causing OOM-style "Model loading was stopped due to
-  // insufficient system resources" errors when nothing is actually wrong.
-  const loaded = await listLoadedModelKeys();
+  const loaded = await backend.loadedModels();
   if (loaded.has(target)) {
     console.log(`🎙️  voice: ${target} already loaded — skipping preload`);
     return { skipped: 'already-loaded', model: target };
   }
 
-  // `lms load` blocks until ready (5-30s cold). Run as fire-and-forget so
+  // The load blocks until ready (5–30 s cold). Run fire-and-forget so
   // reconcile returns immediately; whisper/TTS can come up in parallel.
   console.log(`🎙️  voice: preloading ${target} (warming GPU/cache for first turn)`);
-  pexec(lms, ['load', target], { timeout: 5 * 60 * 1000 })
-    .then(() => console.log(`🎙️  voice: ${target} loaded and ready`))
+  backend.load(target)
+    .then((result) => (result?.ok
+      ? console.log(`🎙️  voice: ${target} loaded and ready`)
+      : console.warn(`🎙️  voice: preload ${target} failed: ${result?.reason || 'unknown'}`)))
     .catch((err) => console.warn(`🎙️  voice: preload ${target} failed: ${err.message}`));
   return { preloading: target };
 };
+
 
 /**
  * Reconcile PM2 state with desired voice.enabled. Called from
