@@ -29,21 +29,38 @@ export function FormField({
   compact = false,
 }) {
   const generatedId = useId();
+  // A hint only earns an id when it will actually render; otherwise
+  // aria-describedby would point at an element that is never in the DOM.
+  const hasHint = hint != null && hint !== '' && hint !== false;
+  const hintId = hasHint ? `${generatedId}-hint` : null;
+
   // The label must point at whatever id the first control actually has: reuse
   // the child's own id when present, otherwise inject the generated one.
+  //
+  // Keep the `cloneElement(child, { id: controlId, ... })` literal intact: the
+  // tree-wide scanner in a11yConventions.test.js proves this wrapper names its
+  // child by matching that exact shape, and a props object built in a variable
+  // is invisible to it (#7525).
   let controlId = generatedId;
   const augmented = Children.map(children, (child, i) => {
     if (i !== 0 || !isValidElement(child)) return child;
+    // Preserve any description the caller already declared and append ours.
+    const existingDescribedBy = child.props['aria-describedby'];
+    const describedBy = hintId
+      ? [existingDescribedBy?.trim(), hintId].filter(Boolean).join(' ')
+      : existingDescribedBy;
     if (child.props.id) {
       controlId = child.props.id;
-      return child;
+      if (describedBy === existingDescribedBy) return child;
+      return cloneElement(child, { 'aria-describedby': describedBy });
     }
-    return cloneElement(child, { id: controlId });
+    return cloneElement(child, { id: controlId, 'aria-describedby': describedBy });
   });
+
   return (
     <div className={className}>
       {label != null && <label htmlFor={controlId} className={compact ? 'block text-xs uppercase tracking-wider text-gray-500 mb-1' : labelClassName}>{label}</label>}
-      {hint != null && <p className={compact ? 'block text-[11px] text-gray-500 mt-1' : 'text-xs text-gray-500 mb-1'}>{hint}</p>}
+      {hasHint && <p id={hintId} className={compact ? 'block text-[11px] text-gray-500 mt-1' : 'text-xs text-gray-500 mb-1'}>{hint}</p>}
       {augmented}
     </div>
   );
