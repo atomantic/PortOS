@@ -599,6 +599,9 @@ describe('MediaJobsQueue — video retry reference mode (#4874)', () => {
     await openRetryEditor(user);
     await waitFor(() => expect(screen.getByLabelText('Reference mode').value).toBe('inspire'));
 
+    // Wait for the model catalog itself, not just the (job-derived) reference
+    // mode, before selecting an option the catalog fetch hasn't rendered yet.
+    await screen.findByRole('option', { name: 'LTX-2.3' });
     await user.selectOptions(screen.getByLabelText('Model'), 'ltx2-model');
     await waitFor(() => expect(screen.getByLabelText('Reference mode').value).toBe('anchor'));
     // And the retry submits the clear rather than a value the server would 400.
