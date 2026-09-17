@@ -324,8 +324,124 @@ async function countCommitsAhead(workspacePath) {
 }
 
 /**
- * Verify that a run whose task shape PROMISED a pull request actually produced
- * one (#3358).
+ * The named outcomes a PR-claim check can reach (#7522).
+ *
+ * The public `verifyPrClaim` result is deliberately sparse — `ok`, an optional
+ * `branch`, an optional `category`. That shape is compact to return and
+ * expensive to READ: `ok: true` means "do not downgrade the run", not
+ * "verified"; a string `branch` doubles as evidence provenance; and
+ * `inconclusive` is set by some non-answers but not others. Every caller that
+ * wanted a different question answered — may this appear on the ledger? may
+ * cleanup skip creating a PR? — had to re-derive it from that field soup, and
+ * each correction (#4540, #5074) had to be applied in several places at once.
+ *
+ * So the check produces ONE of these named outcomes and the projections below
+ * decide what each one authorizes. `check-threw` is produced at the catch
+ * boundary in `finalizeAgent`, not here — a check that never ran is an outcome
+ * too, and naming it keeps "the forge said nothing" from looking like "the forge
+ * said yes".
+ */
+const PR_OBSERVATION = Object.freeze({
+  /** Nothing to verify: the agent did not own PR creation, the run already failed, or there is no workspace. */
+  SKIPPED: 'skipped',
+  /** The check threw. Not a verdict — the reported outcome stands. */
+  CHECK_THREW: 'check-threw',
+  /** Detached HEAD / non-repo workspace: no branch to ask a forge about. */
+  BRANCH_UNAVAILABLE: 'branch-unavailable',
+  /** The forge holds a change request for the branch, with an acceptable trailer. */
+  VERIFIED_CLAIM: 'verified-claim',
+  /** The forge holds no change request AND the branch is PROVEN to hold no commits. */
+  EMPTY_BRANCH: 'empty-branch',
+  /** The forge holds no change request for a branch that does (or may) hold commits. */
+  MISSING_PR: 'missing-pr',
+  /** The change request exists but does not close the issue its branch names. */
+  INVALID_TRAILER: 'invalid-trailer',
+  /** We could not ask, or could not read the answer. Says nothing about the PR. */
+  FORGE_UNAVAILABLE: 'forge-unavailable',
+});
+
+/**
+ * What each outcome AUTHORIZES — the three policies that used to be re-derived
+ * from field shapes at every consumer.
+ *
+ * - `completionOk` — may the run stand as the agent reported it? A thrown check
+ *   and every non-verification say yes; an UNREACHABLE forge says no, because a
+ *   run that may have shipped nothing must not be filed as complete on the
+ *   strength of a probe that never landed. It retries as environmental.
+ * - `observed` — did anything actually look? `skipped`/`check-threw` did not, so
+ *   their public verdict carries no `branch` key at all, which is what
+ *   `prClaimWasVerified` keys on.
+ * - `namesBranch` — does this outcome name the branch it looked at? The auxiliary
+ *   no-change proof may only substitute where this is false: an outcome that
+ *   named its branch already carries the strongest evidence available about that
+ *   branch — including a forge failure ABOUT it, which a second, weaker probe
+ *   must not paper over.
+ * - `recordable` — may a `run.pr-verified` ledger entry be appended? A forge that
+ *   could not be reached is excluded for the same reason a throw is: recording
+ *   `verified: false` would put "this run shipped no PR" on the permanent record
+ *   for a run that may well have shipped one (#4540).
+ */
+const PR_OBSERVATION_POLICY = Object.freeze({
+  [PR_OBSERVATION.SKIPPED]: Object.freeze({ completionOk: true, observed: false, namesBranch: false, recordable: false, category: null }),
+  [PR_OBSERVATION.CHECK_THREW]: Object.freeze({ completionOk: true, observed: false, namesBranch: false, recordable: false, category: null }),
+  [PR_OBSERVATION.BRANCH_UNAVAILABLE]: Object.freeze({ completionOk: true, observed: true, namesBranch: false, recordable: false, category: null }),
+  [PR_OBSERVATION.VERIFIED_CLAIM]: Object.freeze({ completionOk: true, observed: true, namesBranch: true, recordable: true, category: null }),
+  [PR_OBSERVATION.EMPTY_BRANCH]: Object.freeze({ completionOk: true, observed: true, namesBranch: true, recordable: true, category: null }),
+  [PR_OBSERVATION.MISSING_PR]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: true, category: PR_MISSING_CATEGORY }),
+  [PR_OBSERVATION.INVALID_TRAILER]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: true, category: ISSUE_TRAILER_MISSING_CATEGORY }),
+  [PR_OBSERVATION.FORGE_UNAVAILABLE]: Object.freeze({ completionOk: false, observed: true, namesBranch: true, recordable: false, category: FORGE_UNREACHABLE_CATEGORY }),
+});
+
+/**
+ * One observation record. `inconclusive` is a FACT the producer knows (it could
+ * not reach an unambiguous answer), not a policy — `missing-pr` carries it only
+ * when the commit count was unreadable, which is exactly the case where the miss
+ * stands but the learning verdict must stay undeclared.
+ */
+const prObservation = (outcome, fields = {}) => ({
+  outcome,
+  branch: null,
+  message: null,
+  advisory: null,
+  commitsAhead: null,
+  inconclusive: false,
+  ...fields,
+});
+
+/**
+ * Project an observation onto the historical `verifyPrClaim` result shape.
+ *
+ * Kept sparse on purpose: `category` stays ABSENT on a passing verdict and
+ * `commitsAhead`/`inconclusive` appear only where a consumer reads them, so
+ * every existing caller, persisted payload and test sees exactly what it saw
+ * before this indirection existed.
+ */
+function prVerdictFromObservation(observation) {
+  const policy = PR_OBSERVATION_POLICY[observation.outcome];
+  const verdict = { ok: policy.completionOk };
+  // Nothing looked, so there is nothing to report — not even a null branch,
+  // which would read as "we asked and could not name one".
+  if (!policy.observed) return verdict;
+  verdict.branch = observation.branch;
+  if (policy.category) verdict.category = policy.category;
+  if (observation.message) verdict.message = observation.message;
+  if (observation.advisory) verdict.advisory = observation.advisory;
+  if (observation.outcome === PR_OBSERVATION.EMPTY_BRANCH) verdict.noChangesToShip = true;
+  if (observation.outcome === PR_OBSERVATION.MISSING_PR) {
+    // Both facts ride the miss unconditionally: `commitsAhead` feeds the
+    // suggested fix, and an explicit `inconclusive: false` is what tells the
+    // learning verdict this miss was measured rather than guessed at.
+    verdict.commitsAhead = observation.commitsAhead;
+    verdict.inconclusive = observation.inconclusive;
+  } else if (observation.inconclusive) {
+    verdict.inconclusive = true;
+  }
+  return verdict;
+}
+
+/**
+ * Ask the forge whether a run that PROMISED a pull request actually produced
+ * one (#3358), and name the outcome.
  *
  * The failure this closes: an agent that owns its own `/do:pr` step commits,
  * pushes over SSH (unaffected by an outbound block on `gh`), fails to create the
@@ -343,7 +459,85 @@ async function countCommitsAhead(workspacePath) {
  * `glab` split `createPR` already makes. Asking `gh` about a GitLab remote
  * would fail and record every correct MR run as `forge-unreachable`.
  *
- * Four outcomes, never collapsed:
+ * @returns {Promise<{ outcome: string, branch: string|null, message: string|null, advisory: string|null, commitsAhead: number|null, inconclusive: boolean }>}
+ */
+async function observePrClaim({ task, workspacePath, success, prExpected }) {
+  // Only a run that CLAIMED success has a claim to verify; a failed run is
+  // already recorded as failed.
+  if (!prExpected || !success || !workspacePath) return prObservation(PR_OBSERVATION.SKIPPED);
+  const branch = await resolveWorkspaceBranch(workspacePath);
+  // No branch to ask about (detached HEAD, non-repo workspace). Nothing was
+  // verified — say nothing rather than invent a failure.
+  if (!branch) return prObservation(PR_OBSERVATION.BRANCH_UNAVAILABLE, { inconclusive: true });
+
+  const { resolveForgeForRepo } = await import('./git.js');
+  // `env` carries the repo-owner-pinned `GH_TOKEN` the agent's own `gh pr create`
+  // used. Dropping it would query as whatever ambient account `gh` happens to be
+  // on, which on a multi-login host may not even see the PR — reading as
+  // "no PR" for a run that opened one.
+  const { cli, env } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh', env: null }));
+  const found = cli === 'glab'
+    ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath)
+    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null });
+
+  const noun = cli === 'glab' ? 'merge request' : 'pull request';
+  const titleNoun = `${noun[0].toUpperCase()}${noun.slice(1)}`;
+  if (found.status === 'found') {
+    const issueNumber = issueNumberFromRef(branch);
+    if (issueNumber === null) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch });
+    if (typeof found.body !== 'string') {
+      // An unreadable body cannot distinguish a missing trailer from a present
+      // one, so it is a forge failure, never the agent's.
+      return prObservation(PR_OBSERVATION.FORGE_UNAVAILABLE, {
+        branch,
+        message: `Could not read the ${noun} body for branch ${branch} to verify issue #${issueNumber}`,
+        inconclusive: true,
+      });
+    }
+    if (hasIssueClosingTrailer(found.body, issueNumber)) return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, { branch });
+    if (hasIssuePartialTrailer(found.body, issueNumber)) {
+      return prObservation(PR_OBSERVATION.VERIFIED_CLAIM, {
+        branch,
+        advisory: `${titleNoun} for branch ${branch} partially ships issue #${issueNumber}; reconcile the remaining scope after merge.`,
+      });
+    }
+    return prObservation(PR_OBSERVATION.INVALID_TRAILER, {
+      branch,
+      message: `${titleNoun} for branch ${branch} does not contain a closing trailer for issue #${issueNumber}`,
+    });
+  }
+  if (found.status === 'none') {
+    // "No PR" is only a MISS if there was something to open one for. An agent
+    // that investigated its task, found the defect already fixed on main, and
+    // stopped without touching a file leaves a branch with zero commits — and
+    // `gh pr create` on a zero-commit branch does not fail because the agent
+    // slipped, it fails because there is no diff. Recording that as `pr-missing`
+    // failed a correct run and, being non-actionable, re-ran the whole
+    // investigation twice more to reach the same conclusion (agent-446c4f47).
+    //
+    // Deliberately gated on an EXPLICIT 0: an unreadable count is not evidence
+    // of an empty branch, so it leaves the miss standing.
+    const ahead = await countCommitsAhead(workspacePath).catch(() => null);
+    if (ahead === 0) return prObservation(PR_OBSERVATION.EMPTY_BRANCH, { branch });
+    return prObservation(PR_OBSERVATION.MISSING_PR, {
+      branch,
+      commitsAhead: ahead,
+      inconclusive: ahead === null,
+      message: `Agent reported success but no ${noun} exists for branch ${branch}`,
+    });
+  }
+  return prObservation(PR_OBSERVATION.FORGE_UNAVAILABLE, {
+    branch,
+    message: `Could not confirm a ${noun} for branch ${branch} — the forge is unreachable${found.detail ? ` (${String(found.detail).split('\n')[0].slice(0, 120)})` : ''}`,
+    inconclusive: true,
+  });
+}
+
+/**
+ * Public, backward-compatible face of `observePrClaim` — the sparse verdict
+ * `agentWorktreeCleanup` and every existing test already consume.
+ *
+ * Four outcome families, never collapsed:
  *   - `ok: true`  — a PR exists with a valid claim trailer, or there was nothing to check
  *   - `ok: true, noChangesToShip: true` — the forge answered "no PR" and the
  *     branch holds no commits, so there was nothing a PR could have been opened
@@ -359,85 +553,7 @@ async function countCommitsAhead(workspacePath) {
  * a readable non-empty branch missing its PR.
  */
 export async function verifyPrClaim({ task, workspacePath, success, prExpected }) {
-  // Only a run that CLAIMED success has a claim to verify; a failed run is
-  // already recorded as failed.
-  if (!prExpected || !success || !workspacePath) return { ok: true };
-  const branch = await resolveWorkspaceBranch(workspacePath);
-  if (!branch) {
-    // No branch to ask about (detached HEAD, non-repo workspace). Nothing was
-    // verified — say nothing rather than invent a failure.
-    return { ok: true, branch: null, inconclusive: true };
-  }
-
-  const { resolveForgeForRepo } = await import('./git.js');
-  // `env` carries the repo-owner-pinned `GH_TOKEN` the agent's own `gh pr create`
-  // used. Dropping it would query as whatever ambient account `gh` happens to be
-  // on, which on a multi-login host may not even see the PR — reading as
-  // "no PR" for a run that opened one.
-  const { cli, env } = await resolveForgeForRepo(workspacePath).catch(() => ({ cli: 'gh', env: null }));
-  const found = cli === 'glab'
-    ? await (await import('./gitlab.js')).findMergeRequestForBranch(branch, workspacePath)
-    : await (await import('./github.js')).findPullRequestForBranch(branch, { cwd: workspacePath, env: env || null });
-
-  const noun = cli === 'glab' ? 'merge request' : 'pull request';
-  if (found.status === 'found') {
-    const issueNumber = issueNumberFromRef(branch);
-    if (issueNumber === null) return { ok: true, branch };
-    if (typeof found.body !== 'string') {
-      return {
-        ok: false,
-        branch,
-        category: FORGE_UNREACHABLE_CATEGORY,
-        message: `Could not read the ${noun} body for branch ${branch} to verify issue #${issueNumber}`,
-        inconclusive: true,
-      };
-    }
-    if (hasIssueClosingTrailer(found.body, issueNumber)) return { ok: true, branch };
-    if (hasIssuePartialTrailer(found.body, issueNumber)) {
-      return {
-        ok: true,
-        branch,
-        advisory: `${noun[0].toUpperCase()}${noun.slice(1)} for branch ${branch} partially ships issue #${issueNumber}; reconcile the remaining scope after merge.`,
-      };
-    }
-    return {
-      ok: false,
-      branch,
-      category: ISSUE_TRAILER_MISSING_CATEGORY,
-      message: `${noun[0].toUpperCase()}${noun.slice(1)} for branch ${branch} does not contain a closing trailer for issue #${issueNumber}`,
-    };
-  }
-  if (found.status === 'none') {
-    // "No PR" is only a MISS if there was something to open one for. An agent
-    // that investigated its task, found the defect already fixed on main, and
-    // stopped without touching a file leaves a branch with zero commits — and
-    // `gh pr create` on a zero-commit branch does not fail because the agent
-    // slipped, it fails because there is no diff. Recording that as `pr-missing`
-    // failed a correct run and, being non-actionable, re-ran the whole
-    // investigation twice more to reach the same conclusion (agent-446c4f47).
-    //
-    // Deliberately gated on an EXPLICIT 0: an unreadable count is not evidence
-    // of an empty branch, so it leaves the miss standing.
-    const ahead = await countCommitsAhead(workspacePath).catch(() => null);
-    if (ahead === 0) {
-      return { ok: true, branch, noChangesToShip: true };
-    }
-    return {
-      ok: false,
-      branch,
-      commitsAhead: ahead,
-      inconclusive: ahead === null,
-      category: PR_MISSING_CATEGORY,
-      message: `Agent reported success but no ${noun} exists for branch ${branch}`
-    };
-  }
-  return {
-    ok: false,
-    branch,
-    category: FORGE_UNREACHABLE_CATEGORY,
-    message: `Could not confirm a ${noun} for branch ${branch} — the forge is unreachable${found.detail ? ` (${String(found.detail).split('\n')[0].slice(0, 120)})` : ''}`,
-    inconclusive: true,
-  };
+  return prVerdictFromObservation(await observePrClaim({ task, workspacePath, success, prExpected }));
 }
 
 /**
@@ -808,18 +924,64 @@ export async function stampLiExecutionVerdict(taskUpdate, task, { success, valid
 // A no-change audit needs forge + empty-branch proof even when its spawner
 // leaves PR creation to cleanup. Reuse a completed primary check; a thrown
 // check is inconclusive, never proof that there was nothing to ship.
-async function resolveNoChangeProof({
-  noChangeAudit, prExpected, prCheckThrew, prVerdict,
+//
+// The "could not prove it" marker is a branch-less `forge-unavailable`: we tried
+// and learned nothing, which is what keeps `evaluateSuccessCriteria` from
+// scoring a correct no-op as a commit miss.
+async function resolveNoChangeObservation({
+  noChangeAudit, prExpected, primaryObservation,
   task, workspacePath, success, agentId,
 }) {
   if (!noChangeAudit) return null;
-  const inconclusive = { ok: false, category: FORGE_UNREACHABLE_CATEGORY, inconclusive: true };
-  if (prExpected) return prCheckThrew ? inconclusive : prVerdict;
-  return verifyPrClaim({ task, workspacePath, success, prExpected: true })
+  const unproven = prObservation(PR_OBSERVATION.FORGE_UNAVAILABLE, { inconclusive: true });
+  if (prExpected) return primaryObservation.outcome === PR_OBSERVATION.CHECK_THREW ? unproven : primaryObservation;
+  return observePrClaim({ task, workspacePath, success, prExpected: true })
     .catch(err => {
       emitLog('warn', `⚠️ No-change verification failed for ${agentId}: ${err.message}`, { agentId });
-      return inconclusive;
+      return unproven;
     });
+}
+
+/**
+ * Project the primary observation (and the auxiliary no-change proof, when one
+ * was taken) onto the four answers finalize actually needs. One place decides
+ * all four, so a rule repaired in one of them cannot drift out of the others —
+ * which is how #4540 and #5074 each had to be applied three times.
+ *
+ * Authority is asymmetric, and deliberately so:
+ *   - COMPLETION is the primary check's alone. The auxiliary proof is taken for
+ *     spawners that leave PR creation to cleanup, so a non-empty auxiliary
+ *     branch is not a delivery failure — cleanup still has to open that PR after
+ *     finalize (#5074). It must never downgrade a run.
+ *   - EVIDENCE (ledger + cleanup) may fall back to the auxiliary proof, but only
+ *     where the primary named no branch at all AND the proof is a positive
+ *     `empty-branch`. Anything weaker leaves cleanup free to ask the forge again
+ *     and create the PR.
+ */
+function resolvePrEvidence({ primaryObservation, noChangeObservation }) {
+  const primary = PR_OBSERVATION_POLICY[primaryObservation.outcome];
+  const provenEmpty = (observation) => observation?.outcome === PR_OBSERVATION.EMPTY_BRANCH;
+  const evidence = !primary.namesBranch && provenEmpty(noChangeObservation)
+    ? noChangeObservation
+    : primaryObservation;
+  const evidencePolicy = PR_OBSERVATION_POLICY[evidence.outcome];
+  return {
+    completionOk: primary.completionOk,
+    completionVerdict: prVerdictFromObservation(primaryObservation),
+    noChangesToShip: provenEmpty(primaryObservation) || provenEmpty(noChangeObservation),
+    noChangeProof: noChangeObservation ? prVerdictFromObservation(noChangeObservation) : null,
+    // The branch the surviving evidence names, for the operator-facing log line.
+    evidenceBranch: evidence.branch || noChangeObservation?.branch || null,
+    ledgerEntry: evidencePolicy.recordable
+      ? {
+        verified: evidencePolicy.completionOk,
+        branch: evidence.branch,
+        category: evidencePolicy.category,
+        noChangesToShip: provenEmpty(evidence),
+      }
+      : null,
+    cleanupEvidence: prVerdictFromObservation(evidence),
+  };
 }
 
 /**
@@ -865,52 +1027,37 @@ export async function finalizeAgent({
   // every downstream write (task status, learning telemetry, the "Completed
   // successfully" the UI renders off `result.success`) sees the corrected value.
   // A THROW here is not a verdict — fall back to the reported outcome rather
-  // than manufacturing a failure out of a check that never ran.
-  let prCheckThrew = false;
+  // than manufacturing a failure out of a check that never ran, and say so by
+  // NAME so the ledger gate below doesn't have to infer it from an empty result.
   const noChangeAudit = !terminatedByUser && reportedSuccess && isVerifiedNoChangeTask(task);
-  const prVerdict = terminatedByUser
-    ? { ok: true }
-    : await verifyPrClaim({ task, workspacePath, success: reportedSuccess, prExpected })
+  const primaryPrObservation = terminatedByUser
+    ? prObservation(PR_OBSERVATION.SKIPPED)
+    : await observePrClaim({ task, workspacePath, success: reportedSuccess, prExpected })
       .catch(err => {
-        prCheckThrew = true;
         emitLog('warn', `⚠️ PR verification failed for ${agentId}: ${err.message}`, { agentId });
-        return { ok: true };
+        return prObservation(PR_OBSERVATION.CHECK_THREW);
       });
 
   // Codex/Antigravity/OpenCode sessions can own the PR workflow without being
   // able to type slashdo commands, so their spawners deliberately pass
   // `prExpected: false` and let cleanup act as the PR-creation backstop. A
   // marked catalog audit still needs the same forge + empty-branch proof before
-  // a clean exit can satisfy its no-change success criterion. Keep this
-  // auxiliary verdict separate: a non-empty branch must remain eligible for
-  // cleanup to open the PR after finalize rather than being downgraded here.
-  const noChangeProof = await resolveNoChangeProof({
-    noChangeAudit, prExpected, prCheckThrew, prVerdict,
+  // a clean exit can satisfy its no-change success criterion.
+  const noChangeObservation = await resolveNoChangeObservation({
+    noChangeAudit, prExpected, primaryObservation: primaryPrObservation,
     task, workspacePath, success: reportedSuccess, agentId,
   });
-  const effectivePrVerdict = typeof prVerdict.branch === 'string'
-    ? prVerdict
-    : (noChangeProof?.noChangesToShip === true ? noChangeProof : prVerdict);
-  const noChangesToShip = prVerdict.noChangesToShip === true || noChangeProof?.noChangesToShip === true;
+  const prEvidence = resolvePrEvidence({ primaryObservation: primaryPrObservation, noChangeObservation });
+  const noChangesToShip = prEvidence.noChangesToShip;
 
-  // Record the verdict in the lifecycle ledger (#4540) — but ONLY when the
-  // check actually reached one. `verifyPrClaim` returns the same `{ ok: true }`
-  // for "the PR is there", for "this run never promised one", for "there was no
-  // branch to ask about", and (via the catch above) for "the check threw";
-  // appending on every call would file four different facts under one word and
-  // make the ledger lie about the one transition it exists to explain.
-  //
-  // A BRANCH is the tell: every path that actually consulted a forge returns the
-  // branch it asked about, and every path that did not returns no branch at all.
-  // So gate on the branch rather than re-deriving the service's own
-  // applicability rules here, where they would drift apart.
-  //
-  // `forge-unreachable` is excluded for the same reason a throw is: the forge
-  // being down is not evidence about the PR. Recording it as `verified: false`
-  // would put "this run shipped no PR" on the record for a run that may well
-  // have shipped one.
-  if (!prCheckThrew && typeof effectivePrVerdict.branch === 'string' && effectivePrVerdict.category !== FORGE_UNREACHABLE_CATEGORY) {
-    const verified = effectivePrVerdict.ok === true;
+  // Record the verdict in the lifecycle ledger (#4540) — but ONLY for an outcome
+  // the policy table marks recordable. The sparse result returns the same
+  // `{ ok: true }` for "the PR is there", for "this run never promised one", for
+  // "there was no branch to ask about", and for "the check threw"; appending on
+  // every call would file four different facts under one word and make the
+  // ledger lie about the one transition it exists to explain.
+  if (prEvidence.ledgerEntry) {
+    const { verified, branch, category } = prEvidence.ledgerEntry;
     await appendRunEvent({
       kind: 'run.pr-verified',
       runId,
@@ -921,12 +1068,12 @@ export async function finalizeAgent({
       // path) into one entry; the verdict part keeps a run whose SECOND check
       // found the PR its first check missed from being silently suppressed by
       // the miss — that transition is the whole reason to look at the ledger.
-      eventId: `pr-verify:${agentId}:${runId || 'no-run'}:${verified ? 'ok' : effectivePrVerdict.category || 'failed'}`,
+      eventId: `pr-verify:${agentId}:${runId || 'no-run'}:${verified ? 'ok' : category || 'failed'}`,
       data: {
         verified,
-        branch: effectivePrVerdict.branch ?? null,
-        category: effectivePrVerdict.category ?? null,
-        noChangesToShip: effectivePrVerdict.noChangesToShip === true,
+        branch: branch ?? null,
+        category: category ?? null,
+        noChangesToShip: prEvidence.ledgerEntry.noChangesToShip,
       },
     });
   }
@@ -972,9 +1119,10 @@ export async function finalizeAgent({
   // Drift demands repair of the primary checkout even if a PR exists; a
   // missing PR is a concrete delivery failure, ahead of fidelity's judgement
   // about what was built. Keep each diagnosis's card text and reason together.
+  const prCompletionVerdict = prEvidence.completionVerdict;
   const verdict = {
     source: 'reported',
-    success: reportedSuccess && prVerdict.ok && !driftDowngrade,
+    success: reportedSuccess && prEvidence.completionOk && !driftDowngrade,
     errorAnalysis: reportedErrorAnalysis,
     error,
     completionReason,
@@ -986,24 +1134,23 @@ export async function finalizeAgent({
       error: drift.message,
       completionReason: PRIMARY_CHECKOUT_MUTATED_REASON,
     });
-  } else if (!prVerdict.ok) {
+  } else if (!prEvidence.completionOk) {
     Object.assign(verdict, {
       source: 'pr',
-      errorAnalysis: prVerificationAnalysis(prVerdict),
-      error: prVerdict.message,
-      completionReason: prVerdict.category,
+      errorAnalysis: prVerificationAnalysis(prCompletionVerdict),
+      error: prCompletionVerdict.message,
+      completionReason: prCompletionVerdict.category,
     });
   }
-  if (!prVerdict.ok) {
-    emitLog('warn', `⚠️ ${prVerdict.message} — recording ${agentId} as needs-attention (${prVerdict.category}) rather than complete`, {
-      agentId, taskId: task?.id, branch: prVerdict.branch, category: prVerdict.category
+  if (!prEvidence.completionOk) {
+    emitLog('warn', `⚠️ ${prCompletionVerdict.message} — recording ${agentId} as needs-attention (${prCompletionVerdict.category}) rather than complete`, {
+      agentId, taskId: task?.id, branch: prCompletionVerdict.branch, category: prCompletionVerdict.category
     });
   } else if (noChangesToShip) {
     // A no-op run is a legitimate completion, not a silent one — the human still
     // wants to know a task burned an agent and concluded there was nothing to do.
-    const noChangeBranch = effectivePrVerdict.branch || noChangeProof?.branch;
-    emitLog('info', `🫧 ${agentId} opened no change request and committed nothing to ${noChangeBranch} — recording the run as complete with no change warranted`, {
-      agentId, taskId: task?.id, branch: noChangeBranch
+    emitLog('info', `🫧 ${agentId} opened no change request and committed nothing to ${prEvidence.evidenceBranch} — recording the run as complete with no change warranted`, {
+      agentId, taskId: task?.id, branch: prEvidence.evidenceBranch
     });
   }
 
@@ -1171,7 +1318,7 @@ export async function finalizeAgent({
     success: verdict.success,
     hookResult,
     noChangesToShip,
-    noChangeProof,
+    noChangeProof: prEvidence.noChangeProof,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
@@ -1312,7 +1459,7 @@ export async function finalizeAgent({
   // downgraded to `pr-missing` would still be cleaned up as a success — worktree
   // removed, local branch deleted, and no resume pointer recorded — destroying
   // the state the retry needs to open the PR that is missing.
-  return { success: verdict.success, prVerdict: effectivePrVerdict };
+  return { success: verdict.success, prVerdict: prEvidence.cleanupEvidence };
 }
 
 // Tail of the agent's transcript scanned by the rescue. The deliverable, when
