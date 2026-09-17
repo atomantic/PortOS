@@ -819,38 +819,81 @@ export function createRunnerService(config = {}) {
 
       let reasoning = '';
 
+      // Asked on BOTH terminal paths (a clean finish and a mid-stream throw),
+      // so it is stated once: a reasoning model that produced no content still
+      // produced an answer, and the run's text is its reasoning. Restating the
+      // test at each site is how the two drift.
+      const reasoningIsTheOutput = () => !output.trim() && reasoning.trim().length > 0;
+
+      // A read returns an arbitrary SLICE of bytes, never a whole SSE frame, so
+      // both boundaries have to be carried across iterations:
+      //  - `buffer` holds the partial trailing LINE. Parsing per-chunk instead
+      //    fed JSON.parse a frame cut in half at the ~8KB read boundary, which
+      //    threw `Unterminated string in JSON at position 8064` and failed a
+      //    220s NVIDIA NIM nemotron run with outputSize 0 — a reasoning model's
+      //    `delta.reasoning` frames are big enough to straddle a read routinely.
+      //  - `{ stream: true }` holds the partial trailing CHARACTER, so a
+      //    multi-byte rune split across reads doesn't decode to U+FFFD.
+      // This mirrors every other SSE consumer in the tree (openAiChatStream.js,
+      // ollamaManager.js, voice/llm.js); this loop was the lone holdout.
+      let buffer = '';
+
+      const consumeLine = (rawLine) => {
+        // A CRLF transport leaves `\r` on each line: it has to come off before
+        // the terminal-sentinel comparison, or `[DONE]\r` falls through to
+        // JSON.parse and throws at the very end of an otherwise-good stream.
+        const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+        if (!line.startsWith('data: ')) return;
+
+        const data = line.slice(6);
+        if (data === '✅' || data === '[DONE]') return;
+
+        // One malformed frame must not discard the tokens around it. Before the
+        // buffering above, every truncated frame reached here and its throw
+        // aborted the whole run; now a parse failure can only mean the provider
+        // actually emitted a bad frame, which is worth a log line, not the run.
+        const parsed = safeJsonParse(data, null);
+        if (!parsed) {
+          console.error(`❌ Run ${runId} skipped an unparseable stream frame (${data.length} chars)`);
+          return;
+        }
+        const delta = parsed?.choices?.[0]?.delta;
+
+        if (delta?.content) {
+          const text = delta.content;
+          output += text;
+          onData?.({ text });
+        }
+
+        if (delta?.reasoning) {
+          reasoning += delta.reasoning;
+        }
+      };
+
       const processStream = async () => {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          // The last element is either an incomplete line or '' — either way it
+          // is not ready to parse, so it becomes the next iteration's prefix.
+          buffer = lines.pop() || '';
 
-          for (const line of lines) {
-            const data = line.slice(6);
-            if (data === '✅' || data === '[DONE]') continue;
-
-            const parsed = JSON.parse(data);
-            const delta = parsed?.choices?.[0]?.delta;
-
-            if (delta?.content) {
-              const text = delta.content;
-              output += text;
-              onData?.({ text });
-            }
-
-            if (delta?.reasoning) {
-              reasoning += delta.reasoning;
-            }
-          }
+          for (const line of lines) consumeLine(line);
         }
 
+        // A stream that ends without a trailing newline (or without [DONE])
+        // still has a complete frame sitting in the carry buffer; dropping it
+        // would silently truncate the tail of the answer.
+        buffer += decoder.decode();
+        if (buffer.trim()) consumeLine(buffer);
+
         // Capture the fallback decision BEFORE mutating `output` — otherwise
-        // the metadata check below (`!output.trim() && reasoning.trim()`) is
-        // always false on the reasoning-only path because `output` was just
-        // overwritten with the reasoning text.
-        const usedReasoningAsFallback = !output.trim() && reasoning.trim().length > 0;
+        // the metadata check below is always false on the reasoning-only path
+        // because `output` was just overwritten with the reasoning text.
+        const usedReasoningAsFallback = reasoningIsTheOutput();
         if (usedReasoningAsFallback) {
           console.log(`🧠 Reasoning model detected - using reasoning as output (${reasoning.length} chars)`);
           output = reasoning;
@@ -926,8 +969,16 @@ export function createRunnerService(config = {}) {
 
           activeRuns.delete(runId);
 
-          if (output) {
-            await atomicWrite(outputPath, output).catch(() => {});
+          // A reasoning model emits `delta.reasoning` well before its first
+          // content token, so a mid-stream failure routinely finds `output`
+          // empty while the generation so far sits in `reasoning`. The success
+          // path already falls back to it; doing the same here is the
+          // difference between salvaging a long run and reporting
+          // `outputSize: 0` after minutes of streaming.
+          const usedReasoningAsFallback = reasoningIsTheOutput();
+          const partialOutput = usedReasoningAsFallback ? reasoning : output;
+          if (partialOutput) {
+            await atomicWrite(outputPath, partialOutput).catch(() => {});
           }
 
           const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
@@ -939,19 +990,23 @@ export function createRunnerService(config = {}) {
           metadata.error = errorAnalysis.message || err.message;
           metadata.errorCategory = errorAnalysis.category;
           metadata.errorAnalysis = errorAnalysis;
-          metadata.outputSize = Buffer.byteLength(output);
+          metadata.outputSize = Buffer.byteLength(partialOutput);
+          metadata.hadReasoning = reasoning.length > 0;
+          metadata.usedReasoningAsFallback = usedReasoningAsFallback;
 
           if (errorAnalysis.hasError &&
               (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||
                errorAnalysis.category === ERROR_CATEGORIES.USAGE_LIMIT)) {
-            await handleProviderError(provider.id, errorAnalysis, output);
+            await handleProviderError(provider.id, errorAnalysis, partialOutput);
           }
 
           await atomicWrite(metadataPath, metadata);
 
           // Isolate the hook + onComplete so a throwing onRunFailed doesn't
           // bounce into the recovery path and call onRunFailed a second time.
-          safeSettle(() => hooks.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
+          // The hook's third arg is the output tail the host quotes into an
+          // investigation task, so it gets the salvaged text too.
+          safeSettle(() => hooks.onRunFailed?.(metadata, metadata.error, partialOutput), `Run ${runId} onRunFailed hook`);
           safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
         } catch (handlerErr) {
           console.error(`❌ Run ${runId} failure handler error: ${handlerErr.message}`);
