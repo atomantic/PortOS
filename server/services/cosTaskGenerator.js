@@ -887,6 +887,51 @@ async function recordAutoApprovedDeferral({ type, task, appId, project }, state,
 }
 
 /**
+ * Run the one Priority-1 admission pass shared by the periodic evaluator and
+ * event-driven dequeue engine (#7523 — the two used to hand-mirror this
+ * ordered ladder, and #4520/#7300 each landed as two synchronized edits).
+ * Owns the ordered not-runnable-here, approval, and max-spawn gates for
+ * pending user tasks; adapters only decide how an admitted task is emitted,
+ * how per-cycle capacity is tracked, and (optionally) what happens when
+ * capacity denies a candidate.
+ */
+export async function admitPendingUserTasks({ pendingUserTasks, instanceId }, adapter) {
+  const { capacityExhausted, canSpawn, emitSpawn, trackSpawn, onDefer = async () => {} } = adapter;
+
+  const admitted = [];
+  for (const task of pendingUserTasks) {
+    if (capacityExhausted()) break;
+    // Not runnable here: the task is pinned to another instance (#4520), or a
+    // federated peer holds a live lease on it (#1650) and is working it on the
+    // other machine. Skip it during candidate selection so it doesn't consume
+    // this cycle's spawn slot (the spawn guard would return null anyway) and
+    // starve later runnable tasks.
+    const skipReason = getSkipReason(task.metadata, instanceId);
+    if (skipReason) {
+      emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
+      continue;
+    }
+    // A user row that says it is NOT auto-approved is withheld from the unattended
+    // spawn (#7300) — see isUserTaskRunnableUnattended for why, and for why the
+    // rule lives in cosDequeue.js rather than once per engine.
+    if (!isUserTaskRunnableUnattended(task)) {
+      emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
+      continue;
+    }
+    if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
+    const userTask = { ...task, taskType: 'user' };
+    if (!canSpawn(userTask)) {
+      await onDefer(userTask);
+      continue;
+    }
+    emitSpawn(userTask);
+    trackSpawn(userTask);
+    admitted.push(userTask);
+  }
+  return admitted;
+}
+
+/**
  * Priority 0: On-demand task requests (highest priority — user explicitly
  * requested these). Reads the live schedule's `onDemandRequests`, clears each
  * as it is processed, and pushes any produced task (deduped) into the spawn set.
@@ -914,40 +959,23 @@ async function spawnPriority0OnDemand(ctx) {
  */
 async function spawnPriority1UserTasks(ctx) {
   const { pendingUserTasks, availableSlots, perProjectLimit, tasksToSpawn, canSpawnTask, trackSpawn, instanceId } = ctx;
-  for (const task of pendingUserTasks) {
-    if (tasksToSpawn.length >= availableSlots) break;
-    // Not runnable here: the task is pinned to another instance (#4520), or a
-    // federated peer holds a live lease on it (#1650) and is working it on the
-    // other machine. Skip it during candidate selection so it doesn't consume
-    // this cycle's spawn slot (the spawn guard would return null anyway) and
-    // starve later runnable tasks.
-    const skipReason = getSkipReason(task.metadata, instanceId);
-    if (skipReason) {
-      emitLog('debug', `Skipping user task ${task.id} — ${skipReason}`, { taskId: task.id });
-      continue;
-    }
-    // A user row that says it is NOT auto-approved is withheld from the unattended
-    // spawn (#7300) — see isUserTaskRunnableUnattended for why, and for why the
-    // rule lives in cosDequeue.js rather than once per engine.
-    if (!isUserTaskRunnableUnattended(task)) {
-      emitLog('debug', `Skipping user task ${task.id} — recovered row is not auto-approved`, { taskId: task.id });
-      continue;
-    }
-    if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
-    const userTask = { ...task, taskType: 'user' };
-    if (!canSpawnTask(userTask)) {
-      const project = task.metadata?.app || '_self';
-      emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${project}`);
-      await recordDecision(
-        DECISION_TYPES.CAPACITY_FULL,
-        `User task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${project}`,
-        { taskId: task.id, project, limit: perProjectLimit }
-      );
-      continue;
-    }
-    tasksToSpawn.push(userTask);
-    trackSpawn(userTask);
-  }
+  await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
+    capacityExhausted: () => tasksToSpawn.length >= availableSlots,
+    canSpawn: (task) => canSpawnTask(task),
+    emitSpawn: (task) => tasksToSpawn.push(task),
+    trackSpawn,
+    onDefer: (task) => recordPendingUserDeferral(task, perProjectLimit),
+  });
+}
+
+async function recordPendingUserDeferral(task, perProjectLimit) {
+  const project = task.metadata?.app || '_self';
+  emitLog('debug', `⏳ Queued user task ${task.id} - per-project limit reached for ${project}`);
+  await recordDecision(
+    DECISION_TYPES.CAPACITY_FULL,
+    `User task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${project}`,
+    { taskId: task.id, project, limit: perProjectLimit }
+  );
 }
 
 /**

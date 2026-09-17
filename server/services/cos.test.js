@@ -1331,17 +1331,21 @@ describe('cos.js source — priority + capacity invariants', () => {
     // so the guard narrows nothing that was already running.
     expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['task-real', 'task-fieldless']);
 
-    // Both engines run their own user tier, so the rule has to be called in each —
-    // one is a fix, two is the fix. The shared body is cosDequeue.js's.
+    // Both engines used to run their own copy of this tier, verified only by
+    // grepping each body for the guard in source order — one is a fix, two is
+    // the fix. #7523 replaced the duplicated ladder with one shared pass
+    // (admitPendingUserTasks in cosTaskGenerator.js); now the only thing either
+    // engine's body needs to prove is that it DELEGATES there, and the ladder's
+    // own ordering (including this #7300 hold) is pinned once, behaviorally,
+    // against the shared pass in cosTaskGenerator.test.js's
+    // `describe('admitPendingUserTasks', …)` block.
     const cosTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority1UserTasks'));
     const genTier = extractFnBody(GEN_SRC, GEN_SRC.indexOf('async function spawnPriority1UserTasks'));
-    for (const [label, body, emit] of [
-      ['cos.js', cosTier, "cosEvents.emit('task:ready', userTask)"],
-      ['cosTaskGenerator.js', genTier, 'tasksToSpawn.push(userTask)'],
+    for (const [label, body] of [
+      ['cos.js', cosTier],
+      ['cosTaskGenerator.js', genTier],
     ]) {
-      const guardIdx = body.indexOf('isUserTaskRunnableUnattended(task)');
-      expect(guardIdx, `${label} user tier must consult isUserTaskRunnableUnattended`).toBeGreaterThan(-1);
-      expect(body.indexOf(emit), `${label} must admit the task only after the guard`).toBeGreaterThan(guardIdx);
+      expect(body, `${label} user tier must delegate to the shared admitPendingUserTasks pass`).toContain('admitPendingUserTasks(');
     }
   });
 
