@@ -29,21 +29,39 @@ export function FormField({
   compact = false,
 }) {
   const generatedId = useId();
+  // Only generate hintId if hint is present and non-empty to avoid orphan IDREFs.
+  const hintId = hint != null && hint !== '' && hint !== false ? `${generatedId}-hint` : null;
+
   // The label must point at whatever id the first control actually has: reuse
   // the child's own id when present, otherwise inject the generated one.
   let controlId = generatedId;
   const augmented = Children.map(children, (child, i) => {
     if (i !== 0 || !isValidElement(child)) return child;
+
+    // Build props for the child, starting with ID assignment.
+    const childProps = {};
     if (child.props.id) {
       controlId = child.props.id;
-      return child;
+    } else {
+      controlId = generatedId;
+      childProps.id = controlId;
     }
-    return cloneElement(child, { id: controlId });
+
+    // Handle aria-describedby: preserve existing tokens and append hint id.
+    if (hintId) {
+      const existingDescribedBy = child.props['aria-describedby'];
+      const tokens = existingDescribedBy ? [existingDescribedBy.trim(), hintId] : [hintId];
+      childProps['aria-describedby'] = tokens.join(' ');
+    }
+
+    // Only clone if we have props to assign; otherwise return the original child.
+    return Object.keys(childProps).length > 0 ? cloneElement(child, childProps) : child;
   });
+
   return (
     <div className={className}>
       {label != null && <label htmlFor={controlId} className={compact ? 'block text-xs uppercase tracking-wider text-gray-500 mb-1' : labelClassName}>{label}</label>}
-      {hint != null && <p className={compact ? 'block text-[11px] text-gray-500 mt-1' : 'text-xs text-gray-500 mb-1'}>{hint}</p>}
+      {hint != null && hint !== '' && hint !== false && <p id={hintId} className={compact ? 'block text-[11px] text-gray-500 mt-1' : 'text-xs text-gray-500 mb-1'}>{hint}</p>}
       {augmented}
     </div>
   );
