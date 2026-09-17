@@ -620,6 +620,51 @@ export async function getPerpetualParkInfo(taskType, appId = null) {
 }
 
 /**
+ * Stamp (or clear) the perpetual work gate's escalated probe-failure diagnostic
+ * onto the task's schedule record — ALONGSIDE the park fields, never instead of
+ * them, because a stall means the gate is skipping WITHOUT parking (the drain
+ * keeps ticking; there is no park record to hang the reason on otherwise). This
+ * is what lets the Schedule tab render "probe failing — gh: <reason>" instead of
+ * an apparently-healthy armed schedule while a broken forge CLI silently skips
+ * every evaluation (#7551). Survives a process restart the same way a park does.
+ *
+ * `stall: null` clears it — a probe that stops being transient (recovers,
+ * dispatches, or reaches a definitive park) means whatever was stuck has
+ * cleared, so applyPerpetualWorkGate clears this on every non-escalated path.
+ */
+export async function recordPerpetualStall(taskType, appId = null, stall = null) {
+  return updateSchedule(async (schedule) => {
+    const record = ensureExecutionRecord(schedule, taskType, appId);
+    if (!stall) {
+      if (!('stall' in record)) return { result: null, changed: false };
+      delete record.stall;
+      return { result: null, changed: true };
+    }
+    record.stall = {
+      cli: stall.cli || null,
+      reason: stall.reason || null,
+      detail: stall.detail || null,
+      consecutive: Number.isFinite(stall.consecutive) ? stall.consecutive : 0,
+      at: new Date().toISOString()
+    };
+    return { result: null, changed: true };
+  });
+}
+
+/**
+ * First still-relevant stall diagnostic across a perpetual task's per-app (and
+ * global) execution records. Unlike a park, a stall can coexist with a
+ * currently-draining task (the gate skips without parking), so the UI needs its
+ * own signal independent of aggregatePerpetualParks — mirrors that function's
+ * per-app-then-global scan order.
+ */
+function aggregatePerpetualStall(execution) {
+  const appRecords = Object.values(execution?.perApp || {});
+  const stalledApp = appRecords.find((rec) => rec?.stall);
+  return stalledApp?.stall || execution?.stall || null;
+}
+
+/**
  * Is this type+app parked with an UNEXPIRED `parkedUntil`?
  *
  * `getPerpetualParkInfo` reports the park record whether or not it has elapsed —
@@ -1453,7 +1498,12 @@ export async function getScheduleStatus() {
         parkedAppCount: parks.parkedAppCount,
         trackedAppCount: parks.trackedAppCount,
         nextRecheckAt: parks.soonestParkAt === null ? null : new Date(parks.soonestParkAt).toISOString(),
-        parkReason: parks.parkReason
+        parkReason: parks.parkReason,
+        // A stall means the probe (e.g. gh/glab) has failed several evaluations
+        // in a row WITHOUT parking — the drain keeps ticking, so it can be
+        // present at the same time `globalParked`/`parkedAppCount` read "not
+        // parked". Null when the probe is healthy.
+        stall: aggregatePerpetualStall(execution)
       };
     }
 

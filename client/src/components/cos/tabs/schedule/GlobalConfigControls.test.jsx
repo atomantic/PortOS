@@ -328,6 +328,49 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
   });
 });
 
+// A stall (the forge CLI failing several evaluations in a row) can coexist
+// with an apparently-healthy "Draining" state — the gate skips without
+// parking on purpose (#7551) — so it must render regardless of park state.
+describe('GlobalConfigControls — perpetual probe-failure stall', () => {
+  it('renders the redacted probe-failure diagnostic alongside a still-draining status', () => {
+    renderControls({
+      config: {
+        type: 'on-demand',
+        cronExpression: null,
+        perpetual: true,
+        autoStart: true,
+        perpetualStatus: {
+          globalParked: false,
+          parkedAppCount: 0,
+          trackedAppCount: 1,
+          nextRecheckAt: null,
+          parkReason: null,
+          stall: { cli: 'gh', reason: 'gh-list-failed', detail: 'gh: authentication failed', consecutive: 3 }
+        }
+      }
+    });
+    expect(screen.getByText(/Probe failing/)).toBeInTheDocument();
+    expect(screen.getByText(/gh-list-failed/)).toBeInTheDocument();
+    expect(screen.getByText(/authentication failed/)).toBeInTheDocument();
+    expect(screen.getByText(/3 consecutive/)).toBeInTheDocument();
+    // Still reports the drain as healthy — a stall does not imply a park.
+    expect(screen.getByText(/Draining — actionable work available/)).toBeInTheDocument();
+  });
+
+  it('renders nothing extra when the probe is healthy (no stall)', () => {
+    renderControls({
+      config: {
+        type: 'on-demand',
+        cronExpression: null,
+        perpetual: true,
+        autoStart: true,
+        perpetualStatus: { globalParked: false, parkedAppCount: 0, trackedAppCount: 1, nextRecheckAt: null, parkReason: null, stall: null }
+      }
+    });
+    expect(screen.queryByText(/Probe failing/)).not.toBeInTheDocument();
+  });
+});
+
 
 describe('GlobalConfigControls — external issue isolation', () => {
   it('offers text API providers and explains the source policy while retaining an invalid saved pin', async () => {

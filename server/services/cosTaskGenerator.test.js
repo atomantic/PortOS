@@ -77,6 +77,7 @@ import {
   applyOnDemandConsent,
   isConfiguredApprovalRequired,
   recordPerpetualTransient,
+  PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD,
   buildJiraTicketTask,
   buildClaimWorkTask,
   resolveAppClaimReviewers,
@@ -1274,6 +1275,48 @@ describe('emitOnDemandEmpty', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('recordPerpetualTransient counts CONSECUTIVE transient verdicts for the same taskType+app', () => {
+    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
+    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(2);
+    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(3);
+    expect(recordPerpetualTransient('claim-issue', 'app-streak', { cli: 'gh', reason: 'gh-list-failed' })).toBe(4);
+  });
+
+  it('recordPerpetualTransient resets the streak to 0 on a null (actionable/idle) verdict', () => {
+    recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' });
+    recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' });
+    expect(recordPerpetualTransient('claim-issue', 'app-streak-2', null)).toBe(0);
+    // The next transient verdict after a reset starts the streak over at 1, not
+    // where it left off — a recovered probe means the escalation clock restarts.
+    expect(recordPerpetualTransient('claim-issue', 'app-streak-2', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
+  });
+
+  it('recordPerpetualTransient keys the streak by taskType+app, so one app never inherits another\'s count', () => {
+    recordPerpetualTransient('claim-issue', 'app-streak-a', { cli: 'gh', reason: 'gh-list-failed' });
+    recordPerpetualTransient('claim-issue', 'app-streak-a', { cli: 'gh', reason: 'gh-list-failed' });
+    expect(recordPerpetualTransient('claim-issue', 'app-streak-b', { cli: 'gh', reason: 'gh-list-failed' })).toBe(1);
+  });
+
+  it('the escalation threshold is exported and applyPerpetualWorkGate levels its skip log against it, persisting a stall once escalated', () => {
+    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
+    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
+    expect(PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD).toBeGreaterThanOrEqual(1);
+    expect(gate).toMatch(/consecutive >= PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD/);
+    expect(gate).toMatch(/emitLog\(escalated \? 'warn' : 'debug'/);
+    expect(gate).toContain('taskSchedule.recordPerpetualStall(taskType, app.id,');
+  });
+
+  it('the actionable path resets both the transient streak and the persisted stall before deciding to dispatch or no-progress-park', () => {
+    const start = GEN_SRC.indexOf('async function applyPerpetualWorkGate');
+    const gate = GEN_SRC.slice(start, GEN_SRC.indexOf('\n}', start));
+    const actionableIdx = gate.indexOf('if (detection.actionable) {');
+    const resetIdx = gate.indexOf('recordPerpetualTransient(taskType, app.id, null);');
+    const stallClearIdx = gate.indexOf('taskSchedule.recordPerpetualStall(taskType, app.id, null);');
+    expect(actionableIdx).toBeGreaterThan(-1);
+    expect(resetIdx).toBeGreaterThan(actionableIdx);
+    expect(stallClearIdx).toBeGreaterThan(actionableIdx);
   });
 
   it("surfaces the pr-reviewer preflight's recorded skip reason on an idle outcome", async () => {

@@ -2088,10 +2088,24 @@ const TRANSIENT_VERDICT_TTL_MS = 60_000;
 const transientVerdicts = new Map();
 const transientVerdictKey = (taskType, appId) => `${taskType}:${appId || 'global'}`;
 
+// How many CONSECUTIVE transient skips (across evaluations, not within any
+// single 60s window) applyPerpetualWorkGate tolerates at `debug` before
+// escalating to `warn` — see recordPerpetualTransient's return value.
+export const PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD = 3;
+
+// Consecutive-transient-skip counters, keyed the same as transientVerdicts but
+// deliberately tracked SEPARATELY from it: this streak must survive across
+// evaluations more than 60s apart (it counts how many evaluations IN A ROW came
+// back transient, not how many landed inside one verdict's TTL window), and it
+// is reset — not just expired — the moment a probe stops being transient.
+const transientStreaks = new Map();
+
 /**
  * Record why a perpetual work gate skipped WITHOUT parking. `cli` is the forge
  * CLI whose probe failed (`gh` / `glab`), or null when no forge was involved.
- * Passing a null verdict clears any stale entry (the actionable / park paths).
+ * Passing a null verdict clears any stale entry (the actionable / park paths)
+ * AND resets the consecutive-transient streak — a successful probe means
+ * whatever was stuck has cleared.
  *
  * Also doubles as pr-reviewer's idle-skip reason channel: pr-reviewer is
  * on-demand, not perpetual, so its preflight skip (churn park, no external PRs,
@@ -2100,14 +2114,22 @@ const transientVerdictKey = (taskType, appId) => `${taskType}:${appId || 'global
  * for WHY — the same gap this map already closes for 'transient'. The payload
  * shape here is a free-form object (`{ ...verdict }`), so a `{ reason }` payload
  * under the `taskType: 'pr-reviewer'` key needs no separate map or TTL logic.
+ * pr-reviewer shares the streak counter too — harmless, since it is keyed
+ * per-`taskType:appId` and nothing reads pr-reviewer's streak today.
+ *
+ * @returns {number} the new consecutive-transient count (0 once cleared).
  */
 export function recordPerpetualTransient(taskType, appId, verdict) {
   const key = transientVerdictKey(taskType, appId);
   if (!verdict) {
     transientVerdicts.delete(key);
-    return;
+    transientStreaks.delete(key);
+    return 0;
   }
   transientVerdicts.set(key, { ...verdict, at: Date.now() });
+  const count = (transientStreaks.get(key) || 0) + 1;
+  transientStreaks.set(key, count);
+  return count;
 }
 
 /** Read-and-consume the recorded verdict; null when absent or past its TTL. */
@@ -2455,6 +2477,11 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
     ignoreTaskId
   });
   if (detection.actionable) {
+    // A probe that reports actionable work is, by definition, not stuck — clear
+    // both the transient streak and any persisted stall diagnostic before
+    // deciding whether THIS evaluation dispatches or parks on no-progress.
+    recordPerpetualTransient(taskType, app.id, null);
+    await taskSchedule.recordPerpetualStall(taskType, app.id, null);
     // A successful claim/plan agent can still return without changing forge or
     // PLAN state (for example, it decides not to pick the advertised item). The
     // completion refill would otherwise dispatch the same candidate forever.
@@ -2479,25 +2506,42 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
         return { skip: true };
       }
     }
-    recordPerpetualTransient(taskType, app.id, null);
     metadata.perpetual = true;
     // The dispatch is SPENT BY THE CALLER, once a task is certain — see the note
     // on `spendDispatch` in the JSDoc above.
     return { skip: false, spendDispatch: true, signature: drainSignature };
   }
   if (detection.transient) {
-    emitLog('debug', `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason})`, { appId: app.id });
-    // The skip is silent by design (the next tick retries), but an explicit user
-    // "Run" ends here too — record which CLI failed so emitOnDemandEmpty can tell
-    // the difference between a blip and a forge that is broken for good, plus any
-    // remedy the detector already named (a permission the token lacks, which no
-    // amount of retrying fixes).
-    recordPerpetualTransient(taskType, app.id, {
-      cli: detection.cli || null, reason: detection.reason, remedy: detection.remedy || null
+    // Record BEFORE logging, so the log line (and the escalation decision) can
+    // report which consecutive occurrence this is. A single blip stays at
+    // `debug` (suppressed on a default install); once the SAME probe has failed
+    // PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD evaluations in a row, escalate to
+    // `warn` (reaches the console and the cos:log stream) and persist the
+    // stalled verdict — otherwise a perpetual drain whose forge CLI is broken
+    // produces zero console output, zero persisted state, and zero UI signal,
+    // indefinitely (#7551).
+    const consecutive = recordPerpetualTransient(taskType, app.id, {
+      cli: detection.cli || null, reason: detection.reason, remedy: detection.remedy || null, detail: detection.detail || null
     });
+    const detailSuffix = detection.detail ? ` — ${detection.detail}` : '';
+    const escalated = consecutive >= PERPETUAL_TRANSIENT_ESCALATION_THRESHOLD;
+    emitLog(escalated ? 'warn' : 'debug',
+      `Perpetual ${taskType} skip for ${app.name} (transient: ${detection.reason}${detailSuffix}, ${consecutive} consecutive)`,
+      { appId: app.id, consecutive });
+    // The skip is silent by design at low counts (the next tick retries), but an
+    // explicit user "Run" ends here too — record which CLI failed so
+    // emitOnDemandEmpty can tell the difference between a blip and a forge that
+    // is broken for good, plus any remedy the detector already named (a
+    // permission the token lacks, which no amount of retrying fixes).
+    if (escalated) {
+      await taskSchedule.recordPerpetualStall(taskType, app.id, {
+        cli: detection.cli || null, reason: detection.reason, detail: detection.detail || null, consecutive
+      });
+    }
     return { skip: true };
   }
   recordPerpetualTransient(taskType, app.id, null);
+  await taskSchedule.recordPerpetualStall(taskType, app.id, null);
   // Carry the detector's open/in-flight/filtered breakdown into the park so an
   // explicit "Run" can explain WHY a non-empty queue yielded no work.
   const counts = detection.total != null

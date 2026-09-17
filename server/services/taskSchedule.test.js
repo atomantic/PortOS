@@ -136,6 +136,7 @@ import {
   parkPerpetual,
   resetPerpetualForManualRun,
   getPerpetualParkInfo,
+  recordPerpetualStall,
   isPerpetualParkActive,
   getPerpetualDrainState,
   recordPerpetualDispatch,
@@ -3375,6 +3376,49 @@ describe('taskSchedule', () => {
         const status = await getScheduleStatus()
         const p = status.tasks['claim-issue'].perpetualStatus
         expect(p).toMatchObject({ parkedAppCount: 1, trackedAppCount: 2, globalParked: false, nextRecheckAt: future, parkReason: 'no-actionable-issues' })
+      })
+    })
+
+    // The escalated-stall diagnostic (#7551): a perpetual gate that skips
+    // WITHOUT parking (a broken forge CLI) has no park record to hang its
+    // reason on, so it needs its own persisted channel — one that survives a
+    // process restart the same way a park does, and that coexists with a
+    // "draining" (not parked) status.
+    describe('recordPerpetualStall + getScheduleStatus stall surfacing', () => {
+      it('stamps a stall on the per-app record without touching the park fields', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
+        })
+        await recordPerpetualStall('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed', detail: 'gh: authentication failed', consecutive: 3 })
+        const status = await getScheduleStatus()
+        const p = status.tasks['claim-issue'].perpetualStatus
+        expect(p.stall).toMatchObject({ cli: 'gh', reason: 'gh-list-failed', detail: 'gh: authentication failed', consecutive: 3 })
+        expect(p.globalParked).toBe(false)
+        expect(p.parkedAppCount).toBe(0)
+      })
+
+      it('clears the stall when recorded with a null verdict', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
+        })
+        await recordPerpetualStall('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed', consecutive: 3 })
+        await recordPerpetualStall('claim-issue', 'app-1', null)
+        const status = await getScheduleStatus()
+        expect(status.tasks['claim-issue'].perpetualStatus.stall).toBeNull()
+      })
+
+      it('survives being re-read as if from a process restart (persisted, not in-memory)', async () => {
+        mockSchedule({
+          tasks: { 'claim-issue': { type: 'on-demand', perpetual: true, enabled: true } },
+          executions: { 'task:claim-issue': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } }
+        })
+        await recordPerpetualStall('claim-issue', 'app-1', { cli: 'gh', reason: 'gh-list-failed', consecutive: 5 })
+        // A fresh getScheduleStatus() call re-reads the persisted schedule from
+        // scratch rather than any in-process cache, standing in for a restart.
+        const status = await getScheduleStatus()
+        expect(status.tasks['claim-issue'].perpetualStatus.stall).toMatchObject({ consecutive: 5 })
       })
     })
 
