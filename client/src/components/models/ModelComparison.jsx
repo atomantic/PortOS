@@ -28,7 +28,7 @@ import {
   getModelComparison,
   importModelComparison,
   discoverComparisonModels,
-  syncArtificialAnalysis,
+  syncBenchmarkSource,
 } from '../../services/apiModelComparison';
 import Modal from '../ui/Modal';
 import toast from '../ui/Toast';
@@ -107,6 +107,7 @@ export default function ModelComparison() {
   const [scenario, setScenario] = useState({ input: 10000, output: 500, reasoning: 0, tasks: 100 });
   const [modelSearch, setModelSearch] = useState('');
   const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncSource, setSyncSource] = useState('artificial-analysis');
   const [syncKey, setSyncKey] = useState('');
   const [syncStatus, setSyncStatus] = useState('');
   const [syncError, setSyncError] = useState('');
@@ -284,11 +285,23 @@ export default function ModelComparison() {
       .finally(() => setBusy(false));
   };
 
-  const handleSyncAA = () => {
+  // A newer server answers with the full source list; an older one offered
+  // only Artificial Analysis, so fall back to it rather than offering a sync
+  // the server would reject.
+  const syncSources = catalog?.syncSources?.length
+    ? catalog.syncSources
+    : [{ id: 'artificial-analysis', label: 'Artificial Analysis', requiresKey: true }];
+  const selectedSyncSource = syncSources.find(s => s.id === syncSource) || syncSources[0];
+
+  const handleSync = () => {
     setSyncing(true);
     setSyncError('');
-    setSyncStatus('Connecting to Artificial Analysis and syncing models…');
-    syncArtificialAnalysis({ ...(syncKey.trim() ? { apiKey: syncKey.trim() } : {}) }, { silent: true })
+    setSyncStatus(`Connecting to ${selectedSyncSource.label} and syncing…`);
+    syncBenchmarkSource(
+      selectedSyncSource.id,
+      { ...(selectedSyncSource.requiresKey && syncKey.trim() ? { apiKey: syncKey.trim() } : {}) },
+      { silent: true }
+    )
       .then(res => {
         // The sync is done and the catalog is reloading behind it — the dialog
         // has nothing left to ask for, so it closes itself and the result is
@@ -320,11 +333,12 @@ export default function ModelComparison() {
     setSyncStatus('');
   };
 
-  // A configured key makes the dialog a pure speed bump — sync straight away and
-  // only prompt when there is nothing stored to sync with.
-  const startSyncAA = () => {
-    if (catalog?.artificialAnalysisKeyConfigured) {
-      handleSyncAA();
+  // A configured key makes the Artificial Analysis dialog a pure speed bump —
+  // sync straight away and only prompt when there is nothing stored to sync
+  // with. Every other source needs no key and opens the dialog to be picked.
+  const startSync = () => {
+    if (selectedSyncSource.id === 'artificial-analysis' && catalog?.artificialAnalysisKeyConfigured) {
+      handleSync();
       return;
     }
     setSyncError('');
@@ -642,11 +656,11 @@ export default function ModelComparison() {
           <button
             type="button"
             className="inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-port-card border border-port-border rounded-lg hover:border-port-accent disabled:opacity-50 transition-colors"
-            onClick={startSyncAA}
+            onClick={startSync}
             disabled={syncing}
           >
             <CloudDownload size={14} aria-hidden="true" className={`text-port-accent-text ${syncing ? 'animate-pulse' : ''}`} />
-            {syncing ? 'Syncing…' : 'Sync from Artificial Analysis'}
+            {syncing ? 'Syncing…' : 'Sync benchmark data'}
           </button>
           <button
             type="button"
@@ -683,30 +697,61 @@ export default function ModelComparison() {
       >
         <div className="bg-port-card border border-port-border rounded-xl shadow-2xl p-5 space-y-4">
           <h3 id="aa-sync-title" className="text-base font-semibold tracking-tight">
-            Sync Artificial Analysis data
+            Sync benchmark data
           </h3>
-          <p className="text-xs text-port-text-muted leading-relaxed">
-            Fetch the latest benchmark evaluations, pricing, response times, and reasoning effort measurements from the
-            Artificial Analysis Free API. {catalog.artificialAnalysisKeyConfigured
-              ? 'The saved key did not work — enter a replacement below.'
-              : 'This install has no key yet, so enter one below.'} A key entered here is saved privately after
-            authentication succeeds, and later syncs run without asking. Manage it in Settings → Credentials.
-          </p>
           <div className="space-y-1.5">
-            <label htmlFor="aa-api-key" className="text-xs font-medium text-port-text-muted">
-              Artificial Analysis API Key
+            <label htmlFor="sync-source" className="text-xs font-medium text-port-text-muted">
+              Source
             </label>
-            <input
-              id="aa-api-key"
-              type="password"
-              placeholder="aa-…"
-              aria-label="Artificial Analysis API Key"
-              className="w-full bg-port-bg text-port-text border border-port-border rounded-lg p-2.5 text-sm font-mono"
-              value={syncKey}
-              onChange={e => setSyncKey(e.target.value)}
+            <select
+              id="sync-source"
+              aria-label="Sync source"
+              className="w-full bg-port-bg text-port-text border border-port-border rounded-lg p-2.5 text-sm"
+              value={selectedSyncSource.id}
+              onChange={e => { setSyncSource(e.target.value); setSyncError(''); }}
               disabled={syncing}
-            />
+            >
+              {syncSources.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
           </div>
+          {selectedSyncSource.id === 'artificial-analysis' ? (
+            <>
+              <p className="text-xs text-port-text-muted leading-relaxed">
+                Fetch the latest benchmark evaluations, pricing, response times, and reasoning effort measurements from the
+                Artificial Analysis Free API. {catalog.artificialAnalysisKeyConfigured
+                  ? 'The saved key did not work — enter a replacement below.'
+                  : 'This install has no key yet, so enter one below.'} A key entered here is saved privately after
+                authentication succeeds, and later syncs run without asking. Manage it in Settings → Credentials.
+              </p>
+              <div className="space-y-1.5">
+                <label htmlFor="aa-api-key" className="text-xs font-medium text-port-text-muted">
+                  Artificial Analysis API Key
+                </label>
+                <input
+                  id="aa-api-key"
+                  type="password"
+                  placeholder="aa-…"
+                  aria-label="Artificial Analysis API Key"
+                  className="w-full bg-port-bg text-port-text border border-port-border rounded-lg p-2.5 text-sm font-mono"
+                  value={syncKey}
+                  onChange={e => setSyncKey(e.target.value)}
+                  disabled={syncing}
+                />
+              </div>
+            </>
+          ) : selectedSyncSource.id === 'swebench' ? (
+            <p className="text-xs text-port-text-muted leading-relaxed">
+              Fetch the SWE-bench leaderboard results — resolved-task pass@1 percentages and agent-run costs per instance,
+              grouped by agent scaffold across the Verified, Lite, Multilingual and Multimodal tracks. No key needed; the
+              leaderboard page is fetched directly and each run is kept as its own observation.
+            </p>
+          ) : (
+            <p className="text-xs text-port-text-muted leading-relaxed">
+              Fetch LiveCodeBench's published generation-split results and aggregate pass@1 per model across the full
+              date window. No key needed; picking up newly added problems starts a new window series rather than mixing
+              different ones.
+            </p>
+          )}
           {syncStatus && <p className="text-xs text-port-accent-text">{syncStatus}</p>}
           {syncError && <p role="alert" className="text-xs text-port-error">{syncError}</p>}
           <div className="flex justify-end gap-2 pt-2">
@@ -721,8 +766,8 @@ export default function ModelComparison() {
             <button
               type="button"
               className="px-4 py-1.5 text-sm bg-port-accent text-port-on-accent rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
-              onClick={handleSyncAA}
-              disabled={syncing || (!syncKey.trim() && !catalog.artificialAnalysisKeyConfigured)}
+              onClick={handleSync}
+              disabled={syncing || (selectedSyncSource.requiresKey && !syncKey.trim() && !catalog.artificialAnalysisKeyConfigured)}
             >
               {syncing ? 'Syncing…' : 'Start Sync'}
             </button>

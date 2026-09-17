@@ -10,7 +10,7 @@ vi.mock('../../services/apiModelComparison', () => ({
   getModelComparison: vi.fn(),
   importModelComparison: vi.fn(),
   discoverComparisonModels: vi.fn(),
-  syncArtificialAnalysis: vi.fn(),
+  syncBenchmarkSource: vi.fn(),
 }));
 vi.mock('../../services/apiProviders', () => ({ getProviders: vi.fn().mockResolvedValue({ providers: [{ id: 'example', name: 'Example research', models: ['example-model', 'other-model'] }] }) }));
 vi.mock('../../services/apiAgents', () => ({ getCosSchedule: vi.fn(), updateCosTaskInterval: vi.fn(), triggerCosOnDemandTask: vi.fn() }));
@@ -121,32 +121,32 @@ it('connects reasoning effort points with line and allows toggling line style an
 });
 
 it('prompts for a key when none is stored and closes the modal once the sync lands', async () => {
-  api.syncArtificialAnalysis.mockResolvedValue({ success: true, observations: 636, total: 636 });
+  api.syncBenchmarkSource.mockResolvedValue({ success: true, observations: 636, total: 636 });
 
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
   await act(async () => {});
 
-  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
   expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Start Sync' })).toBeDisabled();
 
   fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'test-key-123' } });
   fireEvent.click(screen.getByRole('button', { name: 'Start Sync' }));
 
-  await waitFor(() => expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({ apiKey: 'test-key-123' }, { silent: true }));
+  await waitFor(() => expect(api.syncBenchmarkSource).toHaveBeenCalledWith('artificial-analysis', { apiKey: 'test-key-123' }, { silent: true }));
   await waitFor(() => expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull());
 });
 
 it('syncs straight away without a key prompt when one is already configured', async () => {
   api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
-  api.syncArtificialAnalysis.mockResolvedValue({ success: true, observations: 636, total: 636 });
+  api.syncBenchmarkSource.mockResolvedValue({ success: true, observations: 636, total: 636 });
 
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
   await act(async () => {});
 
-  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
 
-  await waitFor(() => expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({}, { silent: true }));
+  await waitFor(() => expect(api.syncBenchmarkSource).toHaveBeenCalledWith('artificial-analysis', {}, { silent: true }));
   expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull();
 });
 
@@ -154,26 +154,62 @@ it('discards a typed key when the prompt is cancelled', async () => {
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
   await act(async () => {});
 
-  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
   fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'abandoned-key' } });
   fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
-  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
   expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toHaveValue('');
-  expect(api.syncArtificialAnalysis).not.toHaveBeenCalled();
+  expect(api.syncBenchmarkSource).not.toHaveBeenCalled();
 });
 
 it('falls back to the key prompt when a sync with the stored key is rejected', async () => {
   api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
-  api.syncArtificialAnalysis.mockRejectedValue(new Error('Artificial Analysis API failed (401): Unauthorized'));
+  api.syncBenchmarkSource.mockRejectedValue(new Error('Artificial Analysis API failed (401): Unauthorized'));
 
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
   await act(async () => {});
 
-  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
 
   await screen.findByText(/Artificial Analysis API failed \(401\)/);
   expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
+});
+
+it('offers the server sync sources and syncs a keyless source without a key prompt', async () => {
+  api.getModelComparison.mockResolvedValue({
+    schemaVersion: 1, observations: [observation], inventory: [],
+    syncSources: [
+      { id: 'artificial-analysis', label: 'Artificial Analysis', requiresKey: true },
+      { id: 'swebench', label: 'SWE-bench leaderboards', requiresKey: false },
+      { id: 'livecodebench', label: 'LiveCodeBench', requiresKey: false },
+    ],
+  });
+  api.syncBenchmarkSource.mockResolvedValue({ success: true, observations: 2, total: 2 });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
+  fireEvent.change(screen.getByLabelText('Sync source'), { target: { value: 'swebench' } });
+
+  // A keyless source needs no key input, and Start Sync is enabled without one.
+  expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull();
+  expect(screen.getByRole('button', { name: 'Start Sync' })).not.toBeDisabled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Start Sync' }));
+  await waitFor(() => expect(api.syncBenchmarkSource).toHaveBeenCalledWith('swebench', {}, { silent: true }));
+  await waitFor(() => expect(screen.queryByLabelText('Sync source')).toBeNull());
+});
+
+it('falls back to Artificial Analysis only when the server offers no source list', async () => {
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
+  const sourceSelect = screen.getByLabelText('Sync source');
+  expect(sourceSelect).toHaveValue('artificial-analysis');
+  expect(sourceSelect.querySelectorAll('option')).toHaveLength(1);
 });
 
 it('opens on a log cost axis and scopes the chart to the providers models', async () => {

@@ -8,6 +8,6 @@ export const discoverComparisonModels = (providerId, options) => request('/provi
   method: 'POST', body: JSON.stringify({ providerId }), ...options,
 });
 
-export const syncArtificialAnalysis = (data, options) => request('/providers/comparison/sync-aa', {
+export const syncBenchmarkSource = (source, data, options) => request(`/providers/comparison/sync/${source}`, {
   method: 'POST', body: JSON.stringify(data || {}), ...options,
 });
