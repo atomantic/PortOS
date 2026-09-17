@@ -88,48 +88,77 @@
       "name": "Claude Code CLI",
       "type": "cli",
       "command": "claude",
-      "args": ["--print"],
-      "models": ["claude-fable-5-1", "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"],
+      "args": [
+        "--print"
+      ],
+      "models": [
+        "claude-fable-5-1",
+        "claude-haiku-4-5",
+        "claude-sonnet-5",
+        "claude-opus-5"
+      ],
       "defaultModel": "claude-opus-5",
       "lightModel": "claude-haiku-4-5",
       "mediumModel": "claude-sonnet-5",
       "heavyModel": "claude-opus-5",
       "ultraModel": "claude-fable-5-1",
-      "timeout": 300000,
+      "timeout": 900000,
       "enabled": true,
       "envVars": {},
       "secretEnvVars": [],
-      "headlessArgs": ["--no-session-persistence", "--disable-slash-commands", "--tools", ""]
+      "headlessArgs": [
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--tools",
+        ""
+      ]
     },
     "claude-code-bedrock": {
       "id": "claude-code-bedrock",
       "name": "Claude Code CLI: Bedrock",
       "type": "cli",
       "command": "claude",
-      "args": ["--print"],
-      "models": ["us.anthropic.claude-haiku-4-5", "us.anthropic.claude-sonnet-5", "global.anthropic.claude-opus-5", "global.anthropic.claude-opus-5[1m]"],
+      "args": [
+        "--print"
+      ],
+      "models": [
+        "us.anthropic.claude-haiku-4-5",
+        "us.anthropic.claude-sonnet-5",
+        "global.anthropic.claude-opus-5",
+        "global.anthropic.claude-opus-5[1m]"
+      ],
       "defaultModel": "global.anthropic.claude-opus-5[1m]",
       "lightModel": "us.anthropic.claude-haiku-4-5",
       "mediumModel": "us.anthropic.claude-sonnet-5",
       "heavyModel": "global.anthropic.claude-opus-5[1m]",
-      "timeout": 300000,
+      "timeout": 900000,
       "enabled": false,
       "envVars": {
-        "CLAUDE_CODE_USE_BEDROCK": "1",
-        "AWS_BEARER_TOKEN_BEDROCK": ""
+        "AWS_BEARER_TOKEN_BEDROCK": "",
+        "CLAUDE_CODE_USE_BEDROCK": "1"
       },
-      "secretEnvVars": ["AWS_BEARER_TOKEN_BEDROCK"],
-      "headlessArgs": ["--no-session-persistence", "--disable-slash-commands", "--tools", ""]
+      "secretEnvVars": [
+        "AWS_BEARER_TOKEN_BEDROCK"
+      ],
+      "headlessArgs": [
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--tools",
+        ""
+      ]
     },
     "claude-ollama": {
       "id": "claude-ollama",
       "name": "Claude Ollama (local model)",
       "type": "cli",
       "command": "claude",
-      "args": ["--print"],
+      "args": [
+        "--print"
+      ],
+      "ollamaBacked": true,
       "models": [],
       "defaultModel": null,
-      "ollamaBacked": true,
+      "numCtx": 131072,
       "temperature": 0.6,
       "thinking": true,
       "timeout": 600000,
@@ -139,18 +168,28 @@
         "ANTHROPIC_AUTH_TOKEN": "ollama",
         "ANTHROPIC_SMALL_FAST_MODEL": "qwen2.5:7b"
       },
-      "secretEnvVars": ["ANTHROPIC_AUTH_TOKEN"],
-      "headlessArgs": ["--no-session-persistence", "--disable-slash-commands", "--tools", ""]
+      "secretEnvVars": [
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
+      "headlessArgs": [
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--tools",
+        ""
+      ]
     },
     "claude-ollama-tui": {
       "id": "claude-ollama-tui",
       "name": "Claude Ollama TUI (local model)",
       "type": "tui",
       "command": "claude",
-      "args": ["--dangerously-skip-permissions"],
+      "args": [
+        "--dangerously-skip-permissions"
+      ],
+      "ollamaBacked": true,
       "models": [],
       "defaultModel": null,
-      "ollamaBacked": true,
+      "numCtx": 131072,
       "temperature": 0.6,
       "thinking": true,
       "timeout": 600000,
@@ -160,7 +199,9 @@
         "ANTHROPIC_AUTH_TOKEN": "ollama",
         "ANTHROPIC_SMALL_FAST_MODEL": "qwen2.5:7b"
       },
-      "secretEnvVars": ["ANTHROPIC_AUTH_TOKEN"],
+      "secretEnvVars": [
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
       "tuiPromptDelayMs": 2500
     },
     "opencode-ollama": {
@@ -168,10 +209,15 @@
       "name": "OpenCode Ollama (local model)",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
+      "endpoint": "http://localhost:11434/v1",
+      "ollamaBacked": true,
       "models": [],
       "defaultModel": null,
-      "ollamaBacked": true,
+      "temperature": 0.6,
+      "thinking": true,
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -186,9 +232,12 @@
       "type": "tui",
       "command": "opencode",
       "args": [],
+      "endpoint": "http://localhost:11434/v1",
+      "ollamaBacked": true,
       "models": [],
       "defaultModel": null,
-      "ollamaBacked": true,
+      "temperature": 0.6,
+      "thinking": true,
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -202,10 +251,13 @@
       "name": "OpenCode LM Studio (local model)",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
+      "endpoint": "http://localhost:1234/v1",
+      "lmstudioBacked": true,
       "models": [],
       "defaultModel": null,
-      "lmstudioBacked": true,
       "numCtx": 32768,
       "timeout": 600000,
       "enabled": false,
@@ -221,9 +273,10 @@
       "type": "tui",
       "command": "opencode",
       "args": [],
+      "endpoint": "http://localhost:1234/v1",
+      "lmstudioBacked": true,
       "models": [],
       "defaultModel": null,
-      "lmstudioBacked": true,
       "numCtx": 32768,
       "timeout": 600000,
       "enabled": false,
@@ -238,11 +291,15 @@
       "name": "OpenCode MTPLX (local MTP)",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
       "endpoint": "http://127.0.0.1:8000/v1",
-      "models": ["mtplx-qwen38-27b-optimized-speed"],
-      "defaultModel": "mtplx-qwen38-27b-optimized-speed",
       "mtplxBacked": true,
+      "models": [
+        "mtplx-qwen38-27b-optimized-speed"
+      ],
+      "defaultModel": "mtplx-qwen38-27b-optimized-speed",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -258,9 +315,11 @@
       "command": "opencode",
       "args": [],
       "endpoint": "http://127.0.0.1:8000/v1",
-      "models": ["mtplx-qwen38-27b-optimized-speed"],
-      "defaultModel": "mtplx-qwen38-27b-optimized-speed",
       "mtplxBacked": true,
+      "models": [
+        "mtplx-qwen38-27b-optimized-speed"
+      ],
+      "defaultModel": "mtplx-qwen38-27b-optimized-speed",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -276,9 +335,13 @@
       "command": "opencode",
       "args": [],
       "endpoint": "http://127.0.0.1:5568/v1",
-      "models": ["dflash", "qwen3.8-27b-dflash2", "Muse-Glimmer-30B-DFlash2"],
-      "defaultModel": "dflash",
       "llamaBacked": true,
+      "models": [
+        "dflash",
+        "qwen3.8-27b-dflash2",
+        "Muse-Glimmer-30B-DFlash2"
+      ],
+      "defaultModel": "dflash",
       "timeout": 600000,
       "enabled": true,
       "envVars": {
@@ -293,12 +356,16 @@
       "name": "OpenCode vLLM (Qwen3.8-27B)",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
       "endpoint": "http://127.0.0.1:18020/v1",
       "apiKey": "",
-      "models": ["qwen3.8-27b"],
-      "defaultModel": "qwen3.8-27b",
       "vllmBacked": true,
+      "models": [
+        "qwen3.8-27b"
+      ],
+      "defaultModel": "qwen3.8-27b",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -315,9 +382,11 @@
       "args": [],
       "endpoint": "http://127.0.0.1:18020/v1",
       "apiKey": "",
-      "models": ["qwen3.8-27b"],
-      "defaultModel": "qwen3.8-27b",
       "vllmBacked": true,
+      "models": [
+        "qwen3.8-27b"
+      ],
+      "defaultModel": "qwen3.8-27b",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -332,12 +401,16 @@
       "name": "OpenCode SGLang (Qwen3.8-27B)",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
       "endpoint": "http://127.0.0.1:18021/v1",
       "apiKey": "",
-      "models": ["qwen3.8-27b"],
-      "defaultModel": "qwen3.8-27b",
       "sglangBacked": true,
+      "models": [
+        "qwen3.8-27b"
+      ],
+      "defaultModel": "qwen3.8-27b",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -354,9 +427,11 @@
       "args": [],
       "endpoint": "http://127.0.0.1:18021/v1",
       "apiKey": "",
-      "models": ["qwen3.8-27b"],
-      "defaultModel": "qwen3.8-27b",
       "sglangBacked": true,
+      "models": [
+        "qwen3.8-27b"
+      ],
+      "defaultModel": "qwen3.8-27b",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -371,12 +446,16 @@
       "name": "Claude SGLang (Qwen3.8-27B)",
       "type": "cli",
       "command": "claude",
-      "args": ["--print"],
+      "args": [
+        "--print"
+      ],
       "endpoint": "http://127.0.0.1:18021/v1",
       "apiKey": "",
-      "models": ["qwen3.8-27b"],
-      "defaultModel": "qwen3.8-27b",
       "sglangBacked": true,
+      "models": [
+        "qwen3.8-27b"
+      ],
+      "defaultModel": "qwen3.8-27b",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -390,20 +469,31 @@
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-27b",
         "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.8-27b"
       },
-      "secretEnvVars": ["ANTHROPIC_AUTH_TOKEN"],
-      "headlessArgs": ["--no-session-persistence", "--disable-slash-commands", "--tools", ""]
+      "secretEnvVars": [
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
+      "headlessArgs": [
+        "--no-session-persistence",
+        "--disable-slash-commands",
+        "--tools",
+        ""
+      ]
     },
     "claude-sglang-tui": {
       "id": "claude-sglang-tui",
       "name": "Claude SGLang TUI (Qwen3.8-27B)",
       "type": "tui",
       "command": "claude",
-      "args": ["--dangerously-skip-permissions"],
+      "args": [
+        "--dangerously-skip-permissions"
+      ],
       "endpoint": "http://127.0.0.1:18021/v1",
       "apiKey": "",
-      "models": ["qwen3.8-27b"],
-      "defaultModel": "qwen3.8-27b",
       "sglangBacked": true,
+      "models": [
+        "qwen3.8-27b"
+      ],
+      "defaultModel": "qwen3.8-27b",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -417,7 +507,9 @@
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-27b",
         "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.8-27b"
       },
-      "secretEnvVars": ["ANTHROPIC_AUTH_TOKEN"],
+      "secretEnvVars": [
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
       "tuiPromptDelayMs": 2500,
       "tuiIdleTimeoutMs": 180000
     },
@@ -427,7 +519,9 @@
       "type": "api",
       "endpoint": "https://api.orcarouter.ai/v1",
       "apiKey": "",
-      "models": ["orcarouter/auto"],
+      "models": [
+        "orcarouter/auto"
+      ],
       "defaultModel": "orcarouter/auto",
       "lightModel": "orcarouter/auto",
       "mediumModel": "orcarouter/auto",
@@ -442,11 +536,15 @@
       "name": "OpenCode OrcaRouter",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
       "endpoint": "https://api.orcarouter.ai/v1",
-      "models": ["orcarouter/auto"],
-      "defaultModel": "orcarouter/auto",
       "orcarouterBacked": true,
+      "models": [
+        "orcarouter/auto"
+      ],
+      "defaultModel": "orcarouter/auto",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -461,7 +559,10 @@
       "type": "api",
       "endpoint": "https://openrouter.ai/api/v1",
       "apiKey": "",
-      "models": ["openrouter/auto", "stealth/ox-alpha"],
+      "models": [
+        "openrouter/auto",
+        "stealth/ox-alpha"
+      ],
       "defaultModel": "stealth/ox-alpha",
       "lightModel": "openrouter/auto",
       "mediumModel": "stealth/ox-alpha",
@@ -476,11 +577,16 @@
       "name": "OpenCode OpenRouter",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
       "endpoint": "https://openrouter.ai/api/v1",
-      "models": ["openrouter/auto", "stealth/ox-alpha"],
-      "defaultModel": "stealth/ox-alpha",
       "gatewayBacked": "openrouter",
+      "models": [
+        "openrouter/auto",
+        "stealth/ox-alpha"
+      ],
+      "defaultModel": "stealth/ox-alpha",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -496,9 +602,12 @@
       "command": "opencode",
       "args": [],
       "endpoint": "https://openrouter.ai/api/v1",
-      "models": ["openrouter/auto", "stealth/ox-alpha"],
-      "defaultModel": "stealth/ox-alpha",
       "gatewayBacked": "openrouter",
+      "models": [
+        "openrouter/auto",
+        "stealth/ox-alpha"
+      ],
+      "defaultModel": "stealth/ox-alpha",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -514,7 +623,10 @@
       "type": "api",
       "endpoint": "https://integrate.api.nvidia.com/v1",
       "apiKey": "",
-      "models": ["google/gemma-4-31b-it", "poolside/laguna-xs-2.1"],
+      "models": [
+        "google/gemma-4-31b-it",
+        "poolside/laguna-xs-2.1"
+      ],
       "defaultModel": "poolside/laguna-xs-2.1",
       "lightModel": "google/gemma-4-31b-it",
       "mediumModel": "poolside/laguna-xs-2.1",
@@ -529,11 +641,16 @@
       "name": "OpenCode NVIDIA NIM",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
+      "args": [
+        "run"
+      ],
       "endpoint": "https://integrate.api.nvidia.com/v1",
-      "models": ["google/gemma-4-31b-it", "poolside/laguna-xs-2.1"],
-      "defaultModel": "poolside/laguna-xs-2.1",
       "gatewayBacked": "nvidia-nim",
+      "models": [
+        "google/gemma-4-31b-it",
+        "poolside/laguna-xs-2.1"
+      ],
+      "defaultModel": "poolside/laguna-xs-2.1",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -549,9 +666,12 @@
       "command": "opencode",
       "args": [],
       "endpoint": "https://integrate.api.nvidia.com/v1",
-      "models": ["google/gemma-4-31b-it", "poolside/laguna-xs-2.1"],
-      "defaultModel": "poolside/laguna-xs-2.1",
       "gatewayBacked": "nvidia-nim",
+      "models": [
+        "google/gemma-4-31b-it",
+        "poolside/laguna-xs-2.1"
+      ],
+      "defaultModel": "poolside/laguna-xs-2.1",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -568,9 +688,11 @@
       "command": "opencode",
       "args": [],
       "endpoint": "https://api.orcarouter.ai/v1",
-      "models": ["orcarouter/auto"],
-      "defaultModel": "orcarouter/auto",
       "orcarouterBacked": true,
+      "models": [
+        "orcarouter/auto"
+      ],
+      "defaultModel": "orcarouter/auto",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -586,7 +708,18 @@
       "type": "api",
       "endpoint": "https://opencode.ai/zen/v1",
       "apiKey": "",
-      "models": ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5", "gpt-5.6-sol", "gpt-5.5", "grok-4.6", "kimi-k3", "qwen3.6-plus", "big-pickle", "deepseek-v4-flash-free"],
+      "models": [
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+        "gpt-5.6-sol",
+        "gpt-5.5",
+        "grok-4.6",
+        "kimi-k3",
+        "qwen3.6-plus",
+        "big-pickle",
+        "deepseek-v4-flash-free"
+      ],
       "defaultModel": "claude-sonnet-5",
       "lightModel": "claude-haiku-4-5",
       "mediumModel": "claude-sonnet-5",
@@ -601,15 +734,28 @@
       "name": "OpenCode Zen CLI",
       "type": "cli",
       "command": "opencode",
-      "args": ["run"],
-      "models": ["opencode/big-pickle", "opencode/ling-3.0-flash-fin-free", "opencode/mimo-v2.5-free", "opencode/muse-spark-1.2-contributor-free", "opencode/muse-spark-1.3-contributor-free", "opencode/nemotron-3-ultra-free", "opencode/nemotron-3.5-lightning-free"],
+      "args": [
+        "run"
+      ],
+      "endpoint": "https://opencode.ai/zen/v1",
+      "models": [
+        "opencode/big-pickle",
+        "opencode/ling-3.0-flash-fin-free",
+        "opencode/mimo-v2.5-free",
+        "opencode/muse-spark-1.2-contributor-free",
+        "opencode/muse-spark-1.3-contributor-free",
+        "opencode/nemotron-3-ultra-free",
+        "opencode/nemotron-3.5-lightning-free"
+      ],
       "defaultModel": "opencode/big-pickle",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
         "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\"}"
       },
-      "secretEnvVars": ["OPENCODE_API_KEY"],
+      "secretEnvVars": [
+        "OPENCODE_API_KEY"
+      ],
       "headlessArgs": []
     },
     "opencode-zen-tui": {
@@ -618,14 +764,25 @@
       "type": "tui",
       "command": "opencode",
       "args": [],
-      "models": ["opencode/big-pickle", "opencode/ling-3.0-flash-fin-free", "opencode/mimo-v2.5-free", "opencode/muse-spark-1.2-contributor-free", "opencode/muse-spark-1.3-contributor-free", "opencode/nemotron-3-ultra-free", "opencode/nemotron-3.5-lightning-free"],
+      "endpoint": "https://opencode.ai/zen/v1",
+      "models": [
+        "opencode/big-pickle",
+        "opencode/ling-3.0-flash-fin-free",
+        "opencode/mimo-v2.5-free",
+        "opencode/muse-spark-1.2-contributor-free",
+        "opencode/muse-spark-1.3-contributor-free",
+        "opencode/nemotron-3-ultra-free",
+        "opencode/nemotron-3.5-lightning-free"
+      ],
       "defaultModel": "opencode/big-pickle",
       "timeout": 600000,
       "enabled": false,
       "envVars": {
         "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\"}"
       },
-      "secretEnvVars": ["OPENCODE_API_KEY"],
+      "secretEnvVars": [
+        "OPENCODE_API_KEY"
+      ],
       "tuiPromptDelayMs": 2500,
       "tuiIdleTimeoutMs": 180000
     },
@@ -635,17 +792,26 @@
       "type": "cli",
       "command": "codex",
       "args": [],
-      "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
+      "models": [
+        "gpt-6-astra",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex-spark"
+      ],
       "defaultModel": "gpt-5.6-terra",
       "lightModel": "gpt-5.6-luna",
       "mediumModel": "gpt-5.6-terra",
       "heavyModel": "gpt-5.6-sol",
       "ultraModel": "gpt-6-astra",
       "contextWindow": 1000000,
-      "timeout": 300000,
-      "enabled": true,
       "textTransport": "codex-app-server",
       "ignoreUserConfig": false,
+      "timeout": 300000,
+      "enabled": true,
       "envVars": {},
       "secretEnvVars": []
     },
@@ -654,18 +820,29 @@
       "name": "Codex TUI",
       "type": "tui",
       "command": "codex",
-      "args": ["--dangerously-bypass-approvals-and-sandbox"],
-      "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
+      "args": [
+        "--dangerously-bypass-approvals-and-sandbox"
+      ],
+      "models": [
+        "gpt-6-astra",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex-spark"
+      ],
       "defaultModel": "gpt-5.6-terra",
       "lightModel": "gpt-5.6-luna",
       "mediumModel": "gpt-5.6-terra",
       "heavyModel": "gpt-5.6-sol",
       "ultraModel": "gpt-6-astra",
       "contextWindow": 1000000,
-      "timeout": 600000,
-      "enabled": false,
       "textTransport": "codex-app-server",
       "ignoreUserConfig": false,
+      "timeout": 600000,
+      "enabled": false,
       "envVars": {},
       "secretEnvVars": [],
       "tuiPromptDelayMs": 2500
@@ -677,9 +854,9 @@
       "command": "codex",
       "args": [],
       "endpoint": "http://localhost:11434",
+      "ollamaBacked": true,
       "models": [],
       "defaultModel": null,
-      "ollamaBacked": true,
       "numCtx": 131072,
       "timeout": 600000,
       "enabled": false,
@@ -694,9 +871,9 @@
       "command": "codex",
       "args": [],
       "endpoint": "http://localhost:1234/v1",
+      "lmstudioBacked": true,
       "models": [],
       "defaultModel": null,
-      "lmstudioBacked": true,
       "numCtx": 32768,
       "timeout": 600000,
       "enabled": false,
@@ -709,14 +886,21 @@
       "name": "Claude Code TUI",
       "type": "tui",
       "command": "claude",
-      "args": ["--dangerously-skip-permissions"],
-      "models": ["claude-fable-5-1", "claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"],
+      "args": [
+        "--dangerously-skip-permissions"
+      ],
+      "models": [
+        "claude-fable-5-1",
+        "claude-haiku-4-5",
+        "claude-sonnet-5",
+        "claude-opus-5"
+      ],
       "defaultModel": "claude-opus-5",
       "lightModel": "claude-haiku-4-5",
       "mediumModel": "claude-sonnet-5",
       "heavyModel": "claude-opus-5",
       "ultraModel": "claude-fable-5-1",
-      "timeout": 600000,
+      "timeout": 900000,
       "enabled": true,
       "envVars": {},
       "secretEnvVars": [],
@@ -727,16 +911,28 @@
       "name": "Claude Code TUI: Bedrock",
       "type": "tui",
       "command": "claude",
-      "args": ["--dangerously-skip-permissions"],
-      "models": ["us.anthropic.claude-haiku-4-5", "us.anthropic.claude-sonnet-5", "global.anthropic.claude-opus-5", "global.anthropic.claude-opus-5[1m]"],
+      "args": [
+        "--dangerously-skip-permissions"
+      ],
+      "models": [
+        "us.anthropic.claude-haiku-4-5",
+        "us.anthropic.claude-sonnet-5",
+        "global.anthropic.claude-opus-5",
+        "global.anthropic.claude-opus-5[1m]"
+      ],
       "defaultModel": "global.anthropic.claude-opus-5[1m]",
       "lightModel": "us.anthropic.claude-haiku-4-5",
       "mediumModel": "us.anthropic.claude-sonnet-5",
       "heavyModel": "global.anthropic.claude-opus-5[1m]",
-      "timeout": 600000,
+      "timeout": 900000,
       "enabled": false,
-      "envVars": { "CLAUDE_CODE_USE_BEDROCK": "1", "AWS_BEARER_TOKEN_BEDROCK": "" },
-      "secretEnvVars": ["AWS_BEARER_TOKEN_BEDROCK"],
+      "envVars": {
+        "AWS_BEARER_TOKEN_BEDROCK": "",
+        "CLAUDE_CODE_USE_BEDROCK": "1"
+      },
+      "secretEnvVars": [
+        "AWS_BEARER_TOKEN_BEDROCK"
+      ],
       "tuiPromptDelayMs": 2500
     },
     "antigravity-tui": {
@@ -744,8 +940,26 @@
       "name": "Antigravity TUI",
       "type": "tui",
       "command": "agy",
-      "args": ["--dangerously-skip-permissions"],
-      "models": ["antigravity-configured-default","gemini-3.8-flash-high","gemini-3.8-flash-medium","gemini-3.8-flash-low","gemini-3.7-flash-high","gemini-3.7-flash-medium","gemini-3.7-flash-low","gemini-3.6-flash-high","gemini-3.6-flash-medium","gemini-3.6-flash-low","gemini-3.1-pro-high","gemini-3.1-pro-low","claude-sonnet-4-6","claude-opus-4-6-thinking","gpt-oss-120b-medium"],
+      "args": [
+        "--dangerously-skip-permissions"
+      ],
+      "models": [
+        "antigravity-configured-default",
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low",
+        "gemini-3.7-flash-high",
+        "gemini-3.7-flash-medium",
+        "gemini-3.7-flash-low",
+        "gemini-3.6-flash-high",
+        "gemini-3.6-flash-medium",
+        "gemini-3.6-flash-low",
+        "gemini-3.1-pro-high",
+        "gemini-3.1-pro-low",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6-thinking",
+        "gpt-oss-120b-medium"
+      ],
       "defaultModel": "antigravity-configured-default",
       "lightModel": "antigravity-configured-default",
       "mediumModel": "antigravity-configured-default",
@@ -762,8 +976,27 @@
       "name": "Antigravity CLI",
       "type": "cli",
       "command": "agy",
-      "args": ["--print", "--dangerously-skip-permissions"],
-      "models": ["antigravity-configured-default","gemini-3.8-flash-high","gemini-3.8-flash-medium","gemini-3.8-flash-low","gemini-3.7-flash-high","gemini-3.7-flash-medium","gemini-3.7-flash-low","gemini-3.6-flash-high","gemini-3.6-flash-medium","gemini-3.6-flash-low","gemini-3.1-pro-high","gemini-3.1-pro-low","claude-sonnet-4-6","claude-opus-4-6-thinking","gpt-oss-120b-medium"],
+      "args": [
+        "--print",
+        "--dangerously-skip-permissions"
+      ],
+      "models": [
+        "antigravity-configured-default",
+        "gemini-3.8-flash-high",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-low",
+        "gemini-3.7-flash-high",
+        "gemini-3.7-flash-medium",
+        "gemini-3.7-flash-low",
+        "gemini-3.6-flash-high",
+        "gemini-3.6-flash-medium",
+        "gemini-3.6-flash-low",
+        "gemini-3.1-pro-high",
+        "gemini-3.1-pro-low",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6-thinking",
+        "gpt-oss-120b-medium"
+      ],
       "defaultModel": "antigravity-configured-default",
       "lightModel": "antigravity-configured-default",
       "mediumModel": "antigravity-configured-default",
@@ -780,7 +1013,11 @@
       "type": "api",
       "endpoint": "https://integrate.api.nvidia.com/v1",
       "apiKey": "",
-      "models": ["moonshotai/kimi-k2.5", "moonshotai/kimi-k2-instruct", "moonshotai/kimi-k2-thinking"],
+      "models": [
+        "moonshotai/kimi-k2.5",
+        "moonshotai/kimi-k2-instruct",
+        "moonshotai/kimi-k2-thinking"
+      ],
       "defaultModel": "moonshotai/kimi-k2.5",
       "lightModel": "moonshotai/kimi-k2-instruct",
       "mediumModel": "moonshotai/kimi-k2.5",
@@ -797,7 +1034,9 @@
       "type": "api",
       "endpoint": "https://api.cerebras.ai/v1",
       "apiKey": "",
-      "models": ["gpt-oss-120b"],
+      "models": [
+        "gpt-oss-120b"
+      ],
       "defaultModel": "gpt-oss-120b",
       "lightModel": "gpt-oss-120b",
       "mediumModel": "gpt-oss-120b",
@@ -827,10 +1066,10 @@
       "type": "api",
       "endpoint": "http://localhost:11434/v1",
       "apiKey": "",
-      "temperature": 0.6,
-      "thinking": true,
       "models": [],
       "defaultModel": null,
+      "temperature": 0.6,
+      "thinking": true,
       "timeout": 300000,
       "enabled": false,
       "envVars": {},
@@ -842,7 +1081,9 @@
       "type": "api",
       "endpoint": "http://127.0.0.1:8000/v1",
       "apiKey": "",
-      "models": ["mtplx-qwen38-27b-optimized-speed"],
+      "models": [
+        "mtplx-qwen38-27b-optimized-speed"
+      ],
       "defaultModel": "mtplx-qwen38-27b-optimized-speed",
       "timeout": 300000,
       "enabled": false,
@@ -855,7 +1096,11 @@
       "type": "api",
       "endpoint": "http://127.0.0.1:5564/v1",
       "apiKey": "",
-      "models": ["qwen3-235b-a22b-4bit", "gpt-oss-120b-mxfp4", "qwen3-30b-a3b-4bit"],
+      "models": [
+        "qwen3-235b-a22b-4bit",
+        "gpt-oss-120b-mxfp4",
+        "qwen3-30b-a3b-4bit"
+      ],
       "defaultModel": "qwen3-235b-a22b-4bit",
       "timeout": 300000,
       "enabled": false,
@@ -868,7 +1113,12 @@
       "type": "api",
       "endpoint": "https://api.x.ai/v1",
       "apiKey": "",
-      "models": ["grok-4", "grok-3", "grok-3-mini", "grok-code-fast-1"],
+      "models": [
+        "grok-4",
+        "grok-3",
+        "grok-3-mini",
+        "grok-code-fast-1"
+      ],
       "defaultModel": "grok-4",
       "lightModel": "grok-3-mini",
       "mediumModel": "grok-3",
@@ -885,7 +1135,9 @@
       "type": "cli",
       "command": "grok",
       "args": [],
-      "models": ["grok-4.6"],
+      "models": [
+        "grok-4.6"
+      ],
       "defaultModel": "grok-4.6",
       "lightModel": "grok-4.6",
       "mediumModel": "grok-4.6",
@@ -902,7 +1154,9 @@
       "type": "tui",
       "command": "grok",
       "args": [],
-      "models": ["grok-4.6"],
+      "models": [
+        "grok-4.6"
+      ],
       "defaultModel": "grok-4.6",
       "lightModel": "grok-4.6",
       "mediumModel": "grok-4.6",
@@ -920,7 +1174,9 @@
       "type": "cli",
       "command": "kimi",
       "args": [],
-      "models": ["kimi-configured-default"],
+      "models": [
+        "kimi-configured-default"
+      ],
       "defaultModel": "kimi-configured-default",
       "lightModel": "kimi-configured-default",
       "mediumModel": "kimi-configured-default",
@@ -936,8 +1192,12 @@
       "name": "Kimi Code TUI",
       "type": "tui",
       "command": "kimi",
-      "args": ["--yolo"],
-      "models": ["kimi-configured-default"],
+      "args": [
+        "--yolo"
+      ],
+      "models": [
+        "kimi-configured-default"
+      ],
       "defaultModel": "kimi-configured-default",
       "lightModel": "kimi-configured-default",
       "mediumModel": "kimi-configured-default",
@@ -954,8 +1214,39 @@
       "name": "Cursor Agent CLI",
       "type": "cli",
       "command": "cursor-agent",
-      "args": ["--print", "--force"],
-      "models": ["auto", "composer-2.5", "claude-opus-5-high", "claude-opus-5-thinking-high", "claude-opus-5-thinking-xhigh", "claude-opus-5-thinking-max", "claude-sonnet-5-high", "claude-sonnet-5-thinking-high", "claude-sonnet-5-thinking-xhigh", "claude-fable-5-high", "claude-fable-5-thinking-high", "claude-opus-4-8-high", "claude-opus-4-8-thinking-high", "claude-4.6-sonnet-medium", "gpt-5.6-sol-high", "gpt-5.6-sol-xhigh", "gpt-5.6-luna-high", "gpt-5.6-terra-high", "gpt-5.5-high", "gpt-5.4-high", "gpt-5.4-mini-high", "gpt-5.3-codex", "gpt-5.3-codex-high", "gpt-5.3-codex-xhigh", "gpt-5.2-high", "gemini-3.1-pro", "gemini-3.5-flash"],
+      "args": [
+        "--print",
+        "--force"
+      ],
+      "models": [
+        "auto",
+        "composer-2.5",
+        "claude-opus-5-high",
+        "claude-opus-5-thinking-high",
+        "claude-opus-5-thinking-xhigh",
+        "claude-opus-5-thinking-max",
+        "claude-sonnet-5-high",
+        "claude-sonnet-5-thinking-high",
+        "claude-sonnet-5-thinking-xhigh",
+        "claude-fable-5-high",
+        "claude-fable-5-thinking-high",
+        "claude-opus-4-8-high",
+        "claude-opus-4-8-thinking-high",
+        "claude-4.6-sonnet-medium",
+        "gpt-5.6-sol-high",
+        "gpt-5.6-sol-xhigh",
+        "gpt-5.6-luna-high",
+        "gpt-5.6-terra-high",
+        "gpt-5.5-high",
+        "gpt-5.4-high",
+        "gpt-5.4-mini-high",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-high",
+        "gpt-5.3-codex-xhigh",
+        "gpt-5.2-high",
+        "gemini-3.1-pro",
+        "gemini-3.5-flash"
+      ],
       "defaultModel": "auto",
       "lightModel": "composer-2.5",
       "mediumModel": "claude-sonnet-5-thinking-high",
@@ -970,8 +1261,38 @@
       "name": "Cursor Agent TUI",
       "type": "tui",
       "command": "cursor-agent",
-      "args": ["--force"],
-      "models": ["auto", "composer-2.5", "claude-opus-5-high", "claude-opus-5-thinking-high", "claude-opus-5-thinking-xhigh", "claude-opus-5-thinking-max", "claude-sonnet-5-high", "claude-sonnet-5-thinking-high", "claude-sonnet-5-thinking-xhigh", "claude-fable-5-high", "claude-fable-5-thinking-high", "claude-opus-4-8-high", "claude-opus-4-8-thinking-high", "claude-4.6-sonnet-medium", "gpt-5.6-sol-high", "gpt-5.6-sol-xhigh", "gpt-5.6-luna-high", "gpt-5.6-terra-high", "gpt-5.5-high", "gpt-5.4-high", "gpt-5.4-mini-high", "gpt-5.3-codex", "gpt-5.3-codex-high", "gpt-5.3-codex-xhigh", "gpt-5.2-high", "gemini-3.1-pro", "gemini-3.5-flash"],
+      "args": [
+        "--force"
+      ],
+      "models": [
+        "auto",
+        "composer-2.5",
+        "claude-opus-5-high",
+        "claude-opus-5-thinking-high",
+        "claude-opus-5-thinking-xhigh",
+        "claude-opus-5-thinking-max",
+        "claude-sonnet-5-high",
+        "claude-sonnet-5-thinking-high",
+        "claude-sonnet-5-thinking-xhigh",
+        "claude-fable-5-high",
+        "claude-fable-5-thinking-high",
+        "claude-opus-4-8-high",
+        "claude-opus-4-8-thinking-high",
+        "claude-4.6-sonnet-medium",
+        "gpt-5.6-sol-high",
+        "gpt-5.6-sol-xhigh",
+        "gpt-5.6-luna-high",
+        "gpt-5.6-terra-high",
+        "gpt-5.5-high",
+        "gpt-5.4-high",
+        "gpt-5.4-mini-high",
+        "gpt-5.3-codex",
+        "gpt-5.3-codex-high",
+        "gpt-5.3-codex-xhigh",
+        "gpt-5.2-high",
+        "gemini-3.1-pro",
+        "gemini-3.5-flash"
+      ],
       "defaultModel": "auto",
       "lightModel": "composer-2.5",
       "mediumModel": "claude-sonnet-5-thinking-high",
