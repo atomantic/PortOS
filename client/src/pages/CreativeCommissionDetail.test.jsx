@@ -261,12 +261,11 @@ describe('CreativeCommissionDetail live render refresh (#4149)', () => {
       fireEvent.click(screen.getByRole('button', { name: /Run commission .* now/i }));
     });
 
+    // Only the WIRING is under test here — that the page hands the server's
+    // response to toastRunOutcome instead of branching on status itself.
+    // runOutcomeToast.test.jsx owns what the warning toast renders.
     await waitFor(() => expect(toast).toHaveBeenCalled());
     expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining('appears below'));
-    const [content] = toast.mock.calls[0];
-    render(<MemoryRouter>{content({ id: 't1' })}</MemoryRouter>);
-    expect(screen.getByRole('link', { name: /open the project/i }))
-      .toHaveAttribute('href', '/creative-director/cd-orphan');
   });
 });
 

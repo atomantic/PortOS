@@ -25,9 +25,8 @@ const WARNING_DURATION_MS = 12000;
 
 const WARNING_LABEL = 'Run history not saved';
 
-/** The primary outcome line — the same information the plain toasts carry. */
-function outcomeSummary(result, startedMessage) {
-  if (result?.status === 'started') return startedMessage;
+/** The failure line for a non-started outcome — what the plain toasts carried. */
+function failureSummary(result) {
   if (result?.status === 'skipped') return `Run skipped: ${result.reason}`;
   return `Run failed: ${result?.error || 'unknown error'}`;
 }
@@ -74,11 +73,11 @@ export function toastRunOutcome(result, startedMessage) {
   const warning = result?.historyWarning;
   if (!warning) {
     if (result?.status === 'started') toast.success(startedMessage);
-    else toast.error(outcomeSummary(result, startedMessage));
+    else toast.error(failureSummary(result));
     return;
   }
   // The reason a skip/fail happened is not what the ledger lost — keep it.
-  if (result?.status !== 'started') toast.error(outcomeSummary(result, startedMessage));
+  if (result?.status !== 'started') toast.error(failureSummary(result));
   toast((t) => (
     <HistoryWarningToast
       t={t}

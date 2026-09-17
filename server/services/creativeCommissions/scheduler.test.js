@@ -41,7 +41,11 @@ vi.mock('./store.js', () => ({
 // Surfacing (notification + brain inbox) is mocked so the fire handler stays
 // hermetic — the real surface.js lazy-imports notifications/brainStorage.
 const surfaceMock = vi.fn(async () => {});
-vi.mock('./surface.js', () => ({ surfaceCommissionRun: (...a) => surfaceMock(...a) }));
+const surfaceLossMock = vi.fn(async () => {});
+vi.mock('./surface.js', () => ({
+  surfaceCommissionRun: (...a) => surfaceMock(...a),
+  surfaceCommissionHistoryLoss: (...a) => surfaceLossMock(...a),
+}));
 
 // CD graph + autonomy/budget mocks (dynamic-imported inside the fire handler).
 const createProjectMock = vi.fn(async () => ({ id: 'cd-xyz' }));
@@ -586,12 +590,6 @@ describe('run-history write failures are observable (#7529)', () => {
     expect(outcome.historyWarning).toBeUndefined();
   });
 
-  it('omits the warning entirely on a clean fire', async () => {
-    recordRunMock.mockResolvedValueOnce({ id: 'run-1', status: 'started' });
-    const outcome = await runCommissionNow('commission-1');
-    expect(outcome.historyWarning).toBeUndefined();
-  });
-
   it('emits a scheduled diagnostic naming trigger and local ids, never the prompt or the raw driver message', async () => {
     recordRunMock.mockRejectedValueOnce(Object.assign(new Error('relation "commissions" does not exist'), { code: '42P01' }));
     await runScheduledCommission('commission-1');
@@ -637,5 +635,51 @@ describe('run-history write failures are observable (#7529)', () => {
     const outcome = await runCommissionNow('commission-1');
     expect(outcome).toMatchObject({ status: 'failed', error: 'taste-run-persistence-unavailable' });
     expect(advanceMock).not.toHaveBeenCalled();
+  });
+});
+
+// The scheduled trigger is the case #7529 is really about, and it has no HTTP
+// response to carry `historyWarning` home in. Its signal has to be the persisted
+// notification, not a console line nobody reads at 02:00.
+describe('a lost run-history write reaches an unattended user (#7529)', () => {
+  let consoleErrorSpy;
+  beforeEach(() => {
+    getCommissionMock.mockResolvedValue(videoCommission());
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => { consoleErrorSpy.mockRestore(); });
+
+  it('notifies on a SCHEDULED fire whose started row was lost, linking the project that is still running', async () => {
+    recordRunMock.mockRejectedValueOnce(Object.assign(new Error('write timeout'), { code: 'ETIMEDOUT' }));
+    await runScheduledCommission('commission-1');
+    expect(surfaceLossMock).toHaveBeenCalledTimes(1);
+    const [commission, warning] = surfaceLossMock.mock.calls[0];
+    expect(commission.id).toBe('commission-1');
+    expect(warning).toMatchObject({
+      code: HISTORY_UNAVAILABLE, outcome: 'started', trigger: 'schedule', projectId: 'cd-xyz',
+    });
+    // The normal fired-run notification is gated on a real run and cannot fire here.
+    expect(surfaceMock).not.toHaveBeenCalled();
+  });
+
+  it('notifies when the PRE-FIRE failure row is also lost, and still propagates the original read error', async () => {
+    const readErr = Object.assign(new Error('storage timeout'), { code: 'ETIMEDOUT' });
+    getCommissionMock.mockRejectedValue(readErr);
+    recordRunMock.mockRejectedValueOnce(new Error('ledger write timeout'));
+
+    await expect(runScheduledCommission('commission-1')).rejects.toBe(readErr);
+
+    expect(consoleErrorSpy.mock.calls.some(([line]) => line.includes('pre-fire read failed AND its failure could not be recorded'))).toBe(true);
+    // The record was unreadable, so only its id is available to name it by.
+    expect(surfaceLossMock).toHaveBeenCalledWith({ id: 'commission-1' }, expect.objectContaining({
+      code: HISTORY_UNAVAILABLE, outcome: 'failed', trigger: 'schedule',
+    }));
+  });
+
+  it('raises no history notification when the write succeeded', async () => {
+    recordRunMock.mockResolvedValueOnce({ id: 'run-1', status: 'started', projectId: 'cd-xyz' });
+    await runScheduledCommission('commission-1');
+    expect(surfaceLossMock).not.toHaveBeenCalled();
+    expect(surfaceMock).toHaveBeenCalledTimes(1);
   });
 });
