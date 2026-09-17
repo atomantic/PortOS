@@ -486,7 +486,7 @@ describe('MediaJobsQueue — training rows', () => {
 // tab. This is the gated (`enabled`) half of the migration; MemoryManagement
 // covers the unconditional half.
 describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('pauses the checkpoint poll while the tab is hidden and re-fires on return', async () => {
@@ -494,7 +494,41 @@ describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
     listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
 
     render(<MediaJobsQueue kind="training" />);
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    /*
+     * Settle the mount on an OBSERVABLE state before taking the baseline call
+     * counts below.
+     *
+     * The tick-counting form this replaced — `advanceTimersByTimeAsync(0)`
+     * inside one `act` flush — settles a FIXED number of microtask turns, not
+     * "the mount fetches finished". A mount chain needing one more turn on a
+     * loaded machine is measured mid-flight, and the counts race BOTH ways
+     * (#7592/#7448): the checkpoint assertion goes red, and
+     * `listMediaJobs.mock.calls.length` is a baseline taken before the list had
+     * loaded — so "the count did not move" then passes for the wrong reason,
+     * because nothing had loaded to move it.
+     *
+     * `TrainingJobDetail` renders this copy only once `listLoraTrainingCheckpoints`
+     * has RESOLVED (`checkpoints` leaves its `null` loading sentinel), and it
+     * only renders at all once the job list has landed and produced the row —
+     * so it is the end of both mount chains.
+     *
+     * The fake clock stays armed across the mount, unlike BeeperTab's
+     * settle-then-arm order (#7592): BOTH polls under test here are
+     * `setInterval`s registered during mount, so a real-timer mount would leave
+     * them on the real clock where `advanceTimersByTimeAsync` cannot reach them
+     * — and both "did not fire while hidden" assertions would pass vacuously
+     * again, for a new reason.
+     *
+     * `shouldAdvanceTime` is what makes the barrier possible under that armed
+     * clock, and is NOT optional here. @testing-library/dom@10's
+     * `jestFakeTimersAreEnabled` only recognizes JEST's fake timers, so with
+     * vitest's installed `waitFor` takes its REAL-timer path and then waits on
+     * a timer the fake clock owns: against a frozen clock it never polls again
+     * and the test burns its whole timeout. Auto-advancing in step with real
+     * time keeps that poll alive at the cost of a few ms of fake clock — three
+     * orders below the 5s poll interval these assertions measure.
+     */
+    await screen.findByText(/No checkpoints yet/);
     expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
     const jobListCalls = listMediaJobs.mock.calls.length;
 

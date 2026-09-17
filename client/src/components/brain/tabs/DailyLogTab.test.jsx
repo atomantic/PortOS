@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { __resetVisibilityEventForTests } from '../../../hooks/useVisibilityEvent';
+import { awaitPageLoaded } from '../../../test/pageLoadBarrier';
 
 // ── Mock toast ────────────────────────────────────────────────────────────────
 const mockToast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
@@ -62,11 +63,36 @@ const entryFor = (date, content) => ({
 
 let store;
 
+/*
+ * Mount, settle, and only then hand the test a running fake clock.
+ *
+ * The tick-counting form this replaced — `advanceTimersByTimeAsync(0)` inside
+ * one `act` flush — settles a FIXED number of microtask turns, not "the mount
+ * fetches finished". A mount chain needing one more turn on a loaded machine is
+ * measured mid-flight (#7592, the #7448 wrong-barrier shape), and every test in
+ * this file inherited that from the shared helper.
+ *
+ * `awaitPageLoaded` is two-sided on purpose: the spinner must be on screen when
+ * the wait starts, so a renamed label fails loudly instead of degrading to a
+ * no-op that lets the whole file run against the loading state. 'Loading' is
+ * the `text` this tab hands its `BrailleSpinner`, which is also the spinner's
+ * accessible name; it is replaced by the editor once `getDailyLog` resolves.
+ *
+ * Fake timers are armed AFTER that, not in `beforeEach`, because the barrier
+ * cannot run under them: @testing-library/dom@10's `jestFakeTimersAreEnabled`
+ * only recognizes JEST's, so with vitest's installed it takes its REAL-timer
+ * path and then waits on a `setTimeout`/`setInterval` the frozen fake clock
+ * owns — `waitFor` never polls again and the test burns its whole timeout.
+ * Only `Date` is faked up front, because the open day derives from the system
+ * clock; every autosave debounce is armed by a keystroke, which is always
+ * after this point, so no timer under test is left on the real clock.
+ */
 const renderTab = async (initialEntries = ['/']) => {
   // Router context is required: the open day derives from the ?date= param.
   const result = render(<MemoryRouter initialEntries={initialEntries}><DailyLogTab /></MemoryRouter>);
-  // Flush the mount fetches (entry + server-today + history + settings).
-  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  await awaitPageLoaded('Loading');
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(`${TODAY}T12:00:00`));
   return result;
 };
 
@@ -76,7 +102,8 @@ const editor = () => document.querySelector('textarea');
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.useFakeTimers();
+  // Date only until the mount has settled — see renderTab.
+  vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(`${TODAY}T12:00:00`));
   store = { [TODAY]: entryFor(TODAY, 'existing'), [YESTERDAY]: entryFor(YESTERDAY, 'old day') };
 
