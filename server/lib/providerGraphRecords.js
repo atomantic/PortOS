@@ -6,7 +6,7 @@ import {
   PROVIDER_GRAPH_SCHEMA_VERSION,
   buildProviderGraphPreview,
 } from './providerGraphPreview.js';
-import { PROVIDER_HARNESSES, PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';
+import { CREATABLE_HARNESS_IDS, PROVIDER_HARNESSES, PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';
 import {
   effectiveModelAliases,
   modelAliasRevision,
@@ -142,7 +142,9 @@ const creatableKindSchema = z.object({
 
 /** The static half of the create surface. Derived from code, never from rows. */
 const CREATABLE = Object.freeze({
-  harnesses: Object.freeze(PROVIDER_HARNESSES.filter((harness) => harness.recipe).map((harness) => Object.freeze({
+  // Creatable FROM A CONNECTION — a subscription program or Pi carries a
+  // recipe too (#7562) but composes only onto named services, not here.
+  harnesses: Object.freeze(PROVIDER_HARNESSES.filter((harness) => CREATABLE_HARNESS_IDS.includes(harness.id)).map((harness) => Object.freeze({
     id: harness.id,
     label: harness.label,
     modes: [...harness.modes],

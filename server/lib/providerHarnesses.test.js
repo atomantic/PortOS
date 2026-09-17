@@ -12,9 +12,18 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PROVIDER_HARNESSES, harnessById, harnessForProvider } from './providerHarnesses.js';
+import {
+  CREATABLE_HARNESS_IDS,
+  PROVIDER_HARNESSES,
+  compatibleBindings,
+  harnessById,
+  harnessForProvider,
+  isCompatible,
+} from './providerHarnesses.js';
+import { CODEX_OSS_LOCAL_PROVIDERS } from './providerModels.js';
 import { PROVIDER_VENDORS } from './providerVendors.js';
 import { bindingBlocker } from './providerRouteRecipes.js';
+import { SERVICE_DEFINITIONS, resolveServiceInstance } from './serviceDefinitions.js';
 
 /**
  * The legacy Gemini CLI row is a vendor with no harness on purpose: it exists
@@ -24,28 +33,107 @@ const VENDOR_WITHOUT_HARNESS = 'gemini-legacy';
 
 const spawnableVendors = PROVIDER_VENDORS.filter((vendor) => vendor.id !== VENDOR_WITHOUT_HARNESS);
 
-describe('harness rows say why they carry no recipe', () => {
+describe('harness rows say why they cannot be minted from a connection', () => {
   // The refusal quotes this field. While `bindingBlocker` hardcoded one reason,
   // a row added for a different one told the user their harness "reaches only
   // its own vendor service" — wrong, and it points at the wrong remedy.
-  it('sets noRecipe on exactly the rows with no recipe', () => {
-    for (const harness of PROVIDER_HARNESSES) {
-      expect(Boolean(harness.noRecipe), `${harness.id}: noRecipe must accompany a null recipe`)
-        .toBe(harness.recipe === null);
+  it('gives every non-creatable program a reason, and every creatable one none', () => {
+    for (const harness of PROVIDER_HARNESSES.filter((row) => row.id !== 'direct')) {
+      expect(Boolean(harness.connectionBlocker), `${harness.id}`).toBe(!CREATABLE_HARNESS_IDS.includes(harness.id));
     }
+    expect(CREATABLE_HARNESS_IDS).toEqual(['claude', 'opencode', 'codex']);
+  });
+
+  // Since #7562 a row with no bindings is exactly a row nothing can be
+  // composed onto — it has no recipe either. `direct` has no recipe (it is not
+  // a program) yet binds, so it carries no reason. A subscription program (or
+  // Pi) HAS a recipe — `<harness>.cli@<service>` materializes — while still
+  // refusing an arbitrary connection.
+  it('leaves a row with no bindings recipe-less, and every program with bindings a recipe', () => {
+    for (const harness of PROVIDER_HARNESSES.filter((row) => row.id !== 'direct')) {
+      expect(harness.recipe === null, `${harness.id}`).toBe(harness.bindings.length === 0);
+    }
+    expect(harnessById('direct').recipe).toBeNull();
+    expect(harnessById('direct').bindings).toHaveLength(1);
   });
 
   it('refuses each uncreatable harness with its own reason, not a shared guess', () => {
     const connection = { kind: 'ollama', transports: { openai: { baseUrl: 'http://localhost:11434/v1' } }, credentials: {} };
     const messages = PROVIDER_HARNESSES
-      .filter((harness) => harness.recipe === null)
+      .filter((harness) => harness.id !== 'direct' && !CREATABLE_HARNESS_IDS.includes(harness.id))
       .map((harness) => bindingBlocker({ harnessId: harness.id, modes: ['cli'], connection }).message);
 
     // Kilo and OpenChamber are `openai`-protocol rows that still cannot be
     // minted — the case that makes "reaches only its own vendor service" false.
-    expect(messages).toContain(`${harnessById('kilo').label} ${harnessById('kilo').noRecipe}, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`);
-    expect(new Set(messages).size).toBeGreaterThan(1);
+    expect(messages).toContain(`${harnessById('kilo').label} ${harnessById('kilo').connectionBlocker}, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`);
+    expect(messages).toContain(`${harnessById('pi').label} ${harnessById('pi').connectionBlocker}, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`);
+    expect(new Set(messages).size).toBeGreaterThan(2);
     for (const message of messages) expect(message).not.toMatch(/undefined|has no command recipe/);
+  });
+
+  // The graph names a direct binding `null`; the registry names it `direct`.
+  // Either spelling must be the same request to the create endpoint.
+  it('treats a "direct" harnessId exactly like the graph\'s null', () => {
+    const connection = { kind: 'ollama', transports: { openai: { baseUrl: 'http://localhost:11434/v1' } }, credentials: {} };
+    expect(bindingBlocker({ harnessId: 'direct', modes: ['api'], connection }))
+      .toEqual(bindingBlocker({ harnessId: null, modes: ['api'], connection }));
+    expect(bindingBlocker({ harnessId: 'direct', modes: ['cli'], connection })?.code).toBe('PROVIDER_HARNESS_MODE_UNSUPPORTED');
+  });
+});
+
+describe('capability bindings (#7562)', () => {
+  it('has eleven rows, and direct is the harness of an api record', () => {
+    expect(PROVIDER_HARNESSES).toHaveLength(11);
+    expect(harnessForProvider({ type: 'api', endpoint: 'https://api.example.com/v1' })?.id).toBe('direct');
+    expect(harnessForProvider({ type: 'cli', command: 'not-a-harness' })).toBeNull();
+    expect(harnessById('direct').modes).toEqual(['api']);
+  });
+
+  // Codex emits `--oss --local-provider <x>` from the runtime marker at spawn;
+  // the binding must name exactly the runtimes that emitter serves.
+  it('binds Codex to exactly the local runtimes buildCodexOssArgs can name', () => {
+    const binding = harnessById('codex').bindings.find((row) => row.localRuntime);
+    expect([...binding.localRuntime].sort()).toEqual(Object.keys(CODEX_OSS_LOCAL_PROVIDERS).sort());
+  });
+
+  it('names a service every subscription/service binding can resolve', () => {
+    const ids = new Set(SERVICE_DEFINITIONS.map((row) => row.id));
+    for (const harness of PROVIDER_HARNESSES) {
+      for (const binding of harness.bindings.filter((row) => row.service)) {
+        expect(ids.has(binding.service), `${harness.id} → ${binding.service}`).toBe(true);
+      }
+    }
+  });
+
+  // The compatibility table from the issue, verbatim — each row is a product
+  // decision, not a derivation (Claude on NIM is wrong because NIM speaks no
+  // Anthropic wire; Pi on NIM is right because Pi ships a `nvidia` provider).
+  const local = (id, transports) => resolveServiceInstance({ definitionId: id, transports });
+  const OLLAMA = local('ollama', { anthropic: { baseUrl: 'http://127.0.0.1:11434' }, openai: { baseUrl: 'http://127.0.0.1:11434/v1' } });
+  it.each([
+    ['claude', OLLAMA, true],
+    ['claude', 'nvidia-nim', false],
+    ['pi', 'nvidia-nim', true],
+    ['codex', OLLAMA, true],
+    ['codex', 'nvidia-nim', true],
+    ['opencode', 'openrouter', true],
+    ['direct', 'anthropic', false],
+    ['antigravity', 'nvidia-nim', false],
+    ['antigravity', OLLAMA, false],
+    ['antigravity', 'openai', false],
+    ['antigravity', 'antigravity', true],
+    ['kilo', OLLAMA, false],
+    // `harnessOnly`: Kimi's service is reachable through Kimi Code alone.
+    ['direct', 'kimi', false],
+    ['kimi', 'kimi', true],
+  ])('%s × %s → %s', (harnessId, service, expected) => {
+    const instance = typeof service === 'string' ? resolveServiceInstance(service) : service;
+    expect(isCompatible(harnessId, instance)).toBe(expected);
+  });
+
+  it('prefers the local-runtime binding to the generic OpenAI one for a local daemon', () => {
+    expect(compatibleBindings('codex', OLLAMA)[0].localRuntime).toContain('ollama');
+    expect(compatibleBindings('codex', resolveServiceInstance('nvidia-nim'))[0].baseUrl).toEqual({ via: 'env', name: 'OPENAI_BASE_URL' });
   });
 });
 

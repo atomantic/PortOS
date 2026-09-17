@@ -18,8 +18,8 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CREATABLE_HARNESS_IDS } from './providerHarnesses.js';
-import { buildRouteRecord } from './providerRouteRecipes.js';
+import { CREATABLE_HARNESS_IDS, PROVIDER_HARNESSES } from './providerHarnesses.js';
+import { buildRouteRecord, materializeRoute } from './providerRouteRecipes.js';
 
 const SAMPLES = JSON.parse(readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), 'aiToolkit/defaults/providers.sample.json'),
@@ -48,6 +48,26 @@ const CASES = [
 
 const mint = ({ harnessId, mode, connection, sample }) =>
   buildRouteRecord({ harnessId, mode, providerId: sample, name: 'Example', connection });
+
+/**
+ * The harnesses that carry a recipe but cannot be minted from a bare
+ * connection (#7562): a subscription program composes onto its own service,
+ * Pi onto a service it ships a provider name for. Their argv is pinned the
+ * same way, through `materializeRoute`; Pi's `--provider` pair is the one
+ * binding-added suffix, so the shipped argv is asserted as the prefix.
+ */
+const COMPOSED_CASES = [
+  { harnessId: 'antigravity', mode: 'cli', sample: 'antigravity-cli', service: 'antigravity' },
+  { harnessId: 'antigravity', mode: 'tui', sample: 'antigravity-tui', service: 'antigravity' },
+  { harnessId: 'cursor', mode: 'cli', sample: 'cursor-cli', service: 'cursor' },
+  { harnessId: 'cursor', mode: 'tui', sample: 'cursor-tui', service: 'cursor' },
+  { harnessId: 'grok', mode: 'cli', sample: 'grok-cli', service: 'grok-build' },
+  { harnessId: 'grok', mode: 'tui', sample: 'grok-tui', service: 'grok-build' },
+  { harnessId: 'kimi', mode: 'cli', sample: 'kimi-cli', service: 'kimi' },
+  { harnessId: 'kimi', mode: 'tui', sample: 'kimi-tui', service: 'kimi' },
+  { harnessId: 'pi', mode: 'cli', sample: 'pi-cli', service: { definitionId: 'nvidia-nim', credentials: { apiKey: 'example-key' } }, suffix: ['--provider', 'nvidia'] },
+  { harnessId: 'pi', mode: 'tui', sample: 'pi-tui', service: { definitionId: 'nvidia-nim', credentials: { apiKey: 'example-key' } }, suffix: ['--provider', 'nvidia'] },
+];
 
 describe('harness command recipes match the shipped provider samples', () => {
   it('covers every creatable harness, so a new one cannot ship unpinned', () => {
@@ -95,5 +115,24 @@ describe('harness command recipes match the shipped provider samples', () => {
       expect(minted).not.toHaveProperty('textTransportEnabled');
       expect(minted).not.toHaveProperty('allowCustomEndpoint');
     }
+  });
+});
+
+describe('composed-only harness recipes match the shipped provider samples', () => {
+  it('covers every recipe-bearing harness the connection path does not', () => {
+    const composedOnly = PROVIDER_HARNESSES.filter((h) => h.recipe && !CREATABLE_HARNESS_IDS.includes(h.id)).map((h) => h.id);
+    expect([...new Set(COMPOSED_CASES.map((entry) => entry.harnessId))].sort()).toEqual(composedOnly.sort());
+  });
+
+  it.each(COMPOSED_CASES)('composes $harnessId $mode like $sample', ({ harnessId, mode, sample, service, suffix = [] }) => {
+    const shipped = SAMPLES[sample];
+    expect(shipped, `${sample} is missing from providers.sample.json`).toBeDefined();
+    const minted = materializeRoute({ harness: harnessId, method: mode, serviceInstance: service });
+
+    expect(minted.command).toBe(shipped.command);
+    expect(minted.args).toEqual([...shipped.args, ...suffix]);
+    expect(minted.type).toBe(shipped.type);
+    if (mode === 'cli') expect(minted.headlessArgs).toEqual(shipped.headlessArgs ?? []);
+    if (mode === 'tui') expect(minted.tuiPromptDelayMs).toBe(shipped.tuiPromptDelayMs);
   });
 });

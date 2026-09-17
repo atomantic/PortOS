@@ -13,6 +13,7 @@ import {
 import {
   PROVIDER_HARNESS_IDS,
   ROUTE_MODES,
+  graphHarnessId,
   harnessForProvider,
   harnessSupportsMode,
   providerRouteMode,
@@ -295,7 +296,9 @@ export function buildProviderGraphPreview({ providers = [], activeProvider = nul
       continue;
     }
 
-    const harnessId = harness?.id ?? null;
+    // The registry names a direct API record's harness `direct` (#7562); the
+    // graph stores it as `NULL`, and this is the one translation point.
+    const harnessId = graphHarnessId(harness?.id);
     const bucketKey = connectionBucketKey(harnessId, leadProfile);
     const bucket = buckets.get(bucketKey) || [];
     // A record that declares NO transport (a vendor subscription harness, say)

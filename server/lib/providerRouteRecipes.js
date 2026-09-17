@@ -1,8 +1,16 @@
 import { CONNECTION_CREDENTIAL_ENV_VARS, CONNECTION_PROTOCOLS } from './providerConnections.js';
 import { modeSiblingId } from './aiToolkit/internal/providerModes.js';
 import { PROVIDER_GATEWAYS } from './providerGateways.js';
-import { CREATABLE_HARNESS_IDS, harnessById, harnessRecipe } from './providerHarnesses.js';
+import {
+  CREATABLE_HARNESS_IDS,
+  firstCompatibleBinding,
+  graphHarnessId,
+  harnessById,
+  harnessConnectionBlocker,
+  harnessRecipe,
+} from './providerHarnesses.js';
 import { LOCAL_RUNTIMES } from './localProviderRuntime.js';
+import { resolveServiceInstance, serviceError } from './serviceDefinitions.js';
 
 /**
  * Minting a FRESH executable route from a connection and a harness recipe
@@ -131,16 +139,19 @@ export function connectionBlocker({ kind, transports }) {
  *
  * @returns {{code:string, message:string}|null}
  */
-export function bindingBlocker({ harnessId, modes, connection }) {
+export function bindingBlocker({ harnessId: requestedHarnessId, modes, connection }) {
+  // The graph's vocabulary is `null` for a direct API binding; the registry's
+  // is `direct`. Either spelling means the same thing here.
+  const harnessId = graphHarnessId(requestedHarnessId);
   if (harnessId !== null && !CREATABLE_HARNESS_IDS.includes(harnessId)) {
     return {
       code: 'PROVIDER_HARNESS_NOT_CREATABLE',
-      // The REASON is the row's (`noRecipe` in providerHarnesses.js), not this
-      // string's: three different things make a harness uncreatable, and a
-      // hardcoded clause here told two of them the wrong one — sending a user
-      // looking for a vendor service when the real remedy is their own config
-      // file or a runtime they have to start.
-      message: `${harnessById(harnessId)?.label || harnessId} ${harnessById(harnessId)?.noRecipe || 'has no command recipe'}, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`,
+      // The REASON is the row's (`noRecipe` / `connectionLimit` in
+      // providerHarnesses.js), not this string's: several different things make
+      // a harness uncreatable, and a hardcoded clause here told two of them the
+      // wrong one — sending a user looking for a vendor service when the real
+      // remedy is their own config file or a runtime they have to start.
+      message: `${harnessById(harnessId)?.label || harnessId} ${harnessConnectionBlocker(harnessId) || 'has no command recipe'}, so it cannot be pointed at a backend connection. Add it from the provider editor instead.`,
     };
   }
   const harness = harnessId ? harnessById(harnessId) : null;
@@ -175,17 +186,25 @@ export function bindingBlocker({ harnessId, modes, connection }) {
 /** The base URL a connection declares for `protocol`. */
 const connectionBaseUrl = (connection, protocol) => connection.transports?.[protocol]?.baseUrl ?? null;
 
-/** OpenCode's inline provider declaration for one namespace and base URL. */
-const opencodeConfigContent = (kind, baseUrl) => JSON.stringify({
+/**
+ * OpenCode's inline provider declaration for one namespace and base URL, or
+ * the permission-only form for a provider OpenCode already ships (`builtin`).
+ */
+const opencodeProviderConfig = ({ namespace, label, baseUrl, builtin = false }) => JSON.stringify({
   permission: 'allow',
-  provider: {
-    [opencodeNamespace(kind)]: {
-      npm: '@ai-sdk/openai-compatible',
-      name: connectionKindLabel(kind),
-      options: { baseURL: baseUrl },
+  ...(builtin ? {} : {
+    provider: {
+      [namespace]: {
+        npm: '@ai-sdk/openai-compatible',
+        name: label,
+        options: { baseURL: baseUrl },
+      },
     },
-  },
+  }),
 });
+
+const opencodeConfigContent = (kind, baseUrl) =>
+  opencodeProviderConfig({ namespace: opencodeNamespace(kind), label: connectionKindLabel(kind), baseUrl });
 
 /**
  * The executable record for one freshly minted route.
@@ -209,8 +228,8 @@ export function buildRouteRecord({ harnessId, mode, providerId, name, connection
   const envVars = {};
   const secretEnvVars = [];
 
-  if (recipe?.baseUrl.via === 'env') envVars[recipe.baseUrl.name] = baseUrl;
-  if (recipe?.baseUrl.via === 'opencodeConfig') {
+  if (recipe?.baseUrl?.via === 'env') envVars[recipe.baseUrl.name] = baseUrl;
+  if (recipe?.baseUrl?.via === 'opencodeConfig') {
     envVars.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(connection.kind, baseUrl);
   }
   // Every credential the connection holds is materialized, not just the one
@@ -228,7 +247,7 @@ export function buildRouteRecord({ harnessId, mode, providerId, name, connection
   // declares one always declares the variable — empty only if the guard above
   // let a credential-less connection through, which it does not for a required
   // credential.
-  if (recipe?.credential.via === 'env' && !Object.hasOwn(envVars, recipe.credential.name)) {
+  if (recipe?.credential?.via === 'env' && !Object.hasOwn(envVars, recipe.credential.name)) {
     envVars[recipe.credential.name] = '';
   }
 
@@ -245,15 +264,32 @@ export function buildRouteRecord({ harnessId, mode, providerId, name, connection
     // carry one. The record then simply has no marker, and the caller's identity
     // check is what decides whether it still describes this backend.
     ...(connectionKindMarkers(connection.kind) || {}),
-    ...(recipe ? { command: recipe.command, timeout: recipe.timeout } : { timeout: 300000 }),
-    ...(recipe ? recipe.modes[mode] : {}),
+    ...executableRecordTail({ recipe, mode, enabled: false, envVars, secretEnvVars }),
+  };
+}
+
+/** Default wall clock for a record no recipe times — every shipped `api` sample. */
+const API_ROUTE_TIMEOUT_MS = 300000;
+
+/**
+ * The half of an executable record that every writer here assembles the same
+ * way: the program and its per-mode argv (or the API wall clock when there is
+ * no program), an empty catalog, and the env maps. Stated once so a new marker
+ * or env rule lands in {@link buildRouteRecord} and {@link materializeRoute}
+ * together.
+ */
+const executableRecordTail = ({ recipe, mode, args, enabled, envVars, secretEnvVars }) => {
+  const modeRecipe = recipe?.modes?.[mode] ?? null;
+  return {
+    ...(recipe ? { command: recipe.command, timeout: recipe.timeout } : { timeout: API_ROUTE_TIMEOUT_MS }),
+    ...(modeRecipe ? { ...modeRecipe, ...(args ? { args } : {}) } : {}),
     models: [],
     defaultModel: null,
-    enabled: false,
+    enabled,
     envVars,
     secretEnvVars,
   };
-}
+};
 
 /**
  * Route ids for a new binding's modes: readable, stable and free.
@@ -279,4 +315,188 @@ export function mintRouteIds({ harnessId, kind, modes, taken }) {
   // Unreachable with any realistic install; a bounded loop beats an unbounded
   // one, and an explicit throw beats returning a colliding id.
   throw new Error(`Could not mint a free route id for ${stem}`);
+}
+
+/**
+ * The record markers a materialized route on a service definition must carry,
+ * so the spawner and `providerConnectionProfile` classify it onto that service:
+ * the runtime's `*Backed` boolean, or `gatewayBacked: '<id>'`. Slotstream and
+ * a plain API endpoint carry none, exactly as {@link connectionKindMarkers}.
+ */
+const serviceMarkers = (definition, { wrapper }) => {
+  if (definition.localRuntime) return connectionKindMarkers(definition.localRuntime) || {};
+  // `gatewayBacked` marks a WRAPPER — a program spawned in front of a gateway
+  // (the sibling api record owns the key). A record that IS the client carries
+  // none, exactly as every shipped `api` sample.
+  if (definition.gateway && wrapper) return { gatewayBacked: definition.id };
+  return {};
+};
+
+/**
+ * The connection kind a service instance reads back as — the same key space
+ * {@link connectionKindMarkers} and {@link opencodeNamespace} are keyed on, so
+ * a materialized OpenCode config names the namespace its marker resolves to.
+ */
+const serviceConnectionKind = ({ definition, slug }) =>
+  definition.localRuntime || (definition.gateway ? `gateway:${definition.id}` : slug);
+
+/**
+ * The executable record for a (harness, method, service) composition (#7562) —
+ * {@link buildRouteRecord} generalized from "a connection" to "a service
+ * instance", and from "one recipe" to "the first compatible binding".
+ *
+ * Given a harness row (or id), the execution method, a service instance (see
+ * `resolveServiceInstance`), an optional credential-bootstrap app, and the
+ * model/effort selection, it writes every value the binding says the program
+ * reads — base URL, credential, static env, backend markers, inline
+ * OpenCode/Pi selection — plus the recipe's per-mode argv, so the result is a
+ * complete `data/providers.json` record with no further lookup. Feeding it
+ * back through `providerConnectionProfile` classifies it onto the same
+ * service ({@link routeDescribesService}), which is the contract
+ * `createBinding` already holds a minted route to.
+ *
+ * Pure: no I/O, no clock, no spawn. Throws a typed error (`err.code`) rather
+ * than minting a route that cannot run:
+ *   - `HARNESS_UNKNOWN` / `HARNESS_METHOD_UNSUPPORTED`
+ *   - `HARNESS_SERVICE_INCOMPATIBLE` — no binding reaches this service
+ *   - `SERVICE_ENDPOINT_REQUIRED` — the binding needs a base URL the instance
+ *     does not declare (a local daemon's port is an install-specific fact)
+ *   - `SERVICE_CREDENTIAL_REQUIRED` — the program refuses to start without one
+ *   - `SERVICE_CREDENTIAL_BOOTSTRAP_REQUIRED` — the instance's credential is
+ *     minted by a bootstrap CLI at spawn, and none was supplied
+ *
+ * @param {{harness: object|string, method: 'cli'|'tui'|'api',
+ *          serviceInstance: object|string,
+ *          bootstrap?: {id?: string, command: string, args?: string[], argsSeparator?: string, harnessNames?: Record<string,string>}|null,
+ *          selection?: {model?: string|null, effort?: string|null, tiers?: Record<string,string>},
+ *          overrides?: object, providerId?: string, name?: string}} input
+ * @returns {object} the record to hand `createProvider`
+ */
+export function materializeRoute({
+  harness: harnessInput, method, serviceInstance, bootstrap = null, selection = {}, overrides = {}, providerId, name,
+}) {
+  const harness = typeof harnessInput === 'string' ? harnessById(harnessInput) : harnessInput;
+  if (!harness) throw serviceError('HARNESS_UNKNOWN', `No harness "${harnessInput ?? ''}"`);
+  if (!harness.modes.includes(method)) {
+    throw serviceError('HARNESS_METHOD_UNSUPPORTED', `${harness.label} has no ${method} mode.`);
+  }
+  const instance = resolveServiceInstance(serviceInstance);
+  const { definition } = instance;
+  const binding = firstCompatibleBinding(harness, instance);
+  if (!binding) {
+    throw serviceError('HARNESS_SERVICE_INCOMPATIBLE', `${harness.label} cannot be pointed at ${definition.label}.`);
+  }
+  if (instance.credentialVia === 'bootstrap' && method !== 'api' && !bootstrap) {
+    throw serviceError('SERVICE_CREDENTIAL_BOOTSTRAP_REQUIRED',
+      `${definition.label} is credentialed by a bootstrap CLI at spawn; name the bootstrap app to compose this route.`);
+  }
+
+  const recipe = harness.recipe;
+  const envVars = {};
+  const secretEnvVars = [];
+  const fields = {};
+  const args = [...(recipe?.modes?.[method]?.args || [])];
+  const apiKey = typeof instance.credentials.apiKey === 'string' ? instance.credentials.apiKey : '';
+
+  // --- endpoint --------------------------------------------------------------
+  const protocol = binding.protocol || null;
+  const baseUrl = protocol ? instance.transports[protocol]?.baseUrl ?? null : null;
+  if (protocol && !baseUrl) {
+    throw serviceError('SERVICE_ENDPOINT_REQUIRED', `${definition.label} declares no ${protocol} endpoint; set its base URL first.`);
+  }
+  switch (binding.baseUrl?.via) {
+    case 'env': envVars[binding.baseUrl.name] = baseUrl; break;
+    case 'opencodeConfig':
+      envVars.OPENCODE_CONFIG_CONTENT = opencodeProviderConfig({
+        namespace: opencodeNamespace(serviceConnectionKind(instance)), label: definition.label, baseUrl, builtin: binding.baseUrl.builtin === true,
+      });
+      break;
+    case 'piProvider': args.push(binding.baseUrl.flag, definition.piProvider); break;
+    default: break;
+  }
+  // A binding that writes an endpoint also records it on the record: as
+  // `endpoint` for a program that reads that field, and beside an env var,
+  // inline config or provider name as every shipped wrapper sample does — the
+  // readiness probe and the catalog refresh read it off the record. A binding
+  // that writes none (the program signs in itself) records none.
+  // `endpoint` is the OpenAI-compatible URL everywhere it is read (catalog
+  // probes, the local-runtime classifier), so an Anthropic-only service records
+  // none.
+  const endpoint = !binding.baseUrl ? null
+    : binding.baseUrl.via === 'field' ? baseUrl : instance.transports.openai?.baseUrl ?? null;
+  if (endpoint) fields.endpoint = endpoint;
+
+  // --- credential ------------------------------------------------------------
+  const credential = binding.credential || null;
+  // A `gatewayEnv` credential lands under the gateway's own variable (what the
+  // spawner exports for OpenCode); on a service that is not a gateway it lands
+  // on the record's `apiKey`, which the inline-config builder attaches at spawn.
+  const credentialVia = credential?.via === 'gatewayEnv' && !definition.gateway ? 'field' : credential?.via;
+  const credentialEnvName = credentialVia === 'gatewayEnv'
+    ? definition.gateway.apiKeyEnv
+    : credentialVia === 'env' ? credential.name ?? definition.credential.envVars[0] ?? null : null;
+  const credentialRequired = credential?.required === true && instance.credentialVia !== 'bootstrap';
+  if (credentialRequired && apiKey === '') {
+    throw serviceError('SERVICE_CREDENTIAL_REQUIRED',
+      `${harness.label} will not start without a ${credentialEnvName || 'key'} for ${definition.label}. Set one first — any non-empty value works for a local daemon that ignores it.`);
+  }
+  if (credentialVia === 'field') fields.apiKey = apiKey;
+  if (credentialEnvName && (apiKey !== '' || credentialRequired)) {
+    envVars[credentialEnvName] = apiKey;
+    secretEnvVars.push(credentialEnvName);
+  }
+  Object.assign(envVars, binding.env || {});
+
+  // --- assembly --------------------------------------------------------------
+  const tiers = selection.tiers && typeof selection.tiers === 'object' ? selection.tiers : {};
+  const record = {
+    id: providerId ?? `${harness.id}.${method}@${instance.slug}${bootstrap ? `+${bootstrap.id ?? bootstrap.command}` : ''}`,
+    name: name ?? `${harness.label} · ${definition.label}`,
+    type: method,
+    harnessId: harness.id,
+    method,
+    serviceId: instance.slug,
+    servicePlan: instance.plan,
+    ...fields,
+    ...serviceMarkers(definition, { wrapper: Boolean(recipe) }),
+    ...executableRecordTail({ recipe, mode: method, args, enabled: true, envVars, secretEnvVars }),
+    defaultModel: selection.model ?? null,
+    ...(selection.effort ? { effort: selection.effort } : {}),
+    ...tiers,
+    ...overrides,
+  };
+  if (bootstrap && method !== 'api') {
+    record.credentialBootstrap = {
+      command: bootstrap.command,
+      ...(Array.isArray(bootstrap.args) ? { args: [...bootstrap.args] } : {}),
+      // The bootstrap CLI's own name for this harness, when it differs from the
+      // binary PortOS spawns — `resolveCliSpawn` reads it unchanged.
+      harnessId: bootstrap.harnessNames?.[harness.id] ?? recipe.command,
+      ...(bootstrap.argsSeparator ? { argsSeparator: bootstrap.argsSeparator } : {}),
+    };
+  }
+  return record;
+}
+
+/**
+ * Whether a record's connection profile describes `serviceInstance`: it
+ * classifies onto the service's backend kind, and every endpoint it declares is
+ * one the instance is reached at. The round-trip contract `materializeRoute`
+ * owes, stated once so its test and a later store can share it.
+ *
+ * @param {ReturnType<typeof import('./providerConnections.js').providerConnectionProfile>} profile
+ * @param {object} serviceInstance - resolved
+ */
+export function routeDescribesService(profile, serviceInstance) {
+  const instance = resolveServiceInstance(serviceInstance);
+  const { definition } = instance;
+  // A wrapper on a gateway reads back as `gateway:<id>`; a direct API record
+  // on the same gateway reads back as `api` (it carries no marker, see
+  // `serviceMarkers`). Both are that service.
+  const expectedKinds = definition.localRuntime ? [definition.localRuntime]
+    : definition.gateway ? [`gateway:${definition.id}`, 'api']
+      : ['api', 'vendor'];
+  if (!expectedKinds.includes(profile.kind)) return false;
+  return Object.entries(profile.transports).every(([protocol, transport]) =>
+    transport.baseUrl === instance.transports[protocol]?.baseUrl);
 }
