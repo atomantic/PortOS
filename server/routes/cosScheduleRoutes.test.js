@@ -138,6 +138,18 @@ describe('CoS Schedule Routes', () => {
       expect(response.status).toBe(200);
       expect(taskSchedule.getUpcomingTasks).toHaveBeenCalledWith(3);
     });
+
+    // #7527: getUpcomingTasks now rejects (rather than silently returning a
+    // partial []) when an app inventory/override/readiness read fails. The
+    // route must not answer 200 with incomplete deadlines.
+    it('does not return 200 when the upcoming-tasks calculation is unavailable', async () => {
+      taskSchedule.getUpcomingTasks.mockRejectedValue(new Error('app inventory read failed'));
+
+      const response = await request(app).get('/api/cos/upcoming');
+
+      expect(response.status).toBe(503);
+      expect(response.body.code).toBe('UPCOMING_TASKS_UNAVAILABLE');
+    });
   });
 
   describe('GET /api/cos/schedule/task/:taskType', () => {
