@@ -3,6 +3,7 @@ import { Telescope, RefreshCw, Sparkles, Music, Tv, Clock, AlertTriangle, CheckC
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import TwinProviderPicker from './TwinProviderPicker.jsx';
 import MarkdownOutput from '../cos/MarkdownOutput';
 import { formatDateTime, formatHourOfDay } from '../../utils/formatters';
 
@@ -229,25 +230,18 @@ export default function ObservedTasteEvidence() {
         <div className="border-t border-port-border pt-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-end gap-3">
             <div className="flex-1">
-              <label htmlFor="twin-interpret-provider" className="block text-xs text-gray-500 mb-1">
-                Interpret with AI provider
-              </label>
               {providers.length === 0 ? (
-                <p className="text-xs text-gray-500">No AI provider configured — add one in AI Providers.</p>
+                <>
+                  <p className="block text-xs text-gray-500 mb-1">Interpret with AI provider</p>
+                  <p className="text-xs text-gray-500">No AI provider configured — add one in AI Providers.</p>
+                </>
               ) : (
-                <select
-                  id="twin-interpret-provider"
-                  value={selected?.providerId || ''}
-                  onChange={(e) => {
-                    const p = providers.find((x) => x.id === e.target.value);
-                    setSelected({ providerId: e.target.value, model: p?.defaultModel || '' });
-                  }}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:outline-hidden focus:border-port-accent"
-                >
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name || p.id}{p.defaultModel ? ` · ${p.defaultModel}` : ''}</option>
-                  ))}
-                </select>
+                <TwinProviderPicker
+                  label="Interpret with AI provider"
+                  providers={providers}
+                  selected={selected}
+                  onChange={setSelected}
+                />
               )}
             </div>
             <button

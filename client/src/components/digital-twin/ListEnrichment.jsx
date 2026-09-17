@@ -13,6 +13,7 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { FormField } from '../ui/FormField';
+import TwinProviderPicker from './TwinProviderPicker.jsx';
 
 import { ENRICHMENT_CATEGORIES } from './constants';
 
@@ -244,28 +245,13 @@ export default function ListEnrichment({
       {/* Provider Selection & Analyze Button */}
       <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 mb-6">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-          <FormField
-            label="Analyze with"
+          <TwinProviderPicker
             className="flex-1"
-            labelClassName="text-xs text-gray-500 uppercase tracking-wider mb-2 block"
-          >
-            <select
-              value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
-              onChange={(e) => {
-                const [providerId, model] = e.target.value.split(':');
-                setSelectedProvider({ providerId, model });
-              }}
-              className="w-full px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white text-sm"
-            >
-              {providers.map(p => (
-                (p.models || [p.defaultModel]).filter(Boolean).map(model => (
-                  <option key={`${p.id}:${model}`} value={`${p.id}:${model}`}>
-                    {p.name} - {model}
-                  </option>
-                ))
-              ))}
-            </select>
-          </FormField>
+            label="Analyze with"
+            providers={providers}
+            selected={selectedProvider}
+            onChange={setSelectedProvider}
+          />
 
           <button
             onClick={analyzeList}

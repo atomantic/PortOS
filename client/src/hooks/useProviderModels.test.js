@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 
-vi.mock('../services/api', () => ({ getProviders: vi.fn() }));
+vi.mock('../services/api', () => ({ getProviders: vi.fn(), getProviderCatalog: vi.fn() }));
 
 import * as api from '../services/api';
 import useProviderModels from './useProviderModels';
+import { __resetProviderCatalogCache } from './useProviderCatalog.js';
 
 // The catalog `agy models` prints — the shipped provider list mirrors it, and
 // its defaultModel is the "use the CLI's own model" sentinel.
@@ -263,5 +264,39 @@ describe('useProviderModels — a modelFilter whose identity changes', () => {
     await waitFor(() => expect(result.current.availableModels).toEqual([]));
     // `''` is the "use the default model" choice here, never an auto-pick target.
     expect(result.current.selectedModel).toBe('');
+  });
+});
+
+// A COMPOSITE selection (#7566) is not a `GET /api/providers` record: the hook
+// resolves it from the shared catalog and lists it beside the presets, so a
+// restored pin drives `availableModels`/`selectedProvider` like any preset.
+describe('useProviderModels — composite selection', () => {
+  const CATALOG = {
+    harnesses: [{ id: 'pi', label: 'Pi', modes: ['tui'], enabled: true, detected: true }],
+    services: [{ slug: 'nvidia-nim-free', label: 'NVIDIA NIM', plan: 'free', enabled: true, catalog: { models: ['nvidia/example', 'nvidia/other'] } }],
+    bootstraps: [], compatibility: { pi: ['nvidia-nim-free'] }, effortLevels: { pi: ['low', 'high'] }, effortLevelsByModel: {}, presets: [],
+  };
+
+  beforeEach(() => {
+    __resetProviderCatalogCache();
+    api.getProviderCatalog.mockReset().mockResolvedValue(CATALOG);
+  });
+
+  it('fetches the catalog only once a composite is selected, then lists the resolved record with its service models', async () => {
+    const preset = { id: 'other-backend', name: 'Other', type: 'api', enabled: true, models: ['text-a'] };
+    api.getProviders.mockResolvedValue({ activeProvider: 'other-backend', providers: [preset] });
+    const { result } = renderHook(() => useProviderModels({ allowDefault: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(api.getProviderCatalog).not.toHaveBeenCalled();
+    expect(result.current.providers.map((p) => p.id)).toEqual(['other-backend']);
+
+    act(() => result.current.setSelectedProviderId('pi.tui@nvidia-nim-free'));
+    await waitFor(() => expect(result.current.providers.map((p) => p.id)).toEqual(['other-backend', 'pi.tui@nvidia-nim-free']));
+    expect(api.getProviderCatalog).toHaveBeenCalledTimes(1);
+    expect(result.current.availableModels).toEqual(['nvidia/example', 'nvidia/other']);
+    expect(result.current.resolveRef('pi.tui@nvidia-nim-free')).toMatchObject({ harnessId: 'pi', method: 'tui', composite: true });
+
+    act(() => result.current.setSelectedModel('nvidia/other'));
+    expect(result.current.selectedProvider).toEqual({ providerId: 'pi.tui@nvidia-nim-free', model: 'nvidia/other' });
   });
 });

@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
-import { FormField } from '../../ui/FormField';
+import TwinProviderPicker from '../TwinProviderPicker.jsx';
 import { formatBytes } from '../../../utils/formatters';
 import FilePickerButton from '../../ui/FilePickerButton';
 
@@ -335,24 +335,13 @@ export default function ImportTab() {
           </div>
 
           {/* Provider Selection */}
-          <FormField className="mb-6" label="Analysis Provider" labelClassName="block text-sm font-medium text-gray-400 mb-2">
-            <select
-              value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
-              onChange={(e) => {
-                const [providerId, model] = e.target.value.split(':');
-                setSelectedProvider({ providerId, model });
-              }}
-              className="w-full px-3 py-3 bg-port-bg border border-port-border rounded-lg text-white"
-            >
-              {providers.map(p => (
-                (p.models || [p.defaultModel]).filter(Boolean).map(model => (
-                  <option key={`${p.id}:${model}`} value={`${p.id}:${model}`}>
-                    {p.name} - {model}
-                  </option>
-                ))
-              ))}
-            </select>
-          </FormField>
+          <TwinProviderPicker
+            className="mb-6"
+            label="Analysis Provider"
+            providers={providers}
+            selected={selectedProvider}
+            onChange={setSelectedProvider}
+          />
 
           {/* Analyze Button */}
           <button

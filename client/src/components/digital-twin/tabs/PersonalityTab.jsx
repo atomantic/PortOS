@@ -20,6 +20,7 @@ import toast from '../../ui/Toast';
 import useChartColors from '../../../hooks/useChartColors.js';
 import { timeAgo, formatDateShort } from '../../../utils/formatters';
 import { filterGenerationModels } from '../../../utils/providers.js';
+import ProviderModelSelector from '../../ProviderModelSelector';
 
 // Pure helpers are exported for unit tests (PersonalityTab.test.jsx).
 
@@ -422,22 +423,13 @@ export default function PersonalityTab() {
         <div className="bg-port-card rounded-lg border border-port-border p-4 space-y-4">
           <h3 className="font-semibold text-white">Options</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <div>
-              <label htmlFor="personality-scorer-provider" className="block text-sm text-gray-400 mb-1">
-                Alignment scorer provider
-              </label>
-              <select
-                id="personality-scorer-provider"
-                value={scorerProviderId}
-                onChange={(e) => { setScorerProviderId(e.target.value); setScorerModel(''); }}
-                className="w-full px-3 py-2 min-h-[40px] text-sm rounded-lg border border-port-border bg-port-bg text-white focus:ring-port-accent focus:border-port-accent"
-              >
-                <option value="">Same as tested provider</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
+            <ProviderModelSelector
+              label="Alignment scorer provider"
+              providers={providers}
+              selectedProviderId={scorerProviderId}
+              onProviderChange={(id) => { setScorerProviderId(id); setScorerModel(''); }}
+              emptyProviderOption="Same as tested provider"
+            />
             <div>
               <label htmlFor="personality-scorer-model" className="block text-sm text-gray-400 mb-1">
                 Scorer model

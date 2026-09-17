@@ -3,6 +3,7 @@ import { ArrowLeft, Save, Brain, Bell, Target, Layers, TrendingUp, TrendingDown,
 import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress, getMemoryItems } from '../../../services/api';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
+import ProviderModelSelector from '../../ProviderModelSelector';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
 import { GOAL_DEFS, POST_TOPICS, MODULE_LABELS, DRILL_LABELS, DRILL_DESCRIPTIONS, composedSessionDrillTypes } from './constants';
 import { CognitiveDrillTutorialPreview, CognitiveDrillHowItWorksButton } from './CognitiveDrillTutorial';
@@ -1169,32 +1170,18 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
           {/* Provider & Model Selection */}
           <div className="bg-port-card border border-port-accent-2/30 rounded-lg p-4">
             <h4 className="text-sm font-medium text-gray-400 mb-3">AI Provider</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <FormField label="Provider" labelClassName="text-xs text-gray-500 mb-1 block">
-                <select
-                  value={llmProviderId}
-                  onChange={e => { setLlmProviderId(e.target.value); setLlmModel(''); }}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
-                >
-                  <option value="">System Default</option>
-                  {providers.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </FormField>
-              <FormField label="Model" labelClassName="text-xs text-gray-500 mb-1 block">
-                <select
-                  value={llmModel}
-                  onChange={e => setLlmModel(e.target.value)}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white focus:border-port-accent focus:outline-none"
-                >
-                  <option value="">Provider Default</option>
-                  {availableModels.map(m => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-              </FormField>
-            </div>
+            <ProviderModelSelector
+              label="Provider"
+              providers={providers}
+              selectedProviderId={llmProviderId}
+              selectedModel={llmModel}
+              availableModels={availableModels}
+              onProviderChange={(id) => { setLlmProviderId(id); setLlmModel(''); }}
+              onModelChange={setLlmModel}
+              emptyProviderOption="System Default"
+              emptyModelOption="Provider Default"
+              alwaysShowModel
+            />
           </div>
 
           {/* LLM Drill Cards grouped by domain */}

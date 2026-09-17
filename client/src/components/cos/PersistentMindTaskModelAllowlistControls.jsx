@@ -7,6 +7,7 @@ import {
   selectableModelsForProvider,
 } from '../../utils/providers.js';
 import toast from '../ui/Toast';
+import ProviderModelSelector from '../ProviderModelSelector.jsx';
 
 const normalizeEntries = (value) => (Array.isArray(value) ? value : [])
   .filter((entry) => typeof entry?.providerId === 'string' && typeof entry?.model === 'string')
@@ -18,8 +19,6 @@ const modelsFor = (provider) => filterHardwareCompatibleProviderModels(
   filterSelectableModels(selectableModelsForProvider(provider, providerModelList(provider))),
   provider,
 ).map(modelId).filter(Boolean);
-
-const providerLabel = (provider) => `${provider.name || provider.id} (${provider.type})`;
 
 export default function PersistentMindTaskModelAllowlistControls({
   capabilities,
@@ -136,31 +135,24 @@ export default function PersistentMindTaskModelAllowlistControls({
             const stale = !provider || !models.includes(entry.model);
             return (
               <div key={`${entry.providerId}-${entry.model}-${index}`} className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                <div className="min-w-0 flex-1">
-                  <label htmlFor={`${idPrefix}-provider-${index}`} className="mb-1 block text-[11px] text-port-text-muted">Provider</label>
-                  <select
-                    id={`${idPrefix}-provider-${index}`}
-                    value={entry.providerId}
-                    disabled={disabled || saving}
-                    onChange={(event) => updateEntry(index, { providerId: event.target.value })}
-                    className="w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs text-port-text"
-                  >
-                    {availableProviders.map((candidate) => <option key={candidate.id} value={candidate.id}>{providerLabel(candidate)}</option>)}
-                  </select>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <label htmlFor={`${idPrefix}-model-${index}`} className="mb-1 block text-[11px] text-port-text-muted">Model</label>
-                  <select
-                    id={`${idPrefix}-model-${index}`}
-                    value={entry.model}
-                    disabled={disabled || saving || !provider}
-                    onChange={(event) => updateEntry(index, { model: event.target.value })}
-                    className={`w-full rounded border bg-port-bg px-2 py-1.5 text-xs text-port-text ${stale ? 'border-port-warning' : 'border-port-border'}`}
-                  >
-                    {stale && <option value={entry.model}>{entry.model} (no longer available)</option>}
-                    {models.map((model) => <option key={model} value={model}>{model}</option>)}
-                  </select>
-                </div>
+                {/* A stale pair keeps its stored model on screen, named as such —
+                    the queue-time check rejects it until the human removes it.
+                    Compose is off: the allowlist is checked as exact
+                    provider/model PAIRS against stored records at queue time,
+                    which a composed route has none of. */}
+                <ProviderModelSelector
+                  id={`${idPrefix}-provider-${index}`}
+                  providers={availableProviders}
+                  selectedProviderId={entry.providerId}
+                  selectedModel={entry.model}
+                  availableModels={stale && entry.model ? [{ id: entry.model, name: `${entry.model} (no longer available)` }, ...models] : models}
+                  disabled={disabled || saving}
+                  modelDisabled={!provider}
+                  alwaysShowModel
+                  compose={false}
+                  onProviderChange={(providerId) => updateEntry(index, { providerId })}
+                  onModelChange={(model) => updateEntry(index, { model })}
+                />
                 <button
                   type="button"
                   onClick={() => removeEntry(index)}

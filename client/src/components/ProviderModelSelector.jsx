@@ -1,5 +1,20 @@
 /**
- * Two-step provider > model dropdown selector.
+ * Preset-first provider > model (> effort) selector (#7566).
+ *
+ * The provider `<select>` lists the caller's enabled PRESETS grouped by the
+ * harness they run on (`groupProvidersByHarness`), then a final "Custom" group
+ * holding the saved COMPOSITE selection (when the value is one) and a single
+ * "Custom combination…" entry that opens `ProviderComposePopover` — the
+ * harness → method → service → model → effort compose flow. Composing emits a
+ * composite id (`<harness>.<method>@<service>[+<bootstrap>]`) through the same
+ * `onProviderChange` a preset pick uses, so a caller's existing
+ * `{ providerId, model, effort }` field needs no schema change; "Save as
+ * preset" mints a preset and selects it instead. A composite the caller's
+ * `providers` list cannot name is resolved from the shared catalog
+ * (`useProviderCatalog.resolveRef`, fetched only then) so an existing pin
+ * still renders — with its reason when its harness/service is now off, never
+ * auto-replaced (#6368).
+ *
  * @param {Object} props
  * @param {Array} props.providers - Provider list from useProviderModels(). Disabled
  *   providers (`enabled === false`) are filtered out of the dropdown automatically,
@@ -14,13 +29,24 @@
  *   tool-use warning and effort ladder resolve against this — otherwise "no
  *   provider pinned" would also mean "no model or effort can be picked".
  *   Defaults to `selectedProviderId`. See `resolveEffectiveProvider`.
- * @param {string} props.selectedModel - Currently selected model
- * @param {Array} props.availableModels - Models for the selected provider. Entries
+ * @param {string} [props.selectedModel] - Currently selected model (default `''`)
+ * @param {Array} [props.availableModels] - Models for the selected provider. Entries
  *   may be plain strings, or `{ id, name }` objects (the world builder passes the
- *   raw provider `models` array, which can be object-shaped).
+ *   raw provider `models` array, which can be object-shaped). Omit or leave
+ *   empty for a provider the caller's list does not carry (a composite, or a
+ *   preset saved through the popover) and the resolved record's own catalog
+ *   is offered instead.
  * @param {function} props.onProviderChange - Called with provider ID string ("" when
- *   `emptyProviderOption` is set and the user picks it).
- * @param {function} props.onModelChange - Called with model string
+ *   `emptyProviderOption` is set and the user picks it), or a composite id when
+ *   the user composes one.
+ * @param {function} [props.onModelChange] - Called with model string. Omit on a
+ *   provider-only picker (no `availableModels`); a composed model is then
+ *   dropped and the composite runs on its service default.
+ * @param {string} [props.id] - Id for the provider `<select>`, when the caller
+ *   owns the `<label htmlFor>` (`FormField` injects one onto its first child).
+ *   Defaults to a generated id.
+ * @param {string} [props.aria-describedby] - Forwarded to the provider
+ *   `<select>` (`FormField` injects its hint's id the same way).
  * @param {string} [props.label] - Label text (default: "Provider")
  * @param {boolean} [props.disabled] - Disable both selectors
  * @param {boolean} [props.loading] - The caller's provider list hasn't settled
@@ -60,27 +86,43 @@
  *   authoritative capability fetch (`useToolUseModelIds`), so an unannotated
  *   picker costs nothing. No-op for cloud/API providers, whose ids don't encode
  *   their family.
- * @param {{provider?: function, model?: function, effort?: function}} [props.selectionPolicy]
+ * @param {{provider?: function, model?: function, effort?: function, modes?: string[]}} [props.selectionPolicy]
  *   Optional shared policy applied to all three option lists. Provider
  *   predicates receive `(provider)`, model predicates receive `(model, provider)`
  *   and effort predicates receive `(effort, provider, model)`. A selected value
  *   that no longer satisfies the policy remains visible but disabled so it can
- *   be cleared without hiding a stale saved pin.
+ *   be cleared without hiding a stale saved pin. A `modes` list (as
+ *   `providerModeSelectionPolicy` publishes) also restricts the compose flow
+ *   to those execution methods, unless `composeMethods` overrides it.
+ * @param {boolean} [props.compose] - Offer "Custom combination…" (default
+ *   `true`). Pass `false` on a surface whose stored value must be a PRESET id
+ *   — the install's `activeProvider`, or a field validated by
+ *   `presetProviderIdSchema` — so the picker cannot hand it a composite.
+ * @param {string[]} [props.composeMethods] - The execution methods the compose
+ *   flow may offer (`['tui']` for a shell launcher, `['api']` for a streaming
+ *   caller). Defaults to `selectionPolicy.modes`; omit both for no restriction.
  */
-import { useId } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
+  COMPOSE_OPTION_VALUE,
   effectiveModelFor,
   effortLevelsForProvider,
   effortSurvivingModel,
   filterHardwareCompatibleProviderModels,
+  filterSelectableModels,
   isProviderHardwareCompatible,
   isProviderModelHardwareCompatible,
+  providerModelList,
   selectableProviders,
   localToolUseHint,
   withToolUseOptionLabel,
 } from '../utils/providers.js';
+import { groupProvidersByHarness } from '../utils/providerHarnesses.js';
+import { isCompositeProviderId } from '../utils/providerRef.js';
 import useToolUseModelIds from '../hooks/useToolUseModelIds.js';
+import useProviderCatalog from '../hooks/useProviderCatalog.js';
 import EffortSelect from './cos/EffortSelect.jsx';
+import ProviderComposePopover from './providers/ProviderComposePopover.jsx';
 import ToolUseWarning from './ui/ToolUseWarning.jsx';
 
 const SELECT_CLASS =
@@ -99,10 +141,12 @@ export default function ProviderModelSelector({
   providers,
   selectedProviderId,
   effectiveProviderId,
-  selectedModel,
-  availableModels,
+  selectedModel = '',
+  availableModels = [],
   onProviderChange,
   onModelChange,
+  id: idProp,
+  'aria-describedby': describedBy,
   label = 'Provider',
   disabled = false,
   loading = false,
@@ -116,22 +160,48 @@ export default function ProviderModelSelector({
   highlightToolUse = false,
   effort,
   onEffortChange,
-  selectionPolicy
+  selectionPolicy,
+  compose = true,
+  composeMethods,
 }) {
-  const providerSelectId = useId();
+  const generatedProviderSelectId = useId();
+  const providerSelectId = idProp || generatedProviderSelectId;
   const modelSelectId = useId();
   const effortSelectId = useId();
-  // Agent-picker tool-use highlight (opt-in). Resolve the selected provider so
-  // the annotation only fires for local backends (the heuristic mislabels cloud
-  // ids). `localToolUseHint` returns null for cloud/blank, so the warning stays
-  // scoped to a genuinely tool-incapable local pin.
-  // Resolve against the effective provider (the pin, or what a blank selection
-  // falls back to) — everything below describes what a run would actually use.
-  const providerList = Array.isArray(providers) ? providers : [];
+  const [composeOpen, setComposeOpen] = useState(false);
+  // Presets minted through the popover's "Save as preset" this session. The
+  // caller's `providers` list predates them, so they are carried here until
+  // the caller refetches — otherwise the freshly selected id would render as
+  // an unknown value the moment the popover closed.
+  const [savedPresets, setSavedPresets] = useState([]);
+  // A composed/minted route's model and effort, waiting for the caller to
+  // reflect its provider id (see `selectRoute`).
+  const [pendingRoute, setPendingRoute] = useState(null);
+  const callbacksRef = useRef({ onModelChange, onEffortChange });
+  callbacksRef.current = { onModelChange, onEffortChange };
   const providerAllowed = selectionPolicy?.provider;
   const modelAllowed = selectionPolicy?.model;
   const effortAllowed = selectionPolicy?.effort;
-  const selectedProvider = providerList.find((p) => p.id === (effectiveProviderId ?? selectedProviderId));
+  const callerProviders = Array.isArray(providers) ? providers : [];
+  const providerList = [
+    ...callerProviders,
+    ...savedPresets.filter((preset) => !callerProviders.some((p) => p?.id === preset.id)),
+  ];
+  // Resolve against the effective provider (the pin, or what a blank selection
+  // falls back to) — everything below describes what a run would actually use.
+  const lookupId = effectiveProviderId ?? selectedProviderId;
+  const listedProvider = providerList.find((p) => p.id === lookupId);
+  // A composite the caller's list cannot name is looked up in the shared
+  // catalog — fetched only in that case, so the many preset-only pickers never
+  // pay for it. `resolveRef` is a pure lookup over the fetched catalog.
+  const needsCatalog = !listedProvider && isCompositeProviderId(lookupId);
+  const catalog = useProviderCatalog(needsCatalog);
+  const selectedProvider = listedProvider || (needsCatalog ? catalog.resolveRef(lookupId) : undefined) || undefined;
+  const providerFromCatalog = Boolean(selectedProvider) && !listedProvider;
+  // The record behind the select's own value (the pin itself, not what a blank
+  // one resolves to), for the Custom group below.
+  const selectedRecord = providerList.find((p) => p.id === selectedProviderId)
+    ?? (selectedProvider?.id === selectedProviderId ? selectedProvider : null);
   // A blank model ("Default model") isn't a no-op: the agent resolver then runs
   // the provider's own defaultModel — which for an Ollama-backed provider can be
   // a non-tool model that silently wedges the stage. So evaluate the EFFECTIVE
@@ -157,9 +227,31 @@ export default function ProviderModelSelector({
   // pinned to a now-disabled provider still renders its value instead of
   // silently blanking the select (`selectableProviders` is the one rule).
   const visibleProviders = selectableProviders(providerList, { selectedId: selectedProviderId, allowed: providerAllowed });
+  // Presets are grouped by harness; a composite in the list (a hook that
+  // appended the resolved pin) belongs to the "Custom" group instead.
+  const presetGroups = groupProvidersByHarness(visibleProviders.filter((p) => !isCompositeProviderId(p.id)));
+  const selectedComposite = isCompositeProviderId(selectedProviderId)
+    // Unresolvable (catalog unknown, or still loading): keep the raw id on
+    // screen rather than blanking a stored selection.
+    ? selectedRecord ?? { id: selectedProviderId, name: selectedProviderId, unavailableReason: catalog.loading ? null : 'not available on this install' }
+    : null;
+  const allowedComposeMethods = composeMethods ?? selectionPolicy?.modes;
+  // Fail closed under a provider policy the compose flow cannot honor: a
+  // posture/allowlist predicate judges PRESET records, and a composed route
+  // has no such record to judge until the server materializes it. Only a
+  // policy that publishes its execution `modes` (or an explicit
+  // `composeMethods`) says what compose may build.
+  const composePolicyKnown = !providerAllowed || Array.isArray(allowedComposeMethods);
+  const composeEnabled = compose && !loading && composePolicyKnown
+    && (!allowedComposeMethods || allowedComposeMethods.length > 0);
   // Defaults may be omitted from a provider's browsable catalog. Offer a real
   // pin as well as the blank inheritance option, including on required forms.
-  const catalogModels = Array.isArray(availableModels) ? availableModels : [];
+  const callerModels = Array.isArray(availableModels) ? availableModels : [];
+  // A provider the caller's list doesn't carry brings its own catalog (a
+  // composite's service models, a just-saved preset's list).
+  const catalogModels = callerModels.length === 0 && providerFromCatalog
+    ? filterSelectableModels(providerModelList(selectedProvider).filter(Boolean))
+    : callerModels;
   const defaultModel = selectedProvider?.defaultModel;
   const selectableModels = includeDefaultModel && defaultModel
     && !catalogModels.some((model) => modelOption(model)?.value === defaultModel)
@@ -197,7 +289,7 @@ export default function ProviderModelSelector({
   // state with no UI left to change it and every submit still sends it. Owned here
   // rather than by each caller so the rule can't be forgotten by the next picker.
   const handleModelChange = (value) => {
-    onModelChange(value);
+    onModelChange?.(value);
     if (!onEffortChange || !effort) return;
     const surviving = effortSurvivingModel(selectedProvider, value, effort);
     const filteredSurviving = surviving && effortAllowed
@@ -205,6 +297,59 @@ export default function ProviderModelSelector({
       ? ''
       : surviving;
     if (filteredSurviving !== effort) onEffortChange(filteredSurviving);
+  };
+  // The compose entry is an ACTION, not a value: opening the popover leaves the
+  // controlled value untouched, so cancelling restores the previous selection
+  // for free and no caller ever receives the sentinel.
+  const handleProviderSelect = (value) => {
+    if (value === COMPOSE_OPTION_VALUE) {
+      setComposeOpen(true);
+      return;
+    }
+    onProviderChange(value);
+  };
+  // A composed route lands in the caller's existing provider field through
+  // `onProviderChange`; its model and effort follow through the same
+  // callbacks a pick in the sibling selects would use — but only AFTER the
+  // caller reflects the new id. Firing all three in one tick would hand
+  // `onModelChange` to a handler that merges over the caller's CURRENT
+  // provider (`onChange({ ...draft, model })`, `persist(providerId, m)`),
+  // which is still the old one until it re-renders, silently putting the
+  // previous provider back. Waiting for `selectedProviderId` to catch up also
+  // lets the caller's own clearing rule (a provider change resetting the
+  // model) run first and then be overridden by the explicit choice. A caller
+  // that never reflects the id simply never gets the model/effort.
+  const selectRoute = (id, model, routeEffort) => {
+    setPendingRoute({ id, model: model || '', effort: routeEffort || '' });
+    onProviderChange(id);
+  };
+  useEffect(() => {
+    if (!pendingRoute || pendingRoute.id !== selectedProviderId) return;
+    callbacksRef.current.onModelChange?.(pendingRoute.model);
+    callbacksRef.current.onEffortChange?.(pendingRoute.effort);
+    setPendingRoute(null);
+  }, [pendingRoute, selectedProviderId]);
+  // "Use once" passes the composite id; "Save as preset" passes the minted
+  // preset (whose defaults are the composed model and effort) after carrying
+  // it locally until the caller's list catches up.
+  const handleCompose = (compositeId, { model, effort: composedEffort }) => selectRoute(compositeId, model, composedEffort);
+  const handlePresetSaved = (preset) => {
+    setSavedPresets((prev) => [...prev.filter((p) => p.id !== preset.id), preset]);
+    selectRoute(preset.id, preset.defaultModel, preset.effort);
+  };
+  const optionFor = (p) => {
+    const hardwareUnavailable = !isProviderHardwareCompatible(p);
+    const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
+    const unavailable = hardwareUnavailable || policyDisallowed || Boolean(p.unavailableReason);
+    const reason = hardwareUnavailable
+      ? ' (unavailable on this machine)'
+      : policyDisallowed ? ' (not permitted here)'
+        : p.unavailableReason ? ` (${p.unavailableReason})` : '';
+    return (
+      <option key={p.id} value={p.id} disabled={unavailable}>
+        {p.name}{reason}
+      </option>
+    );
   };
   // Use available container space, including narrow drawers on desktop. Bound
   // labeled fields so a lone provider does not stretch across the whole page.
@@ -219,10 +364,11 @@ export default function ProviderModelSelector({
         <select
           id={providerSelectId}
           value={selectedProviderId}
-          onChange={(e) => onProviderChange(e.target.value)}
+          onChange={(e) => handleProviderSelect(e.target.value)}
           disabled={disabled || loading}
           title={compact ? label : undefined}
           aria-label={compact ? label : undefined}
+          aria-describedby={describedBy}
           className={SELECT_CLASS}
         >
           {/* Rendered even when the caller forces a selection: mid-fetch there
@@ -231,18 +377,17 @@ export default function ProviderModelSelector({
           {loading
             ? <option value="">Loading providers…</option>
             : emptyProviderOption != null && <option value="">{effectiveProviderId && selectedProvider?.name && typeof emptyProviderOption === 'string' && !emptyProviderOption.includes(selectedProvider.name) ? `${emptyProviderOption} — ${selectedProvider.name}` : emptyProviderOption}</option>}
-          {visibleProviders.map((p) => {
-            const hardwareUnavailable = !isProviderHardwareCompatible(p);
-            const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
-            const unavailable = hardwareUnavailable || policyDisallowed;
-            return (
-              <option key={p.id} value={p.id} disabled={unavailable}>
-                {p.name}{hardwareUnavailable
-                  ? ' (unavailable on this machine)'
-                  : policyDisallowed ? ' (not permitted here)' : ''}
-              </option>
-            );
-          })}
+          {presetGroups.map((group) => (
+            <optgroup key={group.harnessId} label={group.label}>
+              {group.providers.map(optionFor)}
+            </optgroup>
+          ))}
+          {(selectedComposite || composeEnabled) && (
+            <optgroup label="Custom">
+              {selectedComposite && optionFor(selectedComposite)}
+              {composeEnabled && <option value={COMPOSE_OPTION_VALUE}>Custom combination…</option>}
+            </optgroup>
+          )}
         </select>
       </div>
       {showModel && (
@@ -301,6 +446,15 @@ export default function ProviderModelSelector({
             className={SELECT_CLASS}
           />
         </div>
+      )}
+      {composeEnabled && (
+        <ProviderComposePopover
+          open={composeOpen}
+          onClose={() => setComposeOpen(false)}
+          onCompose={handleCompose}
+          onPresetSaved={handlePresetSaved}
+          allowedMethods={allowedComposeMethods}
+        />
       )}
     </div>
   );

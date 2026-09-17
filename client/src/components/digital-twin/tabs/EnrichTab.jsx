@@ -13,7 +13,7 @@ import {Sparkles,
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
-import { FormField } from '../../ui/FormField';
+import TwinProviderPicker from '../TwinProviderPicker.jsx';
 
 import { ENRICHMENT_CATEGORIES } from '../constants';
 import ListEnrichment from '../ListEnrichment';
@@ -547,24 +547,12 @@ export default function EnrichTab({ onRefresh }) {
             </p>
 
             {/* Provider Selection */}
-            <FormField className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4" labelClassName="text-sm text-gray-400" label="Analyze with:">
-              <select
-                value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
-                onChange={(e) => {
-                  const [providerId, model] = e.target.value.split(':');
-                  setSelectedProvider({ providerId, model });
-                }}
-                className="px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white text-sm"
-              >
-                {providers.map(p => (
-                  (p.models || [p.defaultModel]).filter(Boolean).map(model => (
-                    <option key={`${p.id}:${model}`} value={`${p.id}:${model}`}>
-                      {p.name} - {model}
-                    </option>
-                  ))
-                ))}
-              </select>
-            </FormField>
+            <TwinProviderPicker
+              label="Analyze with"
+              providers={providers}
+              selected={selectedProvider}
+              onChange={setSelectedProvider}
+            />
 
             {/* Writing Samples */}
             <div className="space-y-3">

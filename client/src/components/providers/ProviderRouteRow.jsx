@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Star, Terminal } from 'lucide-react';
 import ProviderRouteModelAliases from './ProviderRouteModelAliases';
+import EffortSelect from '../cos/EffortSelect.jsx';
 import { routeOverrideDraft, routeOverridePatch } from '../../lib/providerManagement';
 
 /**
@@ -87,13 +88,6 @@ export default function ProviderRouteRow({
   const patch = useMemo(() => routeOverridePatch(route.settings, draft), [route.settings, draft]);
   const dirty = Object.keys(patch).length > 0;
   const fields = useMemo(() => orderedFields(route.settings), [route.settings]);
-  const efforts = Array.isArray(route.effortLevels) ? route.effortLevels : [];
-  // A stored level the current ladder no longer lists stays selectable, the
-  // same way a model pin outside the catalog stays visible. Without it the
-  // select would fall back to the blank option, and simply OPENING the panel
-  // would read as "the human cleared the effort" and offer to save it.
-  const stored = route.settings?.effort;
-  const effortOptions = stored && !efforts.includes(stored) ? [...efforts, stored] : efforts;
 
   const set = (key, value) => setDraft((prev) => ({ ...prev, [key]: value }));
   const fieldId = (key) => `route-${route.providerId}-${key}`;
@@ -152,21 +146,20 @@ export default function ProviderRouteRow({
                     onChange={(e) => set(key, e.target.value)}
                   />
                 ) : key === 'effort' ? (
-                  <select
+                  // The route publishes its own ladder (`effortLevels`), which
+                  // the shared select reads off the record; a stored level the
+                  // ladder no longer lists stays selectable and says what it
+                  // runs as, the same way a model pin outside the catalog does.
+                  // A harness with no ladder keeps a DISABLED control so "this
+                  // program takes no effort flag" is visible, not read as "unset".
+                  <EffortSelect
                     id={fieldId(key)}
                     className={INPUT_CLASS}
-                    disabled={efforts.length === 0}
+                    provider={route}
                     value={draft[key] ?? ''}
-                    onChange={(e) => set(key, e.target.value)}
-                  >
-                    {/* A harness with no effort ladder gets a DISABLED control
-                        rather than a hidden field, so "this program takes no
-                        effort flag" is visible instead of reading as "unset". */}
-                    <option value="">
-                      {efforts.length === 0 ? 'This harness takes no effort setting' : 'Harness default'}
-                    </option>
-                    {effortOptions.map((level) => <option key={level} value={level}>{level}</option>)}
-                  </select>
+                    onChange={(value) => set(key, value)}
+                    emptyLadderLabel="This harness takes no effort setting"
+                  />
                 ) : (
                   <input
                     id={fieldId(key)}

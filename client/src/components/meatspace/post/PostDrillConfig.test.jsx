@@ -612,7 +612,8 @@ describe('PostDrillConfig', () => {
       await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
       await waitFor(() => expect(getProviders).toHaveBeenCalled());
       const providerSelect = screen.getByLabelText('Provider');
-      await waitFor(() => expect(providerSelect.querySelectorAll('option')).toHaveLength(2));
+      // System Default, the provider, and the preset-first selector's "Custom combination…" entry (#7566).
+      await waitFor(() => expect(providerSelect.querySelectorAll('option')).toHaveLength(3));
       fireEvent.change(providerSelect, { target: { value: 'prov-1' } });
       fireEvent.click(screen.getByLabelText('Enable all LLM drills'));
       expect(screen.getByRole('switch', { name: 'Reframe' }).getAttribute('aria-checked')).toBe('true');
@@ -629,7 +630,8 @@ describe('PostDrillConfig', () => {
       await renderConfig(<PostDrillConfig config={config} onSaved={vi.fn()} onBack={vi.fn()} />);
       await waitFor(() => expect(getProviders).toHaveBeenCalled());
       const providerSelect = screen.getByLabelText('Provider');
-      await waitFor(() => expect(providerSelect.querySelectorAll('option')).toHaveLength(2));
+      // System Default, the provider, and the preset-first selector's "Custom combination…" entry (#7566).
+      await waitFor(() => expect(providerSelect.querySelectorAll('option')).toHaveLength(3));
       fireEvent.change(providerSelect, { target: { value: 'prov-1' } });
       // Turn the LLM section off (provider selection survives in state).
       fireEvent.click(screen.getByRole('switch', { name: 'Wit & Memory (LLM) drills' }));

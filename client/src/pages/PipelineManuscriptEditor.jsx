@@ -40,6 +40,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
 import { filterGenerationModels, mergeModelLists, localBackendForProvider, modelOptionLabel } from '../utils/providers';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 import useLocalModels from '../hooks/useLocalModels';
 import { locateAnchors } from '../lib/manuscriptAnchors';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
@@ -915,21 +916,16 @@ export default function PipelineManuscriptEditor() {
         {/* Comments sidebar — provider override, review trigger, and the index. */}
         <aside className="border-t lg:border-t-0 lg:border-l border-port-border bg-port-card/40 lg:overflow-y-auto p-3 space-y-3">
           <div className="border border-port-border rounded-lg bg-port-bg/40 p-2.5 space-y-2">
-            <label htmlFor="ms-provider-override" className="block text-[10px] uppercase tracking-wider text-gray-500">
-              AI provider — Generate fix &amp; Editorial review
-            </label>
-            <div className="flex items-center gap-2">
-              <select
-                id="ms-provider-override"
-                value={overrideProviderId}
-                onChange={(e) => changeOverrideProvider(e.target.value)}
-                className="flex-1 min-w-0 px-2 py-1.5 bg-port-bg border border-port-border rounded text-sm text-white"
-              >
-                <option value="">System default</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
+            <div className="flex items-end gap-2">
+              <div className="flex-1 min-w-0">
+                <ProviderModelSelector
+                  label="AI provider — Generate fix & Editorial review"
+                  providers={providers}
+                  selectedProviderId={overrideProviderId}
+                  onProviderChange={changeOverrideProvider}
+                  emptyProviderOption="System default"
+                />
+              </div>
               {overrideProviderId && overrideModels.length > 0 ? (
                 <select
                   id="ms-model-override"
