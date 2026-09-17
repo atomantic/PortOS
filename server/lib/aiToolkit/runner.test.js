@@ -799,6 +799,9 @@ describe('AI Toolkit runner service', () => {
 
     let runner;
     let stopDuringFinalRead = true;
+    // Recorded, not asserted inline: a throw inside the reader would reject the
+    // stream and be reported as a cancel/failure rather than a test failure.
+    let stopAccepted = null;
     const frame = (text) => new TextEncoder()
       .encode(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n`);
     vi.stubGlobal('fetch', vi.fn(async () => {
@@ -813,7 +816,7 @@ describe('AI Toolkit runner service', () => {
                 // success finalizer, while `activeRuns` still holds the run.
                 if (stopDuringFinalRead) {
                   stopDuringFinalRead = false;
-                  expect(await runner.stopRun('run-reused')).toBe(true);
+                  stopAccepted = await runner.stopRun('run-reused');
                 }
                 return { done: true };
               }
@@ -845,6 +848,9 @@ describe('AI Toolkit runner service', () => {
 
     // The chunk was already delivered, so the run is a success despite the Stop.
     const first = await runOnce();
+    // The Stop really did land on a registered run — otherwise no marker was
+    // ever set and the rest of this test would pass vacuously.
+    expect(stopAccepted).toBe(true);
     expect(first).toMatchObject({ success: true });
     expect(first.canceled).toBeUndefined();
 
