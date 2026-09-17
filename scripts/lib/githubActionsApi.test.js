@@ -5,7 +5,9 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import { githubRequest, isSuccess, repoApiPath, resolveApiBase } from './githubActionsApi.js';
+import {
+  fetchJobsWithFailedSteps, githubRequest, isSuccess, repoApiPath, resolveApiBase,
+} from './githubActionsApi.js';
 
 describe('resolveApiBase', () => {
   it('defaults to the public API when GITHUB_API_URL is absent', () => {
@@ -108,5 +110,52 @@ describe('isSuccess', () => {
     expect(isSuccess({ ok: true })).toBe(true);
     expect(isSuccess({ status: 201 })).toBe(true);
     expect(isSuccess(null)).toBe(false);
+  });
+});
+
+describe('fetchJobsWithFailedSteps', () => {
+  const TARGET = {
+    repoPath: 'https://api.github.com/repos/example/portos',
+    runId: '123456789',
+    token: 'ephemeral-test-token',
+  };
+  const jobs = (value) => vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => value });
+
+  it('names the failed steps of a job GitHub recorded as cancelled', () => {
+    // The fail-fast cancel lands before the job's `failure` conclusion is
+    // written, so the step conclusions are the only surviving evidence (7574).
+    return expect(fetchJobsWithFailedSteps(jobs({
+      jobs: [
+        { name: 'Server tests (1/2)', conclusion: 'cancelled', steps: [{ name: 'Run', conclusion: 'cancelled' }] },
+        {
+          name: 'Windows server unit tests (3/3)',
+          conclusion: 'cancelled',
+          steps: [{ name: 'Checkout', conclusion: 'success' }, { name: 'Run tests', conclusion: 'failure' }],
+        },
+      ],
+    }), TARGET)).resolves.toEqual([
+      { name: 'Windows server unit tests (3/3)', steps: ['Run tests'] },
+    ]);
+  });
+
+  it('separates "nothing failed" from "could not look"', async () => {
+    // Both callers turn a non-empty list into a red verdict and `[]` into a
+    // cancelled one. Collapsing null into `[]` would be invisible there and
+    // would silently re-hide the failure this lookup exists to surface.
+    await expect(fetchJobsWithFailedSteps(jobs({ jobs: [] }), TARGET)).resolves.toEqual([]);
+
+    for (const fetchImpl of [
+      vi.fn().mockResolvedValue({ ok: false, status: 403 }),
+      vi.fn().mockRejectedValue(new Error('network unavailable')),
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }),
+      undefined,
+    ]) {
+      await expect(fetchJobsWithFailedSteps(fetchImpl, TARGET)).resolves.toBeNull();
+    }
+
+    const unused = jobs({ jobs: [] });
+    await expect(fetchJobsWithFailedSteps(unused, { ...TARGET, token: '' })).resolves.toBeNull();
+    await expect(fetchJobsWithFailedSteps(unused, { ...TARGET, runId: 'not-a-run' })).resolves.toBeNull();
+    expect(unused).not.toHaveBeenCalled();
   });
 });

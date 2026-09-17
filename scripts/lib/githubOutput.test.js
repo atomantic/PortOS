@@ -4,7 +4,9 @@ import { join } from 'path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { writeStepEnv, writeStepOutput, writeStepSummary } from './githubOutput.js';
+import {
+  formatErrorAnnotation, writeStepEnv, writeStepOutput, writeStepSummary,
+} from './githubOutput.js';
 
 describe('writeStepOutput', () => {
   let outputPath;
@@ -111,5 +113,20 @@ describe('writeStepSummary', () => {
   it('does nothing outside GitHub Actions', () => {
     expect(() => writeStepSummary('### Verdict', {})).not.toThrow();
     expect(readFileSync(summaryPath, 'utf8')).toBe('');
+  });
+});
+
+describe('formatErrorAnnotation', () => {
+  it('escapes the title and the message by their different rules', () => {
+    // A `:` or `,` in a PROPERTY ends it, so both must be encoded there — and
+    // must NOT be in the message, where they are ordinary punctuation.
+    expect(formatErrorAnnotation('CI failed: server (1/2)', 'Run tests, then build'))
+      .toBe('::error title=CI failed%3A server (1/2)::Run tests, then build');
+  });
+
+  it('encodes a newline rather than letting it end the annotation early', () => {
+    expect(formatErrorAnnotation('t', 'line one\nline two')).toBe('::error title=t::line one%0Aline two');
+    // `%` first, or the escapes above would be re-escaped into nonsense.
+    expect(formatErrorAnnotation('t', '50% slower')).toBe('::error title=t::50%25 slower');
   });
 });

@@ -495,12 +495,30 @@ that is actually red. Two PortOS incidents were misdiagnosed as billing this way
 (#7482 on 2026-09-16, #7571 on 2026-09-17) and burned full-matrix re-runs before
 anyone read a job log.
 
+#### Step 0 — read the annotation, then the gate (usually this is the whole answer)
+
+Both now name the job and the failing step, and neither depends on a job
+conclusion, so both survive the cancel:
+
+- **The Checks tab's `::error` annotation.** `scripts/cancel-current-ci-run.js`
+  prints it *before* it POSTs the cancel, and Actions records an annotation the
+  instant the line is printed. It renders above the fold on the pull request.
+- **The `CI Gate` summary.** `scripts/ci-gate-report.js` queries this run's job
+  steps whenever its verdict would otherwise be `cancelled`, and reports a
+  failure naming the culprit instead.
+
+Both are best-effort. If the annotation shows only a job-and-shard label, or
+the gate still says `CANCELLED, not failed`, the lookup behind them did not
+land — fall through to step 1 and run it by hand. A run from before #7574 has
+neither.
+
 #### Step 1 — ask whether a STEP failed (this is the primary diagnostic)
 
-A cancelled job keeps its steps' conclusions, so the failing step survives even
-though the job that owns it reads `cancelled`. **`gh run view --json jobs` does
-not expose steps** — that omission is precisely why both incidents above were
-misread. Go to the REST API instead:
+This is what step 0's two surfaces do for you; run it by hand when they are
+missing or came back empty. A cancelled job keeps its steps' conclusions, so the
+failing step survives even though the job that owns it reads `cancelled`.
+**`gh run view --json jobs` does not expose steps** — that omission is precisely
+why both incidents above were misread. Go to the REST API instead:
 
 ```bash
 gh api "/repos/atomantic/PortOS/actions/runs/<run-id>/jobs?per_page=100" \
@@ -559,9 +577,11 @@ Supporting signals for the spending-limit case, none of them sufficient alone:
 - Every runner is cancelled within a short window of one another, rather than
   one job finishing ~30–60 s ahead of the rest.
 - The logs show tests still passing right up to the cancel.
-- Nothing in `scripts/ci-gate-report.js`'s output helps here — it prints
-  `CANCELLED, not failed` for a fail-fast run too, because it reads job
-  conclusions. Do not count it as a signal either way.
+- `scripts/ci-gate-report.js` distinguishes the two now, so its wording IS a
+  signal — but read which sentence it printed. "Checked every job's STEP
+  conclusions too, and none failed" means the lookup ran and cleared a
+  fail-fast cancel. "could NOT be read" means it did not, and rules nothing
+  out. A run from before #7574 says neither.
 
 Exceeding the concurrent-**job cap** makes GitHub queue runs; cancelling
 in-flight runs is the **spending-limit** behaviour. Full runs are expensive
@@ -595,12 +615,15 @@ which branch protection still gates), and leave the PR for the owner.
 - The gate reports the difference **when the gate itself runs**.
   `scripts/ci-gate-report.js` prints `this run was CANCELLED, not failed`,
   names the cancelled jobs, and points back here — instead of the old
-  undifferentiated "did not pass". Two limits: `if: always()` defeats an
-  upstream failure, not a run-wide cancellation, so in the full external-cancel
-  case the gate job is cancelled too and prints nothing; and the wording is
-  about job conclusions, so it says `CANCELLED, not failed` for a fail-fast run
-  as well. **Never read that line as proof of an external cancel** — it is a
-  statement about conclusions, not about causes.
+  undifferentiated "did not pass". Since #7574 it reaches that wording only
+  after querying the run's job **steps** and finding none failed, so a
+  fail-fast cancel is reported as the red run it is rather than sharing the
+  external cancel's line. Two limits remain: `if: always()` defeats an upstream
+  failure, not a run-wide cancellation, so in the full external-cancel case the
+  gate job is cancelled too and prints nothing; and when the step lookup itself
+  fails the gate says so and falls back to the conclusion-only wording, which
+  proves nothing about causes. It covers a partial cancel; the recovery run
+  covers the rest.
 
 **A caveat worth knowing**: the retry re-runs the whole suite, Windows shards
 included, so if the cause really is the spending limit then recovery spends
