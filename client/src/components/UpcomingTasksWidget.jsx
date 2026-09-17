@@ -34,7 +34,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
     // which used to be indistinguishable from "nothing is scheduled".
     if (error) {
       return (
-        <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
+        <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6" role="status">
           <div className="flex items-center gap-3">
             <Clock className="w-6 h-6 text-gray-500" aria-hidden="true" />
             <div>
@@ -233,7 +233,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
       {/* A later fetch failed but a prior good result is still on screen —
           say so rather than silently going stale (#7527). */}
       {error && (
-        <div className="mt-3 pt-3 border-t border-port-border text-xs text-port-warning text-center">
+        <div className="mt-3 pt-3 border-t border-port-border text-xs text-port-warning text-center" role="status">
           Showing last known schedule — live data unavailable
         </div>
       )}
