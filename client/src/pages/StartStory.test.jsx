@@ -18,6 +18,19 @@ vi.mock('../components/ui/Toast', () => ({
   default: { error: (...a) => toastError(...a) },
 }));
 
+// The universe list gates the "Use an existing universe" radio — it renders
+// `disabled` until a NAMED universe lands — but all three mode cards come from a
+// static list and are on screen synchronously. Waiting on card text therefore
+// resolves on the FIRST poll, before the fetch: the click then lands on a
+// disabled radio, silently does nothing, and the next `findBy*` burns the whole
+// async budget waiting for a select that will never render (#7592, the #7448
+// wrong-barrier shape). Wait on the control the click actually needs instead.
+const clickUseExistingUniverse = async () => {
+  const radio = await screen.findByLabelText('Use an existing universe');
+  await waitFor(() => expect(radio).not.toBeDisabled());
+  fireEvent.click(radio);
+};
+
 describe('StartStory onramp', () => {
   beforeEach(() => {
     navigateMock.mockReset();
@@ -43,9 +56,8 @@ describe('StartStory onramp', () => {
 
   it('forwards the chosen universe to engines that consume it', async () => {
     render(<StartStory />);
-    await screen.findByText('From an idea');
     // Opt into an existing universe, then select one.
-    fireEvent.click(screen.getByLabelText('Use an existing universe'));
+    await clickUseExistingUniverse();
     const select = await screen.findByLabelText('Existing universe');
     fireEvent.change(select, { target: { value: 'u2' } });
 
@@ -58,8 +70,7 @@ describe('StartStory onramp', () => {
 
   it('does not forward a universe to prose mode (no universe link yet)', async () => {
     render(<StartStory />);
-    await screen.findByText('From writing prose');
-    fireEvent.click(screen.getByLabelText('Use an existing universe'));
+    await clickUseExistingUniverse();
     const select = await screen.findByLabelText('Existing universe');
     fireEvent.change(select, { target: { value: 'u1' } });
 
@@ -69,8 +80,7 @@ describe('StartStory onramp', () => {
 
   it('blocks the cards until a universe is picked when using an existing one', async () => {
     render(<StartStory />);
-    await screen.findByText('From an idea');
-    fireEvent.click(screen.getByLabelText('Use an existing universe'));
+    await clickUseExistingUniverse();
     // No universe selected yet — clicking a card should not navigate.
     fireEvent.click(screen.getByText('From an idea'));
     expect(navigateMock).not.toHaveBeenCalled();
@@ -86,8 +96,7 @@ describe('StartStory onramp', () => {
       { id: 'u3', name: '   ' },
     ]);
     render(<StartStory />);
-    await screen.findByText('From an idea');
-    fireEvent.click(screen.getByLabelText('Use an existing universe'));
+    await clickUseExistingUniverse();
     const select = await screen.findByLabelText('Existing universe');
     // Only the placeholder + the one named universe.
     const options = select.querySelectorAll('option');
