@@ -40,10 +40,18 @@ import {
   unsupportedRouteSettings,
 } from '../lib/providerRouteSettings.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
+import {
+  SERVICE_CREDENTIAL_VIAS,
+  allocateServiceSlug,
+  planServiceColumnBackfill,
+  serviceColumnsForConnection,
+} from '../lib/providerServiceInstances.js';
+import { serviceDefinitionById } from '../lib/serviceDefinitions.js';
 import { requireToolkit } from '../lib/aiToolkitState.js';
 import {
   acknowledgeProjection,
   applyReconciliation,
+  applyServiceColumnBackfill,
   commitPendingProjection,
   deleteConnection,
   detachBindingToConnection,
@@ -106,6 +114,22 @@ export function resetProviderGraphState() {
 const providerService = () => requireToolkit().services.providers;
 
 /**
+ * Run `fn` on the graph's one serialization queue. Exported for the
+ * service-instance operations in `providerServices.js`, which mutate the same
+ * rows and must not interleave with a reconcile pass.
+ */
+export const serializeProviderGraph = (fn) => serialize(fn);
+
+/**
+ * A connection addressed by UUID or by service slug (#7563). Every
+ * `/connections/:id` route accepts either, so a client that learned the slug
+ * from `/services` can use it on the older surface too. `null` when neither
+ * matches — and never a label match.
+ */
+export const findConnectionByRef = (graph, ref) =>
+  graph.connections.find((candidate) => candidate.id === ref || (candidate.slug != null && candidate.slug === ref)) ?? null;
+
+/**
  * The patch that materializes a connection-owned snapshot into an executable
  * record. Built from the live record so unknown custom fields and route-owned
  * env vars survive untouched.
@@ -138,8 +162,30 @@ async function reconcilePass(reason) {
     plan.acknowledgements.push(...written.map((providerId) => ({ providerId })));
   }
 
+  // Service-instance columns (#7563): a row written before they existed, an
+  // imported fragment and a detached clone all arrive with no slug. The fresh
+  // rows in the plan are named BEFORE it is applied, so they land addressed;
+  // the pre-existing unnamed rows are backfilled after. Row-derived (never a
+  // seed) and idempotent, so it rides every pass rather than a one-shot
+  // migration. Local I/O only; nothing here contacts a provider.
+  const taken = new Set(graph.connections.map((connection) => connection.slug).filter(Boolean));
+  const harnessOf = (connectionId, bindings) => bindings.find((binding) => binding.connectionId === connectionId)?.harnessId ?? null;
+  for (const connection of plan.imports.connections) {
+    Object.assign(connection, serviceColumnsForConnection(connection, { harnessId: harnessOf(connection.id, plan.imports.bindings), taken }));
+  }
+  for (const regroup of plan.regroups) {
+    if (regroup.connectionAction !== 'clone') continue;
+    const harnessId = regroup.binding?.harnessId ?? graph.bindings.find((binding) => binding.id === regroup.bindingId)?.harnessId ?? null;
+    Object.assign(regroup.connection, serviceColumnsForConnection(regroup.connection, { harnessId, taken }));
+  }
+  const backfill = planServiceColumnBackfill(graph, taken);
+
   const noop = reconciliationIsNoop(plan);
   if (!noop) await applyReconciliation(plan);
+  if (backfill.length > 0) {
+    await applyServiceColumnBackfill(backfill);
+    console.log(`🔗 Provider graph: named ${backfill.length} service instance(s) (${backfill.map((row) => row.slug).join(', ')})`);
+  }
 
   const detached = plan.regroups.filter((regroup) => regroup.connectionAction === 'clone').length;
   const split = plan.regroups.filter((regroup) => !regroup.bindingId).length;
@@ -237,6 +283,13 @@ const requireGraph = () => {
     throw new ServerError('Provider connection graph is unavailable on this install', { status: 503, code: 'PROVIDER_GRAPH_UNAVAILABLE' });
   }
 };
+export const requireProviderGraph = requireGraph;
+
+const requireConnection = (graph, ref) => {
+  const connection = findConnectionByRef(graph, ref);
+  if (!connection) throw new ServerError('Connection not found', { status: 404, code: 'CONNECTION_NOT_FOUND' });
+  return connection;
+};
 
 const stale = (what) => new ServerError(
   `${what} changed since the preview was taken; take a new preview`,
@@ -256,9 +309,7 @@ async function resolveLink({ bindingId, targetConnectionId = null, expectedRevis
   const binding = graph.bindings.find((candidate) => candidate.id === bindingId);
   if (!binding) throw new ServerError('Binding not found', { status: 404, code: 'BINDING_NOT_FOUND' });
   const source = graph.connections.find((candidate) => candidate.id === binding.connectionId) || null;
-  const target = targetConnectionId
-    ? graph.connections.find((candidate) => candidate.id === targetConnectionId) || null
-    : null;
+  const target = targetConnectionId ? findConnectionByRef(graph, targetConnectionId) : null;
   if (targetConnectionId && !target) throw new ServerError('Connection not found', { status: 404, code: 'CONNECTION_NOT_FOUND' });
   if (target && target.id === binding.connectionId) {
     throw new ServerError('That binding already uses this connection', { status: 409, code: 'PROVIDER_GRAPH_ALREADY_LINKED' });
@@ -362,8 +413,17 @@ export function linkBinding(input) {
  */
 export function unlinkBinding(input) {
   return serialize(async () => {
-    const { binding, source } = await resolveLink({ ...input, targetConnectionId: null });
-    const connection = { ...source, id: randomUUID(), revision: 1 };
+    const { graph, binding, source } = await resolveLink({ ...input, targetConnectionId: null });
+    // A clone is a second INSTANCE of the same service, so it takes the next
+    // free slug rather than the source's — `uq_ai_connections_slug` would
+    // refuse the copy, and two rows answering to one address is the bug.
+    const taken = new Set(graph.connections.map((candidate) => candidate.slug).filter(Boolean));
+    const connection = {
+      ...source,
+      id: randomUUID(),
+      revision: 1,
+      slug: allocateServiceSlug(source.slug ?? source.definitionId ?? source.kind, taken),
+    };
     await detachBindingToConnection({ bindingId: binding.id, connection });
     console.log(`🔗 Unlinked binding ${binding.id} onto its own connection ${connection.id}`);
     return { bindingId: binding.id, connectionId: connection.id };
@@ -379,9 +439,10 @@ export function unlinkBinding(input) {
  * that keeps them from accumulating forever, and it is refused while a binding
  * still names the row: unlink first, so no binding is ever silently orphaned.
  */
-export async function removeConnection(connectionId) {
+export async function removeConnection(connectionRef) {
   requireGraph();
   return serialize(async () => {
+    const connectionId = requireConnection(await readGraph(), connectionRef).id;
     const result = await deleteConnection(connectionId);
     if (!result.deleted) {
       throw new ServerError('Unlink the bindings that use this connection first',
@@ -474,6 +535,20 @@ function requireSettledRoutes(routes) {
   }
 }
 
+/**
+ * A plan must be one the instance's definition sells (#7563). A row with no
+ * definition takes any plan: there is nothing to check it against, and refusing
+ * would strand a legacy row a human is trying to label.
+ */
+function requireServicePlan(connection, plan) {
+  if (plan === undefined) return;
+  const definition = connection.definitionId ? serviceDefinitionById(connection.definitionId) : null;
+  if (definition && !definition.plans.includes(plan)) {
+    throw new ServerError(`${definition.label} has no "${plan}" plan; choose one of ${definition.plans.join(', ')}`,
+      { status: 400, code: 'SERVICE_PLAN_UNSUPPORTED' });
+  }
+}
+
 /** Every binding on a connection, and the executable routes those bindings own. */
 function connectionFanout(graph, connectionId) {
   const bindings = graph.bindings.filter((binding) => binding.connectionId === connectionId);
@@ -497,12 +572,19 @@ function connectionFanout(graph, connectionId) {
  * per declared transport and sends them all back: a client that sends a partial
  * map is asking to remove the rest.
  */
-export function updateConnectionSettings({ connectionId, expectedRevision, label, transports, credentials }) {
+export function updateConnectionSettings({
+  connectionId, expectedRevision, label, transports, credentials, plan, enabled, credentialVia,
+}) {
   return serialize(async () => {
     requireGraph();
     const graph = await readGraph();
-    const connection = requireRow(graph.connections, connectionId, 'Connection', 'CONNECTION_NOT_FOUND');
+    const connection = requireConnection(graph, connectionId);
     if (connection.revision !== expectedRevision) throw stale('The connection');
+    requireServicePlan(connection, plan);
+    if (credentialVia !== undefined && !SERVICE_CREDENTIAL_VIAS.includes(credentialVia)) {
+      throw new ServerError(`credentialVia must be one of ${SERVICE_CREDENTIAL_VIAS.join(', ')}`,
+        { status: 400, code: 'PROVIDER_SERVICE_CREDENTIAL_VIA_INVALID' });
+    }
     const { routes } = connectionFanout(graph, connection.id);
     requireSettledRoutes(routes);
 
@@ -513,11 +595,17 @@ export function updateConnectionSettings({ connectionId, expectedRevision, label
         { status: 400, code: 'PROVIDER_GRAPH_REDACTED_CREDENTIAL' });
     }
 
+    const nextVia = credentialVia ?? connection.credentialVia;
     const next = {
       ...connection,
       label: label ?? connection.label,
       transports: transports ?? connection.transports,
-      credentials: merged.credentials,
+      // A `bootstrap` instance stores no secret by definition: the launch
+      // wrapper supplies it at spawn. Switching to it drops whatever was held.
+      credentials: nextVia === 'bootstrap' ? {} : merged.credentials,
+      plan: plan ?? connection.plan,
+      enabled: enabled ?? connection.enabled,
+      credentialVia: nextVia,
     };
     const revision = await saveConnectionSettings(next);
     const applied = await projectRoutes(routes.map((route) => route.providerId), next);
@@ -567,11 +655,11 @@ export function updateBindingSettings({ bindingId, expectedRevision, label, sele
  * a backend whose last model was deleted is a real answer, not "never asked".
  * No pin, default or `activeProvider` is repicked either way.
  */
-export function refreshConnectionCatalog(connectionId) {
+export function refreshConnectionCatalog(connectionRef) {
   return serialize(async () => {
     requireGraph();
     const graph = await readGraph();
-    const connection = requireRow(graph.connections, connectionId, 'Connection', 'CONNECTION_NOT_FOUND');
+    const connection = requireConnection(graph, connectionRef);
     const { routes } = connectionFanout(graph, connection.id);
     if (routes.length === 0) {
       throw new ServerError('This connection has no executable route to probe',
@@ -784,6 +872,8 @@ export function createConnection({ kind, label, transports, credentials }) {
     requireGraph();
     const blocker = connectionBlocker({ kind, transports });
     if (blocker) throw new ServerError(blocker.message, { status: 400, code: blocker.code });
+    const graph = await readGraph();
+    const taken = new Set(graph.connections.map((candidate) => candidate.slug).filter(Boolean));
     const connection = {
       id: randomUUID(),
       revision: 1,
@@ -792,6 +882,11 @@ export function createConnection({ kind, label, transports, credentials }) {
       transports,
       credentials: credentials || {},
       catalog: { state: 'unknown', models: [] },
+      // Named as a service instance from the start (#7563), so the row is
+      // addressable without waiting for the next reconcile pass.
+      ...serviceColumnsForConnection({ kind }, { taken }),
+      enabled: true,
+      credentialVia: 'stored',
     };
     await writeGraph({ connections: [connection], bindings: [], routes: [] });
     console.log(`🔗 Created provider connection ${connection.id} (${kind}, no routes yet)`);
@@ -834,7 +929,7 @@ export function createBinding({ connectionId, harnessId, modes, label }) {
   return serialize(async () => {
     requireGraph();
     const graph = await readGraph();
-    const connection = requireRow(graph.connections, connectionId, 'Connection', 'CONNECTION_NOT_FOUND');
+    const connection = requireConnection(graph, connectionId);
 
     // A backend mid-projection is precisely where the graph and providers.json
     // disagree about the endpoint and credentials this route would be built

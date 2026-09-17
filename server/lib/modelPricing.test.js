@@ -167,6 +167,21 @@ describe('resolveModelRates', () => {
   });
 });
 
+describe('isFreeProvider — declared servicePlan (#7563)', () => {
+  it('answers from the declared plan alone, ahead of every id and endpoint rule', () => {
+    // Two NVIDIA instances: same endpoint, same ids, different plans.
+    const nim = { id: 'nvidia-nim', type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1' };
+    expect(isFreeProvider({ ...nim, servicePlan: 'free' })).toBe(true);
+    expect(isFreeProvider({ ...nim, servicePlan: 'paid' })).toBe(false);
+    expect(isFreeProvider({ id: 'ollama-remote', servicePlan: 'local' })).toBe(true);
+    expect(isFreeProvider({ id: 'claude-code', command: 'claude', servicePlan: 'subscription' })).toBe(false);
+    // A declared paid plan beats an id the regex would have called free.
+    expect(isFreeProvider({ id: 'opencode-zen-paid', endpoint: 'https://opencode.ai/zen/v1', servicePlan: 'paid' })).toBe(false);
+    // No plan: the legacy inference is untouched.
+    expect(isFreeProvider({ id: 'opencode-zen', endpoint: 'https://opencode.ai/zen/v1' })).toBe(true);
+  });
+});
+
 describe('isFreeProvider', () => {
   it('classifies ollama and lmstudio ids as free (object and string forms)', () => {
     expect(isFreeProvider('ollama')).toBe(true);

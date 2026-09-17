@@ -15,6 +15,7 @@ import {
 } from './providerModelAliases.js';
 import { routeSettingsRevision, routeSettingsSchema } from './providerRouteSettings.js';
 import { CREATABLE_CONNECTION_KINDS, connectionKindLabel } from './providerRouteRecipes.js';
+import { SERVICE_PLANS } from './serviceDefinitions.js';
 
 // `PROVIDER_GRAPH_SCHEMA_VERSION` is deliberately NOT re-exported: it is one
 // wire version shared with the preview, and two flat `export *` modules in this
@@ -58,7 +59,15 @@ const catalogSchema = z.object({
   // (#6369). Optional so rows written before the field existed still parse, and
   // nullable so a later SUCCESS can clear it without deleting the key.
   error: z.string().nullable().optional(),
+  // Per-model facts a listing declared (#7563) and when it was last asked.
+  // Optional for the same reason `error` is: older rows carry neither.
+  capabilities: z.record(z.string(), z.object({ contextWindow: z.number().optional() }).strict()).optional(),
+  refreshedAt: z.string().optional(),
 }).strict();
+
+// `credentialVia` is mirrored from `providerServiceInstances.js` rather than
+// imported: that module builds on this one, and the enum is four literals.
+const CREDENTIAL_VIAS = ['stored', 'env', 'cli-login', 'bootstrap'];
 
 const connectionDtoSchema = z.object({
   id: z.string().min(1),
@@ -68,6 +77,14 @@ const connectionDtoSchema = z.object({
   transports: z.record(z.string(), z.object({ baseUrl: z.string().min(1) }).strict()),
   hasCredentials: z.boolean(),
   catalog: catalogSchema,
+  // The service-instance identity (#7563). Additive, so
+  // `PROVIDER_GRAPH_SCHEMA_VERSION` stays at 1 and an older client ignores them.
+  // `slug` / `definitionId` are null on a row the boot backfill has not named.
+  slug: z.string().nullable(),
+  definitionId: z.string().nullable(),
+  plan: z.enum(SERVICE_PLANS),
+  enabled: z.boolean(),
+  credentialVia: z.enum(CREDENTIAL_VIAS),
 }).strict();
 
 const bindingDtoSchema = z.object({
@@ -195,14 +212,24 @@ export function toManagementGraphDto({ connections, bindings, routes, activeProv
     activeProvider: typeof activeProvider === 'string' ? activeProvider : null,
     creatableHarnesses: CREATABLE.harnesses,
     creatableConnectionKinds: CREATABLE.kinds,
-    connections: connections.map(({ id, revision, kind, label, transports, credentials, catalog }) => ({
+    connections: connections.map(({
+      id, revision, kind, label, transports, credentials, catalog,
+      slug = null, definitionId = null, plan = 'paid', enabled = true, credentialVia = 'stored',
+    }) => ({
       id,
       revision,
       kind,
       label,
       transports,
-      hasCredentials: Object.keys(credentials || {}).length > 0,
+      // Only a `stored` instance holds a secret; a `bootstrap` one is supplied
+      // at spawn and an `env` / `cli-login` one is held by something else.
+      hasCredentials: credentialVia === 'stored' && Object.keys(credentials || {}).length > 0,
       catalog,
+      slug,
+      definitionId,
+      plan,
+      enabled,
+      credentialVia,
     })),
     bindings: bindings.map(({ id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels }) => ({
       id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels, blocked: blocked.has(id),

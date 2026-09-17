@@ -30,6 +30,13 @@ const connectionRow = (row) => ({
   transports: row.transports || {},
   credentials: row.credentials || {},
   catalog: row.catalog || { state: 'unknown', models: [] },
+  // Service-instance columns (#7563). `slug` / `definitionId` are null on a
+  // row the boot backfill has not reached; the rest carry column defaults.
+  slug: row.slug ?? null,
+  definitionId: row.definition_id ?? null,
+  plan: row.plan ?? 'paid',
+  enabled: row.enabled !== false,
+  credentialVia: row.credential_via ?? 'stored',
 });
 
 const bindingRow = (row) => ({
@@ -68,17 +75,32 @@ export async function readGraph() {
   };
 }
 
+// The service columns (#7563) are PRESERVED on conflict when the caller did not
+// name them: a reconciliation regroup rebuilds a connection from its routes and
+// knows nothing about the slug a human addresses it by, and `plan` / `enabled`
+// / `credential_via` are NOT NULL, so the insert half substitutes the column
+// default rather than a NULL the constraint would refuse before the conflict
+// clause could run.
 const upsertConnection = (client, connection) => client.query(
-  `INSERT INTO ai_connections (id, revision, kind, label, transports, credentials, catalog, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+  `INSERT INTO ai_connections
+     (id, revision, kind, label, transports, credentials, catalog, slug, definition_id, plan, enabled, credential_via, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, 'paid'), COALESCE($11, true), COALESCE($12, 'stored'), NOW())
    ON CONFLICT (id) DO UPDATE SET
      revision = ai_connections.revision + 1,
      kind = EXCLUDED.kind, label = EXCLUDED.label,
      transports = EXCLUDED.transports, credentials = EXCLUDED.credentials,
-     catalog = EXCLUDED.catalog, updated_at = NOW()`,
+     catalog = EXCLUDED.catalog,
+     slug = COALESCE($8, ai_connections.slug),
+     definition_id = COALESCE($9, ai_connections.definition_id),
+     plan = COALESCE($10, ai_connections.plan),
+     enabled = COALESCE($11, ai_connections.enabled),
+     credential_via = COALESCE($12, ai_connections.credential_via),
+     updated_at = NOW()`,
   [connection.id, connection.revision ?? 1, connection.kind, connection.label ?? '',
     JSON.stringify(connection.transports || {}), JSON.stringify(connection.credentials || {}),
-    JSON.stringify(connection.catalog || { state: 'unknown', models: [] })],
+    JSON.stringify(connection.catalog || { state: 'unknown', models: [] }),
+    connection.slug ?? null, connection.definitionId ?? null, connection.plan ?? null,
+    typeof connection.enabled === 'boolean' ? connection.enabled : null, connection.credentialVia ?? null],
 );
 
 const upsertBinding = (client, binding) => client.query(
@@ -269,17 +291,39 @@ export async function deleteConnection(connectionId) {
  *
  * @returns {Promise<number|null>} the new revision, or `null` if the row is gone
  */
-export async function saveConnectionSettings({ id, label, transports, credentials, catalog }) {
+export async function saveConnectionSettings({ id, label, transports, credentials, catalog, plan, enabled, credentialVia }) {
   const { rows } = await query(
     `UPDATE ai_connections
         SET label = $2, transports = $3, credentials = $4, catalog = $5,
+            plan = COALESCE($6, plan), enabled = COALESCE($7, enabled),
+            credential_via = COALESCE($8, credential_via),
             revision = revision + 1, updated_at = NOW()
       WHERE id = $1
       RETURNING revision`,
     [id, label ?? '', JSON.stringify(transports || {}), JSON.stringify(credentials || {}),
-      JSON.stringify(catalog || { state: 'unknown', models: [] })],
+      JSON.stringify(catalog || { state: 'unknown', models: [] }),
+      plan ?? null, typeof enabled === 'boolean' ? enabled : null, credentialVia ?? null],
   );
   return rows[0]?.revision ?? null;
+}
+
+/**
+ * Fill the service-instance columns on rows that have none (#7563) — the
+ * boot-time backfill planned by `planServiceColumnBackfill`. No revision bump:
+ * nothing a human edited changed, and a stale-revision 409 on the first read
+ * after upgrade would be a lie.
+ */
+export async function applyServiceColumnBackfill(entries) {
+  if (entries.length === 0) return;
+  await withTransaction(async (client) => {
+    for (const { id, slug, definitionId, plan } of entries) {
+      await client.query(
+        `UPDATE ai_connections SET slug = $2, definition_id = $3, plan = $4, updated_at = NOW()
+          WHERE id = $1 AND slug IS NULL`,
+        [id, slug, definitionId, plan],
+      );
+    }
+  });
 }
 
 /**

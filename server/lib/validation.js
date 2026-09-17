@@ -692,6 +692,48 @@ export const providerConnectionUpdateSchema = z.object({
   credentials: z.record(z.string().trim().min(1).max(128), z.string().max(4096).nullable()).optional(),
 }).strict();
 
+// --- service instances (#7563) ------------------------------------------------
+//
+// The literals below mirror `serviceDefinitions.js` (`SERVICE_SLUG_RE`,
+// `SERVICE_PLANS`) and `providerServiceInstances.js` (`SERVICE_CREDENTIAL_VIAS`)
+// rather than importing them: this module is reached by nearly every route
+// (`lib/importScoping.test.js`), and `serviceDefinitions.test.js` pins the
+// mirror so the two cannot drift.
+export const serviceSlugSchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]*$/, {
+  message: 'A service slug is lowercase letters, digits and dashes, starting with a letter or digit',
+});
+export const servicePlanSchema = z.enum(['free', 'paid', 'subscription', 'local']);
+export const serviceCredentialViaSchema = z.enum(['stored', 'env', 'cli-login', 'bootstrap']);
+
+const serviceTransportsSchema = z.record(
+  z.string().trim().min(1).max(64),
+  z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
+);
+
+// POST /api/providers/services — a NEW instance of a definition. The
+// definition decides which transports and plans are legal (`resolveServiceInstance`
+// in the service), so this bounds shape only. Credentials take no `null`, as
+// on the connection create: nothing exists yet to clear.
+export const providerServiceCreateSchema = z.object({
+  definitionId: z.string().trim().min(1).max(64),
+  slug: serviceSlugSchema.optional(),
+  label: z.string().trim().min(1).max(200).optional(),
+  plan: servicePlanSchema.optional(),
+  enabled: z.boolean().optional(),
+  transports: serviceTransportsSchema.optional(),
+  credentials: z.record(z.string().trim().min(1).max(128), z.string().min(1).max(4096)).optional().default({}),
+  credentialVia: serviceCredentialViaSchema.optional(),
+}).strict();
+
+// PATCH /api/providers/services/:slug — the connection update plus the
+// instance's own plan / enabled / credential mode. Same three-valued
+// credential rule, same required `expectedRevision`.
+export const providerServiceUpdateSchema = providerConnectionUpdateSchema.extend({
+  plan: servicePlanSchema.optional(),
+  enabled: z.boolean().optional(),
+  credentialVia: serviceCredentialViaSchema.optional(),
+}).strict();
+
 // PATCH /api/providers/bindings/:id (#6369). Management state only: no
 // `enabled`, because route enablement is an executable-record field that
 // PATCH /api/providers/:id owns and a binding toggle must never grant it.

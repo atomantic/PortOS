@@ -250,4 +250,61 @@ describe.skipIf(!runDb)('ai_* connection graph store', () => {
     const read = await store.readGraph();
     expect(read.bindings).toHaveLength(1);
   });
+
+  describe('service-instance columns (#7563)', () => {
+    it('round-trips the columns and refuses two rows on one slug', async () => {
+      const conn = connection({ slug: 'ollama', definitionId: 'ollama', plan: 'local', enabled: false, credentialVia: 'env' });
+      await store.writeGraph({ connections: [conn], bindings: [], routes: [] });
+      const [read] = (await store.readGraph()).connections;
+      expect(read).toMatchObject({ slug: 'ollama', definitionId: 'ollama', plan: 'local', enabled: false, credentialVia: 'env' });
+
+      await expect(store.writeGraph({ connections: [connection({ slug: 'ollama' })], bindings: [], routes: [] }))
+        .rejects.toThrow(/uq_ai_connections_slug|duplicate key/i);
+    });
+
+    it('reads a row written without the columns with their defaults, and backfills it exactly once', async () => {
+      const conn = connection();
+      await store.writeGraph({ connections: [conn], bindings: [], routes: [] });
+      let [read] = (await store.readGraph()).connections;
+      // A pre-#7563 row: unnamed, on the column defaults — nothing else changed.
+      expect(read).toMatchObject({ slug: null, definitionId: null, plan: 'paid', enabled: true, credentialVia: 'stored', revision: 1 });
+      expect(read.transports).toEqual(conn.transports);
+      expect(read.credentials).toEqual(conn.credentials);
+      expect(read.catalog).toEqual(conn.catalog);
+
+      await store.applyServiceColumnBackfill([{ id: conn.id, slug: 'ollama', definitionId: 'ollama', plan: 'local' }]);
+      [read] = (await store.readGraph()).connections;
+      expect(read).toMatchObject({ slug: 'ollama', definitionId: 'ollama', plan: 'local', revision: 1 });
+      expect(read.credentials).toEqual(conn.credentials);
+
+      // A re-run must not rename a row that is already named.
+      await store.applyServiceColumnBackfill([{ id: conn.id, slug: 'ollama-9', definitionId: 'ollama', plan: 'local' }]);
+      [read] = (await store.readGraph()).connections;
+      expect(read.slug).toBe('ollama');
+      // And an empty table plans and creates nothing.
+      await store.applyServiceColumnBackfill([]);
+    });
+
+    it('preserves the instance columns when a regroup re-upserts the row without them', async () => {
+      const conn = connection({ slug: 'ollama', definitionId: 'ollama', plan: 'local', enabled: false, credentialVia: 'bootstrap' });
+      await store.writeGraph({ connections: [conn], bindings: [], routes: [] });
+      // What `planGraphReconciliation` hands `applyReconciliation` for an
+      // in-place update: the connection-owned values and nothing about the slug.
+      const { slug, definitionId, plan, enabled, credentialVia, ...bare } = conn;
+      await store.writeGraph({ connections: [{ ...bare, label: 'Renamed by reconcile' }], bindings: [], routes: [] });
+      const [read] = (await store.readGraph()).connections;
+      expect(read).toMatchObject({ label: 'Renamed by reconcile', slug: 'ollama', definitionId: 'ollama', plan: 'local', enabled: false, credentialVia: 'bootstrap' });
+    });
+
+    it('writes plan, enabled and credential mode through the settings save, and leaves them alone when unnamed', async () => {
+      const conn = connection({ slug: 'ollama', definitionId: 'ollama', plan: 'local' });
+      await store.writeGraph({ connections: [conn], bindings: [], routes: [] });
+      await store.saveConnectionSettings({ ...conn, plan: 'local', enabled: false, credentialVia: 'cli-login' });
+      let [read] = (await store.readGraph()).connections;
+      expect(read).toMatchObject({ enabled: false, credentialVia: 'cli-login', revision: 2 });
+      await store.saveConnectionSettings({ ...conn, label: 'Only the label' });
+      [read] = (await store.readGraph()).connections;
+      expect(read).toMatchObject({ label: 'Only the label', enabled: false, credentialVia: 'cli-login', plan: 'local' });
+    });
+  });
 });

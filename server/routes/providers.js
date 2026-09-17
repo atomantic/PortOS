@@ -15,6 +15,13 @@ import {
   updateRouteModelAliases,
   updateRouteSettings,
 } from '../services/providerGraph.js';
+import {
+  createService,
+  getService,
+  listServices,
+  refreshServiceCatalog,
+  updateService,
+} from '../services/providerServices.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
@@ -38,6 +45,8 @@ import {
   providerBindingUpdateSchema,
   providerConnectionCreateSchema,
   providerConnectionUpdateSchema,
+  providerServiceCreateSchema,
+  providerServiceUpdateSchema,
   providerRouteModelAliasSchema,
   providerRouteSettingsUpdateSchema,
 } from '../lib/validation.js';
@@ -467,6 +476,55 @@ export function createPortOSProviderRoutes(aiToolkit) {
    */
   router.post('/connections/:id/refresh-models', asyncHandler(async (req, res) => {
     res.json(await refreshConnectionCatalog(req.params.id));
+  }));
+
+  /**
+   * Service INSTANCES (#7563) — the same `ai_connections` rows read as one
+   * instance each of a `SERVICE_DEFINITIONS` entry: slug, definition, plan,
+   * enabled, how it authenticates, and the catalog it last listed. Sanitized
+   * like the graph: credential PRESENCE and SOURCE only, never a value.
+   *
+   * `:slug` also accepts the row's UUID, and every `/connections/:id` route
+   * above accepts a slug, so the two surfaces address one row either way.
+   */
+  router.get('/services', asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await listServices());
+  }));
+
+  // Create an instance from a definition. Nothing is probed and no route is
+  // minted; the catalog starts `unknown` until the explicit refresh below.
+  router.post('/services', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerServiceCreateSchema, req.body ?? {});
+    res.status(201).json(await createService(input));
+  }));
+
+  router.get('/services/:slug', asyncHandler(async (req, res) => {
+    res.set('Cache-Control', 'no-store').json(await getService(req.params.slug));
+  }));
+
+  // The shared-backend edit plus plan / enabled / credential mode. Same
+  // required `expectedRevision`, same three-valued credential rule, same
+  // projection into every route on the row.
+  router.patch('/services/:slug', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerServiceUpdateSchema, req.body ?? {});
+    res.json(await updateService(req.params.slug, input));
+  }));
+
+  // Refused with a 409 while a binding still names the row — the same rule as
+  // the connection delete, because it IS the connection delete.
+  router.delete('/services/:slug', asyncHandler(async (req, res) => {
+    res.json(await removeConnection(req.params.slug));
+  }));
+
+  /**
+   * List the instance's models through its DEFINITION's strategy — a probe of
+   * its own endpoint with its own key, the local daemon, the program that signs
+   * in, or the declared list — filtered to its plan. Needs no executable route.
+   * An explicit discovery request: it lists, never generates, and a failure
+   * keeps the catalog the instance already had.
+   */
+  router.post('/services/:slug/refresh-catalog', asyncHandler(async (req, res) => {
+    res.json(await refreshServiceCatalog(req.params.slug));
   }));
 
   /**

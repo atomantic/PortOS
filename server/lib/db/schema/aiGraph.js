@@ -33,6 +33,25 @@ export const aiGraphDdl = [
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+  // A connection IS a service instance (#7563, epic #7561): a `SERVICE_DEFINITIONS`
+  // row (`definition_id`), addressed by a `slug` (the composite-id segment a
+  // later slice reads), declared under one of the definition's `plan`s, and
+  // switchable off without deleting it (`enabled`). `credential_via` says how
+  // the instance authenticates — `stored` (a key on the row), `env`, `cli-login`
+  // (the harness signed in) or `bootstrap` (a launch wrapper supplies the key at
+  // spawn, so no secret is ever stored). All additive with defaults, so a row
+  // written by an older release reads back unchanged and the boot reconcile
+  // pass fills `slug` / `definition_id` / `plan` from `kind` — never a seed.
+  `ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS slug TEXT`,
+  `ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS definition_id TEXT`,
+  `ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'paid'`,
+  `ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true`,
+  `ALTER TABLE ai_connections ADD COLUMN IF NOT EXISTS credential_via TEXT NOT NULL DEFAULT 'stored'`,
+  // Partial: a row the backfill has not reached yet carries NULL, and two NULLs
+  // never collide, so the index constrains only addressed instances.
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_connections_slug
+      ON ai_connections (slug)
+      WHERE slug IS NOT NULL`,
 
   // One harness configuration on one connection. `harness_id` is NULL only for
   // a direct API binding, which is why the uniqueness below needs two partial
