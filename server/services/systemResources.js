@@ -24,6 +24,7 @@ import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
 import { getQueueCapacity } from './mediaJobQueue/index.js';
 import * as cos from './cos.js';
+import { runningAgentsByTaskId, countSpawningTasks } from '../lib/cosSpawnWindow.js';
 import { getSettings } from './settings.js';
 import {
   hfInventoryRow,
@@ -311,14 +312,30 @@ function loadedModelInventory({ ollamaLoaded, lmStudioLoaded }) {
   ];
 }
 
-function agentQueueSummary(tasks, status) {
+/**
+ * Queue depth vs work in flight, settled against the agent list.
+ *
+ * A mid-spawn task moves from the pending counts to `inProgress` rather than
+ * being counted on both sides (lib/cosSpawnWindow.js), so the two halves move
+ * together and the summary's queued+running total never dips while a spawn
+ * lands. `awaitingApproval` needs no settling: approval is a pre-spawn gate
+ * (`forceSpawnTask` refuses an unapproved task and approving clears the flag),
+ * so no live agent can hold one.
+ */
+function agentQueueSummary(tasks, status, agents) {
   if (!tasks) return null;
+  const runningAgents = runningAgentsByTaskId(agents);
+  const pendingUser = tasks.user?.grouped?.pending || [];
+  const pendingSystem = tasks.cos?.grouped?.pending || [];
+  const spawningUser = countSpawningTasks(pendingUser, runningAgents);
+  const spawningSystem = countSpawningTasks(pendingSystem, runningAgents);
   return {
-    pendingUser: tasks.user?.grouped?.pending?.length || 0,
-    pendingSystem: tasks.cos?.grouped?.pending?.length || 0,
+    pendingUser: pendingUser.length - spawningUser,
+    pendingSystem: pendingSystem.length - spawningSystem,
     awaitingApproval: tasks.cos?.awaitingApproval?.length || 0,
     inProgress: (tasks.user?.grouped?.in_progress?.length || 0)
-      + (tasks.cos?.grouped?.in_progress?.length || 0),
+      + (tasks.cos?.grouped?.in_progress?.length || 0)
+      + spawningUser + spawningSystem,
     activeAgents: status ? status.activeAgents || 0 : null,
     pausedAgents: status ? status.pausedAgents || 0 : null,
     daemonRunning: status?.running ?? null,
@@ -355,6 +372,7 @@ export async function buildSystemResourceReport() {
     browserDownloadsBytes,
     cosTasks,
     cosStatus,
+    cosAgents,
     modelDuplicates,
   ] = await Promise.all([
     statfs('/').catch(() => null),
@@ -379,6 +397,7 @@ export async function buildSystemResourceReport() {
     dirSize(PATHS.browserDownloads, { strict: true }).catch(() => null),
     cos.getAllTasks().catch(() => null),
     cos.getStatus().catch(() => null),
+    cos.getAgents().catch(() => null),
     scanModelDuplicates().catch(() => ({ pinokioDetected: null, items: [], totalReclaimableBytes: 0, error: 'Duplicate model scan unavailable' })),
   ]);
 
@@ -429,7 +448,7 @@ export async function buildSystemResourceReport() {
     running: capacity.totals.running,
     byKind: capacity.byKind,
   };
-  const agentQueue = agentQueueSummary(cosTasks, cosStatus);
+  const agentQueue = agentQueueSummary(cosTasks, cosStatus, cosAgents);
   const modelBytes = sumKnownBytes([hf?.totalBytes, loraStorage?.totalBytes, ollamaBytes, lmStudioBytes]);
   const storageAreas = [
     {

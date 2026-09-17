@@ -701,7 +701,15 @@ describe('deferred imports stay deferred (#6156)', () => {
 // module gained an eager import (the per-module closure diff against the
 // pre-merge tree shows only those three new entries growing). Measured after
 // the merge: 112,982; the ceiling keeps the same ~300 of headroom.
-const MAX_STATIC_INSTANTIATIONS = 113300;
+// 113,300 → 113,700 (CoS spawn-window settlement): `lib/cosSpawnWindow.js` is a
+// dependency-free leaf, so it adds one node per closure that reaches it — six
+// server modules (`routes/cosTaskRoutes.js`, `routes/cosInsightRoutes.js`,
+// `routes/systemHealth.js`, `services/cos.js`, `services/activeProcessing.js`,
+// `services/systemResources.js`) plus its own suite. No subtree. Measured after
+// the change: 113,350 — the pre-change tree had already eroded to within single
+// digits of the old ceiling, so this restores the ~350 of headroom the recent
+// entries carry rather than leaving the next unrelated commit to trip it.
+const MAX_STATIC_INSTANTIATIONS = 113700;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

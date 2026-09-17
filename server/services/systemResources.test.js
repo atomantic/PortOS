@@ -89,6 +89,7 @@ vi.mock('./cos.js', () => ({
     },
   })),
   getStatus: vi.fn(async () => ({ running: true, paused: false, activeAgents: 0, pausedAgents: 0 })),
+  getAgents: vi.fn(async () => []),
 }));
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
@@ -268,6 +269,25 @@ describe('system resource reporting', () => {
     expect(dataArea).toMatchObject({ sizeBytes: null, status: 'unavailable' });
     expect(report.sourceErrors).toContain('portos-data');
     expect(report.cleanupCandidates.some((candidate) => candidate.kind === 'data')).toBe(false);
+  });
+
+  it('moves a task its agent already holds from pending to in flight, without changing the total', async () => {
+    // An agent is registered as running a beat before its task leaves 'pending'
+    // (lib/cosSpawnWindow.js), so counting the two lists independently reported
+    // the same task as queued AND running — "Agent pending 1 / Agent running 1"
+    // for a queue of one. It must move sides, not appear on both and not vanish.
+    cos.getAllTasks.mockResolvedValueOnce({
+      user: { grouped: { pending: [{ id: 'user/42', status: 'pending' }], in_progress: [] } },
+      cos: { grouped: { pending: [], in_progress: [] }, awaitingApproval: [] },
+    });
+    cos.getAgents.mockResolvedValueOnce([{ id: 'agent-1', taskId: 'user/42', status: 'running', startedAt: new Date().toISOString() }]);
+
+    const report = await buildSystemResourceReport();
+
+    expect(report.queues.agents).toMatchObject({ pendingUser: 0, pendingSystem: 0, inProgress: 1 });
+    // The media lane contributes a fixed 3 queued / 1 running, so the one agent
+    // task crossing sides leaves the combined total at 5 either way.
+    expect(report.summary).toMatchObject({ queuedJobs: 3, runningJobs: 2 });
   });
 
   it('preserves failed agent queue and status probes as unknown', async () => {

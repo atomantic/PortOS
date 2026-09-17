@@ -107,6 +107,7 @@ export * from './clipboard.js';
 export * from './effortCostEstimate.js';
 export * from './compareHelpers.js';
 export * from './consoleFilters.js';
+export * from './cosSpawnWindow.js';
 export * from './cosTaskType.js';
 export * from './diffLines.js';
 export * from './diffWords.js';

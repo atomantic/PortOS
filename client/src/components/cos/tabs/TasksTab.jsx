@@ -22,6 +22,7 @@ import SortableTaskItem from './SortableTaskItem';
 import TaskAddForm from '../TaskAddForm';
 import { MicroGlyph, SchematicLabel } from '../../micrographics';
 import useAssignableInstances from '../../../hooks/useAssignableInstances';
+import { runningAgentsByTaskId, isSpawningTask } from '../../../lib/cosSpawnWindow';
 
 // Maps a task-section status → micrographic glyph spec. Animation only on
 // states where motion communicates real work happening (running tasks).
@@ -71,22 +72,15 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
     task.id === selectedTaskId && source === selectedTaskSource
   );
 
-  // The live agent working each task, keyed by task id. spawnAgentForTask registers its
-  // agent as running BEFORE flipping the task off 'pending', so between those
-  // two writes a task reads 'pending' on the task list and 'running' on the
-  // agent list — and the row showed up under Pending AND as an active agent.
-  // Defense in depth, not the whole fix: ChiefOfStaff now subscribes to the
-  // store's task events so the flip lands in ~400ms instead of a 30s poll. This
-  // settles the render from whichever of the two signals arrived first, so the
-  // split is right even when an event is delayed or dropped.
-  // The map (rather than a Set of ids) is what lets an Active row offer a relaunch
-  // onto a different provider/model without fetching the agent list of its own.
-  const runningAgentByTaskId = useMemo(() => new Map(
-    agents.filter(a => a.status === 'running' && a.taskId).map(a => [a.taskId, a])
-  ), [agents]);
+  // The live agent working each task, keyed by task id — mid-spawn tasks are
+  // active, not queued (lib/cosSpawnWindow.js). Settled client-side here rather
+  // than trusting the route's `spawning` stamp because this tab also has the
+  // socket agent feed, which lands ~400ms ahead of the next task refetch; the
+  // map is what lets an Active row offer relaunch without its own agent fetch.
+  const runningAgentByTaskId = useMemo(() => runningAgentsByTaskId(agents), [agents]);
 
   const isSpawning = useCallback(
-    (task) => task.status === 'pending' && runningAgentByTaskId.has(task.id),
+    (task) => isSpawningTask(task, runningAgentByTaskId),
     [runningAgentByTaskId]
   );
 
