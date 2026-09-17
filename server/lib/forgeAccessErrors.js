@@ -17,12 +17,16 @@
 
 // `gh pr list` / `gh repo view` answer a no-access repo through GraphQL, which
 // reports it as an unresolvable node rather than an HTTP status; `gh api` and
-// the REST-backed subcommands answer with the status line instead. Match both,
-// plus gh's bare `Not Found` phrasing for a resource the token cannot read.
+// the REST-backed subcommands answer with the status line instead (gh's own
+// "Not Found" phrasing carries it — `gh: Not Found (HTTP 404)`), so these two
+// patterns cover both transports.
+//
+// Deliberately narrow. Widening the GraphQL arm to other node types would
+// classify a deleted PR or a renamed user — an ordinary missing SUB-resource —
+// as a credential problem and print a remedy that does not apply.
 const NO_ACCESS_PATTERNS = [
-  /could not resolve to a (?:repository|pullrequest|issue|user|organization)/i,
+  /could not resolve to a repository/i,
   /\bHTTP 404\b/i,
-  /^gh: not found\b/im,
 ];
 
 /**

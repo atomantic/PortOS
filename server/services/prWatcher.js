@@ -404,7 +404,8 @@ export async function processPendingMergePrs(app) {
     }
 
     if (isPendingMergeReady(prView)) {
-      const merge = await git.mergePR(app.repoPath, entry.prNumber).catch((err) => ({ success: false, error: err.message }));
+      const merge = await git.mergePR(app.repoPath, entry.prNumber, { forgeAccount: app?.forgeAccount || null })
+        .catch((err) => ({ success: false, error: err.message }));
       if (merge.success) {
         outcomes.set(key, null);
         result.merged += 1;

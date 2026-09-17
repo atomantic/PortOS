@@ -182,6 +182,9 @@ const pendingMerge = (overrides = {}) => ({
 const pendingApp = (entries = [pendingMerge()]) => ({
   id: 'app1',
   repoPath: '/repos/app1',
+  // Pinned so the merge path proves it carries the account down (#7540) — an
+  // owner-match alone picks the wrong account for an org repo.
+  forgeAccount: 'other-account',
   pendingMergePrs: entries
 });
 
@@ -223,7 +226,7 @@ describe('merge-only PR watcher', () => {
     const result = await processPendingMergePrs(app);
 
     expect(result).toMatchObject({ ok: true, checked: 1, merged: 1, escalated: 0 });
-    expect(mergePrMock).toHaveBeenCalledWith('/repos/app1', 88);
+    expect(mergePrMock).toHaveBeenCalledWith('/repos/app1', 88, { forgeAccount: 'other-account' });
     expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
     expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
     expect(execGhMock).toHaveBeenCalledWith([
