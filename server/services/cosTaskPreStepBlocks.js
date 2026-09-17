@@ -397,7 +397,10 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   };
   const result = await reconcile(app.repoPath, {
     cleanup: actions.cleanupMerged !== false,
-    activeAgentIds: new Set(getActiveAgentIds())
+    activeAgentIds: new Set(getActiveAgentIds()),
+    // The app's gh account pin, so a repo owned by another GitHub account is
+    // polled with a credential that can see it (#7540).
+    forgeAccount: app.forgeAccount || null
   }).catch((err) => {
     emitLog('warn', `branch-reconcile pre-step failed for ${app.name}: ${err.message}`, { appId: app.id });
     return null;

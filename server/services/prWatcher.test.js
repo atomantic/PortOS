@@ -9,6 +9,18 @@ vi.mock('./github.js', () => ({
   ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
 }));
 
+// The per-repo gh credential overlay (#7540). Mocked rather than real so the
+// suite asserts what execGh RECEIVED without spawning git/gh probes.
+const PINNED_ENV = { GH_TOKEN: 'token-for-other-account' };
+const resolveForgeExecOptionsMock = vi.fn(async (repoPath) => ({
+  cwd: repoPath || undefined,
+  env: PINNED_ENV,
+  customEnv: PINNED_ENV,
+}));
+vi.mock('./forgeExecOptions.js', () => ({
+  resolveForgeExecOptions: (...args) => resolveForgeExecOptionsMock(...args),
+}));
+
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({
   mergePR: (...args) => mergePrMock(...args),
@@ -43,6 +55,7 @@ vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: (...args) => getOriginInfoMock(...args),
 }));
 
+import { __resetForgeNoAccessLog } from '../lib/forgeAccessErrors.js';
 import {
   matchesAuthorFilter,
   computePrCheck,
@@ -216,7 +229,7 @@ describe('merge-only PR watcher', () => {
     expect(execGhMock).toHaveBeenCalledWith([
       'pr', 'view', '88', '--repo', 'github.com/o/r',
       '--json', 'state,mergeStateStatus,statusCheckRollup'
-    ], undefined, { backoffKey: 'github.com/o/r' });
+    ], undefined, { cwd: '/repos/app1', env: PINNED_ENV, backoffKey: 'github.com/o/r' });
   });
 
   it.each([
@@ -448,6 +461,53 @@ describe('checkPullRequests trusted maintenance boundary', () => {
     const failureSeen = await checkPullRequests(tracked);
     prs[0].statusCheckRollup[0].completedAt = '2026-08-02T00:00:00Z';
     expect((await checkPullRequests({ ...tracked, prWatcherState: { lastSeenPrNumber: 3, activityByPr: failureSeen.activityByPr } })).newPrs.map(pr => pr.number)).toEqual([3]);
+  });
+
+  it('runs every gh read with the per-repo credential, honouring the app\'s forgeAccount pin', async () => {
+    // #7540: `gh repo view`, `gh pr list` and the collaborator `gh api` probes all
+    // used gh's ambient active login, so an app whose repo belongs to another
+    // GitHub account 404'd on every tick forever.
+    forge([rawPr(10, 'collaborator')]);
+    const pinned = { ...app, forgeAccount: 'other-account' };
+
+    expect((await checkPullRequests(pinned)).newPrs).toHaveLength(1);
+
+    expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repos/example', { forgeAccount: 'other-account' });
+    // Not just the PR list — the default-branch read and the actor-trust probes
+    // are against the same private repo and need the same credential.
+    const kinds = new Set(execGhMock.mock.calls.map(([args]) => args[0]));
+    expect(kinds).toEqual(new Set(['repo', 'pr', 'api']));
+    for (const [, , options] of execGhMock.mock.calls) {
+      expect(options).toMatchObject({ cwd: '/repos/example', env: PINNED_ENV });
+    }
+    expect(ensureForgeReachableMock).toHaveBeenCalledWith('pr-watcher', {
+      hostname: 'github.com',
+      env: PINNED_ENV,
+    });
+  });
+
+  it('logs a no-access 404 ONCE per repo instead of once per poll', async () => {
+    // #7540: permanent until credentials change, so the watcher must not narrate
+    // it every scheduler tick — and must still report the poll as failed.
+    __resetForgeNoAccessLog();
+    getOriginInfoMock.mockResolvedValue({ host: 'github.com', fullName: 'example/project', hasOrigin: true });
+    execGhMock.mockRejectedValue(Object.assign(
+      new Error("GraphQL: Could not resolve to a Repository with the name 'example/project'. (repository)"),
+      { ghExitCode: 1, ghNoAccess: true }
+    ));
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const first = await checkPullRequests(app);
+    const second = await checkPullRequests(app);
+
+    expect(first).toMatchObject({ ok: false, reason: 'default-branch-unresolved' });
+    expect(second).toMatchObject({ ok: false, reason: 'default-branch-unresolved' });
+    const noAccessLines = errors.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes('not visible to the gh account'));
+    expect(noAccessLines).toHaveLength(1);
+    expect(noAccessLines[0]).toContain('Forge account');
+    errors.mockRestore();
   });
 
   it('refreshes authority every poll and pins repository and permission queries to the enterprise host', async () => {

@@ -7,6 +7,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { dispatchHintFromLabels } from '../lib/dispatchLabels.js';
+import { isForgeNoAccessMessage } from '../lib/forgeAccessErrors.js';
 
 const DATA_DIR = PATHS.data;
 const REPOS_FILE = join(DATA_DIR, 'github-repos.json');
@@ -171,10 +172,18 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
           name: 'AbortError', signal, terminated: Boolean(signal)
         }));
       } else if (code !== 0) {
-        settle(false);
-        const error = new Error(stderr.trim() || `gh exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
+        const detail = stderr.trim();
+        // A no-access 404 is PERMANENT until credentials change, so it must not
+        // feed the consecutive-failure backoff: that would park the shared
+        // `repoSpec` key for every other caller over a condition retrying can
+        // never clear. `settle(null)` preserves whatever backoff a genuinely
+        // transient failure already recorded. See lib/forgeAccessErrors.js.
+        const noAccess = isForgeNoAccessMessage(detail);
+        settle(noAccess ? null : false);
+        const error = new Error(detail || `gh exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
         error.ghExitCode = code;
-        error.ghStderr = stderr.trim();
+        error.ghStderr = detail;
+        if (noAccess) error.ghNoAccess = true;
         reject(error);
       } else {
         settle(true);
