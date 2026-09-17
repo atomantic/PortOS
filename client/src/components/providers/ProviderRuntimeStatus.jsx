@@ -51,7 +51,7 @@ export default function ProviderRuntimeStatus({ runtime, onInstall, optional = f
             `manageUrl` — Models → LLMs for the catalog apps, Models → Runtimes
             for the servers. */}
         {!manageUrl && (
-          <Link to="/models/harnesses" className="text-[11px] text-gray-500 hover:text-port-accent">
+          <Link to="/ai/harnesses" className="text-[11px] text-gray-500 hover:text-port-accent">
             Manage harness
           </Link>
         )}

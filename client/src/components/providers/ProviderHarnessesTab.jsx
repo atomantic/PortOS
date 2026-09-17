@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { CheckCircle2, Download, ExternalLink, Gauge, PowerOff, TerminalSquare } from 'lucide-react';
+import { CheckCircle2, Download, Gauge, PowerOff, TerminalSquare } from 'lucide-react';
 import toast from '../ui/Toast';
 import Pill from '../ui/Pill';
 import Banner from '../ui/Banner';
@@ -21,9 +21,8 @@ import ProviderCredentialBootstraps from './ProviderCredentialBootstraps';
  *
  * Read from the shared composition catalog (`useProviderCatalog`), so a toggle
  * here is one write plus one cache invalidation, and every open picker's
- * compose flow reflects it without a reload. Install/update/remove of the
- * binary itself stays on Models → Harnesses; this card offers the install a
- * missing binary needs and links there for the rest.
+ * compose flow reflects it without a reload. This card offers the install a
+ * missing binary needs when available.
  */
 
 /** How the enablement verdict reads under the switch. */
@@ -111,9 +110,6 @@ function HarnessCard({
           {harness.detected === false && runtime && !runtime.installable && runtime.blockedReason && (
             <span className="text-gray-500">{runtime.blockedReason}</span>
           )}
-          <Link to="/models/harnesses" className="text-port-accent hover:underline inline-flex items-center gap-1">
-            Versions &amp; updates <ExternalLink className="w-3 h-3" aria-hidden="true" />
-          </Link>
           {QUOTA_TRACKED.has(harness.id) && (
             <Link to="/devtools/quota-burn" className="text-port-accent hover:underline inline-flex items-center gap-1">
               <Gauge className="w-3 h-3" aria-hidden="true" /> Quota
