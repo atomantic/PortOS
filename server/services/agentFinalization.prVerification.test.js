@@ -677,3 +677,192 @@ describe('finalizeAgent — the PR verdict is only recorded when one was reached
     expect(new Set(prVerified().map((e) => e.eventId)).size).toBe(2);
   });
 });
+
+// ─── One run, three answers — the named PR evidence outcomes (#7522) ─────────
+
+/**
+ * Finalize answers three separate questions from the SAME PR observation: may
+ * the run stand as reported, may a verification event go on the lifecycle
+ * ledger, and what evidence does worktree cleanup inherit. Each was previously
+ * re-derived from the sparse verdict's incidental fields (`ok` alone, a string
+ * `branch` as provenance, a `category` exclusion), and each correction — #4540's
+ * forge-unreachable exclusion, #5074's auxiliary-proof restriction — had to be
+ * applied in several places at once.
+ *
+ * These rows pin the three answers TOGETHER for every materially different
+ * outcome, so a projection that drifts out of step with its siblings fails here
+ * rather than in production: a `forge-unreachable` that starts writing
+ * `verified: false` onto the permanent record, or an `issue-trailer-missing`
+ * that reaches cleanup looking verified and gets its branch deleted.
+ */
+describe('finalizeAgent — completion, ledger and cleanup evidence agree per outcome (#7522)', () => {
+  const prVerified = () => appendRunEvent.mock.calls.map(([e]) => e).filter((e) => e.kind === 'run.pr-verified');
+  const noPr = { status: 'none', number: null, url: null, detail: null };
+
+  const finalize = (overrides = {}) => finalizeAgent({
+    agentId: 'agent-1',
+    task: prTask(),
+    runId: 'run-1',
+    providerId: 'claude-code',
+    success: true,
+    exitCode: 0,
+    duration: 1000,
+    outputBuffer: 'done',
+    errorAnalysis: null,
+    workspacePath: '/w',
+    prExpected: true,
+    ...overrides,
+  });
+
+  const anyMessage = expect.any(String);
+  const outcomes = [
+    {
+      name: 'verified-claim — the forge holds a PR that closes the branch\'s issue',
+      arrange: () => onBranch('claim/issue-1'),
+      success: true,
+      cleanupEvidence: { ok: true, branch: 'claim/issue-1' },
+      ledger: { verified: true, branch: 'claim/issue-1', category: null, noChangesToShip: false },
+    },
+    {
+      name: 'verified-claim — a partial-ship trailer passes, carrying its advisory to cleanup',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'u', body: 'Refs #1' });
+      },
+      success: true,
+      cleanupEvidence: { ok: true, branch: 'claim/issue-1', advisory: expect.stringMatching(/partially ships/i) },
+      ledger: { verified: true, branch: 'claim/issue-1', category: null, noChangesToShip: false },
+    },
+    {
+      name: 'invalid-trailer — a PR that does not close its issue fails and is NOT verified evidence',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'u', body: 'Summary only' });
+      },
+      success: false,
+      completionReason: ISSUE_TRAILER_MISSING_CATEGORY,
+      cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: ISSUE_TRAILER_MISSING_CATEGORY, message: anyMessage },
+      ledger: { verified: false, branch: 'claim/issue-1', category: ISSUE_TRAILER_MISSING_CATEGORY, noChangesToShip: false },
+    },
+    {
+      name: 'missing-pr — commits on the branch, no PR',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        git.ahead = 3;
+        findPullRequestForBranchMock.mockResolvedValue(noPr);
+      },
+      success: false,
+      completionReason: PR_MISSING_CATEGORY,
+      cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, message: anyMessage, commitsAhead: 3, inconclusive: false },
+      ledger: { verified: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, noChangesToShip: false },
+    },
+    {
+      name: 'missing-pr — an UNREADABLE commit count leaves the miss standing, flagged inconclusive',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        git.ahead = null;
+        findPullRequestForBranchMock.mockResolvedValue(noPr);
+      },
+      success: false,
+      completionReason: PR_MISSING_CATEGORY,
+      cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, message: anyMessage, commitsAhead: null, inconclusive: true },
+      ledger: { verified: false, branch: 'claim/issue-1', category: PR_MISSING_CATEGORY, noChangesToShip: false },
+    },
+    {
+      name: 'empty-branch — a PROVEN empty branch completes, and cleanup must not open a PR for it',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        git.ahead = 0;
+        findPullRequestForBranchMock.mockResolvedValue(noPr);
+      },
+      success: true,
+      cleanupEvidence: { ok: true, branch: 'claim/issue-1', noChangesToShip: true },
+      ledger: { verified: true, branch: 'claim/issue-1', category: null, noChangesToShip: true },
+    },
+    {
+      name: 'forge-unavailable — the probe failed: the run is held, but NOTHING goes on the ledger',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        findPullRequestForBranchMock.mockResolvedValue({ status: 'unavailable', number: null, url: null, detail: 'connect: refused' });
+      },
+      success: false,
+      completionReason: FORGE_UNREACHABLE_CATEGORY,
+      cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: FORGE_UNREACHABLE_CATEGORY, message: anyMessage, inconclusive: true },
+      ledger: null,
+    },
+    {
+      name: 'forge-unavailable — an unreadable PR body is the forge\'s failure, never a trailer miss',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        findPullRequestForBranchMock.mockResolvedValue({ status: 'found', number: 7, url: 'u', body: null });
+      },
+      success: false,
+      completionReason: FORGE_UNREACHABLE_CATEGORY,
+      cleanupEvidence: { ok: false, branch: 'claim/issue-1', category: FORGE_UNREACHABLE_CATEGORY, message: anyMessage, inconclusive: true },
+      ledger: null,
+    },
+    {
+      name: 'branch-unavailable — we asked and could not name a branch: a non-verification',
+      arrange: () => execGitMock.mockRejectedValue(new Error('not a git repository')),
+      success: true,
+      cleanupEvidence: { ok: true, branch: null, inconclusive: true },
+      ledger: null,
+    },
+    {
+      name: 'check-threw — a check that never ran is not a verdict',
+      arrange: () => {
+        onBranch('claim/issue-1');
+        findPullRequestForBranchMock.mockRejectedValue(new Error('forge exploded'));
+      },
+      success: true,
+      cleanupEvidence: { ok: true },
+      ledger: null,
+    },
+    {
+      name: 'skipped — PortOS owns PR creation, so nothing was verified and nothing is claimed',
+      arrange: () => onBranch('claim/issue-1'),
+      overrides: { prExpected: false },
+      success: true,
+      cleanupEvidence: { ok: true },
+      ledger: null,
+    },
+  ];
+
+  it.each(outcomes)('$name', async ({ arrange, overrides = {}, success, completionReason, cleanupEvidence, ledger }) => {
+    arrange();
+    const finalized = await finalize(overrides);
+
+    const [, completion] = completeAgentMock.mock.calls[0];
+    expect(completion.success).toBe(success);
+    if (completionReason) expect(completion.completionReason).toBe(completionReason);
+    expect(finalized.prVerdict).toEqual(cleanupEvidence);
+    expect(prVerified().map((e) => e.data)).toEqual(ledger ? [ledger] : []);
+  });
+
+  it('substitutes the AUXILIARY proof only for a proven empty branch, never for a miss', async () => {
+    // #5074: a spawner that leaves PR creation to cleanup still takes the forge
+    // + empty-branch proof a marked no-change audit needs. A proven-empty branch
+    // becomes the evidence cleanup and the ledger see; anything else must leave
+    // cleanup free to open the PR after finalize.
+    const auditTask = () => ({
+      ...prTask(),
+      metadata: { ...prTask().metadata, autonomousJob: true, noChangeSuccess: true },
+    });
+    onBranch('cos/sys-1/agent-1');
+    git.ahead = 0;
+    findPullRequestForBranchMock.mockResolvedValue(noPr);
+    const proven = await finalize({ prExpected: false, task: auditTask() });
+    expect(proven.prVerdict).toEqual({ ok: true, branch: 'cos/sys-1/agent-1', noChangesToShip: true });
+    expect(prVerified().map((e) => e.data)).toEqual([
+      { verified: true, branch: 'cos/sys-1/agent-1', category: null, noChangesToShip: true },
+    ]);
+
+    vi.clearAllMocks();
+    git.ahead = 2;
+    const unproven = await finalize({ prExpected: false, task: auditTask() });
+    const [, completion] = completeAgentMock.mock.calls[0];
+    expect(completion.success).toBe(true);
+    expect(unproven.prVerdict).toEqual({ ok: true });
+    expect(prVerified()).toHaveLength(0);
+  });
+});
