@@ -1,5 +1,5 @@
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
@@ -19,6 +19,8 @@ import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import { GatewayKeyHint } from './ProviderNotices';
+import ProviderModelAccess from './ProviderModelAccess';
+import { CONFIGURED_MODEL_KEYS, configuredModelsOf, normalizeModelAccess, providerModelCatalog } from '../../utils/providerModelAccess';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
@@ -61,7 +63,15 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     apiKey: '',
     allowCustomEndpoint: provider?.allowCustomEndpoint === true,
     ignoreUserConfig: provider?.ignoreUserConfig === true,
-    models: provider?.models || [],
+    // The FULL advertised catalog, never the model-access-scoped `models` the
+    // payload carries. This textarea is saved verbatim, so seeding it from the
+    // scoped list would let an ordinary Save persist the narrowed catalog over
+    // the real one — recoverable only by a refresh, and silently wrong until then.
+    models: providerModelCatalog(provider),
+    // Absent on a record with no policy, which is the shape the server reads as
+    // "unconstrained". `null` (not `undefined`) when cleared, so the PATCH
+    // spread-merge sees a clear rather than "unchanged".
+    modelAccess: provider?.modelAccess || null,
     hardwareRequirements: provider?.hardwareRequirements,
     modelHardwareRequirements: provider?.modelHardwareRequirements,
     defaultModel: provider?.defaultModel || '',
@@ -140,6 +150,15 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   // models (and internal sentinels) so an embedding can't be chosen as a model
   // that runs prompts, consistent with the fallback picker below.
   const mergedModels = mergeModelLists(formData.models, liveModelsFor(formData));
+  // The tier models the access policy must never scope out. Memoized on the six
+  // fields themselves rather than on `formData`, so typing in any other field
+  // cannot re-scope the whole catalog in the policy editor's preview.
+  const modelAccessKeeps = useMemo(
+    () => configuredModelsOf(formData),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [formData.defaultModel, formData.lightModel, formData.mediumModel,
+      formData.heavyModel, formData.ultraModel, formData.fallbackModel],
+  );
   // The server publishes compatibility for both the provider runtime and any
   // explicitly annotated model. Unknown probe results stay in the list; only a
   // definitive mismatch is hidden.
@@ -368,9 +387,13 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     // still spread into `data` and silently persisted on an unrelated edit.
     // Clear any embedding value that slipped through so the saved record matches
     // what the picker allows.
-    for (const field of ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'fallbackModel']) {
+    for (const field of CONFIGURED_MODEL_KEYS) {
       if (isEmbeddingModel(data[field])) data[field] = '';
     }
+    // An explicit `null` rather than `undefined` when the policy says nothing:
+    // the server merges a PATCH by spread, which reads `undefined` as "unchanged"
+    // and would leave a policy the user just cleared in place.
+    data.modelAccess = normalizeModelAccess(formData.modelAccess);
     // Effort is meaningful only for providers/models that expose an effort
     // ladder. Clear a stale value when an edit switches to an effort-less
     // provider or Antigravity model; narrowed ladders are clamped by the
@@ -906,6 +929,17 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                   Comma-separated list of available models. For API providers, use Refresh to auto-populate.
                 </p>
               </FormField>
+
+              {/* Which of that catalog this install is entitled to run. Fed the
+                  FULL list (`formData.models`, seeded from `modelCatalog`), because
+                  the policy is authored against everything the upstream
+                  advertises — the scoped view is what it produces. */}
+              <ProviderModelAccess
+                catalog={formData.models || []}
+                value={formData.modelAccess}
+                configuredModels={modelAccessKeeps}
+                onChange={(modelAccess) => setFormData(prev => ({ ...prev, modelAccess }))}
+              />
 
               <FormField label="Default Model">
                 {availableModels.length > 0 ? (

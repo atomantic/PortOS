@@ -12,6 +12,7 @@
  *   providerSelection.js      — which providers/models a picker may OFFER
  *   localModelHeuristics.js   — what an untyped local model can DO
  *   providerContextWindows.js — how large a CONTEXT WINDOW it gets
+ *   providerModelAccess.js    — which of its catalog this install is ENTITLED to
  *   providerReadiness.js      — is it READY to run, and why not
  *   providerAssignments.js    — which provider a RECORD resolves to; assignment options
  *
@@ -24,6 +25,7 @@
 export * from './localModelHeuristics.js';
 export * from './providerAssignments.js';
 export * from './providerContextWindows.js';
+export * from './providerModelAccess.js';
 export * from './providerEndpoints.js';
 export * from './providerGateways.js';
 export * from './providerModels.js';

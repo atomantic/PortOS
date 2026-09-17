@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_MODEL_ACCESS_PATTERNS, MAX_MODEL_ACCESS_PATTERN_LENGTH, MODEL_ACCESS_MODES } from './internal/modelAccess.js';
 import { basename, extname } from 'path';
 import { MAX_TIMEOUT, MIN_TIMEOUT } from './constants.js';
 
@@ -127,6 +128,19 @@ export const providerSchema = z.object({
   // what a person can type, this one has to accept whatever a vendor declares,
   // and rejecting a 10M-window model would 400 the whole provider write.
   modelContextWindows: z.record(z.number().int().min(512).max(33554432)).optional(),
+  // Which of the provider's advertised catalog this install is entitled to
+  // run — a plan/tier scope the upstream `/models` response does not declare
+  // (internal/modelAccess.js). Applied on the way OUT to model pickers; the
+  // stored `models` catalog is never narrowed by it. Nullable so the editor can
+  // clear a policy back to "none" (absent means "unchanged" on a PATCH).
+  modelAccess: z.object({
+    mode: z.enum(MODEL_ACCESS_MODES),
+    // An EMPTY list is valid and means "no constraint yet" — see the sentinel
+    // note in internal/modelAccess.js. Rejecting it here would make the editor
+    // unable to save the mode before the list is typed.
+    patterns: z.array(z.string().trim().min(1).max(MAX_MODEL_ACCESS_PATTERN_LENGTH))
+      .max(MAX_MODEL_ACCESS_PATTERNS).optional(),
+  }).strict().nullable().optional(),
   timeout: z.number().int().min(MIN_TIMEOUT).max(MAX_TIMEOUT).optional(),
   enabled: z.boolean().optional(),
   // A CLI/TUI provider that can ALSO serve plain text through a non-HTTP

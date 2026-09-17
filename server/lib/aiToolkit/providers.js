@@ -26,6 +26,7 @@ import { isOllamaBackedProvider, ollamaBaseFromProvider } from './internal/ollam
 import { gatewayForProvider, isGatewayBackedProvider } from './internal/gateways.js';
 import { canRefreshModels, ollamaRefreshGroupKey, resolveModelFetcher } from './internal/modelFetchers.js';
 import { modelCatalogUpdate, modelContextWindowPatch, parseModelCatalog, toModelCatalog } from './internal/modelCatalog.js';
+import { normalizeModelAccess } from './internal/modelAccess.js';
 
 // Re-exported (rather than defined here) so the model-fetcher table can key its
 // ollama row on the same predicate without importing back into this module.
@@ -63,6 +64,52 @@ function withGatewayApiKey(provider, providers) {
   });
   return executionProvider;
 }
+
+/**
+ * Resolve the MODEL ACCESS policy a provider read is governed by, stamped as
+ * the derived `modelAccessEffective` (+ `modelAccessSource`) rather than folded
+ * into the persisted `modelAccess` field.
+ *
+ * A gateway-backed OpenCode wrapper front-ends the SAME upstream catalog as the
+ * sibling `api` record whose id equals the gateway id — one NVIDIA NIM
+ * entitlement serves the api provider, its CLI wrapper and its TUI wrapper — so
+ * a wrapper with no policy of its own inherits the gateway's. Exactly the
+ * inheritance {@link withGatewayApiKey} already performs for the key, and for
+ * the same reason: the wrapper stores nothing the gateway record owns.
+ *
+ * Two separate field names, not one, because the resolved value must never be
+ * able to become the wrapper's OWN stored policy: `modelAccess` is in
+ * `providerSchema`, so a client that echoes a GET back on a PUT would persist
+ * whatever it was handed. `modelAccessEffective` is not in the schema and is
+ * stripped by `providerSchema.partial()`, which keeps inheritance live — a
+ * later edit to the gateway still reaches every wrapper.
+ *
+ * Returns the SAME object when no policy applies, so an install that has not
+ * configured this sees no change at all.
+ *
+ * Composition order against {@link withGatewayApiKey} is load-bearing: that one
+ * attaches the sibling key as a NON-ENUMERABLE property, which a spread here
+ * would silently drop. This runs first and the key attach stays outermost.
+ */
+function withGatewayModelAccess(provider, providers) {
+  if (!provider || typeof provider !== 'object') return provider;
+  const own = normalizeModelAccess(provider.modelAccess);
+  if (own) return { ...provider, modelAccessEffective: own, modelAccessSource: 'own' };
+  const gateway = gatewayForProvider(provider);
+  const inherited = gateway ? normalizeModelAccess(providers?.[gateway.id]?.modelAccess) : null;
+  if (!inherited) return provider;
+  return { ...provider, modelAccessEffective: inherited, modelAccessSource: gateway.id };
+}
+
+/**
+ * One provider as a READ sees it: the gateway's model-access policy resolved,
+ * then the gateway's API key attached. In that order — the key rides as a
+ * NON-enumerable property, so a spread after it would silently drop the
+ * credential and every wrapper run would lose it.
+ */
+const readProvider = (provider, providers) => (provider
+  ? withGatewayApiKey(withGatewayModelAccess(provider, providers), providers)
+  : null);
 
 // Extensions Windows can launch directly, checked in cmd.exe's own resolution
 // preference. Deliberately excludes an extension-less match — npm ships a
@@ -659,6 +706,8 @@ export function createProviderService(config = {}) {
       throw new Error('Provider with this ID already exists');
     }
 
+    const modelAccess = normalizeModelAccess(providerData.modelAccess);
+
     const provider = {
       id,
       name: providerData.name,
@@ -724,6 +773,11 @@ export function createProviderService(config = {}) {
       ...(typeof providerData.gatewayBacked === 'string' && providerData.gatewayBacked
         ? { gatewayBacked: providerData.gatewayBacked } : {}),
       ...(providerData.orcarouterBacked === true ? { orcarouterBacked: true } : {}),
+      // Which of the upstream catalog this install is entitled to run
+      // (internal/modelAccess.js). Normalized on the way in so a stored record
+      // never holds a mode this build does not know, and only persisted when it
+      // says something — an unconfigured provider stays byte-identical.
+      ...(modelAccess ? { modelAccess } : {}),
       // Explicit opt-in to send the API key to an arbitrary (non-local,
       // non-allowlisted) endpoint — see endpointGuard.js. Only
       // persisted when true so existing keyless/local providers stay clean.
@@ -757,23 +811,24 @@ export function createProviderService(config = {}) {
   return {
     async getAllProviders() {
       const data = await loadProviders();
+      // Model-access resolution only — the API key stays OFF the list shape,
+      // which is read by routes that serialize every provider. The envelope
+      // below is pinned by services/providers.shape.test.js; keep it literal.
       return {
         activeProvider: data.activeProvider,
-        providers: Object.values(data.providers)
+        providers: Object.values(data.providers).map(provider => withGatewayModelAccess(provider, data.providers))
       };
     },
 
     async getProviderById(id) {
       const data = await loadProviders();
-      const provider = data.providers[id];
-      return provider ? withGatewayApiKey(provider, data.providers) : null;
+      return readProvider(data.providers[id], data.providers);
     },
 
     async getActiveProvider() {
       const data = await loadProviders();
       if (!data.activeProvider) return null;
-      const provider = data.providers[data.activeProvider];
-      return provider ? withGatewayApiKey(provider, data.providers) : null;
+      return readProvider(data.providers[data.activeProvider], data.providers);
     },
 
     async setActiveProvider(id) {
@@ -875,10 +930,22 @@ export function createProviderService(config = {}) {
       // invariant `createProvider` keeps by only writing the key when named.
       // Applied to the fanned-out siblings too: a cleared sibling that kept a
       // stored `null` would no longer read as "never had one".
-      const dropClearedBootstrap = (record) => {
+      // Fields whose CLEARED form has to be normalized away rather than stored:
+      // a record that was reset must read exactly like one that never had the
+      // field, or the next reader has to know two spellings of "none".
+      const normalizeClearedFields = (record) => {
         if (record.credentialBootstrap === null) delete record.credentialBootstrap;
+        // Same convention for the model-access policy: an explicit `null` is
+        // "clear it", and a policy that normalizes to nothing (mode `all` with
+        // no patterns) is stored as absent rather than as an inert object, so a
+        // record that was reset reads exactly like one that never had a policy.
+        if (Object.hasOwn(record, 'modelAccess')) {
+          const normalized = normalizeModelAccess(record.modelAccess);
+          if (normalized) record.modelAccess = normalized;
+          else delete record.modelAccess;
+        }
       };
-      dropClearedBootstrap(provider);
+      normalizeClearedFields(provider);
 
       // Grouped BEFORE the edit lands: every connection-identity value the
       // fan-out shares (endpoint, API key, env vars, bootstrap) is exactly what
@@ -890,7 +957,7 @@ export function createProviderService(config = {}) {
       for (const sibling of group || []) {
         if (sibling.id === id) continue;
         Object.assign(sibling, sharedModeUpdates(updates, sibling));
-        dropClearedBootstrap(sibling);
+        normalizeClearedFields(sibling);
       }
       await saveProviders(data);
       return provider;

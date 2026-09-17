@@ -28,7 +28,11 @@ import { loadState } from './cosState.js';
 import { addTask, firstLine, getCosTasks, getTaskById } from './cosTaskStore.js';
 import { getProviderPrerequisiteReadinessMap } from './providerPrerequisites.js';
 import { listManagedBackendModels } from './localLlm.js';
-import { listProviders } from './providers.js';
+// listSelectableProviders, not listProviders: both reads below OFFER models
+// — the task catalog's per-provider allowlist and the choice validator that
+// accepts or refuses a submitted model — so they must see the install's
+// entitlement, not the vendor's whole advertised catalog (docs/MODEL_ACCESS.md).
+import { listSelectableProviders } from './providers.js';
 import {
   assessPersistentMindWorkspaceReadiness,
   readPersistentMindWorkspacePreflight,
@@ -158,7 +162,7 @@ const appCatalogEntry = (app) => ({
 export async function readPersistentMindTaskCatalog({ allowedAppIds, includeAllApps = false } = {}) {
   const [managedApps, providers, root] = await Promise.all([
     readPersistentMindManagedApps({ allowedAppIds }),
-    listProviders(),
+    listSelectableProviders(),
     loadState(),
   ]);
   const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
@@ -350,7 +354,7 @@ async function queueOneTask({ request, taskId, apps, allowedAppIds }) {
   }
   const existing = await getTaskById(taskId);
   if (existing) return { success: true, duplicate: true, task: existing };
-  const [providers, root] = await Promise.all([listProviders(), loadState()]);
+  const [providers, root] = await Promise.all([listSelectableProviders(), loadState()]);
   const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
   if (!capabilities.createTasks) return { success: false, error: 'Persistent mind task creation access is disabled' };
   const choice = await validateChoice(request, apps, providers, capabilities);

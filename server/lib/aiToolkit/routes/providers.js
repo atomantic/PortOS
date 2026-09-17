@@ -2,6 +2,14 @@ import { Router } from 'express';
 import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
 import { providerSchema, providerActiveSchema, validate } from '../validation.js';
 import { withRefreshCapability, withRefreshCapabilityList } from '../internal/modelFetchers.js';
+import { applyModelAccess, applyModelAccessList } from '../internal/modelAccess.js';
+
+// Model-access scoping is the same kind of on-the-way-out derivation as
+// `canRefreshModels`: the stored catalog is what the upstream advertises, and
+// the policy says which of it this install may actually run (internal/modelAccess.js).
+// Narrowing at the route rather than in the service keeps `providers.json` — and
+// every execution path that reads a record directly — holding the real catalog,
+// so clearing the policy restores the full list with no re-probe.
 
 // `canRefreshModels` is DERIVED ON READ and decorated HERE, at the route —
 // never inside `getAllProviders()`. Computing it in the service would put it on
@@ -20,15 +28,20 @@ export function createProvidersRoutes(providerService, options = {}) {
   // `{ error, code, timestamp, context? }` and route to errorMiddleware).
   // Standalone, the toolkit's own defaults serialize the same envelope.
   const { asyncHandler = defaultAsyncHandler, ServerError = ToolkitHttpError } = options;
+  // ONE spelling of the on-the-way-out derivations, so the next one added does
+  // not have to be threaded through every handler — and a handler that missed it
+  // cannot ship a payload shaped differently from its neighbours.
+  const present = (provider) => applyModelAccess(withRefreshCapability(provider));
+  const presentList = (providers) => applyModelAccessList(withRefreshCapabilityList(providers));
 
   router.get('/', asyncHandler(async (req, res) => {
     const data = await providerService.getAllProviders();
-    res.json({ ...data, providers: withRefreshCapabilityList(data.providers) });
+    res.json({ ...data, providers: presentList(data.providers) });
   }));
 
   router.get('/active', asyncHandler(async (req, res) => {
     const provider = await providerService.getActiveProvider();
-    res.json(withRefreshCapability(provider));
+    res.json(present(provider));
   }));
 
   router.put('/active', asyncHandler(async (req, res) => {
@@ -44,7 +57,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(withRefreshCapability(provider));
+    res.json(present(provider));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
@@ -52,7 +65,7 @@ export function createProvidersRoutes(providerService, options = {}) {
     // Samples are provider-shaped and the flag is derived purely from that
     // shape, so decorate them too — a sample's answer is what the provider it
     // becomes will report. PortOS's shadowing `/samples` handler does the same.
-    res.json({ providers: withRefreshCapabilityList(providers) });
+    res.json({ providers: presentList(providers) });
   }));
 
   router.get('/:id', asyncHandler(async (req, res) => {
@@ -62,7 +75,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(withRefreshCapability(provider));
+    res.json(present(provider));
   }));
 
   router.post('/', asyncHandler(async (req, res) => {
@@ -72,7 +85,7 @@ export function createProvidersRoutes(providerService, options = {}) {
     }
 
     const provider = await providerService.createProvider(result.data);
-    res.status(201).json(withRefreshCapability(provider));
+    res.status(201).json(present(provider));
   }));
 
   router.put('/:id', asyncHandler(async (req, res) => {
@@ -89,7 +102,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(withRefreshCapability(provider));
+    res.json(present(provider));
   }));
 
   router.delete('/:id', asyncHandler(async (req, res) => {
@@ -120,7 +133,7 @@ export function createProvidersRoutes(providerService, options = {}) {
       throw new ServerError('Provider not found', { status: 404 });
     }
 
-    res.json(withRefreshCapability(provider));
+    res.json(present(provider));
   }));
 
   return router;

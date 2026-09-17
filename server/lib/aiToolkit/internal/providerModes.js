@@ -87,7 +87,13 @@ export function sharedModeUpdates(updates, sibling) {
   // line and env from — pointed at the old backend with the old credential,
   // and splits the one card in two on the next load. `unifyProviderModes`
   // converges a pair that arrived asymmetric by some other route.
-  const shared = Object.fromEntries(['enabled', 'models', 'modelContextWindows', ...MODE_GROUPED_KEYS]
+  // `modelAccess` rides with `models` rather than with the argv: a pair is one
+  // program on one backend, so the entitlement that scopes that backend's
+  // catalog cannot differ between the headless and interactive mode without the
+  // two cards offering different models for the same account. It stays OUT of
+  // MODE_GROUPED_KEYS, though — it is not connection identity, and pairing on it
+  // would split a card the moment one mode was edited first.
+  const shared = Object.fromEntries(['enabled', 'models', 'modelContextWindows', 'modelAccess', ...MODE_GROUPED_KEYS]
     .filter(key => Object.hasOwn(updates, key))
     .map(key => [key, detachModeValue(updates[key])]));
   // A caller deliberately repicking a default with a new catalog (the editor

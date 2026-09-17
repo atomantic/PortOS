@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
-  getAllProviders: vi.fn(),
+  getSelectableProviders: vi.fn(),
   getProviderById: vi.fn(),
   setActiveProvider: vi.fn(),
   updateProvider: vi.fn(),
@@ -43,7 +43,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('./settings.js', () => ({ getSettings: mocks.getSettings, updateSettings: mocks.updateSettings }));
 vi.mock('./providers.js', async () => ({
-  getAllProviders: mocks.getAllProviders,
+  getSelectableProviders: mocks.getSelectableProviders,
   getProviderById: mocks.getProviderById,
   setActiveProvider: mocks.setActiveProvider,
   updateProvider: mocks.updateProvider,
@@ -76,7 +76,7 @@ const { getAiAssignments, updateAiAssignment } = await import('./aiAssignments.j
 beforeEach(() => {
   vi.clearAllMocks();
   // Defaults that let getAiAssignments() (called after every write) resolve.
-  mocks.getAllProviders.mockResolvedValue({
+  mocks.getSelectableProviders.mockResolvedValue({
     activeProvider: 'openai',
     providers: [
       { id: 'openai', name: 'OpenAI', type: 'api', enabled: true, defaultModel: 'gpt-4', models: ['gpt-4', 'gpt-4o'], fallbackProvider: null },
@@ -180,7 +180,7 @@ describe('getAiAssignments', () => {
     // A renamed Claude-Ollama TUI: neither its id nor its name says "ollama",
     // and the curated payload ships no envVars — without the server-resolved
     // flag the tool-use warning silently skips the incident's provider class.
-    mocks.getAllProviders.mockResolvedValue({
+    mocks.getSelectableProviders.mockResolvedValue({
       activeProvider: 'openai',
       providers: [
         { id: 'openai', name: 'OpenAI', type: 'api', enabled: true, defaultModel: 'gpt-4', models: ['gpt-4'] },
