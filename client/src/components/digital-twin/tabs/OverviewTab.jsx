@@ -17,6 +17,7 @@ import {
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
+import TwinProviderPicker from '../TwinProviderPicker.jsx';
 
 import {
   DOCUMENT_CATEGORIES,
@@ -427,23 +428,13 @@ export default function OverviewTab({ status, settings, onRefresh }) {
         </p>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 mb-4">
-          <select
-            aria-label="AI provider and model"
-            value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
-            onChange={(e) => {
-              const [providerId, model] = e.target.value.split(':');
-              setSelectedProvider({ providerId, model });
-            }}
-            className="px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white text-sm"
-          >
-            {providers.map(p => (
-              (p.models || [p.defaultModel]).filter(Boolean).map(model => (
-                <option key={`${p.id}:${model}`} value={`${p.id}:${model}`}>
-                  {p.name} - {model}
-                </option>
-              ))
-            ))}
-          </select>
+          <TwinProviderPicker
+            compact
+            className="flex-1 min-w-0"
+            providers={providers}
+            selected={selectedProvider}
+            onChange={setSelectedProvider}
+          />
 
           <button
             onClick={checkContradictions}

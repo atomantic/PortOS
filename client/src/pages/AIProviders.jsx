@@ -4,6 +4,7 @@ import { Bot, Cpu, Gauge, Link2, Network, Package } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 import { filterSelectableModels, isProviderHardwareCompatible, mergeModelLists, localBackendForProvider, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isCodexSubscriptionProvider, isLocalEndpoint, isLocalInstanceProvider, providerRuntimeKey, providerCardState, PROVIDER_CARD_STATE } from '../utils/providers';
 import { copyToClipboard } from '../lib/clipboard';
 import { formatCount } from '../utils/formatters';
@@ -931,17 +932,21 @@ export default function AIProviders() {
       {showRunPanel && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-4">
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-4">
-            <select
-              aria-label="Active provider"
-              value={activeProviderId || ''}
-              onChange={(e) => handleSetActive(e.target.value)}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white w-full sm:w-auto"
-            >
-              <option value="">Select Provider</option>
-              {providers.filter(p => p.enabled && isProviderHardwareCompatible(p)).map(p => (
-                <option key={p.id} value={p.id}>{p.name}{isTuiProvider(p) ? ' (CoS TUI)' : ''}</option>
-              ))}
-            </select>
+            {/* `activeProvider` is always a PRESET id (epic #7561), so the
+                compose entry is off here — the picker cannot hand it a composite. */}
+            <div className="w-full sm:w-64">
+              <ProviderModelSelector
+                compact
+                compose={false}
+                label="Active provider"
+                providers={providers}
+                selectedProviderId={activeProviderId || ''}
+                selectedModel=""
+                availableModels={[]}
+                emptyProviderOption="Select Provider"
+                onProviderChange={handleSetActive}
+              />
+            </div>
 
             <select
               aria-label="Orchestration profile"

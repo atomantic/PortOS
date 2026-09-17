@@ -12,6 +12,7 @@ import { nanoAvailability } from '../../services/browserLlm';
 import { readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
 import { formatVoiceLabel } from '../../lib/voiceLabel';
 import { withUnlistedOption } from '../../lib/withUnlistedOption';
+import ProviderModelSelector from '../ProviderModelSelector';
 import FormField from '../ui/FormField';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 
@@ -618,23 +619,25 @@ export function VoiceTab() {
         )}
 
         <FormField label="LLM provider" hint="Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under Settings → Providers.">
-          <select
-            value={llmProvider}
-            onChange={(e) => {
+          {/* Streaming needs a direct API route, so a composed combination is
+              restricted to the `api` method. The model/vision selects below
+              carry their own 'auto' sentinel, so this is the provider only. */}
+          <ProviderModelSelector
+            compact
+            label="LLM provider"
+            providers={providerOptions}
+            selectedProviderId={llmProvider}
+            selectedModel=""
+            availableModels={[]}
+            composeMethods={['api']}
+            onProviderChange={(id) => {
               // Switching provider invalidates the old model — reset to 'auto'
               // so we don't send a model the new provider doesn't have.
-              patch('llm.provider', e.target.value);
+              patch('llm.provider', id);
               patch('llm.model', 'auto');
               patch('llm.visionModel', 'auto');
             }}
-            className={inputCls}
-          >
-            {providerOptions.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}{p.enabled === false ? ' (disabled)' : ''}
-              </option>
-            ))}
-          </select>
+          />
         </FormField>
 
         {/* Not wrapped in <FormField>: the select sits beside a refresh button,
@@ -800,22 +803,21 @@ export function VoiceTab() {
         {cfg.llm.codeAgent?.enabled === true && (
           <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 pl-7">
             <FormField label="Coding agent" hint="Which CLI/TUI agent runs the task. 'System default' uses your active AI provider (Settings → Providers).">
-              <select
-                value={codeProvider}
-                onChange={(e) => {
+              <ProviderModelSelector
+                compact
+                label="Coding agent"
+                providers={codeProviderOptions}
+                selectedProviderId={codeProvider}
+                selectedModel=""
+                availableModels={[]}
+                emptyProviderOption="System default"
+                composeMethods={['cli', 'tui']}
+                onProviderChange={(id) => {
                   // Switching agent invalidates the old model — reset to default.
-                  patch('llm.codeAgent.provider', e.target.value);
+                  patch('llm.codeAgent.provider', id);
                   patch('llm.codeAgent.model', '');
                 }}
-                className={inputCls}
-              >
-                <option value="">System default</option>
-                {codeProviderOptions.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}{p.enabled === false ? ' (disabled)' : ''}
-                  </option>
-                ))}
-              </select>
+              />
             </FormField>
             <FormField label="Model" hint="'System default' lets the agent pick per task complexity.">
               <select

@@ -39,6 +39,7 @@ import useUniverse from '../../../hooks/useUniverse';
 import { useCanonPatch } from '../../../hooks/useCanonPatch';
 import useHydratedPreviewRoute from '../../../hooks/useHydratedPreviewRoute';
 import CanonCard from '../CanonCard';
+import ProviderModelSelector from '../../ProviderModelSelector';
 import MediaPreview from '../../media/MediaPreview';
 import { normalizeImage } from '../../media/normalize';
 import Drawer from '../../Drawer';
@@ -536,34 +537,21 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
           {/* Per-attempt provider/model override. Empty = series default, so a
               first extract behaves exactly as before; the user only reaches for
               these when retrying after a provider failure. */}
-          <select
-            value={extractProvider}
-            onChange={(e) => { setExtractProvider(e.target.value); setExtractModel(''); }}
+          <ProviderModelSelector
+            compact
+            label="Extraction provider"
+            providers={providers}
+            selectedProviderId={extractProvider}
+            selectedModel={extractModel}
+            availableModels={extractProviderModels}
+            emptyProviderOption={`Series default (${providerLabel(seriesDefaultProviderId)})`}
+            emptyModelOption="Default model"
+            alwaysShowModel
             disabled={extracting}
-            title="AI provider for extraction"
-            aria-label="Extraction provider"
-            className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs disabled:opacity-40"
-          >
-            <option value="">Series default ({providerLabel(seriesDefaultProviderId)})</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <select
-            value={extractModel}
-            onChange={(e) => setExtractModel(e.target.value)}
-            disabled={extracting || extractProviderModels.length === 0}
-            title="Model for extraction"
-            aria-label="Extraction model"
-            className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs disabled:opacity-40 max-w-[160px]"
-          >
-            <option value="">Default model</option>
-            {extractProviderModels.map((m) => {
-              const mid = typeof m === 'string' ? m : m.id;
-              const label = typeof m === 'string' ? m : (m.name || m.id);
-              return <option key={mid} value={mid}>{label}</option>;
-            })}
-          </select>
+            modelDisabled={extractProviderModels.length === 0}
+            onProviderChange={(id) => { setExtractProvider(id); setExtractModel(''); }}
+            onModelChange={setExtractModel}
+          />
           <button
             type="button"
             onClick={handleExtract}

@@ -11,6 +11,7 @@ import {
   getProviders,
 } from '../../services/api';
 import { formatCount, timeAgo } from '../../utils/formatters';
+import ProviderModelSelector from '../ProviderModelSelector';
 
 const fmtHours = (h) => `${Number(h ?? 0).toFixed(1)}h`;
 
@@ -313,18 +314,17 @@ export default function GoalScorecardTab() {
               AI narrative
             </label>
             {narrativeEnabled && (
-              <select
-                aria-label="Narrative provider"
-                value={settings?.provider || ''}
+              <ProviderModelSelector
+                compact
+                label="Narrative provider"
+                providers={providers}
+                selectedProviderId={settings?.provider || ''}
+                selectedModel=""
+                availableModels={[]}
                 disabled={savingSettings}
-                onChange={(e) => saveSettings({ provider: e.target.value || null })}
-                className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-200 focus:border-port-accent/60 focus:outline-none"
-              >
-                <option value="">Active provider</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                ))}
-              </select>
+                onProviderChange={(id) => saveSettings({ provider: id || null })}
+                emptyProviderOption="Active provider"
+              />
             )}
             <button
               onClick={handleNarrative}

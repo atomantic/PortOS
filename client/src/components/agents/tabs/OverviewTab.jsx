@@ -6,6 +6,7 @@ import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
 import BrailleSpinner from '../../BrailleSpinner';
 import { FormField } from '../../ui/FormField';
+import ProviderModelSelector from '../../ProviderModelSelector';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
 import { DEFAULT_AVATAR_COLOR } from '../../../themes/portosThemes';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
@@ -538,43 +539,31 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       <div className="text-sm text-white">{label}</div>
                       <div className="text-[10px] text-gray-500">{desc}</div>
                     </div>
-                    <div className="flex gap-2">
-                      <select
-                        aria-label="Provider"
-                        value={fnConfig.providerId || ''}
-                        onChange={(e) => setFormData(prev => ({
-                          ...prev,
-                          aiConfig: {
-                            ...prev.aiConfig,
-                            [key]: { ...prev.aiConfig?.[key], providerId: e.target.value || undefined, model: undefined }
-                          }
-                        }))}
-                        className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-                      >
-                        <option value="">System Default</option>
-                        {providers.map(p => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
-                      <select
-                        aria-label="Model"
-                        value={fnConfig.model || ''}
-                        onChange={(e) => setFormData(prev => ({
-                          ...prev,
-                          aiConfig: {
-                            ...prev.aiConfig,
-                            [key]: { ...prev.aiConfig?.[key], model: e.target.value || undefined }
-                          }
-                        }))}
-                        disabled={!fnConfig.providerId}
-                        className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
-                      >
-                        <option value="">Default</option>
-                        {fnModels.map(m => (
-                          <option key={m} value={m}>{m}</option>
-                        ))}
-                      </select>
-                    </div>
+                    <ProviderModelSelector
+                      compact
+                      providers={providers}
+                      selectedProviderId={fnConfig.providerId || ''}
+                      selectedModel={fnConfig.model || ''}
+                      availableModels={fnModels}
+                      onProviderChange={(providerId) => setFormData(prev => ({
+                        ...prev,
+                        aiConfig: {
+                          ...prev.aiConfig,
+                          [key]: { ...prev.aiConfig?.[key], providerId: providerId || undefined, model: undefined }
+                        }
+                      }))}
+                      onModelChange={(model) => setFormData(prev => ({
+                        ...prev,
+                        aiConfig: {
+                          ...prev.aiConfig,
+                          [key]: { ...prev.aiConfig?.[key], model: model || undefined }
+                        }
+                      }))}
+                      modelDisabled={!fnConfig.providerId}
+                      emptyProviderOption="System Default"
+                      emptyModelOption="Default"
+                      alwaysShowModel
+                    />
                   </div>
                 );
               })}

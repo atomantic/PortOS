@@ -7,6 +7,7 @@ import { getNotesVaults } from '../../../services/apiNotes';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { FormField } from '../../ui/FormField';
+import ProviderModelSelector from '../../ProviderModelSelector';
 import OverflowMenu from '../../ui/OverflowMenu';
 import { onVoiceEvent, sendText, setDictation as setVoiceDictation } from '../../../services/voiceClient';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -689,19 +690,15 @@ export default function DailyLogTab() {
                 />
                 Enable the scheduled evening draft
               </label>
-              <FormField label="AI provider (optional — narrative summary)" labelClassName="block text-xs text-gray-400 mb-1">
-                <select
-                  id="digest-provider"
-                  value={digestSettings?.provider || ''}
-                  onChange={(e) => saveDigestSettings({ provider: e.target.value || null })}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white"
-                >
-                  <option value="">None — structured summary only (no AI)</option>
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                  ))}
-                </select>
-              </FormField>
+              <ProviderModelSelector
+                label="AI provider (optional — narrative summary)"
+                providers={providers}
+                selectedProviderId={digestSettings?.provider || ''}
+                selectedModel=""
+                availableModels={[]}
+                onProviderChange={(id) => saveDigestSettings({ provider: id || null })}
+                emptyProviderOption="None — structured summary only (no AI)"
+              />
               {digestProvider && (
                 <FormField label="Model (optional)" labelClassName="block text-xs text-gray-400 mb-1">
                   <input

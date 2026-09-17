@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import ProviderModelSelector from '../ProviderModelSelector';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
@@ -1065,17 +1066,16 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                     </div>
 
                     <div className="flex-1 min-w-0 grid grid-cols-1 @lg:grid-cols-3 gap-2">
-                      <select
-                        aria-label={`${label} provider`}
-                        value={roleData.provider || ''}
-                        onChange={(e) => updateOrchestrationRoleField(key, 'provider', e.target.value)}
-                        className="px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-xs"
-                      >
-                        <option value="">Auto / Default</option>
-                        {enabledProviders.map((p) => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
+                      <ProviderModelSelector
+                        compact
+                        label={`${label} provider`}
+                        providers={enabledProviders}
+                        selectedProviderId={roleData.provider || ''}
+                        selectedModel=""
+                        availableModels={[]}
+                        onProviderChange={(id) => updateOrchestrationRoleField(key, 'provider', id)}
+                        emptyProviderOption="Auto / Default"
+                      />
 
                       <select
                         aria-label={`${label} model`}

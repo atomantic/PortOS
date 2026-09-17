@@ -7,6 +7,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import { processScreenshotUploads } from '../services/apiMedia';
 import { filterSelectableModels } from '../utils/providers';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 
 export function RunnerPage() {
   const location = useLocation();
@@ -353,35 +354,23 @@ ${prompt.trim()}`;
 
         {mode === 'ai' && (
           <>
-            {/* Provider */}
-            <select
-              aria-label="AI provider"
-              value={selectedProvider}
-              onChange={(e) => {
-                setSelectedProvider(e.target.value);
-                const p = providers.find(p => p.id === e.target.value);
+            {/* Provider + model. A composed route (Custom combination…) is not in
+                `providers`, so `currentProvider` is undefined for it and the
+                selector offers the composite's own service catalog instead. */}
+            <ProviderModelSelector
+              compact
+              label="AI provider"
+              providers={providers}
+              selectedProviderId={selectedProvider}
+              selectedModel={selectedModel}
+              availableModels={filterSelectableModels(currentProvider?.models)}
+              onProviderChange={(id) => {
+                setSelectedProvider(id);
+                const p = providers.find(p => p.id === id);
                 setSelectedModel(p?.defaultModel || '');
               }}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-            >
-              {providers.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-
-            {/* Model */}
-            {filterSelectableModels(currentProvider?.models).length > 0 && (
-              <select
-                aria-label="Model"
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-              >
-                {filterSelectableModels(currentProvider.models).map(m => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-            )}
+              onModelChange={setSelectedModel}
+            />
 
             {/* Timeout */}
             <div className="flex items-center gap-2">

@@ -42,6 +42,9 @@
  * @param {function} [props.onModelChange] - Called with model string. Omit on a
  *   provider-only picker (no `availableModels`); a composed model is then
  *   dropped and the composite runs on its service default.
+ * @param {string} [props.id] - Id for the provider `<select>`, when the caller
+ *   owns the `<label htmlFor>` (`FormField` injects one onto its first child).
+ *   Defaults to a generated id.
  * @param {string} [props.label] - Label text (default: "Provider")
  * @param {boolean} [props.disabled] - Disable both selectors
  * @param {boolean} [props.loading] - The caller's provider list hasn't settled
@@ -140,6 +143,7 @@ export default function ProviderModelSelector({
   availableModels,
   onProviderChange,
   onModelChange,
+  id: idProp,
   label = 'Provider',
   disabled = false,
   loading = false,
@@ -157,7 +161,8 @@ export default function ProviderModelSelector({
   compose = true,
   composeMethods,
 }) {
-  const providerSelectId = useId();
+  const generatedProviderSelectId = useId();
+  const providerSelectId = idProp || generatedProviderSelectId;
   const modelSelectId = useId();
   const effortSelectId = useId();
   const [composeOpen, setComposeOpen] = useState(false);

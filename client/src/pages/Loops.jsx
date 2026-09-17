@@ -13,6 +13,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { clickableProps } from '../lib/a11yKeyboard.js';
 import EmptyState from '../components/EmptyState';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 
 const INTERVAL_PRESETS = [
   { label: '30s', value: '30s' },
@@ -123,20 +124,17 @@ function CreateLoopForm({ providers, onCreated, promptRef }) {
           </div>
         </div>
 
-        <FormField className="flex-1 min-w-[150px]" label="AI Provider" labelClassName="block text-xs text-gray-400 mb-1">
-          <select
-            value={providerId}
-            onChange={e => setProviderId(e.target.value)}
-            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-200"
-          >
-            <option value="">Active provider (default)</option>
-            {providers.map(p => (
-              <option key={p.id} value={p.id}>
-                {p.name} {p.isActive ? '(active)' : ''} — {p.defaultModel || p.type}
-              </option>
-            ))}
-          </select>
-        </FormField>
+        <div className="flex-1 min-w-[150px]">
+          <ProviderModelSelector
+            label="AI Provider"
+            providers={providers}
+            selectedProviderId={providerId}
+            selectedModel=""
+            availableModels={[]}
+            emptyProviderOption="Active provider (default)"
+            onProviderChange={setProviderId}
+          />
+        </div>
 
         <button
           type="button"

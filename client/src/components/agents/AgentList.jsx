@@ -4,6 +4,7 @@ import { Bot, Sparkles } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { FormField } from '../ui/FormField';
+import ProviderModelSelector from '../ProviderModelSelector';
 import EmptyState from '../EmptyState';
 import * as api from '../../services/api';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
@@ -219,32 +220,20 @@ export default function AgentList() {
                 <span className="text-sm font-medium text-white">Generate with AI</span>
               </div>
               <div className="flex items-end gap-3">
-                <FormField label="Provider" className="flex-1" labelClassName="block text-xs text-gray-400 mb-1">
-                  <select
-                    value={selectedProviderId}
-                    onChange={(e) => { setSelectedProviderId(e.target.value); setSelectedModel(''); }}
+                <div className="flex-1 min-w-0">
+                  <ProviderModelSelector
+                    providers={providers}
+                    selectedProviderId={selectedProviderId}
+                    selectedModel={selectedModel}
+                    availableModels={availableModels}
+                    onProviderChange={(id) => { setSelectedProviderId(id); setSelectedModel(''); }}
+                    onModelChange={setSelectedModel}
                     disabled={generating}
-                    className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
-                  >
-                    <option value="">Default (active)</option>
-                    {providers.map(p => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
-                </FormField>
-                <FormField label="Model" className="flex-1" labelClassName="block text-xs text-gray-400 mb-1">
-                  <select
-                    value={selectedModel}
-                    onChange={(e) => setSelectedModel(e.target.value)}
-                    disabled={generating}
-                    className="w-full px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
-                  >
-                    <option value="">Default</option>
-                    {availableModels.map(m => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </FormField>
+                    emptyProviderOption="Default (active)"
+                    emptyModelOption="Default"
+                    alwaysShowModel
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={handleGenerate}
