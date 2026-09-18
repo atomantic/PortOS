@@ -295,10 +295,10 @@ export function formatTrackerInstructions(tracker, options = {}) {
   const jiraDispatchLabelWording = issueLabelContract
     ? `plus the required equivalent dispatch-hint labels ${issueLabelContract.jiraFlags}:`
     : 'plus equivalent dispatch-hint labels when justified:';
-  // Rendered from the shared slot list rather than a literal, so a new label
-  // axis reaches this copy-pasteable example without re-patching it here.
-  // Rendered twice from one contract: GitLab spells every prefixed label with
-  // its scoped `::` separator, so the glab block cannot reuse the gh line.
+  // Rendered from the shared slot list rather than a literal, so a new label axis
+  // reaches this copy-pasteable example without re-patching it here — and rendered
+  // twice from the one contract, because GitLab spells every prefixed label with
+  // its scoped `::` separator and so cannot reuse the gh line.
   const requiredForgeFlags = issueLabelContract?.forgeFlags || '--label model:<tier> --label effort:<level>';
   const forgeLabelFlags = formatOptionalIssueLabelFlags(requiredForgeFlags);
   const forgeLabelFlagsGlab = formatOptionalIssueLabelFlags(requiredForgeFlags, { cli: 'glab' });

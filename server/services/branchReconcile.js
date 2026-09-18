@@ -1506,8 +1506,9 @@ async function dispatchHintLineForBranch(branchName, repoPath) {
   const hint = await getIssueDispatchHint(issueNumber, { cwd: repoPath }).catch(() => ({ status: 'unavailable', model: null, effort: null }));
   if (hint.status !== 'known' || (!hint.model && !hint.effort)) return '';
   // Rendered from the shared vocabulary rather than hand-spelled, so this line
-  // cannot drift from the labels a filer writes (and picks up the forge separator
-  // for free the day getIssueDispatchHint grows a glab arm).
+  // cannot drift from the tiers/levels a filer writes. Canonical GitHub spelling:
+  // getIssueDispatchHint is gh-only, and this is prose for a coordinator prompt,
+  // not a label being applied to a forge.
   const parts = forgeDispatchLabels({ model: hint.model, effort: hint.effort });
   return `- Recommended dispatch (issue #${issueNumber}'s labels): ${parts.join(', ')} — run this branch's work at that capability/effort.`;
 }

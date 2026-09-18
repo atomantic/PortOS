@@ -454,9 +454,14 @@ describe('client mirror of the reviewer vocabulary', () => {
   it('matches the server apply-capable roster', async () => {
     const client = await import('../../client/src/lib/reviewerPins.js');
     expect([...client.APPLY_CAPABLE_REVIEWERS].sort()).toEqual([...APPLY_CAPABLE_REVIEWERS].sort());
-    for (const slug of REVIEWER_VALUES) {
-      expect(client.isApplyCapableReviewer(slug), slug).toBe(isApplyCapableReviewer(slug));
+    // Aliases and casing included: REVIEWER_VALUES alone is all-canonical, so it
+    // would pass even if one side resolved aliases and the other did not.
+    const probes = [...REVIEWER_VALUES, ...Object.keys(REVIEWER_ALIASES), 'CODEX', ' codex ', '', null];
+    for (const slug of probes) {
+      expect(client.isApplyCapableReviewer(slug), String(slug)).toBe(isApplyCapableReviewer(slug));
     }
+    expect(isApplyCapableReviewer('CODEX')).toBe(true);
+    expect(isApplyCapableReviewer('antigravity')).toBe(false);
     // Every apply-capable slug is a reviewer the picker can actually offer.
     for (const slug of APPLY_CAPABLE_REVIEWERS) expect(REVIEWER_VALUES).toContain(slug);
   });

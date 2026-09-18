@@ -532,6 +532,13 @@ export function jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, pla
   ].filter(Boolean);
 }
 
+/** The fixed label tables, in precedence order, as `[colors, descriptions]` pairs. */
+const LABEL_TABLES = Object.freeze([
+  [DISPATCH_LABEL_COLORS, DISPATCH_LABEL_DESCRIPTIONS],
+  [CONTRIBUTOR_LABEL_COLORS, CONTRIBUTOR_LABEL_DESCRIPTIONS],
+  [WORKFLOW_LABEL_COLORS, WORKFLOW_LABEL_DESCRIPTIONS],
+]);
+
 /**
  * `{ name, color, description }` for a forge dispatch, contributor, or workflow
  * label, or null.
@@ -541,12 +548,6 @@ export function jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, pla
  * for `cli` — which is what makes `formatLabelCreateCommand` create the label
  * the issue will actually be filed with.
  */
-const LABEL_TABLES = Object.freeze([
-  [DISPATCH_LABEL_COLORS, DISPATCH_LABEL_DESCRIPTIONS],
-  [CONTRIBUTOR_LABEL_COLORS, CONTRIBUTOR_LABEL_DESCRIPTIONS],
-  [WORKFLOW_LABEL_COLORS, WORKFLOW_LABEL_DESCRIPTIONS],
-]);
-
 export function dispatchLabelSpec(name, { cli = 'gh' } = {}) {
   if (typeof name !== 'string') return null;
   const canonical = forgeLabelName(name);

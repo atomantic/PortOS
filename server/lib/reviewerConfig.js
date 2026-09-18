@@ -71,7 +71,14 @@ export const DEFAULT_REVIEWERS = [];
 // (LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, …): slashdo granting a
 // second reviewer the editing pass is then one row, not an edit at every gate.
 export const APPLY_CAPABLE_REVIEWERS = Object.freeze(['codex']);
-export const isApplyCapableReviewer = (slug) => APPLY_CAPABLE_REVIEWERS.includes(slug);
+// Aliases resolve first, matching the client mirror — a predicate that accepted
+// `codex` but not a future alias of it would silently drop the flag for a user
+// who typed the alias, and the two sides would disagree about the same reviewer.
+export const isApplyCapableReviewer = (slug) => {
+  if (typeof slug !== 'string') return false;
+  const lower = slug.trim().toLowerCase();
+  return APPLY_CAPABLE_REVIEWERS.includes(REVIEWER_ALIASES[lower] || lower);
+};
 // Reviewers that resolve to a local-LLM backend (rather than a CLI or GitHub
 // bot). Used by the code-review endpoint, settings panel, and prompt builder
 // to gate model-id resolution.
@@ -1263,14 +1270,13 @@ export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers =
  *   Usernames are appended as `@user` tokens after the keyed reviewers.
  * - `--review-stop-on-*` only when the effective list is 2+ (stop-mode is
  *   meaningless for one).
- * - `--reviewer-applies` only when an `APPLY_CAPABLE_REVIEWERS` slug (`codex`) is in
- *   the emitted list. slashdo's loop
- *   forces every OTHER local reviewer (`claude`/`agy`/`grok`/`pi`/`cursor`/
- *   `opencode`) back to review-only — codex is the one reviewer with a verified
- *   write-isolated profile — and the flag is a no-op on `copilot`, `@login`
- *   (cloud, read-only) and `ollama` (non-agentic). Emitting it for a list with no
- *   codex therefore promises an editing pass slashdo will not run; it is dropped
- *   instead, so the rendered command says what will actually happen.
+ * - `--reviewer-applies` only when an `APPLY_CAPABLE_REVIEWERS` slug (`codex`) is
+ *   in the emitted list. slashdo's loop forces every OTHER local reviewer
+ *   (`claude`/`agy`/`grok`/`pi`/`cursor`/`opencode`) back to review-only — codex
+ *   is the one with a verified write-isolated profile — and the flag is a no-op on
+ *   `copilot`/`@login` (cloud, read-only) and `ollama` (non-agentic). Emitting it
+ *   for a list with no codex would promise an editing pass slashdo will not run,
+ *   so it is dropped and the rendered command says what will actually happen.
  * - Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix on
  *   their emitted token, so an inconclusive verdict from them doesn't gate the
  *   merge. Reviewers with a `reviewerMaxRounds` cap get `~max=<n>` after it,
