@@ -42,13 +42,24 @@ export function labelSeparator(cli = 'gh') {
   return cli === 'glab' ? '::' : ':';
 }
 
+/** The key half of a prefixed label — one grammar, shared by both regexes below. */
+const LABEL_KEY = '[A-Za-z][A-Za-z0-9-]*';
+
 /** A prefixed label, split into its key and value across either separator. */
-const PREFIXED_LABEL_RE = /^([A-Za-z][A-Za-z0-9-]*)::?(.+)$/;
+const PREFIXED_LABEL_RE = new RegExp(`^(${LABEL_KEY})::?(.+)$`);
 
 /**
  * Rewrite one label into `cli`'s separator. A label with no `key:value` shape
  * (`good first issue`, `in-progress`) is returned untouched, so a caller can
- * pipe every label it is about to apply through this without special-casing.
+ * pipe every label it is about to apply through this without special-casing,
+ * and re-running it is a no-op rather than growing a third colon.
+ *
+ * Every function below that has to name a label in a forge's own spelling goes
+ * through here, so `labelSeparator` has exactly one caller and "key + separator
+ * + value" has exactly one definition. Called with no `cli` it yields the
+ * CANONICAL (GitHub) form, which is what every lookup table here is keyed by —
+ * that is how `dispatchLabelSpec('model::heavy')` finds its color instead of
+ * falling through to "not a dispatch label".
  * @param {string} name
  * @param {{cli?: string}} [options]
  * @returns {string}
@@ -58,13 +69,6 @@ export function forgeLabelName(name, { cli = 'gh' } = {}) {
   const parts = PREFIXED_LABEL_RE.exec(name);
   return parts ? `${parts[1]}${labelSeparator(cli)}${parts[2]}` : name;
 }
-
-/**
- * The GitHub-form spelling of a label, whichever forge wrote it — the key every
- * lookup table here is keyed by. Lets `dispatchLabelSpec('model::heavy')` find
- * its color instead of falling through to "not a dispatch label".
- */
-const canonicalLabelName = (name) => forgeLabelName(name, { cli: 'gh' });
 
 export const DISPATCH_LABEL_COLORS = Object.freeze({
   'model:light': 'D4C5F9',
@@ -216,10 +220,13 @@ export function resolvePlannerId({ providerId, model } = {}) {
   return normalizePlannerId(model) || normalizePlannerId(providerId);
 }
 
-/** Forge label for a planner identity (`planner:opus-5`, `planner::opus-5`), or null. */
-export function forgePlannerLabel(value, { cli = 'gh' } = {}) {
+/**
+ * Forge label for a planner identity (`planner:opus-5`), or null. Canonical
+ * form — `forgeIssueLabels` / `dispatchLabelSpec` re-spell it for the forge.
+ */
+export function forgePlannerLabel(value) {
   const id = normalizePlannerId(value);
-  return id ? `planner${labelSeparator(cli)}${id}` : null;
+  return id ? `${PLANNER_LABEL_PREFIX}${id}` : null;
 }
 
 /** Jira-safe planner label (`planner-opus-5`), or null. */
@@ -231,7 +238,7 @@ export function jiraPlannerLabel(value) {
 /** True when `name` is a forge planner label with a non-empty value, in either separator. */
 export function isPlannerLabel(name) {
   if (typeof name !== 'string') return false;
-  const canonical = canonicalLabelName(name);
+  const canonical = forgeLabelName(name);
   return canonical.startsWith(PLANNER_LABEL_PREFIX) && canonical.length > PLANNER_LABEL_PREFIX.length;
 }
 
@@ -241,12 +248,12 @@ export function isPlannerLabel(name) {
  * name is re-derived from the normalized slug so a caller can't smuggle an
  * unnormalized label past `formatLabelCreateCommand`.
  */
-export function plannerLabelSpec(name, { cli = 'gh' } = {}) {
+export function plannerLabelSpec(name) {
   if (!isPlannerLabel(name)) return null;
-  const id = normalizePlannerId(canonicalLabelName(name).slice(PLANNER_LABEL_PREFIX.length));
+  const id = normalizePlannerId(forgeLabelName(name).slice(PLANNER_LABEL_PREFIX.length));
   if (!id) return null;
   return {
-    name: `planner${labelSeparator(cli)}${id}`,
+    name: `${PLANNER_LABEL_PREFIX}${id}`,
     color: PLANNER_LABEL_COLOR,
     description: `Plan authored by the ${id} model`,
   };
@@ -263,7 +270,7 @@ export function plannerLabelSpec(name, { cli = 'gh' } = {}) {
  * has to act on. `cli` only picks the `label create` dialect (`gh` / `glab`).
  */
 export function formatPlannerLabelGuidance(plannerId, { cli = 'gh' } = {}) {
-  const label = forgePlannerLabel(plannerId, { cli });
+  const label = forgeLabelName(forgePlannerLabel(plannerId), { cli });
   if (!label) return '';
   const sep = labelSeparator(cli);
   return [
@@ -293,11 +300,11 @@ export const OPTIONAL_ISSUE_LABEL_FLAG_SLOTS = Object.freeze([
 ]);
 
 /**
- * `--label <key>:<value>` occurrences in a rendered flag string. Quoted and
- * bare values both, and `(?!:)` so re-running this on an already-GitLab string
- * is a no-op rather than growing a third colon.
+ * The prefixed label inside a rendered `--label <key>:<value>` flag, quoted or
+ * bare. Only the label token is captured; `forgeLabelName` does the re-spelling,
+ * so the separator is not restated here.
  */
-const LABEL_FLAG_SEPARATOR_RE = /(--label\s+"?[A-Za-z][A-Za-z0-9-]*):(?!:)/g;
+const LABEL_FLAG_RE = new RegExp(`(--label\\s+"?)(${LABEL_KEY}::?[^\\s"]+)`, 'g');
 
 /**
  * The optional slots as one line, appended after any flags a contract already
@@ -316,7 +323,7 @@ export function formatOptionalIssueLabelFlags(requiredFlags = '', { cli = 'gh' }
     (slot) => !required.includes(slot.slice('[--label '.length, -1))
   );
   const line = [required.trim(), ...slots].filter(Boolean).join(' ');
-  return cli === 'glab' ? line.replace(LABEL_FLAG_SEPARATOR_RE, '$1::') : line;
+  return line.replace(LABEL_FLAG_RE, (_match, prefix, label) => prefix + forgeLabelName(label, { cli }));
 }
 
 const MODEL_SET = new Set(DISPATCH_MODEL_TIERS);
@@ -360,7 +367,7 @@ export function dispatchHintFromLabels(labels) {
     if (typeof label !== 'string') continue;
     // Canonicalized first: a GitLab tracker hands back the scoped `model::heavy`
     // spelling, and reading only the GitHub form would report it as unlabeled.
-    const canonical = canonicalLabelName(label);
+    const canonical = forgeLabelName(label);
     if (canonical.startsWith('model:')) model = normalizeDispatchModel(canonical.slice('model:'.length)) || model;
     else if (canonical.startsWith('effort:')) effort = normalizeDispatchEffort(canonical.slice('effort:'.length)) || effort;
   }
@@ -369,18 +376,18 @@ export function dispatchHintFromLabels(labels) {
 
 /**
  * Forge (GitHub/GitLab) label name for one axis, or null when the value is
- * unrecognized. `axis` is `'model'` or `'effort'`; `cli` picks the separator
- * (`model:heavy` on GitHub, the scoped `model::heavy` on GitLab).
+ * unrecognized. `axis` is `'model'` or `'effort'`. Canonical (GitHub) form —
+ * `forgeIssueLabels` re-spells the finished list for the forge it is filing to,
+ * so nothing between here and there has to carry a `cli`.
  */
-export function forgeDispatchLabel(axis, value, { cli = 'gh' } = {}) {
-  const sep = labelSeparator(cli);
+export function forgeDispatchLabel(axis, value) {
   if (axis === 'model') {
     const tier = normalizeDispatchModel(value);
-    return tier ? `model${sep}${tier}` : null;
+    return tier ? `model:${tier}` : null;
   }
   if (axis === 'effort') {
     const level = normalizeDispatchEffort(value);
-    return level ? `effort${sep}${level}` : null;
+    return level ? `effort:${level}` : null;
   }
   return null;
 }
@@ -398,8 +405,8 @@ export function jiraDispatchLabel(axis, value) {
  * Valid forge labels for the supplied hints, omitting any unjustified axis.
  * Never invents a default; never derives one axis from the other.
  */
-export function forgeDispatchLabels({ model, effort, cli = 'gh' } = {}) {
-  return [forgeDispatchLabel('model', model, { cli }), forgeDispatchLabel('effort', effort, { cli })].filter(Boolean);
+export function forgeDispatchLabels({ model, effort } = {}) {
+  return [forgeDispatchLabel('model', model), forgeDispatchLabel('effort', effort)].filter(Boolean);
 }
 
 /** Jira-safe equivalents of `forgeDispatchLabels`. */
@@ -502,13 +509,18 @@ export function formatVolunteerClaimCommands(issueRef, { cli = 'gh' } = {}) {
   return [...creates, ...adds, ...formatContributorLabelReleaseCommands(issueRef, { cli })];
 }
 
-/** Dispatch hints + contributor labels for one GitHub/GitLab issue. */
+/**
+ * Dispatch hints + contributor labels for one GitHub/GitLab issue, spelled for
+ * `cli` — this is the one place the forge's separator is applied to a filed
+ * label, so every axis above it stays in the canonical form its lookup tables
+ * are keyed by.
+ */
 export function forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli = 'gh' } = {}) {
   return [
-    ...forgeDispatchLabels({ model, effort, cli }),
+    ...forgeDispatchLabels({ model, effort }),
     ...forgeContributorLabels({ goodFirstIssue, helpWanted }),
-    forgePlannerLabel(planner, { cli }),
-  ].filter(Boolean);
+    forgePlannerLabel(planner),
+  ].filter(Boolean).map((name) => forgeLabelName(name, { cli }));
 }
 
 /** Dispatch hints + contributor labels for one Jira ticket. */
@@ -529,39 +541,33 @@ export function jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, pla
  * for `cli` — which is what makes `formatLabelCreateCommand` create the label
  * the issue will actually be filed with.
  */
+const LABEL_TABLES = Object.freeze([
+  [DISPATCH_LABEL_COLORS, DISPATCH_LABEL_DESCRIPTIONS],
+  [CONTRIBUTOR_LABEL_COLORS, CONTRIBUTOR_LABEL_DESCRIPTIONS],
+  [WORKFLOW_LABEL_COLORS, WORKFLOW_LABEL_DESCRIPTIONS],
+]);
+
 export function dispatchLabelSpec(name, { cli = 'gh' } = {}) {
   if (typeof name !== 'string') return null;
-  const canonical = canonicalLabelName(name);
-  const forgeName = forgeLabelName(name, { cli });
-  if (DISPATCH_LABEL_COLORS[canonical]) {
-    return {
-      name: forgeName,
-      color: DISPATCH_LABEL_COLORS[canonical],
-      description: DISPATCH_LABEL_DESCRIPTIONS[canonical],
-    };
-  }
-  if (CONTRIBUTOR_LABEL_COLORS[canonical]) {
-    return {
-      name: forgeName,
-      color: CONTRIBUTOR_LABEL_COLORS[canonical],
-      description: CONTRIBUTOR_LABEL_DESCRIPTIONS[canonical],
-    };
-  }
-  if (WORKFLOW_LABEL_COLORS[canonical]) {
-    return {
-      name: forgeName,
-      color: WORKFLOW_LABEL_COLORS[canonical],
-      description: WORKFLOW_LABEL_DESCRIPTIONS[canonical],
-    };
+  const canonical = forgeLabelName(name);
+  for (const [colors, descriptions] of LABEL_TABLES) {
+    if (colors[canonical]) {
+      return {
+        name: forgeLabelName(name, { cli }),
+        color: colors[canonical],
+        description: descriptions[canonical],
+      };
+    }
   }
   // Prefix-matched last: the planner axis has no enumerable table, so it must
   // not shadow a fixed label that happens to start with the same characters.
-  return plannerLabelSpec(name, { cli });
+  const planner = plannerLabelSpec(name);
+  return planner ? { ...planner, name: forgeLabelName(planner.name, { cli }) } : null;
 }
 
-/** All slashdo dispatch-label specs, in axis-then-ramp order, spelled for `cli`. */
-export function allDispatchLabelSpecs({ cli = 'gh' } = {}) {
-  return Object.keys(DISPATCH_LABEL_COLORS).map((name) => dispatchLabelSpec(name, { cli }));
+/** All slashdo dispatch-label specs, in axis-then-ramp order. */
+export function allDispatchLabelSpecs() {
+  return Object.keys(DISPATCH_LABEL_COLORS).map((name) => dispatchLabelSpec(name));
 }
 
 /**
@@ -731,7 +737,7 @@ export const REPO_STUDY_LABEL_CONTRACT = Object.freeze({
   dispatchGuidance: MANDATORY_DISPATCH_HINT_GUIDANCE,
   jiraDispatchGuidance: MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE,
   instructions: [
-    '**Repo-study complete-label contract (mandatory):** every NEW proposal must carry `repo-study`, `plan`, at least one relevant `area:*`, exactly one justified model label (`model:*` on GitHub/GitLab, `model-*` on JIRA), and exactly one justified effort label (`effort:*` on GitHub/GitLab, `effort-*` on JIRA). The dispatch axes are independent: choose them from the inspected PortOS files and proposed implementation, never by stamping `medium` on both.',
+    '**Repo-study complete-label contract (mandatory):** every NEW proposal must carry `repo-study`, `plan`, at least one relevant `area:*`, exactly one justified model label (`model:*` on GitHub, `model::*` on GitLab, `model-*` on JIRA), and exactly one justified effort label (`effort:*` on GitHub, `effort::*` on GitLab, `effort-*` on JIRA). The dispatch axes are independent: choose them from the inspected PortOS files and proposed implementation, never by stamping `medium` on both.',
     PORTOS_AREA_LABEL_GUIDANCE,
     'If a proposal cannot be classified defensibly on all three axes, do not file that proposal; filing an incomplete issue is not a valid fallback. After each NEW issue, read its labels back and repair any missing required label before continuing; never relabel a duplicate you skipped. Contributor labels remain optional and must follow the shared guidance.',
   ].join('\n'),
@@ -750,7 +756,7 @@ export const REFERENCE_WATCH_LABEL_CONTRACT = Object.freeze({
   dispatchGuidance: MANDATORY_DISPATCH_HINT_GUIDANCE,
   jiraDispatchGuidance: MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE,
   instructions: [
-    '**Reference-watch complete-label contract (mandatory):** every NEW proposal must carry `reference-watch`, `plan`, exactly one justified model label (`model:*` on GitHub/GitLab, `model-*` on JIRA), and exactly one justified effort label (`effort:*` on GitHub/GitLab, `effort-*` on JIRA). The dispatch axes are independent: choose them from the inspected reference diff and proposed implementation, never by stamping `medium` on both.',
+    '**Reference-watch complete-label contract (mandatory):** every NEW proposal must carry `reference-watch`, `plan`, exactly one justified model label (`model:*` on GitHub, `model::*` on GitLab, `model-*` on JIRA), and exactly one justified effort label (`effort:*` on GitHub, `effort::*` on GitLab, `effort-*` on JIRA). The dispatch axes are independent: choose them from the inspected reference diff and proposed implementation, never by stamping `medium` on both.',
     'If a proposal cannot be classified defensibly on both axes, do not file it; filing an incomplete issue is not a valid fallback. After each NEW issue, read its labels back and repair any missing required label before continuing; never relabel a duplicate you skipped.',
   ].join('\n'),
 });
@@ -760,7 +766,7 @@ export const GENERIC_REPO_STUDY_LABEL_CONTRACT = Object.freeze({
   forgeFlags: '--label area:<area> --label model:<tier> --label effort:<level>',
   jiraFlags: '`area:<area>` + `model-<tier>` + `effort-<level>`',
   instructions: [
-    '**Repo-study complete-label contract (mandatory):** every NEW proposal must carry `repo-study`, `plan`, at least one relevant `area:*`, exactly one justified model label (`model:*` on GitHub/GitLab, `model-*` on JIRA), and exactly one justified effort label (`effort:*` on GitHub/GitLab, `effort-*` on JIRA). The dispatch axes are independent: choose them from the inspected target-app files and proposed implementation, never by stamping `medium` on both.',
+    '**Repo-study complete-label contract (mandatory):** every NEW proposal must carry `repo-study`, `plan`, at least one relevant `area:*`, exactly one justified model label (`model:*` on GitHub, `model::*` on GitLab, `model-*` on JIRA), and exactly one justified effort label (`effort:*` on GitHub, `effort::*` on GitLab, `effort-*` on JIRA). The dispatch axes are independent: choose them from the inspected target-app files and proposed implementation, never by stamping `medium` on both.',
     'Scope labels (`area:*`) are required for repo-study issues. Inspect the target app\'s existing tracker labels and apply the narrowest relevant labels; create a genuinely missing, clearly scoped area label only when the tracker supports it.',
     'If a proposal cannot be classified defensibly on all three axes, do not file that proposal; filing an incomplete issue is not a valid fallback. After each NEW issue, read its labels back and repair any missing required label before continuing; never relabel a duplicate you skipped. Contributor labels remain optional and must follow the shared guidance.',
   ].join('\n'),

@@ -14,7 +14,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => mocks.root) }));
 vi.mock('./apps.js', () => ({ getActiveApps: vi.fn(async () => mocks.apps) }));
 vi.mock('./appIssues.js', () => ({ listAppIssues: (...args) => mocks.listAppIssues(...args) }));
-vi.mock('../lib/workTracker.js', () => ({
+// `resolveAppForgeTarget` is doubled; `forgeCliForTracker` is a pure mapper the
+// code under test relies on for real (it decides the forge's label separator),
+// so it passes through rather than being stubbed into a second definition.
+vi.mock('../lib/workTracker.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   resolveAppForgeTarget: (...args) => mocks.resolveAppForgeTarget(...args),
 }));
 vi.mock('./github.js', () => ({

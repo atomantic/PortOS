@@ -171,12 +171,6 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
   // leaves slashdo's built-in per-loop default; `0` means "loop until clean".
   const reviewerMaxRounds = normalizeReviewerMaxRounds(metadata.reviewLoopReviewerMaxRounds) || {};
   const stopMode = metadata.reviewLoopStopMode || DEFAULT_REVIEW_STOP_MODE;
-  // A reviewer consuming public PR/MR content never receives write authority.
-  // The orchestrator applies independently validated findings in a later step.
-  // This is deliberately stricter than slashdo, whose loop grants an editing
-  // pass to `codex` alone — so the rendered note only ever states the off case,
-  // and `metadata.reviewLoopReviewerApplies` cannot turn it on.
-  const reviewerApplies = false;
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
   const hasLocalLlm = reviewers.some(r => isToolFreeReviewer(r));
   // Spawnable-CLI reviewers, in configured order.
@@ -276,9 +270,14 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
     ...reviewers.filter(isOptionalReviewer).map(reviewer => `\`${reviewer}\``),
     ...usernames.filter(username => isOptionalReviewer(`@${username}`)).map(username => `\`@${username}\``),
   ];
-  const equivArgs = buildReviewWithArgs(reviewers, { stopMode, reviewerApplies, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels: reviewerModelMap });
+  // `reviewerApplies: false`, always: a reviewer consuming public PR/MR content
+  // never receives write authority, and the orchestrator applies independently
+  // validated findings in a later step. Deliberately stricter than slashdo, whose
+  // loop grants an editing pass to `codex` alone — so the rendered note only ever
+  // states the off case, and `metadata.reviewLoopReviewerApplies` cannot turn it on.
+  const equivArgs = buildReviewWithArgs(reviewers, { stopMode, reviewerApplies: false, usernames, optionalReviewers, reviewerMaxRounds, reviewerModels: reviewerModelMap });
   return {
-    usernames, reviewers, reviewerMaxRounds, stopMode, reviewerApplies,
+    usernames, reviewers, reviewerMaxRounds, stopMode,
     reviewerModelMap, reviewerEffortMap, hasCopilot, hasLocalLlm, hasCli, hasGithubUser,
     cliReviewers, cliBinaries, cliReviewerHeading, cliBinaryNote, reviewerPinNote, multi,
     configuredReviewerPositions, reviewerPositionLabel, optionalConfiguredReviewers,
@@ -729,7 +728,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     sourceTaskId, localPhaseReviewers: localPhaseReviewerList, localPhaseCanShortCircuit, localPhaseReviewRequired,
   });
   const {
-    usernames, reviewers, reviewerMaxRounds, stopMode, reviewerApplies,
+    usernames, reviewers, reviewerMaxRounds, stopMode,
     reviewerModelMap, reviewerEffortMap, hasCopilot, hasLocalLlm, hasCli, hasGithubUser,
     cliReviewers, cliBinaries, cliReviewerHeading, cliBinaryNote, reviewerPinNote, multi,
     requiredCliBinaries, optionalCliBinaries, reviewerLabel, optionalConfiguredReviewers,

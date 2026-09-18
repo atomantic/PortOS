@@ -32,6 +32,7 @@ import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js'
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
 import { issueNumberFromRef } from './issueReconcile.js';
+import { forgeDispatchLabels } from '../lib/dispatchLabels.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -1504,7 +1505,10 @@ async function dispatchHintLineForBranch(branchName, repoPath) {
   if (!issueNumber) return '';
   const hint = await getIssueDispatchHint(issueNumber, { cwd: repoPath }).catch(() => ({ status: 'unavailable', model: null, effort: null }));
   if (hint.status !== 'known' || (!hint.model && !hint.effort)) return '';
-  const parts = [hint.model ? `model:${hint.model}` : null, hint.effort ? `effort:${hint.effort}` : null].filter(Boolean);
+  // Rendered from the shared vocabulary rather than hand-spelled, so this line
+  // cannot drift from the labels a filer writes (and picks up the forge separator
+  // for free the day getIssueDispatchHint grows a glab arm).
+  const parts = forgeDispatchLabels({ model: hint.model, effort: hint.effort });
   return `- Recommended dispatch (issue #${issueNumber}'s labels): ${parts.join(', ')} — run this branch's work at that capability/effort.`;
 }
 

@@ -17,7 +17,7 @@ import {
 } from './constants';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { selectableModelsForProvider, effortLevelsForProvider, effectiveModelFor } from '../../utils/providers';
-import { APPLY_CAPABLE_REVIEWER, isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
+import { isApplyCapableReviewer, isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 // The SAME map the readiness cards link by (`LOCAL_RUNTIMES[*].manageUrl` reads
 // from it), taken from the server leaf rather than mirrored — the mirror is what
@@ -196,7 +196,7 @@ export default function ReviewerPicker({
   // Only codex is offered the editing pass: slashdo forces every other local
   // reviewer back to review-only and reverts what it wrote, so showing the toggle
   // for agy/grok/cursor would ask the user to grant write access for nothing.
-  const hasApplyCapableReviewer = selected.includes(APPLY_CAPABLE_REVIEWER);
+  const hasApplyCapableReviewer = selected.some(isApplyCapableReviewer);
   const selectedUsernames = normalizeReviewUsernames(usernames);
   const atMaxUsernames = selectedUsernames.length >= MAX_REVIEW_USERNAMES;
   // Optional (non-blocking) reviewers — emitted with slashdo's `~opt` suffix.

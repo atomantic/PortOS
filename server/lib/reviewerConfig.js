@@ -61,12 +61,17 @@ export const NON_REVIEWER_VENDORS = Object.freeze({
 export const REVIEWER_ALIASES = { gemini: 'antigravity', 'cursor-agent': 'cursor' };
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = [];
-// The one reviewer slashdo's `--reviewer-applies` actually reaches. Its loop
-// forces every other local CLI back to review-only (none of them ships an
-// enforceable write-isolated profile), and the flag is meaningless for the
-// cloud (`copilot`, `@login`) and non-agentic (`ollama`) paths — so a list
-// without codex emits no flag at all rather than a promise slashdo drops.
-export const APPLY_CAPABLE_REVIEWER = 'codex';
+// Reviewers slashdo's `--reviewer-applies` actually reaches. Its loop forces
+// every OTHER local CLI back to review-only and reverts what it wrote — codex is
+// the one with a verified write-isolated profile — and the flag is meaningless
+// for the cloud (`copilot`, `@login`) and non-agentic (`ollama`) paths, so a list
+// without one of these emits no flag rather than a promise slashdo drops.
+//
+// A roster plus a predicate, like every other capability axis in this file
+// (LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, …): slashdo granting a
+// second reviewer the editing pass is then one row, not an edit at every gate.
+export const APPLY_CAPABLE_REVIEWERS = Object.freeze(['codex']);
+export const isApplyCapableReviewer = (slug) => APPLY_CAPABLE_REVIEWERS.includes(slug);
 // Reviewers that resolve to a local-LLM backend (rather than a CLI or GitHub
 // bot). Used by the code-review endpoint, settings panel, and prompt builder
 // to gate model-id resolution.
@@ -1258,7 +1263,8 @@ export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers =
  *   Usernames are appended as `@user` tokens after the keyed reviewers.
  * - `--review-stop-on-*` only when the effective list is 2+ (stop-mode is
  *   meaningless for one).
- * - `--reviewer-applies` only when `codex` is in the emitted list. slashdo's loop
+ * - `--reviewer-applies` only when an `APPLY_CAPABLE_REVIEWERS` slug (`codex`) is in
+ *   the emitted list. slashdo's loop
  *   forces every OTHER local reviewer (`claude`/`agy`/`grok`/`pi`/`cursor`/
  *   `opencode`) back to review-only — codex is the one reviewer with a verified
  *   write-isolated profile — and the flag is a no-op on `copilot`, `@login`
@@ -1327,8 +1333,9 @@ export function buildReviewWithArgs(reviewers, {
   const isDefaultOnly = configured.length === 1 && configured[0] === DEFAULT_REVIEWER
     && !optSet.has(DEFAULT_REVIEWER) && maxLookup.get(DEFAULT_REVIEWER) === undefined
     && effortLookup.get(DEFAULT_REVIEWER) === undefined;
-  // The only reviewer `--reviewer-applies` reaches — see the doc comment above.
-  const hasApplyCapableReviewer = combined.includes(APPLY_CAPABLE_REVIEWER);
+  // Keyed by resolved SLUG, like every other per-reviewer lookup in this function,
+  // so a bracketed or suffixed token cannot slip past the comparison.
+  const hasApplyCapableReviewer = combined.some(t => isApplyCapableReviewer(reviewerTokenSlug(t)));
   const parts = [];
   // Nothing slashdo can parse (a list of PortOS-only reviewers): emit no flag at
   // all rather than a bare `--review-with`.

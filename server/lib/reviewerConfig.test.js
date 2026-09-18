@@ -11,7 +11,8 @@ import {
   REVIEWER_VALUES,
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_CAPABLE_CLI_REVIEWERS,
-  APPLY_CAPABLE_REVIEWER,
+  APPLY_CAPABLE_REVIEWERS,
+  isApplyCapableReviewer,
   MODEL_SELECTABLE_REVIEWERS,
   NON_REVIEWER_VENDORS,
   pairReviewerModelsAndEfforts,
@@ -450,10 +451,14 @@ describe('client mirror of the reviewer vocabulary', () => {
   // gates the emitted flag on it. Drift shows the toggle for a reviewer whose
   // editing pass slashdo would force back to review-only, or hides it from the one
   // reviewer the flag reaches.
-  it('matches the server apply-capable reviewer', async () => {
+  it('matches the server apply-capable roster', async () => {
     const client = await import('../../client/src/lib/reviewerPins.js');
-    expect(client.APPLY_CAPABLE_REVIEWER).toBe(APPLY_CAPABLE_REVIEWER);
-    expect(REVIEWER_VALUES).toContain(APPLY_CAPABLE_REVIEWER);
+    expect([...client.APPLY_CAPABLE_REVIEWERS].sort()).toEqual([...APPLY_CAPABLE_REVIEWERS].sort());
+    for (const slug of REVIEWER_VALUES) {
+      expect(client.isApplyCapableReviewer(slug), slug).toBe(isApplyCapableReviewer(slug));
+    }
+    // Every apply-capable slug is a reviewer the picker can actually offer.
+    for (const slug of APPLY_CAPABLE_REVIEWERS) expect(REVIEWER_VALUES).toContain(slug);
   });
 
   // The roster itself. A reviewer added on one side only is the `antigravity`

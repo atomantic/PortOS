@@ -123,15 +123,22 @@ describe('forge vs Jira label formatting', () => {
   // value per key at a time, which is exactly what these axes want. Filing
   // `model:heavy` there produces an ordinary label instead, so an issue can end up
   // carrying two conflicting tiers and `/do:next --model` stops matching it.
+  // `forgeIssueLabels` is the one place the forge's separator is applied, so the
+  // axis builders above it keep the canonical form their lookup tables are keyed
+  // by and nothing between them has to carry a `cli`.
   it('spells every axis with GitLab\'s scoped separator on glab, and Jira stays colon-free', () => {
-    expect(forgeDispatchLabel('model', 'light', { cli: 'glab' })).toBe('model::light');
-    expect(forgeDispatchLabel('effort', 'max', { cli: 'glab' })).toBe('effort::max');
-    expect(forgeDispatchLabels({ model: 'heavy', effort: 'low', cli: 'glab' }))
-      .toEqual(['model::heavy', 'effort::low']);
     expect(forgeIssueLabels({ model: 'light', planner: 'claude-opus-5', helpWanted: true, cli: 'glab' }))
       .toEqual(['model::light', HELP_WANTED_LABEL, 'planner::opus-5']);
+    expect(forgeIssueLabels({ model: 'heavy', effort: 'low', cli: 'glab' }))
+      .toEqual(['model::heavy', 'effort::low']);
+    // A contributor label has no `key:value` shape, so it is passed through
+    // untouched rather than being mangled into a scoped label.
+    expect(forgeIssueLabels({ goodFirstIssue: true, cli: 'glab' })).toEqual([GOOD_FIRST_ISSUE_LABEL]);
     // An explicit gh, and the default, both keep the single colon.
-    expect(forgeDispatchLabel('model', 'light', { cli: 'gh' })).toBe('model:light');
+    expect(forgeIssueLabels({ model: 'heavy', effort: 'low', cli: 'gh' }))
+      .toEqual(['model:heavy', 'effort:low']);
+    expect(forgeIssueLabels({ model: 'heavy', effort: 'low' })).toEqual(['model:heavy', 'effort:low']);
+    expect(forgeDispatchLabel('model', 'light')).toBe('model:light');
     expect(jiraDispatchLabel('model', 'heavy')).toBe('model-heavy');
   });
 
