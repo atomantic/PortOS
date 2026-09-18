@@ -689,8 +689,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // evidence. Older peers may clip that evidence or substitute a smaller model.
   cosTasks: 9,
   // v1 = the Eidoverse foundation promote-candidate envelope (#7455, epic
-  // #7453) — the ONE Eidoverse artifact the machine-local privacy ADR
-  // authorizes to cross the federation layer. A sender advertises its promoted
+  // #7453) — authorized to cross the federation layer by the federated
+  // Eidoverse foundations ADR (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).
+  // A sender advertises its promoted
   // `baseline` foundations at GET /api/peer-sync/eidoverse-foundations; a
   // receiver pulls, re-runs the full accept-side gate per envelope
   // (`verifyFoundationCandidate`), and stores each acceptance under a

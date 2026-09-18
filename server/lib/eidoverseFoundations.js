@@ -42,15 +42,16 @@
  *      place in the tree that runs untrusted controller code. The ledger runs
  *      the assay fresh on every package attempt, so evidence is never older
  *      than the body it vouches for.
-  *   2. **Federation safety.** A promote payload is the one Eidoverse artifact
- *      authorized to cross the federation layer, so it fails closed:
- *      `lib/federationSafety.js` refuses the package outright when the
- *      candidate carries machine identity, PII, credential-shaped values or
- *      credential-NAMED fields, naming the offending JSON path. Nothing is
- *      redacted and shipped — a redacted promote would leave the author
- *      believing they published what they wrote. See the "PII must not ride
- *      the federation layer" rule in root `AGENTS.md` and the machine-local
- *      privacy ADR.
+  *   2. **Federation safety.** A promote payload is the one durable Eidoverse
+ *      artifact authorized to cross the federation layer, alongside live guest
+ *      conversation, so it fails closed: `lib/federationSafety.js` refuses the
+ *      package outright when the candidate carries machine identity, PII,
+ *      credential-shaped values or credential-NAMED fields, naming the
+ *      offending JSON path. Nothing is redacted and shipped — a redacted
+ *      promote would leave the author believing they published what they
+ *      wrote. See the "PII must not ride the federation layer" rule in root
+ *      `AGENTS.md` and the federated Eidoverse foundations ADR
+ *      (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).
  *
  * `fingerprint` is content-addressed (sha256 over the canonicalized envelope
  * minus the fingerprint itself), so a peer can verify a candidate it was handed
