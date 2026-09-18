@@ -190,7 +190,38 @@ describe('cosToolRegistry', () => {
       authority: { scope: 'mind', capabilities: { manageEidoverse: true } },
     });
     expect(catalog.result.materials.length).toBeGreaterThan(0);
+    expect(catalog.result.materials[0].colorHex).toMatch(/^#[0-9a-f]{6}$/i);
     expect(catalog.result.layouts.map((layout) => layout.id)).toContain('radial-ring');
+  });
+
+  it('computes a named layout into augment-ready operations, deterministically', async () => {
+    const call = {
+      requestId: 'place-1',
+      name: 'eidoverse.place-layout',
+      arguments: { layoutId: 'radial-ring', anchor: [1, 0, 2], propCount: 3, seed: 'plaza', assetPath: 'eidoverse/assets/models/lantern.glb', idPrefix: 'plaza' },
+    };
+    const first = await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } });
+    const second = await executeCosToolCall({ call: { ...call, requestId: 'place-2' }, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } });
+    expect(first.result.operations).toHaveLength(3);
+    expect(first.result.operations.every((op) => op.verb === 'spawn')).toBe(true);
+    // Same {layoutId, anchor, seed} must yield byte-identical operations — the
+    // determinism the replay claim (#7627) rests on.
+    expect(second.result).toEqual(first.result);
+  });
+
+  it('drafts an eidoverse.record-ready district-template foundation from a chosen layout, material, and motif', async () => {
+    const call = {
+      requestId: 'draft-1',
+      name: 'eidoverse.draft-foundation',
+      arguments: {
+        id: 'garden-arcade', title: 'Garden Arcade', summary: 'A colonnade of lanterns around the arrival plaza.',
+        contributionId: 'beacon-relay', layoutId: 'radial-ring', materialId: 'sunbaked-clay', motifId: 'lantern-row', anchor: [4, 0, -6],
+      },
+    };
+    const result = await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } });
+    expect(result.result.foundation).toMatchObject({ id: 'garden-arcade', kind: 'district-template' });
+    expect(result.result.foundation.body.placement.length).toBeGreaterThan(0);
+    expect(result.result.foundation.style).toMatchObject({ materialId: 'sunbaked-clay', motifId: 'lantern-row' });
   });
 
   it('keeps local thinking authority separate and refuses raw configuration arguments', async () => {
@@ -244,6 +275,8 @@ describe('cosToolRegistry', () => {
       'eidoverse.record',
       'eidoverse.promote',
       'eidoverse.creative-catalog',
+      'eidoverse.place-layout',
+      'eidoverse.draft-foundation',
       'eidoverse.controllers',
       'eidoverse.install-controller',
       'eidoverse.arm-controller',

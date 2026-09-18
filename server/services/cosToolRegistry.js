@@ -29,7 +29,13 @@ import {
 } from '../lib/validation.js';
 import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
 import { eidoverseControllerArmSchema, eidoverseControllerIdParamSchema, eidoverseControllerInstallSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
-import { describeCreativeCatalog } from '../lib/eidoverseCreativeToolkit.js';
+import {
+  buildDistrictTemplateAugmentOperations,
+  buildDistrictTemplateFoundationDraft,
+  describeCreativeCatalog,
+  eidoverseDraftFoundationInputSchema,
+  eidoversePlaceLayoutInputSchema,
+} from '../lib/eidoverseCreativeToolkit.js';
 import { persistentMindChooseNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
@@ -412,21 +418,23 @@ const eidoverseObserveTool = Object.freeze({
   },
   adapter: { kind: 'eidoverse-observe', operation: 'observe' },
 });
-// The documented creative toolkit (#7459): named materials, motifs, and
-// generative placement layouts a mind reaches for instead of inventing
-// coordinates and colors from scratch. Purely a catalog read — deterministic,
-// seeded, no AI provider call (`lib/eidoverseCreativeToolkit.js`). Feed a
-// chosen layout into eidoverse.record (a district-template) or
-// into eidoverse.augment (live spawn operations).
-const eidoverseCreativeCatalogTool = Object.freeze({
-  type: 'portos_tool',
-  name: 'eidoverse.creative-catalog',
-  version: COS_TOOL_SCHEMA_VERSION,
-  providerName: providerToolName('eidoverse.creative-catalog'),
-  aliases: [providerToolName('eidoverse.creative-catalog')],
-  description: 'List the documented creative toolkit for Eidoverse vernacular building: named materials and motifs (cosmetics for a foundation\'s `style`) and named generative district-template placement layouts (structure for a foundation\'s `body`). Deterministic and seeded — no AI provider call.',
-  input_schema: zodToOpenApiSchema(z.object({}).strict()),
-  output_schema: objectOutputSchema,
+// The documented creative toolkit (#7459, wired end-to-end in #7627): named
+// materials, motifs, and generative placement layouts a mind reaches for
+// instead of inventing coordinates and colors from scratch. Every operation
+// is deterministic, seeded, and provider-free (`lib/eidoverseCreativeToolkit.js`).
+// `place-layout` and `draft-foundation` are the two ways to use a chosen
+// layout the catalog's own description points at: into eidoverse.augment
+// (live spawn operations) or into eidoverse.record (a district-template).
+// Both stay read-only here — computing a placement or a draft is not writing
+// to the world or the foundation ledger.
+const eidoverseCreativeTools = [
+  ['creative-catalog', 'List the documented creative toolkit for Eidoverse vernacular building: named materials and motifs (cosmetics for a foundation\'s `style`) and named generative district-template placement layouts (structure for a foundation\'s `body`). Deterministic and seeded — no AI provider call.', z.object({}).strict()],
+  ['place-layout', 'Compute a named layout\'s placement (from eidoverse.creative-catalog) into ready-to-submit eidoverse.augment `spawn` operations. Deterministic and seeded: the same {layoutId, anchor, seed} always yields the same operations. This only computes — it never places anything; pass the returned `operations` to eidoverse.augment to actually build.', eidoversePlaceLayoutInputSchema],
+  ['draft-foundation', 'Compose a chosen layout plus a material and motif (from eidoverse.creative-catalog) into an eidoverse.record-ready `district-template` input — the generative placement in `body`, the material/motif cosmetics in `style`. This only drafts — it never records anything; pass the returned `foundation` to eidoverse.record to persist it.', eidoverseDraftFoundationInputSchema],
+].map(([operation, description, schema]) => ({
+  type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName(`eidoverse.${operation}`), aliases: [providerToolName(`eidoverse.${operation}`)],
+  description, input_schema: zodToOpenApiSchema(schema), output_schema: objectOutputSchema,
   policy: {
     scopes: ['mind'],
     requiredCapabilities: ['manageEidoverse'],
@@ -435,8 +443,8 @@ const eidoverseCreativeCatalogTool = Object.freeze({
     async: false,
     confirmation: 'capability-grant',
   },
-  adapter: { kind: 'eidoverse-creative', operation: 'catalog' },
-});
+  adapter: { kind: 'eidoverse-creative', operation },
+}));
 // Installing a controller leaves something RUNNING in the world after the turn
 // ends, which is a different act from building in it during a turn — so it
 // carries its own default-off grant on top of `manageEidoverse`, the same way
@@ -456,7 +464,7 @@ const eidoverseControllerTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-controllers', operation },
 }));
-const eidoverseTools = [eidoverseObserveTool, ...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseCreativeCatalogTool, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+const eidoverseTools = [eidoverseObserveTool, ...eidoverseTravelTools, ...eidoverseFoundationTools, ...eidoverseCreativeTools, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
 const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
   type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(name), aliases: [],
@@ -771,6 +779,8 @@ const executeAdapter = async (tool, args, context, authority) => {
     return observeEidoverseWorld({ signal: context.signal });
   }
   if (tool.adapter.kind === 'eidoverse-creative') {
+    if (tool.adapter.operation === 'place-layout') return { operations: buildDistrictTemplateAugmentOperations(args) };
+    if (tool.adapter.operation === 'draft-foundation') return { foundation: buildDistrictTemplateFoundationDraft(args) };
     return describeCreativeCatalog();
   }
   if (tool.adapter.kind === 'eidoverse-controllers') {

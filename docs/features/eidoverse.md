@@ -893,7 +893,7 @@ own `candidateVersion`, which pins one envelope's shape and is hashed into its
 fingerprint: a change to the envelope bumps both, a change to the wrapper or
 the caps bumps only the category.
 
-### Creative toolkit for minds (#7459)
+### Creative toolkit for minds (#7459, wired end-to-end in #7627)
 
 Authoring a foundation from a blank `body`/`style` is a lot to invent from
 scratch every time. `server/lib/eidoverseCreativeToolkit.js` is a small,
@@ -902,24 +902,42 @@ and **motifs** (cosmetics — install-local `style`, the same class of value
 `styleLeakFindings` refuses inside a `body`) and named **generative placement
 layouts** (`radial-ring`, `grid-plot`, `arc-row`, `grove-cluster` — structure,
 safe as `body`). `eidoverse.creative-catalog` (`manageEidoverse`, read) lists
-all three; nothing here calls an AI provider — every layout is deterministic
-and seeded (`generateDistrictTemplatePlacement`), so the same
-`{layoutId, anchor, seed}` reproduces the same geometry on replay or on a peer
-that later inherits the promoted foundation.
+all three, including each material's `colorHex` — a palette id whose value a
+mind cannot see is not a usable catalog entry. Nothing here calls an AI
+provider; every layout is deterministic and seeded
+(`generateDistrictTemplatePlacement`), so the same `{layoutId, anchor, seed}`
+reproduces the same geometry on replay or on a peer that later inherits the
+promoted foundation.
 
-Two ways to use a chosen layout:
+Two tools use a chosen layout, both read-only (they compute; they do not write
+to the world or the foundation ledger):
 
-- `buildDistrictTemplateAugmentOperations()` turns a placement into
-  ready-to-submit `eidoverse.augment` `spawn` operations for the *live* scene
-  (asset-path validity is still checked where `eidoverse.augment` lands them).
-- `buildDistrictTemplateFoundationDraft()` composes a placement plus a
-  material/motif choice into an `eidoverseFoundationInputSchema`-shaped
-  `district-template` input — the generative substance (layout id, anchor,
-  seed, resulting positions) in `body`, the material/motif cosmetics in
-  `style` — ready to pass straight to `eidoverse.record`. It always lands on
-  the local `vernacular` layer, matching every other authored foundation;
-  publishing it to the shared baseline remains the separate, explicit
+- **`eidoverse.place-layout`** (`manageEidoverse`) calls
+  `buildDistrictTemplateAugmentOperations()` and returns ready-to-submit
+  `eidoverse.augment` `spawn` operations for the *live* scene (asset-path
+  validity is still checked where `eidoverse.augment` lands them). The same
+  `{layoutId, anchor, seed}` yields byte-identical operations every call.
+- **`eidoverse.draft-foundation`** (`manageEidoverse`) calls
+  `buildDistrictTemplateFoundationDraft()` and returns an
+  `eidoverseFoundationInputSchema`-shaped `district-template` input — the
+  generative substance (layout id, anchor, seed, resulting positions) in
+  `body`, the material/motif cosmetics in `style` — ready to pass straight to
+  `eidoverse.record`. Drafting composes nothing itself; recording still lands
+  on the local `vernacular` layer, matching every other authored foundation,
+  and publishing to the shared baseline remains the separate, explicit
   `eidoverse.promote` act above.
+
+**`eidoverse.record` derives, never trusts, a `district-template`'s
+placement.** When a recorded `district-template`'s `body` carries
+`{layoutId, anchor}` (with an optional `seed`), `recordEidoverseFoundation()`
+(`services/eidoverseFoundationLedger.js`) replays
+`generateDistrictTemplatePlacement()` server-side and stores the result as
+`body.placement` — REPLACING any placement the caller supplied, not merging
+it. That is what makes the replay claim above hold for a hand-assembled
+`eidoverse.record` call too, not only for one built from
+`eidoverse.draft-foundation`'s output, and it is why the same `district-template`
+is comparable and replayable on an older or newer install that later inherits
+it (#7625).
 
 ## Observation-first discovery (#7457)
 

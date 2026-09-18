@@ -57,6 +57,7 @@ import {
   verifyFoundationCandidate,
 } from '../lib/eidoverseFoundations.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { generateDistrictTemplatePlacement } from '../lib/eidoverseCreativeToolkit.js';
 import { RESILIENCE_DISTURBANCES, runResilienceAssay } from './eidoverseResilienceAssay.js';
 import { findContributionById } from './eidoverseResilienceContributions.js';
 
@@ -161,6 +162,28 @@ export async function getEidoverseFoundation(id) {
 }
 
 /**
+ * A `district-template` foundation's `body.placement` is DERIVED, never
+ * trusted verbatim from the caller (#7627): `generateDistrictTemplatePlacement()`
+ * is deterministic and seeded, so replaying `{layoutId, anchor, seed}` here —
+ * the same replay a peer runs on inherit — is what makes the module's "same
+ * inputs reproduce the same geometry" claim actually hold on the install that
+ * authored it. A caller-supplied `placement` that disagrees with the
+ * derivation is REPLACED wholesale, not merged: a stale or hand-edited value
+ * must never ride along looking like the derivation's own output.
+ *
+ * A body missing `layoutId` or `anchor` (an older shape, or a foundation kind
+ * this doesn't apply to) is returned unchanged — this only expands the one
+ * documented generative shape, never invents one.
+ */
+function deriveDistrictTemplateBody(authored) {
+  if (authored.kind !== 'district-template') return authored.body;
+  const { layoutId, anchor, propCount, seed, facing } = authored.body;
+  if (typeof layoutId !== 'string' || !Array.isArray(anchor)) return authored.body;
+  const placement = generateDistrictTemplatePlacement({ layoutId, anchor, propCount, seed, facing });
+  return { ...authored.body, placement };
+}
+
+/**
  * Record (or re-author) a local vernacular foundation.
  *
  * `originInstanceId` is supplied by the caller rather than read here so this
@@ -194,9 +217,16 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
     // the route and the mind tool — treat this function's return value as the
     // recorded foundation, and a verdict shape would make "refused" look like
     // a saved record to anything that did not read the new field.
+    // Digest the body as it will be STORED, not as it arrived (#7627 + #7631).
+    // A district-template's `placement` is derived here rather than supplied, so
+    // a caller who re-submits only the `{layoutId, anchor, seed}` recipe of an
+    // inherited template — which is exactly what `eidoverse.draft-foundation`
+    // hands back — would otherwise digest a body the inherited copy never had,
+    // slip past the republish guard, and then be stored byte-identical to it.
+    const body = deriveDistrictTemplateBody(authored);
     const derivation = resolveFoundationDerivation({
       claim: authored.derivedFrom,
-      body: authored.body,
+      body,
       inheritedRecords: Object.values(foundations),
       existingEdge: existing?.derivedFrom || null,
       now,
@@ -209,7 +239,7 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
       title: authored.title,
       summary: authored.summary,
       contributionId: authored.contributionId,
-      body: authored.body,
+      body,
       style: authored.style,
       provenance: existing?.provenance || { originInstanceId, authorKind: authored.authorKind, createdAt: now },
       disclosure: authored.disclosure,
