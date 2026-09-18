@@ -27,6 +27,7 @@ import {
   dispatchLabelSpec, forgeIssueLabels, resolvePlannerId,
 } from '../lib/dispatchLabels.js';
 import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../lib/forgeIssueCli.js';
+import { forgeCliForTracker } from '../lib/workTracker.js';
 import { boundedByJsonChars } from '../lib/objects.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
 import { scrubHomePath } from '../lib/homePath.js';
@@ -63,7 +64,7 @@ const MAX_CATALOG_PROMPT_CHARS = 2_000;
  */
 const scrubForgeText = (value) => scrubSecretTokens(scrubHomePath(value));
 
-const labelSpec = (name) => dispatchLabelSpec(name)
+const labelSpec = (name, cli) => dispatchLabelSpec(name, { cli })
   || (PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS[name]
     ? { name, ...PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS[name] }
     : null);
@@ -175,20 +176,22 @@ export async function listPersistentMindIssues(args) {
  * rather than adding a serial spawn per label to every file.
  */
 const ensureLabels = async ({ app, names }) => {
+  const cli = forgeCliForTracker(app.forge);
   await Promise.all(names.map((name) => {
-    const spec = labelSpec(name);
+    const spec = labelSpec(name, cli);
     if (!spec) return null;
-    return (app.forge === 'gitlab'
-      ? execGlab(forgeLabelCreateArgs('glab', spec), app.repoPath)
-      : execGh(forgeLabelCreateArgs('gh', spec, { repo: app.repoSpec }))).catch(() => null);
+    return (cli === 'glab'
+      ? execGlab(forgeLabelCreateArgs(cli, spec), app.repoPath)
+      : execGh(forgeLabelCreateArgs(cli, spec, { repo: app.repoSpec }))).catch(() => null);
   }));
 };
 
 const createIssue = ({ app, title, body, labels }) => {
-  const args = forgeIssueCreateArgs(app.forge === 'gitlab' ? 'glab' : 'gh', {
-    title, body, labels, repo: app.forge === 'gitlab' ? null : app.repoSpec,
+  const cli = forgeCliForTracker(app.forge);
+  const args = forgeIssueCreateArgs(cli, {
+    title, body, labels, repo: cli === 'glab' ? null : app.repoSpec,
   });
-  const run = app.forge === 'gitlab'
+  const run = cli === 'glab'
     ? execGlab(args, app.repoPath, undefined, { rejectOnError: true })
     : execGh(args);
   return run.then(
@@ -239,6 +242,7 @@ export async function filePersistentMindIssue(args) {
   const labels = [
     PERSISTENT_MIND_ISSUE_LABEL,
     ...forgeIssueLabels({
+      cli: forgeCliForTracker(app.forge),
       model: args.model,
       effort: args.effort,
       // The planner axis records who WROTE the plan — this mind's own model —

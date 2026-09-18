@@ -39,10 +39,13 @@ function expectForgeDispatchContract(block, { cli, issueLabel }) {
   expect(block).toContain('effort:low|medium|high|xhigh|max');
   expect(block).toContain('REQUIRED on every issue you file');
   expect(block).not.toContain('Omit an axis rather than guessing');
-  expect(block).toContain(`--label ${issueLabel} --label plan ${formatOptionalIssueLabelFlags(REFERENCE_WATCH_LABEL_CONTRACT.forgeFlags)}`);
+  // The glab copy of the same example spells every prefixed label with GitLab's
+  // scoped `::`, so it cannot assert the gh line — that is the whole point of
+  // rendering the two separately.
+  expect(block).toContain(`--label ${issueLabel} --label plan ${formatOptionalIssueLabelFlags(REFERENCE_WATCH_LABEL_CONTRACT.forgeFlags, { cli })}`);
   // The planner axis is part of that list, so the copy-pasteable command offers
   // it — not just the guidance prose above it.
-  expect(block).toContain('[--label planner:<model>]');
+  expect(block).toContain(cli === 'glab' ? '[--label planner::<model>]' : '[--label planner:<model>]');
   expect(block).toContain('good first issue');
   expect(block).toContain('Do not relabel');
   expect(block).toContain('Issue-quality gate');
@@ -315,7 +318,8 @@ describe('formatTrackerInstructions — repo-study complete labels', () => {
 
   it('uses the same complete-label contract on GitLab and JIRA', () => {
     const gitlab = formatTrackerInstructions('gitlab', repoStudy);
-    expect(gitlab).toContain(`--label repo-study --label plan ${formatOptionalIssueLabelFlags(REPO_STUDY_LABEL_CONTRACT.forgeFlags)}`);
+    expect(gitlab).toContain(`--label repo-study --label plan ${formatOptionalIssueLabelFlags(REPO_STUDY_LABEL_CONTRACT.forgeFlags, { cli: 'glab' })}`);
+    expect(gitlab).toContain('--label area::<area> --label model::<tier> --label effort::<level>');
     expect(gitlab).toContain('glab label list');
 
     const jira = formatTrackerInstructions('jira', repoStudy);

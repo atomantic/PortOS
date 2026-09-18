@@ -1285,7 +1285,7 @@ describe('validation.js', () => {
       expect(buildReviewWithArgs(['codex', 'antigravity', 'copilot'])).toBe('--review-with codex,antigravity,copilot');
     });
 
-    it('adds stop-mode only for 2+ reviewers and reviewer-applies only with a CLI reviewer', () => {
+    it('adds stop-mode only for 2+ reviewers and reviewer-applies only with codex', () => {
       expect(buildReviewWithArgs(['codex', 'copilot'], { stopMode: 'on-findings', reviewerApplies: true }))
         .toBe('--review-with codex,copilot --review-stop-on-findings --reviewer-applies');
       // single reviewer → no stop-mode flag
@@ -1293,6 +1293,21 @@ describe('validation.js', () => {
         .toBe('--review-with codex --reviewer-applies');
       // copilot-only → reviewer-applies suppressed (no-op on copilot)
       expect(buildReviewWithArgs(['copilot'], { reviewerApplies: true })).toBe('');
+    });
+
+    // slashdo's loop forces every local reviewer except codex back to review-only
+    // and reverts anything it wrote — codex is the one with a verified
+    // write-isolated profile. Emitting the flag for a codex-free list promised an
+    // editing pass that never ran, and pointed the user at granting agy/grok/cursor
+    // unsandboxed write access to get it.
+    it('drops reviewer-applies when no codex pass is in the list', () => {
+      expect(buildReviewWithArgs(['antigravity', 'copilot'], { reviewerApplies: true }))
+        .toBe('--review-with antigravity,copilot');
+      expect(buildReviewWithArgs(['claude', 'grok', 'cursor'], { reviewerApplies: true }))
+        .toBe('--review-with claude,grok,cursor');
+      // ...and keeps it as soon as codex joins them.
+      expect(buildReviewWithArgs(['antigravity', 'codex'], { reviewerApplies: true }))
+        .toBe('--review-with antigravity,codex --reviewer-applies');
     });
 
     it('appends username reviewers as @user tokens after the keyed reviewers', () => {
@@ -1618,7 +1633,7 @@ describe('validation.js', () => {
       // `--review-with` with an empty value is as fatal to slashdo as an unknown
       // slug; the surrounding prompt still names the reviewers and the Local
       // Reviewer Procedure that runs them.
-      expect(buildReviewWithArgs(['mtplx', 'opencode'])).toBe('');
+      expect(buildReviewWithArgs(['mtplx', 'kilo'])).toBe('');
     });
 
     it('does not let a stray copilot pin force the suppressed lone-default flag on', () => {

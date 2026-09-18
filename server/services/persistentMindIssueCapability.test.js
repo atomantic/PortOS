@@ -14,7 +14,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => mocks.root) }));
 vi.mock('./apps.js', () => ({ getActiveApps: vi.fn(async () => mocks.apps) }));
 vi.mock('./appIssues.js', () => ({ listAppIssues: (...args) => mocks.listAppIssues(...args) }));
-vi.mock('../lib/workTracker.js', () => ({
+// `resolveAppForgeTarget` is doubled; `forgeCliForTracker` is a pure mapper the
+// code under test relies on for real (it decides the forge's label separator),
+// so it passes through rather than being stubbed into a second definition.
+vi.mock('../lib/workTracker.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   resolveAppForgeTarget: (...args) => mocks.resolveAppForgeTarget(...args),
 }));
 vi.mock('./github.js', () => ({
@@ -259,7 +263,16 @@ describe('persistent mind issue capability', () => {
 
     expect(await filePersistentMindIssue(fileRequest())).toMatchObject({ ok: true, number: 11, forge: 'gitlab' });
     const create = mocks.execGlab.mock.calls.map(([args]) => args).find((args) => args[0] === 'issue');
-    expect(create).toEqual(expect.arrayContaining(['--label', 'persistent-mind,model:medium,effort:high,planner:opus-5']));
+    // Every prefixed label carries GitLab's scoped `::` — that is what makes the
+    // tracker enforce one value per key, so a second `model::*` replaces the
+    // first instead of leaving the issue carrying two conflicting tiers.
+    expect(create).toEqual(expect.arrayContaining(['--label', 'persistent-mind,model::medium,effort::high,planner::opus-5']));
+    // ...and the lazy `label create` uses the same spelling, or `issue create`
+    // 422s on a label that does not exist.
+    const labelNames = mocks.execGlab.mock.calls
+      .map(([args]) => args).filter((args) => args[0] === 'label')
+      .map((args) => args[args.indexOf('--name') + 1]);
+    expect(labelNames).toEqual(expect.arrayContaining(['model::medium', 'effort::high', 'planner::opus-5']));
     expect(mocks.execGh).not.toHaveBeenCalled();
   });
 });

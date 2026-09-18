@@ -173,8 +173,13 @@ describe('ReviewerPicker', () => {
     expect(screen.getByText('Antigravity')).toBeInTheDocument();
   });
 
-  it('shows the reviewer-applies toggle only when a non-copilot reviewer is present', () => {
+  // slashdo's loop grants the editing pass to codex alone and forces every other
+  // local reviewer back to review-only, reverting whatever it wrote. Offering the
+  // toggle for agy asked the user to grant write access that buys them nothing.
+  it('shows the reviewer-applies toggle only when codex is selected', () => {
     const { rerender } = render(<ReviewerPicker reviewers={['copilot']} onChange={() => {}} />);
+    expect(screen.queryByText(/Reviewer applies fixes/)).not.toBeInTheDocument();
+    rerender(<ReviewerPicker reviewers={['antigravity', 'grok']} onChange={() => {}} />);
     expect(screen.queryByText(/Reviewer applies fixes/)).not.toBeInTheDocument();
     rerender(<ReviewerPicker reviewers={['codex']} onChange={() => {}} />);
     expect(screen.getByText(/Reviewer applies fixes/)).toBeInTheDocument();

@@ -87,10 +87,16 @@ const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio', 'mtplx']);
  * imports THIS one, so the arrow can only point one way.
  *
  * Deliberately NOT the full `REVIEWER_VALUES` roster — a `PORTOS_ONLY_REVIEWERS`
- * slug (`lmstudio`/`mtplx`/`opencode`/`kilo`/`kimi`) has no slashdo counterpart and
+ * slug (`lmstudio`/`mtplx`/`kilo`/`kimi`) has no slashdo counterpart and
  * aborts the command, so seeing one in an explicit flag means the argument was
  * hand-written against a grammar we don't own. That falls through to the
  * unresolvable branch, which prunes nothing.
+ *
+ * slashdo's `cmd[<invocation>]` escape hatch is likewise absent, and deliberately:
+ * an arbitrary shell command maps to no PortOS reviewer, so it resolves as
+ * unreadable and the run keeps every reviewer include. `splitReviewerEntries` is
+ * already bracket-aware, so a comma inside the invocation does not split the
+ * entry — the flag reaches slashdo verbatim, which is the whole contract here.
  */
 const SLASHDO_REVIEWER_SLUGS = Object.freeze({
   copilot: 'copilot',
@@ -103,6 +109,9 @@ const SLASHDO_REVIEWER_SLUGS = Object.freeze({
   agy: 'antigravity',
   gemini: 'antigravity',
   antigravity: 'antigravity',
+  opencode: 'opencode',
+  zen: 'opencode',
+  'opencode-zen': 'opencode',
   ollama: 'ollama',
 });
 
