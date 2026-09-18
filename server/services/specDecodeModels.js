@@ -32,6 +32,7 @@ import { getHfToken } from './hfToken.js';
 import {
   SPEC_DECODE_PRESETS,
   SPEC_MODEL_ROLES,
+  SPEC_ROLE_LABELS,
   findSpecDecodePreset,
   hfSearchUrl,
   specDecodeSource,
@@ -61,7 +62,7 @@ const fileStat = async (path) => {
   return stats?.isFile() ? stats : null;
 };
 
-/** State of one preset role (base or drafter) for the UI. */
+/** State of one preset role (base, drafter or vision projector) for the UI. */
 const describeEntry = async (presetId, role) => {
   const entry = findSpecDecodePreset(presetId)?.[role];
   if (!entry?.path) return null;
@@ -91,8 +92,12 @@ export async function getSpecDecodePresetStatus() {
     id: preset.id,
     label: preset.label,
     specType: preset.specType,
-    model: await describeEntry(preset.id, 'model'),
-    draftModel: await describeEntry(preset.id, 'draftModel'),
+    // Keyed off the role list so a role added to the vocabulary is reported
+    // without a fourth hand-written line here — `describeEntry` already returns
+    // null for a preset that declares no weight for it.
+    ...Object.fromEntries(await Promise.all(
+      SPEC_MODEL_ROLES.map(async (role) => [role, await describeEntry(preset.id, role)]),
+    )),
   })));
 }
 
@@ -108,7 +113,7 @@ const normalize = (text) => String(text).toLowerCase().replace(/[^a-z0-9]/g, '')
  * launcher's existence check and then fail at load time — the exact confusion
  * this whole module exists to remove.
  */
-export function pickGgufSibling(model, { file, quant, repo }) {
+export function pickGgufSibling(model, { file, quant, repo, role = 'model' }) {
   const all = modelSiblingFilenames(model).filter((name) => /\.gguf$/i.test(name));
   if (!all.length) {
     throw new ServerError(`Hugging Face repo ${repo} publishes no .gguf file`, { status: 422, code: 'SPEC_NO_GGUF' });
@@ -127,15 +132,21 @@ export function pickGgufSibling(model, { file, quant, repo }) {
       { status: 422, code: 'SPEC_FILE_MISSING' },
     );
   }
+  // The projector role and every other role want DISJOINT halves of the repo.
   // A projector ships under the target's own quant tag
   // (`mmproj-Muse-Glimmer-30B-Q4_K_M.gguf`, 1.4 GB) right beside the 17 GB target,
-  // so shortest-name-wins below would hand one back — and it would then satisfy
-  // the launcher's existence check and fail at load. Only an explicit `file` may
-  // name one, which is why this filter sits after the exact-match branch.
-  const ggufs = all.filter((name) => !isProjectorName(name));
+  // so for a language-weight role shortest-name-wins below would hand one back —
+  // and it would then satisfy the launcher's existence check and fail at load.
+  // For the `projector` role the same test inverts: the language packs are the
+  // files that must not be selected. Either way an explicit `file` outranks this,
+  // which is why the filter sits after the exact-match branch.
+  const wantsProjector = role === 'projector';
+  const ggufs = all.filter((name) => isProjectorName(name) === wantsProjector);
   if (!ggufs.length) {
     throw new ServerError(
-      `Hugging Face repo ${repo} publishes only projector (mmproj) sidecars, not a loadable model`,
+      wantsProjector
+        ? `Hugging Face repo ${repo} publishes no projector (mmproj) sidecar — this model has no vision tower to load`
+        : `Hugging Face repo ${repo} publishes only projector (mmproj) sidecars, not a loadable model`,
       { status: 422, code: 'SPEC_NO_GGUF' },
     );
   }
@@ -191,13 +202,13 @@ const siblingFor = (model, filename) => {
 // stream for hours, while metadata headers/body and the size fallback must settle.
 const METADATA_FETCH_TIMEOUT_MS = 10_000;
 
-const resolveSpecDownloadPlan = async ({ source, destPath, token, signal }) => {
+const resolveSpecDownloadPlan = async ({ source, role, destPath, token, signal }) => {
   const headers = buildHfAuthHeaders(token);
   const { file, url, meta } = await withAbortTimeout(METADATA_FETCH_TIMEOUT_MS, async (deadline) => {
     const boundedSignal = anyAbortSignal([signal, deadline]);
     try {
       const model = await fetchHuggingfaceModel(source.repo, { token, signal: boundedSignal });
-      const selectedFile = pickGgufSibling(model, { file: source.file, quant: source.quant, repo: source.repo });
+      const selectedFile = pickGgufSibling(model, { file: source.file, quant: source.quant, repo: source.repo, role });
       const selectedUrl = buildHfResolveUrl(source.repo, 'main', selectedFile);
       let selectedMeta = siblingDownloadMeta(siblingFor(model, selectedFile));
       if (!selectedMeta.bytes) {
@@ -232,7 +243,7 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
   const source = specDecodeSource(presetId, role);
   if (!source) {
     throw new ServerError(
-      `No Hugging Face source is registered for that preset's ${role === 'model' ? 'base model' : 'drafter'} — download it manually and point the field at the file.`,
+      `No Hugging Face source is registered for that preset's ${SPEC_ROLE_LABELS[role]} — download it manually and point the field at the file.`,
       { status: 400, code: 'SPEC_NO_SOURCE' },
     );
   }
@@ -261,6 +272,7 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
     onProgress({ event: 'start', presetId, role, path: source.path, message: `Resolving ${source.repo} on Hugging Face…` });
     const plan = await resolveSpecDownloadPlan({
       source,
+      role,
       destPath,
       token,
       signal: slot.signal,
@@ -310,7 +322,7 @@ export async function previewSpecDecodeDownload({ presetId, role }) {
   const source = specDecodeSource(presetId, role);
   if (!source) {
     throw new ServerError(
-      `No Hugging Face source is registered for that preset's ${role === 'model' ? 'base model' : 'drafter'} — download it manually and point the field at the file.`,
+      `No Hugging Face source is registered for that preset's ${SPEC_ROLE_LABELS[role]} — download it manually and point the field at the file.`,
       { status: 400, code: 'SPEC_NO_SOURCE' },
     );
   }
@@ -330,7 +342,7 @@ export async function previewSpecDecodeDownload({ presetId, role }) {
     };
   }
   const token = await getHfToken();
-  const plan = await resolveSpecDownloadPlan({ source, destPath, token });
+  const plan = await resolveSpecDownloadPlan({ source, role, destPath, token });
   return {
     kind: 'spec-decode',
     file: plan.file,

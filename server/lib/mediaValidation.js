@@ -14,6 +14,7 @@ import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
+import { SPEC_MODEL_ROLES } from './specDecodePresets.js';
 import { isLoopbackHostname, parseBrowserOrigin } from './beeperOAuthOrigin.js';
 
 // iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
@@ -306,6 +307,10 @@ export const localLlmMtplxRemoveSchema = z.object({ model: mtplxRepoIdSchema });
 export const localLlmLlamaServerStartSchema = z.object({
   model: z.string().trim().min(1).max(500),
   draftModel: z.string().trim().max(500).optional().nullable(),
+  // llama.cpp's multimodal projector sidecar (`--mmproj`). Optional and shaped
+  // like the drafter path: empty/absent means the launch is text-only, which is
+  // exactly the line every pre-#7611 PortOS produced.
+  projector: z.string().trim().max(500).optional().nullable(),
   // A comma-separated list of llama.cpp `--spec-type` implementations
   // (`ngram-map-k`, `draft-dflash,ngram-map-k`). Free vocabulary on purpose —
   // fork builds ship their own — but shaped, since it lands in the launch argv.
@@ -335,12 +340,15 @@ export const localLlmLlamaServerStartSchema = z.object({
   cacheTypeV: z.enum(['f16', 'q8_0', 'q4_0']).optional().nullable().default(null),
   draftMax: z.coerce.number().int().min(0).max(64).optional().nullable().default(null),
 });
-// Speculative-decoding weight download: which curated preset, and which half of
-// the pair. Both are enum-ish server-owned ids — no path or repo ever arrives
+// Speculative-decoding weight download: which curated preset, and which of its
+// weights. Both are enum-ish server-owned ids — no path or repo ever arrives
 // from the client, so a request can only ever write to a curated `models/` file.
+// The role list comes from `specDecodePresets.js` rather than a literal here, so
+// a role added to the launcher's vocabulary cannot be rejected at the route by a
+// copy nobody updated.
 export const localLlmSpecModelDownloadSchema = z.object({
   presetId: z.string().trim().min(1).max(100),
-  role: z.enum(['model', 'draftModel']),
+  role: z.enum(SPEC_MODEL_ROLES),
 });
 // Confirm-step disk preflight for a weight download. Discriminated on `kind`
 // so the server resolves dest + expected size — the client never supplies a
@@ -351,7 +359,7 @@ export const localLlmDownloadPreflightSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('spec-decode'),
     presetId: z.string().trim().min(1).max(100),
-    role: z.enum(['model', 'draftModel']),
+    role: z.enum(SPEC_MODEL_ROLES),
   }),
   z.object({
     kind: z.literal('mtplx'),

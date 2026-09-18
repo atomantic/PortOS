@@ -27,9 +27,15 @@ import { LOCAL_LLM_BACKENDS as BACKENDS, localLlmBackendLabel as labelFor } from
 // list a path the Download button had no source for.
 const DEFAULT_SPEC_PRESET_ID = 'qwen3.8-27b-dspark';
 const downloadKey = (presetId, role) => `${presetId}:${role}`;
+// The projector is the one weight a launch is fine WITHOUT — no `--mmproj` just
+// means text-only. So unlike the base model and the drafter, its path is seeded
+// only once the GGUF is actually on disk: seeding a path that isn't there would
+// block Start on an optional 629 MB download, behind a field that lives under
+// Advanced. Downloading it from the row below fills this in (see startSpecDownload).
+const seededProjectorPath = (preset) => (preset?.projector?.exists ? preset.projector.path : '');
 // Each entry carries its own `role`, so the rows come straight off the preset
 // rather than from a second copy of the role list.
-const specWeightEntries = (preset) => [preset?.model, preset?.draftModel].filter((e) => e?.path);
+const specWeightEntries = (preset) => [preset?.model, preset?.draftModel, preset?.projector].filter((e) => e?.path);
 
 // Defaults for the advanced numeric fields. They are applied when the server is
 // launched rather than on every keystroke: a controlled number input that coerces
@@ -86,6 +92,9 @@ export default function LocalLlmRuntimesView() {
   const [llamaForm, setLlamaForm] = useState({
     model: '',
     draftModel: '',
+    // llama.cpp's `--mmproj` vision sidecar. Empty = text-only, which is what a
+    // preset with no projector launches.
+    projector: '',
     specType: 'draft-dspark',
     port: 5568,
     host: '127.0.0.1',
@@ -112,6 +121,12 @@ export default function LocalLlmRuntimesView() {
   // but only the starting tab owns the toast and the cleanup.
   const [llamaDownloads, setLlamaDownloads] = useState({});
   const specPresetSeeded = useRef(false);
+  // The LIVE preset id. A multi-gigabyte download outlives many renders, so a
+  // handler resuming from its await must compare against this rather than the
+  // `llamaPresetId` its own closure captured — that one can only ever equal the
+  // value the handler already started with.
+  const llamaPresetIdRef = useRef(llamaPresetId);
+  llamaPresetIdRef.current = llamaPresetId;
   const [showLlamaAdvanced, setShowLlamaAdvanced] = useState(false);
   const [showLlamaLogs, setShowLlamaLogs] = useState(false);
 
@@ -182,6 +197,7 @@ export default function LocalLlmRuntimesView() {
       ...prev,
       model: preset.model?.path || '',
       draftModel: preset.draftModel?.path || '',
+      projector: seededProjectorPath(preset),
       specType: preset.specType || prev.specType,
     }));
   }, [llamaStatus?.presets]);
@@ -451,10 +467,11 @@ export default function LocalLlmRuntimesView() {
   // is what the launcher would reject with LLAMA_MODEL_FILE_MISSING, so block
   // Start here and point at the Download button instead of spending a request
   // to produce an error the card can already answer.
+  // Every role's form field is named after the role, so no mapping is needed —
+  // adding `projector` to the vocabulary did not add a branch here.
   const missingWeight = (role) => {
     const entry = activeSpecPreset?.[role];
-    const field = role === 'model' ? llamaForm.model : llamaForm.draftModel;
-    return Boolean(entry?.path && !entry.exists && entry.path === (field || '').trim());
+    return Boolean(entry?.path && !entry.exists && entry.path === (llamaForm[role] || '').trim());
   };
   const baseWeightMissing = missingWeight('model');
   // Rendered from the server's list (status payload) so the card never carries a
@@ -472,7 +489,11 @@ export default function LocalLlmRuntimesView() {
   // load one — an `ngram-*` run needs no drafter, so a preset's undownloaded
   // drafter path must not hold it hostage.
   const draftWeightMissing = drafterInUse && missingWeight('draftModel');
-  const llamaStartBlocked = llamaModelMissing || baseWeightMissing || draftWeightMissing;
+  // No spec type turns vision on or off: a projector path in the field is one the
+  // launch line will carry, so an undownloaded one blocks Start unconditionally —
+  // the server would reject it with LLAMA_MODEL_FILE_MISSING anyway.
+  const projectorWeightMissing = missingWeight('projector');
+  const llamaStartBlocked = llamaModelMissing || baseWeightMissing || draftWeightMissing || projectorWeightMissing;
   // Say what the launcher will do with a mismatched pair rather than letting the
   // server quietly rewrite the launch line the user thought they were starting.
   const specTypeNotice = !drafterConfigured && draftSpecTypes.length > 0
@@ -489,7 +510,9 @@ export default function LocalLlmRuntimesView() {
       ? 'Download the base model to enable Start'
       : draftWeightMissing
         ? 'Download the drafter, or clear the field to run without it'
-        : '';
+        : projectorWeightMissing
+          ? 'Download the vision projector, or clear the field to run text-only'
+          : '';
 
   const startSpecDownload = async (role) => {
     const presetId = llamaPresetId;
@@ -499,6 +522,13 @@ export default function LocalLlmRuntimesView() {
       // Custom catch below owns the failure toast — `silent` keeps apiCore from
       // firing a second one for the same error.
       const res = await downloadSpecDecodeModel(presetId, role, { silent: true });
+      // Fetching the projector is the user saying they want vision — arm it on
+      // the launch line rather than leaving the field they can't see (it lives
+      // under Advanced) empty and the download with no visible effect. Only when
+      // the field is still empty, so a hand-entered path is never overwritten.
+      if (role === 'projector' && res?.path && presetId === llamaPresetIdRef.current) {
+        setLlamaForm((prev) => (prev.projector.trim() ? prev : { ...prev, projector: res.path }));
+      }
       toast.success(res?.alreadyDownloaded
         ? `${res.path} is already on disk`
         : `${res?.path || 'Model'} downloaded`);
@@ -551,7 +581,14 @@ export default function LocalLlmRuntimesView() {
 
   const handleDeleteSpecModel = async (role) => {
     try {
-      const res = await removeSpecDecodeModel(llamaPresetId, role, { silent: true });
+      const presetId = llamaPresetId;
+      const res = await removeSpecDecodeModel(presetId, role, { silent: true });
+      // Deleting the sidecar is the inverse of fetching it, so release the field
+      // it armed — otherwise the path stays behind and blocks Start on a file the
+      // user just chose to remove, with the only Clear button under Advanced.
+      if (role === 'projector' && presetId === llamaPresetIdRef.current) {
+        setLlamaForm((prev) => (prev.projector.trim() === (res?.path || '').trim() ? { ...prev, projector: '' } : prev));
+      }
       toast.success(res?.path ? `Deleted ${res.path}` : 'Weight file deleted');
     } catch (err) {
       toast.error(err?.message || 'Could not delete the weight file');
@@ -567,7 +604,7 @@ export default function LocalLlmRuntimesView() {
       toast.error('Please specify a base model path (e.g. models/Qwen3.8-27B-Q4_K_M.gguf)');
       return;
     }
-    if (baseWeightMissing || draftWeightMissing) {
+    if (baseWeightMissing || draftWeightMissing || projectorWeightMissing) {
       toast.error(`${llamaStartBlockedReason} — the GGUF isn't on this machine yet.`);
       return;
     }
@@ -635,11 +672,12 @@ export default function LocalLlmRuntimesView() {
     if (!preset) return;
     setLlamaPresetId(preset.id);
     // `custom` carries no paths — it exists so hand-entered fields keep a label.
-    if (preset.model?.path || preset.draftModel?.path) {
+    if (preset.model?.path || preset.draftModel?.path || preset.projector?.path) {
       setLlamaForm((prev) => ({
         ...prev,
         model: preset.model?.path || '',
         draftModel: preset.draftModel?.path || '',
+        projector: seededProjectorPath(preset),
         specType: preset.specType || prev.specType,
       }));
     }
@@ -835,6 +873,12 @@ export default function LocalLlmRuntimesView() {
                 {llamaStatus.config?.draftModel && (
                   <p><span className="text-gray-500">Drafter:</span> <code className="text-port-accent">{llamaStatus.config.draftModel}</code></p>
                 )}
+                {/* Only shown when one is loaded. A launch with no `--mmproj` is
+                    text-only, and "Vision: none" on every non-multimodal run
+                    would be noise on the card's most-read lines. */}
+                {llamaStatus.config?.projector && (
+                  <p><span className="text-gray-500">Vision projector:</span> <code className="text-port-accent">{llamaStatus.config.projector}</code></p>
+                )}
                 {llamaStatus.config && (
                   <p>
                     <span className="text-gray-500">Model id:</span>{' '}
@@ -1016,6 +1060,26 @@ export default function LocalLlmRuntimesView() {
                   {specTypeNotice && (
                     <p className="text-[11px] text-port-warning mt-1">{specTypeNotice}</p>
                   )}
+                </FormField>
+                {/* Under Advanced rather than beside the two model paths: only a
+                    multimodal GGUF has a projector at all, so for most presets
+                    this field is permanently empty and would only crowd the
+                    fold. It is independent of Spec Type — nothing about
+                    speculative decoding turns vision on or off. */}
+                <FormField label="Vision Projector / --mmproj (Optional)" labelClassName="text-[11px] text-gray-400 block mb-1" className="col-span-2 sm:col-span-4">
+                  <input
+                    id="llama-projector"
+                    aria-label="Vision Projector / --mmproj (Optional)"
+                    type="text"
+                    value={llamaForm.projector}
+                    onChange={(e) => setLlamaField('projector', e.target.value)}
+                    placeholder={activeSpecPreset?.projector?.path || 'models/your-model-mmproj-Q8_0.gguf'}
+                    className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white placeholder-gray-600"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    A multimodal model&apos;s vision tower ships as a separate <code className="text-gray-400">mmproj</code> GGUF.
+                    Leave this empty to launch text-only — the model still loads and answers, it just cannot see images.
+                  </p>
                 </FormField>
                 <FormField label="Model id (alias)" labelClassName="text-[11px] text-gray-400 block mb-1">
                   <input

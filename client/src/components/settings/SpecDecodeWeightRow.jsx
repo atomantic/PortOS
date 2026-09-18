@@ -4,7 +4,9 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import useConfirmDelete from '../../hooks/useConfirmDelete.js';
 import { formatBytes } from '../../utils/formatters';
 
-const ROLE_LABELS = { model: 'Target base model', draftModel: 'Drafter' };
+// Mirrors `SPEC_ROLE_LABELS` in server/lib/specDecodePresets.js — same three
+// roles, title-cased for a row heading.
+const ROLE_LABELS = { model: 'Target base model', draftModel: 'Drafter', projector: 'Vision projector' };
 
 /**
  * One GGUF of a speculative-decoding preset: where it goes, whether it's on
@@ -108,7 +110,7 @@ export default function SpecDecodeWeightRow({ entry, progress, onDownload, onCan
               target="_blank"
               rel="noopener noreferrer"
               className="text-[11px] text-port-warning hover:underline flex items-center gap-1"
-              title="No single-file GGUF is published for this drafter — download one yourself and point the field at it"
+              title={`No single-file GGUF is published for this ${label.toLowerCase()} — download one yourself and point the field at it`}
             >
               Find on Hugging Face <ExternalLink size={10} />
             </a>
