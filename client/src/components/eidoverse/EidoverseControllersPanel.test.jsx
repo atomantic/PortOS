@@ -11,16 +11,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../services/api', () => ({
   listEidoverseControllers: vi.fn(),
+  getEidoverseControllerInstall: vi.fn(),
   installEidoverseController: vi.fn(),
   setEidoverseControllerArmed: vi.fn(),
   retireEidoverseController: vi.fn(),
+  updateEidoverseControllerConfig: vi.fn(),
 }));
 
 import {
+  getEidoverseControllerInstall,
   installEidoverseController,
   listEidoverseControllers,
   retireEidoverseController,
   setEidoverseControllerArmed,
+  updateEidoverseControllerConfig,
 } from '../../services/api';
 import EidoverseControllersPanel from './EidoverseControllersPanel';
 
@@ -117,6 +121,8 @@ describe('the Eidoverse controllers panel', () => {
       .mockResolvedValueOnce(listing([]))
       .mockResolvedValueOnce(listing([install()]));
     installEidoverseController.mockResolvedValue({ outcome: 'installed', install: install(), reasons: [] });
+    // Installing opens the new row, which fetches its inspect detail.
+    getEidoverseControllerInstall.mockResolvedValue(install());
     await renderPanel();
 
     fireEvent.change(screen.getByLabelText('Install id (lowercase slug)'), { target: { value: 'tide-beacon' } });
@@ -137,6 +143,44 @@ describe('the Eidoverse controllers panel', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Disarm/ })); });
 
     expect(setEidoverseControllerArmed).toHaveBeenCalledWith('tide-beacon', false, { silent: true });
+  });
+
+  // #7629: `summarizeControllerInstall`'s LIST projection never carries
+  // `config` — this pins that the panel does not render that absence as
+  // `{}`, but fetches the real config through the INSPECT route instead.
+  it('fetches and renders a real config on Details, rather than the `{}` a list row never carries', async () => {
+    listEidoverseControllers.mockResolvedValue(listing([install()]));
+    getEidoverseControllerInstall.mockResolvedValue({ ...install(), config: { rate: 7 }, state: { total: 42 } });
+    await renderPanel();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Details' })); });
+
+    expect(getEidoverseControllerInstall).toHaveBeenCalledWith('tide-beacon', { silent: true });
+    // Both the read-only Config block and the editable config textarea show
+    // the real value, so scope this to the read-only block specifically.
+    await waitFor(() => expect(screen.getByText('Config:').nextElementSibling).toHaveTextContent('"rate": 7'));
+  });
+
+  // #7629: "inherit and modify" — a mind or human editing an inherited
+  // controller's config must not have to destroy its accumulated state to do
+  // it, unlike a re-install.
+  it('changes config from the Details editor and reloads the inspected record, without an install/re-install', async () => {
+    listEidoverseControllers.mockResolvedValue(listing([install()]));
+    getEidoverseControllerInstall
+      .mockResolvedValueOnce({ ...install(), config: { rate: 1 }, state: { total: 4 } })
+      .mockResolvedValueOnce({ ...install(), config: { rate: 9 }, state: { total: 4 } });
+    updateEidoverseControllerConfig.mockResolvedValue({ outcome: 'updated', install: { ...install(), config: { rate: 9 }, state: { total: 4 } }, reasons: [] });
+    await renderPanel();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Details' })); });
+    await waitFor(() => expect(screen.getByLabelText(/Edit config/)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/Edit config/), { target: { value: '{ "rate": 9 }' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save config' })); });
+
+    expect(updateEidoverseControllerConfig).toHaveBeenCalledWith('tide-beacon', { rate: 9 }, { silent: true });
+    expect(installEidoverseController).not.toHaveBeenCalled();
+    expect(getEidoverseControllerInstall).toHaveBeenCalledTimes(2);
   });
 
   it('retires an installed controller only after a second confirming click', async () => {

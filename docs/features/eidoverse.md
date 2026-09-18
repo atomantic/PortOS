@@ -1086,6 +1086,20 @@ backlog: a machine asleep for three days wakes to ONE tick, because a cadence is
 than retried forever, and an install whose `controllerId` this version no longer
 ships is disarmed immediately.
 
+**Every tick revalidates the stored install against its own definition
+(#7629).** `record.config` is re-parsed through `definition.configSchema`
+before each step rather than trusted from install time — a config that no
+longer parses (a shipped schema tightened, a hand-edited file) disarms the
+install immediately instead of stepping it, and a newly-added default lands on
+the record the first time it re-parses cleanly. `definition.invariants` — the
+same predicates the resilience assay replays — run against the state a step
+just produced; a violation fails that step and counts toward
+`maxConsecutiveFailures` like any other failure, so the live supervisor holds a
+controller to the same contract the promote gate does. The store's own
+`schemaVersion` stamp is read back (not assumed to be this build's constant):
+a store written by a newer build disarms rather than stepping under rules it
+does not fully understand.
+
 **Storage** is `data/eidoverse/controllers.json` — `file-primary` and machine
 local, never federated (`docs/STORAGE.md`). A controller crosses to a peer only
 as the *body* of a promoted foundation, which carries no install.
@@ -1101,7 +1115,19 @@ what makes running it on a schedule safe.
 `eidoverse.retire-controller` are gated on `manageEidoverse` **and** the separate
 default-off `installEidoverseControllers` grant, and are mind-scope only:
 building in the world during a turn is a different act from leaving something
-running in it afterwards. The read beside them, `eidoverse.controllers`, needs
-only `manageEidoverse` — a mind that can build should be able to see what is
-already ticking, and seeing is what makes the writes usable rather than
-guesswork.
+running in it afterwards. The reads beside them, `eidoverse.controllers` and
+`eidoverse.inspect-controller`, need only `manageEidoverse` — a mind that can
+build should be able to see what is already ticking, and seeing is what makes
+the writes usable rather than guesswork. `eidoverse.controllers` never carries
+`config`/`state` (`summarizeControllerInstall`'s LIST projection); a caller that
+wants one install's config and accumulated state back reads
+`eidoverse.inspect-controller`, backed by the same `GET
+/api/eidoverse/world/controllers/:id` the panel's Details view uses (#7629).
+
+**Changing a config without losing state.** Re-installing an existing id
+rebuilds its state from the new config from scratch — the deliberate behavior
+for "I want this to start over." `updateEidoverseControllerConfig` (routed at
+`PATCH /api/eidoverse/world/controllers/:id/config`) is the other verb: it
+re-parses the new config through the definition's own schema and leaves
+`state` untouched, for a later mind that wants to tune a value on a controller
+it inherited without destroying what it has already accumulated.

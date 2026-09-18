@@ -2,10 +2,12 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { AlertTriangle, Pause, Play, Radio, Trash2, Zap } from 'lucide-react';
 import {
+  getEidoverseControllerInstall,
   installEidoverseController,
   listEidoverseControllers,
   retireEidoverseController,
   setEidoverseControllerArmed,
+  updateEidoverseControllerConfig,
 } from '../../services/api';
 import { formatCount, formatDateShort, timeAgo } from '../../utils/formatters';
 
@@ -78,6 +80,64 @@ function DisarmedReason({ reason }) {
   );
 }
 
+/**
+ * The Config block for an expanded install. `install.config` never carries a
+ * value on a LIST row — `summarizeControllerInstall` puts config/state behind
+ * `includeState`, which only the single-install INSPECT sets (#7629) — so
+ * this renders whatever `getEidoverseControllerInstall` came back with for
+ * this id, not anything already on the row.
+ */
+function ControllerConfigBlock({ detail }) {
+  if (!detail || (detail.status === 'loading' && !detail.install)) return <p className="text-sm text-gray-500" role="status">Loading config…</p>;
+  if (detail.status === 'error') return <p className="text-sm text-port-error" role="alert">{detail.error}</p>;
+  return (
+    <>
+      <p className="text-gray-400">Config:</p>
+      <pre className="max-h-32 overflow-auto rounded-lg bg-port-bg p-3 text-xs text-gray-300">{JSON.stringify(detail.install?.config ?? {}, null, 2)}</pre>
+    </>
+  );
+}
+
+/**
+ * Change an installed controller's config while its accumulated state
+ * survives — the "inherit and modify" verb the epic names (#7629), distinct
+ * from re-installing the same id, which rebuilds state from the new config
+ * and throws the old state away. Its own component, mounted only while the
+ * row is expanded and the inspect fetch has landed, so its draft always
+ * starts from the config that fetch returned rather than a stale list row.
+ */
+function ControllerConfigEditor({ installId, config, onSaved }) {
+  const [draft, setDraft] = useState(() => JSON.stringify(config ?? {}, null, 2));
+  const [saving, setSaving] = useState(false);
+  const [verdict, setVerdict] = useState(null);
+  const fieldId = useId();
+
+  const save = useCallback(async (event) => {
+    event.preventDefault();
+    const parsed = parseJsonObject(draft, 'Config');
+    if (parsed.error) { setVerdict({ outcome: 'refused', reasons: [parsed.error] }); return; }
+    setSaving(true);
+    const result = await updateEidoverseControllerConfig(installId, parsed.value, silent)
+      .catch((reason) => ({ outcome: 'refused', install: null, reasons: [reason?.message || 'Could not update the config.'] }));
+    setSaving(false);
+    setVerdict(result);
+    if (result.outcome === 'updated') await onSaved();
+  }, [draft, installId, onSaved]);
+
+  return (
+    <form className="mt-2 space-y-2" onSubmit={save}>
+      <label htmlFor={`${fieldId}-edit-config`} className="text-xs text-gray-400">
+        Edit config — its accumulated state is preserved, unlike a re-install
+      </label>
+      <textarea id={`${fieldId}-edit-config`} rows={5} className={`${fieldClass} font-mono text-xs`} value={draft} onChange={(event) => setDraft(event.target.value)} />
+      <Verdict verdict={verdict} />
+      <div className="flex justify-end">
+        <button type="submit" className={secondaryButton} disabled={saving}>{saving ? 'Saving…' : 'Save config'}</button>
+      </div>
+    </form>
+  );
+}
+
 function Verdict({ verdict }) {
   if (!verdict) return null;
   if (verdict.outcome === 'installed' || verdict.outcome === 'updated' || verdict.outcome === 'retired') {
@@ -110,6 +170,7 @@ export default function EidoverseControllersPanel() {
   const [installVerdict, setInstallVerdict] = useState(null);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [inspected, setInspected] = useState({});
   const fieldId = useId();
 
   const applyListing = useCallback((listing) => {
@@ -132,6 +193,25 @@ export default function EidoverseControllersPanel() {
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
   }, [applyListing]);
+
+  // The INSPECT the list route omits by design (#7629): opening a row's
+  // Details fetches its config and state directly rather than reading them
+  // off a list row that never carries them. Keyed by `id` in the state write
+  // (not by "whatever is currently open"), so a response for a row the user
+  // has since closed only ever updates that row's own cache entry.
+  const fetchInspected = useCallback((id) => {
+    // Keeps the previous install cached through a refetch (e.g. right after a
+    // config save), so the editor below does not flash empty while the fresh
+    // copy is in flight.
+    setInspected((current) => ({ ...current, [id]: { status: 'loading', install: current[id]?.install ?? null } }));
+    return getEidoverseControllerInstall(id, silent)
+      .then((install) => setInspected((current) => ({ ...current, [id]: { status: 'ready', install } })))
+      .catch((reason) => setInspected((current) => ({ ...current, [id]: { status: 'error', error: reason?.message || 'Could not load this controller.' } })));
+  }, []);
+
+  useEffect(() => {
+    if (openId) fetchInspected(openId);
+  }, [openId, fetchInspected]);
 
   const openController = useCallback((id) => {
     setSearchParams((prev) => {
@@ -289,8 +369,19 @@ export default function EidoverseControllersPanel() {
                       Installed {formatDateShort(install.installedAt)} by {install.installedBy} ·
                       {' '}{install.consecutiveFailures > 0 ? `${install.consecutiveFailures} consecutive failure(s)` : 'no consecutive failures'}
                     </p>
-                    <p className="text-gray-400">Config:</p>
-                    <pre className="max-h-32 overflow-auto rounded-lg bg-port-bg p-3 text-xs text-gray-300">{JSON.stringify(install.config ?? {}, null, 2)}</pre>
+                    <ControllerConfigBlock detail={inspected[install.id]} />
+                    {inspected[install.id]?.install && (
+                      <ControllerConfigEditor
+                        // Remounts (dropping any in-progress edit) only when a
+                        // freshly-fetched config actually differs from the
+                        // last one this editor initialized from — notably
+                        // right after this editor's own save lands.
+                        key={`${install.id}:${JSON.stringify(inspected[install.id].install.config ?? {})}`}
+                        installId={install.id}
+                        config={inspected[install.id].install.config}
+                        onSaved={() => fetchInspected(install.id)}
+                      />
+                    )}
                     {install.recentEffects?.length > 0 && (
                       <>
                         <p className="text-gray-400">Recent effects:</p>

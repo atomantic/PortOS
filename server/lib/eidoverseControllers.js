@@ -148,6 +148,18 @@ export const eidoverseControllerInstallSchema = z.object({
 
 export const eidoverseControllerIdParamSchema = z.object({ id: controllerInstallIdSchema }).strict();
 
+/**
+ * A config-only update: change what an installed controller is configured
+ * with while its accumulated `state` survives untouched (#7629). This is the
+ * "inherit and modify" verb the epic names — distinct from re-installing the
+ * same id, which rebuilds state from the new config and throws the old state
+ * away.
+ */
+export const eidoverseControllerConfigUpdateSchema = z.object({
+  id: controllerInstallIdSchema,
+  config: boundedJsonObject(EIDOVERSE_CONTROLLER_LIMITS.configBytes),
+}).strict();
+
 export const eidoverseControllerArmSchema = z.object({ id: controllerInstallIdSchema, armed: z.boolean() }).strict();
 
 /** Who installed this, at the coarsest grain that is still useful — the same
@@ -201,6 +213,35 @@ const ASYNC_STEP_REASON = 'step() returned a Promise — a controller tick is sy
 const isThenable = (value) => Boolean(value) && typeof value === 'object' && typeof value.then === 'function';
 
 const stepFailure = (reason) => ({ ok: false, state: null, effects: [], reason });
+
+/**
+ * Run a definition's `invariants` against the state a step just produced, the
+ * same `(state, tick) => true | false | { ok, reason }` shape
+ * `eidoverseResilienceAssay.js`'s `runInvariants` evaluates them under. The
+ * live tick path holds a controller to the same contract the promote gate
+ * does, rather than the gate being the stricter of the two (#7629).
+ */
+function invariantFailures(state, tick, invariants) {
+  const failures = [];
+  for (const invariant of invariants) {
+    const label = invariant.name || 'invariant';
+    let result;
+    try {
+      result = invariant(state, tick);
+    } catch (error) {
+      failures.push(`"${label}" threw: ${error.message}`);
+      continue;
+    }
+    if (isThenable(result)) {
+      failures.push(`"${label}" returned a Promise — invariants must be synchronous`);
+    } else if (result === false) {
+      failures.push(`"${label}" failed`);
+    } else if (result && typeof result === 'object' && result.ok === false) {
+      failures.push(`"${label}" failed${result.reason ? `: ${result.reason}` : ''}`);
+    }
+  }
+  return failures;
+}
 
 /**
  * A JSON round-trip copy, or `null` when the value cannot make the trip.
@@ -281,6 +322,13 @@ export function runControllerStep({ definition, state, config, tick }) {
   if (!effects.success) {
     const [issue] = effects.error.issues;
     return stepFailure(`step() proposed an effect outside the permitted vocabulary: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'unknown'}`.slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax));
+  }
+
+  if (Array.isArray(definition.invariants) && definition.invariants.length > 0) {
+    const failed = invariantFailures(serialized.value, tick, definition.invariants);
+    if (failed.length > 0) {
+      return stepFailure(`live state violated an invariant: ${failed.join('; ')}`.slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax));
+    }
   }
 
   return { ok: true, state: serialized.value, effects: effects.data, reason: null };

@@ -245,6 +245,7 @@ describe('cosToolRegistry', () => {
       'eidoverse.promote',
       'eidoverse.creative-catalog',
       'eidoverse.controllers',
+      'eidoverse.inspect-controller',
       'eidoverse.install-controller',
       'eidoverse.arm-controller',
       'eidoverse.retire-controller',

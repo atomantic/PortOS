@@ -444,8 +444,9 @@ const eidoverseCreativeCatalogTool = Object.freeze({
 // that can build in the world should be able to see what is already ticking in
 // it, and seeing is what makes the writes usable rather than guesswork.
 const eidoverseControllerTools = [
-  ['controllers', 'List the executable world controllers PortOS ships and the ones installed here — each install\'s cadence, whether it is armed, whether its effects reach the world, its tick count, and why the supervisor disarmed it if it did. Read this before installing: `controllerId` must be one of the registry ids it returns.', z.object({}).strict(), ['manageEidoverse'], 'read'],
-  ['install-controller', 'Attach a bounded controller to the private world so it keeps ticking between your wakes. `controllerId` names one of the ids eidoverse.controllers returns — a controller is never a path or code you supply. Every tick is synchronous and provider-free, and `deliverEffects` (default false) decides whether its effects reach the world at all. This is a REQUEST: the result is `outcome: "installed"` only when it landed, and any other outcome means nothing is running — read `reasons`. The first tick is one interval away, never immediate.', eidoverseControllerInstallSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+  ['controllers', 'List the executable world controllers PortOS ships and the ones installed here — each install\'s cadence, whether it is armed, whether its effects reach the world, its tick count, and why the supervisor disarmed it if it did. Read this before installing: `controllerId` must be one of the registry ids it returns. This list never carries `config`/`state` — use eidoverse.inspect-controller for one install\'s full record.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['inspect-controller', 'Read one installed controller\'s full record by its install id, including its `config` and its accumulated `state` — the detail eidoverse.controllers deliberately omits. Read this before deciding whether to arm-controller, retire-controller, or re-install over an id you did not author.', eidoverseControllerIdParamSchema, ['manageEidoverse'], 'read'],
+  ['install-controller', 'Attach a bounded controller to the private world so it keeps ticking between your wakes. `controllerId` names one of the ids eidoverse.controllers returns — a controller is never a path or code you supply. Every tick is synchronous and provider-free, and `deliverEffects` (default false) decides whether its effects reach the world at all. This is a REQUEST: the result is `outcome: "installed"` only when it landed, and any other outcome means nothing is running — read `reasons`. The first tick is one interval away, never immediate. Re-installing an existing id REBUILDS its state from the new config — inspect it first with eidoverse.inspect-controller if you want to keep what it has accumulated.', eidoverseControllerInstallSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
   ['arm-controller', 'Pause or resume one installed controller without losing the state it has accumulated. Use this to resume a controller the supervisor disarmed after repeated failures, once you have fixed what it was failing on — re-installing would work too but starts its state over.', eidoverseControllerArmSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
   ['retire-controller', 'Stop and remove one installed controller by its install id. Retiring deletes the install and its accumulated state; re-installing starts it fresh.', eidoverseControllerIdParamSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
 ].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
@@ -789,15 +790,22 @@ const executeAdapter = async (tool, args, context, authority) => {
         installs: listed.installs.map((install) => summarizeControllerInstall(install)),
       };
     }
+    if (tool.adapter.operation === 'inspect-controller') {
+      // The INSPECT `summarizeControllerInstall`'s own header promises
+      // (#7629) — the `controllers` list above stays state-free by design.
+      const install = await runtime.getEidoverseControllerInstall(args.id);
+      if (!install) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${args.id}"`] };
+      return { outcome: 'found', install: summarizeControllerInstall(install, { includeState: true }), reasons: [] };
+    }
     if (tool.adapter.operation === 'arm-controller') {
       const armed = await runtime.setEidoverseControllerArmed(args.id, args.armed);
       return { ...armed, install: armed.install ? summarizeControllerInstall(armed.install) : null };
     }
     if (tool.adapter.operation === 'install-controller') {
       const result = await runtime.installEidoverseController(args, { installedBy: 'mind' });
-      // State included here and nowhere else: the mind just authored this
-      // config and the initial state is what tells it the controller
-      // understood it. The list projection stays state-free.
+      // State included here too, and on inspect-controller: the mind just
+      // authored this config and the initial state is what tells it the
+      // controller understood it. The list projection stays state-free.
       return { ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null };
     }
     const result = await runtime.retireEidoverseController(args.id);
