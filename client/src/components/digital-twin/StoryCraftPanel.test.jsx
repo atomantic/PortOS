@@ -44,6 +44,15 @@ describe('StoryCraftPanel', () => {
     expect(screen.getByText(/answer its question/)).toBeInTheDocument();
   });
 
+  it('spells out a MISSING CART stage\'s note as text, not only a tooltip', () => {
+    render(<StoryCraftPanel evaluation={evaluation} />);
+
+    // The actionable half of CART has to be readable on touch, where a `title`
+    // never surfaces. A present stage's note stays a chip.
+    expect(screen.getByText('missing')).toBeInTheDocument();
+    expect(screen.queryByText('kitchen table')).not.toBeInTheDocument();
+  });
+
   it('renders nothing before a story has been scored', () => {
     const { container } = render(<StoryCraftPanel evaluation={null} />);
 

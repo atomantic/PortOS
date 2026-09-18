@@ -27,14 +27,15 @@ import { countWords } from '../../../lib/textUtils';
 import toast from '../../ui/Toast';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { formatCount, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
+import { isValidTimeString } from '../../../utils/timeWindow';
 
-// Mirrors the server's reminder default and its strict HH:MM schema
-// (server/services/autobiography.js DEFAULT_CONFIG, server/lib/timezone.js).
+// Mirrors the server's reminder default (server/services/autobiography.js
+// DEFAULT_CONFIG). The strict HH:MM check comes from the shared, parity-tested
+// `isValidTimeString` rather than a private copy of the pattern.
 const DEFAULT_REMINDER_TIME = '09:00';
 // Matches CUSTOM_PROMPT_ID in server/services/autobiography.js — the promptId a
 // story written against the user's own question is saved under.
 const CUSTOM_PROMPT_ID = 'custom';
-const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export default function AutobiographyTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -227,7 +228,7 @@ export default function AutobiographyTab({ onRefresh }) {
       setStories(prev => prev.map(s => (s.id === storyId ? { ...s, evaluation: result.evaluation } : s)));
       toast.success(`Storytelling score: ${result.evaluation.overallScore}/${result.evaluation.maxScore}`);
     }
-    setEvaluatingStoryId(null);
+    setEvaluatingStoryId(prev => (prev === storyId ? null : prev));
   };
 
   const handleWeaveNarrative = async (storyId) => {
@@ -282,14 +283,18 @@ export default function AutobiographyTab({ onRefresh }) {
   // the reminder's updatedAt, and re-register the cron on every partial value.
   // So the field is a local draft that commits on blur, and an unusable value
   // reverts to what is saved rather than being sent.
-  const commitReminderTime = () => {
+  const commitReminderTime = async () => {
     const saved = config?.reminder?.time || DEFAULT_REMINDER_TIME;
-    if (!HHMM_RE.test(reminderTimeDraft)) {
+    if (!isValidTimeString(reminderTimeDraft)) {
       setReminderTimeDraft(saved);
       return;
     }
     if (reminderTimeDraft === saved) return;
-    handleConfigUpdate({ reminder: { time: reminderTimeDraft } });
+    // A rejected save must snap the field back too. Leaving the typed value on
+    // screen after a failed PATCH shows a wake-up time that is not the one
+    // registered, and the user has no reason to re-save it.
+    const result = await handleConfigUpdate({ reminder: { time: reminderTimeDraft } });
+    if (!result) setReminderTimeDraft(saved);
   };
 
   const handleConfigUpdate = async (updates) => {
@@ -299,6 +304,7 @@ export default function AutobiographyTab({ onRefresh }) {
       setConfig(result);
       toast.success('Settings updated');
     }
+    return result;
   };
 
   const wordCount = countWords(storyContent);
@@ -392,14 +398,17 @@ export default function AutobiographyTab({ onRefresh }) {
                 value={reminderTimeDraft}
                 onChange={(e) => setReminderTimeDraft(e.target.value)}
                 onBlur={commitReminderTime}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.repeat) commitReminderTime(); }}
                 disabled={config.reminder?.enabled !== true}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-50"
               />
             </label>
           </div>
-          <p className="text-xs text-gray-500">
-            Skipped on any day you already wrote a story.
-          </p>
+          {config.reminder?.enabled === true && (
+            <p className="text-xs text-gray-500">
+              Skipped on any day you already wrote a story.
+            </p>
+          )}
           {config.lastPromptAt && (
             <p className="text-xs text-gray-500">
               Last prompt: {formatDateTime(config.lastPromptAt)}
@@ -447,7 +456,9 @@ export default function AutobiographyTab({ onRefresh }) {
                 value={ownQuestion}
                 maxLength={500}
                 onChange={(e) => setOwnQuestion(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') startOwnQuestion(); }}
+                // !e.repeat: a held Enter would otherwise auto-repeat into the story
+                // textarea that mounts autoFocused (client/src/AGENTS.md).
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.repeat) startOwnQuestion(); }}
                 placeholder="Why do I like black licorice?"
                 className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent/50"
               />

@@ -55,15 +55,23 @@ export default function StoryCraftPanel({ evaluation }) {
       </div>
 
       {evaluation.cart?.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {evaluation.cart.map((stage) => (
-            <Pill
-              key={stage.id}
-              tone={stage.present ? 'success' : 'note'}
-              title={stage.note || undefined}
-            >
-              {stage.label}
-            </Pill>
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            {evaluation.cart.map((stage) => (
+              <Pill key={stage.id} tone={stage.present ? 'success' : 'note'}>
+                {stage.label}
+              </Pill>
+            ))}
+          </div>
+          {/* A MISSING stage's note is the actionable half of CART, so it
+              renders as text rather than only a `title` — a tooltip is
+              unreachable on touch, which is where this gets read. A present
+              stage's note is just confirmation and stays out of the way. */}
+          {evaluation.cart.filter((s) => !s.present && s.note).map((stage) => (
+            <p key={stage.id} className="text-xs text-gray-500">
+              <span className="text-gray-400">{stage.label}: </span>
+              {stage.note}
+            </p>
           ))}
         </div>
       )}
