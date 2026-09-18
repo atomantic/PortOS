@@ -13,6 +13,7 @@ import {
   parseCostInput,
   rowCells,
 } from '../usage/SubscriptionSavingsCard';
+import { useQuotaPendingPoll } from '../../hooks/useQuotaPendingPoll';
 import useUrlParams from '../../hooks/useUrlParams';
 import { USAGE_PERIOD_OPTIONS, resolveUsagePeriod, DEFAULT_USAGE_PERIOD } from '../../lib/usagePeriods';
 
@@ -39,6 +40,7 @@ import { USAGE_PERIOD_OPTIONS, resolveUsagePeriod, DEFAULT_USAGE_PERIOD } from '
  */
 
 const NO_ROWS = [];
+
 
 /**
  * Parse a tier input to the patch value the API expects: a trimmed label, or
@@ -220,6 +222,13 @@ export default function SubscriptionsTab() {
 
   // Window-dependent read, re-run per period click — and only this one.
   useEffect(() => { loadSavings(); }, [loadSavings]);
+
+  // A quota read never blocks the response: a family whose CLI scrape is still
+  // running answers `pending` and the reading lands behind it. Poll only while
+  // something is pending — without it this tab showed whatever stood in for the
+  // reading (a federated peer's older meters, or a spinner) until the user
+  // navigated away and back. The Usage page does the same.
+  useQuotaPendingPoll(loadQuotas, quotas);
 
   const setPeriod = (id) => updateParams(
     { period: id === DEFAULT_USAGE_PERIOD ? null : id },

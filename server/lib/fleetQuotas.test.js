@@ -96,11 +96,51 @@ describe('mergeQuotaCard', () => {
 
   it('fills a card this machine could not read from a peer that could', () => {
     const merged = mergeFleetQuotaCards(
+      [localCard({ limits: [], activity: [], error: 'No quota data found.', note: 'Reading the Claude Code /usage panel…' })],
+      [peerEntry()],
+    )[0];
+    expect(merged.error).toBeNull();
+    expect(merged.limits).toEqual([expect.objectContaining({ key: 'session', percentUsed: 65 })]);
+  });
+
+  // Regression: a peer's stand-in reading used to clear the flag, ending the
+  // page's poll on a possibly days-old number.
+  it('stays pending while this machine is still reading, even once a peer has filled it', () => {
+    const merged = mergeFleetQuotaCards(
       [localCard({ limits: [], activity: [], pending: true, error: null, note: 'Reading the Claude Code /usage panel…' })],
       [peerEntry()],
     )[0];
-    expect(merged.pending).toBe(false);
+    expect(merged.pending).toBe(true);
     expect(merged.limits).toEqual([expect.objectContaining({ key: 'session', percentUsed: 65 })]);
+  });
+
+  // A peer syncs on its own cadence, so its reading can describe a window that
+  // has since rolled over — a spent meter, not the current allowance.
+  it('drops a contributed window whose reset has already passed', () => {
+    const now = Date.parse('2026-09-10T00:00:00.000Z');
+    const merged = mergeFleetQuotaCards(
+      [localCard({ limits: [], activity: [], error: 'No quota data found.' })],
+      [peerEntry({ quotas: [{ ...peerEntry().quotas[0], limits: [
+        limit('session', 63, { resetsAt: '2026-09-04T06:10:00.000Z' }),
+        limit('week', 12, { resetsAt: '2026-09-14T21:00:00.000Z' }),
+      ] }] })],
+      { now },
+    )[0];
+    // The expired `session` row is gone; the open weekly window survives.
+    expect(merged.limits.map((l) => l.key)).toEqual(['week']);
+    // …and it says WHEN and WHERE it was read, so it can be aged on screen.
+    expect(merged.limits[0]).toMatchObject({ readAt: '2026-09-03T11:00:00.000Z', readBy: 'peer-1', readByName: 'Example Box' });
+  });
+
+  it('does not let an expired peer window beat this machine on the same key', () => {
+    const now = Date.parse('2026-09-10T00:00:00.000Z');
+    const merged = mergeFleetQuotaCards(
+      [localCard({ limits: [limit('week', 76, { resetsAt: '2026-09-14T21:00:00.000Z' })], fetchedAt: '2026-09-09T23:00:00.000Z' })],
+      // Newer stamp, but the window it describes closed days ago.
+      [peerEntry({ quotas: [{ ...peerEntry().quotas[0], limits: [limit('week', 12, { resetsAt: '2026-09-07T21:00:00.000Z' })], fetchedAt: '2026-09-09T23:30:00.000Z' }] })],
+      { now },
+    )[0];
+    expect(merged.limits).toEqual([expect.objectContaining({ key: 'week', percentUsed: 76, readBy: null })]);
   });
 
   it('leaves a still-unreadable card reporting its own failure', () => {

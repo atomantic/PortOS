@@ -8,7 +8,7 @@ import { PROVIDER_FAMILIES, familyForProvider } from '../lib/providerFamilies.js
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { applyCredentialBootstrap, needsProcessGroup } from '../lib/credentialBootstrap.js';
 import { createStaleWhileRevalidate, PENDING, WAIT } from '../lib/staleWhileRevalidate.js';
-import { parseHumanReset, normalizeResetAt } from '../lib/quotaReset.js';
+import { parseHumanReset, limitWindowExpired } from '../lib/quotaReset.js';
 import { compareNewerWins, parseTsMs } from '../lib/lwwTimestamp.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { readFileTail } from '../lib/fileUtils.js';
@@ -339,10 +339,33 @@ async function readLiveCodexQuota() {
  * reset can't be resolved hasn't been shown to have passed, so it counts live.
  */
 const unexpiredLimits = (card, now) =>
-  (card?.limits || []).filter((limit) => {
-    const { epochMs } = normalizeResetAt(limit, { now });
-    return epochMs === null || epochMs > now;
-  });
+  (card?.limits || []).filter((limit) => !limitWindowExpired(limit, { now }));
+
+/**
+ * Every card, with the windows that have already reset dropped.
+ *
+ * Applied to EVERY family rather than only the retained Codex card, because
+ * every adapter can serve a reading older than the window it describes: the
+ * claude cache serves stale for 60s, the TUI scrapes for 5 minutes, and the
+ * federated store keeps the last card until a newer one is read. A spent
+ * meter's percentage is a reading of an allowance that has since come back, so
+ * it must not reach the page, the burn gate, or a peer.
+ *
+ * A card emptied by the pruning says WHY. Otherwise it renders through the
+ * empty branch as "No rate-limit data reported", which is a verdict about the
+ * provider rather than a statement about a reading that simply aged out.
+ */
+const EXPIRED_ONLY_MESSAGE = 'Every window in this reading has since reset — refresh for a current one.';
+
+const pruneExpiredWindows = (card, now) => {
+  const limits = unexpiredLimits(card, now);
+  if (limits.length === (card?.limits?.length ?? 0)) return card;
+  return {
+    ...card,
+    limits,
+    ...(limits.length ? {} : { error: card.error || EXPIRED_ONLY_MESSAGE }),
+  };
+};
 
 /**
  * Passive reads stay local; a fresh request queries the account without
@@ -872,9 +895,15 @@ async function readProviderQuotas({ wait, family }) {
   // scrape, and it reads as a footnote to the model-quota cards above it. Not
   // raced with the family scrapes — this is two small local file reads against
   // their multi-second TUI PTY spawns, so concurrency would buy no wall-clock.
-  if (family && family !== IMAGE_GEN_FAMILY) return familyCards;
+  // One expiry pass over every card, here rather than inside an adapter or the
+  // fleet merge: "this window has already reset" is a property of any reading,
+  // and a rule applied only on the federated path would have a single-machine
+  // install rendering a spent meter its federated twin drops.
+  const now = Date.now();
+  const prune = (cards) => cards.map((card) => pruneExpiredWindows(card, now));
+  if (family && family !== IMAGE_GEN_FAMILY) return prune(familyCards);
   const imageCard = await fetchImageGenQuota();
-  return imageCard ? [...familyCards, imageCard] : familyCards;
+  return prune(imageCard ? [...familyCards, imageCard] : familyCards);
 }
 
 /**

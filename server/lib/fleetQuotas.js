@@ -25,6 +25,7 @@
  */
 
 import { compareNewerWins, parseTsMs } from './lwwTimestamp.js';
+import { limitWindowExpired } from './quotaReset.js';
 import { isNonBlankStr } from './textUtils.js';
 
 // Structural bounds on ONE peer-supplied quota payload. Same reasoning as the
@@ -96,6 +97,17 @@ export function sanitizeQuotaCards(raw) {
   return out;
 }
 
+/**
+ * Does this card carry numbers to act on?
+ *
+ * The one question every `pending` consumer actually asks. `pending` means
+ * "this machine's scrape is in flight" — which, since a federated peer's
+ * reading can fill the meters meanwhile, no longer implies "empty". Consumers
+ * that need a number (the burn gate) or that choose between a spinner and
+ * meters ask this instead of re-deriving it from the flag.
+ */
+export const cardHasReading = (card) => Boolean(card?.limits?.length || card?.metrics?.length);
+
 /** The most recent `fetchedAt` in a set of cards, or null when none parses. */
 export const latestFetchedAt = (cards) => (Array.isArray(cards) ? cards : []).reduce((latest, card) => {
   const ms = parseTsMs(card?.fetchedAt);
@@ -107,12 +119,20 @@ export const latestFetchedAt = (cards) => (Array.isArray(cards) ? cards : []).re
  * Freshest reading per limit key across contributors, keeping the local card's
  * ordering first and appending keys only a peer reported (a window this
  * machine's CLI has not surfaced yet is still real).
+ *
+ * Every surviving limit carries WHEN it was read (`readAt`) and BY WHICH
+ * instance, so a consumer can age a stand-in reading instead of presenting a
+ * peer's day-old meter as this moment's number. `readBy` is null for the local
+ * contribution, which is how the UI tells "this machine" from a stand-in.
  */
-function unifyLimits(contributions) {
+function unifyLimits(contributions, now) {
   const best = new Map();
   const order = [];
   for (const c of contributions) {
     for (const limit of c.limits || []) {
+      // A window whose reset has passed is not a reading of the current
+      // allowance — drop it rather than let it win its key on freshness.
+      if (limitWindowExpired(limit, { now })) continue;
       const incumbent = best.get(limit.key);
       if (!incumbent) order.push(limit.key);
       // Unparseable-loses, tie → incumbent: the shared LWW polarity, so the
@@ -123,8 +143,8 @@ function unifyLimits(contributions) {
     }
   }
   return order.map((key) => {
-    const { limit, instanceId, name } = best.get(key);
-    return { ...limit, readBy: instanceId, readByName: name };
+    const { limit, fetchedAt, instanceId, name } = best.get(key);
+    return { ...limit, readAt: fetchedAt ?? null, readBy: instanceId, readByName: name };
   });
 }
 
@@ -174,7 +194,7 @@ export function fleetNote(contributions, { hasActivity }) {
  * caption included — a single-machine install has nothing to combine, and
  * claiming otherwise would be worse than the wording this replaces.
  */
-export function mergeQuotaCard(local, peerCards = []) {
+export function mergeQuotaCard(local, peerCards = [], now = Date.now()) {
   const localContribution = {
     instanceId: local.instanceId || null,
     name: local.name || null,
@@ -186,7 +206,7 @@ export function mergeQuotaCard(local, peerCards = []) {
   const contributions = [localContribution, ...peerCards.filter((c) => (c.limits?.length || c.activity?.length))];
   if (contributions.length < 2) return local;
 
-  const limits = unifyLimits(contributions);
+  const limits = unifyLimits(contributions, now);
   const activity = unifyActivity(contributions);
   // Plan/tier is account-wide, same as the meters: take the freshest named
   // reading so a card this machine could not label still shows SuperGrok/Pro
@@ -210,10 +230,19 @@ export function mergeQuotaCard(local, peerCards = []) {
     limits,
     activity,
     fleet,
-    // A local card that could not be read (a logged-out CLI, a scrape still in
-    // flight) is no longer empty once a peer has read the SAME account — so it
-    // stops reporting a failure it no longer has.
-    pending: limits.length ? false : local.pending,
+    // A local card that could not be read (a logged-out CLI) is no longer empty
+    // once a peer has read the SAME account — so it stops reporting a failure it
+    // no longer has.
+    //
+    // `pending` is NOT cleared that way, because it does not mean "empty": it
+    // means THIS machine's reading is in flight and will land in a moment. The
+    // Usage page polls while any card is pending and stops when none is, so
+    // clearing it here ended the poll on the peer's stand-in numbers — a
+    // days-old "12% used" sat on screen as the current weekly figure until the
+    // user hit Refresh by hand, then came back at the next cold cache.
+    // A peer's reading fills the card meanwhile; the poll swaps in this
+    // machine's the moment it arrives.
+    pending: local.pending,
     error: limits.length ? null : local.error,
     note: fleetNote(contributions, { hasActivity: activity.length > 0 }),
   };
@@ -226,7 +255,7 @@ export function mergeQuotaCard(local, peerCards = []) {
  * provider we don't is that machine's business, and inventing a card here would
  * put a meter on screen for a plan the viewer can't spend.
  */
-export function mergeFleetQuotaCards(localCards, peerEntries = []) {
+export function mergeFleetQuotaCards(localCards, peerEntries = [], { now = Date.now() } = {}) {
   const cards = Array.isArray(localCards) ? localCards : [];
   if (!cards.length || !peerEntries.length) return cards;
   const byFamily = new Map();
@@ -237,5 +266,5 @@ export function mergeFleetQuotaCards(localCards, peerEntries = []) {
       byFamily.set(card.family, list);
     }
   }
-  return cards.map((card) => mergeQuotaCard(card, byFamily.get(card.family) || []));
+  return cards.map((card) => mergeQuotaCard(card, byFamily.get(card.family) || [], now));
 }

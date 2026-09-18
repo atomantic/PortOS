@@ -33,6 +33,9 @@ export function StatTile({ label, value, detail }) {
 
 export default function ProviderQuotaBody({ quota, showActivity = true, showNote = true }) {
   if (!quota) return null;
+  // Whether this card has anything to put on screen — the pending branch and the
+  // empty state ask the same question from opposite sides, so they ask it once.
+  const hasReadings = Boolean(quota.limits?.length || quota.metrics?.length);
   if (!quota.supported) {
     return (
       <p className="text-xs sm:text-sm text-gray-500">
@@ -41,11 +44,16 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
     );
   }
 
-  // The reading is still being taken. It comes BEFORE the error and empty
-  // branches because a pending card has no limits — rendering it through those
-  // says "No rate-limit data reported", which is a verdict about the provider
-  // rather than a statement about a scrape still in flight.
-  if (quota.pending) {
+  // The reading is still being taken AND there is nothing to show meanwhile. It
+  // comes BEFORE the error and empty branches because a pending card has no
+  // limits — rendering it through those says "No rate-limit data reported",
+  // which is a verdict about the provider rather than a statement about a scrape
+  // still in flight.
+  //
+  // A pending card CAN carry meters: on a federated install a peer's reading
+  // fills it while this machine's scrape runs. Those are worth showing, so this
+  // branch yields to the meters below and the spinner moves down beside them.
+  if (quota.pending && !hasReadings) {
     return (
       <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-gray-400 py-1">
         <BrailleSpinner />
@@ -71,6 +79,15 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
 
   return (
     <div className="space-y-1 sm:space-y-2">
+      {/* Meters from the fleet, with this machine's own reading still in
+          flight — say so, or the peer's numbers look like the final answer. */}
+      {quota.pending && (
+        <div className="flex items-center gap-1.5 sm:gap-2 text-[10px] sm:text-xs text-gray-400">
+          <BrailleSpinner />
+          <span>Reading this machine&apos;s usage…</span>
+        </div>
+      )}
+
       {quota.limits?.length > 0 && (
         <div>
           {quota.limits.map((limit) => (
@@ -79,7 +96,7 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
         </div>
       )}
 
-      {!quota.limits?.length && !quota.metrics?.length && (
+      {!hasReadings && (
         <div className="text-xs sm:text-sm text-gray-500">No rate-limit data reported</div>
       )}
 

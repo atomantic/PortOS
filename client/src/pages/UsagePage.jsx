@@ -7,7 +7,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
 import { formatCompactCountOrDash as formatNumber, formatCount, formatUsd, timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useQuotaPendingPoll } from '../hooks/useQuotaPendingPoll';
 import SubscriptionSavingsCard from '../components/usage/SubscriptionSavingsCard';
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
@@ -15,9 +15,6 @@ import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
 
-// How often to re-ask while a provider's quota reading is still being taken. A
-// CLI/TUI scrape is a 10-20s spawn, so this is a handful of polls, not a loop.
-const PENDING_POLL_MS = 4000;
 
 // A subscription is one account across every federated instance, but each
 // instance can only read its own CLI's panel. When peers have contributed a
@@ -151,12 +148,9 @@ function ProviderQuotaSection() {
     });
   }, []);
 
-  // A quota read never blocks the response: a cold cache answers with `pending`
-  // cards and the reading lands behind it. Without this poll those cards would
-  // sit on "reading quota…" until the user hit Refresh by hand. Enabled only
-  // while something is pending — the section does not otherwise auto-refresh.
-  const anyPending = (quotas || []).some((quota) => quota.pending);
-  useAutoRefetch(load, PENDING_POLL_MS, { enabled: anyPending, immediate: false, pollOnly: true });
+  // Cards still being scraped come back `pending`; the shared hook re-asks
+  // until the readings land. See hooks/useQuotaPendingPoll.js.
+  useQuotaPendingPoll(load, quotas);
 
   return (
     <div className="space-y-3">

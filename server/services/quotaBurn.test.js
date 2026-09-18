@@ -45,6 +45,15 @@ describe('selectBurnCandidates', () => {
     expect(selectBurnCandidates([pending], config, { now: NOW, bypassGatesFor: 'grok' })).toEqual([]);
   });
 
+  // `pending` means THIS machine's scrape is in flight, not that the card is
+  // empty: on a federated install a peer's reading for the same account fills
+  // the meters meanwhile (lib/fleetQuotas.js). Gating on the flag alone reported
+  // "reading provider quota…" for a family whose headroom was already known.
+  it('burns against a pending card that a peer has already filled', () => {
+    const filled = { ...quota('grok', '2026-07-26T18:00:00.000Z'), pending: true };
+    expect(selectBurnCandidates([filled], config, { now: NOW })).toHaveLength(1);
+  });
+
   it('selects burnable windows by reset time then priority', () => {
     const candidates = selectBurnCandidates([
       quota('codex', '2026-07-27T00:00:00.000Z'),
