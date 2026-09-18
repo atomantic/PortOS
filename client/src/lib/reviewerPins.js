@@ -156,6 +156,14 @@ export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'gr
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = [];
 
+// The one reviewer `--reviewer-applies` reaches. slashdo's loop forces every
+// other local CLI back to review-only and reverts what it wrote, and the flag is
+// meaningless for the cloud (`copilot`, `@login`) and non-agentic (`ollama`)
+// paths — so the picker offers the toggle only when codex is selected, rather
+// than inviting a user to grant agy/grok/cursor write access that gets reverted.
+// Mirror of `APPLY_CAPABLE_REVIEWER` in server/lib/reviewerConfig.js.
+export const APPLY_CAPABLE_REVIEWER = 'codex';
+
 // Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
 // reviewers to gate merging, appended to slashdo's `--review-with` after the
 // keyed reviewers. Mirror of `normalizeReviewUsernames` + MAX_REVIEW_USERNAMES —

@@ -227,7 +227,7 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
   const labels = [
     { name: LI_LABEL, color: '1d76db', desc: 'Filed by the Layered Intelligence loop' },
     { name: LI_BLOCKING_LABEL, color: 'b60205', desc: 'Layered Intelligence loop is paused on this issue' },
-    ...extraLabels.map((name) => dispatchLabelSpec(name)).filter(Boolean).map((s) => ({
+    ...extraLabels.map((name) => dispatchLabelSpec(name, { cli })).filter(Boolean).map((s) => ({
       name: s.name, color: s.color, desc: s.description
     }))
   ];
@@ -251,7 +251,7 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
  * hints are validated before filing; contributor labels remain optional — never
  * derived from `complexity`. `planner` is the identity of
  * the model that REASONED this proposal (PortOS knows it; the reasoner is never
- * asked to name itself), applied as `planner:<model>` and lazily created by
+ * asked to name itself), applied as `planner:<model>` (`planner::<model>` on GitLab) and lazily created by
  * `ensureForgeLabels` like every other extra.
  */
 export async function fileProposalToForge({
@@ -260,7 +260,7 @@ export async function fileProposalToForge({
   if (!isDispatchModel(model) || !isDispatchEffort(effort)) {
     return { success: false, error: 'Issue filing requires valid model and effort dispatch labels; investigate and supply both before retrying' };
   }
-  const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner });
+  const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli });
   await ensureForgeLabels({ cli, cwd, env, extraLabels: extras, exec });
   const fullBody = `${body}\n\n${slugMarker(slug)}`;
   const args = forgeIssueCreateArgs(cli, { title, body: fullBody, labels: [LI_LABEL, ...extras] });

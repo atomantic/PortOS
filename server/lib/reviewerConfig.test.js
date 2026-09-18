@@ -11,6 +11,7 @@ import {
   REVIEWER_VALUES,
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_CAPABLE_CLI_REVIEWERS,
+  APPLY_CAPABLE_REVIEWER,
   MODEL_SELECTABLE_REVIEWERS,
   NON_REVIEWER_VENDORS,
   pairReviewerModelsAndEfforts,
@@ -161,16 +162,18 @@ describe('reviewerConfig reviewer CLI binaries', () => {
     expect(reviewerEffortLevels('mtplx')).toEqual(LOCAL_LLM_EFFORT_LEVELS);
   });
 
-  // slashdo's `--review-with` vocabulary is copilot/codex/agy/claude/grok/cursor/
-  // ollama/@login. Anything else aborts the command, so PortOS's own reviewers
-  // must never reach that flag.
+  // slashdo's `--review-with` vocabulary is copilot/codex/agy/claude/grok/pi/
+  // cursor/opencode/ollama/@login. Anything else aborts the command, so PortOS's
+  // own reviewers must never reach that flag — and a reviewer slashdo DOES accept
+  // must not be withheld from it either: `opencode` was still being dropped after
+  // slashdo added it, which handed the run to the host's saved defaults instead.
   it('classifies every reviewer slashdo cannot parse as PortOS-only', () => {
-    expect([...PORTOS_ONLY_REVIEWERS].sort()).toEqual(['kilo', 'kimi', 'lmstudio', 'mtplx', 'opencode']);
+    expect([...PORTOS_ONLY_REVIEWERS].sort()).toEqual(['kilo', 'kimi', 'lmstudio', 'mtplx']);
     const { flagTokens, portosOnly } = splitSlashdoReviewerTokens([
       'ollama[qwen2.5:7b]~max=1', 'opencode', '@octocat', 'mtplx~effort=high', 'codex', 'kilo',
     ]);
-    expect(flagTokens).toEqual(['ollama[qwen2.5:7b]~max=1', '@octocat', 'codex']);
-    expect(portosOnly).toEqual(['opencode', 'mtplx', 'kilo']);
+    expect(flagTokens).toEqual(['ollama[qwen2.5:7b]~max=1', 'opencode', '@octocat', 'codex']);
+    expect(portosOnly).toEqual(['mtplx', 'kilo']);
   });
 
   // slashdoInvocation keeps its own copy of the roster to decide which slashdo
@@ -441,6 +444,16 @@ describe('client mirror of the reviewer vocabulary', () => {
     const client = await import('../../client/src/lib/reviewerPins.js');
     expect([...client.MODEL_CAPABLE_CLI_REVIEWERS].sort()).toEqual([...MODEL_CAPABLE_CLI_REVIEWERS].sort());
     expect([...client.MODEL_SELECTABLE_REVIEWERS].sort()).toEqual([...MODEL_SELECTABLE_REVIEWERS].sort());
+  });
+
+  // The picker gates its reviewer-applies toggle on this, and `buildReviewWithArgs`
+  // gates the emitted flag on it. Drift shows the toggle for a reviewer whose
+  // editing pass slashdo would force back to review-only, or hides it from the one
+  // reviewer the flag reaches.
+  it('matches the server apply-capable reviewer', async () => {
+    const client = await import('../../client/src/lib/reviewerPins.js');
+    expect(client.APPLY_CAPABLE_REVIEWER).toBe(APPLY_CAPABLE_REVIEWER);
+    expect(REVIEWER_VALUES).toContain(APPLY_CAPABLE_REVIEWER);
   });
 
   // The roster itself. A reviewer added on one side only is the `antigravity`

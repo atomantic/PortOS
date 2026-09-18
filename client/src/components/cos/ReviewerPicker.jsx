@@ -17,7 +17,7 @@ import {
 } from './constants';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { selectableModelsForProvider, effortLevelsForProvider, effectiveModelFor } from '../../utils/providers';
-import { isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
+import { APPLY_CAPABLE_REVIEWER, isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 // The SAME map the readiness cards link by (`LOCAL_RUNTIMES[*].manageUrl` reads
 // from it), taken from the server leaf rather than mirrored — the mirror is what
@@ -193,7 +193,10 @@ export default function ReviewerPicker({
   // provider.
   const selected = Array.isArray(reviewers) ? [...new Set(reviewers.map(normalizeReviewerValue))] : [];
   const addable = REVIEWER_OPTIONS.filter(o => !selected.includes(o.value));
-  const hasNonCopilot = selected.some(r => r !== 'copilot');
+  // Only codex is offered the editing pass: slashdo forces every other local
+  // reviewer back to review-only and reverts what it wrote, so showing the toggle
+  // for agy/grok/cursor would ask the user to grant write access for nothing.
+  const hasApplyCapableReviewer = selected.includes(APPLY_CAPABLE_REVIEWER);
   const selectedUsernames = normalizeReviewUsernames(usernames);
   const atMaxUsernames = selectedUsernames.length >= MAX_REVIEW_USERNAMES;
   // Optional (non-blocking) reviewers — emitted with slashdo's `~opt` suffix.
@@ -930,7 +933,7 @@ export default function ReviewerPicker({
         </div>
       )}
 
-      {showRunFlags && hasNonCopilot && (
+      {showRunFlags && hasApplyCapableReviewer && (
         <label htmlFor={`${id}-applies`} className="flex items-center gap-2 cursor-pointer select-none text-xs text-gray-500">
           <input
             id={`${id}-applies`}
@@ -940,7 +943,7 @@ export default function ReviewerPicker({
             onChange={e => emit({ reviewerApplies: e.target.checked })}
             className="w-3.5 h-3.5 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
           />
-          Reviewer applies fixes (CLI edits the working tree; no effect on Copilot)
+          Reviewer applies fixes (Codex edits the working tree; every other reviewer stays review-only)
         </label>
       )}
     </div>

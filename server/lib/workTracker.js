@@ -297,7 +297,11 @@ export function formatTrackerInstructions(tracker, options = {}) {
     : 'plus equivalent dispatch-hint labels when justified:';
   // Rendered from the shared slot list rather than a literal, so a new label
   // axis reaches this copy-pasteable example without re-patching it here.
-  const forgeLabelFlags = formatOptionalIssueLabelFlags(issueLabelContract?.forgeFlags || '--label model:<tier> --label effort:<level>');
+  // Rendered twice from one contract: GitLab spells every prefixed label with
+  // its scoped `::` separator, so the glab block cannot reuse the gh line.
+  const requiredForgeFlags = issueLabelContract?.forgeFlags || '--label model:<tier> --label effort:<level>';
+  const forgeLabelFlags = formatOptionalIssueLabelFlags(requiredForgeFlags);
+  const forgeLabelFlagsGlab = formatOptionalIssueLabelFlags(requiredForgeFlags, { cli: 'glab' });
   const dispatchGuidance = issueLabelContract?.dispatchGuidance || DISPATCH_HINT_GUIDANCE;
   const jiraDispatchGuidance = issueLabelContract?.jiraDispatchGuidance || JIRA_DISPATCH_HINT_GUIDANCE;
   const jiraLabelContract = issueLabelContract
@@ -360,7 +364,7 @@ ${forgeLabelContract}
 ${forgeLabelContract}
   ${forgeFileStep} File with repeated \`--label\` flags so the category/scope labels stay intact:
   \`\`\`bash
-  glab issue create --title "[<slug>] <Short title>" ${forgeCategoryFlags} ${forgeLabelFlags} --description "<body>"
+  glab issue create --title "[<slug>] <Short title>" ${forgeCategoryFlags} ${forgeLabelFlagsGlab} --description "<body>"
   \`\`\`
   (Run \`glab issue create --help\` if a flag is rejected — glab's flags evolve.) The body must contain ${bodyRequirements}. For **Maybe — needs human call** items, also add \`--label needs-decision\` and end the body with \`**Decision needed:** <one sentence>.\`.
 - **Finalize:** No source-code edits, no PLAN.md, no branches, no MRs — the issues ARE the deliverable. \`/claim --issues\` (the \`claim-issue-gitlab\` flow) picks them up later.`,

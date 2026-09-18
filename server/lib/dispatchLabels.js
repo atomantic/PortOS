@@ -6,8 +6,14 @@
  * Omit an axis when the evidence does not justify it; never stamp `medium` on
  * both by reflex. Do not derive one axis from the other, or from complexity.
  *
- * GitHub/GitLab use the colon form (`model:light`). Jira labels cannot carry
- * a colon on some versions, so Jira gets the hyphen form (`model-light`).
+ * GitHub uses the single-colon form (`model:light`). GitLab renders any
+ * `key::value` label as a native SCOPED label — two-tone, and only one value
+ * per key can sit on an issue at a time — which is exactly the semantics these
+ * axes want, so every prefixed label is written `model::light` there. GitHub
+ * has no equivalent feature. Jira labels cannot carry a colon on some versions,
+ * so Jira gets the hyphen form (`model-light`). The separator is never
+ * hardcoded below: it comes from `labelSeparator(cli)`, and the read side
+ * accepts both so a label written by either forge is recognized.
  *
  * Contributor labels (`good first issue`, `help wanted`) are a third, equally
  * optional axis: apply them when the work is actually onboarding-shaped, not
@@ -24,6 +30,41 @@ import { kebabCase } from './textUtils.js';
 
 export const DISPATCH_MODEL_TIERS = Object.freeze(['light', 'medium', 'heavy', 'ultra']);
 export const DISPATCH_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+
+/**
+ * The `<key><sep><value>` separator each forge CLI wants. GitLab's `::` is what
+ * turns `model::heavy` into a native scoped label; GitHub keeps the plain `:`.
+ * Mirrors slashdo's `LABEL_SEP` (`lib/vcs-host.md`).
+ * @param {string} [cli] - `'gh'` or `'glab'`
+ * @returns {':'|'::'}
+ */
+export function labelSeparator(cli = 'gh') {
+  return cli === 'glab' ? '::' : ':';
+}
+
+/** A prefixed label, split into its key and value across either separator. */
+const PREFIXED_LABEL_RE = /^([A-Za-z][A-Za-z0-9-]*)::?(.+)$/;
+
+/**
+ * Rewrite one label into `cli`'s separator. A label with no `key:value` shape
+ * (`good first issue`, `in-progress`) is returned untouched, so a caller can
+ * pipe every label it is about to apply through this without special-casing.
+ * @param {string} name
+ * @param {{cli?: string}} [options]
+ * @returns {string}
+ */
+export function forgeLabelName(name, { cli = 'gh' } = {}) {
+  if (typeof name !== 'string') return name;
+  const parts = PREFIXED_LABEL_RE.exec(name);
+  return parts ? `${parts[1]}${labelSeparator(cli)}${parts[2]}` : name;
+}
+
+/**
+ * The GitHub-form spelling of a label, whichever forge wrote it — the key every
+ * lookup table here is keyed by. Lets `dispatchLabelSpec('model::heavy')` find
+ * its color instead of falling through to "not a dispatch label".
+ */
+const canonicalLabelName = (name) => forgeLabelName(name, { cli: 'gh' });
 
 export const DISPATCH_LABEL_COLORS = Object.freeze({
   'model:light': 'D4C5F9',
@@ -175,10 +216,10 @@ export function resolvePlannerId({ providerId, model } = {}) {
   return normalizePlannerId(model) || normalizePlannerId(providerId);
 }
 
-/** Forge label for a planner identity (`planner:opus-5`), or null. */
-export function forgePlannerLabel(value) {
+/** Forge label for a planner identity (`planner:opus-5`, `planner::opus-5`), or null. */
+export function forgePlannerLabel(value, { cli = 'gh' } = {}) {
   const id = normalizePlannerId(value);
-  return id ? `${PLANNER_LABEL_PREFIX}${id}` : null;
+  return id ? `planner${labelSeparator(cli)}${id}` : null;
 }
 
 /** Jira-safe planner label (`planner-opus-5`), or null. */
@@ -187,11 +228,11 @@ export function jiraPlannerLabel(value) {
   return id ? `${JIRA_PLANNER_LABEL_PREFIX}${id}` : null;
 }
 
-/** True when `name` is a forge planner label with a non-empty value. */
+/** True when `name` is a forge planner label with a non-empty value, in either separator. */
 export function isPlannerLabel(name) {
-  return typeof name === 'string'
-    && name.startsWith(PLANNER_LABEL_PREFIX)
-    && name.length > PLANNER_LABEL_PREFIX.length;
+  if (typeof name !== 'string') return false;
+  const canonical = canonicalLabelName(name);
+  return canonical.startsWith(PLANNER_LABEL_PREFIX) && canonical.length > PLANNER_LABEL_PREFIX.length;
 }
 
 /**
@@ -200,12 +241,12 @@ export function isPlannerLabel(name) {
  * name is re-derived from the normalized slug so a caller can't smuggle an
  * unnormalized label past `formatLabelCreateCommand`.
  */
-export function plannerLabelSpec(name) {
+export function plannerLabelSpec(name, { cli = 'gh' } = {}) {
   if (!isPlannerLabel(name)) return null;
-  const id = normalizePlannerId(name.slice(PLANNER_LABEL_PREFIX.length));
+  const id = normalizePlannerId(canonicalLabelName(name).slice(PLANNER_LABEL_PREFIX.length));
   if (!id) return null;
   return {
-    name: `${PLANNER_LABEL_PREFIX}${id}`,
+    name: `planner${labelSeparator(cli)}${id}`,
     color: PLANNER_LABEL_COLOR,
     description: `Plan authored by the ${id} model`,
   };
@@ -222,10 +263,11 @@ export function plannerLabelSpec(name) {
  * has to act on. `cli` only picks the `label create` dialect (`gh` / `glab`).
  */
 export function formatPlannerLabelGuidance(plannerId, { cli = 'gh' } = {}) {
-  const label = forgePlannerLabel(plannerId);
+  const label = forgePlannerLabel(plannerId, { cli });
   if (!label) return '';
+  const sep = labelSeparator(cli);
   return [
-    `Planner attribution: add \`--label ${shellQuote(label)}\` to every issue you file, so the backlog records which model planned the work. It is independent of the dispatch axes — never substitute it for \`model:\`/\`effort:\`.`,
+    `Planner attribution: add \`--label ${shellQuote(label)}\` to every issue you file, so the backlog records which model planned the work. It is independent of the dispatch axes — never substitute it for \`model${sep}\`/\`effort${sep}\`.`,
     `Create it first, like the other labels: \`${formatLabelCreateCommand(label, { cli })}\``,
   ].join('\n');
 }
@@ -251,17 +293,30 @@ export const OPTIONAL_ISSUE_LABEL_FLAG_SLOTS = Object.freeze([
 ]);
 
 /**
+ * `--label <key>:<value>` occurrences in a rendered flag string. Quoted and
+ * bare values both, and `(?!:)` so re-running this on an already-GitLab string
+ * is a no-op rather than growing a third colon.
+ */
+const LABEL_FLAG_SEPARATOR_RE = /(--label\s+"?[A-Za-z][A-Za-z0-9-]*):(?!:)/g;
+
+/**
  * The optional slots as one line, appended after any flags a contract already
  * makes REQUIRED. `requiredFlags` (e.g. the repo-study contract's
  * `--label area:<area> --label model:<tier> …`) suppresses the bracketed slot
  * for any axis it already spells out, so an example never offers a label twice.
+ *
+ * The suppression compares GitHub-form slugs, then the finished line is
+ * rewritten into `cli`'s separator in one pass — so a caller states its required
+ * flags once, in one spelling, and still gets a GitLab-correct `model::<tier>`
+ * in the glab copy of the same example.
  */
-export function formatOptionalIssueLabelFlags(requiredFlags = '') {
+export function formatOptionalIssueLabelFlags(requiredFlags = '', { cli = 'gh' } = {}) {
   const required = typeof requiredFlags === 'string' ? requiredFlags : '';
   const slots = OPTIONAL_ISSUE_LABEL_FLAG_SLOTS.filter(
     (slot) => !required.includes(slot.slice('[--label '.length, -1))
   );
-  return [required.trim(), ...slots].filter(Boolean).join(' ');
+  const line = [required.trim(), ...slots].filter(Boolean).join(' ');
+  return cli === 'glab' ? line.replace(LABEL_FLAG_SEPARATOR_RE, '$1::') : line;
 }
 
 const MODEL_SET = new Set(DISPATCH_MODEL_TIERS);
@@ -303,24 +358,29 @@ export function dispatchHintFromLabels(labels) {
   let effort = null;
   for (const label of Array.isArray(labels) ? labels : []) {
     if (typeof label !== 'string') continue;
-    if (label.startsWith('model:')) model = normalizeDispatchModel(label.slice('model:'.length)) || model;
-    else if (label.startsWith('effort:')) effort = normalizeDispatchEffort(label.slice('effort:'.length)) || effort;
+    // Canonicalized first: a GitLab tracker hands back the scoped `model::heavy`
+    // spelling, and reading only the GitHub form would report it as unlabeled.
+    const canonical = canonicalLabelName(label);
+    if (canonical.startsWith('model:')) model = normalizeDispatchModel(canonical.slice('model:'.length)) || model;
+    else if (canonical.startsWith('effort:')) effort = normalizeDispatchEffort(canonical.slice('effort:'.length)) || effort;
   }
   return { model, effort };
 }
 
 /**
  * Forge (GitHub/GitLab) label name for one axis, or null when the value is
- * unrecognized. `axis` is `'model'` or `'effort'`.
+ * unrecognized. `axis` is `'model'` or `'effort'`; `cli` picks the separator
+ * (`model:heavy` on GitHub, the scoped `model::heavy` on GitLab).
  */
-export function forgeDispatchLabel(axis, value) {
+export function forgeDispatchLabel(axis, value, { cli = 'gh' } = {}) {
+  const sep = labelSeparator(cli);
   if (axis === 'model') {
     const tier = normalizeDispatchModel(value);
-    return tier ? `model:${tier}` : null;
+    return tier ? `model${sep}${tier}` : null;
   }
   if (axis === 'effort') {
     const level = normalizeDispatchEffort(value);
-    return level ? `effort:${level}` : null;
+    return level ? `effort${sep}${level}` : null;
   }
   return null;
 }
@@ -338,8 +398,8 @@ export function jiraDispatchLabel(axis, value) {
  * Valid forge labels for the supplied hints, omitting any unjustified axis.
  * Never invents a default; never derives one axis from the other.
  */
-export function forgeDispatchLabels({ model, effort } = {}) {
-  return [forgeDispatchLabel('model', model), forgeDispatchLabel('effort', effort)].filter(Boolean);
+export function forgeDispatchLabels({ model, effort, cli = 'gh' } = {}) {
+  return [forgeDispatchLabel('model', model, { cli }), forgeDispatchLabel('effort', effort, { cli })].filter(Boolean);
 }
 
 /** Jira-safe equivalents of `forgeDispatchLabels`. */
@@ -443,11 +503,11 @@ export function formatVolunteerClaimCommands(issueRef, { cli = 'gh' } = {}) {
 }
 
 /** Dispatch hints + contributor labels for one GitHub/GitLab issue. */
-export function forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner } = {}) {
+export function forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli = 'gh' } = {}) {
   return [
-    ...forgeDispatchLabels({ model, effort }),
+    ...forgeDispatchLabels({ model, effort, cli }),
     ...forgeContributorLabels({ goodFirstIssue, helpWanted }),
-    forgePlannerLabel(planner),
+    forgePlannerLabel(planner, { cli }),
   ].filter(Boolean);
 }
 
@@ -460,38 +520,48 @@ export function jiraIssueLabels({ model, effort, goodFirstIssue, helpWanted, pla
   ].filter(Boolean);
 }
 
-/** `{ name, color, description }` for a forge dispatch, contributor, or workflow label, or null. */
-export function dispatchLabelSpec(name) {
+/**
+ * `{ name, color, description }` for a forge dispatch, contributor, or workflow
+ * label, or null.
+ *
+ * Lookups go through the canonical (GitHub-form) spelling so a GitLab-scoped
+ * `model::heavy` resolves to the same row, while the returned `name` is spelled
+ * for `cli` — which is what makes `formatLabelCreateCommand` create the label
+ * the issue will actually be filed with.
+ */
+export function dispatchLabelSpec(name, { cli = 'gh' } = {}) {
   if (typeof name !== 'string') return null;
-  if (DISPATCH_LABEL_COLORS[name]) {
+  const canonical = canonicalLabelName(name);
+  const forgeName = forgeLabelName(name, { cli });
+  if (DISPATCH_LABEL_COLORS[canonical]) {
     return {
-      name,
-      color: DISPATCH_LABEL_COLORS[name],
-      description: DISPATCH_LABEL_DESCRIPTIONS[name],
+      name: forgeName,
+      color: DISPATCH_LABEL_COLORS[canonical],
+      description: DISPATCH_LABEL_DESCRIPTIONS[canonical],
     };
   }
-  if (CONTRIBUTOR_LABEL_COLORS[name]) {
+  if (CONTRIBUTOR_LABEL_COLORS[canonical]) {
     return {
-      name,
-      color: CONTRIBUTOR_LABEL_COLORS[name],
-      description: CONTRIBUTOR_LABEL_DESCRIPTIONS[name],
+      name: forgeName,
+      color: CONTRIBUTOR_LABEL_COLORS[canonical],
+      description: CONTRIBUTOR_LABEL_DESCRIPTIONS[canonical],
     };
   }
-  if (WORKFLOW_LABEL_COLORS[name]) {
+  if (WORKFLOW_LABEL_COLORS[canonical]) {
     return {
-      name,
-      color: WORKFLOW_LABEL_COLORS[name],
-      description: WORKFLOW_LABEL_DESCRIPTIONS[name],
+      name: forgeName,
+      color: WORKFLOW_LABEL_COLORS[canonical],
+      description: WORKFLOW_LABEL_DESCRIPTIONS[canonical],
     };
   }
   // Prefix-matched last: the planner axis has no enumerable table, so it must
   // not shadow a fixed label that happens to start with the same characters.
-  return plannerLabelSpec(name);
+  return plannerLabelSpec(name, { cli });
 }
 
-/** All eight slashdo dispatch-label specs, in axis-then-ramp order. */
-export function allDispatchLabelSpecs() {
-  return Object.keys(DISPATCH_LABEL_COLORS).map((name) => dispatchLabelSpec(name));
+/** All slashdo dispatch-label specs, in axis-then-ramp order, spelled for `cli`. */
+export function allDispatchLabelSpecs({ cli = 'gh' } = {}) {
+  return Object.keys(DISPATCH_LABEL_COLORS).map((name) => dispatchLabelSpec(name, { cli }));
 }
 
 /**
@@ -500,7 +570,7 @@ export function allDispatchLabelSpecs() {
  * when `name` is not a dispatch label.
  */
 export function formatLabelCreateCommand(name, { cli = 'gh' } = {}) {
-  const spec = dispatchLabelSpec(name);
+  const spec = dispatchLabelSpec(name, { cli });
   if (!spec) return null;
   const quoted = shellQuote(spec.name);
   if (cli === 'glab') {
@@ -545,7 +615,7 @@ export const ISSUE_QUALITY_GUIDANCE = [
  * vocabulary can no more drift between them than from the writing vocabulary.
  */
 const HINT_MEANING_LINES = [
-  'Reading dispatch hints (`model:` / `effort:`): an issue carrying these labels has already been routed by whoever planned it. Honor that routing rather than re-deciding it — the planner read the code before choosing.',
+  'Reading dispatch hints (`model:` / `effort:`, spelled `model::` / `effort::` on a GitLab tracker, where `key::value` is a native scoped label): an issue carrying these labels has already been routed by whoever planned it. Honor that routing rather than re-deciding it — the planner read the code before choosing.',
   `- \`model:${DISPATCH_MODEL_TIERS.join('|')}\` — the CAPABILITY the work needs. Run it on, respectively, the cheapest capable coding model, the routine workhorse, a strong model for complex work, or the frontier model explicitly configured for exceptional reasoning. Prefer tier requests over exact model IDs unless a task requires a specific model; keep reasoning effort independent. Ultra is opt-in, not the default for all planning.`,
   `- \`effort:${DISPATCH_EFFORT_LEVELS.join('|')}\` — the REASONING BUDGET per step, independent of the model. Match the depth of analysis the work gets to it.`,
 ];
@@ -577,6 +647,7 @@ export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   '- `model:light|medium|heavy|ultra` — capability: light is mechanical (rename, config, a well-specified single-file edit); medium is routine multi-file work; heavy is genuinely hard reasoning (concurrency, schema/compatibility design, redesign); ultra is exceptional frontier reasoning, explicitly requested.',
   '- `effort:low|medium|high|xhigh|max` — reasoning budget per step, independent of model. `model:light` + `effort:max` is a mechanical sweep across many call sites; `model:heavy` + `effort:low` is a two-line change that hinges on one idea.',
   'Never derive one axis from the other, and do NOT stamp `medium` on both by reflex — where that genuinely is the answer, justify it in one line of the body. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
+  'On GitLab, write every prefixed label with a DOUBLE colon (`model::heavy`, `effort::max`, `planner::opus-5`): GitLab renders `key::value` as a native scoped label, so only one value per key can sit on an issue at a time. GitHub has no equivalent and keeps the single colon (`model:heavy`). Use the separator the repo\'s own tracker uses, and match an existing `area` label\'s spelling rather than re-separating it — a mismatched separator is a different, unfilterable label.',
   'Create each label immediately before applying it (`gh label create <name> --color <hex> 2>/dev/null || true`; glab needs `--name` and `#<hex>`). Colors: model:light D4C5F9, model:medium A371F7, model:heavy 6F42C1, model:ultra C2185B, effort:low BFE5E5, effort:medium 76C7C7, effort:high 1D7874, effort:xhigh 0E4F4C, effort:max 05403D.',
   'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT a good first issue. Use the same gh / glab label create form.',
   HELP_WANTED_GUIDANCE,

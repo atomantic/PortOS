@@ -63,7 +63,14 @@ const MAX_CATALOG_PROMPT_CHARS = 2_000;
  */
 const scrubForgeText = (value) => scrubSecretTokens(scrubHomePath(value));
 
-const labelSpec = (name) => dispatchLabelSpec(name)
+/**
+ * Which CLI dialect an app's tracker speaks — and, through `dispatchLabelSpec` /
+ * `forgeIssueLabels`, which separator its prefixed labels are spelled with
+ * (`model:heavy` on GitHub, GitLab's scoped `model::heavy`).
+ */
+const forgeCli = (app) => (app.forge === 'gitlab' ? 'glab' : 'gh');
+
+const labelSpec = (name, cli) => dispatchLabelSpec(name, { cli })
   || (PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS[name]
     ? { name, ...PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS[name] }
     : null);
@@ -176,7 +183,7 @@ export async function listPersistentMindIssues(args) {
  */
 const ensureLabels = async ({ app, names }) => {
   await Promise.all(names.map((name) => {
-    const spec = labelSpec(name);
+    const spec = labelSpec(name, forgeCli(app));
     if (!spec) return null;
     return (app.forge === 'gitlab'
       ? execGlab(forgeLabelCreateArgs('glab', spec), app.repoPath)
@@ -239,6 +246,7 @@ export async function filePersistentMindIssue(args) {
   const labels = [
     PERSISTENT_MIND_ISSUE_LABEL,
     ...forgeIssueLabels({
+      cli: forgeCli(app),
       model: args.model,
       effort: args.effort,
       // The planner axis records who WROTE the plan — this mind's own model —
