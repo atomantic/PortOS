@@ -17,6 +17,10 @@ import {
   normalizePersistentMindThinkingRequests,
   normalizePersistentMindThinkingSelection,
 } from './persistentMindThinkingPresets.js';
+import {
+  createDefaultPersistentMindToolActivation,
+  normalizePersistentMindToolActivation,
+} from './persistentMindToolActivation.js';
 import { trimTo } from './textUtils.js';
 
 export const PERSISTENT_MIND_SCHEMA_VERSION = 8;
@@ -345,6 +349,12 @@ export function createDefaultPersistentMindState() {
     recentMessageFingerprints: [],
     callHistory: [],
     thinkingRequests: normalizePersistentMindThinkingRequests(),
+    // Progressive tool exposure (#7624): which families' full schemas are
+    // still on lease from a prior turn's tools.activate/renewal, plus the
+    // turn id the lease was last aged against so a within-turn tool-round
+    // loop never ages it twice. A selection hint only — see
+    // persistentMindToolActivation.js for the "never authority" invariant.
+    toolActivation: createDefaultPersistentMindToolActivation(),
     lastCompletedTurnId: null,
     lastCompletedAt: null,
     nextEligibleWakeAt: null,
@@ -453,6 +463,7 @@ export function normalizePersistentMindState(raw) {
     recentMessageIds: recentMessageIds.slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
     recentMessageFingerprints: recentMessageFingerprints.slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
     thinkingRequests,
+    toolActivation: normalizePersistentMindToolActivation(source.toolActivation),
     callHistory: callHistory.slice(-PERSISTENT_MIND_LIMITS.MAX_CALL_HISTORY),
     lastCompletedTurnId: asId(source.lastCompletedTurnId) || null,
     lastCompletedAt: asIso(source.lastCompletedAt),

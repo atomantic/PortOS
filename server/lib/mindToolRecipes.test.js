@@ -74,6 +74,6 @@ describe('closed, governed recipe definition boundary', () => {
   it('defaults the definition grant off and preserves it across old capability updates', () => {
     expect(createDefaultPersistentMindCapabilities().manageToolRecipes).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 8, readPortos: true }).success).toBe(true);
-    expect(mergePersistentMindCapabilities({ manageToolRecipes: true }, { schemaVersion: 3, readPortos: false })).toMatchObject({ schemaVersion: 12, manageToolRecipes: true, readPortos: false });
+    expect(mergePersistentMindCapabilities({ manageToolRecipes: true }, { schemaVersion: 3, readPortos: false })).toMatchObject({ schemaVersion: 13, manageToolRecipes: true, readPortos: false });
   });
 });
