@@ -16,6 +16,20 @@ The writer may have already edited some profiles. Treat any non-empty field belo
 {{existingCharactersJson}}
 ```
 
+{{#factual}}
+## Lens: non-fiction
+
+This text is **first-person non-fiction about real people** — a memoir, journal entry, voice memo, or captured thought. The people in it exist. Read it as a record, not as a story, and let these rules override anything below that assumes invented material:
+
+- **Never mint a role-tag name.** The "for unnamed characters use a stable role tag like `THE BARTENDER`" instruction is for invented characters and does NOT apply here. An uppercase role tag turns a real family into stock cast.
+- **A person named by relation keeps that exact word as `name`, in the writer's own casing** — `Mom`, never `MOM` or `THE MOTHER`; likewise `Dad`, `Grandma`. When the text also gives a proper name, prefer the name and put the relation word in `aliases`.
+- **Do not extract the writer as a character.** The narrator of a memoir is the author, not a cast member — unless the text refers to them in the third person.
+- **`physicalDescription` may stay empty.** The "commit when prose is silent, then log it" rule is SUSPENDED for real people: inventing a real person's ethnicity, build, or wardrobe is a fabrication about someone who exists, not a useful image-gen default. Describe only what the text states, and omit the field entirely when it states nothing.
+- **`role` takes a plain descriptor the text supports** — `mother`, `neighbor`, `co-worker` — or is omitted. A real person is not a `protagonist` or an `antagonist`.
+- **Do not visually differentiate the cast.** Real people are not a cast to be spread across ethnicity, age, and silhouette axes for renderability.
+- The rule the framework fields already carry now covers the physical ones too: **A wrong guess is worse than a gap.**
+{{/factual}}
+
 ## Source prose
 
 ```

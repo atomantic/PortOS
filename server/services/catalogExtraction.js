@@ -20,12 +20,12 @@
 import { randomUUID } from 'crypto';
 import { extractBible } from './bibleExtractor.js';
 import { runStagedLLM } from './stageRunner.js';
-import { BIBLE_KINDS, BIBLE_FIELD, BIBLE_LIMITS } from '../lib/storyBible.js';
+import { BIBLE_KINDS, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS } from '../lib/storyBible.js';
 import { CATALOG_TYPES } from '../lib/catalogTypes.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { catalogEvents } from './catalogEvents.js';
 import { getScrap, listChildScraps, listIngredientsForRef } from './catalogDB.js';
-import { escapeRegExp } from '../lib/textUtils.js';
+import { countWords, escapeRegExp } from '../lib/textUtils.js';
 
 // Light-shape ingredient type ids, sourced from the shared registry
 // (`extractionShape === 'light'`). Adding a light type to `catalogTypes.js`
@@ -38,6 +38,60 @@ const BIBLE_TYPE_IDS = CATALOG_TYPES.filter((t) => t.extractionShape === 'bible'
 // Map a light TYPE id to its plural draft key (`idea` → `ideas`). The bundled
 // prompt's JSON keys + the draft scaffolding key results by this plural.
 const lightDraftKey = (id) => `${id}s`;
+
+// Scrap source kinds whose text is the user's own lived capture rather than
+// invented fiction. A voice memo and a bridged brain record are first-person
+// by construction, so reading them through the fiction lens is exactly what
+// mints role tags (`MOM` / `DAD` / `NARRATOR`) out of a memoir. Phase 2 of
+// #7609 replaces this with the target universe's own `factual` flag, at which
+// point the source kind becomes the fallback rather than the only signal.
+const FACTUAL_SOURCE_KINDS = Object.freeze(new Set(['brain-bridge', 'voice-memo']));
+
+// Tags stamped on rows extracted under the factual lens. `factual` marks every
+// row as lived material; `real-person` additionally marks an extracted
+// character so "real people" stays filterable in the catalog. Stamped per RUN
+// from the scrap's lens — which is why this cannot be the type registry's
+// `defaultTags` (that table is per-type, and the same type is extracted under
+// both lenses).
+const FACTUAL_TAG = 'factual';
+const REAL_PERSON_TAG = 'real-person';
+
+/**
+ * Derive the extraction lens from a stored scrap row. Returns only the keys
+ * that carry a value so a title-less paste renders exactly the prompt it
+ * renders today.
+ *
+ * @param {{ title?: string, sourceKind?: string }} scrap
+ * @returns {{ title?: string, sourceKind?: string, factual?: boolean }}
+ */
+function scrapExtractionContext(scrap) {
+  if (!scrap || typeof scrap !== 'object') return {};
+  const title = typeof scrap.title === 'string' ? scrap.title.trim() : '';
+  const sourceKind = typeof scrap.sourceKind === 'string' ? scrap.sourceKind.trim() : '';
+  const context = {};
+  if (title) context.title = title;
+  if (sourceKind) context.sourceKind = sourceKind;
+  if (FACTUAL_SOURCE_KINDS.has(sourceKind)) context.factual = true;
+  return context;
+}
+
+// Append a tag without mutating the extractor's entry or duplicating a tag the
+// model already emitted.
+const withTag = (entry, tag) => {
+  const tags = Array.isArray(entry?.tags) ? entry.tags : [];
+  if (tags.includes(tag)) return entry;
+  return { ...entry, tags: [...tags, tag] };
+};
+
+// Stamp the factual lens onto a sanitized entry list. A no-op under the fiction
+// lens, so every non-factual extraction keeps today's tags byte-for-byte.
+const stampFactualTags = (entries, { factual, isCharacter = false }) => {
+  if (!factual || !Array.isArray(entries)) return entries;
+  return entries.map((entry) => {
+    const tagged = withTag(entry, FACTUAL_TAG);
+    return isCharacter ? withTag(tagged, REAL_PERSON_TAG) : tagged;
+  });
+};
 
 // Light-shape stage that bundles ideas/scenes/concepts into one LLM call.
 // Surfaced to the UI as a single stage row — the three result arrays land
@@ -133,8 +187,9 @@ function sanitizeLightEntry(kind, raw) {
  * malformed response logs and yields empty arrays, mirroring extractBible's
  * sanitizeBibleList tolerance for missing keys.
  */
-async function extractIdeasScenesConcepts({ corpus, providerOverride }) {
+async function extractIdeasScenesConcepts({ corpus, providerOverride, promptContext = {}, factual = false }) {
   const result = await runStagedLLM('catalog-ideas-scenes-concepts', {
+    ...promptContext,
     draftBody: corpus,
     returnsJson: true,
   }, {
@@ -150,7 +205,7 @@ async function extractIdeasScenesConcepts({ corpus, providerOverride }) {
   for (const id of LIGHT_TYPE_IDS) {
     const key = lightDraftKey(id);
     const raw = Array.isArray(content[key]) ? content[key] : [];
-    out[key] = raw.map((r) => sanitizeLightEntry(id, r)).filter(Boolean);
+    out[key] = stampFactualTags(raw.map((r) => sanitizeLightEntry(id, r)).filter(Boolean), { factual });
   }
   return out;
 }
@@ -162,6 +217,9 @@ async function extractIdeasScenesConcepts({ corpus, providerOverride }) {
  * @param {string} args.rawText      The scrap body to extract from.
  * @param {string} [args.scrapId]    Scrap id to attach to progress frames.
  * @param {string} [args.providerOverride] Override the staged-llm provider.
+ * @param {object} [args.context]    Extraction lens — `{ title, sourceKind, factual }`
+ *                                   from `scrapExtractionContext`. Fills the prompts'
+ *                                   framing slots and gates the factual sections.
  * @returns {Promise<{
  *   runId: string,
  *   characters: Array,
@@ -197,12 +255,28 @@ function neutralizeFenceDelimiters(text) {
 // omitted, a fresh runId is minted (the normal single-scrap path). `emitStart`
 // lets the chunked path suppress the per-child `start` frame, which would
 // otherwise reset the client's stage checklist on every chunk.
-export async function extractIngredients({ rawText, scrapId = null, providerOverride, runId = randomUUID(), emitStart = true } = {}) {
+export async function extractIngredients({ rawText, scrapId = null, providerOverride, runId = randomUUID(), emitStart = true, context = {} } = {}) {
   if (typeof rawText !== 'string' || !rawText.trim()) {
     throw new Error('extractIngredients: rawText is required');
   }
 
   const corpus = neutralizeFenceDelimiters(rawText);
+
+  // The lens the scrap gives the model. `work.{title,kind,wordCount}` fills the
+  // three slots every writers-room bible prompt already declares and that the
+  // catalog path used to render empty; `scrapTitle` / `sourceKind` fill the
+  // light stage's own Source block; `factual` gates the non-fiction sections in
+  // both families. Word count is measured against THIS corpus (a chunk's own
+  // length), not the parent's, so a chunked run never tells the model it is
+  // reading more text than it was handed.
+  const { title: scrapTitle = '', sourceKind = '', factual = false } = context;
+  const promptContext = {
+    work: { title: scrapTitle, kind: sourceKind, wordCount: countWords(corpus) },
+    scrapTitle,
+    sourceKind,
+    factual,
+  };
+
   const emit = (frame) => {
     try {
       catalogEvents.emit('progress', { runId, scrapId, ...frame });
@@ -221,7 +295,7 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
     emit({ type: 'stage', id: stage.id, status: 'running' });
     try {
       if (stage.id === LIGHT_STAGE_ID) {
-        const out = await extractIdeasScenesConcepts({ corpus, providerOverride });
+        const out = await extractIdeasScenesConcepts({ corpus, providerOverride, promptContext, factual });
         const count = LIGHT_TYPE_IDS.reduce((n, id) => n + (out[lightDraftKey(id)]?.length || 0), 0);
         emit({ type: 'stage', id: stage.id, status: 'completed', count });
         return { id: stage.id, light: out, error: null };
@@ -230,11 +304,16 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
         kind: stage.kind,
         corpus,
         existing: [],
+        context: promptContext,
         providerOverride,
         source: `catalog-extract-${stage.id}`,
       });
-      emit({ type: 'stage', id: stage.id, status: 'completed', count: result.extracted.length });
-      return { id: stage.id, extracted: result.extracted, error: null };
+      const extracted = stampFactualTags(result.extracted, {
+        factual,
+        isCharacter: stage.kind === BIBLE_KIND.CHARACTER,
+      });
+      emit({ type: 'stage', id: stage.id, status: 'completed', count: extracted.length });
+      return { id: stage.id, extracted, error: null };
     } catch (err) {
       console.error(`❌ catalog extract ${stage.id} failed: ${err.message}`);
       emit({ type: 'stage', id: stage.id, status: 'failed', error: err.message });
@@ -344,9 +423,14 @@ export async function extractIngredientsForScrap({ scrapId, providerOverride } =
   const parent = await getScrap(scrapId);
   if (!parent) throw new Error(`extractIngredientsForScrap: scrap ${scrapId} not found`);
 
+  // One lens for the whole scrap. Chunk children inherit the PARENT's context:
+  // a child row carries no title of its own and splitting a memoir mid-paragraph
+  // must not flip half of it back to the fiction lens.
+  const context = scrapExtractionContext(parent);
+
   const children = await listChildScraps(parent.id);
   if (children.length === 0) {
-    return extractIngredients({ rawText: parent.rawText, scrapId: parent.id, providerOverride });
+    return extractIngredients({ rawText: parent.rawText, scrapId: parent.id, providerOverride, context });
   }
 
   // One shared run id for the whole chunked extraction so every child's
@@ -367,7 +451,7 @@ export async function extractIngredientsForScrap({ scrapId, providerOverride } =
   // union the per-child drafts. Progress frames carry the parent scrapId + the
   // shared runId so the UI's existing live checklist keeps tracking one scrap.
   const childDrafts = await mapWithConcurrency(children, CHUNK_EXTRACT_CONCURRENCY, (child) =>
-    extractIngredients({ rawText: child.rawText, scrapId: parent.id, providerOverride, runId, emitStart: false }),
+    extractIngredients({ rawText: child.rawText, scrapId: parent.id, providerOverride, runId, emitStart: false, context }),
   );
 
   const merged = dedupDrafts(childDrafts);

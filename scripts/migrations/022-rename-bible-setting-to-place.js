@@ -92,7 +92,7 @@ export const ACCEPTED_OLD_MD5 = {
   'bible-deference.md': '218f0e85643609ed85a12b1ccc7b5a8d',
 };
 export const NEW_SHIPPED_MD5 = {
-  'writers-room-places.md': 'a7f68e51dd6b4421d20f5bd9d855d9b4',
+  'writers-room-places.md': '5d323f7aea4c2658e7e29afae2bdb7a4', // post-394 (non-fiction lens)
   'bible-deference.md': 'a4681348c27776e414acf6e0be566a99',
 };
 export const DRIFT_SUBDIRS = {
