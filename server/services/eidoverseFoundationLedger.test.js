@@ -71,6 +71,54 @@ describe('the local foundation ledger', () => {
   });
 });
 
+describe('deriving a district-template placement server-side (#7627)', () => {
+  const districtTemplate = (bodyOverrides = {}) => authored({
+    id: 'garden-arcade',
+    kind: 'district-template',
+    body: { layoutId: 'radial-ring', anchor: [1, 0, 2], propCount: 4, seed: 'plaza', ...bodyOverrides },
+  });
+
+  it('persists a server-derived placement for a declared {layoutId, anchor, seed}', async () => {
+    const saved = await record(districtTemplate(), '2026-03-04T05:06:07.000Z');
+
+    expect(saved.body.placement).toBeTruthy();
+    expect(saved.body.placement).toHaveLength(4);
+    expect(saved.body.layoutId).toBe('radial-ring');
+  });
+
+  it('reproduces byte-identical placement for the same {layoutId, anchor, seed} across two recordings', async () => {
+    const first = await record(districtTemplate(), '2026-03-04T05:06:07.000Z');
+    const second = await record(districtTemplate({ }), '2026-03-04T05:06:08.000Z');
+
+    expect(second.body.placement).toEqual(first.body.placement);
+  });
+
+  it('replaces a caller-supplied placement that disagrees with the derivation, rather than merging it', async () => {
+    const bogusPlacement = [{ pos: [999, 999, 999], yaw: 0 }];
+    const saved = await record(districtTemplate({ placement: bogusPlacement }), '2026-03-04T05:06:07.000Z');
+
+    expect(saved.body.placement).not.toEqual(bogusPlacement);
+    expect(saved.body.placement).toHaveLength(4);
+  });
+
+  it('leaves a non-district-template body untouched even if it happens to carry a layoutId-shaped field', async () => {
+    const saved = await record(authored({ body: { schema: { layoutId: 'not-a-real-layout', anchor: [0, 0, 0] } } }), '2026-03-04T05:06:07.000Z');
+
+    expect(saved.body).toEqual({ schema: { layoutId: 'not-a-real-layout', anchor: [0, 0, 0] } });
+  });
+
+  it('leaves a district-template body without a declared layoutId/anchor untouched', async () => {
+    const saved = await record(authored({ id: 'legacy-district', kind: 'district-template', body: { note: 'hand-authored, pre-toolkit' } }), '2026-03-04T05:06:07.000Z');
+
+    expect(saved.body).toEqual({ note: 'hand-authored, pre-toolkit' });
+  });
+
+  it('refuses an unknown layoutId rather than silently storing an unusable declaration', async () => {
+    await expect(record(districtTemplate({ layoutId: 'floating-islands' })))
+      .rejects.toThrow(/Unknown layout "floating-islands"/);
+  });
+});
+
 describe('packaging a promote candidate', () => {
   it('runs the assay itself and packages a foundation that survives it', async () => {
     await record({}, '2026-03-04T05:06:07.000Z');
@@ -338,6 +386,28 @@ describe('building on a foundation inherited from a peer (#7631)', () => {
     expect(inherited.outcome).toBe('inherited');
     return { candidate: promoted.candidate, inherited: inherited.foundation };
   };
+
+  // #7627 derives a district-template's `placement` server-side, so the guard
+  // has to digest the body it will STORE. Digesting the body as it arrived let a
+  // caller re-submit just the inherited template's {layoutId, anchor, seed}
+  // recipe — what `eidoverse.draft-foundation` returns — and land a stored body
+  // byte-identical to the peer's while never matching it at the check.
+  it('refuses a district-template whose recipe only derives into the inherited body', async () => {
+    await record({ id: 'tide-beacon', kind: 'district-template', body: { layoutId: 'radial-ring', anchor: [1, 0, 2], propCount: 4, seed: 'plaza' } }, '2026-03-01T00:00:00.000Z');
+    const promoted = await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+    expect((await recordEidoverseFoundationInheritance(promoted.candidate, {
+      sourceInstanceId: 'instance-peer-one', localInstanceId: 'instance-this-install', now: '2026-03-02T00:00:00.000Z',
+    })).outcome).toBe('inherited');
+
+    // The recipe ALONE — no `placement` key, so its raw digest cannot match the
+    // inherited body, which carries the derived placement.
+    await expect(recordEidoverseFoundation(
+      authored({ id: 'my-own-arcade', kind: 'district-template', body: { layoutId: 'radial-ring', anchor: [1, 0, 2], propCount: 4, seed: 'plaza' } }),
+      { originInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z' },
+    )).rejects.toThrow(new RegExp(`inherited from install ${PEER_ORIGIN}`));
+    expect(await getEidoverseFoundation('my-own-arcade')).toBeNull();
+  });
 
   it('refuses to record a peer\'s body as this install\'s own work, naming the origin it came from', async () => {
     const { candidate } = await inheritPeerFoundation();
