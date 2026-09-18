@@ -32,7 +32,7 @@ export default function EidoverseGuest() {
   }, []);
   return <main className="flex h-dvh flex-col bg-port-bg text-white">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-port-border px-4 py-3">
-      <div><h1 className="font-semibold">Eidoverse guest visit</h1><p className="text-sm text-gray-400">Visitor access · Chat is visible to people and agents in this world</p><p className="text-sm text-gray-400">This world's own local vernacular — its private style and buildings, not the shared PortOS baseline</p></div>
+      <div><h1 className="font-semibold">Eidoverse guest visit</h1><p className="text-sm text-gray-400">Visitor access · Chat is visible to people and agents in this world</p><p className="text-sm text-gray-400">Most of what you see is the shared PortOS world design every install renders the same way. Only this host's own local vernacular — its private style and builds — is unique to this world.</p></div>
       {!left && <button type="button" disabled={leaving} className="min-h-10 rounded-lg border border-port-border px-3" onClick={async () => {
         setLeaving(true);
         const departed = await frame.leaveWorld().then(() => true).catch((failure) => {
