@@ -1,5 +1,6 @@
 /**
- * Speculative-decoding launcher presets (llama-server target + drafter pairs).
+ * llama-server launcher presets — a target on its own, or a target paired with
+ * a speculative-decoding drafter.
  *
  * Server-owned because the paths are only half the story: each preset also
  * carries the Hugging Face repo the GGUF comes from, so PortOS can report
@@ -13,6 +14,12 @@
  * the hint. `file` is the exception, and it is a PIN rather than a preference:
  * it appears only where the quant tag cannot discriminate the target, so a pin
  * that stops resolving is an error, not a cue to fall back to the hint.
+ *
+ * Not every preset is a PAIR. A preset whose `specType` drafts with nothing
+ * (`none`, any `ngram-*`) carries an empty `draftModel` and is simply the
+ * launch line for one checkpoint — which is what makes this list, not the
+ * Ollama/LM Studio catalog, the right home for a model whose weights only
+ * llama-server can load (Ternary Bonsai 2 below).
  *
  * A file with no published single-file GGUF (the DSpark 8B block ships as a
  * tokenizer-less checkpoint that has to be converted against its target) simply
@@ -109,6 +116,29 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
       repo: 'z-lab/Muse-Glimmer-30B-DFlash2-GGUF',
       quant: 'Q4_K_M',
     },
+  },
+  {
+    // PrismML's ternary pack of Qwen3.8-27B, and the first preset here that
+    // speculates with nothing.
+    //
+    // PQ2_0 over the 1.3 GB smaller PTQ1_0: PQ2_0 is the pack PrismML measures
+    // on Apple Silicon and the faster prompt-processing pack on every backend,
+    // while PTQ1_0's decode edge is specific to Ada-generation and L4 cards.
+    // Either one needs a build of PrismML's llama.cpp fork on PATH, which is
+    // what the label warns about — and a launch that starts is NOT evidence the
+    // right binary is there, because a stock build accepts a plain ternary Q2_0
+    // and then emits garbage. Measurements, build recipe and why this model is
+    // absent from the Ollama/LM Studio catalog:
+    // docs/research/2026-09-18-ternary-bonsai-2-27b.md
+    id: 'ternary-bonsai-2-27b',
+    label: 'Ternary Bonsai 2 27B — no drafter (needs a PrismML llama.cpp build)',
+    specType: 'none',
+    model: {
+      path: 'models/Ternary-Bonsai-2-27B-PQ2_0.gguf',
+      repo: 'prism-ml/Ternary-Bonsai-2-27B-gguf',
+      quant: 'PQ2_0',
+    },
+    draftModel: { path: '' },
   },
   {
     id: 'custom',
