@@ -136,6 +136,15 @@ const HEADER_CLASS = `hidden @xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.5
  * `false` counts as missing; `undefined` (not a CLI reviewer, or the caller
  * didn't fetch it) says nothing.
  *
+ * `providerReviewUnsupported` is the same endpoint's provider-backed counterpart
+ * (#7660) — `{ 'provider:<id>': 'REVIEWER_UNSUPPORTED' }`, present ONLY for a
+ * provider that would refuse a tool-free review outright (a hosted gateway
+ * fronting a CLI whose no-tool posture can only be enforced locally). A capable
+ * provider is absent rather than `false`, so a caller that never fetched it and
+ * a machine where nothing is wrong both read `undefined`. Warn-only like the
+ * rest: without it, such a reviewer is only discovered as a review gate that
+ * never clears.
+ *
  * Together with `modelOptions.providerDisabled`, that decides which reviewers
  * the **Add** row offers up front: one whose CLI is missing here, or whose
  * provider records are all switched off, is folded behind a `+N unavailable`
@@ -153,6 +162,7 @@ export default function ReviewerPicker({
   reviewerEfforts = {},
   modelOptions = null,
   installed = null,
+  providerReviewUnsupported = null,
   stopMode = DEFAULT_REVIEW_STOP_MODE,
   reviewerApplies = false,
   defaults = null,
@@ -257,6 +267,15 @@ export default function ReviewerPicker({
       const provider = providerRecords.find(record => `provider:${record.id}` === token);
       if (modelOptions?.loaded && !provider) return { label: 'missing', title: 'This reviewer provider is no longer configured on this machine.' };
       if (provider?.enabled === false) return { label: 'disabled', title: 'Enable this provider in AI Providers before running its review.' };
+      // Last, so a missing or switched-off provider keeps its more specific
+      // word: this one is about a provider that IS configured and enabled and
+      // still could never answer a review.
+      if (providerReviewUnsupported?.[token]) {
+        return {
+          label: "can't review",
+          title: `${labelFor(token)} has no enforced tool-free review transport on this machine, so a review round would never complete. Switch the provider to its API mode, or pick a reviewer harness that supports one.`
+        };
+      }
       return null;
     }
     if (installed?.[token] === false) {

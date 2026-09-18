@@ -42,6 +42,23 @@ export const isReviewer = (value) => REVIEWER_VALUES.includes(value) || isProvid
 export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value) || isProviderReviewer(value);
 
 /**
+ * Reviewer refusals a CALLER can fix by changing configuration, as opposed to a
+ * reviewer that was genuinely asked and failed (quota, transport, timeout).
+ *
+ * The review gate in a claim/PR run answers an unreachable reviewer with
+ * `review-blocked`: publish, leave the PR open, wait for the outage to pass.
+ * That is exactly wrong for a reviewer that can NEVER answer — the pipeline
+ * stalls indefinitely while each individual PR looks like it is merely waiting
+ * (#7660). These codes are how a caller tells the two apart.
+ *
+ * Vocabulary rather than service code so the route deciding 400-vs-502 and the
+ * service producing the codes read the SAME list, without the route pulling in
+ * the review service's closure to do it.
+ */
+export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze(['NO_MODEL', 'REVIEWER_UNAVAILABLE', 'REVIEWER_UNSUPPORTED']);
+export const isReviewerConfigFault = (code) => REVIEWER_CONFIG_FAULT_CODES.includes(code);
+
+/**
  * Vendors PortOS can spawn that are deliberately NOT reviewers, each mapped to
  * the reason. The roster above claims to cover every spawnable vendor; this is
  * the other half of that claim, and `reviewerConfig.test.js` fails on a

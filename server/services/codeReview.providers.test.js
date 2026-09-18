@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access } from 'node:fs/promises';
 import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cosValidation.js';
-import { resolveReviewerConfig, buildReviewWithArgs } from '../lib/reviewerConfig.js';
+import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
 import { buildLocalReviewerInstructions } from './cosTaskPrompts.js';
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('./providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
 vi.mock('../lib/aiToolkitState.js', () => ({ getAIToolkitInstance: () => ({}) }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn() }));
 vi.mock('../lib/cliProviderRun.js', () => ({ runCliProviderPrompt: vi.fn() }));
 vi.mock('./lmStudioManager.js', () => ({ getBaseUrl: vi.fn() }));
 vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities: vi.fn() }));
 
-const { getProviderById } = await import('./providers.js');
+const { getProviderById, listProviders } = await import('./providers.js');
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js');
-const { pickCodeReviewDefaults, runLocalCodeReview } = await import('./codeReview.js');
+const { pickCodeReviewDefaults, runLocalCodeReview, getProviderReviewUnsupported } = await import('./codeReview.js');
 
 const backend = 'provider:example-gpu';
 const provider = { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
@@ -25,6 +25,7 @@ const provider = { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled:
 beforeEach(() => {
   vi.clearAllMocks();
   getProviderById.mockResolvedValue(provider);
+  listProviders.mockResolvedValue([provider]);
   callProviderAISimple.mockResolvedValue({ text: 'NO FINDINGS' });
 });
 
@@ -65,7 +66,7 @@ describe('configured provider reviewers', () => {
 
   it.each([null, { ...provider, enabled: false }])('refuses a missing or disabled provider before inference', async record => {
     getProviderById.mockResolvedValue(record);
-    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false, code: 'REVIEWER_UNAVAILABLE' });
     expect(callProviderAISimple).not.toHaveBeenCalled();
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
@@ -98,8 +99,55 @@ describe('configured provider reviewers', () => {
 
   it('refuses an unsupported harness instead of spawning it with ordinary agent permissions', async () => {
     getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'custom-agent' });
-    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false, error: expect.stringContaining('no enforced tool-free') });
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({
+      ok: false, code: 'REVIEWER_UNSUPPORTED', error: expect.stringContaining('no enforced tool-free'),
+    });
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
     expect(callProviderAISimple).not.toHaveBeenCalled();
+  });
+
+  // #7660: a reviewer that can never answer used to be indistinguishable from
+  // one that timed out, so the claim gate waited out an outage with no end and
+  // every PR stalled looking like it was merely pending.
+  it('separates a configuration fault from a reviewer that ran and failed', async () => {
+    expect(isReviewerConfigFault('REVIEWER_UNSUPPORTED')).toBe(true);
+    expect(isReviewerConfigFault('REVIEWER_UNAVAILABLE')).toBe(true);
+    expect(isReviewerConfigFault('NO_MODEL')).toBe(true);
+    callProviderAISimple.mockResolvedValue({ error: 'upstream timed out' });
+    const ranAndFailed = await runLocalCodeReview({ backend, diff: 'example diff' });
+    expect(ranAndFailed.ok).toBe(false);
+    expect(isReviewerConfigFault(ranAndFailed.code)).toBe(false);
+  });
+
+  describe('getProviderReviewUnsupported', () => {
+    it('names only the enabled providers that could never run a tool-free review', async () => {
+      listProviders.mockResolvedValue([
+        provider,
+        { ...provider, id: 'hosted-harness', type: 'cli', command: 'custom-agent' },
+        { ...provider, id: 'switched-off', type: 'cli', command: 'custom-agent', enabled: false },
+      ]);
+      const unsupported = await getProviderReviewUnsupported();
+      // The capable provider is ABSENT rather than false, so "nobody fetched
+      // this map" and "nothing is wrong here" read the same to a picker.
+      expect(unsupported).toEqual({ 'provider:hosted-harness': 'REVIEWER_UNSUPPORTED' });
+      expect(unsupported['provider:example-gpu']).toBeUndefined();
+      // A disabled provider is already badged `disabled` by the picker's own
+      // provider-record check; reporting it here would badge one fact twice.
+      expect(unsupported['provider:switched-off']).toBeUndefined();
+    });
+
+    it('agrees with what the dispatch actually does, rather than keeping its own copy of the rule', async () => {
+      const harness = { ...provider, id: 'hosted-harness', type: 'cli', command: 'custom-agent' };
+      listProviders.mockResolvedValue([harness]);
+      getProviderById.mockResolvedValue(harness);
+      const warned = await getProviderReviewUnsupported();
+      const ran = await runLocalCodeReview({ backend: 'provider:hosted-harness', diff: 'example diff' });
+      expect(warned['provider:hosted-harness']).toBe(ran.code);
+    });
+
+    it('reports nothing when the provider store cannot be read', async () => {
+      listProviders.mockRejectedValue(new Error('provider store unreadable'));
+      expect(await getProviderReviewUnsupported()).toEqual({});
+    });
   });
 });

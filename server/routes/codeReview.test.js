@@ -3,10 +3,15 @@ import express from 'express'
 import { request } from '../lib/testHelper.js'
 import { errorMiddleware } from '../lib/errorHandler.js'
 
+// The route reads `isReviewerConfigFault` from the reviewer VOCABULARY module,
+// which stays unmocked here — the predicate deciding 400-vs-502 has to be the
+// real one, or this suite would still pass while the route and the service
+// disagreed about which codes are config faults (#7660).
 vi.mock('../services/codeReview.js', () => ({
   runLocalCodeReview: vi.fn(),
   getCodeReviewDefaults: vi.fn(),
   getReviewerCliInstalled: vi.fn(),
+  getProviderReviewUnsupported: vi.fn(),
 }))
 
 vi.mock('../services/settings.js', () => ({
@@ -37,6 +42,7 @@ beforeEach(() => {
     ollamaModel: null,
   })
   codeReviewSvc.getReviewerCliInstalled.mockResolvedValue({ claude: true, antigravity: false, codex: true, grok: true })
+  codeReviewSvc.getProviderReviewUnsupported.mockResolvedValue({})
 })
 
 describe('GET /api/code-review/defaults', () => {
@@ -45,6 +51,17 @@ describe('GET /api/code-review/defaults', () => {
     expect(res.status).toBe(200)
     expect(res.body.reviewers).toEqual(['copilot'])
     expect(res.body.installed).toEqual({ claude: true, antigravity: false, codex: true, grok: true })
+  })
+
+  // #7660: without this, a reviewer that can never satisfy the tool-free gate is
+  // invisible until it has silently blocked every PR the install opens.
+  it('reports the provider reviewers that could never run a tool-free review', async () => {
+    codeReviewSvc.getProviderReviewUnsupported.mockResolvedValue({ 'provider:hosted-harness': 'REVIEWER_UNSUPPORTED' })
+    const res = await request(makeApp()).get('/api/code-review/defaults')
+    expect(res.status).toBe(200)
+    expect(res.body.providerReviewUnsupported).toEqual({ 'provider:hosted-harness': 'REVIEWER_UNSUPPORTED' })
+    // Warn-only, exactly like `installed`: the reviewer list itself is untouched.
+    expect(res.body.reviewers).toEqual(['copilot'])
   })
 })
 
@@ -211,6 +228,24 @@ describe('POST /api/code-review/local', () => {
 
     expect(res.status).toBe(400)
     expect(res.body.error).toMatch(/No model configured/)
+  })
+
+  // A reviewer that can NEVER answer must not read as a transient outage: the
+  // claim gate answers a 502 by leaving the PR open to wait, so an unsupported
+  // reviewer would stall the merge pipeline indefinitely (#7660).
+  it.each(['REVIEWER_UNSUPPORTED', 'REVIEWER_UNAVAILABLE'])('returns 400 for the %s config fault', async (code) => {
+    codeReviewSvc.runLocalCodeReview.mockResolvedValue({
+      ok: false,
+      code,
+      error: 'This provider has no enforced tool-free review transport. Select its API mode or a supported reviewer harness.',
+    })
+
+    const res = await request(makeApp())
+      .post('/api/code-review/local')
+      .send({ backend: 'provider:hosted-harness', diff: 'diff --git a b' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/no enforced tool-free/)
   })
 
   it('returns 502 when the service returns { ok: false }', async () => {
