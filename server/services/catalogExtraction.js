@@ -21,7 +21,8 @@ import { randomUUID } from 'crypto';
 import { extractBible } from './bibleExtractor.js';
 import { runStagedLLM } from './stageRunner.js';
 import { BIBLE_KINDS, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS } from '../lib/storyBible.js';
-import { CATALOG_TYPES } from '../lib/catalogTypes.js';
+import { CATALOG_TYPES, canonicalTagKey } from '../lib/catalogTypes.js';
+import { isFactualSourceKind } from '../lib/catalogSourceKinds.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { catalogEvents } from './catalogEvents.js';
 import { getScrap, listChildScraps, listIngredientsForRef } from './catalogDB.js';
@@ -39,14 +40,6 @@ const BIBLE_TYPE_IDS = CATALOG_TYPES.filter((t) => t.extractionShape === 'bible'
 // prompt's JSON keys + the draft scaffolding key results by this plural.
 const lightDraftKey = (id) => `${id}s`;
 
-// Scrap source kinds whose text is the user's own lived capture rather than
-// invented fiction. A voice memo and a bridged brain record are first-person
-// by construction, so reading them through the fiction lens is exactly what
-// mints role tags (`MOM` / `DAD` / `NARRATOR`) out of a memoir. Phase 2 of
-// #7609 replaces this with the target universe's own `factual` flag, at which
-// point the source kind becomes the fallback rather than the only signal.
-const FACTUAL_SOURCE_KINDS = Object.freeze(new Set(['brain-bridge', 'voice-memo']));
-
 // Tags stamped on rows extracted under the factual lens. `factual` marks every
 // row as lived material; `real-person` additionally marks an extracted
 // character so "real people" stays filterable in the catalog. Stamped per RUN
@@ -57,39 +50,35 @@ const FACTUAL_TAG = 'factual';
 const REAL_PERSON_TAG = 'real-person';
 
 /**
- * Derive the extraction lens from a stored scrap row. Returns only the keys
- * that carry a value so a title-less paste renders exactly the prompt it
- * renders today.
+ * Derive the extraction lens from a stored scrap row. Empty strings (not
+ * omitted keys) are what keep the prompts' mustache sections closed, so a
+ * title-less paste renders exactly the prompt it renders today.
  *
  * @param {{ title?: string, sourceKind?: string }} scrap
- * @returns {{ title?: string, sourceKind?: string, factual?: boolean }}
+ * @returns {{ title: string, sourceKind: string, factual: boolean }}
  */
 function scrapExtractionContext(scrap) {
-  if (!scrap || typeof scrap !== 'object') return {};
-  const title = typeof scrap.title === 'string' ? scrap.title.trim() : '';
-  const sourceKind = typeof scrap.sourceKind === 'string' ? scrap.sourceKind.trim() : '';
-  const context = {};
-  if (title) context.title = title;
-  if (sourceKind) context.sourceKind = sourceKind;
-  if (FACTUAL_SOURCE_KINDS.has(sourceKind)) context.factual = true;
-  return context;
+  const trim = (value) => (typeof value === 'string' ? value.trim() : '');
+  const sourceKind = trim(scrap?.sourceKind);
+  return { title: trim(scrap?.title), sourceKind, factual: isFactualSourceKind(sourceKind) };
 }
 
-// Append a tag without mutating the extractor's entry or duplicating a tag the
-// model already emitted.
-const withTag = (entry, tag) => {
-  const tags = Array.isArray(entry?.tags) ? entry.tags : [];
-  if (tags.includes(tag)) return entry;
-  return { ...entry, tags: [...tags, tag] };
-};
-
-// Stamp the factual lens onto a sanitized entry list. A no-op under the fiction
-// lens, so every non-factual extraction keeps today's tags byte-for-byte.
-const stampFactualTags = (entries, { factual, isCharacter = false }) => {
-  if (!factual || !Array.isArray(entries)) return entries;
+/**
+ * Append tags to a sanitized entry list without mutating the entries or
+ * duplicating a tag the model already emitted. An empty tag list returns the
+ * list unchanged, so every fiction-lens extraction keeps today's tags
+ * byte-for-byte and allocates nothing.
+ */
+const stampTags = (entries, tags) => {
+  if (tags.length === 0) return entries;
   return entries.map((entry) => {
-    const tagged = withTag(entry, FACTUAL_TAG);
-    return isCharacter ? withTag(tagged, REAL_PERSON_TAG) : tagged;
+    const existing = Array.isArray(entry.tags) ? entry.tags : [];
+    // Compare by the catalog's own tag identity, so a model that emitted
+    // `Real-Person` or `factual ` doesn't put a visible duplicate in the
+    // review draft that `normalizeTags` would only collapse at persist time.
+    const seen = new Set(existing.map(canonicalTagKey));
+    const missing = tags.filter((tag) => !seen.has(canonicalTagKey(tag)));
+    return missing.length === 0 ? entry : { ...entry, tags: [...existing, ...missing] };
   });
 };
 
@@ -187,7 +176,7 @@ function sanitizeLightEntry(kind, raw) {
  * malformed response logs and yields empty arrays, mirroring extractBible's
  * sanitizeBibleList tolerance for missing keys.
  */
-async function extractIdeasScenesConcepts({ corpus, providerOverride, promptContext = {}, factual = false }) {
+async function extractIdeasScenesConcepts({ corpus, providerOverride, promptContext = {} }) {
   const result = await runStagedLLM('catalog-ideas-scenes-concepts', {
     ...promptContext,
     draftBody: corpus,
@@ -198,6 +187,8 @@ async function extractIdeasScenesConcepts({ corpus, providerOverride, promptCont
     source: 'catalog-extract-ideas-scenes-concepts',
   });
   const content = result?.content || {};
+  // Lived material is tagged `factual`; an invented-fiction run stamps nothing.
+  const lightTags = promptContext.factual ? [FACTUAL_TAG] : [];
   // One sanitized array per light type, keyed by plural draft key. Driven by
   // the registry so a new light type (with its prompt JSON key) is picked up
   // here without an extra line.
@@ -205,7 +196,7 @@ async function extractIdeasScenesConcepts({ corpus, providerOverride, promptCont
   for (const id of LIGHT_TYPE_IDS) {
     const key = lightDraftKey(id);
     const raw = Array.isArray(content[key]) ? content[key] : [];
-    out[key] = stampFactualTags(raw.map((r) => sanitizeLightEntry(id, r)).filter(Boolean), { factual });
+    out[key] = stampTags(raw.map((r) => sanitizeLightEntry(id, r)).filter(Boolean), lightTags);
   }
   return out;
 }
@@ -264,16 +255,14 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
 
   // The lens the scrap gives the model. `work.{title,kind,wordCount}` fills the
   // three slots every writers-room bible prompt already declares and that the
-  // catalog path used to render empty; `scrapTitle` / `sourceKind` fill the
-  // light stage's own Source block; `factual` gates the non-fiction sections in
-  // both families. Word count is measured against THIS corpus (a chunk's own
-  // length), not the parent's, so a chunked run never tells the model it is
-  // reading more text than it was handed.
-  const { title: scrapTitle = '', sourceKind = '', factual = false } = context;
+  // catalog path used to render empty — the light stage's Source block reads the
+  // same three rather than carrying aliases that can drift. `factual` gates the
+  // non-fiction sections in both families. Word count is measured against THIS
+  // corpus (a chunk's own length), not the parent's, so a chunked run never
+  // tells the model it is reading more text than it was handed.
+  const { title = '', sourceKind = '', factual = false } = context;
   const promptContext = {
-    work: { title: scrapTitle, kind: sourceKind, wordCount: countWords(corpus) },
-    scrapTitle,
-    sourceKind,
+    work: { title, kind: sourceKind, wordCount: countWords(corpus) },
     factual,
   };
 
@@ -295,7 +284,7 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
     emit({ type: 'stage', id: stage.id, status: 'running' });
     try {
       if (stage.id === LIGHT_STAGE_ID) {
-        const out = await extractIdeasScenesConcepts({ corpus, providerOverride, promptContext, factual });
+        const out = await extractIdeasScenesConcepts({ corpus, providerOverride, promptContext });
         const count = LIGHT_TYPE_IDS.reduce((n, id) => n + (out[lightDraftKey(id)]?.length || 0), 0);
         emit({ type: 'stage', id: stage.id, status: 'completed', count });
         return { id: stage.id, light: out, error: null };
@@ -308,10 +297,11 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
         providerOverride,
         source: `catalog-extract-${stage.id}`,
       });
-      const extracted = stampFactualTags(result.extracted, {
-        factual,
-        isCharacter: stage.kind === BIBLE_KIND.CHARACTER,
-      });
+      // A real person additionally earns `real-person`, which is what keeps
+      // them filterable apart from an invented cast.
+      const extracted = stampTags(result.extracted, factual
+        ? [FACTUAL_TAG, ...(stage.kind === BIBLE_KIND.CHARACTER ? [REAL_PERSON_TAG] : [])]
+        : []);
       emit({ type: 'stage', id: stage.id, status: 'completed', count: extracted.length });
       return { id: stage.id, extracted, error: null };
     } catch (err) {

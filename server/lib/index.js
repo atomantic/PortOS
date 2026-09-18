@@ -91,6 +91,7 @@ export * from './threejsTransform.js';
 // === Story & narrative ===
 export * as catalogBulkParsers from './catalogBulkParsers.js';
 export * from './catalogChunking.js';
+export * from './catalogSourceKinds.js';
 export * from './catalogTypes.js';
 export * as catalogUniverseTags from './catalogUniverseTags.js';
 export * from './canonPrompt.js';

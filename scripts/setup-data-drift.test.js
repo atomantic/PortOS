@@ -100,7 +100,7 @@ const EXPECTED_STAGE_NEW = {
   'writers-room-places.md': '5d323f7aea4c2658e7e29afae2bdb7a4',
   'writers-room-characters.md': '73ec5bbfdad5c62ec5d5c30f0940febf',
   'writers-room-objects.md': '10efde7fbb46b28223db03f38e7043e4',
-  'catalog-ideas-scenes-concepts.md': '243074821ebc58eec63e26d284101b29',
+  'catalog-ideas-scenes-concepts.md': 'e6cce39c76689ea9c5233f233cd0f153',
   'writers-room-evaluate.md': '995cfd92061b55730b0e081998e96f84',
   'cos-agent-briefing.md': 'a01c81d3a7f4ac0ca9e8d5137735c0e3',
   'universe-character-expand.md': '961b73ba6e50df5d49f0cc76505e50bd',

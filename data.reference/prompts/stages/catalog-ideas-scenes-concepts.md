@@ -4,12 +4,12 @@ You are a creative analyst surfacing reusable narrative fragments from raw autho
 
 You will return three arrays in a single JSON response: `ideas`, `scenes`, and `concepts`. The author has pasted prose, notes, or stream-of-consciousness into a personal creative catalog. They will review each candidate and selectively commit. Quality matters more than coverage — surface only what is genuinely reusable.
 
-{{#sourceKind}}
+{{#work.kind}}
 ## Source
 
-{{#scrapTitle}}- Title: {{scrapTitle}} — the author's own handle for this piece. Use it to read the text in context; do not extract it as an entry.
-{{/scrapTitle}}- Captured as: {{sourceKind}}
-{{/sourceKind}}
+{{#work.title}}- Title: {{work.title}} — the author's own handle for this piece. Use it to read the text in context; do not extract it as an entry.
+{{/work.title}}- Captured as: {{work.kind}}
+{{/work.kind}}
 
 ## Source text
 

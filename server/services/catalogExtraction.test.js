@@ -378,21 +378,6 @@ describe('catalogExtraction — extraction lens (#7609)', () => {
     bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
   });
 
-  it('threads the scrap title and source kind into BOTH prompt families', async () => {
-    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Kitchen table notes', sourceKind: 'paste' }));
-
-    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-
-    // Bible prompts declare {{work.title}} / {{work.kind}} / {{work.wordCount}};
-    // the catalog path used to render all three empty.
-    for (const call of bibleExtractor.extractBible.mock.calls) {
-      expect(call[0].context.work).toEqual({ title: 'Kitchen table notes', kind: 'paste', wordCount: 2 });
-    }
-    // The light stage has its own {{scrapTitle}} / {{sourceKind}} Source block.
-    const [, lightVars] = stageRunner.runStagedLLM.mock.calls[0];
-    expect(lightVars).toMatchObject({ scrapTitle: 'Kitchen table notes', sourceKind: 'paste' });
-  });
-
   it('leaves the lens off for an invented-fiction paste', async () => {
     catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Chapter one', sourceKind: 'paste' }));
     bibleExtractor.extractBible.mockResolvedValue({ extracted: [{ name: 'THE BARTENDER' }] });
@@ -407,19 +392,13 @@ describe('catalogExtraction — extraction lens (#7609)', () => {
     expect(out.ideas[0].tags).toEqual([]);
   });
 
-  it('raises the factual lens for a voice memo and a bridged brain record', async () => {
-    for (const sourceKind of ['voice-memo', 'brain-bridge']) {
-      vi.clearAllMocks();
-      stageRunner.runStagedLLM.mockResolvedValue(emptyLightResponse);
-      bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-      catalogDB.listChildScraps.mockResolvedValue([]);
-      catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Sunday', sourceKind }));
+  it.each(['voice-memo', 'brain-bridge'])('raises the factual lens for %s', async (sourceKind) => {
+    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Sunday', sourceKind }));
 
-      await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
 
-      expect(bibleExtractor.extractBible.mock.calls[0][0].context.factual).toBe(true);
-      expect(stageRunner.runStagedLLM.mock.calls[0][1].factual).toBe(true);
-    }
+    expect(bibleExtractor.extractBible.mock.calls[0][0].context.factual).toBe(true);
+    expect(stageRunner.runStagedLLM.mock.calls[0][1].factual).toBe(true);
   });
 
   it('stamps real-person on characters and factual on every row under the lens', async () => {
@@ -479,6 +458,10 @@ describe('catalogExtraction — extraction lens (#7609)', () => {
     await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
 
     const bibleVars = bibleExtractor.extractBible.mock.calls[0][0].context;
+    // Every bible kind is framed identically — one lens per scrap, not per stage.
+    for (const [args] of bibleExtractor.extractBible.mock.calls) {
+      expect(args.context.work).toEqual({ title: 'Kitchen table notes', kind: 'voice-memo', wordCount: 2 });
+    }
     const characters = applyTemplate(stagePrompt('writers-room-characters'), { ...bibleVars, draftBody: 'x' });
     // The framing block the catalog path used to render as three empty labels.
     expect(characters).toContain('- Title: Kitchen table notes');
@@ -487,6 +470,8 @@ describe('catalogExtraction — extraction lens (#7609)', () => {
     expect(characters).toContain('## Lens: non-fiction');
 
     const [, lightVars] = stageRunner.runStagedLLM.mock.calls[0];
+    // One vocabulary: the light template reads the same {{work.*}} slots the
+    // three bible templates declare, so the framing cannot drift between them.
     const light = applyTemplate(stagePrompt('catalog-ideas-scenes-concepts'), lightVars);
     expect(light).toContain('- Title: Kitchen table notes');
     expect(light).toContain('- Captured as: voice-memo');

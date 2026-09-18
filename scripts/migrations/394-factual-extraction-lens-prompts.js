@@ -32,7 +32,7 @@ export const NEW_SHIPPED_MD5 = {
   'writers-room-characters.md': '73ec5bbfdad5c62ec5d5c30f0940febf',
   'writers-room-places.md': '5d323f7aea4c2658e7e29afae2bdb7a4',
   'writers-room-objects.md': '10efde7fbb46b28223db03f38e7043e4',
-  'catalog-ideas-scenes-concepts.md': '243074821ebc58eec63e26d284101b29',
+  'catalog-ideas-scenes-concepts.md': 'e6cce39c76689ea9c5233f233cd0f153',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
@@ -42,7 +42,7 @@ const { applyMigration, up } = makePromptReplaceMigration({
   customizedHint: (filename) =>
     `   To upgrade it manually, diff data.reference/prompts/stages/${filename}\n` +
     `   against data/prompts/stages/${filename} and adopt the\n` +
-    '   "{{#factual}} / ## Lens: non-fiction" section (plus the {{#sourceKind}}\n' +
+    '   "{{#factual}} / ## Lens: non-fiction" section (plus the {{#work.kind}}\n' +
     '   "## Source" block on catalog-ideas-scenes-concepts.md). Without it,\n' +
     '   factual ingest keeps extracting real people as fictional role tags.',
 });
