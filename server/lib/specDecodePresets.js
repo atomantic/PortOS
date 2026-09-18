@@ -15,11 +15,10 @@
  * it appears only where the quant tag cannot discriminate the target, so a pin
  * that stops resolving is an error, not a cue to fall back to the hint.
  *
- * Not every preset is a PAIR. A preset whose `specType` drafts with nothing
- * (`none`, any `ngram-*`) carries an empty `draftModel` and is simply the
- * launch line for one checkpoint — which is what makes this list, not the
- * Ollama/LM Studio catalog, the right home for a model whose weights only
- * llama-server can load (Ternary Bonsai 2 below).
+ * A preset whose `specType` drafts with nothing (`none`, any `ngram-*`) carries
+ * an empty `draftModel`. That is what makes this list, rather than the
+ * Ollama/LM Studio catalog in `localLlmCatalog.js`, the right home for a model
+ * whose weights only llama-server can load (Ternary Bonsai 2 below).
  *
  * A file with no published single-file GGUF (the DSpark 8B block ships as a
  * tokenizer-less checkpoint that has to be converted against its target) simply
