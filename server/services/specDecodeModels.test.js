@@ -110,6 +110,25 @@ describe('pickGgufSibling', () => {
     expect(pickGgufSibling(model, { file: entry.file, quant: entry.quant, repo: entry.repo }))
       .toBe('Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf');
   });
+
+  // The Ternary Bonsai preset carries NO `file` pin, which is only correct while
+  // its quant hint discriminates. Its repo publishes two ternary packs whose tags
+  // differ by one leading letter (`PQ2_0` / `PTQ1_0`) next to a 53.8 GB `F16` — so
+  // a hint that fell through to the shortest name would fetch 46 GB of the wrong
+  // weights, and one matching loosely would fetch the 1-bit pack instead.
+  it('resolves the Ternary Bonsai 2 preset to PQ2_0, not PTQ1_0 or the 53.8 GB F16', () => {
+    const entry = specDecodePresets.findSpecDecodePreset('ternary-bonsai-2-27b').model;
+    const model = siblings(
+      'Ternary-Bonsai-2-27B-F16.gguf',
+      'Ternary-Bonsai-2-27B-PQ2_0.gguf',
+      'Ternary-Bonsai-2-27B-PTQ1_0.gguf',
+      'Ternary-Bonsai-2-27B-mmproj-BF16.gguf',
+      'Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
+    );
+    expect(entry.file).toBeUndefined();
+    expect(pickGgufSibling(model, { quant: entry.quant, repo: entry.repo }))
+      .toBe('Ternary-Bonsai-2-27B-PQ2_0.gguf');
+  });
 });
 
 describe('getSpecDecodePresetStatus', () => {
@@ -129,6 +148,15 @@ describe('getSpecDecodePresetStatus', () => {
     expect(q2k.draftModel.downloadable).toBe(true);
     // `custom` carries no paths, so it has no weights rows to render.
     expect(presets.find((p) => p.id === 'custom').model).toBeNull();
+    // A drafter-free preset is the MIXED state neither of the above produces:
+    // a populated, downloadable base beside a null drafter. That is what the
+    // launcher card reads to render one weights row instead of two and to leave
+    // its drafter field empty, so `custom`'s both-null row does not stand in
+    // for it.
+    const bonsai = presets.find((p) => p.id === 'ternary-bonsai-2-27b');
+    expect(bonsai.specType).toBe('none');
+    expect(bonsai.model.downloadable).toBe(true);
+    expect(bonsai.draftModel).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

@@ -167,6 +167,18 @@ can't fight your choice:
 
 Vocabulary reference: llama.cpp `docs/speculative.md`.
 
+### 2d. Presets that speculate with nothing at all
+
+A preset may also carry `--spec-type none` and no drafter, in which case the
+launcher is just PortOS's way of starting one checkpoint. That exists for models
+whose weights `llama-server` is the only local runtime able to load — the
+**Ternary Bonsai 2 27B** preset is the case it was added for. Its ternary packs
+(`PQ2_0`, `PTQ1_0`) need a build of PrismML's llama.cpp fork; Ollama and LM
+Studio both embed a stock llama.cpp and cannot run them, which is why that model
+has no entry in the Ollama/LM Studio catalog. Build recipe, PATH wiring, and the
+measured cost of using the fork's *prebuilt* macOS binary instead of a
+from-source build: [Ternary Bonsai 2 27B on Apple M5 Max](../research/2026-09-18-ternary-bonsai-2-27b.md).
+
 ### 3. Use in PortOS
 1. Navigate to **AI Providers** (`/ai`) or **Models → Runtimes**.
 2. Verify **OpenCode llama TUI** is enabled.
