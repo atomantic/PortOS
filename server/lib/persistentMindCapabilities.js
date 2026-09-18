@@ -157,7 +157,7 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
       'The server runs the agent-free resilience assay itself — the mind can ask for the check, never assert a passing verdict',
       'The promote envelope carries the foundation\'s body and drops its style layer, so an inheriting peer keeps its own cosmetics',
       'A candidate carrying machine identity, PII, or credential-shaped values is refused outright and never redacted and shipped',
-      'Promotion publishes only what this install authored; it cannot reach another install\'s foundations',
+      'Promotion publishes only what this install authored; a body copied from an inherited foundation is refused unless it is recorded as a derivation, and the edge back to the origin travels with it',
     ],
   }),
   Object.freeze({

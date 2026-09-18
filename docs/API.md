@@ -361,7 +361,7 @@ federate world records.
 | POST | `/eidoverse/world/augment` | Apply bounded, allowlisted world construction/role operations |
 | POST | `/eidoverse/world/say` | Send a bounded message as the PortOS CoS presence |
 | GET | `/eidoverse/world/foundations` | Local foundation ledger: ownership layer, provenance, derived lineage, any inheritance edge, and packaged promote candidates |
-| POST | `/eidoverse/world/foundations` | Record (or re-author) a local vernacular foundation — the layer is never caller-supplied |
+| POST | `/eidoverse/world/foundations` | Record (or re-author) a local vernacular foundation — the layer is never caller-supplied; a body copied from an inherited foundation is refused with 409 unless it carries a `derivedFrom: { originInstanceId, foundationId }` edge naming it |
 | GET | `/eidoverse/world/foundations/:id` | One foundation record, with its derived provenance lineage |
 | POST | `/eidoverse/world/foundations/:id/candidate` | Run the agent-free resilience assay and package a promote candidate; a refusal returns 200 with its reasons |
 | POST | `/eidoverse/world/foundations/:id/promote` | Re-package and publish a foundation into this install's shared baseline population; a refusal returns 200 with its reasons and moves nothing |

@@ -323,3 +323,59 @@ describe('foundation lineage (#7461)', () => {
     expect(foundationLineage(undefined)).toEqual([]);
   });
 });
+
+/**
+ * #7631: the derivation edge is the one field on the envelope that carries
+ * another install's sha256. Two things about it can only be pinned here — the
+ * digest must stay INSIDE the content-addressed fingerprint yet OUTSIDE the
+ * credential scan (`scrubSecretTokens` treats 64 unbroken hex characters as a
+ * leaked secret, so a naive scan refuses every derived foundation ever
+ * promoted), and a v1 envelope must keep verifying byte-for-byte.
+ */
+describe('the derived-from edge on a promote envelope (#7631)', () => {
+  const derivedFrom = {
+    type: 'derived-from',
+    originInstanceId: 'instance-origin-peer',
+    foundationId: 'tide-beacon',
+    fingerprint: 'b'.repeat(64),
+    derivedAt: NOW,
+  };
+
+  it('packages and re-verifies a derived foundation instead of refusing its edge as a credential', () => {
+    // The scan reads the edge's digest as credential-shaped on its own; the
+    // packaging path has to exclude that ONE field from the scan without
+    // excluding it from the hash.
+    expect(federationSafetyFindings({ derivedFrom })).toHaveLength(1);
+
+    const result = packageRecord({ derivedFrom });
+
+    expect(result.outcome).toBe('packaged');
+    expect(result.candidate.candidateVersion).toBe(EIDOVERSE_FOUNDATION_CANDIDATE_VERSION);
+    expect(result.candidate.derivedFrom).toEqual(derivedFrom);
+    expect(verifyFoundationCandidate(result.candidate, { requiredDisturbances: DISTURBANCES }).valid).toBe(true);
+  });
+
+  it('refuses a v1 envelope that carries an edge its version never hashed', () => {
+    const packaged = packageRecord({ derivedFrom }).candidate;
+    const backdated = { ...packaged, candidateVersion: 1 };
+    backdated.fingerprint = foundationCandidateFingerprint({ ...backdated, fingerprint: undefined });
+
+    const verified = verifyFoundationCandidate(backdated, { requiredDisturbances: DISTURBANCES });
+
+    expect(verified.valid).toBe(false);
+    expect(verified.reasons.join(' ')).toContain('candidateVersion 2');
+  });
+
+  it('carries an origin\'s own derivation edge onto the inheriting install, so the chain does not truncate to the last hop', () => {
+    const candidate = packageRecord({ derivedFrom }).candidate;
+
+    const inherited = foundationFromInheritedCandidate({
+      candidate, requiredDisturbances: DISTURBANCES, sourceInstanceId: 'instance-peer-relay',
+      localInstanceId: 'instance-this-install', now: '2026-03-05T00:00:00.000Z',
+    });
+
+    expect(inherited.outcome).toBe('inherited');
+    expect(inherited.foundation.derivedFrom).toEqual(derivedFrom);
+    expect(foundationLineage(inherited.foundation).map((event) => event.type)).toContain('derived');
+  });
+});

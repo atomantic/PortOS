@@ -79,8 +79,22 @@ export const EIDOVERSE_FOUNDATION_KINDS = Object.freeze(['schema', 'affordance',
 /** Wire stamp on the promote envelope. The peer pull/inherit slice gates on
  * this; it is deliberately separate from `PORTOS_SCHEMA_VERSIONS`, which
  * versions STORAGE layouts for the record-sync transports this payload does
- * not ride. */
-export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSION = 1;
+ * not ride.
+ *
+ * v2 added the `derived-from` edge (#7631), so an install that builds on a
+ * peer's foundation publishes "derived from A's X" instead of a byte-identical
+ * body stamped as its own work. */
+export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSION = 2;
+
+/**
+ * Every envelope version this install can still READ. A v1 envelope predates
+ * the derivation edge and is otherwise byte-for-byte the shape it always was,
+ * so refusing it would strand every not-yet-upgraded peer's whole offering for
+ * a field that is absent by construction — and, because the fingerprint is
+ * hashed over the envelope AS SENT, a v1 payload still verifies unchanged.
+ * Only `EIDOVERSE_FOUNDATION_CANDIDATE_VERSION` is ever WRITTEN.
+ */
+export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSIONS_ACCEPTED = Object.freeze([1, 2]);
 
 /**
  * Keys that are UNAMBIGUOUSLY cosmetic and so must never appear inside a
@@ -208,6 +222,46 @@ export const foundationInheritanceEdgeSchema = z.object({
 }).strict();
 
 /**
+ * The second provenance-graph edge (#7631): "this install AUTHORED this
+ * foundation, building on the copy it holds of `foundationId` from origin
+ * `originInstanceId`."
+ *
+ * Deliberately a separate field from `inheritance` rather than a variant of
+ * it, because the two make opposite claims about who did the work. An
+ * `inherited` record is a peer's foundation this install merely stores and may
+ * never re-share; a `derived` record IS this install's own work and promotes
+ * normally — it just carries, and publishes, the edge back to what it was
+ * built from. That is what makes "build on a peer's foundation" a one-click
+ * path that keeps attribution instead of a one-click path that erases it.
+ *
+ * `fingerprint` is the ORIGIN's candidate digest, copied off the inherited
+ * record this install actually holds rather than from the caller's claim (see
+ * `resolveFoundationDerivation`): the edge then attests what was inherited,
+ * not what someone asserted. `derivedAt` is stamped when the edge is first
+ * recorded and carried across later re-authorings of the same body, the same
+ * way `provenance.createdAt` is.
+ */
+export const foundationDerivationEdgeSchema = z.object({
+  type: z.literal('derived-from'),
+  originInstanceId: instanceIdSchema,
+  foundationId: foundationIdSchema,
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/, 'must be a sha256 hex digest'),
+  derivedAt: isoDateSchema,
+}).strict();
+
+/**
+ * What an AUTHOR may claim — which inherited foundation this new body builds
+ * on, and nothing more. The digest and the timestamp are deliberately absent:
+ * both are stamped from this install's own ledger, so no caller (a route body,
+ * a mind tool, a hand-edited file) can mint a derivation edge pointing at a
+ * fingerprint or a moment this install never saw.
+ */
+export const foundationDerivationClaimSchema = z.object({
+  originInstanceId: instanceIdSchema,
+  foundationId: foundationIdSchema,
+}).strict();
+
+/**
  * The fields a foundation carries in every one of its three shapes — the local
  * record, what a caller may author, and the promote envelope. Declared once so
  * a cap change cannot land on two of the three and silently diverge them.
@@ -248,6 +302,13 @@ export const eidoverseFoundationRecordSchema = z.object({
   // default — an additive nullable field on the machine-local ledger, so no
   // migration is owed (`docs/STORAGE.md`'s entry for `foundations.json`).
   inheritance: foundationInheritanceEdgeSchema.nullable().default(null),
+  // `null` on everything authored from nothing. Set on a record this install
+  // authored by building on a peer's inherited foundation (#7631), and copied
+  // onto a local copy of a peer's record whose own envelope carried one, so a
+  // third install reads the whole chain rather than just the last hop. Additive
+  // and nullable on a machine-local ledger, so no migration is owed — same
+  // argument as `inheritance` above.
+  derivedFrom: foundationDerivationEdgeSchema.nullable().default(null),
   updatedAt: isoDateSchema,
 }).strict();
 
@@ -262,12 +323,15 @@ export const eidoverseFoundationInputSchema = z.object({
   style: foundationStyleSchema.default({}),
   disclosure: foundationDisclosureSchema.default({}),
   authorKind: authorKindSchema.default('user'),
+  // A CLAIM, not the edge: see `foundationDerivationClaimSchema`.
+  derivedFrom: foundationDerivationClaimSchema.nullable().default(null),
 }).strict();
 
 /** The promote envelope — the only shape authorized to cross to a peer. */
 export const eidoverseFoundationCandidateSchema = z.object({
   ...foundationCoreShape,
-  candidateVersion: z.literal(EIDOVERSE_FOUNDATION_CANDIDATE_VERSION),
+  candidateVersion: z.union(EIDOVERSE_FOUNDATION_CANDIDATE_VERSIONS_ACCEPTED.map((version) => z.literal(version))),
+  derivedFrom: foundationDerivationEdgeSchema.nullable().default(null),
   foundationId: foundationIdSchema,
   provenance: foundationProvenanceSchema.extend({
     packagedAt: isoDateSchema,
@@ -388,6 +452,95 @@ function withoutFingerprint(candidate) {
 }
 
 /**
+ * The scan input: the hash input, minus the derivation edge's digest as well.
+ * A `derived-from` edge carries the ORIGIN's candidate fingerprint, which is
+ * another 64 unbroken hex characters and so trips `scrubSecretTokens` exactly
+ * as the envelope's own digest would. It is excluded from the SCAN only — it
+ * stays in the hash input, because the edge is part of what the fingerprint
+ * has to cover for a receiver to detect a re-attributed envelope.
+ */
+function scannableCandidate(candidate) {
+  const rest = withoutFingerprint(candidate);
+  if (!rest.derivedFrom || typeof rest.derivedFrom !== 'object') return rest;
+  const { fingerprint: _edgeDigest, ...edge } = rest.derivedFrom;
+  return { ...rest, derivedFrom: edge };
+}
+
+/**
+ * A content address for a foundation `body` alone — the same canonicalization
+ * the candidate fingerprint uses, so key order and whitespace never decide
+ * whether two bodies are "the same work".
+ */
+export function foundationBodyDigest(body) {
+  return createHash('sha256').update(canonicalStringify(body ?? {})).digest('hex');
+}
+
+/**
+ * Resolve the `derived-from` edge an authored foundation carries — or the
+ * reason this install refuses to record the body as its own work (#7631).
+ *
+ * The guard this replaces tested `record.inheritance`, a field the authoring
+ * path clears unconditionally: loading a peer's foundation into the authoring
+ * form and saving it produced a local record stamped with THIS install's
+ * origin and no edge at all, which promoted and re-shared cleanly. So the
+ * check moved off the mutable flag and onto the bytes: a body that
+ * canonicalizes to one this install holds under an inherited key is refused
+ * unless the author says what it is derived from.
+ *
+ * A claim is resolved against the inherited records this install ACTUALLY
+ * holds, and the resulting edge is stamped from that record. A claim naming a
+ * foundation this install never inherited is refused rather than recorded,
+ * which is what keeps the edge an attestation of local ledger state instead of
+ * a free-text assertion that travels to peers.
+ *
+ * An existing edge survives a re-authoring the same way `provenance` does: a
+ * derivation that a later edit diverges from is still the thing this work grew
+ * out of, and dropping the edge on the first byte changed would make erasure
+ * the easy path all over again.
+ *
+ * Pure: the caller supplies the inherited records, the previous edge, and the
+ * clock.
+ *
+ * @param {object} options
+ * @param {{ originInstanceId: string, foundationId: string }|null} options.claim
+ * @param {object} options.body - the body being authored
+ * @param {Array<object>} options.inheritedRecords - ledger records carrying an `inheritance` edge
+ * @param {object|null} [options.existingEdge] - the edge the record being re-authored already carried
+ * @param {string} options.now
+ * @returns {{ edge: object|null, refusal: string|null }}
+ */
+export function resolveFoundationDerivation({ claim, body, inheritedRecords, existingEdge = null, now }) {
+  const held = (inheritedRecords || []).filter((entry) => entry?.inheritance && entry?.provenance);
+  let edge = existingEdge || null;
+
+  if (claim) {
+    const source = held.find((entry) => entry.provenance.originInstanceId === claim.originInstanceId && entry.id === claim.foundationId);
+    if (!source) {
+      return { edge: null, refusal: `no foundation inherited from install ${claim.originInstanceId} is recorded under "${claim.foundationId}" — a derivation edge names a foundation this install actually holds` };
+    }
+    const carried = edge && edge.originInstanceId === claim.originInstanceId && edge.foundationId === claim.foundationId;
+    edge = {
+      type: 'derived-from',
+      originInstanceId: claim.originInstanceId,
+      foundationId: claim.foundationId,
+      fingerprint: source.inheritance.fingerprint,
+      derivedAt: carried ? edge.derivedAt : now,
+    };
+  }
+
+  const digest = foundationBodyDigest(body);
+  const copied = held.find((entry) => foundationBodyDigest(entry.body) === digest);
+  if (copied && !(edge && edge.originInstanceId === copied.provenance.originInstanceId && edge.foundationId === copied.id)) {
+    return {
+      edge: null,
+      refusal: `this body is byte-for-byte the foundation "${copied.id}" inherited from install ${copied.provenance.originInstanceId} — record it as a derivation of that foundation rather than as this install's own work`,
+    };
+  }
+
+  return { edge, refusal: null };
+}
+
+/**
  * Package a local vernacular foundation into a promote candidate.
  *
  * @param {object} options
@@ -432,6 +585,11 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
     disclosure: foundation.disclosure,
     provenance: { ...foundation.provenance, packagedAt: now, portosVersion },
     assay: foundation.assay,
+    // Published, not just remembered: a receiver that cannot see the edge has
+    // no way to tell this install's own work from a body it built on a peer's.
+    // Omitted rather than sent as `null` when there is none, so an undecorated
+    // v2 envelope hashes over exactly the fields a v1 one did.
+    ...(foundation.derivedFrom ? { derivedFrom: foundation.derivedFrom } : {}),
   };
   const candidate = { ...draft, fingerprint: foundationCandidateFingerprint(draft) };
 
@@ -466,10 +624,17 @@ export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
     reasons.push('fingerprint does not match the candidate body — the payload was altered after packaging');
   }
 
+  // A v1 envelope predates the derivation edge, so one that carries anyway is
+  // not an older peer — it is a payload assembled by hand. Refuse it rather
+  // than accept an edge under a version whose fingerprint never covered one.
+  if (envelope.candidateVersion === 1 && envelope.derivedFrom) {
+    reasons.push('a v1 promote envelope cannot carry a derived-from edge — the field was introduced at candidateVersion 2');
+  }
+
   const assayRefusal = assayEvidenceRefusal(envelope.assay, requiredDisturbances, envelope.contributionId);
   if (assayRefusal) reasons.push(assayRefusal);
 
-  const findings = [...styleLeakFindings(envelope.body), ...federationSafetyFindings(withoutFingerprint(envelope))];
+  const findings = [...styleLeakFindings(envelope.body), ...federationSafetyFindings(scannableCandidate(envelope))];
   for (const finding of findings) reasons.push(`${finding.path}: ${finding.detail} (${finding.code})`);
 
   return { valid: reasons.length === 0, reasons, findings };
@@ -567,6 +732,11 @@ export function foundationFromInheritedCandidate({ candidate, requiredDisturbanc
     assay: envelope.assay,
     candidate: envelope,
     promotedAt: null,
+    // Copied verbatim off the envelope (absent on a v1 one, which reads back
+    // as `null`): the origin told us its own work was derived from a third
+    // install's, and dropping that here would truncate the chain to the last
+    // hop on every install downstream of it.
+    derivedFrom: envelope.derivedFrom ?? null,
     inheritance: {
       type: 'inherited-from',
       originInstanceId: envelope.provenance.originInstanceId,
@@ -614,6 +784,19 @@ export function foundationLineage(record) {
       at: record.provenance.createdAt,
       authorKind: record.provenance.authorKind ?? null,
       originInstanceId: record.provenance.originInstanceId ?? null,
+    });
+  }
+
+  // Emitted alongside `authored` or `inherited` rather than instead of either:
+  // a derivation says what this work GREW OUT OF, which is a different fact
+  // from who authored the record and from which peer handed it over (#7631).
+  if (record.derivedFrom) {
+    events.push({
+      type: 'derived',
+      at: record.derivedFrom.derivedAt,
+      originInstanceId: record.derivedFrom.originInstanceId,
+      foundationId: record.derivedFrom.foundationId,
+      fingerprint: record.derivedFrom.fingerprint,
     });
   }
 
@@ -681,6 +864,7 @@ export function summarizeFoundation(record) {
       ? { originInstanceId: record.provenance.originInstanceId ?? null, authorKind: record.provenance.authorKind ?? null, createdAt: record.provenance.createdAt ?? null }
       : null,
     inheritance: record?.inheritance ?? null,
+    derivedFrom: record?.derivedFrom ?? null,
     lineage: foundationLineage(record),
   };
 }
