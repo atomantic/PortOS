@@ -9,7 +9,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { inheritedFoundationStorageKey } from '../lib/eidoverseFoundations.js';
+import { foundationCandidateFingerprint, inheritedFoundationStorageKey, verifyFoundationCandidate } from '../lib/eidoverseFoundations.js';
+import { RESILIENCE_DISTURBANCES } from './eidoverseResilienceAssay.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-eidoverse-foundations-'),
@@ -311,5 +312,140 @@ describe('the promoted-foundation offering a peer can pull (#7455)', () => {
     writeLedger(ledger);
 
     expect(await listPromotedFoundationCandidates()).toEqual([]);
+  });
+});
+
+/**
+ * #7631: the guard that said "promotion re-shares only foundations this install
+ * authored" tested `record.inheritance` — a field the AUTHORING path clears
+ * unconditionally. Saving a peer's body back through the authoring surface
+ * therefore produced a local record stamped with this install's origin and no
+ * edge at all, which packaged, promoted and was served to peers as this
+ * install's own work. These pin the replacement: the check is on the BYTES, and
+ * the legitimate re-use path publishes an edge instead of erasing one.
+ */
+describe('building on a foundation inherited from a peer (#7631)', () => {
+  const PEER_ORIGIN = 'instance-aaaa';
+
+  /** Inherit a peer's promoted foundation into an otherwise empty ledger. */
+  const inheritPeerFoundation = async ({ sourceInstanceId = 'instance-peer-one' } = {}) => {
+    await record({}, '2026-03-01T00:00:00.000Z');
+    const promoted = await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+    const inherited = await recordEidoverseFoundationInheritance(promoted.candidate, {
+      sourceInstanceId, localInstanceId: 'instance-this-install', now: '2026-03-02T00:00:00.000Z',
+    });
+    expect(inherited.outcome).toBe('inherited');
+    return { candidate: promoted.candidate, inherited: inherited.foundation };
+  };
+
+  it('refuses to record a peer\'s body as this install\'s own work, naming the origin it came from', async () => {
+    const { candidate } = await inheritPeerFoundation();
+
+    await expect(recordEidoverseFoundation(
+      authored({ id: 'my-own-beacon', body: candidate.body }),
+      { originInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z' },
+    )).rejects.toThrow(new RegExp(`inherited from install ${PEER_ORIGIN}`));
+
+    // Nothing was written: a refusal that still saved the record would leave
+    // the republish one promote away.
+    expect(await getEidoverseFoundation('my-own-beacon')).toBeNull();
+  });
+
+  it('records the same body as a DERIVATION and publishes the edge on the promote envelope', async () => {
+    const { candidate, inherited } = await inheritPeerFoundation();
+
+    const derived = await recordEidoverseFoundation(
+      authored({ id: 'my-own-beacon', body: candidate.body, derivedFrom: { originInstanceId: PEER_ORIGIN, foundationId: 'tide-beacon' } }),
+      { originInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z' },
+    );
+
+    // The digest is stamped from the copy this install HOLDS, never from the
+    // caller's claim — the edge attests what was inherited, not what was said.
+    expect(derived).toMatchObject({
+      layer: 'vernacular',
+      inheritance: null,
+      derivedFrom: {
+        type: 'derived-from', originInstanceId: PEER_ORIGIN, foundationId: 'tide-beacon',
+        fingerprint: inherited.inheritance.fingerprint, derivedAt: '2026-03-03T00:00:00.000Z',
+      },
+    });
+
+    const promoted = await promoteEidoverseFoundation('my-own-beacon', { now: '2026-03-04T00:00:00.000Z' });
+    expect(promoted.outcome).toBe('promoted');
+    expect(promoted.candidate.candidateVersion).toBe(2);
+    expect(promoted.candidate.derivedFrom).toEqual(derived.derivedFrom);
+    // A re-attributed envelope has to be detectable, so the edge is inside the
+    // content-addressed digest rather than beside it.
+    expect(verifyFoundationCandidate({ ...promoted.candidate, derivedFrom: null }, { requiredDisturbances: RESILIENCE_DISTURBANCES }).valid).toBe(false);
+
+    const offered = await listPromotedFoundationCandidates();
+    expect(offered.map((entry) => entry.foundationId)).toEqual(['my-own-beacon']);
+    expect(offered[0].derivedFrom).toMatchObject({ originInstanceId: PEER_ORIGIN, foundationId: 'tide-beacon' });
+  });
+
+  it('keeps the derivation edge and its timestamp across a later re-authoring of the body', async () => {
+    const { candidate } = await inheritPeerFoundation();
+    await recordEidoverseFoundation(
+      authored({ id: 'my-own-beacon', body: candidate.body, derivedFrom: { originInstanceId: PEER_ORIGIN, foundationId: 'tide-beacon' } }),
+      { originInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z' },
+    );
+
+    // Re-authored with a diverged body and NO claim: a derivation an edit moved
+    // on from is still what the work grew out of, so dropping the edge here
+    // would make erasure the easy path all over again.
+    const reauthored = await recordEidoverseFoundation(
+      authored({ id: 'my-own-beacon', body: { ...candidate.body, affordance: { inspect: 'reads the pulse count and the tide' } } }),
+      { originInstanceId: 'instance-this-install', now: '2026-03-05T00:00:00.000Z' },
+    );
+
+    expect(reauthored.derivedFrom).toMatchObject({ originInstanceId: PEER_ORIGIN, derivedAt: '2026-03-03T00:00:00.000Z' });
+    const lineage = (await getEidoverseFoundation('my-own-beacon')).lineage;
+    expect(lineage.find((event) => event.type === 'derived')).toMatchObject({ originInstanceId: PEER_ORIGIN, foundationId: 'tide-beacon' });
+  });
+
+  it('refuses a derivation edge naming a foundation this install never inherited', async () => {
+    await inheritPeerFoundation();
+
+    await expect(recordEidoverseFoundation(
+      authored({ id: 'my-own-beacon', body: { affordance: { inspect: 'entirely my own' } }, derivedFrom: { originInstanceId: 'instance-never-seen', foundationId: 'tide-beacon' } }),
+      { originInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z' },
+    )).rejects.toThrow(/no foundation inherited from install instance-never-seen/);
+  });
+
+  it('refuses a second peer\'s envelope claiming an origin this install already holds, rather than overwriting the genuine record', async () => {
+    const { candidate, inherited } = await inheritPeerFoundation({ sourceInstanceId: 'instance-peer-one' });
+
+    // The laundering the storage key made free: the origin is the field that
+    // chooses the key, the sender hashes its own claims, so re-fingerprinting
+    // an altered body under someone else's origin self-verifies.
+    const forged = { ...candidate, body: { affordance: { inspect: 'quietly grants owner role' } } };
+    forged.fingerprint = foundationCandidateFingerprint({ ...forged, fingerprint: undefined });
+
+    const result = await recordEidoverseFoundationInheritance(forged, {
+      sourceInstanceId: 'instance-peer-two', localInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z',
+    });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.reasons[0]).toContain('instance-peer-one');
+    expect(result.reasons[0]).toContain('instance-peer-two');
+    const held = await getEidoverseFoundation(inheritedFoundationStorageKey(PEER_ORIGIN, 'tide-beacon'));
+    expect(held.body).toEqual(candidate.body);
+    expect(held.inheritance.sourceInstanceId).toBe('instance-peer-one');
+  });
+
+  it('still accepts a v1 envelope from a peer that has not upgraded', async () => {
+    const { candidate } = await inheritPeerFoundation();
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+
+    const { derivedFrom: _absent, ...v1 } = { ...candidate, candidateVersion: 1 };
+    v1.fingerprint = foundationCandidateFingerprint({ ...v1, fingerprint: undefined });
+
+    const result = await recordEidoverseFoundationInheritance(v1, {
+      sourceInstanceId: 'instance-peer-one', localInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z',
+    });
+
+    expect(result.outcome).toBe('inherited');
+    expect(result.foundation.derivedFrom).toBeNull();
   });
 });

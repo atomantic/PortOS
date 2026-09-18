@@ -51,7 +51,14 @@ const EMPTY_DRAFT = Object.freeze({
   id: '', kind: 'affordance', title: '', summary: '', contributionId: '',
   body: '{\n  "affordance": {}\n}', style: '{}',
   requires: '', effects: '', license: '', notes: '',
+  // `{ originInstanceId, foundationId }` once this draft builds on a peer's
+  // inherited foundation — see `draftFromFoundation` (#7631).
+  derivedFrom: null,
 });
+
+/** Slug cap in `foundationIdSchema`; a derived id is trimmed to fit. */
+const FOUNDATION_ID_MAX = 64;
+const DERIVED_ID_SUFFIX = '-derived';
 
 /** Comma-separated authoring input as the array the disclosure schema wants. */
 const splitList = (value) => value.split(',').map((entry) => entry.trim()).filter(Boolean);
@@ -74,8 +81,29 @@ function parseJsonObject(text, label) {
   return { value: parsed };
 }
 
+/**
+ * A new local id for a draft built on a peer's foundation. Keeping the
+ * inherited id would re-author (or create) a LOCAL record under the same name,
+ * which is how a peer's work used to end up promoted as this install's own.
+ */
+const derivedFoundationId = (id) => `${String(id).slice(0, FOUNDATION_ID_MAX - DERIVED_ID_SUFFIX.length)}${DERIVED_ID_SUFFIX}`;
+
+/**
+ * Load a foundation into the authoring form.
+ *
+ * For a LOCAL row this is a plain re-author: same id, same everything. For an
+ * INHERITED row it is a DERIVATION (#7631) — a new local id plus the
+ * `derivedFrom` edge naming what it was built on, which the server resolves
+ * against the copy this install actually holds and publishes on the promote
+ * envelope. Re-use stays one click; re-use that erases the origin does not
+ * exist. The inherited `id` is deliberately not carried over: the acceptance
+ * test for this change asserts exactly that.
+ */
 const draftFromFoundation = (foundation) => ({
-  id: foundation.id,
+  id: foundation.inheritance ? derivedFoundationId(foundation.id) : foundation.id,
+  derivedFrom: foundation.inheritance
+    ? { originInstanceId: foundation.inheritance.originInstanceId, foundationId: foundation.id }
+    : null,
   kind: foundation.kind,
   title: foundation.title,
   summary: foundation.summary,
@@ -154,9 +182,26 @@ function InheritedFromBadge({ inheritance }) {
   );
 }
 
+/** This install's own work, built on a peer's foundation — the opposite claim
+ * to `InheritedFromBadge`'s, and the one that keeps attribution when somebody
+ * re-uses what a peer promoted (#7631). */
+function DerivedFromBadge({ derivedFrom }) {
+  if (!derivedFrom) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-port-border bg-port-bg px-2 py-0.5 text-xs text-gray-400"
+      title={`Built on "${derivedFrom.foundationId}" from instance ${derivedFrom.originInstanceId}`}
+    >
+      <GitFork size={12} aria-hidden="true" />
+      Derived
+    </span>
+  );
+}
+
 const LINEAGE_COPY = Object.freeze({
   authored: (event) => `Authored (${event.authorKind || 'unknown'})`,
   inherited: (event) => `Inherited from instance ${event.originInstanceId}`,
+  derived: (event) => `Derived from "${event.foundationId}" on instance ${event.originInstanceId}`,
   assayed: (event) => (event.pass ? 'Agent-free assay passed' : 'Agent-free assay failed'),
   packaged: () => 'Promote candidate packaged',
   promoted: () => 'Promoted to the shared baseline',
@@ -260,6 +305,9 @@ export default function EidoverseFoundationsPanel() {
       contributionId: draft.contributionId.trim(),
       body: body.value,
       style: style.value,
+      // Omitted rather than sent as `null` when absent: the field is optional
+      // on the input schema, and an explicit `null` is the same thing to it.
+      ...(draft.derivedFrom ? { derivedFrom: draft.derivedFrom } : {}),
       disclosure: {
         requires: splitList(draft.requires),
         effects: splitList(draft.effects),
@@ -324,6 +372,7 @@ export default function EidoverseFoundationsPanel() {
                       <h4 className="font-medium text-white">{foundation.title}</h4>
                       <LayerBadge layer={foundation.layer} />
                       <InheritedFromBadge inheritance={foundation.inheritance} />
+                      <DerivedFromBadge derivedFrom={foundation.derivedFrom} />
                       <span className="rounded-full border border-port-border px-2 py-0.5 text-xs text-gray-400">{foundation.kind}</span>
                     </div>
                     <p className="mt-1 text-sm text-gray-400">{foundation.summary}</p>
@@ -386,8 +435,15 @@ export default function EidoverseFoundationsPanel() {
                     </p>
                     <pre className="max-h-32 overflow-auto rounded-lg bg-port-bg p-3 text-xs text-gray-300">{JSON.stringify(foundation.style, null, 2)}</pre>
                     <button type="button" className={secondaryButton} onClick={() => setDraft(draftFromFoundation(foundation))}>
-                      Load into the form below
+                      {foundation.inheritance ? 'Build on this in the form below' : 'Load into the form below'}
                     </button>
+                    {foundation.inheritance && (
+                      <p className="text-xs text-gray-500">
+                        Loads a new local id and records a derivation edge back to instance{' '}
+                        {foundation.inheritance.originInstanceId}, which travels with the foundation if you
+                        promote it. Saving this body unchanged as your own work is refused.
+                      </p>
+                    )}
                   </div>
                 )}
               </li>
@@ -403,6 +459,13 @@ export default function EidoverseFoundationsPanel() {
           both described the previous body. A foundation already in the shared baseline returns to local when
           you edit it, so the new body can be promoted in its turn.
         </p>
+        {draft.derivedFrom && (
+          <p className="mt-3 rounded-lg border border-port-accent/40 bg-port-accent/5 p-3 text-sm text-gray-300" role="status">
+            Building on <code className="text-gray-200">{draft.derivedFrom.foundationId}</code> from instance{' '}
+            <code className="text-gray-200">{draft.derivedFrom.originInstanceId}</code>. Recording this keeps the
+            edge back to that install, and promoting it publishes the edge rather than your name alone.
+          </p>
+        )}
         <form className="mt-4 space-y-3" onSubmit={submitDraft}>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>

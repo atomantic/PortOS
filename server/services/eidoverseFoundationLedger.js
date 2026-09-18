@@ -13,6 +13,14 @@
  * which lands directly at `baseline` and carries an `inherited-from` edge
  * rather than this install's own authorship.
  *
+ * Between the two sits DERIVATION (#7631): a record this install authored by
+ * building on an inherited copy. It is local work — it packages and promotes
+ * like any other — but it carries, and publishes, a `derived-from` edge back to
+ * the origin. `recordEidoverseFoundation()` refuses a body that matches an
+ * inherited one and names no such edge, which is what closed the path from
+ * 'load a peer's foundation into the authoring form' to 're-share it as this
+ * install's own work'.
+ *
  * **The promote gate runs the agent-free assay; it never accepts a verdict.**
  * `packageEidoverseFoundationCandidate()` resolves the foundation's declared
  * contribution by ID through `eidoverseResilienceContributions.js`, replays it
@@ -45,8 +53,10 @@ import {
   foundationLineage,
   inheritedFoundationStorageKey,
   packageFoundationCandidate,
+  resolveFoundationDerivation,
   verifyFoundationCandidate,
 } from '../lib/eidoverseFoundations.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { RESILIENCE_DISTURBANCES, runResilienceAssay } from './eidoverseResilienceAssay.js';
 import { findContributionById } from './eidoverseResilienceContributions.js';
 
@@ -176,6 +186,22 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
   return withLedgerLock(async () => {
     const foundations = await readFoundations();
     const existing = foundations[authored.id] || null;
+    // The republish guard (#7631). `inheritance` below is a field THIS path
+    // clears, so it could never have stopped a peer's foundation being saved
+    // back through the authoring surface and promoted as local work; the body
+    // itself is what gets checked, against every inherited copy this install
+    // holds. A refusal is thrown rather than returned because both callers —
+    // the route and the mind tool — treat this function's return value as the
+    // recorded foundation, and a verdict shape would make "refused" look like
+    // a saved record to anything that did not read the new field.
+    const derivation = resolveFoundationDerivation({
+      claim: authored.derivedFrom,
+      body: authored.body,
+      inheritedRecords: Object.values(foundations),
+      existingEdge: existing?.derivedFrom || null,
+      now,
+    });
+    if (derivation.refusal) throw new ServerError(derivation.refusal, { status: 409 });
     const record = {
       id: authored.id,
       layer: DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
@@ -195,6 +221,7 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
       // `inheritedFoundationStorageKey()`'s namespace, so it can never
       // overwrite (or be confused with) a copy pulled from a peer.
       inheritance: null,
+      derivedFrom: derivation.edge,
       updatedAt: now,
     };
     foundations[authored.id] = record;
@@ -354,7 +381,30 @@ export async function recordEidoverseFoundationInheritance(candidate, { sourceIn
 
   return withLedgerLock(async () => {
     const foundations = await readFoundations();
-    const key = inheritedFoundationStorageKey(built.foundation.provenance.originInstanceId, built.foundation.id);
+    const originInstanceId = built.foundation.provenance.originInstanceId;
+    const key = inheritedFoundationStorageKey(originInstanceId, built.foundation.id);
+    // The storage key is chosen by `provenance.originInstanceId` — a field the
+    // SENDER wrote and hashed into its own fingerprint, so re-fingerprinting an
+    // altered origin costs a forger nothing and `verifyFoundationCandidate()`
+    // (which only checks self-consistency) cannot see it. Without this check a
+    // peer offering an envelope that claims ANOTHER install's origin silently
+    // replaced this install's genuine copy of that install's foundation (#7631).
+    //
+    // Divergence is the whole signal: `listPromotedFoundationCandidates()`
+    // filters out inherited records, so no shipped install re-shares a
+    // foundation it did not author, and a genuine record under this key can
+    // therefore only ever have come from the origin itself. Re-offering from
+    // the SAME peer stays an ordinary update.
+    const held = foundations[key];
+    if (held?.inheritance && held.inheritance.sourceInstanceId !== sourceInstanceId) {
+      console.warn(`⚠️ Eidoverse foundation "${built.foundation.id}" attributed to origin ${originInstanceId} is already held from peer ${held.inheritance.sourceInstanceId} — refusing the copy offered by peer ${sourceInstanceId} rather than overwriting it`);
+      return {
+        outcome: 'refused',
+        foundation: null,
+        reasons: [`this install already holds "${built.foundation.id}" from origin ${originInstanceId} by way of peer ${held.inheritance.sourceInstanceId}; peer ${sourceInstanceId} offered a different copy under that same origin — refusing rather than overwriting the record already attributed to it`],
+        findings: [],
+      };
+    }
     foundations[key] = built.foundation;
     await writeFoundations(foundations);
     return { outcome: 'inherited', foundation: { ...built.foundation, lineage: foundationLineage(built.foundation) }, reasons: [], findings: [] };

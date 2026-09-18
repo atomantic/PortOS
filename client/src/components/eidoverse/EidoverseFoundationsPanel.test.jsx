@@ -41,6 +41,21 @@ const foundation = (overrides = {}) => ({
   ...overrides,
 });
 
+/** A local copy of a peer's promoted foundation, as the list endpoint serves it. */
+const inheritedFoundation = () => foundation({
+  layer: 'baseline',
+  provenance: { originInstanceId: 'instance-origin-peer', authorKind: 'mind', createdAt: '2026-03-01T00:00:00.000Z' },
+  inheritance: {
+    type: 'inherited-from', originInstanceId: 'instance-origin-peer', foundationId: 'tide-beacon',
+    fingerprint: 'a'.repeat(64), packagedAt: '2026-03-01T01:00:00.000Z',
+    sourceInstanceId: 'instance-relay-peer', inheritedAt: '2026-03-04T05:06:07.000Z',
+  },
+  lineage: [
+    { type: 'inherited', at: '2026-03-04T05:06:07.000Z', originInstanceId: 'instance-origin-peer', sourceInstanceId: 'instance-relay-peer' },
+    { type: 'assayed', at: '2026-03-01T00:30:00.000Z', pass: true },
+  ],
+});
+
 const listing = (foundations, counts) => ({
   foundations,
   counts: counts || { vernacular: foundations.length, baseline: 0, candidates: 0 },
@@ -119,19 +134,7 @@ describe('the Eidoverse foundations promote panel', () => {
   });
 
   it('marks a local copy of a peer foundation as Inherited and hides the promote/run-assay actions a re-share would need (#7461)', async () => {
-    const inherited = foundation({
-      layer: 'baseline',
-      provenance: { originInstanceId: 'instance-origin-peer', authorKind: 'mind', createdAt: '2026-03-01T00:00:00.000Z' },
-      inheritance: {
-        type: 'inherited-from', originInstanceId: 'instance-origin-peer', foundationId: 'tide-beacon',
-        fingerprint: 'a'.repeat(64), packagedAt: '2026-03-01T01:00:00.000Z',
-        sourceInstanceId: 'instance-relay-peer', inheritedAt: '2026-03-04T05:06:07.000Z',
-      },
-      lineage: [
-        { type: 'inherited', at: '2026-03-04T05:06:07.000Z', originInstanceId: 'instance-origin-peer', sourceInstanceId: 'instance-relay-peer' },
-        { type: 'assayed', at: '2026-03-01T00:30:00.000Z', pass: true },
-      ],
-    });
+    const inherited = inheritedFoundation();
     listEidoverseFoundations.mockResolvedValue(listing([inherited], { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }));
     getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
     await renderPanel();
@@ -142,5 +145,38 @@ describe('the Eidoverse foundations promote panel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText(/Inherited from instance instance-origin-peer/)).toBeInTheDocument();
+  });
+
+  /**
+   * #7631: 'Load into the form below' sat OUTSIDE the guard that hides Promote
+   * and Run assay, and copied the inherited id verbatim. Saving the form then
+   * wrote a LOCAL record under that id with this install's own origin and no
+   * edge, which promoted and was served to peers as this install's own work.
+   */
+  it('turns re-use of an inherited foundation into a derivation instead of a copy under the peer\'s own id (#7631)', async () => {
+    listEidoverseFoundations.mockResolvedValue(listing([inheritedFoundation()], { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }));
+    getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
+    recordEidoverseFoundation.mockResolvedValue({ success: true });
+    await renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build on this in the form below' }));
+
+    // The inherited id is NOT reused: that id is what made the copy look like
+    // a re-author of this install's own foundation.
+    const idField = screen.getByLabelText('Id (lowercase slug)');
+    expect(idField.value).not.toBe('tide-beacon');
+    expect(idField.value).toBe('tide-beacon-derived');
+    expect(screen.getByText(/Building on/)).toBeInTheDocument();
+
+    await act(async () => { fireEvent.submit(idField.closest('form')); });
+
+    expect(recordEidoverseFoundation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'tide-beacon-derived',
+        derivedFrom: { originInstanceId: 'instance-origin-peer', foundationId: 'tide-beacon' },
+      }),
+      expect.anything(),
+    );
   });
 });
