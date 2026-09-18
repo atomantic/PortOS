@@ -109,3 +109,12 @@ describe('linkifyText resolver', () => {
     expect(screen.getByText('Closes #7640')).toBeInTheDocument();
   });
 });
+
+it('refuses a resolver destination that would not pass as a markdown link href', () => {
+  // The resolver is caller-supplied, so a `javascript:`/`data:` destination must
+  // not become an anchor just because it arrived through a different door.
+  const hostile = (text) => [{ ref: text, url: 'javascript:alert(1)' }];
+  render(<MarkdownOutput content="click me" linkifyText={hostile} />);
+  expect(screen.queryByRole('link')).toBeNull();
+  expect(screen.getByText('click me')).toBeInTheDocument();
+});

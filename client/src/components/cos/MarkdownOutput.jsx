@@ -22,11 +22,17 @@ function renderText(text, linkifyText, key) {
   // The common case by far: nothing to link. Hand back the bare string so the
   // no-reference path costs exactly what it did before the resolver existed.
   if (!segments || (segments.length === 1 && typeof segments[0] === 'string')) return [text];
-  return segments.map((seg, i) => (
-    seg?.url
-      ? <a key={`${key}-${i}`} href={seg.url} className={LINK_CLASS} target="_blank" rel="noopener noreferrer">{seg.ref}</a>
-      : seg
-  ));
+  return segments.map((seg, i) => {
+    // `safeSrc` for the same reason a markdown link's href gets it: the
+    // resolver is supplied by the caller, and a `javascript:`/`data:`
+    // destination must not become an anchor just because it arrived through a
+    // different door. A rejected destination degrades to the literal text.
+    const href = seg?.url ? safeSrc(seg.url) : null;
+    if (!seg?.url) return seg;
+    return href
+      ? <a key={`${key}-${i}`} href={href} className={LINK_CLASS} target="_blank" rel="noopener noreferrer">{seg.ref}</a>
+      : seg.ref;
+  });
 }
 
 function parseInline(text, linkifyText) {

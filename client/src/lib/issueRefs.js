@@ -36,7 +36,8 @@
 // A qualified `owner/repo#12` is deliberately NOT matched: the stamped base
 // names one repository and cannot be retargeted at another, so the honest
 // outcome is plain text rather than a same-numbered issue in the wrong repo.
-// The `\/` in the lookbehind is what declines it — the `#` there follows `o`.
+// No extra rule is needed: the `#` in `slashdo#12` follows a word character,
+// which the lookbehind already rejects.
 const ISSUE_REF_RE = /(?<![\w#&/:=-])#([1-9]\d{0,4})(?!\w)/g;
 
 /**
@@ -48,8 +49,9 @@ const ISSUE_REF_RE = /(?<![\w#&/:=-])#([1-9]\d{0,4})(?!\w)/g;
  *
  * @param {string} text
  * @param {string|null|undefined} issueUrlBase — `agent.metadata.repoIssueUrl`
- * @returns {Array<string | { ref: string, url: string }>} the input as a single
- *   string when there is no tracker to resolve against, or nothing to link.
+ * @returns {Array<string | { ref: string, url: string }>} a single-element
+ *   array holding `text` unchanged when there is no tracker to resolve
+ *   against, or nothing in the text to link.
  */
 export function splitIssueRefs(text, issueUrlBase) {
   // `indexOf` before the regex: the overwhelming majority of text runs in a
