@@ -171,6 +171,27 @@ export default function BibleTab({
           </div>
         </div>
 
+        {/* Factual/fiction axis (#7616). Drives how the catalog extractor reads
+            material captured into this world — lived record vs invented story.
+            Part of the draft, so it saves with the normal Save action. */}
+        <div className="flex items-start gap-2">
+          <input
+            id="world-factual"
+            type="checkbox"
+            checked={draft.factual === true}
+            onChange={(e) => updateDraft({ factual: e.target.checked })}
+            className="mt-0.5 h-4 w-4 accent-port-accent"
+          />
+          <div className="min-w-0">
+            <label htmlFor="world-factual" className="text-xs text-gray-300">
+              This is a real-world universe
+            </label>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              Its people and places are real. Captured text is read as lived record, not invented story material.
+            </p>
+          </div>
+        </div>
+
         {/* Persisted per-universe link (#4188): the pick lives on the record
             (`moodBoardId`) and rides the normal draft Save — not localStorage —
             so it survives reload, is per-universe, and syncs to peers. */}

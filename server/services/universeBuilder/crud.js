@@ -89,6 +89,8 @@ export async function listUniverseSummaries() {
       // Importer only needs a one-line subtitle, never the full starter treatment.
       starterPrompt: trimTo(u.starterPrompt, LOGLINE_MAX).trim(),
       origin: u.origin, createdAt: u.createdAt, updatedAt: u.updatedAt,
+      // Factual/fiction axis (#7616) — the list badges a real-world universe.
+      factual: u.factual === true,
       canonCount: row.legacyRecord
         ? u.characters.length + u.places.length + u.objects.length
         : row.canonCount,
@@ -290,6 +292,9 @@ export async function createUniverse(input = {}) {
       ephemeral: input.ephemeral === true,
       // Importer-orphan marker (issue #727) — see sanitizeTemplate.
       importDraft: input.importDraft === true,
+      // Factual/fiction axis (#7616) — see sanitizeTemplate. Persisted only
+      // when true, so a fiction universe's on-disk shape is unchanged.
+      factual: input.factual === true,
     });
     // Persist through the facade (backend-agnostic). We're inside the per-id
     // queue, and writeRecord does NOT re-queue, so this can't deadlock.
@@ -519,6 +524,11 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
       // promotion via `{ importDraft: false }`; the sanitizer drops every
       // non-`true` value back to absent, mirroring `ephemeral`.
       'importDraft',
+      // Factual/fiction axis (#7616). Same one-directional sanitizer contract
+      // as `ephemeral`/`importDraft`: only a literal `true` marks the universe
+      // factual, and key-present-with-`false` clears it back to absent (which
+      // is exactly what the settings toggle sends when it is switched off).
+      'factual',
     ];
     const scalarPatch = Object.fromEntries(
       PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),

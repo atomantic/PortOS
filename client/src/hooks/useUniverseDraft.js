@@ -46,6 +46,8 @@ export const createEmptyUniverseDraft = () => ({
   logline: '',
   premise: '',
   styleNotes: '',
+  // Factual/fiction axis (#7616) — true marks a real-world universe.
+  factual: false,
   moodBoardId: null,
   categories: ensureDraftCategories(),
   compositeSheets: [],
@@ -64,6 +66,7 @@ export const universeDraftSnapshot = (draft = {}) => JSON.stringify({
   logline: draft.logline || '',
   premise: draft.premise || '',
   styleNotes: draft.styleNotes || '',
+  factual: draft.factual === true,
   moodBoardId: draft.moodBoardId || null,
   categories: draft.categories || {},
   compositeSheets: draft.compositeSheets || [],
@@ -256,6 +259,9 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
           logline: universe.logline || '',
           premise: universe.premise || '',
           styleNotes: universe.styleNotes || '',
+          // Absent on the wire means fiction — normalize so the toggle is
+          // always a controlled boolean rather than undefined.
+          factual: universe.factual === true,
           moodBoardId: universe.moodBoardId || null,
           influences: ensureInfluences(universe.influences),
           styleReferences: universe.styleReferences || [],
@@ -282,6 +288,9 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       logline: draft.logline || '',
       premise: draft.premise || '',
       styleNotes: draft.styleNotes || '',
+      // Factual/fiction axis (#7616). Always shipped, like the other scalars:
+      // the server drops a literal `false` back to absent, which is the clear.
+      factual: draft.factual === true,
       // Linked mood board (#4188) — null clears server-side; the field always
       // ships so Save carries the full intended state like other scalars.
       moodBoardId: draft.moodBoardId || null,

@@ -79,7 +79,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `sanitizeCharacter` would strip the profile and last-writer-wins the loss
   // back onto the newer peer. Per-category gate → only universe sync pauses
   // with old peers.
-  universes: 11,
+  // v12 = universe `factual` added (#7616) — the factual/fiction axis that
+  // tells the catalog extractor to read a world's material as lived record
+  // rather than invented story. Persisted only when true, but federated: a
+  // <=v11 peer would strip it in its `factual`-unaware `sanitizeTemplate`
+  // and last-writer-wins the loss back, silently reclassifying the user's
+  // Reality universe as fiction.
+  universes: 12,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode

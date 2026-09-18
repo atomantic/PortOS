@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon, Copy } from 'lucide-react';
+import { Plus, Globe, Trash2, Users, Workflow as WorkflowIcon, Copy, BadgeCheck } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ImageThumb from '../components/ui/ImageThumb';
@@ -25,6 +25,19 @@ import { listUniverseSummaries, deleteUniverse, listPipelineSeriesSummaries, lis
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import { useRecordMerge } from '../hooks/useRecordMerge';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+
+// Chip on a universe whose `factual` flag is set (#7616): its people and
+// places are real, so captured text is extracted as lived record rather than
+// as invented story material. Rendered beside the name in both list layouts.
+const FactualBadge = () => (
+  <span
+    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-port-accent/15 text-port-accent border border-port-accent/30"
+    title="Real-world universe — captured text is read as lived record, not invented story material"
+  >
+    <BadgeCheck size={10} />
+    Real
+  </span>
+);
 
 // Build universeId → latest image filename from media collections. Mirrors
 // resolveCover() in MediaCollections.jsx but trimmed: we only care about image
@@ -275,6 +288,7 @@ export default function Universes() {
                             <div className="text-white font-medium flex items-center gap-2 flex-wrap group-hover:text-port-accent transition-colors">
                               <span>{u.name || '(untitled universe)'}</span>
                               {u.origin ? <OriginBadge origin={u.origin} compact /> : null}
+                              {u.factual ? <FactualBadge /> : null}
                             </div>
                             {u.logline ? (
                               <div className="text-xs text-gray-500 mt-0.5 line-clamp-1 break-words">{u.logline}</div>
@@ -314,6 +328,7 @@ export default function Universes() {
                       <div className="text-white font-medium flex items-center gap-2 flex-wrap">
                         <span>{u.name || '(untitled universe)'}</span>
                         {u.origin ? <OriginBadge origin={u.origin} compact /> : null}
+                        {u.factual ? <FactualBadge /> : null}
                       </div>
                       {u.logline ? (
                         <div className="text-xs text-gray-500 mt-0.5 break-words">{u.logline}</div>

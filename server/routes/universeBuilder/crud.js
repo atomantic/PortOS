@@ -60,6 +60,8 @@ const createSchema = z.object({
   // Per-record render pin (#3231 Phase 3) — this universe's default image
   // backend + cloud model.
   ...recordRenderPinFields,
+  // Factual/fiction axis (#7616) — true marks a real-world universe.
+  factual: z.boolean().optional(),
   // Local-only "don't sync to peers" marker — see sanitizeRecordForWire.
   ephemeral: z.boolean().optional(),
 });
@@ -102,6 +104,9 @@ const patchSchema = z.object({
   // Per-record render pin (#3231 Phase 3). Key-present with 'auto'/''/null
   // clears; key-absent preserves.
   ...recordRenderPinFields,
+  // Factual/fiction axis (#7616). Only a literal `true` marks the universe
+  // factual; `false` clears it back to absent (see sanitizeTemplate).
+  factual: z.boolean().optional(),
   ephemeral: z.boolean().optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
