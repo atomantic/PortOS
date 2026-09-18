@@ -21,6 +21,12 @@ import {
   PERSISTENT_MIND_TRAJECTORY_LIMITS,
   parsePersistentMindCursor,
 } from '../lib/persistentMindTrajectory.js';
+import {
+  PERSISTENT_MIND_JOURNAL_KINDS,
+  PERSISTENT_MIND_JOURNAL_LIMITS,
+  PERSISTENT_MIND_JOURNAL_STATUSES,
+  publicPersistentMindJournalEvent,
+} from '../lib/persistentMindJournal.js';
 import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import {
   normalizePersistentMindThinkingPresets,
@@ -45,6 +51,10 @@ import {
   readPersistentMindRollups,
   updatePersistentMindMemory,
 } from '../services/persistentMindContext.js';
+import {
+  correctPersistentMindJournalEvent,
+  readPersistentMindJournal,
+} from '../services/persistentMindJournal.js';
 import { getProviderById } from '../services/providers.js';
 import { persistentMindHarnessInfo } from '../services/persistentMindAdapter.js';
 import { cleanupPersistentMind } from '../services/persistentMindMaintenance.js';
@@ -164,6 +174,20 @@ const memoryUpdateSchema = z.object(memoryFields).partial().strict().refine(
   'At least one memory field is required'
 );
 const memoryParamsSchema = z.object({ memoryId: z.string().trim().min(1).max(128) }).strict();
+const journalReadSchema = z.object({
+  kind: z.enum(PERSISTENT_MIND_JOURNAL_KINDS).optional(),
+  status: z.enum(PERSISTENT_MIND_JOURNAL_STATUSES).optional(),
+  limit: z.coerce.number().int().positive().max(PERSISTENT_MIND_JOURNAL_LIMITS.maxPageSize).optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
+}).strict();
+// Two verbs, not a free status write: the user may settle an entry or retire
+// one the mind got wrong. Neither deletes it, and neither can resurrect a
+// retired statement — that is the mind's own supersede operation.
+const journalCorrectionSchema = z.object({
+  action: z.enum(['resolve', 'retire']),
+  resolution: z.string().trim().max(PERSISTENT_MIND_JOURNAL_LIMITS.maxResolutionChars).optional(),
+}).strict();
+const journalParamsSchema = z.object({ journalEventId: z.string().trim().min(1).max(160) }).strict();
 const cleanupSchema = z.object({
   scopes: z.array(z.enum(PERSISTENT_MIND_CLEANUP_SCOPES))
     .min(1)
@@ -261,6 +285,29 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
     rollups,
     harness: persistentMindHarnessInfo(provider),
   });
+}));
+
+router.get('/mind/journal', asyncHandler(async (req, res) => {
+  const { limit = PERSISTENT_MIND_JOURNAL_LIMITS.defaultPageSize, offset = 0, ...filters } = validateRequest(journalReadSchema, req.query);
+  const events = await readPersistentMindJournal(PERSISTENT_MIND_ID, filters);
+  res.json({
+    kinds: PERSISTENT_MIND_JOURNAL_KINDS,
+    statuses: PERSISTENT_MIND_JOURNAL_STATUSES,
+    total: events.length,
+    counts: Object.fromEntries(PERSISTENT_MIND_JOURNAL_STATUSES.map((status) => [
+      status, events.filter((event) => event.status === status).length,
+    ])),
+    events: events.slice(offset, offset + limit).map(publicPersistentMindJournalEvent),
+  });
+}));
+
+router.post('/mind/journal/:journalEventId/correct', asyncHandler(async (req, res) => {
+  const { journalEventId } = validateRequest(journalParamsSchema, req.params);
+  const input = validateRequest(journalCorrectionSchema, req.body);
+  const result = requireSuccess(await correctPersistentMindJournalEvent({
+    mindId: PERSISTENT_MIND_ID, eventId: journalEventId, ...input,
+  }));
+  res.json({ success: true, changed: result.changed, event: publicPersistentMindJournalEvent(result.event) });
 }));
 
 // Keep the persistent mind's authority inventory separate from the broader

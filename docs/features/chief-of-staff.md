@@ -110,6 +110,20 @@ The composer's **Send with another model** picker arms one preset for the **next
 
 Temporary thinking messages retain the exact accepted provider, model, and effort. Changing or revoking a preset refuses the pending session; a label-only rename preserves its route. Revoked selections and interruptions after inference may have begun require a fresh message to run again. Temporary provider outages before inference leave the accepted message queued. Matching transport retries keep the original selection even after revocation. Older queued temporary messages without a recorded route retain their content but require explicit resubmission.
 
+### The decision journal
+
+Rollups are sealed prose and memories are flat facts that decay on one clock, so neither can say *that decision is retired now*: a reversed decision sat beside its replacement, and the more-accessed stale one could outrank the correction. The journal is the third shape — typed, individually addressable, and status-bearing.
+
+- **Kinds.** `decision`, `commitment`, `open_question`, `risk`, `goal`, `preference`. Each entry is a concise standalone statement in the mind's own words, never a transcript quote.
+- **Three operations.** `append`, `supersede` (this statement replaces entry E) and `resolve` (E is settled). Supersession is the operation the memory store cannot express: the old entry stays readable with `status: superseded` and a pointer to what replaced it, and stops being quoted as current. Nothing is ever deleted.
+- **Source-grounded and bounded.** Every operation cites the message sequences it came from; one citing nothing — or citing a range the extraction was never shown — is discarded while its well-grounded siblings still apply. At most five operations per extraction, and **zero is the normal outcome**: greetings, acknowledgements, tool chatter and raw reasoning produce none.
+- **Where it runs.** At the same boundary that seals a rollup, on the same pinned provider and the same per-call boundary as the summary it feeds — no new provider path and no cold-bootstrap call. A malformed answer gets one narrow repair attempt and then gives up **without writing**; a failed extraction never blocks the seal.
+- **What the rollup becomes.** The sealed summary compacts from the journal rather than from raw turns, so active decisions, outstanding commitments, unresolved questions and risks survive as facts, the settled history that explains the current state is kept, and superseded wording is absent by construction.
+- **Untrusted evidence.** Prior entries replayed into the extraction prompt are data, not instructions: every stored statement is quoted so an injected heading or directive cannot forge a prompt section, and the prompt says so in words.
+- **Correcting it.** **Mind → Journal** groups active entries by kind, collapses retired ones behind a toggle showing what replaced each, and lets the user settle or retire an entry the mind got wrong. The `history` cleanup scope clears the journal along with the messages it cites; a context-only clear does not.
+
+Storage, retention and the privacy posture are in [STORAGE.md](../STORAGE.md).
+
 ## API Endpoints
 
 | Route | Description |
@@ -128,6 +142,8 @@ Temporary thinking messages retain the exact accepted provider, model, and effor
 | GET /api/cos/reports | List reports |
 | GET /api/cos/learning | Get learning insights |
 | GET /api/cos/digest | Get weekly digest |
+| GET /api/cos/mind/journal | Persistent Mind decision journal, filterable by `kind` and `status` |
+| POST /api/cos/mind/journal/:id/correct | Settle (`resolve`) or retire (`retire`) one journal entry the mind got wrong — a status transition, never a delete |
 
 ## Prompt Templates
 

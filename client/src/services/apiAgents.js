@@ -57,6 +57,19 @@ export const cancelPersistentMindThinkingRequest = (options = {}) =>
   request('/cos/mind/thinking-request', { method: 'DELETE', ...options });
 export const getPersistentMindContext = (options = {}) => request('/cos/mind/context', options);
 export const getPersistentMindTools = (options = {}) => request('/cos/mind/tools', options);
+export const getPersistentMindJournal = ({ kind, status, ...options } = {}) => {
+  const params = new URLSearchParams();
+  if (kind) params.set('kind', kind);
+  if (status) params.set('status', status);
+  const query = params.toString();
+  return request(`/cos/mind/journal${query ? `?${query}` : ''}`, options);
+};
+// Retire or settle one entry. The server never deletes it: both verbs are
+// status transitions that keep the statement readable as history.
+export const correctPersistentMindJournalEvent = (journalEventId, body, options = {}) =>
+  request(`/cos/mind/journal/${encodeURIComponent(journalEventId)}/correct`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
 export const getMindRecipes = (options = {}) => request('/cos/mind/recipes', options);
 export const getMindRecipe = (id, options = {}) => request(`/cos/mind/recipes/${encodeURIComponent(id)}`, options);
 export const createMindRecipe = (definition, options = {}) => request('/cos/mind/recipes', {

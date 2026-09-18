@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PERSISTENT_MIND_ID,
+  PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
   assemblePersistentMindContext,
   buildPersistentMindRollup,
   parsePersistentMindCursor,
@@ -95,7 +96,7 @@ describe('assemblePersistentMindContext', () => {
     source: source(history.slice(0, 3)),
     providerId: 'example-provider',
     model: 'example-model',
-    promptVersion: 1,
+    promptVersion: PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
     createdAt: '2026-08-25T12:30:00.000Z',
   });
 
@@ -111,7 +112,7 @@ describe('assemblePersistentMindContext', () => {
     expect(context.chars).toBeLessThanOrEqual(2_000);
     expect(context.summaryState).toBe('ready');
     expect(context.text).toContain('A stable resident Chief of Staff.');
-    expect(context.text).toContain('example-provider/example-model; prompt v1');
+    expect(context.text).toContain(`example-provider/example-model; prompt v${PERSISTENT_MIND_ROLLUP_PROMPT_VERSION}`);
     expect(context.text).toContain('The first turn established the task boundary.');
     expect(context.text).toContain('Recent message');
     expect(context.omittedRange).toMatchObject({ fromSequence: 1, toSequence: 3 });
@@ -148,7 +149,7 @@ describe('assemblePersistentMindContext', () => {
     });
     expect(assemblePersistentMindContext({ events: history, rollups: [failed], recentEventLimit: 2 }).summaryState)
       .toBe('failed');
-    expect(assemblePersistentMindContext({ events: history, rollups: [readyRollup], recentEventLimit: 2, promptVersion: 2 }).summaryState)
+    expect(assemblePersistentMindContext({ events: history, rollups: [readyRollup], recentEventLimit: 2, promptVersion: PERSISTENT_MIND_ROLLUP_PROMPT_VERSION + 1 }).summaryState)
       .toBe('stale');
   });
 });
