@@ -387,7 +387,7 @@ describe('CoS TABS ↔ nav manifest', () => {
     expectPageNavTabs(TABS, [
       'briefing:Briefing', 'tasks:Tasks', 'agents:Agents', 'jobs:System Tasks',
       'runs:Runs', 'run-events:Run Events', 'schedule:Schedule', 'workflow:Timeline',
-      'digest:Digest', 'gsd:GSD', 'productivity:Productivity', 'learning:Learning',
+      'digest:Digest', 'gsd:GSD', 'learning:Learning',
       'memory:Memory', 'mind:Mind', 'health:Health', 'config:Config',
     ]);
   });

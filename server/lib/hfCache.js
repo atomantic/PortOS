@@ -42,7 +42,12 @@ export const getHfCacheRoot = () => {
 // HF's on-disk naming: `org/name` -> `models--org--name`. Forward slashes
 // inside the name (rare) are also `--` separated. Strip trailing slash so
 // a registry-edit user pasting `org/name/` doesn't miss a real cache hit.
-const repoToDirName = (repoId) => `models--${repoId.replace(/\/$/, '').replace(/\//g, '--')}`;
+//
+// Exported because the directory name is also the IDENTITY of a downloaded model
+// everywhere outside this file: the inventory row id, the manifest key, and the
+// delete route's path parameter. A second copy of this rule that forgot the
+// trailing-slash strip would mint a key that never matches the cache listing.
+export const repoToDirName = (repoId) => `models--${repoId.replace(/\/$/, '').replace(/\//g, '--')}`;
 
 const WEIGHT_EXTENSIONS = ['.safetensors', '.ckpt', '.bin', '.pt', '.msgpack', '.gguf'];
 const isWeightFile = (name) => WEIGHT_EXTENSIONS.some((ext) => name.endsWith(ext));

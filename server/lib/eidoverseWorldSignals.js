@@ -31,6 +31,39 @@ const coarseStatus = (value) => {
   return 'steady';
 };
 
+/**
+ * CoS task status -> world signal, mapped EXPLICITLY rather than through
+ * `coarseStatus`'s word matcher.
+ *
+ * The generic matcher reads a work queue backwards. `pending` contains the
+ * word "pending", so it lands on `attention`; `challenged` (#2441 — a
+ * sub-agent disputing a reviewer rejection, which is stuck until a human rules
+ * on it) matches nothing at all and lands on `steady`. Because `observePlace`
+ * ORs its sources' attention flags, ONE queued task — the resting state of any
+ * work queue — flipped the Agent Foundry to `attention`, while a genuinely
+ * stuck one stayed silent. The district then read `active` only in the narrow
+ * window where every open task happened to be in flight, so it flapped on
+ * ordinary queue churn and its alarm carried no information.
+ *
+ * Task status is a CLOSED vocabulary (`TASK_STATUS_VALUES` in `taskParser.js`),
+ * so it is decided by name rather than by word-matching. The line it draws:
+ * waiting on a WORKER is ordinary, waiting on a HUMAN is attention.
+ *
+ * Attention is the DEFAULT rather than a listed case, so a status added to the
+ * vocabulary later — or a hand-edited marker `parseTasksMarkdown` could not
+ * represent, which it returns as its raw token — surfaces instead of going
+ * quiet. That matches how the parser itself treats an unrepresentable status:
+ * `toRepresentableTask` parks it as `blocked` with an `unknown-status`
+ * category, i.e. as something a human has to look at.
+ */
+const taskSignalStatus = (task) => {
+  const status = String(task?.status || 'pending').toLowerCase();
+  if (status === 'blocked') return 'error';
+  if (status === 'in_progress') return 'active';
+  if (status === 'pending') return task?.approvalRequired === true ? 'attention' : 'steady';
+  return 'attention';
+};
+
 const finiteOrNull = (value) => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const nonNegativeOrNull = (value) => {
   const number = finiteOrNull(value);
@@ -73,8 +106,8 @@ function projectedApps(apps) {
     }));
 }
 
-function projectedProductivity(todayActivity, velocity, taskState) {
-  if (!todayActivity && !velocity) return null;
+function projectedProductivity(todayActivity, taskState) {
+  if (!todayActivity) return null;
   const stats = todayActivity?.stats || {};
   const queue = {
     pendingApprovals: Array.isArray(taskState?.awaitingApproval) ? taskState.awaitingApproval.length : null,
@@ -88,13 +121,10 @@ function projectedProductivity(todayActivity, velocity, taskState) {
   return [{
     id: 'summary',
     label: 'Productivity',
-    completedToday: nonNegativeOrNull(stats.completed ?? velocity?.today),
-    succeededToday: nonNegativeOrNull(stats.succeeded ?? velocity?.todaySuccesses),
-    failedToday: nonNegativeOrNull(stats.failed ?? velocity?.todayFailures),
+    completedToday: nonNegativeOrNull(stats.completed),
+    succeededToday: nonNegativeOrNull(stats.succeeded),
+    failedToday: nonNegativeOrNull(stats.failed),
     successRate: percentageOrNull(stats.successRate),
-    velocity: finiteOrNull(velocity?.velocity),
-    averagePerDay: nonNegativeOrNull(velocity?.avgPerDay),
-    historicalDays: nonNegativeOrNull(velocity?.historicalDays),
     queue,
     running: todayActivity?.isRunning === true,
     paused: todayActivity?.isPaused === true,
@@ -120,8 +150,6 @@ function projectedActivity(calendar) {
       weeks: calendar.weeks.length,
       activeDays: nonNegativeOrNull(summary.activeDays),
       totalTasks: nonNegativeOrNull(summary.totalTasks),
-      totalSuccesses: nonNegativeOrNull(summary.totalSuccesses),
-      successRate: percentageOrNull(summary.successRate),
       maxTasks: nonNegativeOrNull(calendar.maxTasks),
       todayTasks: nonNegativeOrNull(today?.tasks),
     },
@@ -129,9 +157,6 @@ function projectedActivity(calendar) {
       id: opaqueId('activity-day', day.date, `day-${index}`),
       label: 'Activity day',
       tasks: nonNegativeOrNull(day.tasks) ?? 0,
-      successes: nonNegativeOrNull(day.successes) ?? 0,
-      failures: nonNegativeOrNull(day.failures) ?? 0,
-      successRate: percentageOrNull(day.successRate),
       isToday: day.isToday === true,
     })),
   ];
@@ -349,7 +374,7 @@ function healthSnapshot({ apps, cosStatus, review, backupState, notifications, c
 export function buildEidoverseWorldSignals({
   apps, agents, taskState, cosStatus, review, featuresState, peers,
   backupState, notifications, character, voiceConfig, memory, diskPercent,
-  todayActivity, velocity, activityCalendar, goalsData, memoryGraph,
+  todayActivity, activityCalendar, goalsData, memoryGraph,
   inboxCounts, introspection, jira, destinations,
 }) {
   const projectedAgents = Array.isArray(agents)
@@ -361,7 +386,7 @@ export function buildEidoverseWorldSignals({
     ? taskState.tasks
       .filter((task) => !['completed', 'done', 'archived'].includes(String(task?.status || '').toLowerCase()))
       .map((task, index) => ({
-        id: opaqueId('task', task.id, `task-${index}`), label: 'Active task', status: coarseStatus(task.status || 'pending'),
+        id: opaqueId('task', task.id, `task-${index}`), label: 'Active task', status: taskSignalStatus(task),
       }))
     : null;
   const projectedFeatures = Array.isArray(featuresState?.features)
@@ -388,7 +413,7 @@ export function buildEidoverseWorldSignals({
     features: projectedFeatures,
     peers: projectedPeers,
     health,
-    productivity: projectedProductivity(todayActivity, velocity, taskState),
+    productivity: projectedProductivity(todayActivity, taskState),
     activity: projectedActivity(activityCalendar),
     goals: projectedGoals(goalsData),
     memory: projectedMemory(memoryGraph),

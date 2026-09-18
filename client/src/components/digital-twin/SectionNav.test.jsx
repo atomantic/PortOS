@@ -106,3 +106,28 @@ describe('SectionNav', () => {
     expect(groupTab('Profile')).toHaveAccessibleName('Profile');
   });
 });
+
+// The section strip is a browse surface, so it applies the same feature gate the
+// sidebar and ⌘K do (client/src/lib/navFeatures.js) — the `feature` tag rides
+// through getPageNavTabs onto these tab objects, exactly as it does for the
+// Messages strip. Mocked per-test rather than globally so the default-on case
+// above keeps exercising the real hook's "no override" answer.
+describe('SectionNav feature gating', () => {
+  it('drops a section whose feature is off, and keeps it when the feature is on', async () => {
+    vi.resetModules();
+    vi.doMock('../../hooks/useInstanceFeatures', () => ({
+      useInstanceFeatures: () => ({ isFeatureEnabled: (id) => id !== 'autobiography' })
+    }));
+    const Gated = (await import('./SectionNav')).default;
+
+    render(<Gated activeSection="documents" onChange={() => {}} />);
+    const row = screen.getByRole('tablist', { name: 'Sources sections' });
+    expect(within(row).queryByRole('tab', { name: /Autobiography/ })).toBeNull();
+    // The gate must be scoped to the tagged section — an untagged sibling in the
+    // same group still renders, so this isn't just an empty strip.
+    expect(within(row).getByRole('tab', { name: /^Interview/ })).toBeTruthy();
+
+    vi.doUnmock('../../hooks/useInstanceFeatures');
+    vi.resetModules();
+  });
+});

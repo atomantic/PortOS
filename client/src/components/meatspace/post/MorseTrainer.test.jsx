@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
+import { awaitEnabled } from '../../../test/enabledBarrier.js';
 
 // Stub the training-log API so mount-time fetches (refreshTrainingStats) and
 // round-completion writes (logTraining) never hit the network — mirrors the
@@ -216,7 +217,7 @@ describe('MorseTrainer training log integration', () => {
 
     await waitFor(() => expect(submitTrainingEntry).toHaveBeenCalledTimes(2));
     expect(onContinue).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByText("Continue Today's Routine")).toBeEnabled());
+    await awaitEnabled(() => screen.getByText("Continue Today's Routine"));
   });
 
   describe('round completion', () => {

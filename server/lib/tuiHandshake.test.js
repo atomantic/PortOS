@@ -14,6 +14,10 @@ import {
   OOM_NUDGE_ARM_WINDOW_MS,
   OOM_NUDGE_COOLDOWN_MS,
   OOM_NUDGE_MAX_ATTEMPTS,
+  createStallNudgeGate,
+  STALL_NUDGE_IDLE_MS,
+  STALL_NUDGE_RECOVERY_MS,
+  STALL_NUDGE_MAX_ATTEMPTS,
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
   SELF_CLEARING_RESUBMIT_ECHO_MS,
   MCP_BOOT_PASTE_DEADLINE_MS,
@@ -108,6 +112,35 @@ describe('tuiHandshake — paste timing constants', () => {
     expect(PASTE_MARKER_PATTERN.test('[Pasted ~46 chars]')).toBe(false);
   });
 
+  it('PASTE_MARKER_PATTERN matches Pi paste-commit chips', () => {
+    // Pi spells the chip `[paste #N +M lines]` — lowercase and WITHOUT the
+    // trailing `d` every other TUI uses, and with no `text` token. Real
+    // incident (2026-09-17): a pi-TUI CoS agent pasted its prompt 3 times and
+    // died `paste-not-rendered` with `[paste #1 +371 lines][paste #2 +371
+    // lines][paste #3 +371 lines]` visible in the composer and Enter never
+    // sent. Pi collapses the paste and HIDES the body, so the marker is the
+    // ONLY confirmation signal available — without it the text fallback in
+    // verifyPasteRendered can never succeed either.
+    expect(PASTE_MARKER_PATTERN.test('[paste #1 +371 lines]')).toBe(true);
+    expect(PASTE_MARKER_PATTERN.test('[paste #3 +1 line]')).toBe(true);
+    // Space-collapsed form left behind by the ANSI stripper.
+    expect(PASTE_MARKER_PATTERN.test('[paste#1+371lines]')).toBe(true);
+    // Each re-paste adds its own chip, so the count is what distinguishes the
+    // TUI's own commit from a marker echoed out of the prompt.
+    expect(countPasteMarkers('[paste #1 +371 lines][paste #2 +371 lines]')).toBe(2);
+  });
+
+  it('a pi paste confirms on the marker alone, with the body hidden', () => {
+    // The whole point of the marker path: pi's chip REPLACES the prompt text in
+    // the buffer, so a prefix that is genuinely absent must still confirm.
+    const prompt = 'x'.repeat(40) + ' ship up to 6 independent issues in parallel';
+    const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
+    expect(verifiablePrefix).toBeTruthy();
+    const buffer = '[Skills] find-skills, hyperframes\n[paste #1 +371 lines]';
+    expect(verifyPasteRendered(buffer, verifiablePrefix)).toBe(false);
+    expect(isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount: 0 })).toBe(true);
+  });
+
   it('PASTE_MARKER_PATTERN matches the SPACE-COLLAPSED form left after ANSI strip', () => {
     // The raw PTY stream renders the marker with absolute-column cursor moves
     // between tokens (`[Pasted\x1b[11Gtext\x1b[16G#1…`), so once ANSI is stripped
@@ -134,6 +167,9 @@ describe('tuiHandshake — paste timing constants', () => {
   it('PASTE_MARKER_PATTERN does NOT match similar-looking but distinct text', () => {
     expect(PASTE_MARKER_PATTERN.test('[Pasted text]')).toBe(false);
     expect(PASTE_MARKER_PATTERN.test('[Pasted #1]')).toBe(false);
+    // Pi's `#N` branch requires the `+M lines` tail, so a bare chip stays out.
+    expect(PASTE_MARKER_PATTERN.test('[paste #1]')).toBe(false);
+    expect(PASTE_MARKER_PATTERN.test('[paste #1 +371 chars]')).toBe(false);
     expect(PASTE_MARKER_PATTERN.test('Pasted text #1')).toBe(false);
     expect(PASTE_MARKER_PATTERN.test('')).toBe(false);
   });
@@ -1996,5 +2032,66 @@ describe('answerStartupDialogs', () => {
     const second = answerOnce(reAsking, answers);
     expect(second.result).toBeNull();
     expect(second.written).toEqual([]);
+  });
+});
+
+describe('createStallNudgeGate', () => {
+  it('nudges a session that went quiet with its task unfinished', () => {
+    const gate = createStallNudgeGate();
+    const quietSince = 0;
+    // Still inside the threshold: a slow tool call is not a stall.
+    expect(gate.takeNudge(STALL_NUDGE_IDLE_MS - 1, quietSince)).toBe(0);
+    expect(gate.takeNudge(STALL_NUDGE_IDLE_MS, quietSince)).toBe(1);
+  });
+
+  it('waits out the threshold from the NUDGE, not from output', () => {
+    // The case this exists for: a session wedged below its composer never
+    // echoes the paste, so lastOutputAt stays put. Measuring from output alone
+    // would re-fire on the very next 5s poll and spend the whole budget in
+    // seconds.
+    const gate = createStallNudgeGate();
+    const quietSince = 0;
+    const firstNudgeAt = STALL_NUDGE_IDLE_MS;
+    expect(gate.takeNudge(firstNudgeAt, quietSince)).toBe(1);
+    expect(gate.takeNudge(firstNudgeAt + 5000, quietSince)).toBe(0);
+    expect(gate.takeNudge(firstNudgeAt + STALL_NUDGE_IDLE_MS - 1, quietSince)).toBe(0);
+    expect(gate.takeNudge(firstNudgeAt + STALL_NUDGE_IDLE_MS, quietSince)).toBe(2);
+  });
+
+  it('reports exhaustion once after STALL_NUDGE_MAX_ATTEMPTS unanswered nudges, then goes quiet', () => {
+    const gate = createStallNudgeGate();
+    let now = 0;
+    for (let i = 1; i <= STALL_NUDGE_MAX_ATTEMPTS; i += 1) {
+      now += STALL_NUDGE_IDLE_MS;
+      expect(gate.takeNudge(now, 0)).toBe(i);
+    }
+    // Wedged below the composer: pasting into it forever only fills raw.txt, so
+    // the verdict is handed back ONCE and the consumer says it out loud.
+    expect(gate.takeNudge(now + STALL_NUDGE_IDLE_MS, 0)).toBe('exhausted');
+    expect(gate.takeNudge(now + STALL_NUDGE_IDLE_MS * 2, 0)).toBe(0);
+    expect(gate.takeNudge(now + STALL_NUDGE_IDLE_MS * 10, 0)).toBe(0);
+  });
+
+  it('does not read the nudge\'s own paste echo as recovery', () => {
+    const gate = createStallNudgeGate();
+    const firstNudgeAt = STALL_NUDGE_IDLE_MS;
+    expect(gate.takeNudge(firstNudgeAt, 0)).toBe(1);
+    // The bracketed-paste echo lands a beat later and is the ONLY output the
+    // wedged session produces. Counting it would reset the streak forever.
+    const echoAt = firstNudgeAt + 1000;
+    expect(gate.takeNudge(echoAt + STALL_NUDGE_IDLE_MS, echoAt)).toBe(2);
+  });
+
+  it('clears an exhausted streak — and re-arms the verdict — once the session comes back to life', () => {
+    const gate = createStallNudgeGate();
+    let now = 0;
+    for (let i = 1; i <= STALL_NUDGE_MAX_ATTEMPTS; i += 1) {
+      now += STALL_NUDGE_IDLE_MS;
+      gate.takeNudge(now, 0);
+    }
+    // It printed well past the paste echo, so the nudges landed after all. A
+    // stall hours later is a fresh one, with the whole budget available again.
+    const revivedAt = now + STALL_NUDGE_RECOVERY_MS + 1;
+    expect(gate.takeNudge(revivedAt + STALL_NUDGE_IDLE_MS, revivedAt)).toBe(1);
   });
 });

@@ -114,6 +114,7 @@ import { startBeeperAttachmentGc } from './beeperAttachmentGc.js';
 import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
+import { registerAutobiographyReminderSchedule } from './autobiographyReminder.js';
 import { recoverInterruptedRepoClones, recoverStuckClassifications } from './brain.js';
 import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
@@ -293,7 +294,13 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // `null` for every other provider, reads a local cache rather than calling
       // a model, and imports each runtime's cache reader lazily so neither subtree
       // reaches the boot closure (see `services/localCachedModels.js`).
-      cachedModelIds: localCachedModelIds
+      cachedModelIds: localCachedModelIds,
+      // A composite id (`harness.method@service[+bootstrap]`, #7564) names no
+      // stored record: the toolkit hands it here, and the host materializes it
+      // from the harness registry, the service instance and settings. Imported
+      // lazily so the graph store's subtree stays off the boot closure until a
+      // composite is actually asked for.
+      resolveCompositeProvider: async (id) => (await import('./compositeProviders.js')).resolveCompositeProvider(id)
     }),
 
     // Compatibility shims for services that import from the old service files.
@@ -434,6 +441,10 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // was down (or during a redeploy) still fires once we're back up, instead of
   // silently waiting for tomorrow's tick (#2015).
   registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ POST reminder init failed', err));
+  // Register the optional daily autobiography story prompt (opt-in, off by
+  // default, and only when the instance feature is on) — deterministic prompt
+  // bank, no LLM calls. Same catch-up rationale as the POST reminder above.
+  registerAutobiographyReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ Autobiography reminder init failed', err));
   // Initialize backup scheduler for daily data backups
   startBackupScheduler().catch(err => logBootstrapFailure('❌ Backup scheduler init failed', err));
   // Automatic PortOS self-update — OFF by default. When the user turns it on
@@ -764,7 +775,12 @@ const runDatabaseBootPhase = () => runDatabasePhase({
   // Provider connection graph (#6367): first run imports every provider record
   // into ai_connections / ai_harness_bindings / ai_route_bindings; later runs
   // reconcile against providers.json. Reads and writes local state only.
-  reconcileProviderGraph: async () => (await import('./providerGraph.js')).initProviderGraph(),
+  reconcileProviderGraph: async () => {
+    await (await import('./providerGraph.js')).initProviderGraph();
+    // Per-harness enablement (#7564): normalize the settings slice and prime
+    // the composite cache's revision. Settings-only — no provider is contacted.
+    await (await import('./harnessEnablement.js')).reconcileHarnessEnablement();
+  },
 
   reconcileStackerNews: reconcileStackerNewsSchedulers
 });

@@ -9,6 +9,8 @@ import {
   selectableModelsForProvider,
   withStaleAntigravityPin,
 } from '../utils/providers';
+import { isCompositeProviderId } from '../utils/providerRef.js';
+import useProviderCatalog from './useProviderCatalog.js';
 
 // The provider's selectable model source, via the shared `providerModelList`:
 // a signed-in ChatGPT account's own catalog when one has been fetched, else the
@@ -66,7 +68,14 @@ const sourceModels = (provider, withEffort) => {
  *   way to express a tier, so collapsing them would strip the capability.
  * @param {boolean} [options.enabled] - Load the provider catalog only when true.
  *   Disabled pickers keep an empty catalog and do not issue a provider request.
- * @returns {{ providers, activeProviderId, selectedProviderId, selectedModel, availableModels, selectedProvider, setSelectedProviderId, setSelectedModel, loading }}
+ *
+ * A COMPOSITE selection (`<harness>.<method>@<service>`, #7566) — restored
+ * from a saved pin or emitted by the selector's compose flow — is not a
+ * record in `GET /api/providers`. The hook then resolves it through the
+ * shared catalog (`useProviderCatalog.resolveRef`, fetched only in that case)
+ * and appends the synthesized record to `providers`, so `availableModels`
+ * and `selectedProvider` describe it exactly as they would a preset.
+ * @returns {{ providers, activeProviderId, selectedProviderId, selectedModel, availableModels, selectedProvider, setSelectedProviderId, setSelectedModel, loading, resolveRef }}
  */
 export default function useProviderModels({ filter, allowDefault = false, preselectDefaults = false, silent = false, modelFilter, withEffort = false, enabled = true } = {}) {
   const [providers, setProviders] = useState([]);
@@ -157,9 +166,18 @@ export default function useProviderModels({ filter, allowDefault = false, presel
     return () => { loadGenerationRef.current += 1; };
   }, [enabled, load]);
 
+  // presets ∪ the currently saved composite, so an existing pin renders.
+  const compositeSelected = isCompositeProviderId(selectedProviderId);
+  const catalog = useProviderCatalog(compositeSelected);
+  const providersWithSelection = useMemo(() => {
+    if (!compositeSelected) return providers;
+    const resolved = catalog.resolveRef(selectedProviderId);
+    return resolved ? [...providers, resolved] : providers;
+  }, [providers, compositeSelected, selectedProviderId, catalog.resolveRef]);
+
   const currentProvider = useMemo(
-    () => providers.find(p => p.id === selectedProviderId),
-    [providers, selectedProviderId]
+    () => providersWithSelection.find(p => p.id === selectedProviderId),
+    [providersWithSelection, selectedProviderId]
   );
 
   const availableModels = useMemo(
@@ -229,7 +247,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
     : null;
 
   return {
-    providers,
+    providers: providersWithSelection,
     activeProviderId,
     selectedProviderId,
     selectedModel,
@@ -237,6 +255,7 @@ export default function useProviderModels({ filter, allowDefault = false, presel
     selectedProvider,
     setSelectedProviderId: handleProviderChange,
     setSelectedModel: handleModelChange,
-    loading
+    loading,
+    resolveRef: catalog.resolveRef,
   };
 }

@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router';
 import { MAINTENANCE_TASK_ORDER } from '../../../../lib/quotaBurnTasks';
 import { MAINTENANCE_SEQUENCE_TYPES } from '../../../../../../server/lib/maintenanceSequence';
 import MaintenanceRunForm from './MaintenanceRunForm';
+import { findEnabledByRole } from '../../../../test/enabledBarrier.js';
 
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../../../services/socket', () => ({ default: socket }));
@@ -145,7 +146,7 @@ it('enables only missing prerequisites and waits for refreshed saved settings be
   expect(screen.getByRole('combobox', { name: 'App' })).toBeDisabled();
   expect(api.startMaintenanceRun).not.toHaveBeenCalled();
   finishRefresh();
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled());
+  await findEnabledByRole('button', { name: 'Run now' });
   await user.click(screen.getByRole('button', { name: 'Run now' }));
   expect(await screen.findByText(/Maintenance started/)).toBeInTheDocument();
 });

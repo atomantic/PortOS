@@ -20,6 +20,7 @@ import {
   isActiveType,
 } from './catalogTypes.js';
 import { csvIdsParam } from './sharedSchemas.js';
+import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
 
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
 // type there flows through to consumers automatically. Kept as a frozen
@@ -77,17 +78,10 @@ const payload = z.record(z.string(), z.unknown())
 // Scrap source kinds. The DB column is a free VARCHAR(32) so peers running a
 // newer build can push kinds an older build doesn't enumerate (the sync-apply
 // path uses the looser `z.string().max(32)` below, NOT this enum). This enum
-// gates the LOCAL ingest routes only — every value here is one a local ingest
-// path actually produces.
-export const SCRAP_SOURCE_KINDS = Object.freeze([
-  'paste',
-  'brain-bridge',
-  'importer-handoff',
-  'manual',
-  'url',         // POST /catalog/ingest/url — fetched + main-text-extracted page
-  'file',        // POST /catalog/ingest/file — uploaded .txt/.md/.pdf
-  'voice-memo',  // POST /catalog/ingest/voice — recorded memo, Whisper-transcribed
-]);
+// gates the LOCAL ingest routes only — every id here is one a local ingest
+// path actually produces. The registry itself (ids, labels, and the extraction
+// lens each path implies) lives in the leaf `catalogSourceKinds.js`, so the
+// extractor can read the lens without pulling zod in behind it.
 
 // --- User-defined catalog types (PostgreSQL `catalog_user_types`, #1001) --
 // A user type is a DB-persisted (formerly settings.json), federated definition
@@ -141,7 +135,7 @@ export const catalogUserTypesSettingsSchema = z.array(catalogUserTypeSchema).max
 export const catalogScrapCreateSchema = z.object({
   title: z.string().trim().max(300).optional().nullable(),
   rawText: z.string().min(1).max(2_000_000),
-  sourceKind: z.enum(SCRAP_SOURCE_KINDS).optional(),
+  sourceKind: z.enum(SCRAP_SOURCE_KIND_IDS).optional(),
   metadata: payload,
 }).strict();
 

@@ -67,7 +67,6 @@ let { listJournals, _clearObsidianLocationsCacheForTest } = {};
 let { updatePostConfig } = {};
 let { createMemoryItem } = {};
 let { applySessionToReviewSchedule } = {};
-let { onTaskCompleted } = {};
 let { recordUserAction } = {};
 let { getDigitalTwinSnapshot, applyDigitalTwinRemote } = {};
 
@@ -90,7 +89,6 @@ beforeAll(async () => {
   ({ updatePostConfig } = await import('./meatspacePost.js'));
   ({ createMemoryItem } = await import('./meatspacePostMemory.js'));
   ({ applySessionToReviewSchedule } = await import('./meatspacePostReview.js'));
-  ({ onTaskCompleted } = await import('./productivity.js'));
   ({ recordUserAction } = await import('./userActions.js'));
   ({ getDigitalTwinSnapshot, applyDigitalTwinRemote } = await import('./digital-twin-sync.js'));
 });
@@ -104,7 +102,6 @@ const cases = [
   ['POST config', () => join(PATHS.meatspace, 'post-config.json'), () => updatePostConfig({ enabled: true })],
   ['memory items', () => join(PATHS.meatspace, 'post-memory-items.json'), () => createMemoryItem({ title: 'Example', lines: ['Example line'] })],
   ['review schedule', () => join(PATHS.meatspace, 'post-review-schedule.json'), () => applySessionToReviewSchedule({ masteredSkills: [{ skillId: 'example' }] })],
-  ['productivity', () => join(PATHS.cos, 'productivity.json'), () => onTaskCompleted({ completedAt: '2026-01-02T00:00:00Z', result: { success: true } })],
   ['user actions', () => join(PATHS.data, 'user-action-events.json'), () => recordUserAction({ type: 'cos.task.create', dedupeKey: 'example', actor: 'user' })],
   ['health day', () => join(PATHS.health, '2026-01-02.json'), () => mergeIntoDay('2026-01-02', 'steps', [{ date: '2026-01-02T12:00:00Z', qty: 1 }])],
   ['autobiography stories', () => join(PATHS.digitalTwin, 'autobiography/stories.json'), () => saveStory({ promptId: 'childhood-0', content: 'Example memory' })],

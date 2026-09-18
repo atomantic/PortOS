@@ -1,5 +1,6 @@
 import { getCudaCapability, getCudaUtilization } from '../lib/cudaCapability.js';
 import { summarizeSystemActivity } from '../lib/systemIdle.js';
+import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
 import { listJobs, getRunningJob } from './mediaJobQueue/index.js';
 import { sanitizeJob } from './mediaJobQueue/sanitizeJob.js';
 import { listGeneratingModelSummaries } from './imageTo3d/models.js';
@@ -65,7 +66,9 @@ function llmRunState(count) {
  * A task stays 'pending' until spawnAgentForTask flips it to 'in_progress',
  * which happens AFTER its agent is registered as running — so a snapshot taken
  * in between would count one task as queued AND active, and the widget read
- * 'N active, N queued' for a queue of N. A task a live agent holds is active.
+ * 'N active, N queued' for a queue of N. A task a live agent holds is active —
+ * the settlement in lib/cosSpawnWindow.js, shared with every other surface that
+ * pairs the two lists.
  *
  * When the agent list is readable, BOTH counts come off that one read: taking
  * `active` from `getStatus()` and `queued` from here would let the two skew
@@ -84,14 +87,14 @@ function llmRunState(count) {
  */
 function agentCounts(agents, cosStatus, pendingTaskIds) {
   const runningAgents = agents === null ? null : agents.filter((agent) => agent.status === 'running');
-  const claimedTaskIds = new Set((runningAgents || []).map((agent) => agent.taskId).filter(Boolean));
+  const heldByRunningAgent = runningAgentsByTaskId(agents);
   return {
     // An unreadable pending-task list is its own untrusted reading: zero queued
     // tasks is the value that unlocks a restart, so it may not come from a
     // failed read any more than a zero agent count may.
     trusted: (agents !== null || Boolean(cosStatus)) && pendingTaskIds !== null,
     active: runningAgents ? runningAgents.length : (cosStatus?.activeAgents || 0),
-    queued: pendingTaskIds ? pendingTaskIds.filter((id) => !claimedTaskIds.has(id)).length : 0,
+    queued: pendingTaskIds ? unclaimedTaskIds(pendingTaskIds, heldByRunningAgent).length : 0,
   };
 }
 

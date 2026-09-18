@@ -54,6 +54,7 @@ import { PERSISTENT_MIND_SCHEMA_VERSION } from '../lib/persistentMind.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
+const SPAWN_WINDOW_SRC = readFileSync(join(__dirname, '..', 'lib', 'cosSpawnWindow.js'), 'utf-8');
 // The task-generation engine (evaluateTasks + the improvement/idle generators
 // + applyPlanIdMetadata) was extracted to cosTaskGenerator.js (issue-741). The
 // spawn-side scheduler (dequeueNextTask, tryImmediateSpawn, the tasks:changed
@@ -2034,7 +2035,7 @@ describe('forceSpawnTask — pre-validate provider before task:ready', () => {
   // landing there answers `{ success: true }` and toasts "Spawning" for a second
   // dispatch that withSpawnDedupGuard then silently drops.
   it('refuses a task a running agent already holds', () => {
-    const holderIdx = forceFn.indexOf('agent.taskId === taskId');
+    const holderIdx = forceFn.indexOf('spawningAgentForTask(taskId, runningAgents)');
     expect(holderIdx, 'forceSpawnTask must reject a task a running agent holds')
       .toBeGreaterThan(-1);
     expect(forceFn, 'the refusal must name the agent that holds it')
@@ -2048,11 +2049,19 @@ describe('forceSpawnTask — pre-validate provider before task:ready', () => {
   // route never runs cleanupZombieAgents — so an unbounded refusal would turn the
   // task's own recovery action into a permanent no-op.
   it('bounds the refusal so a stale holder can still be superseded', () => {
-    expect(forceFn, 'the holder refusal must be age-bounded')
-      .toContain('SPAWN_CLAIM_GRACE_MS');
+    // The bound now lives in lib/cosSpawnWindow.js, shared with the status
+    // counters and the task lists — so the pending LIST that renders the "Run
+    // now" button and the refusal behind it agree about which holders are stale.
+    expect(forceFn, 'the holder refusal must go through the age-bounded settlement')
+      .toMatch(/spawningAgentForTask\(taskId, runningAgents\)/);
     expect(forceFn, 'a stale holder must fall through to the spawn, not return')
-      .toMatch(/holderAgeMs < SPAWN_CLAIM_GRACE_MS/);
-    expect(COS_SRC, 'the grace window must be defined').toMatch(/const SPAWN_CLAIM_GRACE_MS = /);
+      .toMatch(/const holder = runningAgents\.get\(taskId\);/);
+    expect(COS_SRC, 'the bound must come from the shared settlement, not a local copy')
+      .toMatch(/spawningAgentForTask[\s\S]*?from '\.\.\/lib\/cosSpawnWindow\.js'/);
+    expect(COS_SRC, 'no second grace window may be declared here')
+      .not.toMatch(/const SPAWN_CLAIM_GRACE_MS = /);
+    expect(SPAWN_WINDOW_SRC, 'the grace window must be defined')
+      .toMatch(/export const SPAWN_CLAIM_GRACE_MS = /);
   });
 });
 

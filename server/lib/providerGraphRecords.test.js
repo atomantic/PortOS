@@ -437,6 +437,72 @@ describe('a connection several harnesses share through different protocols', () 
   });
 });
 
+describe('derived presets declare the instance they sit on (#7565)', () => {
+  const SERVICE = { id: 'svc-nim', revision: 3, kind: 'gateway:nvidia-nim', label: 'NVIDIA NIM', slug: 'nvidia-nim', definitionId: 'nvidia-nim', plan: 'free',
+    transports: { openai: { baseUrl: 'https://integrate.api.nvidia.com/v1' } }, credentials: { apiKey: 'nim-key' }, catalog: { state: 'known', models: ['nvidia/example'] } };
+  // A "Save as preset" of `direct.api@nvidia-nim`: its profile reads back as
+  // kind `api`, not `gateway:nvidia-nim` — containment alone would never place
+  // it on the instance it was derived from.
+  const DIRECT_PRESET = {
+    id: 'direct-api-nvidia-nim', name: 'Direct API · NVIDIA NIM', type: 'api', harnessId: 'direct', method: 'api', serviceId: 'nvidia-nim',
+    endpoint: 'https://integrate.api.nvidia.com/v1', apiKey: 'nim-key', enabled: true, models: ['nvidia/example'], envVars: {}, secretEnvVars: [],
+  };
+  const OPENCODE_PRESET = {
+    id: 'opencode-cli-nvidia-nim', name: 'OpenCode · NVIDIA NIM', type: 'cli', command: 'opencode', harnessId: 'opencode', method: 'cli', serviceId: 'nvidia-nim',
+    gatewayBacked: 'nvidia-nim', endpoint: 'https://integrate.api.nvidia.com/v1', enabled: true, models: ['nvidia/example'],
+    envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: 'allow', provider: { 'nvidia-nim': { npm: '@ai-sdk/openai-compatible', name: 'NVIDIA NIM', options: { baseURL: 'https://integrate.api.nvidia.com/v1' } } } }), NVIDIA_API_KEY: 'nim-key' },
+    secretEnvVars: ['NVIDIA_API_KEY'],
+  };
+  const graphWith = () => ({ connections: [structuredClone(SERVICE)], bindings: [], routes: [] });
+
+  it('imports a saved preset ONTO the instance it names, never as a fragment of its own', () => {
+    const plan = planGraphReconciliation(graphWith(), [structuredClone(DIRECT_PRESET), structuredClone(OPENCODE_PRESET)], { mintId: minter('new') });
+    expect(plan.imports.connections).toEqual([]);
+    expect(plan.imports.bindings).toHaveLength(2);
+    expect(plan.imports.bindings.every((binding) => binding.connectionId === 'svc-nim')).toBe(true);
+    expect(plan.imports.bindings.map((binding) => binding.harnessId).sort()).toEqual([null, 'opencode']);
+    expect(plan.imports.routes.map((route) => route.providerId).sort()).toEqual(['direct-api-nvidia-nim', 'opencode-cli-nvidia-nim']);
+    // The projected snapshot is the record's own owned values, so the next pass is a no-op.
+    const direct = plan.imports.routes.find((route) => route.providerId === 'direct-api-nvidia-nim');
+    expect(direct.projected).toEqual(connectionOwnedSnapshot(DIRECT_PRESET));
+  });
+
+  it('takes a distinct variant key when the harness already sits on that instance', () => {
+    const graph = graphWith();
+    graph.bindings.push({ id: 'b-existing', revision: 1, connectionId: 'svc-nim', harnessId: 'opencode', variantKey: 'default', label: 'x', enabled: true, selectedModels: [] });
+    const plan = planGraphReconciliation(graph, [structuredClone(OPENCODE_PRESET)], { mintId: minter('new') });
+    expect(plan.imports.bindings[0]).toMatchObject({ connectionId: 'svc-nim', harnessId: 'opencode', variantKey: 'variant:opencode-cli-nvidia-nim' });
+  });
+
+  it('keeps a declared preset on its instance across passes even where containment would move it', () => {
+    const graph = graphWith();
+    graph.bindings.push({ id: 'b-direct', revision: 1, connectionId: 'svc-nim', harnessId: null, variantKey: 'default', label: 'x', enabled: true, selectedModels: [] });
+    graph.routes.push({ providerId: 'direct-api-nvidia-nim', bindingId: 'b-direct', mode: 'api', modelMap: {}, projected: connectionOwnedSnapshot(DIRECT_PRESET), pending: null, pendingRevision: null });
+    const plan = planGraphReconciliation(graph, [structuredClone(DIRECT_PRESET)], { mintId: minter('new') });
+    expect(reconciliationIsNoop(plan)).toBe(true);
+    expect(plan.regroups[0]).toMatchObject({ connectionAction: 'unchanged', bindingId: 'b-direct', routeIds: ['direct-api-nvidia-nim'] });
+  });
+
+  it('recovers an interrupted projection onto a derived preset like any route: retry while the file still holds the old value', () => {
+    const graph = graphWith();
+    graph.bindings.push({ id: 'b-direct', revision: 1, connectionId: 'svc-nim', harnessId: null, variantKey: 'default', label: 'x', enabled: true, selectedModels: [] });
+    const moved = connectionOwnedSnapshot({ ...DIRECT_PRESET, endpoint: 'https://nim.example.test/v1' });
+    graph.routes.push({ providerId: 'direct-api-nvidia-nim', bindingId: 'b-direct', mode: 'api', modelMap: {}, projected: connectionOwnedSnapshot(DIRECT_PRESET), pending: moved, pendingRevision: 2 });
+    const plan = planGraphReconciliation(graph, [structuredClone(DIRECT_PRESET)], { mintId: minter('new') });
+    expect(plan.retries).toEqual([{ providerId: 'direct-api-nvidia-nim', owned: moved }]);
+    expect(plan.conflicts).toEqual([]);
+    // Landed: the file already carries the new endpoint.
+    const landed = planGraphReconciliation(graph, [{ ...DIRECT_PRESET, endpoint: 'https://nim.example.test/v1' }], { mintId: minter('new') });
+    expect(landed.acknowledgements).toEqual([{ providerId: 'direct-api-nvidia-nim' }]);
+  });
+
+  it('still imports a preset naming an instance this graph does not have as its own fragment', () => {
+    const plan = planGraphReconciliation({ connections: [], bindings: [], routes: [] }, [structuredClone(DIRECT_PRESET)], { mintId: minter('new') });
+    expect(plan.imports.connections).toHaveLength(1);
+    expect(plan.imports.routes[0].providerId).toBe('direct-api-nvidia-nim');
+  });
+});
+
 describe('a mode-only legacy edit stays route-scoped', () => {
   it('changes no connection-owned value and plans no graph change', () => {
     const providers = providersFixture();

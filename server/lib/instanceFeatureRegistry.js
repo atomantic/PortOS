@@ -37,6 +37,15 @@ export const INSTANCE_FEATURES = Object.freeze([
     defaultEnabled: true,
   }),
   Object.freeze({
+    id: 'autobiography',
+    label: 'Autobiography',
+    description: 'A daily prompt to write one short life story, with suggested questions and storytelling-craft feedback.',
+    // Default ON, like POST: turning the FEATURE off hides the tab and silences
+    // the scheduler entirely, while the daily prompt itself stays separately
+    // opt-in (config.reminder) so an enabled feature never nudges uninvited.
+    defaultEnabled: true,
+  }),
+  Object.freeze({
     id: 'datadog',
     label: 'DataDog',
     description: 'Error monitoring dashboards for apps wired to a DataDog instance.',

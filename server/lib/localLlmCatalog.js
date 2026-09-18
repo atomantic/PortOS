@@ -83,6 +83,19 @@ export const LOCAL_LLM_CATEGORIES = [
 // to the Ollama library as `:cloud`-only tags whose manifests carry no weights —
 // pulling one gets you an API passthrough, not a local model. Verify a tag has a
 // non-zero manifest size before adding it here.
+//
+// Nor may an entry name weights whose KERNELS the backend lacks. Ollama and LM
+// Studio both embed a stock llama.cpp, so a build carrying a vendor's private
+// quantization type belongs in `specDecodePresets.js` (the llama-server launcher,
+// where the operator chooses the binary) and NOT here. Ternary Bonsai 2 27B is
+// the worked example: stock llama.cpp rejects its `PQ2_0`/`PTQ1_0` packs as
+// unknown types, and — the reason this is a hard rule rather than a preference —
+// it loads a plain ternary `Q2_0` with no warning and generates garbage, so the
+// install would look like it worked. The same applies on the MLX side: that
+// model's `mlx-2bit` pack declares a `prism_hadamard_qwen35` model type and ships
+// its own loader, and a stock MLX loader skips the activation transform and
+// returns wrong output rather than an error. See
+// docs/research/2026-09-18-ternary-bonsai-2-27b.md.
 export const LOCAL_LLM_CATALOG = [
   {
     key: 'vulnllm-r-7b-gguf', name: 'VulnLLM-R 7B (GGUF)',

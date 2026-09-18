@@ -15,8 +15,11 @@ import { screen, waitForElementToBeRemoved } from '@testing-library/react';
  * `waitForElementToBeRemoved` throws when the element was not there to begin
  * with, so a label that stops matching fails loudly instead of silently
  * becoming a no-op. Pass the `label` a page hands its `PageSkeleton`, which is
- * the skeleton's accessible name.
+ * the skeleton's accessible name — or the accessible name of whatever else the
+ * page shows while loading, e.g. the `text` handed to a `BrailleSpinner`
+ * (`DailyLogTab` waits on `'Loading'`).
  *
- * @param {string} label the PageSkeleton `label` prop, e.g. 'Loading timeline project'
+ * @param {string} label the loading indicator's accessible name, e.g. the
+ *   PageSkeleton `label` prop 'Loading timeline project'
  */
 export const awaitPageLoaded = (label) => waitForElementToBeRemoved(screen.getByLabelText(label));

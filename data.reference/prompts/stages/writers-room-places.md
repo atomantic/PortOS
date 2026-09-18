@@ -16,6 +16,16 @@ The writer may have already edited some entries. Treat any non-empty field below
 {{existingPlacesJson}}
 ```
 
+{{#factual}}
+## Lens: non-fiction
+
+This text is **first-person non-fiction about real places** — a memoir, journal entry, voice memo, or captured thought. The locations in it exist. Read it as a record, not as a story:
+
+- **Name each place as the writer names it** — `the kitchen`, `the back porch`, `the highway out of town`. Do not rename a real place into a genre-flavored invention.
+- **Build the slugline from the writer's own wording.** It is still the storyboard's match key, so keep it consistent across the text — but do not invent a cinematic location name to fill it.
+- **Describe only what the text states.** Omit `palette`, `era`, `weather`, or `recurringDetails` rather than inventing them: a guess about a place someone actually lived is a fabrication, not a helpful default. **A wrong guess is worse than a gap.**
+{{/factual}}
+
 ## Source prose
 
 ```

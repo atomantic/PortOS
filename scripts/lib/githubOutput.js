@@ -62,3 +62,54 @@ export function writeStepSummary(markdown, env = process.env) {
   if (!path) return;
   appendFileSync(path, `${markdown}\n`);
 }
+
+/**
+ * A workflow-sourced name (a job's, a step's) rendered into a log line.
+ *
+ * Actions parses a line beginning `::` as a workflow command, and the name
+ * comes from a workflow file, so a newline or a `::` would let a name forge a
+ * command instead of appearing in one. Capped because these land in an
+ * annotation title, not in a report.
+ *
+ * @param {unknown} value
+ * @param {string} [fallback] - used when the value is empty
+ * @returns {string}
+ */
+export function safeWorkflowText(value, fallback = '') {
+  return String(value || fallback)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/::/g, ':')
+    .slice(0, 80);
+}
+
+/**
+ * Escaping for the two halves of a workflow command, which differ: a property
+ * value is delimited by `:` and `,` as well, so those need encoding there and
+ * must NOT be encoded in the message (where they are ordinary punctuation).
+ * `%` goes first, or it would re-encode the escapes that follow it.
+ */
+const escapeCommandData = (value) => String(value)
+  .replace(/%/g, '%25')
+  .replace(/\r/g, '%0D')
+  .replace(/\n/g, '%0A');
+const escapeCommandProperty = (value) => escapeCommandData(value)
+  .replace(/:/g, '%3A')
+  .replace(/,/g, '%2C');
+
+/**
+ * An `::error::` workflow annotation line, ready to print to stdout.
+ *
+ * Annotations are the one diagnostic surface that survives the run being
+ * cancelled out from under the job that wrote it: Actions records them the
+ * moment the line is printed, and renders them at the top of the pull
+ * request's Checks tab. That is why fail-fast reporting uses one — a job's
+ * step conclusions are readable over the API, but only by somebody who
+ * already knows to look (issue 7574).
+ *
+ * @param {string} title - short heading; shown in the Checks tab
+ * @param {string} message - the detail line
+ * @returns {string}
+ */
+export function formatErrorAnnotation(title, message) {
+  return `::error title=${escapeCommandProperty(title)}::${escapeCommandData(message)}`;
+}

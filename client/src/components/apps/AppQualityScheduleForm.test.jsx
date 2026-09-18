@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import AppQualityScheduleForm from './AppQualityScheduleForm';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 vi.mock('../../services/apiApps', () => ({
   getAppQualitySchedule: vi.fn(),
@@ -119,7 +120,7 @@ describe('AppQualityScheduleForm', () => {
     fireEvent.click(screen.getByLabelText('Security'));
     expect(screen.getByRole('button', { name: /Re-planning/ })).toBeDisabled();
     expect(applyAppQualitySchedule).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByRole('button', { name: /Apply schedule/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /Apply schedule/ });
   });
 
   it('re-enables Apply after a failed save instead of locking the form', async () => {

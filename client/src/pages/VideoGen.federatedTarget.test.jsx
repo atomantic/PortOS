@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 import {
   loadVideoGenPage,
@@ -62,7 +63,7 @@ describe('VideoGen federated render target', () => {
   it('submits the peer, its engine and its model — and no local-only fields', async () => {
     await startRender();
     fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /^Generate$/ });
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Generate$/ })); });
 
@@ -103,7 +104,7 @@ describe('VideoGen federated render target', () => {
   it('lets image mode be selected on a peer, since a mode alone conditions nothing', async () => {
     await startRender();
     fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /^Generate$/ });
 
     fireEvent.click(screen.getByRole('button', { name: /^Image$/ }));
 
@@ -119,7 +120,7 @@ describe('VideoGen federated render target', () => {
   it.each([['Extend'], ['Audio']])('blocks %s mode, which cannot cross at all', async (label) => {
     await startRender();
     fireEvent.change(await screen.findByRole('combobox', { name: /generation target/i }), { target: { value: 'peer-example' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/ })).toBeEnabled());
+    await findEnabledByRole('button', { name: /^Generate$/ });
 
     fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${label}$`) }));
 

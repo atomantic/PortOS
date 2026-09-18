@@ -5,17 +5,20 @@
  *   POST /:id/pull-requests/:number/resolve         → queue a review-loop agent
  *   POST /:id/pull-requests/:number/review          → queue pr-reviewer for ONE PR
  *   POST /:id/pull-requests/:number/do-review       → queue /do:review for ONE PR
+ *   POST /:id/pull-requests/:number/merge           → merge it now, no agent
  *
- * No POST route merges a user's PR directly. `/resolve` queues PortOS's
- * existing review-loop follow-up, which owns fetching feedback, fixing the
- * branch, waiting for checks, and merging — and starts it immediately, because
- * pressing the button is the approval. `/review` queues the `pr-reviewer`
- * scheduled task narrowed to a single request, so the security-scan → review
- * pipeline that normally sweeps every external PR can be pointed at one.
- * `/do-review` runs the bundled `/do:review` workflow against one request with
- * the install's Code Review Defaults and publishes an inline review — the only
- * one of the three that offers a review on EVERY open GitHub PR, whoever opened
- * it, because `pr-reviewer` covers untrusted contributors alone.
+ * Three of the four queue an agent. `/resolve` queues PortOS's existing
+ * review-loop follow-up, which owns fetching feedback, fixing the branch,
+ * waiting for checks, and merging — and starts it immediately, because pressing
+ * the button is the approval. `/review` queues the `pr-reviewer` scheduled task
+ * narrowed to a single request, so the security-scan → review pipeline that
+ * normally sweeps every external PR can be pointed at one. `/do-review` runs the
+ * bundled `/do:review` workflow against one request with the install's Code
+ * Review Defaults and publishes an inline review — the only one of the three
+ * that offers a review on EVERY open GitHub PR, whoever opened it, because
+ * `pr-reviewer` covers untrusted contributors alone. `/merge` is the one that
+ * queues nothing and spends nothing: the forge's own merge button, for a change
+ * the user has already read.
  */
 
 import { Router } from 'express';
@@ -29,6 +32,12 @@ import { resolveReviewLoopOptions } from '../../services/codeReview.js';
 import { getAllTasks } from '../../services/cos.js';
 import { spawnReviewLoopFollowUp } from '../../services/agentWorktreeCleanup.js';
 import { listAppPullRequests } from '../../services/appPullRequests.js';
+import {
+  MERGE_METHODS,
+  DEFAULT_MERGE_METHOD,
+  isDirectlyMergeablePullRequest,
+  mergeAppPullRequest,
+} from '../../services/appPullRequestMerge.js';
 import { isDoReviewTask, spawnPrDoReviewTask } from '../../services/prDoReviewTask.js';
 import {
   isReviewablePullRequest,
@@ -42,6 +51,14 @@ const router = Router();
 
 const pullRequestParamsSchema = z.object({
   number: z.coerce.number().int().positive(),
+});
+
+// The direct merge's only inputs; the tab always sends both. A caller that omits
+// `deleteBranch` gets the conservative answer — the flag is irreversible on the
+// forge, and the merge service refuses it outright for a long-lived head.
+const pullRequestMergeSchema = z.object({
+  method: z.enum(MERGE_METHODS).optional(),
+  deleteBranch: z.boolean().optional(),
 });
 
 const ACTIVE_TASK_STATUSES = new Set(['pending', 'in_progress', 'blocked']);
@@ -196,10 +213,25 @@ async function listWithActionState(app) {
         doReviewAction: actionFor(pullRequest, tasks, app.id, isDoReviewTaskFor),
         reviewEligible: reviewEligible(pullRequest),
         doReviewEligible: isDoReviewablePullRequest(result, pullRequest),
+        mergeEligible: isDirectlyMergeablePullRequest(pullRequest),
       })),
     },
     tasks,
   };
+}
+
+// The one spelling of "this row is still open", shared by every route that
+// re-reads the open set before acting on a single request — the message and
+// code would otherwise drift across three doors with nothing catching it.
+function findOpenPullRequest(result, number) {
+  const pullRequest = (result.pullRequests || []).find(candidate => candidate.number === number);
+  if (!pullRequest) {
+    throw new ServerError(`Open pull request or merge request #${number} was not found`, {
+      status: 404,
+      code: 'PULL_REQUEST_NOT_OPEN',
+    });
+  }
+  return pullRequest;
 }
 
 function throwForgeReadError(result) {
@@ -247,13 +279,7 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     });
   }
 
-  const pullRequest = result.pullRequests.find(candidate => candidate.number === number);
-  if (!pullRequest) {
-    throw new ServerError(`Open pull request or merge request #${number} was not found`, {
-      status: 404,
-      code: 'PULL_REQUEST_NOT_OPEN',
-    });
-  }
+  const pullRequest = findOpenPullRequest(result, number);
   if (!pullRequest.url || !pullRequest.headBranch) {
     throw new ServerError(`Pull request or merge request #${number} has no usable forge URL or source branch`, {
       status: 502,
@@ -349,6 +375,51 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     duplicate: task.duplicate === true,
     started,
     queueReason,
+  });
+}));
+
+// POST /api/apps/:id/pull-requests/:number/merge — merge one open request NOW,
+// with no agent and no model spend. The open set is re-read first, exactly as
+// `/resolve` does: a tab left open for an hour must not merge a request that has
+// since been closed, replaced, or turned into a draft.
+router.post('/:id/pull-requests/:number/merge', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const { number } = validateRequest(pullRequestParamsSchema, req.params);
+  const { method = DEFAULT_MERGE_METHOD, deleteBranch = false } =
+    validateRequest(pullRequestMergeSchema, req.body || {});
+
+  const result = await listAppPullRequests(app);
+  throwForgeReadError(result);
+
+  const pullRequest = findOpenPullRequest(result, number);
+  if (!isDirectlyMergeablePullRequest(pullRequest)) {
+    throw new ServerError(`${result.forge === 'gitlab' ? 'Merge' : 'Pull'} request #${number} is a draft — mark it ready for review before merging`, {
+      status: 409,
+      code: 'PULL_REQUEST_IS_DRAFT',
+    });
+  }
+
+  const merge = await mergeAppPullRequest(app, pullRequest, { method, deleteBranch });
+  if (!merge.ok) {
+    const refused = merge.code === 'method-not-allowed';
+    throw new ServerError(merge.error, {
+      // Only the forge failing the merge itself is a bad gateway; everything
+      // else is this request asking for something the project does not allow.
+      status: merge.code === 'merge-failed' ? 502 : 409,
+      code: refused ? 'MERGE_METHOD_NOT_ALLOWED' : 'PULL_REQUEST_MERGE_FAILED',
+      context: { method, reason: merge.code },
+    });
+  }
+
+  res.json({
+    appId: app.id,
+    appName: app.name,
+    number,
+    merged: true,
+    method: merge.method,
+    // The ANSWER, not the request: a long-lived head (a `main → release`
+    // request) merges without its branch being deleted.
+    deletedBranch: merge.deletedBranch,
   });
 }));
 
@@ -470,13 +541,7 @@ router.post('/:id/pull-requests/:number/do-review', loadApp, asyncHandler(async 
     );
   }
 
-  const pullRequest = (result.pullRequests || []).find(candidate => candidate.number === number);
-  if (!pullRequest) {
-    throw new ServerError(`Open pull request or merge request #${number} was not found`, {
-      status: 404,
-      code: 'PULL_REQUEST_NOT_OPEN',
-    });
-  }
+  const pullRequest = findOpenPullRequest(result, number);
   if (!isDoReviewablePullRequest(result, pullRequest)) {
     throw new ServerError(`Pull request #${number} has no usable forge URL`, {
       status: 502,

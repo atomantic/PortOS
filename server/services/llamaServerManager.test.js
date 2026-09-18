@@ -75,6 +75,7 @@ describe('llamaServerManager', () => {
   let modelDir;
   let modelPath;
   let draftPath;
+  let projectorPath;
   let homebrewBinaryPath;
   let homebrewPrefix;
   let pm2State = null;
@@ -90,8 +91,10 @@ describe('llamaServerManager', () => {
     modelDir = await mkdtemp(join(tmpdir(), 'portos-llama-'));
     modelPath = join(modelDir, 'model.gguf');
     draftPath = join(modelDir, 'draft.gguf');
+    projectorPath = join(modelDir, 'mmproj.gguf');
     await writeFile(modelPath, 'gguf');
     await writeFile(draftPath, 'gguf');
+    await writeFile(projectorPath, 'gguf');
     const homebrewRoot = join(modelDir, 'homebrew');
     const cellarRoot = join(homebrewRoot, 'Cellar', 'llama.cpp', 'build-100');
     homebrewPrefix = join(homebrewRoot, 'opt', 'llama.cpp');
@@ -336,6 +339,45 @@ describe('llamaServerManager', () => {
     expect(status.config.parallel).toBe(1);
   });
 
+  // The whole point of #7611: a vision-capable GGUF loads text-only unless
+  // llama.cpp is handed its projector sidecar. Both halves are asserted here —
+  // the flag lands when a projector is set, and the line is UNCHANGED when one
+  // is not, because every existing launch must keep producing the same argv.
+  it('puts --mmproj on the launch line for a projector, and nothing at all without one', async () => {
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+
+    await startLlamaServer({ model: modelPath, specType: 'none', projector: projectorPath });
+    const withProjector = execPm2Calls.find((c) => c[0] === 'start').slice(8);
+    expect(withProjector.slice(0, 4)).toEqual(['-m', modelPath, '--mmproj', projectorPath]);
+    const running = await getLlamaServerStatus();
+    expect(running.config.projector).toBe(projectorPath);
+
+    await stopLlamaServer();
+    execPm2Calls = [];
+    await startLlamaServer({ model: modelPath, specType: 'none' });
+    const withoutProjector = execPm2Calls.find((c) => c[0] === 'start').slice(8);
+    expect(withoutProjector).not.toContain('--mmproj');
+    expect(withoutProjector).toEqual(withProjector.filter((a) => a !== '--mmproj' && a !== projectorPath));
+    expect((await getLlamaServerStatus()).config.projector).toBeNull();
+  });
+
+  // Vision is orthogonal to speculative decoding — no spec type turns it on or
+  // off — so the projector survives the resolution that drops an unused drafter.
+  it('keeps the projector when an ngram spec type drops the drafter', async () => {
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+
+    await startLlamaServer({
+      model: modelPath,
+      draftModel: draftPath,
+      projector: projectorPath,
+      specType: 'ngram-map-k',
+    });
+
+    const startCall = execPm2Calls.find((c) => c[0] === 'start');
+    expect(startCall).not.toContain('--model-draft');
+    expect(startCall[startCall.indexOf('--mmproj') + 1]).toBe(projectorPath);
+  });
+
   it('starts an ngram spec type with no drafter model at all', async () => {
     // `ngram-*` implementations draft from the tokens already in context, so a
     // drafter GGUF is not just optional — there is nothing to download.
@@ -447,6 +489,11 @@ describe('llamaServerManager', () => {
     await expect(startLlamaServer({ model: modelPath, draftModel: join(modelDir, 'absent.gguf') })).rejects.toThrow(
       /drafter model was not found/i
     );
+    // Same gate for the projector: an `--mmproj` llama-server cannot open is a
+    // failed launch, so it is refused here rather than in a server log (#7611).
+    await expect(startLlamaServer({ model: modelPath, projector: join(modelDir, 'absent.gguf') })).rejects.toThrow(
+      /vision projector was not found/i
+    );
     // The weights are a separate multi-gigabyte download; spawning anyway just
     // buries that in a server log.
     expect(execPm2Calls.filter((c) => c[0] === 'start')).toHaveLength(0);
@@ -482,7 +529,7 @@ describe('llamaServerManager', () => {
       name: LLAMA_APP,
       status: 'online',
       pid: 98765,
-      args: ['-m', modelPath, '--model-draft', draftPath, '--port', '8090', '--host', '127.0.0.1', '--parallel', '4'],
+      args: ['-m', modelPath, '--model-draft', draftPath, '--mmproj', projectorPath, '--port', '8090', '--host', '127.0.0.1', '--parallel', '4'],
     };
 
     const status = await getLlamaServerStatus();
@@ -492,6 +539,10 @@ describe('llamaServerManager', () => {
     expect(status.endpoint).toBe('http://127.0.0.1:8090/v1');
     expect(status.config?.model).toBe(modelPath);
     expect(status.config?.draftModel).toBe(draftPath);
+    // Recovered from argv too, so the status card describes a running vision
+    // launch correctly — and so a relaunch replays the same line rather than
+    // silently demoting the daemon to text-only.
+    expect(status.config?.projector).toBe(projectorPath);
     expect(status.config?.parallel).toBe(4);
   });
 

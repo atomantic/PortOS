@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import MediaAnnotate from './MediaAnnotate';
+import { awaitEnabled } from '../test/enabledBarrier.js';
 
 // Re-render (issue #2036 phase 2) is the focus: annotate an image, then feed the
 // flattened markup back through img2img. The canvas itself is exercised by
@@ -71,8 +72,7 @@ describe('MediaAnnotate re-render with annotations', () => {
     renderPage();
 
     // The button enables once the canvas reports dims AND saved strokes load.
-    const btn = await screen.findByTitle('Re-render this image guided by your annotations');
-    await waitFor(() => expect(btn).not.toBeDisabled());
+    const btn = await awaitEnabled(() => screen.getByTitle('Re-render this image guided by your annotations'));
     fireEvent.click(btn);
 
     // Provider/model is visible before any AI call (no cold-bootstrap).
@@ -97,8 +97,7 @@ describe('MediaAnnotate re-render with annotations', () => {
     getRegenAvailability.mockResolvedValue({ available: false, reason: 'No local FLUX runner installed.' });
     renderPage();
 
-    const btn = await screen.findByTitle('Re-render this image guided by your annotations');
-    await waitFor(() => expect(btn).not.toBeDisabled());
+    const btn = await awaitEnabled(() => screen.getByTitle('Re-render this image guided by your annotations'));
     fireEvent.click(btn);
 
     expect(await screen.findByText('No local FLUX runner installed.')).toBeInTheDocument();
@@ -133,8 +132,7 @@ describe('MediaAnnotate blank-canvas sketch (phase 3)', () => {
     // No img2img availability probe for a blank canvas.
     expect(getRegenAvailability).not.toHaveBeenCalled();
 
-    const saveBtn = await screen.findByTitle('Save sketch');
-    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+    const saveBtn = await awaitEnabled(() => screen.getByTitle('Save sketch'));
     fireEvent.click(saveBtn);
     await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledTimes(1));
     expect(saveMediaSketch).toHaveBeenCalledWith(
@@ -151,8 +149,7 @@ describe('MediaAnnotate blank-canvas sketch (phase 3)', () => {
     ['invalid dimensions', '?w=invalid&h=Infinity', 1024, 1024],
   ])('saves the canvas size for %s', async (_label, search, width, height) => {
     renderBlank(search);
-    const saveBtn = await screen.findByTitle('Save sketch');
-    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+    const saveBtn = await awaitEnabled(() => screen.getByTitle('Save sketch'));
     fireEvent.click(saveBtn);
     await waitFor(() => expect(saveMediaSketch).toHaveBeenCalledWith(
       'sketch:11111111-1111-1111-1111-111111111111',

@@ -27,6 +27,7 @@ import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
 import { isApiProvider } from '../../../utils/providers';
+import TwinProviderPicker from '../TwinProviderPicker.jsx';
 import ObservedTasteEvidence from '../ObservedTasteEvidence';
 import { formatDateNumeric } from '../../../utils/formatters';
 
@@ -783,23 +784,13 @@ export default function TasteTab({ onRefresh }) {
             </p>
           </div>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full sm:w-auto">
-            <select
-              aria-label="AI provider and model"
-              value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
-              onChange={(e) => {
-                const [providerId, model] = e.target.value.split(':');
-                setSelectedProvider({ providerId, model });
-              }}
-              className="px-3 py-3 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-white text-sm"
-            >
-              {providers.map(p => (
-                (p.models || [p.defaultModel]).filter(Boolean).map(model => (
-                  <option key={`${p.id}:${model}`} value={`${p.id}:${model}`}>
-                    {p.name} - {model}
-                  </option>
-                ))
-              ))}
-            </select>
+            <TwinProviderPicker
+              compact
+              className="flex-1 min-w-0"
+              providers={providers}
+              selected={selectedProvider}
+              onChange={setSelectedProvider}
+            />
             <button
               onClick={handleGenerateOverallSummary}
               disabled={generatingSummary || (profile?.completedCount || 0) === 0}

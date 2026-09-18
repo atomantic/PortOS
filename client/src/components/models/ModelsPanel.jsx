@@ -5,13 +5,29 @@ import DuplicateModelWeights from './DuplicateModelWeights.jsx';
 import MemoryManagement from '../settings/MemoryManagement.jsx';
 import Banner from '../ui/Banner.jsx';
 import CleanupControl from '../system-resources/CleanupControl.jsx';
-import { formatBytes } from '../../utils/formatters.js';
+import { formatBytes, timeAgo } from '../../utils/formatters.js';
 
 const BACKEND_LABEL = {
   huggingface: 'Hugging Face',
   lora: 'LoRA',
   ollama: 'Ollama',
   lmstudio: 'LM Studio',
+};
+
+/**
+ * When these weights arrived, phrased honestly about how PortOS knows.
+ *
+ * A row PortOS installed itself carries the real moment it landed. A row a scan
+ * ADOPTED — weights pulled by another tool, or by an install predating the
+ * manifest — only knows when PortOS first looked at the disk, so it must not
+ * claim a year-old model was installed this afternoon. `source` is what
+ * distinguishes them; a scan-built row carries neither field and says nothing.
+ */
+const provenanceLabel = (model) => {
+  if (!model.installedAt) return null;
+  return model.source === 'scan'
+    ? `tracked since ${timeAgo(model.installedAt)}`
+    : `installed ${timeAgo(model.installedAt)}`;
 };
 
 const normalizeLmStudioRepo = (value) => String(value || '')
@@ -26,7 +42,9 @@ function InventoryEmpty({ loading, onRun }) {
     <section className="rounded-2xl border border-dashed border-port-accent/40 bg-port-accent/5 px-5 py-7 text-center">
       <Download className="mx-auto mb-3 text-port-accent" size={25} />
       <h3 className="font-semibold text-white">Inventory downloaded models</h3>
-      <p className="mx-auto mt-2 max-w-xl text-sm text-gray-400">Scan Hugging Face, LoRA, Ollama, and LM Studio storage to see what is installed.</p>
+      <p className="mx-auto mt-2 max-w-xl text-sm text-gray-400">
+        Nothing has been tracked yet. Scan Hugging Face, LoRA, Ollama, and LM Studio storage once — after that PortOS keeps the list current as you install and remove models.
+      </p>
       <button
         type="button"
         onClick={onRun}
@@ -40,7 +58,19 @@ function InventoryEmpty({ loading, onRun }) {
   );
 }
 
-export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
+/**
+ * Residency above, the downloaded-model inventory below.
+ *
+ * `report` is either a live disk scan or the manifest-backed record of it
+ * (`inventorySource`), which the server shapes identically on purpose — the rows,
+ * their cleanup candidates and their delete actions are built by the same server
+ * helpers either way, so this component never needs to know which it is holding
+ * beyond the one provenance line it prints. `initializing` covers the brief read
+ * of that record: without it the run-the-inventory prompt flashes on every visit
+ * to an install that has one.
+ */
+export default function ModelsPanel({ report, loading, initializing = false, onRunReport, cleanup }) {
+  const fromManifest = report?.inventorySource === 'manifest';
   const [residency, setResidency] = useState(null);
   const candidates = new Map((report?.cleanupCandidates || []).map((item) => [item.id, item]));
   const loaded = useMemo(() => ({
@@ -64,7 +94,11 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
 
       <DuplicateModelWeights key={report?.generatedAt} duplicates={report?.modelDuplicates} locked={loading || cleanup.locked} onRefresh={onRunReport} />
 
-      {!report ? <InventoryEmpty loading={loading} onRun={onRunReport} /> : (
+      {!report ? (initializing ? (
+        <section className="rounded-2xl border border-port-border bg-port-card px-5 py-7 text-center text-sm text-gray-500" role="status">
+          Loading tracked model inventory…
+        </section>
+      ) : <InventoryEmpty loading={loading} onRun={onRunReport} />) : (
         <section className="rounded-2xl border border-port-border bg-port-card p-4 sm:p-5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -74,6 +108,14 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
               </div>
               <p className="mt-1 text-xs text-gray-500">
                 {report.models.downloaded.length} item{report.models.downloaded.length === 1 ? '' : 's'} · {Number.isFinite(report.models.totals.all) ? formatBytes(report.models.totals.all) : 'size unavailable'}
+                {' · '}
+                {fromManifest
+                  // A manifest with no `reconciledAt` is the reachable state where
+                  // PortOS recorded installs but no scan has ever corroborated them
+                  // against the disk. "last verified never" is accurate but reads
+                  // like a defect; name the state instead.
+                  ? (report.reconciledAt ? `tracked, last verified ${timeAgo(report.reconciledAt)}` : 'tracked, not yet verified against disk')
+                  : `scanned ${timeAgo(report.generatedAt)}`}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -83,9 +125,10 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
                 type="button"
                 onClick={onRunReport}
                 disabled={loading || cleanup.locked}
+                title="Rescan the model stores on disk and reconcile the tracked list — picks up models installed or deleted outside PortOS"
                 className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-2 text-xs text-gray-300 hover:bg-port-border/40 disabled:opacity-50"
               >
-                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
+                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> {loading ? 'Rescanning…' : 'Rescan disk'}
               </button>
             </div>
           </div>
@@ -142,7 +185,9 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
                       {effectiveLoaded && <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-[10px] uppercase text-purple-300">loaded</span>}
                       {residencyUnknown && <span className="rounded bg-port-warning/10 px-1.5 py-0.5 text-[10px] uppercase text-port-warning">status unknown</span>}
                     </div>
-                    {model.detail && <p className="mt-0.5 truncate text-xs text-gray-500">{model.detail}</p>}
+                    <p className="mt-0.5 truncate text-xs text-gray-500">
+                      {[model.detail, provenanceLabel(model)].filter(Boolean).join(' · ')}
+                    </p>
                   </div>
                   <div className="text-sm font-semibold tabular-nums text-white">
                     {Number.isFinite(model.sizeBytes) ? `${model.sizeIsEstimate ? '≈' : ''}${formatBytes(model.sizeBytes)}` : 'Size unavailable'}

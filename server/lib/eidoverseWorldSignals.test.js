@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { eidoverseHostId, eidoversePeerId } from './eidoverseWorldSignals.js';
+import { buildEidoverseObservation } from './eidoverseObservation.js';
+import { buildEidoverseWorldSignals, eidoverseHostId, eidoversePeerId } from './eidoverseWorldSignals.js';
 
 describe('Eidoverse public identity compatibility', () => {
   // Fixed outputs from the pre-extraction collector: changing these identities
@@ -18,5 +19,68 @@ describe('Eidoverse public identity compatibility', () => {
       expect(eidoversePeerId({ instanceId, id: 'legacy-peer' })).toBe(peerId);
     }
     expect(eidoversePeerId({})).toBe('peer-f486350022b1');
+  });
+});
+
+describe('Agent Foundry task signals', () => {
+  // Regression: the Agent Foundry read `attention` whenever ONE task sat in
+  // the queue, because `pending` matched the generic status word-matcher,
+  // while a `challenged` task — stuck until a human rules on it — matched
+  // nothing and read `steady`. The district ORs its sources, so the alarm
+  // fired on the resting state of the queue and stayed silent on the one
+  // status that actually wanted someone. Asserted through the district that
+  // consumes the signal, because the flip a mind acts on is the district's,
+  // not the individual task's.
+  const agentFoundryStatus = (tasks, agents = [{ id: 'agent-1', status: 'running' }]) => {
+    const source = buildEidoverseWorldSignals({
+      agents,
+      taskState: { tasks },
+      destinations: new Set(),
+    });
+    const { report } = buildEidoverseObservation({ source });
+    return report.places.find((place) => place.id === 'agents').status;
+  };
+
+  it('treats a queued task as ordinary work and reserves attention for a human decision', () => {
+    expect(agentFoundryStatus([{ id: 'task-1', status: 'pending' }])).toBe('active');
+    expect(agentFoundryStatus([
+      { id: 'task-1', status: 'pending' },
+      { id: 'task-2', status: 'in_progress' },
+    ])).toBe('active');
+
+    expect(agentFoundryStatus([{ id: 'task-1', status: 'pending', approvalRequired: true }])).toBe('attention');
+    expect(agentFoundryStatus([{ id: 'task-1', status: 'challenged' }])).toBe('attention');
+    expect(agentFoundryStatus([{ id: 'task-1', status: 'blocked' }])).toBe('attention');
+    expect(agentFoundryStatus(
+      [{ id: 'task-1', status: 'pending' }],
+      [{ id: 'agent-1', status: 'paused' }],
+    )).toBe('attention');
+  });
+
+  it('maps each task status to its own signal and drops finished work', () => {
+    const source = buildEidoverseWorldSignals({
+      agents: [],
+      taskState: {
+        tasks: [
+          { id: 'task-pending', status: 'pending' },
+          { id: 'task-approval', status: 'pending', approvalRequired: true },
+          { id: 'task-progress', status: 'in_progress' },
+          { id: 'task-blocked', status: 'blocked' },
+          { id: 'task-challenged', status: 'challenged' },
+          { id: 'task-hand-edited', status: '[>]' },
+          { id: 'task-done', status: 'completed' },
+        ],
+      },
+      destinations: new Set(),
+    });
+    expect(source.tasks.map((task) => task.status)).toEqual([
+      'steady', 'attention', 'active', 'error', 'attention', 'attention',
+    ]);
+  });
+
+  it('keeps an unreadable task list distinct from an empty one', () => {
+    expect(agentFoundryStatus([])).toBe('active');
+    expect(agentFoundryStatus([], [])).toBe('quiet');
+    expect(agentFoundryStatus(null, null)).toBe('unknown');
   });
 });

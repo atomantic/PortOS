@@ -145,7 +145,7 @@ describe('Layout — manifest-derived sidebar structure', () => {
       '/settings/backup', '/settings/credentials', '/settings/database', '/settings/features',
       '/settings/security', '/settings/sharing',
       '/settings/telegram', '/settings/voice', '/settings/mortalloom',
-      '/openclaw', '/prompts', '/ai'
+      '/openclaw', '/prompts', '/ai/presets', '/ai/harnesses', '/ai/services'
     ];
     for (const p of settingsPaths) {
       expect(NAV_PRESENTATION[p], `missing NAV_PRESENTATION for settings path ${p}`).toBeDefined();
@@ -551,7 +551,7 @@ describe('Layout — isFullWidthRoute classification', () => {
     ['/story-builder', false], ['/story-builder/s1/step', true],
     // AI Providers: the index AND its editor sub-routes (a drawer over the same
     // page) are full-width, but a sibling path sharing the `/ai` prefix is not.
-    ['/ai', true], ['/ai/new', true], ['/ai/edit/codex', true], ['/airlock', false],
+    ['/ai', true], ['/ai/presets', true], ['/ai/presets/codex', true], ['/ai/harnesses', true], ['/ai/services/ollama', true], ['/ai/edit/codex', true], ['/airlock', false],
     ['/pipeline', false], ['/pipeline/series/s1', true],
     ['/local-llm', false], ['/local-llm/m', true],
     // Music owns the same full-bleed title/tab/body shell as Media Gen, but

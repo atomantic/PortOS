@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { retypeSettled } from '../../test/settledInput';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 // Mock the media-jobs API so the queue renders a controlled job list without
 // the network. useAutoRefetch calls the fetcher on mount.
@@ -486,7 +487,7 @@ describe('MediaJobsQueue — training rows', () => {
 // tab. This is the gated (`enabled`) half of the migration; MemoryManagement
 // covers the unconditional half.
 describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
   afterEach(() => { vi.useRealTimers(); });
 
   it('pauses the checkpoint poll while the tab is hidden and re-fires on return', async () => {
@@ -494,7 +495,41 @@ describe('MediaJobsQueue — hidden-tab polling (#5697)', () => {
     listLoraTrainingCheckpoints.mockResolvedValue({ checkpoints: [] });
 
     render(<MediaJobsQueue kind="training" />);
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    /*
+     * Settle the mount on an OBSERVABLE state before taking the baseline call
+     * counts below.
+     *
+     * The tick-counting form this replaced — `advanceTimersByTimeAsync(0)`
+     * inside one `act` flush — settles a FIXED number of microtask turns, not
+     * "the mount fetches finished". A mount chain needing one more turn on a
+     * loaded machine is measured mid-flight, and the counts race BOTH ways
+     * (#7592/#7448): the checkpoint assertion goes red, and
+     * `listMediaJobs.mock.calls.length` is a baseline taken before the list had
+     * loaded — so "the count did not move" then passes for the wrong reason,
+     * because nothing had loaded to move it.
+     *
+     * `TrainingJobDetail` renders this copy only once `listLoraTrainingCheckpoints`
+     * has RESOLVED (`checkpoints` leaves its `null` loading sentinel), and it
+     * only renders at all once the job list has landed and produced the row —
+     * so it is the end of both mount chains.
+     *
+     * The fake clock stays armed across the mount, unlike BeeperTab's
+     * settle-then-arm order (#7592): BOTH polls under test here are
+     * `setInterval`s registered during mount, so a real-timer mount would leave
+     * them on the real clock where `advanceTimersByTimeAsync` cannot reach them
+     * — and both "did not fire while hidden" assertions would pass vacuously
+     * again, for a new reason.
+     *
+     * `shouldAdvanceTime` is what makes the barrier possible under that armed
+     * clock, and is NOT optional here. @testing-library/dom@10's
+     * `jestFakeTimersAreEnabled` only recognizes JEST's fake timers, so with
+     * vitest's installed `waitFor` takes its REAL-timer path and then waits on
+     * a timer the fake clock owns: against a frozen clock it never polls again
+     * and the test burns its whole timeout. Auto-advancing in step with real
+     * time keeps that poll alive at the cost of a few ms of fake clock — three
+     * orders below the 5s poll interval these assertions measure.
+     */
+    await screen.findByText(/No checkpoints yet/);
     expect(listLoraTrainingCheckpoints).toHaveBeenCalledTimes(1);
     const jobListCalls = listMediaJobs.mock.calls.length;
 
@@ -564,6 +599,9 @@ describe('MediaJobsQueue — video retry reference mode (#4874)', () => {
     await openRetryEditor(user);
     await waitFor(() => expect(screen.getByLabelText('Reference mode').value).toBe('inspire'));
 
+    // Wait for the model catalog itself, not just the (job-derived) reference
+    // mode, before selecting an option the catalog fetch hasn't rendered yet.
+    await screen.findByRole('option', { name: 'LTX-2.3' });
     await user.selectOptions(screen.getByLabelText('Model'), 'ltx2-model');
     await waitFor(() => expect(screen.getByLabelText('Reference mode').value).toBe('anchor'));
     // And the retry submits the clear rather than a value the server would 400.
@@ -739,7 +777,7 @@ describe('MediaJobsQueue — local video holds', () => {
     expect(await screen.findByText('2 video jobs held')).toBeInTheDocument();
     expect(screen.getByText('Shader compilation failed')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Resume' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Resume' });
     expect(screen.getByText('2 video jobs held')).toBeInTheDocument();
     let finishResume;
     resumeMediaVideoHold.mockImplementationOnce(() => new Promise((resolve) => { finishResume = resolve; }));

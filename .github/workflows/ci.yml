@@ -318,9 +318,13 @@ jobs:
         if: needs.impact.outputs.smoke == 'true' && matrix.shard == 1
         run: npm run smoke
 
-      - name: Cancel sibling CI jobs after failure
+      - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'
         env:
+          # Actions exposes no variable for the matrix leg, and the annotation
+          # has to name the shard even when the API lookup behind it fails.
+          # Empty on the unsharded jobs, which the script treats as absent.
+          CI_FAILED_SHARD: ${{ matrix.shard }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
 
@@ -412,9 +416,13 @@ jobs:
         if: needs.impact.outputs.build == 'true' && matrix.shard == 1
         run: npm run test --prefix client -- ApiExplorer.bundle
 
-      - name: Cancel sibling CI jobs after failure
+      - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'
         env:
+          # Actions exposes no variable for the matrix leg, and the annotation
+          # has to name the shard even when the API lookup behind it fails.
+          # Empty on the unsharded jobs, which the script treats as absent.
+          CI_FAILED_SHARD: ${{ matrix.shard }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
 
@@ -488,9 +496,13 @@ jobs:
           CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
         run: node scripts/run-ci-lint.js
 
-      - name: Cancel sibling CI jobs after failure
+      - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'
         env:
+          # Actions exposes no variable for the matrix leg, and the annotation
+          # has to name the shard even when the API lookup behind it fails.
+          # Empty on the unsharded jobs, which the script treats as absent.
+          CI_FAILED_SHARD: ${{ matrix.shard }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
 
@@ -632,9 +644,13 @@ jobs:
         env:
           PGDATABASE: portos_test
 
-      - name: Cancel sibling CI jobs after failure
+      - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'
         env:
+          # Actions exposes no variable for the matrix leg, and the annotation
+          # has to name the shard even when the API lookup behind it fails.
+          # Empty on the unsharded jobs, which the script treats as absent.
+          CI_FAILED_SHARD: ${{ matrix.shard }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
 
@@ -764,9 +780,13 @@ jobs:
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
 
-      - name: Cancel sibling CI jobs after failure
+      - name: Report the failure, then cancel sibling CI jobs
         if: failure() && github.event_name == 'pull_request'
         env:
+          # Actions exposes no variable for the matrix leg, and the annotation
+          # has to name the shard even when the API lookup behind it fails.
+          # Empty on the unsharded jobs, which the script treats as absent.
+          CI_FAILED_SHARD: ${{ matrix.shard }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
 
@@ -775,6 +795,12 @@ jobs:
     if: always()
     needs: [impact, server, client, lint, database, windows-server]
     runs-on: ubuntu-latest
+    # READ, not write: the reporter only lists this run's jobs, to name the one
+    # whose STEP failed when the fail-fast cancel beat GitHub to writing the job
+    # conclusion. Cancelling the run stays a leaf-job privilege.
+    permissions:
+      contents: read
+      actions: read
     steps:
       # The gate needs the repo only for scripts/ci-gate-report.js, which
       # imports Node builtins only — no dependency install, no setup-node.
@@ -794,6 +820,9 @@ jobs:
       # job; adding a job to the gate is one line here and no code change.
       - name: Require every selected job to pass
         env:
+          # Lets the reporter read this run's job steps when the verdict would
+          # otherwise be a bare "cancelled" — see scripts/ci-gate-report.js.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI_GATE_LABEL: CI Gate
           CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}
           CI_GATE_RESULT_SERVER: ${{ needs.server.result }}
@@ -824,6 +853,9 @@ jobs:
     if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'full'
     needs: [impact, gate]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -834,6 +866,7 @@ jobs:
       # red complete suite on the release path either.
       - name: Require the aggregate gate to have passed
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CI_GATE_LABEL: Full CI Gate
           # Strict: a `skipped` gate must not satisfy this one. Unlike the
           # aggregate gate, whose per-job `skipped` is the impact plan doing

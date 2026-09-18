@@ -35,8 +35,9 @@ export const PASTE_DEADLINE_MS = 10000;
 export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 
 // Claude Code emits `[Pasted text #N +M lines]`, Codex emits
-// `[Pasted Content N chars]`, OpenCode emits `[Pasted ~N lines]`, and
-// Grok Build emits `[Pasted: 31 KB]` after
+// `[Pasted Content N chars]`, OpenCode emits `[Pasted ~N lines]`, Pi emits
+// `[paste #N +M lines]` (note: "paste", not "Pasted" — hence the optional `d`),
+// and Grok Build emits `[Pasted: 31 KB]` after
 // committing a paste. Watch for any of these markers (or fall back after
 // PASTE_TO_ENTER_FALLBACK_MS) before sending `\r` so Enter doesn't get
 // swallowed mid-paste-commit.
@@ -53,6 +54,14 @@ export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 // was the root cause of issue #1229: across a month of real transcripts the
 // marker "never appeared" only because the matcher ran against the raw stream;
 // the fast path was effectively dead and every run fell back to the blind timer.
+//
+// Pi's marker is ALSO the only evidence a pi paste landed: like Claude Code, pi
+// COLLAPSES a multi-line bracketed paste into the chip and hides the body, so
+// the verifyPasteRendered text fallback can never see the prompt. Before pi's
+// `[paste #N +M lines]` form was in the alternation above, every pi-TUI CoS
+// agent burned all 3 paste attempts and died `paste-not-rendered` with three
+// chips (`[paste #1][paste #2][paste #3]`) sitting unsent in the composer and
+// Enter never sent — the prompt was delivered perfectly all three times.
 export const PASTE_MARKER_POLL_MS = 150;
 
 // Paste verification: after paste-commit (marker or fallback), verify the prompt
@@ -65,7 +74,7 @@ export const PASTE_RETRY_MAX_ATTEMPTS = 3;
 export const PASTE_RETRY_BASE_DELAY_MS = 800;
 // Minimum prefix length for verification (shorter prompts verify whole-text)
 const MIN_VERIFIABLE_PREFIX_LEN = 15;
-export const PASTE_MARKER_PATTERN = /\[Pasted\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?|:\s*\d+(?:\.\d+)?\s*(?:B|KB|MB))\]/i;
+export const PASTE_MARKER_PATTERN = /\[Pasted?\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?|#\d+\s*\+\d+\s*lines?|:\s*\d+(?:\.\d+)?\s*(?:B|KB|MB))\]/i;
 export const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
 export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 
@@ -1425,5 +1434,108 @@ export function createToolPermissionGate() {
       return { ...dialog, count: declines };
     },
     takeNudge: nudge.takeNudge,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stall nudge — "the session stopped mid-task and nothing will ever re-ask"
+// ---------------------------------------------------------------------------
+//
+// The failure this exists for has no error banner, no dialog and no exit: the
+// model narrates its next step ("Next: /do:pr"), ends its turn, and the TUI
+// returns to its idle composer. The run is not finished, the sentinel is not
+// written, and — since the wall-clock ceiling was removed — nothing else in the
+// unattended path will ever touch that session again. A human dropping into the
+// Shell tab and typing `continue` recovers it every time; this gate types it.
+//
+// Unlike the OOM and tool-permission gates, there is nothing to ARM on: the
+// condition IS the silence, so this one is poll-only. That also makes the
+// threshold the entire false-positive defense — see STALL_NUDGE_IDLE_MS.
+
+// How long the session must have printed NOTHING before it counts as stopped.
+//
+// Deliberately a silence test rather than a chrome test, for the reason
+// OOM_NUDGE_SETTLE_MS spells out: in-flight chrome is per-provider vocabulary,
+// while silence is universal. One number covers every TUI because what it
+// measures is bytes on the PTY, not a footer — Claude Code repaints its working
+// counter about once a second for as long as ANY tool or API call is in flight,
+// and the provider that barely repaints its chrome at all (OpenCode, ~8 times
+// across a 74MB transcript) is streaming that 74MB through this same stream.
+// Three unbroken minutes of NOTHING is a composer at rest under both.
+//
+// Three minutes rather than the old ceiling's scale because the cost asymmetry
+// runs one way: a nudge that was not needed is queued into the composer and read
+// as "keep going", while a nudge that never comes leaves the run holding its
+// lane forever.
+export const STALL_NUDGE_IDLE_MS = 3 * 60 * 1000;
+// How much output AFTER a nudge proves the session took the hint. Long enough to
+// exclude the bracketed-paste echo of the nudge itself (which lands within a
+// second or so), short enough that a session that genuinely resumed clears its
+// streak immediately. A run that works for hours and then stalls again gets the
+// full budget back rather than inheriting a spent one.
+export const STALL_NUDGE_RECOVERY_MS = 30000;
+// After this many CONSECUTIVE unanswered nudges, stop. A session that ignored
+// three of them is wedged below the composer (a dead child, a TUI that stopped
+// reading its PTY), and pasting into it forever only fills raw.txt.
+export const STALL_NUDGE_MAX_ATTEMPTS = 3;
+// What gets pasted. It leads with the literal word a human used, for the literal
+// reason it worked — the TUI still holds the whole conversation and the model
+// only needs a turn — and then closes the two doors that produce this state in
+// an unattended run: waiting on an answer that is never coming, and treating
+// "I described the next step" as finishing it.
+export const STALL_NUDGE_TEXT = 'continue — this session went quiet with its task unfinished, and the completion sentinel has not been written. Nobody is watching it: no question will be answered and no approval is coming, so choose the most reasonable option yourself. Carry out the next step you named, then the one after it, and keep going until the task is genuinely complete and the sentinel is written.';
+
+/**
+ * State machine for "nudge a TUI session that stopped mid-task".
+ *
+ * Poll `takeNudge(nowMs, lastOutputAtMs)` on whatever timer the consumer already
+ * runs. It owns the silence threshold, the post-nudge quiet period, the recovery
+ * reset and the attempt budget so a consumer can't get any of them subtly wrong,
+ * and returns:
+ *   - the 1-based nudge number — paste and say so
+ *   - `'exhausted'` (once) — the budget is spent and the session is STILL quiet,
+ *     so it is wedged below its composer rather than merely stopped. Reported
+ *     rather than swallowed because giving up silently is the very condition
+ *     this gate exists to end: the run holds its lane with nothing to show for
+ *     it, and the sibling gates all announce their verdict.
+ *   - 0 — nothing to do
+ *
+ * The post-nudge wait is measured from the NUDGE, not from output, and that is
+ * the load-bearing detail: a session wedged below its composer never echoes the
+ * paste, so a purely output-based gate would re-fire on the very next poll tick
+ * and paste continuously until the budget ran out seconds later.
+ *
+ * @param {{ idleMs?: number, recoveryMs?: number, maxAttempts?: number }} [options]
+ * @returns {{ takeNudge: (nowMs: number, lastOutputAtMs: number) => number|'exhausted' }}
+ */
+export function createStallNudgeGate({
+  idleMs = STALL_NUDGE_IDLE_MS,
+  recoveryMs = STALL_NUDGE_RECOVERY_MS,
+  maxAttempts = STALL_NUDGE_MAX_ATTEMPTS,
+} = {}) {
+  let attempts = 0;
+  let nudgedAt = null;
+  let reportedExhausted = false;
+  return {
+    takeNudge(nowMs, lastOutputAtMs) {
+      // Checked before the budget so an exhausted streak can still be cleared by
+      // a session that came back to life — which also re-arms the verdict, since
+      // a run that recovered and stalled again is wedged afresh.
+      if (nudgedAt !== null && lastOutputAtMs - nudgedAt > recoveryMs) {
+        attempts = 0;
+        nudgedAt = null;
+        reportedExhausted = false;
+      }
+      if (nowMs - lastOutputAtMs < idleMs) return 0;
+      if (nudgedAt !== null && nowMs - nudgedAt < idleMs) return 0;
+      if (attempts >= maxAttempts) {
+        if (reportedExhausted) return 0;
+        reportedExhausted = true;
+        return 'exhausted';
+      }
+      attempts += 1;
+      nudgedAt = nowMs;
+      return attempts;
+    },
   };
 }

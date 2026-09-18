@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 vi.mock('../../services/api', () => ({
   handleSelfRestart: vi.fn(),
@@ -134,7 +135,7 @@ describe('TailnetHelpBanner HTTPS activation', () => {
     await user.click(screen.getByRole('button', { name: 'Enable HTTPS' }));
     await user.click(await screen.findByRole('button', { name: 'Restart PortOS' }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Restart PortOS' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Restart PortOS' });
     expect(toast.error).toHaveBeenCalledWith('Restart unavailable');
     expect(handleSelfRestart).not.toHaveBeenCalled();
   });

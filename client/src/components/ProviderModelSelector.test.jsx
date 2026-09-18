@@ -10,6 +10,11 @@ import ProviderModelSelector from './ProviderModelSelector';
 import { providerModeSelectionPolicy } from '../utils/providers.js';
 import { __resetToolUseModelIdsCache } from '../hooks/useToolUseModelIds.js';
 import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
+import { COMPOSE_OPTION_VALUE } from '../utils/providerSelection.js';
+
+// The preset-first select ends in a "Custom combination…" action entry
+// (#7566); these assertions are about the PRESET rows, so drop it.
+const presetOptions = (select) => [...select.querySelectorAll('option')].filter((o) => o.value !== COMPOSE_OPTION_VALUE);
 
 const PROVIDERS = [
   { id: 'p1', name: 'Provider One' },
@@ -91,7 +96,7 @@ describe('ProviderModelSelector', () => {
   it('renders only the provider options by default (no empty sentinel)', () => {
     renderSelector();
     const options = screen.getAllByRole('option').map((o) => o.textContent);
-    expect(options).toEqual(['Provider One', 'Provider Two', 'm1', 'm2']);
+    expect(options).toEqual(['Provider One', 'Provider Two', 'Custom combination…', 'm1', 'm2']);
   });
 
   it('keeps both execution modes independently selectable when the settings page groups their card', () => {
@@ -102,7 +107,7 @@ describe('ProviderModelSelector', () => {
       { id: 'example-tui', name: 'Example TUI', type: 'tui', enabled: true, executionModes },
     ], selectedProviderId: 'example-cli', onProviderChange });
     const select = screen.getByRole('combobox', { name: 'Provider' });
-    expect([...select.options].map(option => [option.value, option.textContent])).toEqual([
+    expect(presetOptions(select).map(option => [option.value, option.textContent])).toEqual([
       ['example-cli', 'Example CLI'], ['example-tui', 'Example TUI'],
     ]);
     fireEvent.change(select, { target: { value: 'example-tui' } });
@@ -190,7 +195,7 @@ describe('ProviderModelSelector', () => {
       ],
     });
     const providerSelect = screen.getAllByRole('combobox')[0];
-    const labels = [...providerSelect.querySelectorAll('option')].map((o) => o.textContent);
+    const labels = presetOptions(providerSelect).map((o) => o.textContent);
     expect(labels).toEqual(['Provider One', 'Provider Three']);
   });
 
@@ -203,7 +208,7 @@ describe('ProviderModelSelector', () => {
       ],
     });
     const providerSelect = screen.getAllByRole('combobox')[0];
-    const labels = [...providerSelect.querySelectorAll('option')].map((o) => o.textContent);
+    const labels = presetOptions(providerSelect).map((o) => o.textContent);
     expect(labels).toEqual(['Provider One', 'Provider Two']);
   });
 
@@ -224,7 +229,7 @@ describe('ProviderModelSelector', () => {
     });
 
     const [providerSelect, modelSelect, effortSelect] = screen.getAllByRole('combobox');
-    expect([...providerSelect.options].map((option) => option.value)).toEqual(['local']);
+    expect(presetOptions(providerSelect).map((option) => option.value)).toEqual(['local']);
     expect([...modelSelect.options].map((option) => option.value)).toEqual(['safe-model']);
     expect([...effortSelect.options].map((option) => option.value)).toEqual(['', 'low']);
   });
@@ -245,7 +250,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
       selectionPolicy: providerModeSelectionPolicy('cli-harness'),
     });
     const providerSelect = screen.getAllByRole('combobox')[0];
-    const options = [...providerSelect.options];
+    const options = presetOptions(providerSelect);
     // The eligible CLI route and the INELIGIBLE SAVED PIN are both offered;
     // an ineligible route nobody pinned is simply not offered at all.
     expect(options.map((option) => option.value)).toEqual(['claude-code', 'claude-code-tui']);
@@ -282,7 +287,7 @@ it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller poli
       availableModels: ['too-large', 'small'],
     });
     const [providerSelect, modelSelect] = screen.getAllByRole('combobox');
-    expect([...providerSelect.querySelectorAll('option')].map((option) => option.value)).toEqual(['p1', 'p3']);
+    expect(presetOptions(providerSelect).map((option) => option.value)).toEqual(['p1', 'p3']);
     expect([...modelSelect.querySelectorAll('option')].map((option) => option.value)).toEqual(['too-large', 'small']);
     expect(modelSelect.querySelector('option[value="too-large"]').disabled).toBe(true);
   });
@@ -534,5 +539,56 @@ describe('ProviderModelSelector — provider list still loading', () => {
     expect(screen.getByRole('option', { name: 'Default (active provider)' })).toBeTruthy();
     expect(screen.queryByRole('option', { name: 'Loading providers…' })).toBeNull();
     expect(provider.disabled).toBe(false);
+  });
+});
+
+// A provider-only picker keeps its own model field (a table cell, a free-text
+// pin the selector has no shape for). Rendering a model select there hands the
+// user a control whose `onChange` reaches nobody — and a COMPOSITE resolved
+// from the shared catalog supplies its own model list, so the list alone could
+// conjure that dead select beside the caller's live one (#7585).
+describe('ProviderModelSelector provider-only mode', () => {
+  it('renders no model select when the caller wired no onModelChange', () => {
+    render(
+      <ProviderModelSelector
+        providers={PROVIDERS}
+        selectedProviderId="p1"
+        availableModels={['m1', 'm2']}
+        onProviderChange={() => {}}
+      />
+    );
+    expect(screen.getByLabelText('Provider')).toBeTruthy();
+    expect(screen.queryByLabelText('Model')).toBeNull();
+  });
+
+  it('honors alwaysShowModel only when the model change is actually wired', () => {
+    const { rerender } = render(
+      <ProviderModelSelector
+        providers={PROVIDERS}
+        selectedProviderId="p1"
+        alwaysShowModel
+        emptyModelOption="Default model"
+        onProviderChange={() => {}}
+      />
+    );
+    expect(screen.queryByLabelText('Model')).toBeNull();
+
+    rerender(
+      <ProviderModelSelector
+        providers={PROVIDERS}
+        selectedProviderId="p1"
+        alwaysShowModel
+        emptyModelOption="Default model"
+        onProviderChange={() => {}}
+        onModelChange={() => {}}
+      />
+    );
+    expect(screen.getByLabelText('Model')).toBeTruthy();
+  });
+
+  it('names the model select for its form, so two pickers on a page stay distinguishable', () => {
+    renderSelector({ modelLabel: 'Embedding Model' });
+    expect(screen.getByLabelText('Embedding Model')).toBeTruthy();
+    expect(screen.queryByLabelText('Model')).toBeNull();
   });
 });

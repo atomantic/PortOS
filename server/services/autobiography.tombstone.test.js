@@ -28,6 +28,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 vi.mock('./notifications.js', () => ({
   addNotification: vi.fn(),
   NOTIFICATION_TYPES: { AUTOBIOGRAPHY_PROMPT: 'autobiography_prompt' },
+  PRIORITY_LEVELS: { LOW: 'low', MEDIUM: 'medium', HIGH: 'high', CRITICAL: 'critical' },
   exists: vi.fn(() => false),
 }));
 

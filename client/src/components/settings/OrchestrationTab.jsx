@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, Edit2, Trash2, Cpu, Check, X, Shield, Sparkles } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
+import ProviderModelSelector from '../ProviderModelSelector';
 import * as api from '../../services/api';
 import { effortAwareModelOptions, effortSurvivingModel } from '../../utils/providers';
 
@@ -267,21 +268,13 @@ export default function OrchestrationTab() {
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div>
-                        <label htmlFor={`role-${key}-provider`} className="text-xs text-gray-400 mb-1 block">Provider</label>
-                        <select
-                          id={`role-${key}-provider`}
-                          aria-label={`${label} Provider`}
-                          value={roleData.provider || ''}
-                          onChange={(e) => updateRoleField(key, 'provider', e.target.value)}
-                          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                        >
-                          <option value="">Default (Auto / Inherit)</option>
-                          {providers.map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      </div>
+                      <ProviderModelSelector
+                        label={`${label} Provider`}
+                        providers={providers}
+                        selectedProviderId={roleData.provider || ''}
+                        onProviderChange={(id) => updateRoleField(key, 'provider', id)}
+                        emptyProviderOption="Default (Auto / Inherit)"
+                      />
 
                       <div>
                         <label htmlFor={`role-${key}-model`} className="text-xs text-gray-400 mb-1 block">Model</label>

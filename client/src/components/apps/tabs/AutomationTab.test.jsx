@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
+import { awaitEnabled } from '../../../test/enabledBarrier.js';
 
 // ── Mock router — capture navigate calls, no real Router needed ────────────────
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -149,7 +150,7 @@ describe('AutomationTab per-app options', () => {
     expect(within(row).getByRole('switch', { name: 'security enabled for this app: off' })).toHaveAttribute('aria-checked', 'false');
     fireEvent.click(within(row).getByRole('switch', { name: 'security enabled for this app: off' }));
     api.updateAppTaskTypeOverride.mockResolvedValue({ success: true });
-    await waitFor(() => expect(within(row).getByRole('button', { name: 'Run Now' })).toBeEnabled());
+    await awaitEnabled(() => within(row).getByRole('button', { name: 'Run Now' }));
     api.triggerCosOnDemandTask.mockResolvedValue({ success: true });
     fireEvent.click(within(row).getByRole('button', { name: 'Run Now' }));
     await waitFor(() => expect(api.triggerCosOnDemandTask).toHaveBeenCalledWith('security', 'app-1', { silent: true }));

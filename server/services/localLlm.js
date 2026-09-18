@@ -51,6 +51,8 @@ import { commandExists } from '../lib/commandExists.js'
 import { runStreamingCommand } from '../lib/streamingSpawn.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
+import { localModelInventoryRow } from '../lib/modelInventory.js'
+import { recordModelInstall, recordModelUninstall } from './modelManifest.js'
 import { getProviderById, getAllProviders, updateProvider, refreshProviderModelsBatch, isOllamaBackedProvider } from './providers.js'
 import { getSettings } from './settings.js'
 
@@ -1022,7 +1024,7 @@ export async function previewInstallModel(backend, modelId) {
   }
 }
 
-export async function installModel(backend, modelId, onProgress, { force = false } = {}) {
+async function performInstallModel(backend, modelId, onProgress, { force = false } = {}) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
   // Resolve-not-throw: every other failure this function can hit (unknown
   // backend, OLLAMA_OUTDATED, ...) resolves `{ success: false, error }` —
@@ -1072,7 +1074,7 @@ export async function installModel(backend, modelId, onProgress, { force = false
 /**
  * Delete an installed model from a backend.
  */
-export async function deleteModel(backend, modelId) {
+async function performDeleteModel(backend, modelId) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
   if (backend === 'ollama') {
     const loaded = await ollamaManager.getLoadedModels()
@@ -1096,6 +1098,54 @@ export async function deleteModel(backend, modelId) {
   // LM Studio has no delete in its REST API and the `lms` CLI has no `rm`
   // command — deleteModel removes the model's on-disk folder directly.
   return lmStudioManager.deleteModel(modelId)
+}
+
+// Both backends' installs and deletes have several success and failure exits
+// each (preflight refusal, a forced evict that failed, the `lms` CLI vs the REST
+// fallback, a residency check that could not be verified). Recording the manifest
+// at every one of those is how a later exit gets added without one — so the two
+// public entry points wrap a single internal function and record once, off its
+// one contractual `{ success }` result.
+//
+// A `pending` LM Studio install is deliberately NOT recorded: the REST fallback
+// only QUEUES the download, so the weights are not on disk yet and the next
+// reconcile is what adopts them.
+/**
+ * Install a model into a backend, recording it in the model manifest on success.
+ *
+ * @param {string} backend
+ * @param {string} modelId
+ * @param {Function} [onProgress]
+ * @param {Object} [options]
+ * @param {boolean} [options.force] Re-download even when the weights are present
+ * @returns {Promise<Object>} `{ success, ... }` — never throws (see performInstallModel)
+ */
+export async function installModel(backend, modelId, onProgress, options = {}) {
+  const result = await performInstallModel(backend, modelId, onProgress, options)
+  if (result?.success && !result.pending) {
+    // The row comes from the shared builder the SCAN uses, so a tracked model and
+    // a scanned one carry the same size semantics, cleanup warning and delete
+    // action. Size is left unset: neither backend reports the installed bytes, and
+    // the next reconcile measures it off disk.
+    await recordModelInstall({
+      ...localModelInventoryRow({ backend, modelId }),
+      source: 'download',
+    })
+  }
+  return result
+}
+
+/**
+ * Delete an installed model from a backend, clearing it from the model manifest.
+ *
+ * @param {string} backend
+ * @param {string} modelId
+ * @returns {Promise<Object>} `{ success, ... }`
+ */
+export async function deleteModel(backend, modelId) {
+  const result = await performDeleteModel(backend, modelId)
+  if (result?.success) await recordModelUninstall({ backend, key: modelId })
+  return result
 }
 
 // ---- switch / migrate --------------------------------------------------------
@@ -1141,6 +1191,13 @@ async function tryLocalImport(to, model, targetId, resolved, mode, onProgress) {
   // `linked` reflects what actually happened on disk — link mode falls back to a
   // copy across filesystems, so report the real outcome, not the requested mode.
   onProgress({ event: 'start', message: `${r.linked ? 'Linked' : 'Copied'} ${r.modelId} onto ${to} (no download)` })
+  // A migration's fast path never goes through `installModel` — it moves the GGUF
+  // itself — so it records its own arrival, or the target backend's newest models
+  // would be the ones the manifest does not know about.
+  await recordModelInstall({
+    ...localModelInventoryRow({ backend: to, modelId: r.modelId }),
+    source: 'import',
+  })
   return { source: model.id, target: r.modelId, status: 'imported', linked: !!r.linked, reason: null }
 }
 

@@ -34,10 +34,9 @@ export const formatBranchSummary = ({ leftoverCount, states }) => [
 // health surfaces do — but the honesty distinction the feature exists to enforce
 // means the level must match how each insight was actually derived. Most insight
 // types are direct counts read off records (N tasks awaiting approval, N blocked,
-// N health issues) → data-backed. Only the two that lean on success-rate
-// statistics — auto-skipped task types and the peak-productivity-hour suggestion
-// — are genuinely modeled → inferred.
-const INFERRED_INSIGHT_TYPES = new Set(['learning', 'peak-time']);
+// N health issues) → data-backed. Only auto-skipped task types lean on
+// success-rate statistics → inferred.
+const INFERRED_INSIGHT_TYPES = new Set(['learning']);
 
 const DATA_BACKED_PROVENANCE = {
   level: 'data-backed',
@@ -50,7 +49,7 @@ const DATA_BACKED_PROVENANCE = {
 const INFERRED_PROVENANCE = {
   level: 'inferred',
   explainer:
-    'Surfaced by your Chief of Staff from statistical patterns in your task history — success rates by task type and time of day — not a value you set or a direct count.',
+    'Surfaced by your Chief of Staff from statistical patterns in your task history — success rates by task type — not a value you set or a direct count.',
   whatWouldChange:
     'As more task runs accumulate and those success rates shift, this recommendation is recomputed or drops away.',
 };
@@ -65,8 +64,7 @@ const ICON_MAP = {
   Brain,
   Newspaper,
   ListTodo,
-  MessageSquare,
-  Zap
+  MessageSquare
 };
 
 const PRIORITY_STYLES = {

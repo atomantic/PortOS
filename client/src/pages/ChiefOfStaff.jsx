@@ -11,6 +11,7 @@ import { isRiggedAvatarStyle, riggedRecordForStyle, useAvatarCapabilities } from
 import { coalesce } from '../utils/coalesce';
 import { sameJsonShape } from '../lib/sameJsonShape';
 import { isAgentHandoff } from '../lib/agentOutcome';
+import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cosSpawnWindow';
 import { WEBGL_AVATAR_STYLE_IDS } from '../lib/avatarStyles';
 import { Play, Pause, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -55,7 +56,6 @@ const ScheduleTab = lazy(() => import('../components/cos/tabs/ScheduleTab'));
 const WorkflowTab = lazy(() => import('../components/cos/tabs/WorkflowTab'));
 const DigestTab = lazy(() => import('../components/cos/tabs/DigestTab'));
 const GsdTab = lazy(() => import('../components/cos/tabs/GsdTab'));
-const ProductivityTab = lazy(() => import('../components/cos/tabs/ProductivityTab'));
 const LearningTab = lazy(() => import('../components/cos/tabs/LearningTab'));
 const MemoryTab = lazy(() => import('../components/cos/tabs/MemoryTab'));
 const HealthTab = lazy(() => import('../components/cos/tabs/HealthTab'));
@@ -720,10 +720,20 @@ export default function ChiefOfStaff() {
     [agents]
   );
 
-  // Memoize pending task count
+  // Memoize pending task count, settled against the live agent list.
+  //
+  // GET /api/cos/tasks already settles `grouped.pending` for the spawn window,
+  // but `activeAgentCount` above reads the SOCKET-fed agent array, which lands on
+  // 'cos:agent:spawned' — ahead of the next task fetch. Counting the payload raw
+  // would tick Active to 1 while Pending still read 1 until that fetch returned,
+  // which is the "1 pending and 1 active" this page is the headline surface for.
+  // Same settlement TasksTab makes from the same two arrays, so the header cards
+  // and the task list below them cannot disagree. See lib/cosSpawnWindow.js.
+  const runningAgentByTaskId = useMemo(() => runningAgentsByTaskId(agents), [agents]);
   const pendingTaskCount = useMemo(() =>
-    (tasks.user?.grouped?.pending?.length || 0) + (tasks.cos?.grouped?.pending?.length || 0),
-    [tasks.user?.grouped?.pending?.length, tasks.cos?.grouped?.pending?.length]
+    withoutSpawningTasks(tasks.user?.grouped?.pending, runningAgentByTaskId).length
+      + withoutSpawningTasks(tasks.cos?.grouped?.pending, runningAgentByTaskId).length,
+    [tasks.user?.grouped?.pending, tasks.cos?.grouped?.pending, runningAgentByTaskId]
   );
 
   const hasCanvasAvatar = CANVAS_AVATAR_STYLES.has(avatarStyle) || isRiggedAvatarStyle(avatarStyle);
@@ -1240,13 +1250,6 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-gsd" aria-labelledby="tab-gsd">
             <Suspense fallback={<TabLoadFallback label="GSD" />}>
               <GsdTab />
-            </Suspense>
-          </div>
-        )}
-        {activeTab === 'productivity' && (
-          <div role="tabpanel" id="tabpanel-productivity" aria-labelledby="tab-productivity">
-            <Suspense fallback={<TabLoadFallback label="productivity" />}>
-              <ProductivityTab />
             </Suspense>
           </div>
         )}

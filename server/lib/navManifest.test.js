@@ -157,16 +157,16 @@ describe('nav contract — generated section child navigation', () => {
 
   it('keeps moved Providers and Usage destinations in the Models child nav', () => {
     expect(getSectionNavTabs('Models').filter((tab) => ['providers', 'usage'].includes(tab.id))).toEqual([
-      { id: 'providers', label: 'Providers', to: '/ai' },
+      { id: 'providers', label: 'Providers', to: '/ai/presets' },
       { id: 'usage', label: 'Usage', to: '/devtools/usage' },
     ]);
     expect(getSectionNavTabs('Settings').some((tab) => tab.id === 'providers')).toBe(false);
   });
 
   it.each([
-    ['/ai', 'Models'],
-    ['/ai/edit/example-provider', 'Models'],
-    ['/ai/fleet', 'Models'],
+    ['/ai/presets', 'Models'],
+    ['/ai/presets/example-provider', 'Models'],
+    ['/ai/presets/new', 'Models'],
     ['/devtools/usage', 'Models'],
     ['/models/llms/abuse', 'Models'],
     ['/models/llms-runtimes', 'Models'],
@@ -560,7 +560,8 @@ const SOCKET_JS = path.join(REPO_ROOT, 'client/src/services/socket.js');
 // not from ⌘K / voice / the sidebar.
 const NAV_COVERAGE_OPT_OUT = new Map([
   ['/*', 'catch-all 404 page — reached only by an unmatched URL, never a destination'],
-  ['/ai/new', 'create-provider drawer, reached via the "Add Provider" button on /ai'],
+  ['/ai/presets/new', 'create-preset drawer, reached via the "Add preset" button on /ai/presets'],
+  ['/ai/services/new', 'add-service drawer, reached via the "Add service" button on /ai/services'],
   ['/apps/create', 'create-app form, reached via the "New App" button on /apps'],
   ['/creative-commission/new', 'create-commission drawer, reached via the "New Commission" button on /creative-commission'],
   ['/feature-agents/create', 'create-agent form, reached via the "New Agent" button'],
@@ -761,6 +762,11 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
       // The dataset workbench was its own deep-linkable path, and a bookmark into
       // one dataset breaks just as silently as the index.
       '/media/training/:datasetId',
+      // #7567 — /ai became /ai/presets and the Backend Connections drawer
+      // became the Services view; a stored pin or bookmark on either must land.
+      '/ai',
+      '/ai/connections',
+      '/ai/connections/:connectionId',
       // The rest of the moves App.jsx already redirected but nothing declared.
       // A pinned sidebar row is a STORED route path, so an undeclared move made
       // the pin stop resolving and vanish on the next update — the client reads

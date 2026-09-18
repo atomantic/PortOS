@@ -49,6 +49,10 @@ import {
   providerServiceUpdateSchema,
   providerRouteModelAliasSchema,
   providerRouteSettingsUpdateSchema,
+  providerPresetCreateSchema,
+  credentialBootstrapsSettingsSchema,
+  harnessEnablementUpdateSchema,
+  harnessIdParamSchema,
 } from '../lib/validation.js';
 import {
   getProviderRuntimeStatus,
@@ -79,6 +83,7 @@ import {
   PUBLIC_REVIEW_ACTIONS_POSTURE,
 } from '../lib/providerVendors.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
+import { presetDerivable, presetKind } from '../lib/providerPresets.js';
 import {
   captureSystemCapabilities,
   detectSystemCapabilities,
@@ -192,6 +197,11 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   // cannot persist the narrowed list over the real one.
   return sanitizeProvider({
     ...applyModelAccess(decorated),
+    // The RAW record's key: an inherited or materialized one rides
+    // NON-enumerably (`withGatewayApiKey`, the composite resolver), so the
+    // decorating spreads above dropped it — re-carried here so `hasApiKey`
+    // reports the key the run would actually use (#7564).
+    apiKey: provider?.apiKey,
     // The UNION of the two refresh paths, because the button asks only
     // whether SOME path can serve this record. Which one actually serves it is
     // decided in `POST /:id/refresh-models`, and the two must stay in step or
@@ -201,8 +211,18 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
     publicReviewActionsSupported: publicReviewPostures.includes(PUBLIC_REVIEW_ACTIONS_POSTURE),
+    // Preset structure (#7565): `derived` when the record names the service it
+    // is materialized from, else `legacy`; and whether a legacy record is a
+    // candidate for "Convert to derived preset" (pure over the record — the
+    // conversion itself still proves the fixpoint against the service).
+    presetKind: presetKind(provider),
+    presetDerivable: presetDerivable(provider),
   });
 };
+
+// Deferred: the preset service reaches the graph store and the composite
+// resolver, which every suite that mounts these routes would otherwise pay for.
+const presetService = () => import('../services/providerPresets.js');
 
 /**
  * Carry a gateway-backed wrapper's RESOLVED model-access policy from the read
@@ -491,6 +511,24 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.set('Cache-Control', 'no-store').json(await listServices());
   }));
 
+  /**
+   * Every `SERVICE_DEFINITIONS` row an "Add service" flow may instantiate
+   * (#7567): family, plans, transports with default base URLs, and where a key
+   * is obtained. Code-only data — no instance, no credential — so it is
+   * cacheable for the process lifetime. Declared above `/services/:slug` by
+   * name rather than position: its own segment can never be read as a slug.
+   * Deferred imports like the catalog handler below: a suite that mocks
+   * `providerServices.js` would otherwise instantiate the instance/definition
+   * subtree through this route file alone (server/AGENTS.md "Import scoping").
+   */
+  router.get('/service-definitions', asyncHandler(async (_req, res) => {
+    const [{ SERVICE_DEFINITIONS }, { presentServiceDefinition }] = await Promise.all([
+      import('../lib/serviceDefinitions.js'),
+      import('../lib/providerServiceInstances.js'),
+    ]);
+    res.json({ definitions: SERVICE_DEFINITIONS.map(presentServiceDefinition) });
+  }));
+
   // Create an instance from a definition. Nothing is probed and no route is
   // minted; the catalog starts `unknown` until the explicit refresh below.
   router.post('/services', asyncHandler(async (req, res) => {
@@ -605,9 +643,91 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * probe at the wrong endpoint. The response carries booleans, labels, and the
    * provider's own already-displayed endpoint — never a resolved binary path.
    */
-  router.get('/readiness', asyncHandler(async (_req, res) => {
+  router.get('/readiness', asyncHandler(async (req, res) => {
+    // `?providerId=<composite>` answers for ONE composition (#7564): the
+    // materialized record is what the readiness probe reads, so a composite
+    // that resolves is judged exactly as a stored record on the same daemon.
+    const compositeId = typeof req.query.providerId === 'string' ? req.query.providerId : null;
+    if (compositeId) {
+      const provider = await providerService.getProviderById(compositeId);
+      res.json({ readiness: provider ? await getProviderReadinessMap([provider]) : {} });
+      return;
+    }
     const data = await providerService.getAllProviders();
     res.json({ readiness: await getProviderReadinessMap(data.providers) });
+  }));
+
+  /**
+   * The composition catalog (#7564): every axis a `{ providerId, model, effort }`
+   * picker composes over — harnesses with their enablement, service instances,
+   * bootstrap apps, which harness reaches which service, the effort ladder per
+   * harness (and per model where a model narrows it), and the stored presets.
+   * Derived from cache and settings only: harness detection is the runtime
+   * probe's cache, nothing is spawned, no provider is contacted.
+   *
+   * `GET /api/providers` stays presets-only — every existing `useProviderModels`
+   * consumer keeps its shape; this is the additive surface for composing.
+   */
+  router.get('/catalog', asyncHandler(async (_req, res) => {
+    const { buildProviderCatalog } = await import('../services/compositeProviders.js');
+    const [catalog, data, capabilities] = await Promise.all([buildProviderCatalog(), providerService.getAllProviders(), detectSystemCapabilities()]);
+    res.json({ ...catalog, presets: data.providers.map((provider) => presentProvider(provider, capabilities)) });
+  }));
+
+  /** Per-harness enablement (#7564): the user's word, else PATH detection, `direct` always on. */
+  router.get('/harnesses', asyncHandler(async (_req, res) => {
+    const { listHarnessEnablement } = await import('../services/harnessEnablement.js');
+    res.json({ harnesses: await listHarnessEnablement() });
+  }));
+
+  router.put('/harnesses/:id', asyncHandler(async (req, res) => {
+    const harnessId = validateRequest(harnessIdParamSchema, req.params.id);
+    const { enabled } = validateRequest(harnessEnablementUpdateSchema, req.body || {});
+    const { setHarnessEnabled } = await import('../services/harnessEnablement.js');
+    res.json({ harness: { id: harnessId, ...(await setHarnessEnabled(harnessId, enabled)) } });
+  }));
+
+  /**
+   * Credential-bootstrap apps (#7564): the wrapper CLIs a composite's
+   * `+<slug>` suffix names. Saving never spawns anything — `setupCommand` is
+   * advisory text, and the wrapper runs only when a composite is executed.
+   */
+  router.get('/bootstraps', asyncHandler(async (_req, res) => {
+    const { listCredentialBootstraps } = await import('../services/credentialBootstrapApps.js');
+    res.json({ bootstraps: await listCredentialBootstraps() });
+  }));
+
+  router.put('/bootstraps', asyncHandler(async (req, res) => {
+    const bootstraps = validateRequest(credentialBootstrapsSettingsSchema, req.body?.bootstraps ?? req.body ?? {});
+    const { saveCredentialBootstraps } = await import('../services/credentialBootstrapApps.js');
+    res.json({ bootstraps: await saveCredentialBootstraps(bootstraps) });
+  }));
+
+  /**
+   * One composite's verdict (#7564): eligible or not, with the reason a picker
+   * shows beside a saved selection that names it, and — when eligible — the
+   * materialized record sanitized exactly as a stored one (`presentProvider`:
+   * `apiKey` → `hasApiKey`, secret env values redacted).
+   */
+  router.get('/composites/:id', asyncHandler(async (req, res) => {
+    const { describeCompositeProvider } = await import('../services/compositeProviders.js');
+    const { record, ...verdict } = await describeCompositeProvider(req.params.id);
+    res.json({ ...verdict, provider: record ? presentProvider(record, await detectSystemCapabilities()) : null });
+  }));
+
+  /**
+   * "Save as preset" (#7565): store the record a composite id resolves to, as
+   * an enabled derived preset the picker can name like any other. The
+   * resolver's verdict gates it — an ineligible composite is a 400 with its
+   * code and reason, never a stored record that cannot run. `model` and
+   * `effort` become the preset's defaults; a `+<bootstrap>` suffix becomes
+   * its `credentialBootstrapId`.
+   */
+  router.post('/presets', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerPresetCreateSchema, req.body ?? {});
+    const { createPresetFromComposite } = await presetService();
+    const created = await createPresetFromComposite(input);
+    res.status(201).json(presentProvider(created, await detectSystemCapabilities()));
   }));
 
   /**
@@ -969,6 +1089,19 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(result);
   }));
 
+  /**
+   * "Convert to derived preset" (#7565): stamp one legacy record with the
+   * harness, method and service instance it already runs on — only when
+   * re-deriving it from that service reproduces every connection-owned value
+   * it carries (the same fixpoint the boot backfill applies). Refused with the
+   * reason otherwise; nothing about how the record runs is changed either way.
+   */
+  router.post('/:id/derive', asyncHandler(async (req, res) => {
+    const { derivePreset } = await presetService();
+    const provider = await derivePreset(req.params.id);
+    res.json(presentProvider(provider, await detectSystemCapabilities()));
+  }));
+
   // Sanitized GET /:id — must be after specific /:id/* routes above
   router.get('/:id', asyncHandler(async (req, res) => {
     const provider = await providerService.getProviderById(req.params.id);
@@ -1007,7 +1140,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
       }
     }
 
-    const provider = await providerService.updateProvider(req.params.id, updates);
+    // A DERIVED preset (#7565) stores what its service derives — see
+    // `storableProviderRecord` for what is refused and what is read as a narrowing.
+    const { storableProviderRecord } = await presetService();
+    const stored = await storableProviderRecord({ ...existing, ...updates, id: req.params.id }, updates);
+
+    const provider = await providerService.updateProvider(req.params.id, stored);
     res.json(presentProvider(withResolvedModelAccess(provider, existing), await detectSystemCapabilities()));
   }));
 
@@ -1093,7 +1231,9 @@ export function createPortOSProviderRoutes(aiToolkit) {
       res.status(201).json({ providers: created.map(provider => presentProvider(provider, capabilities)) });
       return;
     }
-    const provider = await providerService.createProvider(validation.data);
+    // A body naming a harness, method and service is a DERIVED preset (#7565).
+    const { storableProviderRecord } = await presetService();
+    const provider = await providerService.createProvider(await storableProviderRecord(validation.data, validation.data));
     res.status(201).json(presentProvider(provider, await detectSystemCapabilities()));
   }));
 

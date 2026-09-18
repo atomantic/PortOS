@@ -70,11 +70,14 @@ describe('TasksTab Run Now', () => {
 // the agent list rather than rendering the task in both sections at once.
 describe('TasksTab spawning window', () => {
   const pendingTask = (id, extra = {}) => ({ id, description: `Task ${id}`, status: 'pending', metadata: {}, ...extra });
+  // `startedAt` is how the settlement tells a live spawn from a zombie record —
+  // registerAgent always stamps it. See server/lib/cosSpawnWindow.js.
+  const liveAgent = (id, taskId, ageMs = 0) => ({ id, status: 'running', taskId, startedAt: new Date(Date.now() - ageMs).toISOString() });
 
   it('moves a pending task with a live agent out of Pending and into Active', async () => {
     renderTab({
       tasks: { user: { tasks: [pendingTask('task-spawning'), pendingTask('task-waiting')] }, cos: { tasks: [] } },
-      agents: [{ id: 'agent-1', status: 'running', taskId: 'task-spawning' }],
+      agents: [liveAgent('agent-1', 'task-spawning')],
       liveOutputs: { 'agent-1': [{ line: 'Implementing the change' }] },
     });
 
@@ -95,10 +98,24 @@ describe('TasksTab spawning window', () => {
     expect(screen.queryByText(/^Active \(/)).not.toBeInTheDocument();
   });
 
+  it('hands the task back to Pending once its holder is too old to be mid-spawn', async () => {
+    // Past SPAWN_CLAIM_GRACE_MS a `running` agent on a `pending` task is a zombie,
+    // not a spawn in flight — and `forceSpawnTask` supersedes it on the same
+    // bound. Keeping it under Active would hide the stuck task in a section whose
+    // rows are presented as work already underway.
+    renderTab({
+      tasks: { user: { tasks: [pendingTask('task-stuck')] }, cos: { tasks: [] } },
+      agents: [liveAgent('agent-1', 'task-stuck', 10 * 60 * 1000)],
+    });
+
+    await waitFor(() => expect(screen.getByText('Pending (1)')).toBeInTheDocument());
+    expect(screen.queryByText(/^Active \(/)).not.toBeInTheDocument();
+  });
+
   it('keeps Process now reachable for a task whose agent record is stuck running', async () => {
     renderTab({
       tasks: { user: { tasks: [pendingTask('task-spawning')] }, cos: { tasks: [] } },
-      agents: [{ id: 'agent-1', status: 'running', taskId: 'task-spawning' }],
+      agents: [liveAgent('agent-1', 'task-spawning')],
     });
 
     await waitFor(() => expect(screen.getByText('Active (1)')).toBeInTheDocument());

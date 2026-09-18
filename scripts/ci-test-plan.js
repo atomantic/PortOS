@@ -424,6 +424,7 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/pollingConventions.test.js');
     add('client/src/popoverClampConventions.test.js');
     add('client/src/preWrapClasses.test.js');
+    add('client/src/providerSelectConventions.test.js');
     add('client/src/responsiveGridConventions.test.js');
     add('client/src/storageConventions.test.js');
     add('client/src/subNavConventions.test.js');

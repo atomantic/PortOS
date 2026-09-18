@@ -21,7 +21,9 @@ export const ACCEPTED_OLD_MD5 = {
   ]
 };
 export const NEW_SHIPPED_MD5 = {
-  "writers-room-characters.md": "4b19f6538ff3a602007ef8e32c8e5047",
+  // Re-pointed at the post-394 body (non-fiction lens). 4b19f65… stays
+  // reachable as 394's accepted-old, so an install on it still upgrades.
+  "writers-room-characters.md": "73ec5bbfdad5c62ec5d5c30f0940febf",
   "writers-room-evaluate.md": "995cfd92061b55730b0e081998e96f84"
 };
 const { applyMigration, up } = makePromptReplaceMigration({

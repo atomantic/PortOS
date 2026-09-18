@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router';
 const api = vi.hoisted(() => ({
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
+  deriveProviderPreset: vi.fn(),
 }));
 
 const toast = vi.hoisted(() => ({
@@ -332,5 +333,53 @@ describe('ProviderForm model access', () => {
     renderForm({ provider: { ...scopedProvider, modelAccess: { mode: 'allow', patterns: [] } } });
     switchTab('Models');
     expect(screen.getByText(/No patterns yet/)).toBeInTheDocument();
+  });
+
+  // #7565: a DERIVED preset says where its connection comes from; a legacy one
+  // the server reports convertible offers the one-click conversion and closes
+  // through onSave like any other save. Neither appears on a new record.
+  describe('preset structure', () => {
+    const legacy = { id: 'claude-local', name: 'Claude', type: 'cli', command: 'claude', presetKind: 'legacy', presetDerivable: true };
+
+    it('explains a derived preset, links its service, hides the connection-owned fields and offers no conversion', () => {
+      renderForm({ provider: { ...legacy, presetKind: 'derived', presetDerivable: false, harnessId: 'claude', method: 'cli', serviceId: 'ollama' } });
+      expect(screen.getByText(/Derived from service/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'ollama' })).toHaveAttribute('href', '/ai/services/ollama');
+      expect(screen.queryByRole('button', { name: /Convert to derived preset/ })).not.toBeInTheDocument();
+      // The service owns type, command and the inline bootstrap (#7567); the
+      // preset keeps its name and arguments.
+      expect(screen.queryByLabelText('Type *')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Command *')).not.toBeInTheDocument();
+      expect(screen.queryByText('Credential Bootstrap (optional)')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Name *')).toHaveValue('Claude');
+      expect(screen.getByLabelText('Arguments (space-separated)')).toBeInTheDocument();
+    });
+
+    it('hides the endpoint and key of a derived API preset, keeping them on a legacy one', () => {
+      const apiRecord = { id: 'nvidia', name: 'NVIDIA', type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1', presetKind: 'legacy', presetDerivable: false };
+      const { unmount } = renderForm({ provider: apiRecord });
+      expect(screen.getByLabelText('Endpoint *')).toHaveValue('https://integrate.api.nvidia.com/v1');
+      expect(screen.getByLabelText('API Key')).toBeInTheDocument();
+      unmount();
+      renderForm({ provider: { ...apiRecord, presetKind: 'derived', harnessId: 'direct', method: 'api', serviceId: 'nvidia-nim' } });
+      expect(screen.queryByLabelText('Endpoint *')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
+    });
+
+    it('converts a derivable legacy preset through the API and hands back to the page', async () => {
+      const onSave = vi.fn();
+      api.deriveProviderPreset.mockResolvedValue({ ...legacy, presetKind: 'derived', serviceId: 'ollama' });
+      renderForm({ provider: legacy, onSave });
+      fireEvent.click(screen.getByRole('button', { name: /Convert to derived preset/ }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(api.deriveProviderPreset).toHaveBeenCalledWith('claude-local');
+      expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('ollama'));
+    });
+
+    it('offers nothing on a record the server does not report convertible, nor on a new one', () => {
+      renderForm({ provider: { ...legacy, presetDerivable: false } });
+      expect(screen.queryByRole('button', { name: /Convert to derived preset/ })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Derived from service/)).not.toBeInTheDocument();
+    });
   });
 });

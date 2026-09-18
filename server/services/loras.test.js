@@ -58,7 +58,10 @@ beforeEach(async () => {
     const actual = await vi.importActual('../lib/fileUtils.js');
     return {
       ...actual,
-      PATHS: { ...actual.PATHS, loras: tmpLoras },
+      // `data` as well as `loras`: a finished install records itself in the model
+      // manifest (`data/model-manifest.json`), and the test-isolation guard
+      // refuses that write while the data root still points at the real install.
+      PATHS: { ...actual.PATHS, data: tmpRoot, loras: tmpLoras },
       atomicWrite: (...args) => atomicWriteHook
         ? atomicWriteHook(actual.atomicWrite, ...args)
         : actual.atomicWrite(...args),
@@ -520,12 +523,19 @@ describe('patchLoraSidecar', () => {
     const firstPatch = lorasService.patchLoraSidecar('delete-race.safetensors', { name: 'Before delete' });
     await writeStarted;
     const deletion = lorasService.deleteLora('delete-race.safetensors');
-    const latePatch = lorasService.patchLoraSidecar('delete-race.safetensors', { name: 'After delete' });
+    // Capture the rejection AT CREATION, not after the awaits below: this patch is
+    // queued behind the deletion and rejects as soon as that lands, which is
+    // before an `await deletion` on the line after it has returned. Attaching the
+    // handler later leaves a window where the rejection is genuinely unhandled,
+    // and Node reports it as such — a false failure about the delete path rather
+    // than about anything this test asserts.
+    const latePatch = lorasService.patchLoraSidecar('delete-race.safetensors', { name: 'After delete' })
+      .catch((error) => error);
 
     releaseWrite();
     await firstPatch;
     await deletion;
-    const err = await latePatch.catch((error) => error);
+    const err = await latePatch;
     expect(err.status).toBe(404);
     expect(err.code).toBe('NOT_FOUND');
     expect(existsSync(filePath)).toBe(false);

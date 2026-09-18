@@ -6,9 +6,11 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
 import useProviderModels from '../../../hooks/useProviderModels';
 import { enabledProcessProviderFilter } from '../../../utils/providers';
@@ -94,6 +96,70 @@ const ACTION_KINDS = {
   },
 };
 const KIND_IDS = Object.keys(ACTION_KINDS);
+
+// The direct merge's methods, in the order the forges list them.
+const MERGE_METHOD_LABELS = { merge: 'Merge commit', squash: 'Squash', rebase: 'Rebase' };
+const DEFAULT_MERGE_METHOD = 'merge';
+
+/**
+ * The one row action that runs no agent. Armed into an inline confirm rather
+ * than merging on the first click: the forge merge is irreversible, and the
+ * method and branch deletion are choices the user should see before it happens.
+ */
+function MergeAction({
+  pullRequest, idPrefix, title, armed, merging, method, onMethodChange,
+  deleteBranch, onDeleteBranchChange, onArm, onCancel, onConfirm,
+}) {
+  if (!armed) {
+    return (
+      <button
+        type="button"
+        onClick={onArm}
+        title={title}
+        className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap transition-colors"
+      >
+        <GitMerge size={14} /> Merge
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 px-2 py-1.5 bg-port-bg border border-port-border rounded-lg">
+      <label htmlFor={`${idPrefix}-method-${pullRequest.number}`} className="sr-only">
+        Merge method for #{pullRequest.number}
+      </label>
+      <select
+        id={`${idPrefix}-method-${pullRequest.number}`}
+        value={method}
+        onChange={event => onMethodChange(event.target.value)}
+        className="px-2 py-1 bg-port-card border border-port-border rounded-lg text-white text-xs focus:border-port-accent focus:outline-hidden"
+      >
+        {Object.entries(MERGE_METHOD_LABELS).map(([value, methodLabel]) => (
+          <option key={value} value={value}>{methodLabel}</option>
+        ))}
+      </select>
+      <input
+        id={`${idPrefix}-delete-${pullRequest.number}`}
+        type="checkbox"
+        checked={deleteBranch}
+        onChange={event => onDeleteBranchChange(event.target.checked)}
+      />
+      <label htmlFor={`${idPrefix}-delete-${pullRequest.number}`} className="text-xs text-gray-400">
+        Delete branch
+      </label>
+      <ConfirmButtonPair
+        tone="success"
+        confirmText={`Merge #${pullRequest.number}`}
+        confirmIcon={GitMerge}
+        busy={merging}
+        busyText="Merging…"
+        ariaLabel={`Confirm merging #${pullRequest.number}`}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />
+    </div>
+  );
+}
+
 const actionRecord = (kind, result) =>
   (ACTION_KINDS[kind].queued || (r => r[ACTION_KINDS[kind].field]))(result);
 const emptyActions = () => Object.fromEntries(KIND_IDS.map(kind => [kind, {}]));
@@ -160,6 +226,7 @@ function actionRank(status) {
  */
 export default function PullRequestsTab({ appId, appName }) {
   const searchId = useId();
+  const mergeId = useId();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -167,6 +234,16 @@ export default function PullRequestsTab({ appId, appName }) {
   const [actions, setActions] = useState(emptyActions);
   const actionsRef = useRef(emptyActions());
   const requestRef = useRef(0);
+  // Direct merge: no CoS task backs it, so it needs none of the action
+  // machinery above — only the shared single-row confirm state, an in-flight
+  // flag, and the two knobs the confirm row exposes (kept across rows as a
+  // session default).
+  const {
+    isConfirming, requestDelete: requestMerge, cancelDelete: cancelMerge,
+  } = useConfirmDelete();
+  const [merging, setMerging] = useState(false);
+  const [mergeMethod, setMergeMethod] = useState(DEFAULT_MERGE_METHOD);
+  const [deleteBranchOnMerge, setDeleteBranchOnMerge] = useState(true);
 
   // Resolve & merge defaults to the active provider. PR review follows its
   // saved stages unless the user explicitly enables the eligibility override.
@@ -359,6 +436,40 @@ export default function PullRequestsTab({ appId, appName }) {
     }
   };
 
+  // The one action that runs no agent: merge the request on the forge and drop
+  // it from the list. A failure deliberately leaves the confirm row open — a
+  // method the project forbids is answered by picking another one, not by
+  // starting over.
+  const confirmMerge = async pullRequest => {
+    const { number } = pullRequest;
+    setMerging(true);
+    const result = await api.mergeAppPullRequest(appId, number, {
+      method: mergeMethod,
+      deleteBranch: deleteBranchOnMerge,
+    }).catch(err => {
+      toast.error(err?.message || `Failed to merge #${number}`);
+      return null;
+    });
+    setMerging(false);
+    if (!result) return;
+
+    cancelMerge();
+    // `deletedBranch` is the server's answer, not the request: it refuses to
+    // delete a long-lived head however the checkbox was left.
+    const branchNote = result.deletedBranch
+      ? ' and deleted its branch'
+      : (deleteBranchOnMerge ? ` — kept ${pullRequest.headBranch || 'the source branch'}` : '');
+    toast.success(`Merged ${forgeLabel} #${number}${branchNote}`);
+    // Drop the row now rather than waiting out the forge round trip the reload
+    // costs. The reload still runs: landing a commit on the base branch changes
+    // the mergeability and check state of every other open row.
+    setData(current => current && {
+      ...current,
+      pullRequests: (current.pullRequests || []).filter(candidate => candidate.number !== number),
+    });
+    load();
+  };
+
   // Which actions this row offers. Each kind names the server's own per-row
   // verdict (`eligibleField`) rather than the tab re-deriving one: two copies of
   // an eligibility rule drift, and the button would then promise an action the
@@ -407,6 +518,9 @@ export default function PullRequestsTab({ appId, appName }) {
       </div>
 
       <div className="px-3 py-2 text-xs text-gray-500 bg-port-card border border-port-border rounded-lg space-y-1">
+        <p>
+          Merge lands the request on the forge immediately — no agent, no review, no model spend. Pick the merge method and whether to delete the source branch, then confirm. A long-lived source branch (a <span className="font-mono">main → release</span> request) is never deleted.
+        </p>
         <p>
           Resolve and merge starts a PortOS agent right away to inspect feedback, fix the branch, wait for checks, and merge when the forge allows it. It uses the configured Code Review Defaults.
         </p>
@@ -590,6 +704,23 @@ export default function PullRequestsTab({ appId, appName }) {
                         </button>
                       );
                     })}
+
+                    {pullRequest.mergeEligible && (
+                      <MergeAction
+                        pullRequest={pullRequest}
+                        idPrefix={mergeId}
+                        title={`Merge ${forgeLabel} request #${pullRequest.number} for ${appName} now, without an agent`}
+                        armed={isConfirming(pullRequest.number)}
+                        merging={merging}
+                        method={mergeMethod}
+                        onMethodChange={setMergeMethod}
+                        deleteBranch={deleteBranchOnMerge}
+                        onDeleteBranchChange={setDeleteBranchOnMerge}
+                        onArm={() => requestMerge(pullRequest.number)}
+                        onCancel={cancelMerge}
+                        onConfirm={() => confirmMerge(pullRequest)}
+                      />
+                    )}
                   </div>
                 </div>
               </div>

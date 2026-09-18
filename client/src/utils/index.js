@@ -42,6 +42,7 @@ export * from './providerGateways.js';
 export * from './providerHarnesses.js';
 export * from './providerModels.js';
 export * from './providerReadiness.js';
+export * from './providerRef.js';
 export * from './providerSelection.js';
 export * from './providerTypes.js';
 export * from './providers.js';

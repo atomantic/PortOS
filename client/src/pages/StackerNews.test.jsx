@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { clearSettled, retypeSettled, typeSettled } from '../test/settledInput';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 const api = {
   getStackerNewsAccounts: vi.fn(),
@@ -250,7 +251,7 @@ describe('StackerNews', () => {
     await user.click(screen.getByRole('button', { name: 'Save account' }));
     expect(screen.getByRole('button', { name: 'Sync now' })).toBeDisabled();
     await act(async () => save.resolve({ ...accounts[0], monitoringIntervalMinutes: 20 }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Sync now' });
   });
 
   it('discards an unsaved account draft left behind by closing the drawer', async () => {

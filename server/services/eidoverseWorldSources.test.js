@@ -36,9 +36,8 @@ vi.mock('../lib/memoryStats.js', () => ({
   getMemoryStats: vi.fn(async () => sources.memory),
 }));
 vi.mock('./identity.js', () => ({ getGoals: vi.fn(async () => sources.goalsData) }));
-vi.mock('./productivity.js', () => ({
+vi.mock('./cosActivityCalendar.js', () => ({
   getActivityCalendar: vi.fn(async () => sources.activityCalendar),
-  getVelocityMetrics: vi.fn(async () => sources.velocity),
 }));
 vi.mock('./brainGraph.js', () => ({
   getBrainGraphOverview: vi.fn(async () => sources.memoryGraph),
@@ -72,7 +71,6 @@ beforeEach(() => {
     memory: { total: 100, used: 10 },
     diskPercent: 10,
     todayActivity: null,
-    velocity: null,
     activityCalendar: { weeks: [] },
     goalsData: { goals: [] },
     memoryGraph: { nodes: [], edges: [], hasEmbeddings: false },
@@ -161,11 +159,11 @@ describe('Eidoverse world source aggregation', () => {
   it('orders recent active days first after the activity summary', async () => {
     sources.activityCalendar = {
       weeks: [[
-        { date: '2026-01-01', tasks: 1, successes: 1 },
-        { date: '2026-01-02', tasks: 0, successes: 0 },
-        { date: '2026-01-03', tasks: 3, successes: 2, isToday: true },
+        { date: '2026-01-01', tasks: 1 },
+        { date: '2026-01-02', tasks: 0 },
+        { date: '2026-01-03', tasks: 3, isToday: true },
       ]],
-      summary: { activeDays: 2, totalTasks: 4, totalSuccesses: 3 },
+      summary: { activeDays: 2, totalTasks: 4 },
       maxTasks: 3,
     };
 
@@ -181,7 +179,6 @@ describe('Eidoverse world source aggregation', () => {
       isRunning: true,
       isPaused: false,
     };
-    sources.velocity = { velocity: 1.5, avgPerDay: 2, historicalDays: 7 };
     sources.taskState = {
       tasks: [
         { id: 'task-one', title: 'Example private task', status: 'pending' },

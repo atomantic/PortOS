@@ -6,6 +6,7 @@ import {
   allocateServiceSlug,
   applyServicePlanFilter,
   credentialSourceFor,
+  instanceApiKeyFor,
   kindForDefinition,
   storedTransports,
   takenServiceSlugs,
@@ -13,7 +14,13 @@ import {
 } from '../lib/providerServiceInstances.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { resolveServiceInstance, serviceDefinitionById } from '../lib/serviceDefinitions.js';
-import { findConnectionByRef, requireProviderGraph, serializeProviderGraph, updateConnectionSettings } from './providerGraph.js';
+import {
+  findConnectionByRef,
+  rematerializeDerivedPresets,
+  requireProviderGraph,
+  serializeProviderGraph,
+  updateConnectionSettings,
+} from './providerGraph.js';
 import { readGraph, saveConnectionSettings, writeGraph } from './providerGraphStore.js';
 
 /**
@@ -43,18 +50,6 @@ const ANTHROPIC_VERSION = '2023-06-01';
 const loadInstallEnvFile = async () => (await import('./credentialInventory.js')).loadInstallEnvFile();
 
 /**
- * The key an instance runs under, or `''`. A `stored` instance holds it on the
- * row (under `apiKey`, or under the env var name a route-derived row kept); an
- * `env` one reads the definition's conventional variable from the process.
- */
-function instanceApiKey(connection, definition, env) {
-  const firstNamed = (bag) => definition.credential.envVars.map((name) => bag[name]).find(isNonBlankStr) ?? '';
-  if (connection.credentialVia === 'env') return firstNamed(env);
-  const stored = connection.credentials || {};
-  return stored.apiKey ?? firstNamed(stored);
-}
-
-/**
  * GET `/models` on the instance's own endpoint with its own key.
  *
  * Serves both `probe` (a hosted API) and `daemon` (a local runtime): the
@@ -67,7 +62,7 @@ function instanceApiKey(connection, definition, env) {
  * "answered nothing" and "could not answer" stay apart.
  */
 async function listByProbe(connection, definition, { env, probe }) {
-  const apiKey = instanceApiKey(connection, definition, env);
+  const apiKey = instanceApiKeyFor(connection, definition, env);
   const openai = connection.transports?.openai?.baseUrl;
   const anthropic = connection.transports?.anthropic?.baseUrl;
   if (!openai && !anthropic) return { refreshed: false, error: 'This service declares no endpoint to list models from' };
@@ -145,10 +140,13 @@ function describe(connection, graph, envFile) {
   });
 }
 
-/** Every instance, sanitized: never a credential value, never a projection snapshot. */
-export async function listServices() {
+/**
+ * Every instance, sanitized: never a credential value, never a projection
+ * snapshot. A caller holding a fresh graph read passes it to skip a second.
+ */
+export async function listServices({ graph: preread = null } = {}) {
   requireProviderGraph();
-  const [graph, envFile] = await Promise.all([readGraph(), loadInstallEnvFile()]);
+  const [graph, envFile] = await Promise.all([preread ?? readGraph(), loadInstallEnvFile()]);
   return { services: graph.connections.map((connection) => describe(connection, graph, envFile)) };
 }
 
@@ -254,6 +252,9 @@ export function refreshServiceCatalog(ref, deps = {}) {
       error: outcome.error == null ? null : sanitizeCatalogError(outcome.error, connection.credentials),
     }, { now });
     const revision = await saveConnectionSettings({ ...connection, catalog });
+    // A derived preset's `models` is this catalog narrowed (#7565): a listing
+    // that changed reaches every preset on the instance in the same request.
+    await rematerializeDerivedPresets({ ...connection, catalog, revision: revision ?? connection.revision });
 
     console.log(`🔗 Refreshed service ${connection.slug ?? connection.id} catalog via ${definition.catalog.strategy}: `
       + `${catalog.state}, ${catalog.models.length} models`);

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { harnessById } from './providerHarnesses.js';
+import { CONNECTION_CREDENTIAL_ENV_VARS } from './providerConnections.js';
 import { connectionDtoSchema, connectionHasCredentials, toConnectionDto } from './providerGraphRecords.js';
 import { isNonBlankStr } from './textUtils.js';
 import {
@@ -7,6 +8,7 @@ import {
   SERVICE_FAMILIES,
   SERVICE_PLANS,
   SERVICE_SLUG_RE,
+  resolveServiceInstance,
   serviceDefinitionById,
   serviceDefinitionForLocalRuntime,
 } from './serviceDefinitions.js';
@@ -76,6 +78,64 @@ export function kindForDefinition(definition) {
   if (definition.gateway) return `${GATEWAY_KIND}${definition.id}`;
   if (definition.family === 'subscription' || definition.harnessOnly) return 'vendor';
   return 'api';
+}
+
+/**
+ * The key an instance runs under, or `''`. A `stored` instance holds it on the
+ * row (under `apiKey`, or under the env var name a route-derived row kept); an
+ * `env` one reads the definition's conventional variable from the process; a
+ * `cli-login` or `bootstrap` instance holds none — the program signs in, or the
+ * launch wrapper supplies it.
+ *
+ * @param {{credentialVia?: string, credentials?: object}} connection
+ * @param {{credential: {envVars: readonly string[]}}} definition
+ * @param {Record<string, string|undefined>} env
+ */
+export function instanceApiKeyFor(connection, definition, env) {
+  const firstNamed = (bag, names) => names.map((name) => bag?.[name]).find(isNonBlankStr) ?? '';
+  const via = connection.credentialVia ?? 'stored';
+  if (via === 'env') return firstNamed(env, definition.credential.envVars);
+  if (via !== 'stored') return '';
+  const stored = connection.credentials || {};
+  if (isNonBlankStr(stored.apiKey)) return stored.apiKey;
+  // A route-derived row keeps its key under the env var the record carried
+  // (`ANTHROPIC_AUTH_TOKEN` on a Claude-Ollama import), which a local daemon's
+  // definition names no conventional variable for — so every credential
+  // variable the profile reads is a place the key may sit, after the
+  // definition's own.
+  return firstNamed(stored, [...definition.credential.envVars, ...CONNECTION_CREDENTIAL_ENV_VARS]);
+}
+
+/**
+ * The pure instance shape behind a connection row: its definition, slug, plan,
+ * endpoints and the key it runs under. `null` when the row names no definition
+ * this build has (nothing composes onto it).
+ *
+ * A stored row OUTLIVES the definition it names: installs upgrade on their own
+ * schedule, so a release that drops or renames a plan leaves existing rows on
+ * the old one. `resolveServiceInstance` THROWS on a plan the definition no
+ * longer sells (and on a slug that predates `SERVICE_SLUG_RE`), and the
+ * composition catalog maps this over EVERY connection — so one stale row would
+ * take down the whole surface instead of dropping the single service it
+ * describes. Answer `null` for it, exactly as for an unknown definition.
+ *
+ * @param {object} connection - a store row
+ * @param {Record<string, string|undefined>} [env]
+ */
+export function instanceForConnection(connection, env = process.env) {
+  const definition = connection?.definitionId ? serviceDefinitionById(connection.definitionId) : null;
+  if (!definition || !connection.slug) return null;
+  const plan = connection.plan ?? definition.plans[0];
+  if (!definition.plans.includes(plan) || !SERVICE_SLUG_RE.test(connection.slug)) return null;
+  const apiKey = instanceApiKeyFor(connection, definition, env);
+  return resolveServiceInstance({
+    definition,
+    slug: connection.slug,
+    plan: connection.plan,
+    transports: connection.transports,
+    credentials: apiKey ? { apiKey } : {},
+    credentialVia: connection.credentialVia,
+  });
 }
 
 /** The slugs a graph already uses — what every allocation must avoid. */
@@ -184,7 +244,33 @@ const definitionDtoSchema = z.object({
   plans: z.array(z.enum(SERVICE_PLANS)).min(1),
   catalogStrategy: z.enum(CATALOG_STRATEGIES),
   harnessOnly: z.string().nullable(),
+  // Where a key is obtained and which variables it is conventionally held
+  // under — what a Services card's "get a key" link and env hint read (#7567).
+  keyUrl: z.string().nullable(),
+  envVars: z.array(z.string()),
+  // The transports a definition speaks with their default base URLs, so an
+  // "Add service" form can pre-fill an endpoint or demand one where the
+  // definition declares none.
+  transports: z.record(z.string(), z.object({ defaultBaseUrl: z.string().nullable() }).strict()),
 }).strict();
+
+/**
+ * One definition as the wire publishes it — the `definition` half of the
+ * service DTO and each row of `GET /api/providers/service-definitions`.
+ * Code-only data: no instance, no credential.
+ */
+export const presentServiceDefinition = (definition) => ({
+  id: definition.id,
+  label: definition.label,
+  family: definition.family,
+  plans: [...definition.plans],
+  catalogStrategy: definition.catalog.strategy,
+  harnessOnly: definition.harnessOnly ?? null,
+  keyUrl: definition.credential.keyUrl ?? null,
+  envVars: [...definition.credential.envVars],
+  transports: Object.fromEntries(Object.entries(definition.transports)
+    .map(([protocol, transport]) => [protocol, { defaultBaseUrl: transport.defaultBaseUrl ?? null }])),
+});
 
 /**
  * One instance as `GET /api/providers/services` publishes it: the connection
@@ -223,14 +309,7 @@ export function toServiceDto(connection, { bindingCount = 0, credentialSource = 
   const resolved = definition === undefined ? (base.definitionId ? serviceDefinitionById(base.definitionId) : null) : definition;
   return serviceDtoSchema.parse({
     ...base,
-    definition: resolved ? {
-      id: resolved.id,
-      label: resolved.label,
-      family: resolved.family,
-      plans: [...resolved.plans],
-      catalogStrategy: resolved.catalog.strategy,
-      harnessOnly: resolved.harnessOnly ?? null,
-    } : null,
+    definition: resolved ? presentServiceDefinition(resolved) : null,
     credentialSource,
     bindingCount,
     readiness: serviceReadiness(base, resolved, credentialSource),

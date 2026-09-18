@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router';
 import { beforeEach, expect, it, vi } from 'vitest';
 import AppQualityRunner from './AppQualityRunner';
 import AppQuality from './AppQuality';
+import { awaitEnabled, findEnabledByLabelText, findEnabledByRole } from '../../test/enabledBarrier.js';
 vi.mock('./AppQualityHistory', () => ({ default: () => null }));
 import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../../services/apiAgents';
 import useProviderModels from '../../hooks/useProviderModels';
@@ -19,7 +20,7 @@ it('launches missing checks with visible mode and effort, then exposes held runn
   startMaintenanceRun.mockResolvedValue({ run: { id: 'run-1', status: 'running', reason: 'Enable security in Schedule', steps: [] } });
   render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
   const button = screen.getByRole('button', { name: 'Run 2 checks now' });
-  await waitFor(() => expect(button).toBeEnabled());
+  await awaitEnabled(button);
   fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'fix' } });
   fireEvent.click(screen.getByText('Use high effort'));
   fireEvent.click(button);
@@ -32,7 +33,7 @@ it('allows one category and recovers from launch failure without reporting a run
   render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
   fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'performance' } });
   const button = screen.getByRole('button', { name: 'Run now' });
-  await waitFor(() => expect(button).toBeEnabled());
+  await awaitEnabled(button);
   fireEvent.click(button);
   expect(await screen.findByRole('alert')).toHaveTextContent('Provider unavailable');
   expect(button).toBeEnabled();
@@ -42,7 +43,7 @@ it('allows one category and recovers from launch failure without reporting a run
 it('preserves run overrides when moving controls into a category row', async () => {
   startMaintenanceRun.mockResolvedValue({ run: { id: 'run-2', status: 'running', steps: [] } });
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Run 2 checks now' })).toBeEnabled());
+  await findEnabledByRole('button', { name: 'Run 2 checks now' });
   fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'fix' } });
   fireEvent.click(screen.getByText('Use high effort'));
   fireEvent.click(screen.getByRole('link', { name: 'Configure and run Security' }));
@@ -88,11 +89,11 @@ it('excludes known unavailable and N/A assessments from suggestions while allowi
   ] } }} /></MemoryRouter>);
   fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['security'] }), { silent: true }));
-  await waitFor(() => expect(screen.getByLabelText('Checks')).toBeEnabled());
+  await findEnabledByLabelText('Checks');
   fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'typing' } });
   fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing'] }), { silent: true }));
-  await waitFor(() => expect(screen.getByLabelText('Checks')).toBeEnabled());
+  await findEnabledByLabelText('Checks');
   fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'all' } });
   fireEvent.click(screen.getByRole('button', { name: 'Run 3 checks now' }));
   await waitFor(() => expect(startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ taskTypes: ['typing', 'console-errors', 'security'] }), { silent: true }));

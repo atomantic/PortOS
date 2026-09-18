@@ -1,6 +1,7 @@
 import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useMemo, useState } from 'react';
-import { AlertTriangle, Braces, Cpu, Plug, SlidersHorizontal } from 'lucide-react';
+import { Link } from 'react-router';
+import { AlertTriangle, Braces, Cpu, Link2, Plug, SlidersHorizontal } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { filterHardwareCompatibleProviderModels, filterGenerationModels, isEmbeddingModel, isProviderHardwareCompatible, isProviderModelHardwareCompatible, mergeModelLists, configuredDefaultIn, localBackendForProvider, mergeObservedContextWindows, withRuntimeContextWindow, modelOptionLabel, isProcessProvider, isLocalEndpoint, effectiveModelContextWindow, isRunnerAllowedCommand, effortLevelsForProvider, isOllamaBackedProvider, gatewayForProvider, isClaudeCommandProvider, generationControlsFor, isCodexProvider } from '../../utils/providers';
@@ -107,6 +108,21 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
   });
 
   const [activeTab, setActiveTab] = useDrawerTab('providerTab', 'connection', PROVIDER_FORM_TAB_IDS);
+  // Preset structure (#7565). A DERIVED preset takes its program, endpoint,
+  // credential, environment and catalog from the service it names on every
+  // save; the server refuses a direct edit to one of those with a pointer at
+  // the service, so the banner says so up front. A legacy record the server
+  // reports convertible gets the one-click conversion here.
+  const isDerived = provider?.presetKind === 'derived';
+  const [converting, setConverting] = useState(false);
+  const convertToDerived = async () => {
+    setConverting(true);
+    const derived = await api.deriveProviderPreset(provider.id).catch(() => null);
+    setConverting(false);
+    if (!derived) return;
+    toast.success(`Now derived from service "${derived.serviceId}"`);
+    onSave();
+  };
 
   const [newEnvKey, setNewEnvKey] = useState('');
   const [newEnvValue, setNewEnvValue] = useState('');
@@ -509,6 +525,36 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
           )}
           {activeTab === 'connection' && (
             <div className="space-y-4">
+              {isDerived && (
+                <Banner tone="info" icon={Link2}>
+                  <p>
+                    Derived from service{' '}
+                    <Link to={`/ai/services/${encodeURIComponent(provider.serviceId)}`} className="font-mono text-port-accent hover:underline">
+                      {provider.serviceId}
+                    </Link>{' '}
+                    via <code className="font-mono">{provider.harnessId}</code> ({provider.method}). The command, endpoint,
+                    credential, backend environment and model catalog come from that service and are refreshed on every
+                    save — edit them on the service, not here. Name, arguments, timeouts, model pins, effort and
+                    generation settings are this preset's own.
+                  </p>
+                </Banner>
+              )}
+              {provider && !isDerived && provider.presetDerivable && (
+                <Banner tone="info" icon={Link2}>
+                  <p>
+                    This preset holds its own copy of a service's endpoint and credentials. Converting it derives those
+                    from the service it already runs on, so a change to the service reaches it automatically.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={convertToDerived}
+                    disabled={converting}
+                    className="mt-2 px-3 py-1.5 text-sm rounded-lg border border-port-accent/50 text-port-accent hover:bg-port-accent/10 disabled:opacity-50"
+                  >
+                    {converting ? 'Converting…' : 'Convert to derived preset'}
+                  </button>
+                </Banner>
+              )}
               <FormField label="Name *">
                 <input
                   type="text"
@@ -519,6 +565,13 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                 />
               </FormField>
 
+              {/* Connection-owned fields (type, command, endpoint, key, inline
+                  bootstrap) are the SERVICE's on a derived preset (#7565): the
+                  server re-materializes them on every save and refuses an edit
+                  that would move one, so the form shows none of them (#7567).
+                  The values stay in `formData` untouched, which is what keeps
+                  the per-tab validation satisfied. */}
+              {!isDerived && (
               <FormField label="Type *">
                 <select
                   value={formData.type}
@@ -530,9 +583,11 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                   <option value="api">API</option>
                 </select>
               </FormField>
+              )}
 
               {(formData.type === 'cli' || formData.type === 'tui') && (
                 <>
+                  {!isDerived && (
                   <FormField label="Command *">
                     <input
                       type="text"
@@ -559,6 +614,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       </Banner>
                     )}
                   </FormField>
+                  )}
 
                   <FormField label="Arguments (space-separated)">
                     <input
@@ -616,6 +672,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       invocation above, exactly as typing `<bootstrap> run <harness>
                       ...` would. Setup Command is shown for the user to run
                       themselves; PortOS never executes it. */}
+                  {!isDerived && (
+                  <>
                   <p className="text-sm text-gray-400 -mb-1">Credential Bootstrap (optional)</p>
                   <FormField label="Setup Command" compact>
                     <input
@@ -685,6 +743,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     re-parents the harness out of that group, or traps signals without passing them on, can leave
                     it running after PortOS has finished the run.
                   </p>
+                  </>
+                  )}
 
                   {/* The CLI/TUI backends that can authenticate: the vLLM compose
                       stack is started with VLLM_API_KEY, so without this field
@@ -695,7 +755,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       set when the operator ran `--api-key`), so the two cannot
                       share one placeholder without telling half the operators to
                       paste a secret that does not exist. */}
-                  {capabilityProvider?.vllmBacked && (
+                  {!isDerived && capabilityProvider?.vllmBacked && (
                     <FormField label="API Key">
                       <input
                         type="password"
@@ -711,7 +771,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     </FormField>
                   )}
 
-                  {capabilityProvider?.sglangBacked && (
+                  {!isDerived && capabilityProvider?.sglangBacked && (
                     <FormField label="API Key (optional)">
                       <input
                         type="password"
@@ -769,6 +829,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
 
               {formData.type === 'api' && (
                 <>
+                  {!isDerived && (
+                  <>
                   <FormField label="Endpoint *">
                     <input
                       type="url"
@@ -799,6 +861,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       one; local backends (Ollama, LM Studio) don't.
                     </p>
                   </FormField>
+                  </>
+                  )}
 
                   <FormField label="Custom endpoint">
                     <label htmlFor="allowCustomEndpoint" className="flex items-start gap-2 cursor-pointer">

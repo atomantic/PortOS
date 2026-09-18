@@ -271,6 +271,9 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand) {
     id: runtime.id,
     label: runtime.label,
     command: runtime.command,
+    // The harness this binary drives (`PROVIDER_HARNESSES` id), so a harness
+    // card can find its runtime without a client-side copy of the vendor table.
+    vendor: runtime.vendor,
     installed,
     // `null` = the banner did not parse (or the probe answered a bare boolean),
     // NOT "0.0.0". Every version comparison bails on it rather than reporting a

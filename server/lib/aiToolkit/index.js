@@ -70,7 +70,9 @@ export function createAIToolkit(config = {}) {
     // Host probe for the checkpoints a one-model-per-process local runtime has
     // cached but is not serving — see createProviderService(). Unset
     // standalone, so a refresh reports only what the endpoint answers with.
-    cachedModelIds = null
+    cachedModelIds = null,
+    // Host resolver for composite provider ids — see createProviderService().
+    resolveCompositeProvider = null
   } = config;
 
   const providerService = createProviderService({
@@ -78,7 +80,8 @@ export function createAIToolkit(config = {}) {
     providersFile,
     sampleFile: sampleProvidersFile,
     onProvidersSaved,
-    cachedModelIds
+    cachedModelIds,
+    resolveCompositeProvider
   });
 
   let providerStatusService = null;

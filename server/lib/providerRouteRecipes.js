@@ -54,6 +54,18 @@ const LOCAL_RUNTIME_MARKERS = Object.freeze({
   sglang: 'sglangBacked',
 });
 
+/**
+ * Every record key a backend marker can sit under: the local-runtime booleans,
+ * the generic gateway marker, and each gateway's legacy per-gateway boolean —
+ * so a writer that has to CLEAR a stale marker (a preset re-derived from a
+ * different service, #7565) names the same set this module writes.
+ */
+export const BACKEND_MARKER_KEYS = Object.freeze([
+  ...Object.values(LOCAL_RUNTIME_MARKERS),
+  'gatewayBacked',
+  ...PROVIDER_GATEWAYS.flatMap((gateway) => (gateway.legacyMarker ? [gateway.legacyMarker] : [])),
+]);
+
 /** Every `kind` `POST /api/providers/connections` accepts. */
 export const CREATABLE_CONNECTION_KINDS = Object.freeze([
   ...Object.keys(LOCAL_RUNTIME_MARKERS),
@@ -372,22 +384,38 @@ const serviceConnectionKind = ({ definition, slug }) =>
  *          overrides?: object, providerId?: string, name?: string}} input
  * @returns {object} the record to hand `createProvider`
  */
-export function materializeRoute({
+export function materializeRoute(input) {
+  const { record, error } = materializeRouteOutcome(input);
+  if (error) throw error;
+  return record;
+}
+
+/**
+ * {@link materializeRoute} as a VERDICT: `{ record }` when the composition is
+ * runnable, `{ error }` (the same typed 400) when it is not. The composite
+ * resolver (#7564) reads refusals as reasons to show beside a saved selection,
+ * so it needs the answer without a throw; the create endpoint keeps the
+ * throwing form. One body, two shapes.
+ *
+ * @returns {{record: object, error: null}|{record: null, error: Error & {code: string, status: 400}}}
+ */
+export function materializeRouteOutcome({
   harness: harnessInput, method, serviceInstance, bootstrap = null, selection = {}, overrides = {}, providerId, name,
 }) {
+  const refuse = (code, message) => ({ record: null, error: serviceError(code, message) });
   const harness = typeof harnessInput === 'string' ? harnessById(harnessInput) : harnessInput;
-  if (!harness) throw serviceError('HARNESS_UNKNOWN', `No harness "${harnessInput ?? ''}"`);
+  if (!harness) return refuse('HARNESS_UNKNOWN', `No harness "${harnessInput ?? ''}"`);
   if (!harness.modes.includes(method)) {
-    throw serviceError('HARNESS_METHOD_UNSUPPORTED', `${harness.label} has no ${method} mode.`);
+    return refuse('HARNESS_METHOD_UNSUPPORTED', `${harness.label} has no ${method} mode.`);
   }
   const instance = resolveServiceInstance(serviceInstance);
   const { definition } = instance;
   const binding = firstCompatibleBinding(harness, instance);
   if (!binding) {
-    throw serviceError('HARNESS_SERVICE_INCOMPATIBLE', `${harness.label} cannot be pointed at ${definition.label}.`);
+    return refuse('HARNESS_SERVICE_INCOMPATIBLE', `${harness.label} cannot be pointed at ${definition.label}.`);
   }
   if (instance.credentialVia === 'bootstrap' && method !== 'api' && !bootstrap) {
-    throw serviceError('SERVICE_CREDENTIAL_BOOTSTRAP_REQUIRED',
+    return refuse('SERVICE_CREDENTIAL_BOOTSTRAP_REQUIRED',
       `${definition.label} is credentialed by a bootstrap CLI at spawn; name the bootstrap app to compose this route.`);
   }
 
@@ -402,7 +430,7 @@ export function materializeRoute({
   const protocol = binding.protocol || null;
   const baseUrl = protocol ? instance.transports[protocol]?.baseUrl ?? null : null;
   if (protocol && !baseUrl) {
-    throw serviceError('SERVICE_ENDPOINT_REQUIRED', `${definition.label} declares no ${protocol} endpoint; set its base URL first.`);
+    return refuse('SERVICE_ENDPOINT_REQUIRED', `${definition.label} declares no ${protocol} endpoint; set its base URL first.`);
   }
   switch (binding.baseUrl?.via) {
     case 'env': envVars[binding.baseUrl.name] = baseUrl; break;
@@ -437,7 +465,7 @@ export function materializeRoute({
     : credentialVia === 'env' ? credential.name ?? definition.credential.envVars[0] ?? null : null;
   const credentialRequired = credential?.required === true && instance.credentialVia !== 'bootstrap';
   if (credentialRequired && apiKey === '') {
-    throw serviceError('SERVICE_CREDENTIAL_REQUIRED',
+    return refuse('SERVICE_CREDENTIAL_REQUIRED',
       `${harness.label} will not start without a ${credentialEnvName || 'key'} for ${definition.label}. Set one first — any non-empty value works for a local daemon that ignores it.`);
   }
   if (credentialVia === 'field') fields.apiKey = apiKey;
@@ -475,7 +503,7 @@ export function materializeRoute({
       ...(bootstrap.argsSeparator ? { argsSeparator: bootstrap.argsSeparator } : {}),
     };
   }
-  return record;
+  return { record, error: null };
 }
 
 /**

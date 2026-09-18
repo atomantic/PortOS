@@ -16,13 +16,14 @@
  * own constants, not restated — one catalog, rendered twice.
  */
 
+import { useEffect, useRef } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { Link } from 'react-router';
-import EffortSelect from '../cos/EffortSelect';
+import ProviderModelSelector from '../ProviderModelSelector';
 import { AGENT_OPTIONS } from '../cos/constants';
 import { fileIssuesEffective, managedAgentOptionsFor } from '../cos/tabs/schedule/scheduleConstants';
 import { effectiveQuotaBurnSettings, QUOTA_BURN_TASK_REF_KIND, taskSourceHref } from '../../lib/quotaBurnTasks';
-import { effortAwareModelOptions, effortLevelsForProvider, effortSurvivingModel } from '../../utils/providers';
+import { effortAwareModelOptions } from '../../utils/providers';
 import { inputClass } from './fields';
 
 const INHERIT = '';
@@ -37,7 +38,23 @@ export default function StepSettings({ job, entry, providers, idPrefix, onChange
   const saved = entry?.config || null;
   const effective = effectiveQuotaBurnSettings(job, saved);
 
-  const setOverride = (key, value) => onChange({ ...job, overrides: { ...overrides, [key]: value || null } });
+  // `onChange` REPLACES the whole job, and the shared selector emits model and
+  // effort back to back (its effort-survival rule, and the compose flow applying
+  // a route). A second emit built from the `job` PROP — still the pre-change one
+  // until the parent's PATCH round-trips — would drop the first, so emits compose
+  // against the last value sent instead. The accumulator is released on every
+  // commit, whether or not the parent applied the change, so the next
+  // interaction always starts from the live prop.
+  const emitted = useRef(null);
+  useEffect(() => { emitted.current = null; });
+  const setOverrides = (patch) => {
+    const base = emitted.current || job;
+    const next = { ...base, overrides: { ...(base.overrides || {}), ...patch } };
+    emitted.current = next;
+    onChange(next);
+  };
+
+  const setOverride = (key, value) => setOverrides({ [key]: value || null });
   // A param set back to "Inherit" is DELETED rather than written as null: the
   // server merges the bag over the task's saved metadata, so a null would pin
   // the key to null instead of letting the task's own value through.
@@ -45,7 +62,7 @@ export default function StepSettings({ job, entry, providers, idPrefix, onChange
     const next = { ...params };
     if (value === undefined) delete next[key];
     else next[key] = value;
-    onChange({ ...job, overrides: { ...overrides, params: next } });
+    setOverrides({ params: next });
   };
 
   // Falls back to the family's first eligible binary rather than to nothing: an
@@ -54,17 +71,6 @@ export default function StepSettings({ job, entry, providers, idPrefix, onChange
   // model and effort controls simply vanished for every step that inherits.
   const selectedProvider = providers.find((provider) => provider.id === effective.providerId) || providers[0] || null;
   const availableModels = selectedProvider ? effortAwareModelOptions(selectedProvider, effective.model) : [];
-  const effortLevels = selectedProvider ? effortLevelsForProvider(selectedProvider, effective.model) : null;
-
-  const handleModelChange = (raw) => {
-    const nextModel = raw || null;
-    // A pinned effort the new model does not offer is dropped rather than saved
-    // onto a model that cannot honor it.
-    const surviving = overrides.effort && selectedProvider
-      ? effortSurvivingModel(selectedProvider, nextModel, overrides.effort)
-      : overrides.effort;
-    onChange({ ...job, overrides: { ...overrides, model: nextModel, effort: surviving || null } });
-  };
 
   const auditCapable = saved?.fileIssuesCapable === true;
   const filesIssues = fileIssuesEffective(saved, params);
@@ -91,56 +97,33 @@ export default function StepSettings({ job, entry, providers, idPrefix, onChange
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label htmlFor={`${idPrefix}-provider`} className="block text-xs text-gray-400">
-          Provider
-          <select
+        <div className="sm:col-span-2">
+          {/* The step's own pins are three-state, so every select keeps a blank
+              "Inherit" row naming what the task would use; `effectiveProviderId`
+              is what makes the model list and effort ladder resolve against the
+              provider an unpinned step actually runs on. */}
+          <ProviderModelSelector
             id={`${idPrefix}-provider`}
-            className={inputClass}
-            value={overrides.providerId || INHERIT}
-            onChange={(event) => setOverride('providerId', event.target.value)}
-          >
-            <option value={INHERIT}>Inherit ({saved?.providerId || 'family default'})</option>
-            {providers.map((provider) => (
-              <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>
-            ))}
-          </select>
-        </label>
-
-        <label htmlFor={`${idPrefix}-model`} className="block text-xs text-gray-400">
-          Model
-          <select
-            id={`${idPrefix}-model`}
-            className={inputClass}
-            value={overrides.model || INHERIT}
-            onChange={(event) => handleModelChange(event.target.value)}
-          >
-            <option value={INHERIT}>Inherit ({saved?.model || 'task default'})</option>
-            {availableModels.map((option) => {
-              const value = typeof option === 'string' ? option : option.id;
-              return <option key={value} value={value}>{typeof option === 'string' ? option : (option.name || option.id)}</option>;
-            })}
-            {/* A pin the current provider no longer lists still has to render as
-                itself, or the select silently reports a different model than the
-                one that will run. */}
-            {overrides.model && !availableModels.some((option) => (typeof option === 'string' ? option : option.id) === overrides.model) && (
-              <option value={overrides.model}>{overrides.model}</option>
-            )}
-          </select>
-        </label>
-
-        {effortLevels?.length > 0 && (
-          <label htmlFor={`${idPrefix}-effort`} className="block text-xs text-gray-400">
-            Thinking effort
-            <EffortSelect
-              id={`${idPrefix}-effort`}
-              provider={selectedProvider}
-              model={effective.model}
-              value={overrides.effort || INHERIT}
-              onChange={(effort) => setOverride('effort', effort)}
-              className={inputClass}
-            />
-          </label>
-        )}
+            label="Provider"
+            modelLabel="Model"
+            providers={providers}
+            selectedProviderId={overrides.providerId || INHERIT}
+            // Only while the step INHERITS: the blank row then also names the
+            // provider it actually resolves to. Passing it under a pin would
+            // append that pin's name to the "Inherit (…)" label, which reads as
+            // the inherited provider being the one currently selected.
+            effectiveProviderId={overrides.providerId ? undefined : selectedProvider?.id}
+            selectedModel={overrides.model || INHERIT}
+            availableModels={availableModels}
+            onProviderChange={(providerId) => setOverride('providerId', providerId)}
+            onModelChange={(model) => setOverride('model', model)}
+            effort={overrides.effort || INHERIT}
+            onEffortChange={(effort) => setOverride('effort', effort)}
+            emptyProviderOption={`Inherit (${saved?.providerId || 'family default'})`}
+            emptyModelOption={`Inherit (${saved?.model || 'task default'})`}
+            alwaysShowModel
+          />
+        </div>
 
         {auditCapable && (
           <label htmlFor={`${idPrefix}-file-issues`} className="block text-xs text-gray-400">

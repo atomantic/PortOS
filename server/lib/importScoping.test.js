@@ -684,7 +684,43 @@ describe('deferred imports stay deferred (#6156)', () => {
 // 111,500 → 111,700 (#7563): `routes/providers.js` gained `providerServices.js`
 // and `providerGraph.js` gained `providerServiceInstances.js`, each one file
 // deep, plus two new suites.
-const MAX_STATIC_INSTANTIATIONS = 111700;
+// 111,700 → 112,900 (#7564): the composite provider-id grammar is ONE
+// dependency-free leaf (`lib/providerRef.js`) reached through `zodCompat.js`
+// by every suite that validates a selection field, and its mirror
+// (`aiToolkit/internal/providerRef.js`) by every suite that reaches the
+// toolkit's provider service or validation — one node each on ~700 closures,
+// no subtree. The resolver itself (`services/compositeProviders.js`) is
+// reached only by `await import()` from the run paths and the routes, so its
+// graph-store closure stays off every suite that does not test it. Measured
+// after the change: 112,576, with five new suites; the ceiling keeps the same
+// ~300 of headroom the previous number carried.
+// 112,900 → 113,300 (#7567 rebase): three suites merged in parallel — the
+// SWE-bench and LiveCodeBench benchmark sources (#7590, 154-module closures
+// each, self-contained) and the CoS activity calendar (#7591, 44) — each fit
+// under the ceiling alone and overshot it together by 82. No widely-reached
+// module gained an eager import (the per-module closure diff against the
+// pre-merge tree shows only those three new entries growing). Measured after
+// the merge: 112,982; the ceiling keeps the same ~300 of headroom.
+// 113,300 → 113,700 (CoS spawn-window settlement): `lib/cosSpawnWindow.js` is a
+// dependency-free leaf, so it adds one node per closure that reaches it — six
+// server modules (`routes/cosTaskRoutes.js`, `routes/cosInsightRoutes.js`,
+// `routes/systemHealth.js`, `services/cos.js`, `services/activeProcessing.js`,
+// `services/systemResources.js`) plus its own suite. No subtree. Measured after
+// the change: 113,350 — the pre-change tree had already eroded to within single
+// digits of the old ceiling, so this restores the ~350 of headroom the recent
+// entries carry rather than leaving the next unrelated commit to trip it.
+// 113,700 → 114,200 (#7609 catalog extraction lens): `lib/catalogSourceKinds.js`
+// is a dependency-free leaf — the scrap source-kind vocabulary plus the
+// extraction lens each kind implies — so it adds one node per closure that
+// reaches it: `lib/catalogValidation.js` (which builds its ingest enum from
+// the ids), `services/catalogExtraction.js`, the lib barrel, and its own
+// suite. No subtree, and no widely-reached module gained an edge into one.
+// Measured before 113,568, after 113,814; its whole share is 246. The
+// alternative is what this issue exists to close: the lens re-declared as a
+// private Set inside the extractor, parallel to the source-kind list at the
+// Zod boundary, where a new ingest source silently reads a memoir through the
+// fiction lens. Restores the ~390 of headroom the recent entries carry.
+const MAX_STATIC_INSTANTIATIONS = 114200;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

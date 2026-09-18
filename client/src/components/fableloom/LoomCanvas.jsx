@@ -9,6 +9,9 @@
  * under); otherwise `pickLoomOrientation` keys off canvas width.
  * Click (or tap) selects a scene (selection lives in the URL — the parent
  * navigates); mouse-drag repositions a card and persists `pos` on release.
+ * Dragging anywhere a card did NOT claim pans the view instead — a graph
+ * larger than its pane was otherwise only reachable by scrollbar or trackpad.
+ * On the stacked layout no card claims a drag, so the whole surface pans.
  * Touch never drags — it would fight scrolling, and desktop `pos` is the
  * wrong coordinate space for the stacked layout. Selecting a scene dims
  * every edge that doesn't touch it, and on the stacked layout a path strip
@@ -19,12 +22,26 @@
 import { useEffect, useId, useMemo, useRef } from 'react';
 import { Flag, Play } from 'lucide-react';
 import useContainerWidth from '../../hooks/useContainerWidth';
+import useDragToPan from '../../hooks/useDragToPan';
+import { isTapGesture } from '../../lib/graphPicking';
 import {
   layoutLoomGraph, LOOM_EDGE_LABEL_MAX, LOOM_ORIENTATION,
 } from '../../lib/loomLayout';
 import LoomSceneMedia from './LoomSceneMedia';
 
 const DRAG_THRESHOLD_PX = 4;
+
+/**
+ * Shared by both canvas gestures: how far the pointer has travelled since
+ * pointerdown, or `null` while it is still close enough to read as a click.
+ * Latches `moved` on the gesture once the threshold is cleared.
+ */
+const gestureDelta = (gesture, event) => {
+  const point = { x: event.clientX, y: event.clientY };
+  if (!gesture.moved && isTapGesture(gesture.start, point, DRAG_THRESHOLD_PX)) return null;
+  gesture.moved = true;
+  return { dx: point.x - gesture.start.x, dy: point.y - gesture.start.y };
+};
 
 const truncate = (text, max) => {
   const s = typeof text === 'string' ? text : '';
@@ -48,6 +65,19 @@ export default function LoomCanvas({
   // once on release. Routing it through setState re-rendered every node card
   // (each with a foreignObject media surface) ~60×/s. Edges catch up on release.
   const dragRef = useRef(null);
+  // Set by whichever gesture actually moved, read once by the surface's
+  // click-capture handler — one mechanism for "this click was a drag".
+  const draggedRef = useRef(false);
+  // A pan is the same story one level up: scrollLeft/scrollTop are mutated
+  // directly per pointermove so no node re-renders while the view moves. A
+  // card's own drag wins when both could claim the gesture (`canStart`), and
+  // a completed pan folds into `draggedRef` so the shared click-capture below
+  // swallows it exactly like a card drag does.
+  const pan = useDragToPan({
+    slop: DRAG_THRESHOLD_PX,
+    canStart: () => !dragRef.current,
+    onPanEnd: () => { draggedRef.current = true; },
+  });
   const cardRefs = useRef(new Map());
   const mediaRefs = useRef(new Map());
   const [measureRef, measuredWidth] = useContainerWidth();
@@ -78,30 +108,25 @@ export default function LoomCanvas({
     // desktop `pos`.
     if (event.pointerType !== 'mouse' || stacked) return;
     event.currentTarget.setPointerCapture(event.pointerId);
-    const start = positions[node.id] || { x: 0, y: 0 };
+    const origin = positions[node.id] || { x: 0, y: 0 };
     dragRef.current = {
       id: node.id,
       cardEl: cardRefs.current.get(node.id),
       mediaEl: mediaRefs.current.get(node.id),
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: start.x,
-      originY: start.y,
-      x: start.x,
-      y: start.y,
+      start: { x: event.clientX, y: event.clientY },
+      origin,
+      x: origin.x,
+      y: origin.y,
       moved: false,
     };
   };
 
   const handlePointerMove = (event) => {
     const drag = dragRef.current;
-    if (!drag) return;
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
-    if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
-    drag.moved = true;
-    drag.x = Math.max(0, drag.originX + dx);
-    drag.y = Math.max(0, drag.originY + dy);
+    const delta = drag && gestureDelta(drag, event);
+    if (!delta) return;
+    drag.x = Math.max(0, drag.origin.x + delta.dx);
+    drag.y = Math.max(0, drag.origin.y + delta.dy);
     drag.cardEl?.setAttribute('transform', `translate(${drag.x}, ${drag.y})`);
     // Media foreignObjects are deliberately NOT children of the transformed
     // card group. Move their absolute coordinates in lockstep while dragging.
@@ -112,23 +137,29 @@ export default function LoomCanvas({
   const handlePointerUp = () => {
     const drag = dragRef.current;
     dragRef.current = null;
-    if (!drag) return;
-    if (drag.moved) {
-      if (drag.cardEl) drag.cardEl.dataset.loomDragged = '1';
-      if (drag.mediaEl) drag.mediaEl.dataset.loomDragged = '1';
-      onMoveNode?.(drag.id, { x: Math.round(drag.x), y: Math.round(drag.y) });
-    }
+    if (!drag?.moved) return;
+    draggedRef.current = true;
+    onMoveNode?.(drag.id, { x: Math.round(drag.x), y: Math.round(drag.y) });
   };
 
-  const handleNodeActivate = (event, nodeId) => {
-    // A completed mouse-drag fires click on the card too — ignore that one so
-    // repositioning doesn't also select (and so we don't persist stacked-layout
-    // coordinates as desktop `pos` via a follow-up navigate).
-    if (event?.currentTarget?.dataset?.loomDragged === '1') {
-      delete event.currentTarget.dataset.loomDragged;
-      return;
-    }
-    onSelectNode?.(nodeId);
+  const handleSurfacePointerDown = (event) => {
+    // Cleared at the START of every gesture: a drag released outside the canvas
+    // (or cancelled) never gets its click, and a stale flag would then swallow
+    // the next genuine select. `canStart` (above) already answers "did a scene
+    // card claim this drag?" by asking `dragRef` — on the stacked layout cards
+    // never claim a drag, so a card is pannable surface there.
+    draggedRef.current = false;
+    pan.panProps.onPointerDown(event);
+  };
+
+  // Either drag still fires a click when it ends — on the card, on an edge, or
+  // (once the pointer was captured) on the surface itself. One capture-phase
+  // handler on the common ancestor swallows it wherever it lands, so a drag
+  // never also selects.
+  const handleSurfaceClickCapture = (event) => {
+    if (!draggedRef.current) return;
+    draggedRef.current = false;
+    event.stopPropagation();
   };
 
   if (!nodes.length) return null;
@@ -143,10 +174,13 @@ export default function LoomCanvas({
   return (
     <div className="relative h-full w-full">
       <div
-        ref={measureRef}
-        className={`overflow-auto h-full w-full overscroll-contain ${showStrip ? 'pb-28' : ''}`}
+        ref={(el) => { measureRef.current = el; pan.surfaceRef.current = el; }}
+        className={`overflow-auto h-full w-full overscroll-contain cursor-grab active:cursor-grabbing ${showStrip ? 'pb-28' : ''}`}
         data-testid="loom-canvas"
         data-orientation={orientation}
+        {...pan.panProps}
+        onPointerDown={handleSurfacePointerDown}
+        onClickCapture={handleSurfaceClickCapture}
       >
         <svg
           width={width}
@@ -246,7 +280,8 @@ export default function LoomCanvas({
                 onPointerDown={(e) => handlePointerDown(e, node)}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
-                onClick={(e) => handleNodeActivate(e, node.id)}
+                onPointerCancel={handlePointerUp}
+                onClick={() => onSelectNode?.(node.id)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
@@ -321,7 +356,8 @@ export default function LoomCanvas({
                 onPointerDown={(event) => handlePointerDown(event, node)}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
-                onClick={(event) => handleNodeActivate(event, node.id)}
+                onPointerCancel={handlePointerUp}
+                onClick={() => onSelectNode?.(node.id)}
               >
                 <div className="h-full w-full min-w-0 overflow-hidden" xmlns="http://www.w3.org/1999/xhtml">
                   <LoomSceneMedia

@@ -1,63 +1,43 @@
 /**
- * CoS Productivity, Insights, Goal Progress, and Decision Log Routes
+ * CoS Activity, Insights, Goal Progress, and Decision Log Routes
  */
 
 import { Router } from 'express';
 import * as cos from '../services/cos.js';
 import * as taskLearning from '../services/taskLearning.js';
-import * as productivity from '../services/productivity.js';
+import { getActivityCalendar } from '../services/cosActivityCalendar.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parsePagination } from '../lib/validation.js';
+import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
 
 const router = Router();
 
-// GET /api/cos/productivity - Get productivity insights and work patterns
-router.get('/productivity', asyncHandler(async (req, res) => {
-  const insights = await productivity.getProductivityInsights();
-  res.json(insights);
-}));
-
-// GET /api/cos/productivity/summary - Get quick summary for dashboard
-router.get('/productivity/summary', asyncHandler(async (req, res) => {
-  const summary = await productivity.getProductivitySummary();
-  res.json(summary);
-}));
-
-// POST /api/cos/productivity/recalculate - Force recalculation from history
-router.post('/productivity/recalculate', asyncHandler(async (req, res) => {
-  const data = await productivity.recalculateProductivity();
-  res.json({ success: true, data });
-}));
-
-// GET /api/cos/productivity/trends - Get daily task completion trends for charting
-router.get('/productivity/trends', asyncHandler(async (req, res) => {
-  const days = parseInt(req.query.days, 10) || 30;
-  const trends = await productivity.getDailyTrends(days);
-  res.json(trends);
-}));
-
-// GET /api/cos/productivity/calendar - Get activity calendar for GitHub-style heatmap
-router.get('/productivity/calendar', asyncHandler(async (req, res) => {
-  const weeks = parseInt(req.query.weeks, 10) || 12;
-  const calendar = await productivity.getActivityCalendar(weeks);
-  res.json(calendar);
+// GET /api/cos/activity-calendar - Runs-per-day heatmap for the dashboard widget
+router.get('/activity-calendar', asyncHandler(async (req, res) => {
+  // Clamped: the grid materializes one object per day, so an unbounded `weeks`
+  // (a typo, or a stale client) would build millions of them. 260 weeks is five
+  // years, past any window the heatmap renders legibly.
+  const requested = parseInt(req.query.weeks, 10) || 12;
+  res.json(await getActivityCalendar(Math.min(Math.max(requested, 1), 260)));
 }));
 
 // GET /api/cos/actionable-insights - Get prioritized action items requiring user attention
 // Surfaces the most important things to address right now across all CoS subsystems
 router.get('/actionable-insights', asyncHandler(async (req, res) => {
-  const [tasksData, learningSummary, healthCheck, notificationsModule, optimalTimeInfo, pendingFeedbackCount, leftoverFindings] = await Promise.all([
+  const [tasksData, learningSummary, healthCheck, notificationsModule, pendingFeedbackCount, leftoverFindings, agents] = await Promise.all([
     cos.getAllTasks().catch(err => { console.error(`❌ Failed to load tasks: ${err.message}`); return { user: null, cos: null }; }),
     taskLearning.getLearningInsights().catch(err => { console.error(`❌ Failed to load learning insights: ${err.message}`); return null; }),
     cos.runHealthCheck().catch(err => { console.error(`❌ Failed to run health check: ${err.message}`); return { issues: [] }; }),
     import('../services/notifications.js').catch(err => { console.error(`❌ Failed to load notifications: ${err.message}`); return null; }),
-    productivity.getOptimalTimeInfo().catch(() => ({ hasData: false })),
     cos.getPendingAgentFeedbackCount().catch(err => { console.error(`❌ Failed to load pending agent feedback: ${err.message}`); return 0; }),
-    detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; })
+    detectIdleLeftoverBranches().catch(err => { console.error(`❌ Failed to detect leftover branches: ${err.message}`); return []; }),
+    // Settles the pending list against live agents — see lib/cosSpawnWindow.js.
+    cos.getAgents().catch(err => { console.error(`❌ Failed to load agents: ${err.message}`); return []; })
   ]);
+  const runningAgents = runningAgentsByTaskId(agents);
 
   const notificationsData = notificationsModule ? await notificationsModule.getNotifications({ unreadOnly: true, limit: 10 }).catch(() => []) : [];
 
@@ -199,7 +179,7 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
   }
 
   // 7. Pending user tasks (informational)
-  const pendingUserTasks = tasksData.user?.grouped?.pending || [];
+  const pendingUserTasks = withoutSpawningTasks(tasksData.user?.grouped?.pending, runningAgents);
   if (pendingUserTasks.length > 0 && insights.length < 4) {
     insights.push({
       type: 'tasks',
@@ -209,20 +189,6 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
       description: pendingUserTasks[0]?.description?.substring(0, 80) || 'Pending tasks available',
       action: { label: 'View Tasks', route: '/cos/tasks' },
       count: pendingUserTasks.length
-    });
-  }
-
-  // 8. Peak productivity time (proactive suggestion)
-  // Show when it's a peak hour AND there are pending tasks to work on
-  const totalPendingTasks = pendingUserTasks.length + (tasksData.cos?.grouped?.pending?.length || 0);
-  if (optimalTimeInfo?.hasData && optimalTimeInfo.isOptimal && totalPendingTasks > 0 && insights.length < 5) {
-    insights.push({
-      type: 'peak-time',
-      priority: 'low',
-      icon: 'Zap',
-      title: 'Peak productivity hour',
-      description: `This hour has a ${optimalTimeInfo.currentSuccessRate || optimalTimeInfo.peakSuccessRate}% success rate — good time to tackle tasks`,
-      action: { label: 'Start Task', route: '/cos/tasks' }
     });
   }
 
@@ -247,19 +213,24 @@ router.get('/recent-tasks', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/cos/quick-summary - Get at-a-glance dashboard summary
-// Combines today's activity, queue counts, and velocity into one efficient call.
+// Combines today's activity and queue counts into one efficient call.
 router.get('/quick-summary', asyncHandler(async (req, res) => {
-  const [todayActivity, tasksData, velocityData] = await Promise.all([
+  const [todayActivity, tasksData, agents] = await Promise.all([
     cos.getTodayActivity(),
     cos.getAllTasks(),
-    productivity.getVelocityMetrics()
+    // The dashboard widget renders this queue total beside its own "N agents
+    // running" line, so a raw pending count showed the one task already being
+    // worked on both — see lib/cosSpawnWindow.js.
+    cos.getAgents().catch(() => [])
   ]);
+  const runningAgents = runningAgentsByTaskId(agents);
 
-  // Count pending approvals from system tasks
+  // Count pending approvals from system tasks. Not settled: approval is a
+  // pre-spawn gate, so no live agent can hold one.
   const pendingApprovals = tasksData.cos?.awaitingApproval?.length || 0;
 
   // Count pending user tasks
-  const pendingUserTasks = tasksData.user?.grouped?.pending?.length || 0;
+  const pendingUserTasks = withoutSpawningTasks(tasksData.user?.grouped?.pending, runningAgents).length;
 
   res.json({
     today: {
@@ -269,12 +240,6 @@ router.get('/quick-summary', asyncHandler(async (req, res) => {
       running: todayActivity.stats.running,
       successRate: todayActivity.stats.successRate,
       timeWorked: todayActivity.time.combined
-    },
-    velocity: {
-      percentage: velocityData.velocity,
-      label: velocityData.velocityLabel,
-      avgPerDay: velocityData.avgPerDay,
-      historicalDays: velocityData.historicalDays
     },
     queue: {
       pendingApprovals,

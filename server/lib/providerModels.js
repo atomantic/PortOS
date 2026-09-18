@@ -445,6 +445,9 @@ export function isKimiProvider(provider) {
  */
 export function isAntigravityProvider(provider) {
   if (!provider) return false;
+  // A composite/derived record names its harness outright (#7564) and may
+  // carry no command at all, so the harness id is the first word.
+  if (provider.harnessId === 'antigravity') return true;
   const id = String(provider.id || '').toLowerCase();
   if (id === 'antigravity-cli' || id === 'antigravity-tui') return true;
   const base = commandBasename(provider.command);
@@ -526,19 +529,28 @@ export function foldCursorEffortIntoModel(model, effort) {
  */
 export function effortLevelsForProvider(provider, model = null) {
   if (!provider) return null;
-  if (isOpencodeLocalProvider(provider)) return OPENCODE_LOCAL_EFFORT_LEVELS;
-  if (isCodexProvider(provider)) return codexEffortLevelsForModel(model);
-  if (isAntigravityProvider(provider)) {
+  // A record materialized from a composite id names its harness (#7564); each
+  // arm honors that before sniffing the command, so a path-configured binary or
+  // a bootstrap-wrapped spawn still offers its rungs.
+  const harness = provider.harnessId ?? null;
+  if (harness === 'opencode' || isOpencodeLocalProvider(provider)) {
+    return isOpencodeLocalProvider(provider) ? OPENCODE_LOCAL_EFFORT_LEVELS : null;
+  }
+  if (harness === 'codex' || isCodexProvider(provider)) return codexEffortLevelsForModel(model);
+  if (harness === 'antigravity' || isAntigravityProvider(provider)) {
     const perModel = model ? antigravityModelEffortLevels(model, provider.models) : null;
     if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
     return perModel.length ? perModel : null;
   }
-  if (commandBasename(provider.command) === 'pi') return ['low', 'medium', 'high', 'xhigh', 'max'];
-  if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
-  if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
-  if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
+  if (harness === 'pi' || commandBasename(provider.command) === 'pi') return PI_EFFORT_LEVELS;
+  if (harness === 'cursor' || isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
+  if (harness === 'grok' || isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
+  if (harness === 'claude' || isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
   return null;
 }
+
+/** Pi's reasoning ladder (`pi --effort`). */
+const PI_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
 // Every effort value any CLI accepts, ordered weakest→strongest. The clamp
 // below walks this so an effort saved against one provider survives a switch to

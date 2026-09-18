@@ -61,6 +61,7 @@ const STRUCTURALLY_SELECTED = new Map([
   ['client/src/numberFormattingConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/pollingConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/popoverClampConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/providerSelectConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/preWrapClasses.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/responsiveGridConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/storageConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],

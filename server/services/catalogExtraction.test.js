@@ -31,6 +31,14 @@ const bibleExtractor = await import('./bibleExtractor.js');
 const stageRunner = await import('./stageRunner.js');
 const catalogDB = await import('./catalogDB.js');
 const { catalogEvents } = await import('./catalogEvents.js');
+const { applyTemplate } = await import('../lib/promptTemplate.js');
+const { readFileSync } = await import('fs');
+const { join, dirname } = await import('path');
+const { fileURLToPath } = await import('url');
+
+// server/services → ../../data.reference is the shipped template directory.
+const stagePrompt = (name) =>
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data.reference', 'prompts', 'stages', `${name}.md`), 'utf8');
 const {
   extractIngredients,
   extractIngredientsForScrap,
@@ -354,6 +362,153 @@ describe('catalogExtraction — extractIngredientsForScrap', () => {
     catalogDB.getScrap.mockResolvedValue(null);
     await expect(extractIngredientsForScrap({ scrapId: 'missing' }))
       .rejects.toThrow(/not found/);
+  });
+});
+
+// The scrap's title and source kind were loaded by getScrap and then dropped,
+// so the catalog path rendered every framing slot in the bible prompts empty
+// and the light stage had no idea what it was reading. A first-person memoir
+// then came back as `MOM` / `DAD` role tags, because the fiction-shaped
+// prompt did exactly what it was told (#7609).
+describe('catalogExtraction — extraction lens (#7609)', () => {
+  const scrap = (over = {}) => ({ id: 'cat-scrap-p', rawText: 'two words', parentScrapId: null, ...over });
+
+  beforeEach(() => {
+    catalogDB.listChildScraps.mockResolvedValue([]);
+    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
+  });
+
+  it('leaves the lens off for an invented-fiction paste', async () => {
+    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Chapter one', sourceKind: 'paste' }));
+    bibleExtractor.extractBible.mockResolvedValue({ extracted: [{ name: 'THE BARTENDER' }] });
+    stageRunner.runStagedLLM.mockResolvedValue({ content: { ideas: [{ name: 'A premise' }], scenes: [], concepts: [] } });
+
+    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+
+    expect(bibleExtractor.extractBible.mock.calls[0][0].context.factual).toBe(false);
+    expect(stageRunner.runStagedLLM.mock.calls[0][1].factual).toBe(false);
+    // No tag stamping under the fiction lens — a novel's cast is not a real person.
+    expect(out.characters[0].tags).toBeUndefined();
+    expect(out.ideas[0].tags).toEqual([]);
+  });
+
+  it.each(['voice-memo', 'brain-bridge'])('raises the factual lens for %s', async (sourceKind) => {
+    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Sunday', sourceKind }));
+
+    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+
+    expect(bibleExtractor.extractBible.mock.calls[0][0].context.factual).toBe(true);
+    expect(stageRunner.runStagedLLM.mock.calls[0][1].factual).toBe(true);
+  });
+
+  it('stamps real-person on characters and factual on every row under the lens', async () => {
+    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Sunday', sourceKind: 'voice-memo' }));
+    bibleExtractor.extractBible.mockImplementation(async ({ kind }) => ({
+      extracted: [{ name: kind === 'character' ? 'Mom' : 'the kitchen', tags: ['seed'] }],
+    }));
+    stageRunner.runStagedLLM.mockResolvedValue({
+      content: { ideas: [{ name: 'Why I apologize' }], scenes: [], concepts: [] },
+    });
+
+    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+
+    // real-person is what keeps real people filterable apart from a cast; it
+    // rides the per-RUN lens, so it can never be the type registry's defaultTags.
+    expect(out.characters[0].tags).toEqual(['seed', 'factual', 'real-person']);
+    expect(out.places[0].tags).toEqual(['seed', 'factual']);
+    expect(out.ideas[0].tags).toEqual(['factual']);
+  });
+
+  it('does not double-stamp a tag the model already emitted', async () => {
+    catalogDB.getScrap.mockResolvedValue(scrap({ sourceKind: 'voice-memo' }));
+    bibleExtractor.extractBible.mockImplementation(async ({ kind }) => ({
+      extracted: kind === 'character' ? [{ name: 'Mom', tags: ['real-person'] }] : [],
+    }));
+
+    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+    expect(out.characters[0].tags).toEqual(['real-person', 'factual']);
+  });
+
+  it('gives every chunk of a chunked scrap the parent lens, with its OWN word count', async () => {
+    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Sunday', sourceKind: 'voice-memo', rawText: 'a b c d' }));
+    catalogDB.listChildScraps.mockResolvedValue([
+      { id: 'c1', rawText: 'a b', chunkIndex: 1, parentScrapId: 'cat-scrap-p' },
+      { id: 'c2', rawText: 'c d e', chunkIndex: 2, parentScrapId: 'cat-scrap-p' },
+    ]);
+
+    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+
+    const contexts = bibleExtractor.extractBible.mock.calls.map(([args]) => args.context);
+    // Splitting a memoir mid-paragraph must not flip half of it to fiction, and
+    // a child carries no title of its own.
+    expect(contexts.every((c) => c.factual === true && c.work.title === 'Sunday')).toBe(true);
+    // Word count is measured against the corpus the model actually receives —
+    // telling it "4 words" while handing it 2 is a lie about its own input.
+    expect(new Set(contexts.map((c) => c.work.wordCount))).toEqual(new Set([2, 3]));
+  });
+
+  // The two halves of the fix live in different files — the extractor names the
+  // variables, the shipped templates read them. Either side can be renamed
+  // without the other failing, and the symptom is a silently empty prompt
+  // section, which is the exact bug #7609 reports. Render the real templates
+  // with the real variables to keep them pinned together.
+  it('fills the shipped templates it hands those variables to', async () => {
+    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Kitchen table notes', sourceKind: 'voice-memo' }));
+
+    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+
+    const bibleVars = bibleExtractor.extractBible.mock.calls[0][0].context;
+    // Every bible kind is framed identically — one lens per scrap, not per stage.
+    for (const [args] of bibleExtractor.extractBible.mock.calls) {
+      expect(args.context.work).toEqual({ title: 'Kitchen table notes', kind: 'voice-memo', wordCount: 2 });
+    }
+    const characters = applyTemplate(stagePrompt('writers-room-characters'), { ...bibleVars, draftBody: 'x' });
+    // The framing block the catalog path used to render as three empty labels.
+    expect(characters).toContain('- Title: Kitchen table notes');
+    expect(characters).toContain('- Kind: voice-memo');
+    expect(characters).toContain('- Word count: 2');
+    expect(characters).toContain('## Lens: non-fiction');
+
+    const [, lightVars] = stageRunner.runStagedLLM.mock.calls[0];
+    // One vocabulary: the light template reads the same {{work.*}} slots the
+    // three bible templates declare, so the framing cannot drift between them.
+    const light = applyTemplate(stagePrompt('catalog-ideas-scenes-concepts'), lightVars);
+    expect(light).toContain('- Title: Kitchen table notes');
+    expect(light).toContain('- Captured as: voice-memo');
+    expect(light).toContain('## Lens: non-fiction');
+    // Nothing unresolved is left staring at the model.
+    expect(characters).not.toMatch(/\{\{/);
+    expect(light).not.toMatch(/\{\{/);
+  });
+
+  it('gives a title-less paste the same instructions it got before the lens existed', async () => {
+    // A scrap with neither field (a peer-synced row can have both null) must
+    // not render a half-empty framing stub or leak the non-fiction rules.
+    catalogDB.getScrap.mockResolvedValue(scrap({ title: null, sourceKind: null }));
+
+    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
+
+    const { context } = bibleExtractor.extractBible.mock.calls[0][0];
+    expect(context.work).toEqual({ title: '', kind: '', wordCount: 2 });
+    expect(context.factual).toBe(false);
+
+    // Empty strings are what keep the mustache sections CLOSED. The guarantee
+    // is instruction-level, not byte-level: promptTemplate deliberately does
+    // not strip a standalone section line, so a closed section collapses to a
+    // blank line (the same convention {{#sceneMap}} already uses). What must
+    // hold is that none of the non-fiction rules reach a fiction extraction.
+    for (const name of ['writers-room-characters', 'writers-room-places', 'writers-room-objects']) {
+      const rendered = applyTemplate(stagePrompt(name), { ...context, draftBody: 'x' });
+      expect(rendered).not.toContain('## Lens: non-fiction');
+      expect(rendered).not.toMatch(/\{\{/);
+    }
+    const [, lightVars] = stageRunner.runStagedLLM.mock.calls[0];
+    const light = applyTemplate(stagePrompt('catalog-ideas-scenes-concepts'), lightVars);
+    expect(light).not.toContain('## Lens: non-fiction');
+    // The Source block is gated on the capture kind, so a kind-less scrap gets
+    // no empty "## Source" stub either.
+    expect(light).not.toContain('## Source\n');
+    expect(light).not.toMatch(/\{\{/);
   });
 });
 

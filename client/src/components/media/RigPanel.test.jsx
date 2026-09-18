@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { findEnabledByRole } from '../../test/enabledBarrier.js';
 
 const mock = vi.hoisted(() => ({
   getRiggingReadiness: vi.fn(),
@@ -71,7 +72,7 @@ describe('RigPanel', () => {
     const onRecordChange = vi.fn();
     const { rerender } = render(<RigPanel record={READY_RECORD} onRecordChange={onRecordChange} />);
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /rig this character/i })).toBeEnabled());
+    await findEnabledByRole('button', { name: /rig this character/i });
     fireEvent.click(screen.getByRole('button', { name: /rig this character/i }));
 
     await waitFor(() => expect(onRecordChange).toHaveBeenCalledWith(rigged));

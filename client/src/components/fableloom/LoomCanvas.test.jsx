@@ -233,6 +233,129 @@ describe('LoomCanvas', () => {
     expect(screen.queryByTestId('loom-path-strip')).not.toBeInTheDocument();
   });
 
+  it('pans the graph when the canvas background is dragged with the mouse', () => {
+    render(<LoomCanvas episode={episode()} selectedNodeId={null} onSelectNode={() => {}} />);
+    const surface = screen.getByTestId('loom-canvas');
+    surface.scrollLeft = 120;
+    surface.scrollTop = 60;
+
+    fireEvent.pointerDown(surface, { pointerId: 1, pointerType: 'mouse', button: 0, clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(surface, { pointerId: 1, pointerType: 'mouse', clientX: 150, clientY: 170 });
+    fireEvent.pointerUp(surface, { pointerId: 1, pointerType: 'mouse' });
+
+    // The delta applies against the scroll offset captured at pointerdown.
+    expect(surface.scrollLeft).toBe(170);
+    expect(surface.scrollTop).toBe(90);
+  });
+
+  it('pans from a scene card on the stacked layout, where no card claims a drag', () => {
+    const onMoveNode = vi.fn();
+    render(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={() => {}}
+        onMoveNode={onMoveNode}
+        viewportWidth={390}
+      />,
+    );
+    const surface = screen.getByTestId('loom-canvas');
+    expect(surface).toHaveAttribute('data-orientation', 'tb');
+    const card = screen.getByLabelText('Scene: The Gate');
+
+    fireEvent.pointerDown(card, { pointerId: 6, pointerType: 'mouse', button: 0, clientX: 200, clientY: 300 });
+    fireEvent.pointerMove(surface, { pointerId: 6, pointerType: 'mouse', clientX: 200, clientY: 220 });
+    fireEvent.pointerUp(surface, { pointerId: 6, pointerType: 'mouse' });
+
+    // Stacked cards span nearly the whole surface, so they must be pannable;
+    // they must still never persist stacked coordinates as desktop `pos`.
+    expect(surface.scrollTop).toBe(80);
+    expect(onMoveNode).not.toHaveBeenCalled();
+  });
+
+  it('leaves a card drag to the card rather than panning the view', () => {
+    const onMoveNode = vi.fn();
+    const onSelectNode = vi.fn();
+    render(
+      <LoomCanvas
+        episode={episode()}
+        selectedNodeId={null}
+        onSelectNode={onSelectNode}
+        onMoveNode={onMoveNode}
+      />,
+    );
+    const surface = screen.getByTestId('loom-canvas');
+    const card = screen.getByLabelText('Scene: The Gate');
+    surface.scrollLeft = 40;
+
+    // The card captures the pointer, so the browser retargets the rest of the
+    // gesture to it — fire there rather than on the surface.
+    fireEvent.pointerDown(card, { pointerId: 2, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(card, { pointerId: 2, pointerType: 'mouse', clientX: 140, clientY: 130 });
+    fireEvent.pointerUp(card, { pointerId: 2, pointerType: 'mouse' });
+
+    expect(onMoveNode).toHaveBeenCalledWith('n1', expect.objectContaining({ x: expect.any(Number) }));
+    expect(surface.scrollLeft).toBe(40);
+
+    // Repositioning a card must not also select it — the click the drag ends
+    // with is swallowed by the surface, wherever the browser retargets it.
+    fireEvent.click(card);
+    expect(onSelectNode).not.toHaveBeenCalled();
+  });
+
+  it('keeps a press that never moved a select, not a drag', () => {
+    const onSelectNode = vi.fn();
+    render(<LoomCanvas episode={episode()} selectedNodeId={null} onSelectNode={onSelectNode} />);
+    const surface = screen.getByTestId('loom-canvas');
+    const card = screen.getByLabelText('Scene: The Gate');
+
+    fireEvent.pointerDown(card, { pointerId: 3, pointerType: 'mouse', button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(card, { pointerId: 3, pointerType: 'mouse', clientX: 102, clientY: 101 });
+    fireEvent.pointerUp(card, { pointerId: 3, pointerType: 'mouse' });
+    fireEvent.click(card);
+
+    // Inside DRAG_THRESHOLD_PX, so nothing moved and the click still selects.
+    expect(surface.scrollLeft).toBe(0);
+    expect(onSelectNode).toHaveBeenCalledWith('n1');
+  });
+
+  it('swallows the click that ends a drag, wherever that click lands', () => {
+    const onSelectNode = vi.fn();
+    render(<LoomCanvas episode={episode()} selectedNodeId={null} onSelectNode={onSelectNode} />);
+    const surface = screen.getByTestId('loom-canvas');
+    const label = screen.getByLabelText('Path: enter the gate');
+
+    fireEvent.pointerDown(label, { pointerId: 4, pointerType: 'mouse', button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(surface, { pointerId: 4, pointerType: 'mouse', clientX: 240, clientY: 300 });
+    fireEvent.pointerUp(surface, { pointerId: 4, pointerType: 'mouse' });
+    fireEvent.click(label);
+
+    expect(surface.scrollLeft).toBe(60);
+    expect(onSelectNode).not.toHaveBeenCalled();
+
+    // A cancelled gesture that never produced its click must not leave the
+    // suppression armed and eat the next genuine select.
+    fireEvent.pointerDown(surface, { pointerId: 5, pointerType: 'mouse', button: 0, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(surface, { pointerId: 5, pointerType: 'mouse', clientX: 60, clientY: 10 });
+    fireEvent.pointerCancel(surface, { pointerId: 5, pointerType: 'mouse' });
+    fireEvent.pointerDown(label, { pointerId: 7, pointerType: 'mouse', button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerUp(surface, { pointerId: 7, pointerType: 'mouse' });
+    fireEvent.click(label);
+    expect(onSelectNode).toHaveBeenCalledWith('n2');
+  });
+
+  it('ignores a touch drag on the background so the native scroll gesture survives', () => {
+    render(<LoomCanvas episode={episode()} selectedNodeId={null} onSelectNode={() => {}} />);
+    const surface = screen.getByTestId('loom-canvas');
+    surface.scrollTop = 25;
+
+    fireEvent.pointerDown(surface, { pointerId: 8, pointerType: 'touch', button: 0, clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(surface, { pointerId: 8, pointerType: 'touch', clientX: 200, clientY: 120 });
+    fireEvent.pointerUp(surface, { pointerId: 8, pointerType: 'touch' });
+
+    expect(surface.scrollTop).toBe(25);
+  });
+
   it('stacks the graph and shows a path strip on a narrow canvas', () => {
     const onSelectNode = vi.fn();
     render(

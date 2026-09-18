@@ -91,10 +91,22 @@ describe('pickGgufSibling', () => {
       .toThrow(/projector \(mmproj\) sidecars/i);
   });
 
-  it('still honours an explicit projector filename', () => {
+  // Naming an `mmproj-` file by hand used to be the only way to fetch a
+  // projector, so the pin was allowed to escape the projector filter. The
+  // `projector` role replaced that escape hatch (#7611), and a pin is now held
+  // to its role's half of the repo — otherwise a `model`-role pin would land a
+  // vision sidecar in the path the launcher hands `-m`, where it satisfies every
+  // existence check and fails at load.
+  it('honours an explicit projector filename only under the projector role', () => {
     const model = siblings('model-Q4_K_M.gguf', 'mmproj-model-Q4_K_M.gguf');
-    expect(pickGgufSibling(model, { file: 'mmproj-model-Q4_K_M.gguf', quant: 'Q4_K_M', repo: 'o/r' }))
+    expect(pickGgufSibling(model, { file: 'mmproj-model-Q4_K_M.gguf', quant: 'Q4_K_M', repo: 'o/r', role: 'projector' }))
       .toBe('mmproj-model-Q4_K_M.gguf');
+    expect(() => pickGgufSibling(model, { file: 'mmproj-model-Q4_K_M.gguf', quant: 'Q4_K_M', repo: 'o/r' }))
+      .toThrow(/projector \(mmproj\) sidecar, not loadable weights/i);
+    // And the mirror: a projector role pinned at language weights is the same
+    // authoring mistake, caught rather than downloaded into the mmproj path.
+    expect(() => pickGgufSibling(model, { file: 'model-Q4_K_M.gguf', repo: 'o/r', role: 'projector' }))
+      .toThrow(/not a projector/i);
   });
 
   // The preset pins `file` precisely because the quant hint is ambiguous here;
@@ -109,6 +121,70 @@ describe('pickGgufSibling', () => {
     );
     expect(pickGgufSibling(model, { file: entry.file, quant: entry.quant, repo: entry.repo }))
       .toBe('Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf');
+  });
+
+  // The Ternary Bonsai preset carries NO `file` pin, which is only correct while
+  // its quant hint discriminates. Its repo publishes two ternary packs whose tags
+  // differ by one leading letter (`PQ2_0` / `PTQ1_0`) next to a 53.8 GB `F16` — so
+  // a hint that fell through to the shortest name would fetch 46 GB of the wrong
+  // weights, and one matching loosely would fetch the 1-bit pack instead.
+  it('resolves the Ternary Bonsai 2 preset to PQ2_0, not PTQ1_0 or the 53.8 GB F16', () => {
+    const entry = specDecodePresets.findSpecDecodePreset('ternary-bonsai-2-27b').model;
+    const model = siblings(
+      'Ternary-Bonsai-2-27B-F16.gguf',
+      'Ternary-Bonsai-2-27B-PQ2_0.gguf',
+      'Ternary-Bonsai-2-27B-PTQ1_0.gguf',
+      'Ternary-Bonsai-2-27B-mmproj-BF16.gguf',
+      'Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
+    );
+    expect(entry.file).toBeUndefined();
+    expect(pickGgufSibling(model, { quant: entry.quant, repo: entry.repo }))
+      .toBe('Ternary-Bonsai-2-27B-PQ2_0.gguf');
+  });
+
+  // The `projector` role inverts the projector filter, so the SAME sibling list
+  // resolves to opposite halves of the repo depending on the role. Asserted
+  // against the real Ternary Bonsai list — two projectors beside three language
+  // packs — because the regression this catches is the two selections colliding,
+  // not either one in isolation (#7611).
+  //
+  // The quant hint alone is what proves the invert: the preset's `file` pin
+  // short-circuits at the exact-match branch ABOVE the filter, so a pinned pick
+  // would resolve to a projector even with the filter still hard-coded the old
+  // way. Both are asserted — the pin because it is what the preset ships, the
+  // hint because it is what actually reaches the clause under test.
+  it('selects a projector sibling for the projector role, by pin and by quant hint', () => {
+    const preset = specDecodePresets.findSpecDecodePreset('ternary-bonsai-2-27b');
+    const model = siblings(
+      'Ternary-Bonsai-2-27B-F16.gguf',
+      'Ternary-Bonsai-2-27B-PQ2_0.gguf',
+      'Ternary-Bonsai-2-27B-PTQ1_0.gguf',
+      'Ternary-Bonsai-2-27B-mmproj-BF16.gguf',
+      'Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
+    );
+    expect(pickGgufSibling(model, { ...preset.projector, role: 'projector' }))
+      .toBe('Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf');
+    expect(pickGgufSibling(model, { quant: 'Q8_0', repo: preset.projector.repo, role: 'projector' }))
+      .toBe('Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf');
+    // …while the same hint under the model role still cannot see a projector at
+    // all: `Q8_0` is carried only by the two sidecars here, so there is nothing
+    // left for it to match among the language packs.
+    expect(() => pickGgufSibling(model, { quant: 'Q8_0', repo: preset.model.repo, role: 'model' }))
+      .toThrow(/no Q8_0 build/i);
+  });
+
+  it('refuses a projector-role pick with no projector in the repo', () => {
+    const model = siblings('model-Q4_K_M.gguf', 'model-Q8_0.gguf');
+    expect(() => pickGgufSibling(model, { quant: 'Q8_0', repo: 'o/r', role: 'projector' }))
+      .toThrow(/no projector/i);
+  });
+
+  // Every non-projector role shares the base model's filter, so the drafter is
+  // protected from a same-quant projector by the same clause.
+  it('keeps a projector out of a drafter-role pick', () => {
+    const model = siblings('mmproj-model-Q4_K_M.gguf', 'drafter-model-Q4_K_M.gguf');
+    expect(pickGgufSibling(model, { quant: 'Q4_K_M', repo: 'o/r', role: 'draftModel' }))
+      .toBe('drafter-model-Q4_K_M.gguf');
   });
 });
 
@@ -129,6 +205,24 @@ describe('getSpecDecodePresetStatus', () => {
     expect(q2k.draftModel.downloadable).toBe(true);
     // `custom` carries no paths, so it has no weights rows to render.
     expect(presets.find((p) => p.id === 'custom').model).toBeNull();
+    // A drafter-free preset is the MIXED state neither of the above produces:
+    // a populated, downloadable base beside a null drafter. That is what the
+    // launcher card reads to render one weights row instead of two and to leave
+    // its drafter field empty, so `custom`'s both-null row does not stand in
+    // for it.
+    const bonsai = presets.find((p) => p.id === 'ternary-bonsai-2-27b');
+    expect(bonsai.specType).toBe('none');
+    expect(bonsai.model.downloadable).toBe(true);
+    expect(bonsai.draftModel).toBeNull();
+    // The projector role is reported beside the other two, so the card renders a
+    // third weights row with its own Download button rather than leaving the
+    // vision tower as the one file the user must fetch by hand (#7611).
+    expect(bonsai.projector.path).toMatch(/mmproj-Q8_0\.gguf$/);
+    expect(bonsai.projector.role).toBe('projector');
+    expect(bonsai.projector.downloadable).toBe(true);
+    // A text-only preset reports no projector at all, which is what keeps the
+    // row out of every other preset's card.
+    expect(recommended.projector).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

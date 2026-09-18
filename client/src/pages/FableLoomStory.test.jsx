@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import userEvent from '@testing-library/user-event';
+import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 const toastMocks = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), warning: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({ default: toastMocks }));
@@ -407,8 +408,7 @@ describe('FableLoomStory scene media lifecycle', () => {
     api.generateImage.mockResolvedValue({ jobId: 'image-job-1', status: 'queued' });
     renderEditor();
 
-    const generate = await screen.findByRole('button', { name: 'Canvas generate image' });
-    await waitFor(() => expect(generate).toBeEnabled());
+    const generate = await findEnabledByRole('button', { name: 'Canvas generate image' });
     await user.click(generate);
 
     await waitFor(() => expect(api.generateImage).toHaveBeenCalledTimes(1));

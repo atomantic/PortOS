@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { awaitEnabled } from '../../test/enabledBarrier.js';
 
 vi.mock('../../services/api', () => ({
   getAuthStatus: vi.fn(),
@@ -71,7 +72,7 @@ describe('SharingTab — federated media provider (#4348)', () => {
     });
 
     render(<SharingTab />);
-    await waitFor(() => expect(providerToggle()).toBeEnabled());
+    await awaitEnabled(providerToggle);
     await waitFor(() => expect(screen.getByLabelText('MiniMax model')).toBeInTheDocument());
     fireEvent.click(providerToggle());
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
@@ -109,7 +110,7 @@ describe('SharingTab — federated media provider (#4348)', () => {
       },
     });
     render(<SharingTab />);
-    await waitFor(() => expect(providerToggle()).toBeEnabled());
+    await awaitEnabled(providerToggle);
     fireEvent.click(providerToggle());
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({

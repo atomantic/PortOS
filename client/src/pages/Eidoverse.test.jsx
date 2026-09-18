@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { awaitEnabled, findEnabledByRole } from '../test/enabledBarrier.js';
 
 vi.mock('../services/api', () => ({
   getApp: vi.fn(),
@@ -543,7 +544,7 @@ describe('Eidoverse hosted page', () => {
     await user.type(nameInput, '-edited');
     resolveSave({ ...worldResponse, human: worldResponse.identity });
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save and project' })).toBeEnabled());
+    await findEnabledByRole('button', { name: 'Save and project' });
     expect(nameInput).toHaveValue('example-portos-user-edited');
     expect(screen.queryByText('Saved locally and queued for projection.')).not.toBeInTheDocument();
   });
@@ -649,7 +650,7 @@ describe('Eidoverse hosted page', () => {
       design: { ...design, reconciliation: { status: 'complete', checkpoint: 'projection-committed' } },
       recipe,
     });
-    await waitFor(() => expect(refresh).toBeEnabled());
+    await awaitEnabled(refresh);
   });
 
   it('keeps a fresh-world curtain up until the dawn environment is applied', async () => {
@@ -763,7 +764,7 @@ describe('Eidoverse hosted page', () => {
     expect(screen.getByLabelText('Sun hour')).toHaveValue(8.4);
 
     const save = screen.getByRole('button', { name: 'Save and project' });
-    await waitFor(() => expect(save).toBeEnabled());
+    await awaitEnabled(save);
     expect([...save.closest('form').elements]
       .filter((element) => typeof element.checkValidity === 'function' && !element.checkValidity())
       .map((element) => ({ id: element.id, value: element.value, validationMessage: element.validationMessage })))
@@ -806,7 +807,7 @@ describe('Eidoverse hosted page', () => {
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
     await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(apply).toBeEnabled());
+    await awaitEnabled(apply);
     expect(refresh).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Refresh world' })).toBeEnabled();
   });
@@ -821,7 +822,7 @@ describe('Eidoverse hosted page', () => {
     await user.clear(screen.getByLabelText('Exposure'));
     await user.clear(screen.getByLabelText('Grass density'));
     const save = screen.getByRole('button', { name: 'Save and project' });
-    await waitFor(() => expect(save).toBeEnabled());
+    await awaitEnabled(save);
     fireEvent.submit(save.closest('form'));
 
     await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledOnce());
@@ -870,7 +871,7 @@ describe('Eidoverse hosted page', () => {
 
     expect(screen.getByText(legacyPath)).toBeInTheDocument();
     const clear = screen.getByRole('button', { name: 'Clear legacy Feature override' });
-    await waitFor(() => expect(clear).toBeEnabled());
+    await awaitEnabled(clear);
     await user.click(clear);
     expect(screen.queryByRole('button', { name: 'Clear legacy Feature override' })).not.toBeInTheDocument();
 

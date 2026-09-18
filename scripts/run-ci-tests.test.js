@@ -63,7 +63,11 @@ describe('ci.yml shard wiring', () => {
     expect(jobs.lint).toBeTruthy();
     expect(jobs.lint).toContain('run: node scripts/run-ci-lint.js');
     expect(jobs.lint).not.toContain('strategy:');
-    expect(jobs.lint).not.toContain('matrix.shard');
+    // Exactly one `matrix.shard`: the shared fail-fast step's CI_FAILED_SHARD,
+    // which renders empty on an unsharded job. A second occurrence — a cache
+    // key, a step name, above all a shard-pinned `if:` — is the regression.
+    expect(jobs.lint.match(/matrix\.shard/g)).toHaveLength(1);
+    expect(jobs.lint).toContain('CI_FAILED_SHARD: ${{ matrix.shard }}');
     // A scoped plan emits `client_shards: [1]`, so a later-shard pin would skip
     // lint on every impact-scoped pull request. Its gate is the plan's lint mode.
     expect(jobs.lint).toContain("if: needs.impact.outputs.lint_mode != 'skip'");

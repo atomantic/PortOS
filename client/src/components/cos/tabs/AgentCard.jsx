@@ -639,11 +639,18 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               </span>
             )}
             {!inactive && (
-              <span className={`px-2 py-0.5 text-xs rounded animate-pulse shrink-0 ${
-                agent.metadata?.phase === 'initializing' ? 'bg-yellow-500/20 text-yellow-400' :
-                'bg-port-accent/20 text-port-accent'
-              }`}>
-                {agent.metadata?.phase === 'initializing' ? 'Initializing'
+              // 'stalled' is the one phase that does NOT pulse: the run is still
+              // alive but has ignored every nudge, and an animated badge reads as
+              // progress. See the stall gate in server/services/agentTuiSpawning.js.
+              <span className={`px-2 py-0.5 text-xs rounded shrink-0 ${
+                agent.metadata?.phase === 'stalled' ? 'bg-orange-500/20 text-orange-400' :
+                agent.metadata?.phase === 'initializing' ? 'bg-yellow-500/20 text-yellow-400 animate-pulse' :
+                'bg-port-accent/20 text-port-accent animate-pulse'
+              }`} title={agent.metadata?.phase === 'stalled'
+                ? 'Idle and not responding to nudges — open the Shell tab to take it over'
+                : undefined}>
+                {agent.metadata?.phase === 'stalled' ? 'Stalled'
+                    : agent.metadata?.phase === 'initializing' ? 'Initializing'
                     : 'Working'}
               </span>
             )}

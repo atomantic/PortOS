@@ -369,6 +369,10 @@ function parseConfigFromArgs(args) {
   if (!model) return null;
 
   const draftModel = getArg('--model-draft') || getArg('--spec-draft-model') || getArg('-md');
+  // Absent means the recovered process is running text-only — a pre-#7611
+  // PortOS could not emit this flag at all, so every launch line it left behind
+  // reads back as no projector, which is the truth about that process.
+  const projector = getArg('--mmproj');
   // Absent means the process is running WITHOUT speculative decoding — don't
   // invent a type the launch line never carried.
   const specType = getArg('--spec-type');
@@ -386,6 +390,7 @@ function parseConfigFromArgs(args) {
   return {
     model,
     draftModel,
+    projector,
     specType,
     port,
     host,
@@ -563,6 +568,9 @@ export async function startLlamaServer(options = {}) {
   const {
     model,
     draftModel,
+    // llama.cpp's multimodal projector (`--mmproj`). Optional and independent of
+    // speculative decoding: a vision-capable GGUF loads text-only without it.
+    projector,
     specType = 'draft-dflash',
     port = PORTS.LLAMA_SERVER,
     host = '127.0.0.1',
@@ -609,6 +617,12 @@ export async function startLlamaServer(options = {}) {
   const configuredDraftPath = typeof draftModel === 'string' && draftModel.trim()
     ? draftModel.trim()
     : null;
+  // Unlike the drafter, the projector is resolved against nothing — no spec type
+  // turns vision on or off, so what the caller set is what goes on the line.
+  const projectorPath = typeof projector === 'string' && projector.trim()
+    ? projector.trim()
+    : null;
+  if (projectorPath) await assertModelFileExists('The vision projector', projectorPath);
 
   // `--spec-type` is a comma-separated LIST, and only its `draft-*` entries want
   // a drafter GGUF — every `ngram-*` implementation speculates off the tokens
@@ -640,6 +654,7 @@ export async function startLlamaServer(options = {}) {
 
   const args = ['-m', expandHome(model.trim())];
   if (draftPath) args.push('--model-draft', expandHome(draftPath));
+  if (projectorPath) args.push('--mmproj', expandHome(projectorPath));
   if (effectiveSpecTypes.length > 0) args.push('--spec-type', effectiveSpecTypes.join(','));
   if (port) args.push('--port', String(port));
   if (host) args.push('--host', host);
@@ -702,6 +717,9 @@ export async function startLlamaServer(options = {}) {
     // The drafter actually on the launch line, so the status card reports what
     // is running rather than what the form happened to be holding.
     draftModel: draftPath,
+    // Same reason: `null` here means the running process is text-only, which is
+    // what the card says rather than echoing an unused form field.
+    projector: projectorPath,
     // The types actually on the launch line, so the status card reports what is
     // running rather than what was asked for.
     specType: effectiveSpecTypes.join(','),
@@ -725,7 +743,7 @@ export async function startLlamaServer(options = {}) {
   await execPm2(['delete', LLAMA_APP]).catch(() => {});
   clearJlistCache();
 
-  console.log(`🦙 llama-server starting on ${host}:${port} (model ${model}${draftPath ? `, drafter ${draftPath}` : ''})`);
+  console.log(`🦙 llama-server starting on ${host}:${port} (model ${model}${draftPath ? `, drafter ${draftPath}` : ''}${projectorPath ? `, projector ${projectorPath}` : ''})`);
   await execPm2([
     'start', binaryPath,
     '--name', LLAMA_APP,
