@@ -17,9 +17,11 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await im
 }));
 
 const {
+  adoptEidoverseFoundation,
   applyEidoverseFoundationTombstones,
   deleteEidoverseFoundation,
   getEidoverseFoundation,
+  getEidoverseFoundationByRef,
   listEidoverseFoundations,
   packageEidoverseFoundationCandidate,
   promoteEidoverseFoundation,
@@ -722,5 +724,139 @@ describe('deleting a foundation record (#7632)', () => {
     // Deleting a copy this install merely holds retracts nothing: it was never
     // this install's to publish.
     expect(await listWithdrawnFoundationTombstones()).toEqual([]);
+  });
+});
+
+/**
+ * Epic #7453's headline success signal was "a mind can USE something another
+ * mind left". Until #7626 nothing on either install read a foundation's
+ * `body`: inheriting stored a row, `summarizeFoundation()` omitted the body,
+ * `GET /foundations/:id` could not name a `peer:`-keyed record at all, and no
+ * runtime consumed one. So the only way to use a peer's contribution was a
+ * human reading raw JSON and retyping it — which #7631 then refuses as
+ * republishing. These pin the two verbs that close it.
+ */
+describe('reading and adopting an inherited foundation (#7626)', () => {
+  const PEER_ORIGIN = 'instance-aaaa';
+
+  /** Promote a foundation as one install, then inherit it as another. */
+  const inheritPeerControllerFoundation = async (bodyOverride) => {
+    await record({ body: bodyOverride ?? { controller: { definitionId: 'ambient-beacon', config: { label: 'harbor', pulseEveryTicks: 3 } } } }, '2026-03-01T00:00:00.000Z');
+    const promoted = await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+    expect(promoted.outcome).toBe('promoted');
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+    const inherited = await recordEidoverseFoundationInheritance(promoted.candidate, {
+      sourceInstanceId: 'instance-peer-one', localInstanceId: 'instance-this-install', now: '2026-03-02T00:00:00.000Z',
+    });
+    expect(inherited.outcome).toBe('inherited');
+    return inherited.foundation;
+  };
+
+  it('reaches a local and an inherited record sharing one id without confusing them', async () => {
+    await inheritPeerControllerFoundation();
+    // A LOCAL foundation under the same human-readable id, authored after the
+    // inherited copy landed. Before the ref grammar, the bare id was the only
+    // address a read-one caller had, so the inherited copy was unreachable and
+    // an ambiguous id silently meant "the local one".
+    await record({ summary: 'This install\'s own beacon, not the peer\'s.' }, '2026-03-03T00:00:00.000Z');
+
+    const local = await getEidoverseFoundationByRef({ id: 'tide-beacon', originInstanceId: null });
+    const peers = await getEidoverseFoundationByRef({ id: 'tide-beacon', originInstanceId: PEER_ORIGIN });
+
+    expect(local.layer).toBe('vernacular');
+    expect(local.inheritance).toBeNull();
+    expect(peers.layer).toBe('baseline');
+    expect(peers.inheritance).toMatchObject({ originInstanceId: PEER_ORIGIN, sourceInstanceId: 'instance-peer-one' });
+    // An origin this install never inherited from resolves to nothing rather
+    // than falling back to the local record.
+    expect(await getEidoverseFoundationByRef({ id: 'tide-beacon', originInstanceId: 'instance-never-seen' })).toBeNull();
+  });
+
+  it('adopts an inherited controller foundation into a disarmed install carrying a derived-from edge', async () => {
+    const inherited = await inheritPeerControllerFoundation();
+
+    const adopted = await adoptEidoverseFoundation({ id: 'tide-beacon', originInstanceId: PEER_ORIGIN }, { installedBy: 'mind' });
+
+    expect(adopted.outcome).toBe('adopted');
+    // Disarmed and silent: adopting a peer's controller must not, in one call,
+    // produce a thing already ticking and already allowed to act in the world.
+    expect(adopted.install).toMatchObject({
+      id: 'tide-beacon',
+      controllerId: 'ambient-beacon',
+      armed: false,
+      deliverEffects: false,
+      config: { label: 'harbor', pulseEveryTicks: 3 },
+    });
+    expect(adopted.install.derivedFrom).toEqual({
+      type: 'derived-from',
+      originInstanceId: PEER_ORIGIN,
+      foundationId: 'tide-beacon',
+      fingerprint: inherited.inheritance.fingerprint,
+      derivedAt: '2026-03-02T00:00:00.000Z',
+    });
+  });
+
+  it('keeps the derived-from edge when the adopted controller is later re-installed by hand', async () => {
+    await inheritPeerControllerFoundation();
+    const adopted = await adoptEidoverseFoundation({ id: 'tide-beacon', originInstanceId: PEER_ORIGIN });
+    const { installEidoverseController } = await import('./eidoverseControllerRuntime.js');
+
+    // An ordinary local edit — change the cadence, arm it — passes no
+    // `derivedFrom`. An edge that vanished here would make erasing a peer's
+    // attribution the path of least effort, which is the hole #7631 closed on
+    // the authoring side.
+    const reinstalled = await installEidoverseController(
+      { id: 'tide-beacon', controllerId: 'ambient-beacon', config: { label: 'harbor', pulseEveryTicks: 3 }, tickIntervalMs: 600_000, armed: true },
+      { installedBy: 'user' },
+    );
+
+    expect(reinstalled.outcome).toBe('installed');
+    expect(reinstalled.install.armed).toBe(true);
+    expect(reinstalled.install.derivedFrom).toEqual(adopted.install.derivedFrom);
+  });
+
+  it('refuses a kind with no interpreter by name rather than succeeding at nothing', async () => {
+    await inheritPeerControllerFoundation();
+    const foundations = JSON.parse(readFileSync(join(lazyTempDataRoot('portos-eidoverse-foundations-'), 'eidoverse', 'foundations.json'), 'utf8'));
+    const key = inheritedFoundationStorageKey(PEER_ORIGIN, 'tide-beacon');
+    foundations.foundations[key].kind = 'schema';
+    writeFileSync(join(lazyTempDataRoot('portos-eidoverse-foundations-'), 'eidoverse', 'foundations.json'), JSON.stringify(foundations));
+
+    const result = await adoptEidoverseFoundation({ id: 'tide-beacon', originInstanceId: PEER_ORIGIN });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.install).toBeNull();
+    expect(result.reasons[0]).toContain('"schema" foundation is a declaration with no interpreter');
+  });
+
+  it('refuses to adopt a foundation this install authored itself', async () => {
+    await record({}, '2026-03-04T00:00:00.000Z');
+
+    const result = await adoptEidoverseFoundation({ id: 'tide-beacon', originInstanceId: null });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.reasons[0]).toContain('authored on this install');
+  });
+
+  it('refuses rather than overwriting a controller already installed under that id for another reason', async () => {
+    await inheritPeerControllerFoundation();
+    const { installEidoverseController } = await import('./eidoverseControllerRuntime.js');
+    // A controller the user stood up themselves, which happens to share the
+    // foundation's id. Installing over it would silently retarget a RUNNING
+    // controller at a peer's config.
+    expect((await installEidoverseController(
+      { id: 'tide-beacon', controllerId: 'lantern-keeper', config: { lanterns: [{ id: 'plaza-lantern', pos: [0, 2, 0] }] }, armed: true },
+      { installedBy: 'user' },
+    )).outcome).toBe('installed');
+
+    const result = await adoptEidoverseFoundation({ id: 'tide-beacon', originInstanceId: PEER_ORIGIN });
+
+    expect(result.outcome).toBe('refused');
+    expect(result.reasons[0]).toContain('retire it first');
+  });
+
+  it('reports an unknown reference as its own outcome, not as a refusal', async () => {
+    const result = await adoptEidoverseFoundation({ id: 'tide-beacon', originInstanceId: 'instance-never-seen' });
+    expect(result.outcome).toBe('unknown-foundation');
   });
 });

@@ -331,6 +331,17 @@ export const eidoverseFoundationTargetSchema = z.object({
   originInstanceId: instanceIdSchema.nullable().optional().default(null),
 }).strict();
 
+/**
+ * The ledger key a `{ id, originInstanceId }` ref addresses — the plain id for
+ * a locally-authored record, the `peer:` namespace for an inherited copy.
+ *
+ * The single place either kind of reference becomes a storage key, so a caller
+ * never re-derives the namespace and the two can never drift.
+ */
+export function foundationLedgerKey({ id, originInstanceId = null }) {
+  return originInstanceId ? inheritedFoundationStorageKey(originInstanceId, id) : id;
+}
+
 /** What a caller (route, mind tool, test) may author. Layer is NOT accepted:
  * a new local artifact is `vernacular` by construction, and moving to
  * `baseline` is what the promote path is for. */
@@ -884,4 +895,133 @@ export function summarizeFoundation(record) {
     derivedFrom: record?.derivedFrom ?? null,
     lineage: foundationLineage(record),
   };
+}
+
+/**
+ * A ledger record projected for a mind that has chosen ONE foundation to look
+ * at (#7626) — everything `summarizeFoundation()` carries, plus the two fields
+ * it deliberately omits: the `body` (the promotable substance itself) and the
+ * author's `disclosure`.
+ *
+ * Why this is a second projection rather than a widened first one: the list is
+ * read every time a mind wonders what exists here, and a list of whole bodies
+ * is kilobytes of substance per entry riding into a prompt to answer a
+ * question about ids. The choice of WHICH body to read is a decision the mind
+ * makes after the list, so the body belongs on the read-one. `style` stays
+ * omitted in both — it is this install's cosmetics, and a mind that never sees
+ * them cannot narrate them into a promote body.
+ *
+ * Without this, a peer's foundation was legible to the HUMAN (the list route
+ * returns whole records, and the panel renders one) and structurally illegible
+ * to every Mind on the install that inherited it, which is the gap that made
+ * epic #7453's "a mind uses what another mind left" untrue in practice.
+ */
+export function detailFoundation(record) {
+  if (!record) return null;
+  return {
+    ...summarizeFoundation(record),
+    body: record.body ?? null,
+    disclosure: record.disclosure ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Adoption (#7626)
+// ---------------------------------------------------------------------------
+
+/**
+ * What `body.controller` must look like for a `controller` foundation to be
+ * adoptable — the recipe an install replays to stand the thing up locally.
+ *
+ * `config` is validated only as bounded JSON here; the CONTROLLER's own
+ * `configSchema` is what actually gates it, and that lives in the shipped
+ * registry that `installEidoverseController()` resolves. Checking it twice
+ * against two definitions of "valid" is how the two drift.
+ *
+ * Nothing here can name a module, a path, or code: `definitionId` is a slug
+ * resolved against this install's OWN fixed registry, so adopting a peer's
+ * controller foundation can only ever arm a controller this install already
+ * ships. That is the property that makes adoption safe to expose at all — a
+ * peer describes WHICH shipped controller to run and with what settings, never
+ * what code to run.
+ */
+const foundationControllerBodySchema = z.object({
+  definitionId: z.string().trim().min(1).max(64)
+    .regex(/^[a-z0-9][a-z0-9-]*$/, 'must be a lowercase slug (letters, digits, hyphens)'),
+  config: boundedJsonObject(FOUNDATION_LIMITS.jsonBytes).default({}),
+  tickIntervalMs: z.number().int().positive().optional(),
+  placement: z.record(z.string().min(1).max(64), z.unknown()).optional(),
+}).strict();
+
+/**
+ * Decide what adopting a foundation MEANS for its kind, as a pure verdict.
+ *
+ * Adoption is the verb epic #7453's success signal needs and never had: until
+ * now, inheriting a peer's foundation stored a row and no runtime on either
+ * install read its `body`, so the only way to use a peer's contribution was a
+ * human reading raw JSON out of a panel and retyping it — which erases the
+ * provenance the whole graph exists to keep.
+ *
+ * Refusals are RESULTS with a named reason, never throws, and never silent
+ * successes. A `schema` or `affordance` foundation is a declaration with no
+ * interpreter on this install, and saying so is the honest answer: pretending
+ * to adopt one would be the same "described the payload and called it
+ * adoption" mistake this closes.
+ *
+ * Pure: the caller supplies the record and performs whatever the plan names.
+ *
+ * @param {object|null} record - a ledger record
+ * @returns {{ outcome: 'plan'|'refused', plan: object|null, reasons: string[] }}
+ */
+export function planFoundationAdoption(record) {
+  const refusedPlan = (reason) => ({ outcome: 'refused', plan: null, reasons: [reason] });
+  if (!record) return refusedPlan('no foundation is recorded under that reference');
+
+  // Adoption applies to a copy of a PEER's foundation. A local record needs no
+  // adopting — its author already has every way to install it — and letting
+  // this path touch one would make "adopt" a second, edgeless authoring route
+  // into the controller runtime.
+  if (!record.inheritance) {
+    return refusedPlan('this foundation was authored on this install — adoption applies to a local copy of a peer\'s foundation, which this install installs directly instead');
+  }
+
+  if (record.kind === 'controller') {
+    const parsed = foundationControllerBodySchema.safeParse(record.body?.controller);
+    if (!parsed.success) {
+      return refusedPlan(`this controller foundation's body.controller is not an installable recipe: ${issueReasons(parsed.error).join('; ')}`);
+    }
+    return {
+      outcome: 'plan',
+      plan: {
+        kind: 'controller',
+        install: {
+          id: record.id,
+          controllerId: parsed.data.definitionId,
+          config: parsed.data.config,
+          ...(parsed.data.tickIntervalMs ? { tickIntervalMs: parsed.data.tickIntervalMs } : {}),
+          ...(parsed.data.placement ? { placement: parsed.data.placement } : {}),
+          // Both false, and NOT negotiable by the envelope: adopting a peer's
+          // controller must never, in one tool call, produce a thing that is
+          // already ticking and already allowed to speak and build in the
+          // world. Arming it and letting it deliver are separate, local acts.
+          armed: false,
+          deliverEffects: false,
+        },
+        derivedFrom: {
+          type: 'derived-from',
+          originInstanceId: record.inheritance.originInstanceId,
+          foundationId: record.inheritance.foundationId,
+          fingerprint: record.inheritance.fingerprint,
+          derivedAt: record.inheritance.inheritedAt,
+        },
+      },
+      reasons: [],
+    };
+  }
+
+  if (record.kind === 'district-template') {
+    return refusedPlan('district-template adoption needs the layout replay path — nothing on this install turns a template body into geometry yet (#7627)');
+  }
+
+  return refusedPlan(`a "${record.kind}" foundation is a declaration with no interpreter on this install — there is nothing for adoption to stand up`);
 }

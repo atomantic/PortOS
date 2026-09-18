@@ -48,6 +48,7 @@
 
 import { z } from 'zod';
 import { eidoverseWorldAugmentSchema } from './eidoverseValidation.js';
+import { foundationDerivationEdgeSchema } from './eidoverseFoundations.js';
 
 export const EIDOVERSE_CONTROLLER_LIMITS = Object.freeze({
   idMax: 64,
@@ -208,6 +209,22 @@ export const eidoverseControllerRecordSchema = eidoverseControllerInstallSchema.
   // controller id that no longer resolves). Distinct from `armed: false`
   // chosen by a human, which carries no reason.
   disarmedReason: z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMITS.reasonMax).nullable().default(null),
+  // `null` on every controller a human or a mind installed from the shipped
+  // registry — the overwhelming majority. Set only when this install was stood
+  // up by ADOPTING a foundation inherited from a peer (#7626), naming the
+  // origin install, the foundation id, and the envelope fingerprint it was
+  // adopted from.
+  //
+  // This is what makes adoption the provenance-KEEPING way to re-use a peer's
+  // contribution, as against reading the body out of the panel and retyping
+  // it, which keeps nothing. It is deliberately the same edge shape a derived
+  // foundation carries: one definition of "this grew out of that", pointing at
+  // the same content-addressed fingerprint, whatever kind of record holds it.
+  //
+  // Additive and nullable on a machine-local store nothing federates, so no
+  // migration is owed — a record written before this field existed reads back
+  // as `null` through this same default.
+  derivedFrom: foundationDerivationEdgeSchema.nullable().default(null),
 }).strict();
 
 // ---------------------------------------------------------------------------
@@ -418,6 +435,10 @@ export function summarizeControllerInstall(record, { includeState = false } = {}
     consecutiveDeliveryFailures: record?.consecutiveDeliveryFailures ?? 0,
     disarmedReason: record?.disarmedReason ?? null,
     note: record?.note ?? null,
+    // Surfaced in the SUMMARY rather than only behind `includeState`: "this
+    // controller came from a peer's foundation" is the first thing a reader of
+    // the list needs, and hiding it would put attribution behind a flag.
+    derivedFrom: record?.derivedFrom ?? null,
     recentEffects: (record?.recentEffects ?? []).slice(0, 5),
     ...(includeState ? { config: record?.config ?? {}, state: record?.state ?? {} } : {}),
   };
