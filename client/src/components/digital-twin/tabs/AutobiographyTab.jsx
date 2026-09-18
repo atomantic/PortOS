@@ -14,15 +14,28 @@ import {BookOpen,
   Sparkles,
   Link2,
   MessageCircle,
-  ScrollText} from 'lucide-react';
+  ScrollText,
+  HelpCircle,
+  Lightbulb,
+  Gauge} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import StoryCraftPanel from '../StoryCraftPanel';
 import * as api from '../../../services/api';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { countWords } from '../../../lib/textUtils';
 import toast from '../../ui/Toast';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { formatCount, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
+import { isValidTimeString } from '../../../utils/timeWindow';
+
+// Mirrors the server's reminder default (server/services/autobiography.js
+// DEFAULT_CONFIG). The strict HH:MM check comes from the shared, parity-tested
+// `isValidTimeString` rather than a private copy of the pattern.
+const DEFAULT_REMINDER_TIME = '09:00';
+// Matches CUSTOM_PROMPT_ID in server/services/autobiography.js — the promptId a
+// story written against the user's own question is saved under.
+const CUSTOM_PROMPT_ID = 'custom';
 
 export default function AutobiographyTab({ onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -38,9 +51,17 @@ export default function AutobiographyTab({ onRefresh }) {
   const [storyContent, setStoryContent] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Story ideas — the same menu the daily prompt notification offers
+  const [suggestions, setSuggestions] = useState([]);
+  const [ownQuestion, setOwnQuestion] = useState('');
+
+  // Storytelling-craft evaluation, keyed by story id while it runs
+  const [evaluatingStoryId, setEvaluatingStoryId] = useState(null);
+
   // Config state
   const [showConfig, setShowConfig] = useState(false);
   const [config, setConfig] = useState(null);
+  const [reminderTimeDraft, setReminderTimeDraft] = useState(DEFAULT_REMINDER_TIME);
 
   // Edit state
   const [editingStory, setEditingStory] = useState(null);
@@ -71,12 +92,25 @@ export default function AutobiographyTab({ onRefresh }) {
     setStories(storiesData);
     setThemes(themesData);
     setConfig(configData);
+    setReminderTimeDraft(configData?.reminder?.time || DEFAULT_REMINDER_TIME);
     setLoading(false);
   }, [filterTheme]);
+
+  // Suggestions come from the prompt bank and what's already been written —
+  // never from the theme filter, so this stays out of `loadData` and its
+  // filterTheme dependency. It refreshes on mount and after a save, which is
+  // exactly when the set can actually change.
+  const refreshSuggestions = useCallback(async () => {
+    setSuggestions(await api.getAutobiographySuggestions({ silent: true }).catch(() => []));
+  }, []);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    refreshSuggestions();
+  }, [refreshSuggestions]);
 
   // Auto-load prompt from URL param (when arriving from notification)
   useEffect(() => {
@@ -87,13 +121,21 @@ export default function AutobiographyTab({ onRefresh }) {
     }
   }, [loading, searchParams, setSearchParams]);
 
+  // The one place a writing session starts. Every entry point below just
+  // produces the question to answer and hands it here, so per-session state
+  // can't drift between them — which it already had: two of the five reset
+  // `parentStoryId` and the other two didn't, leaving a fresh bank prompt
+  // saved as a follow-up of whatever was last open.
+  const beginWriting = (prompt, { parentStoryId: parent = null } = {}) => {
+    setCurrentPrompt(prompt);
+    setParentStoryId(parent);
+    setWriting(true);
+    setStoryContent('');
+  };
+
   const loadPromptById = async (promptId) => {
     const prompt = await api.getAutobiographyPromptById(promptId).catch(() => null);
-    if (prompt) {
-      setCurrentPrompt(prompt);
-      setWriting(true);
-      setStoryContent('');
-    }
+    if (prompt) beginWriting(prompt);
   };
 
   const startWriting = async () => {
@@ -101,11 +143,24 @@ export default function AutobiographyTab({ onRefresh }) {
       toast.error(err.message);
       return null;
     });
-    if (prompt) {
-      setCurrentPrompt(prompt);
-      setWriting(true);
-      setStoryContent('');
+    if (prompt) beginWriting(prompt);
+  };
+
+  // Write against a question the user typed themselves. The story still answers
+  // a question — it's just theirs rather than one from the bank.
+  const startOwnQuestion = () => {
+    const question = ownQuestion.trim();
+    if (!question) {
+      toast.error('Write a question first');
+      return;
     }
+    beginWriting({
+      id: CUSTOM_PROMPT_ID,
+      themeId: CUSTOM_PROMPT_ID,
+      themeLabel: 'Your Own Question',
+      text: question
+    });
+    setOwnQuestion('');
   };
 
   const skipPrompt = async () => {
@@ -124,8 +179,10 @@ export default function AutobiographyTab({ onRefresh }) {
       return;
     }
     setSaving(true);
-    const opts = parentStoryId
-      ? { parentStoryId, customPromptText: currentPrompt.text }
+    // A follow-up and a user-written question both carry their question text in
+    // customPromptText — neither has a bank prompt the server could look it up from.
+    const opts = (parentStoryId || currentPrompt.id === CUSTOM_PROMPT_ID)
+      ? { parentStoryId: parentStoryId || undefined, customPromptText: currentPrompt.text }
       : {};
     const result = await api.saveAutobiographyStory(currentPrompt.id, storyContent.trim(), opts, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
@@ -140,6 +197,8 @@ export default function AutobiographyTab({ onRefresh }) {
       setFollowUps({ storyId: result.id, prompts: result.followUpPrompts || null });
       setExpandedStory(result.id);
       loadData();
+      // The prompt just used drops out of the bank, so the menu changes here.
+      refreshSuggestions();
       onRefresh?.();
     }
     setSaving(false);
@@ -161,6 +220,17 @@ export default function AutobiographyTab({ onRefresh }) {
     setGeneratingFollowUps(false);
   };
 
+  const handleEvaluateStory = async (storyId) => {
+    setEvaluatingStoryId(storyId);
+    const result = await api.evaluateAutobiographyStory(storyId, undefined, { silent: true })
+      .catch((err) => { toast.error(err.message); return null; });
+    if (result?.evaluation) {
+      setStories(prev => prev.map(s => (s.id === storyId ? { ...s, evaluation: result.evaluation } : s)));
+      toast.success(`Storytelling score: ${result.evaluation.overallScore}/${result.evaluation.maxScore}`);
+    }
+    setEvaluatingStoryId(prev => (prev === storyId ? null : prev));
+  };
+
   const handleWeaveNarrative = async (storyId) => {
     setWeavingStoryId(storyId);
     // request() already toasts on failure; the catch only swallows so the
@@ -179,15 +249,10 @@ export default function AutobiographyTab({ onRefresh }) {
   ), [stories]);
 
   const startFollowUp = (parentId, questionText, themeId, themeLabel) => {
-    setParentStoryId(parentId);
-    setCurrentPrompt({
-      id: `followup-${parentId}`,
-      themeId,
-      themeLabel,
-      text: questionText
-    });
-    setWriting(true);
-    setStoryContent('');
+    beginWriting(
+      { id: `followup-${parentId}`, themeId, themeLabel, text: questionText },
+      { parentStoryId: parentId }
+    );
     setFollowUps(null);
   };
 
@@ -212,6 +277,26 @@ export default function AutobiographyTab({ onRefresh }) {
     }
   };
 
+  // A `type="time"` input fires onChange for every intermediate keystroke,
+  // including the empty string while the hour is being retyped — PATCHing each
+  // one would 400 against the server's strict HH:MM schema mid-edit, restamp
+  // the reminder's updatedAt, and re-register the cron on every partial value.
+  // So the field is a local draft that commits on blur, and an unusable value
+  // reverts to what is saved rather than being sent.
+  const commitReminderTime = async () => {
+    const saved = config?.reminder?.time || DEFAULT_REMINDER_TIME;
+    if (!isValidTimeString(reminderTimeDraft)) {
+      setReminderTimeDraft(saved);
+      return;
+    }
+    if (reminderTimeDraft === saved) return;
+    // A rejected save must snap the field back too. Leaving the typed value on
+    // screen after a failed PATCH shows a wake-up time that is not the one
+    // registered, and the user has no reason to re-save it.
+    const result = await handleConfigUpdate({ reminder: { time: reminderTimeDraft } });
+    if (!result) setReminderTimeDraft(saved);
+  };
+
   const handleConfigUpdate = async (updates) => {
     const result = await api.updateAutobiographyConfig(updates, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
@@ -219,6 +304,7 @@ export default function AutobiographyTab({ onRefresh }) {
       setConfig(result);
       toast.success('Settings updated');
     }
+    return result;
   };
 
   const wordCount = countWords(storyContent);
@@ -293,11 +379,98 @@ export default function AutobiographyTab({ onRefresh }) {
               </select>
             </label>
           </div>
+          <div className="flex flex-wrap items-center gap-4 pt-3 border-t border-port-border">
+            <label className="flex items-center gap-2 text-sm text-gray-300" htmlFor="autobiography-reminder-enabled">
+              <input
+                id="autobiography-reminder-enabled"
+                type="checkbox"
+                checked={config.reminder?.enabled === true}
+                onChange={(e) => handleConfigUpdate({ reminder: { enabled: e.target.checked } })}
+                className="rounded border-port-border"
+              />
+              Daily story prompt
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-300" htmlFor="autobiography-reminder-time">
+              at
+              <input
+                id="autobiography-reminder-time"
+                type="time"
+                value={reminderTimeDraft}
+                onChange={(e) => setReminderTimeDraft(e.target.value)}
+                onBlur={commitReminderTime}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.repeat) commitReminderTime(); }}
+                disabled={config.reminder?.enabled !== true}
+                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-50"
+              />
+            </label>
+          </div>
+          {config.reminder?.enabled === true && (
+            <p className="text-xs text-gray-500">
+              Skipped on any day you already wrote a story.
+            </p>
+          )}
           {config.lastPromptAt && (
             <p className="text-xs text-gray-500">
               Last prompt: {formatDateTime(config.lastPromptAt)}
             </p>
           )}
+        </div>
+      )}
+
+      {/* Story ideas — the same menu the daily prompt offers, plus your own question */}
+      {!writing && (
+        <div className="bg-port-card border border-port-border rounded-lg p-5 space-y-4">
+          <div className="flex items-center gap-2">
+            <Lightbulb className="w-4 h-4 text-amber-400" />
+            <span className="text-sm font-medium text-white">Story ideas</span>
+            <span className="text-xs text-gray-500">Every story answers a question</span>
+          </div>
+          {suggestions.length > 0 && (
+            <div className="space-y-2">
+              {suggestions.map((prompt) => (
+                <button
+                  key={prompt.id}
+                  onClick={() => beginWriting(prompt)}
+                  className="w-full text-left p-3 rounded-lg bg-port-bg border border-port-border hover:border-port-accent/50 transition-colors group"
+                >
+                  <div className="flex items-start gap-2">
+                    <PenLine size={14} className="mt-0.5 text-port-accent/60 group-hover:text-port-accent shrink-0" />
+                    <span className="text-sm text-gray-300 group-hover:text-white">
+                      <span className="text-xs text-port-accent mr-2">{prompt.themeLabel}</span>
+                      {prompt.text}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="space-y-2">
+            <label htmlFor="autobiography-own-question" className="flex items-center gap-1.5 text-xs text-gray-400">
+              <HelpCircle size={12} />
+              Or answer your own question
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                id="autobiography-own-question"
+                type="text"
+                value={ownQuestion}
+                maxLength={500}
+                onChange={(e) => setOwnQuestion(e.target.value)}
+                // !e.repeat: a held Enter would otherwise auto-repeat into the story
+                // textarea that mounts autoFocused (client/src/AGENTS.md).
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.repeat) startOwnQuestion(); }}
+                placeholder="Why do I like black licorice?"
+                className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent/50"
+              />
+              <button
+                onClick={startOwnQuestion}
+                disabled={!ownQuestion.trim()}
+                className="px-3 py-2 bg-port-accent text-white rounded text-sm font-medium hover:bg-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Answer it
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -397,14 +570,18 @@ export default function AutobiographyTab({ onRefresh }) {
               <span>~{Math.max(1, Math.round(wordCount / 150))} min read</span>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={skipPrompt}
-                className="flex items-center gap-1 px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors"
-                title="Get a different prompt"
-              >
-                <SkipForward size={14} />
-                Skip
-              </button>
+              {/* Skip swaps in a different BANK prompt — meaningless for a
+                  follow-up or a question the user wrote themselves. */}
+              {!parentStoryId && currentPrompt.id !== CUSTOM_PROMPT_ID && (
+                <button
+                  onClick={skipPrompt}
+                  className="flex items-center gap-1 px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors"
+                  title="Get a different prompt"
+                >
+                  <SkipForward size={14} />
+                  Skip
+                </button>
+              )}
               <button
                 onClick={saveStory}
                 disabled={saving || !storyContent.trim()}
@@ -543,6 +720,9 @@ export default function AutobiographyTab({ onRefresh }) {
                       </div>
                     )}
 
+                    {/* Storytelling-craft score */}
+                    <StoryCraftPanel evaluation={story.evaluation} />
+
                     {/* Woven narrative for this chain */}
                     {narrative?.storyId === story.id && (
                       <div className="mt-3 bg-port-bg border border-amber-500/30 rounded-lg p-4 space-y-2">
@@ -573,7 +753,16 @@ export default function AutobiographyTab({ onRefresh }) {
                       </div>
                     )}
 
-                    <div className="flex items-center gap-2 justify-end pt-2 border-t border-port-border/50">
+                    <div className="flex flex-wrap items-center gap-2 justify-end pt-2 border-t border-port-border/50">
+                      <button
+                        onClick={() => handleEvaluateStory(story.id)}
+                        disabled={evaluatingStoryId === story.id}
+                        className="flex items-center gap-1 px-2 py-1 text-xs text-emerald-400/70 hover:text-emerald-400 transition-colors disabled:opacity-50"
+                        title="Score this story against the seven storytelling moves and CART"
+                      >
+                        {evaluatingStoryId === story.id ? <BrailleSpinner /> : <Gauge size={12} />}
+                        {story.evaluation ? 'Re-score' : 'Score craft'}
+                      </button>
                       {isChainable(story) && (
                         <button
                           onClick={() => handleWeaveNarrative(story.id)}

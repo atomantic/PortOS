@@ -113,6 +113,27 @@ export function todayInTimezone(timezone, atDate = new Date()) {
   return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`
 }
 
+/**
+ * Does a UTC timestamp fall on the given "YYYY-MM-DD" LOCAL calendar day?
+ *
+ * The question every day-scoped "did this already happen today" gate asks: a
+ * record carries a precise UTC instant, the day bucket it must be compared
+ * against is a local calendar day, and for any negative-UTC-offset zone the two
+ * disagree for several hours around the rollover. Keyed through
+ * `todayInTimezone` so the record's day and the scheduler's "today" are derived
+ * by one rule rather than two that must stay byte-identical.
+ *
+ * A missing or unparseable timestamp answers false — "no evidence it happened
+ * today" — rather than throwing, because every caller is a guard deciding
+ * whether to stay quiet.
+ */
+export function isLocalDay(timestamp, timezone, dayStr) {
+  if (!timestamp) return false
+  const at = new Date(timestamp)
+  if (Number.isNaN(at.getTime())) return false
+  return todayInTimezone(timezone, at) === dayStr
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000
 const LOCAL_DAY_SEARCH_RADIUS_MS = 36 * 60 * 60 * 1000
 
@@ -271,4 +292,17 @@ export function isWithinTimeWindow({ start, end, nowMinutes }) {
   if (s < e) return nowMinutes >= s && nowMinutes < e
   // Overnight wrap: in-window if at-or-after start OR before end.
   return nowMinutes >= s || nowMinutes < e
+}
+
+// "HH:MM" → the daily cron expression ("M H * * *") that fires at that local
+// wall-clock time. STRICT on purpose (zero-padded hour): the value comes from
+// a user-editable reminder setting, and a malformed one must be visible as a
+// refusal to schedule rather than silently rounded into some other slot — so
+// this returns null and the caller cancels instead of registering a bad cron.
+// Shared by every daily-reminder scheduler (POST, autobiography) so two of
+// them cannot drift on what "09:00" registers as.
+export function dailyCronFromHHMM(time) {
+  if (typeof time !== 'string' || !HHMM_STRICT_RE.test(time)) return null
+  const [hour, minute] = time.split(':').map(Number)
+  return `${minute} ${hour} * * *`
 }

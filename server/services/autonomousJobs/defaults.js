@@ -194,7 +194,7 @@ Phase 4 — Report:
   {
     id: 'job-autobiography-prompt',
     name: 'Autobiography Story Prompt',
-    description: 'Send a notification prompting the user to write a 5-minute autobiographical story based on a thematic prompt.',
+    description: 'Send a notification offering a few 5-minute autobiographical story ideas drawn from the thematic prompt bank. Interval-based; the time-of-day version lives in the Autobiography tab\'s own reminder setting, and both share one notification so enabling both cannot double-nudge.',
     category: 'autobiography-prompt',
     interval: 'daily',
     intervalMs: DAY,
