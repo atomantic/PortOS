@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
   listFoundations: vi.fn(),
   packageCandidate: vi.fn(),
   promoteFoundation: vi.fn(),
-  listContributions: vi.fn(),
   recordFoundation: vi.fn(),
   withdrawFoundation: vi.fn(),
   deleteFoundation: vi.fn(),
@@ -48,10 +47,6 @@ vi.mock('../services/eidoverseFoundationLedger.js', () => ({
   recordEidoverseFoundation: mocks.recordFoundation,
   withdrawEidoverseFoundation: mocks.withdrawFoundation,
   deleteEidoverseFoundation: mocks.deleteFoundation,
-}));
-
-vi.mock('../services/eidoverseResilienceContributions.js', () => ({
-  listRegisteredContributionIds: mocks.listContributions,
 }));
 
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: () => Promise.resolve('instance-aaaa') }));
@@ -211,8 +206,7 @@ describe('Eidoverse world routes', () => {
       kind: 'controller',
       title: 'Tide Beacon',
       summary: 'A beacon that keeps pulsing between mind wakes.',
-      contributionId: 'beacon-relay-demo',
-      body: { affordance: { inspect: 'reads the pulse count' } },
+      body: { controller: { definitionId: 'ambient-beacon', config: {} } },
     };
     mocks.recordFoundation.mockResolvedValue({ ...authored, layer: 'vernacular' });
 
@@ -330,15 +324,12 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
     expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/adopt')).status).toBe(404);
   });
 
-  it('serves the registered assay contributions on their own path, where no foundation id can shadow them', async () => {
-    mocks.listContributions.mockResolvedValue(['beacon-relay-demo']);
-    mocks.getFoundationByRef.mockResolvedValue(null);
-
-    const response = await request(makeApp()).get('/api/eidoverse/world/contributions');
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ contributions: ['beacon-relay-demo'] });
-    expect(mocks.getFoundationByRef).not.toHaveBeenCalled();
+  it('no longer serves an assay-contribution list to bind a foundation to (#7625)', async () => {
+    // The route existed so an author could pick an id that would satisfy the
+    // promote gate. Naming one WAS satisfying it, which is the hole #7625
+    // closed by deriving the sandbox from the body; there is nothing to bind to
+    // now, and a lingering endpoint would keep advertising that there is.
+    expect((await request(makeApp()).get('/api/eidoverse/world/contributions')).status).toBe(404);
   });
 
   // --- Controllers: the install surface beside the mind tool (#7488) -------

@@ -682,10 +682,12 @@ skips it; only `eidoverseResilienceAssay.test.js` exercises it, proving the
 harness catches the "author-mind-only" failure mode).
 
 This harness is what the promote gate below runs:
-`services/eidoverseFoundationLedger.js` replays a foundation's declared
-contribution through `runResilienceAssay()` and refuses to package a promote
-candidate on a failing verdict ([#7455](https://github.com/atomantic/PortOS/issues/7455)).
-Both the CLI and that gate resolve contributions through the one registry in
+`services/eidoverseFoundationLedger.js` replays a foundation through
+`runResilienceAssay()` and refuses to package a promote candidate on a failing
+verdict ([#7455](https://github.com/atomantic/PortOS/issues/7455)). Since #7625
+the gate builds that contribution from the foundation's OWN body
+(`server/lib/eidoverseFoundationSandbox.js`) rather than resolving one by id;
+the CLI still sweeps the shipped fixtures through the registry in
 `server/services/eidoverseResilienceContributions.js`.
 
 ### Local vernacular vs shared baseline, and the promote gate (#7455)
@@ -722,32 +724,60 @@ is the install-local ledger — machine-local like `portos-world.json` beside it
 never federated, no seed file and no migration, since an absent file is the empty
 ledger every install starts from.
 
-**The promote gate runs the assay; it never accepts a verdict.**
-`POST /api/eidoverse/world/foundations/:id/candidate` resolves the foundation's
-declared `contributionId` through `server/services/eidoverseResilienceContributions.js`
-(by id against a fixed directory — never by a caller-supplied module path),
-replays it through the agent-free harness above, and packages against the verdict
-it just produced. A caller therefore cannot assert that its build survived its
+**The promote gate runs the assay against the foundation's OWN body; it never
+accepts a verdict and never replays something the author merely named.**
+`POST /api/eidoverse/world/foundations/:id/candidate` DERIVES the sandbox from
+`body` through `server/lib/eidoverseFoundationSandbox.js` (#7625), replays it
+through the agent-free harness above, and packages against the verdict it just
+produced.
+
+Until #7625 the binding was a single author-supplied string: `contributionId`
+was free text, it resolved against the shipped fixture directory, and naming a
+shipped fixture was *sufficient* to clear the gate. A local build could promote —
+and be offered to every federated peer — on evidence that described the demo
+fixture rather than the body inside the envelope. `contributionId` is now
+**derived** (`controller:<definitionId>`, or `<kind>:<id>`) and is not accepted
+on any authoring surface: not the route body, not `eidoverse.record`, not the
+panel. A receiving peer re-derives it from the envelope's own `kind`/`body` and
+refuses one whose evidence is about something else.
+
+One derivation per declared kind, each refusing a body it cannot interpret —
+which is the honest answer, because a declaration nobody but its author can
+replay is not promotable:
+
+| kind | what gets replayed |
+| --- | --- |
+| `controller` | the shipped definition named by `body.controller.definitionId`, run against **this install's** `body.controller.config` through the definition's own `configSchema`. Upstream's `exampleConfig` proves only that upstream's example survives. |
+| `district-template` | the declared `body.placement` must reproduce from its own `{ layoutId, anchor, propCount, seed, facing }` via `generateDistrictTemplatePlacement()`, and the body is the harness's projection source — a template's consequence is its projection plan. |
+| `schema` / `affordance` | the declarative interpreter: a clean world state is built from `body.schema`'s declared field types and every `body.affordance` verb is resolved against it each tick. An affordance recorded as prose (`{ inspect: 'reads the pulse count' }`) is refused; it has to declare `{ reads, writes }` over fields `body.schema` declares. |
+
+The executable part stays shipped code in every case, so this adds no
+arbitrary-code-execution surface — what varies is the declarative input the
+install actually authored. A caller therefore cannot assert that its build survived its
 author's absence; it can only ask for the check — the same proposal-versus-
 consequence separation the construction tools got in #7454, applied to promotion.
 A foundation that is re-authored loses both its candidate and its verdict, because
 both described the previous body; a refused package likewise clears any candidate
 packaged earlier, since the verdict that vouched for it no longer holds.
 
-Contributions are resolved **by id against a fixed directory**, which today holds
-only the two reference fixtures shipped with the assay harness. So on a stock
-install the endpoint can package a candidate for the demo contribution and
-nothing else — a real author gets "no resilience-assay contribution is
-registered" until executable world controllers (#7456) add their registry as a
-second source behind the same resolver.
+`server/services/eidoverseResilienceContributions.js` still resolves the shipped
+fixtures **by id against a fixed directory** for the CLI and the harness's own
+tests. It is no longer the promote path's resolver, and there is no longer an
+endpoint or mind tool advertising its ids — `GET /api/eidoverse/world/contributions`
+and `eidoverse.contributions` are gone, because a list of ids that were
+sufficient to pass the gate was a list of ways around it. An author choosing a
+`controller` behaviour reads `GET /api/eidoverse/world/controllers` /
+`eidoverse.controllers`, which already project the shipped registry.
 
 Four refusals stand between a local artifact and the shared baseline, and every
 one returns a readable reason naming what to fix:
 
 1. **Ownership** — only a `vernacular` foundation is promotable.
-2. **Agent-free resilience** — the verdict must pass, cover the full disturbance
-   suite, and be bound to the contribution this foundation names (a passing
-   verdict borrowed from another build is refused explicitly).
+2. **Agent-free resilience** — the body must have a derivable sandbox at all, and
+   the verdict must pass, cover the full disturbance suite, and be bound to the
+   label this foundation's own `kind`/`body` derives (a passing verdict borrowed
+   from another build is refused explicitly, on both the packaging and the
+   receiving side).
 3. **Style leak** — a vernacular style key inside `body`.
 4. **Federation safety** — `server/lib/federationSafety.js` refuses the package
    when the candidate carries machine identity, network info, PII,
@@ -804,9 +834,10 @@ aged out of the capped list is likewise final.
 foundation with its ownership-layer badge, records or re-authors one, runs the
 assay, promotes, and renders each refusal reason verbatim beside the foundation
 it refused. The expanded foundation is a `?foundation=<id>` search param, so a
-refusal is linkable. `GET /api/eidoverse/world/contributions` backs the
-contribution picker — an install that registers none says so rather than offering
-an empty list.
+refusal is linkable. The form has no contribution field: it seeds the `body` per
+kind and, for a `controller`, fills it from a shipped definition read off
+`GET /api/eidoverse/world/controllers` — an install that ships none says so
+rather than offering an empty picker.
 
 **The mind needs its own grant to promote.** `eidoverse.promote` (with the read
 beside it, `eidoverse.foundations`) is gated on `manageEidoverse` **and** the
@@ -823,8 +854,10 @@ same `recordEidoverseFoundation()` the HTTP route above uses, gated on
 `manageEidoverse` alone (no promote grant needed — authoring stays local by
 construction) and mind-scope only. `authorKind` is stamped `'mind'` server-side
 regardless of what the call arguments claim, the same reason `layer` is never
-caller-supplied. `eidoverse.contributions` (`manageEidoverse`, read) lists the
-`contributionId` values a new foundation may bind to before it is promotable.
+caller-supplied — and, since #7625, the same reason `contributionId` is not
+accepted either: a mind that could name what the gate replays could point it at a
+shipped demo. `eidoverse.controllers` (`manageEidoverse`, read) is what a mind
+reads first, for the `definitionId` values a `controller` body may name.
 
 ### Provenance graph and inheritance edges (#7461)
 
@@ -989,7 +1022,18 @@ peer crowd out this install's own retractions.
 Both directions are gated on the `eidoverse` instance feature: an install with
 Eidoverse turned off neither offers nor accumulates.
 
-**Compatibility.** `PORTOS_SCHEMA_VERSIONS.eidoverseFoundations` (v3) is the
+**Compatibility.** The envelope's `candidateVersion` is **v3** as of #7625. The
+bump is semantic rather than structural: a pre-v3 envelope's assay evidence was
+recorded against a contribution its author named, with no required relationship
+to the body travelling beside it, so there is nothing to upgrade — the accept
+side refuses v1 and v2 outright with that reason rather than inheriting on
+them. Migration `scripts/migrations/397-eidoverse-foundation-derived-assay.js`
+does the local half: it re-derives every record's binding label, drops the
+verdicts the old replay produced, and returns an unreplayable `baseline`
+foundation to `vernacular` with `promotedAt: null` — exactly what the ledger
+already does when a body is re-authored, for exactly the same reason.
+
+`PORTOS_SCHEMA_VERSIONS.eidoverseFoundations` (v3) is the
 transport contract, registered in `NON_RECORD_SCHEMA_CATEGORIES` because this
 is a receiver-pull category with no push to gate — a foundation is not a
 peer-subscribable record kind. It is deliberately separate from the envelope's
@@ -1187,10 +1231,10 @@ there is no await for a network, disk, or provider call to hide behind. Root
 property of the tick path rather than a convention — boot arms a timer and
 nothing else. The same synchronous rule is why every shipped controller is
 replayable by the agent-free assay with no extra authoring: the controller
-registry is the assay's **second contribution source**, behind the same
-`findContributionById` resolver, so a `controller` foundation can name its
-controller's id as its `contributionId` and be gated for promotion on evidence
-it still runs with its author gone.
+registry is both the assay CLI's second contribution source and what a
+`controller` foundation's promote gate resolves `body.controller.definitionId`
+against — replaying the definition against **this install's own config**, so the
+evidence is about the controller this install actually configured.
 
 **Effects are proposals, from a closed vocabulary.** A step returns effects, it
 does not perform them — the same proposal-versus-consequence separation the

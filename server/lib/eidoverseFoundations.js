@@ -36,7 +36,9 @@
  *      the contribution itself: `assayEvidenceFromVerdict()` folds a
  *      `runResilienceAssay()` result into the evidence block, and packaging
  *      refuses evidence that is missing, failing, bound to a DIFFERENT
- *      contribution than the one this foundation names, or short of the full
+ *      contribution than the one this foundation's OWN body derives
+ *      (`lib/eidoverseFoundationSandbox.js`, #7625 — the binding label is
+ *      derived, never authored), or short of the full
  *      disturbance suite. Keeping execution in the harness that owns the
  *      sandbox leaves this module pure and synchronous, and leaves exactly one
  *      place in the tree that runs untrusted controller code. The ledger runs
@@ -84,18 +86,19 @@ export const EIDOVERSE_FOUNDATION_KINDS = Object.freeze(['schema', 'affordance',
  *
  * v2 added the `derived-from` edge (#7631), so an install that builds on a
  * peer's foundation publishes "derived from A's X" instead of a byte-identical
- * body stamped as its own work. */
-export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSION = 2;
-
-/**
- * Every envelope version this install can still READ. A v1 envelope predates
- * the derivation edge and is otherwise byte-for-byte the shape it always was,
- * so refusing it would strand every not-yet-upgraded peer's whole offering for
- * a field that is absent by construction — and, because the fingerprint is
- * hashed over the envelope AS SENT, a v1 payload still verifies unchanged.
- * Only `EIDOVERSE_FOUNDATION_CANDIDATE_VERSION` is ever WRITTEN.
- */
-export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSIONS_ACCEPTED = Object.freeze([1, 2]);
+ * body stamped as its own work.
+ *
+ * **v3 (#7625) is a SEMANTIC break, not a shape change.** A v1/v2 envelope's
+ * `assay` block was evidence about whatever contribution its author NAMED,
+ * which had no required relationship to the `body` travelling beside it. v3
+ * evidence is produced by replaying the body itself
+ * (`eidoverseFoundationSandbox.js`) and its `contributionId` is DERIVED from
+ * `kind`/`body`, so a receiver can re-derive the binding instead of taking
+ * the sender's word for it. Every older envelope is therefore refused outright
+ * rather than inherited — there is no way to upgrade evidence that never
+ * described the payload, which is why this install reads exactly one version
+ * rather than a widening accepted set. */
+export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSION = 3;
 
 /**
  * Keys that are UNAMBIGUOUSLY cosmetic and so must never appear inside a
@@ -133,10 +136,59 @@ const FOUNDATION_LIMITS = Object.freeze({
 const foundationIdSchema = z.string().trim().min(1).max(FOUNDATION_LIMITS.idMax)
   .regex(/^[a-z0-9][a-z0-9-]*$/, 'must be a lowercase slug (letters, digits, hyphens)');
 
-/** The resilience-assay contribution this foundation is replayed as — the
- * binding between a recorded artifact and the sandbox that proves it survives
- * its author's absence. Resolved by `services/eidoverseResilienceContributions.js`. */
+/**
+ * The binding between a recorded artifact and the sandbox that proved it
+ * survives its author's absence.
+ *
+ * **Derived, never authored (#7625).** It is absent from
+ * `eidoverseFoundationInputSchema` below and computed by
+ * `derivedContributionId()` just beneath it from the foundation's own
+ * `kind`/`body`. When an author could supply it, naming a shipped demo fixture
+ * was sufficient to clear the promote gate, and the evidence a peer inherited
+ * on described that fixture rather than the body in the envelope.
+ */
 const contributionIdSchema = z.string().trim().min(1).max(120);
+
+/** A shipped-definition / foundation slug. Mirrors `foundationIdSchema`. */
+const CONTROLLER_DEFINITION_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * The shipped controller definition id a `controller` foundation names, or
+ * `null` when its body names none. Exported because `eidoverseFoundationSandbox.js`
+ * has to resolve the definition (an async registry read) BEFORE it can build
+ * the sandbox.
+ */
+export function controllerDefinitionIdFromBody(body) {
+  const declared = isPlainObject(body) && isPlainObject(body.controller) ? body.controller.definitionId : null;
+  return typeof declared === 'string' && CONTROLLER_DEFINITION_SLUG.test(declared.trim()) ? declared.trim() : null;
+}
+
+/**
+ * The label a foundation's assay evidence is bound to, derived from the record
+ * rather than supplied by its author.
+ *
+ * Lives HERE rather than beside the sandbox that replays the body, even though
+ * that is where it is conceptually rooted: both binding checks below call it,
+ * and the sandbox reaches the creative toolkit, which reaches this module's
+ * input schema — so importing it the other way closes an ESM cycle and leaves
+ * `eidoverseFoundationInputSchema` in its temporal dead zone at first load.
+ * The function is pure and reads only `kind`/`id`/`body`, so it belongs to the
+ * schema layer as easily as to the harness.
+ *
+ * Total on purpose: a body too malformed to derive a sandbox from still gets a
+ * stable label, because BOTH sides of the binding check compute it the same
+ * way — the label's job is to bind evidence to a body, and refusing the
+ * malformed body is `foundationSandbox()`'s job, not this one's.
+ */
+export function derivedContributionId({ kind, id, body }) {
+  if (kind === 'controller') {
+    const definitionId = controllerDefinitionIdFromBody(body);
+    if (definitionId) return `controller:${definitionId}`;
+  }
+  return `${kind}:${id}`;
+}
 
 // `.datetime()`, not a `Date.parse` refine: `Date.parse` accepts "March 4, 2026"
 // and "2026", and these timestamps are hashed into a payload a peer parses.
@@ -266,12 +318,14 @@ export const foundationDerivationClaimSchema = z.object({
  * The fields a foundation carries in every one of its three shapes — the local
  * record, what a caller may author, and the promote envelope. Declared once so
  * a cap change cannot land on two of the three and silently diverge them.
+ *
+ * `contributionId` is deliberately NOT here: it is on the record and on the
+ * envelope but never on the input, because it is derived rather than authored.
  */
 const foundationCoreShape = {
   kind: z.enum(EIDOVERSE_FOUNDATION_KINDS),
   title: z.string().trim().min(1).max(FOUNDATION_LIMITS.titleMax),
   summary: z.string().trim().min(1).max(FOUNDATION_LIMITS.summaryMax),
-  contributionId: contributionIdSchema,
   body: foundationBodySchema,
   disclosure: foundationDisclosureSchema,
 };
@@ -279,6 +333,7 @@ const foundationCoreShape = {
 /** The local ledger record. `style` stays here and never leaves the install. */
 export const eidoverseFoundationRecordSchema = z.object({
   ...foundationCoreShape,
+  contributionId: contributionIdSchema,
   id: foundationIdSchema,
   // `runtime` is absent by construction: an install authors its own artifacts
   // and may promote them, but the shared framework layer is never a record here.
@@ -344,7 +399,10 @@ export function foundationLedgerKey({ id, originInstanceId = null }) {
 
 /** What a caller (route, mind tool, test) may author. Layer is NOT accepted:
  * a new local artifact is `vernacular` by construction, and moving to
- * `baseline` is what the promote path is for. */
+ * `baseline` is what the promote path is for. Neither is `contributionId`
+ * (#7625): the sandbox the assay replays is derived from `body`, so the
+ * binding label is derived from it too — a caller that could name it could
+ * borrow another contribution's passing verdict. */
 export const eidoverseFoundationInputSchema = z.object({
   ...foundationCoreShape,
   id: foundationIdSchema,
@@ -358,7 +416,8 @@ export const eidoverseFoundationInputSchema = z.object({
 /** The promote envelope — the only shape authorized to cross to a peer. */
 export const eidoverseFoundationCandidateSchema = z.object({
   ...foundationCoreShape,
-  candidateVersion: z.union(EIDOVERSE_FOUNDATION_CANDIDATE_VERSIONS_ACCEPTED.map((version) => z.literal(version))),
+  contributionId: contributionIdSchema,
+  candidateVersion: z.literal(EIDOVERSE_FOUNDATION_CANDIDATE_VERSION),
   derivedFrom: foundationDerivationEdgeSchema.nullable().default(null),
   foundationId: foundationIdSchema,
   provenance: foundationProvenanceSchema.extend({
@@ -582,6 +641,7 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
   const parsed = eidoverseFoundationRecordSchema.safeParse(record);
   if (!parsed.success) return refused(issueReasons(parsed.error));
   const foundation = parsed.data;
+  const derivedLabel = derivedContributionId(foundation);
 
   // Two refusals the envelope gate below cannot phrase usefully: ownership
   // layer is not carried on the envelope at all, and a missing assay would
@@ -598,6 +658,14 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
     // Promotion publishes only what this install authored (#7461); it must
     // never become a relay that re-shares a peer's foundation as its own.
     foundation.inheritance ? `inherited from another install (${foundation.inheritance.originInstanceId}) — promotion re-shares only foundations this install authored` : null,
+    // A ledger file is a file a human (or a restored backup from before #7625)
+    // can hand us, so the derived binding is re-checked here rather than
+    // trusted because the ledger wrote it. `packageEidoverseFoundationCandidate`
+    // re-derives before calling in, so this only ever fires on a record that
+    // reached the gate some other way.
+    foundation.contributionId === derivedLabel
+      ? null
+      : `this record is labelled "${foundation.contributionId}" but its own kind and body derive "${derivedLabel}" — re-author the foundation so its assay evidence is bound to the body it describes`,
     assayEvidenceRefusal(foundation.assay, requiredDisturbances, foundation.contributionId),
   ].filter(Boolean);
   if (reasons.length > 0) return refused(reasons);
@@ -639,6 +707,22 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
  * @returns {{ valid: boolean, reasons: string[], findings: Array }}
  */
 export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
+  // Phrased before the schema runs, because `z.literal(3)` reports an OLDER
+  // envelope as "invalid literal value" — true, and useless to the human
+  // reading a sync log. A pre-v3 envelope is not malformed; its evidence simply
+  // described something other than the body it travels with (#7625). This also
+  // subsumes every older-shape check: a v1 envelope carrying the v2
+  // `derived-from` edge (#7631) is refused here as an older envelope rather
+  // than for the edge, because its evidence is unusable either way.
+  const declaredVersion = candidate?.candidateVersion;
+  if (Number.isInteger(declaredVersion) && declaredVersion < EIDOVERSE_FOUNDATION_CANDIDATE_VERSION) {
+    return {
+      valid: false,
+      reasons: [`this promote envelope is candidate v${declaredVersion}; this install requires v${EIDOVERSE_FOUNDATION_CANDIDATE_VERSION}. A pre-v3 envelope's resilience evidence was recorded against a contribution its author NAMED rather than against the body it carries, so it cannot be inherited — ask the origin install to re-package the foundation.`],
+      findings: [],
+    };
+  }
+
   const parsed = eidoverseFoundationCandidateSchema.safeParse(candidate);
   if (!parsed.success) return { valid: false, reasons: issueReasons(parsed.error), findings: [] };
   const envelope = parsed.data;
@@ -652,11 +736,14 @@ export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
     reasons.push('fingerprint does not match the candidate body — the payload was altered after packaging');
   }
 
-  // A v1 envelope predates the derivation edge, so one that carries anyway is
-  // not an older peer — it is a payload assembled by hand. Refuse it rather
-  // than accept an edge under a version whose fingerprint never covered one.
-  if (envelope.candidateVersion === 1 && envelope.derivedFrom) {
-    reasons.push('a v1 promote envelope cannot carry a derived-from edge — the field was introduced at candidateVersion 2');
+  // The label has to be the one THIS envelope's own kind/body derives, not one
+  // the sender chose. Without this a v3 envelope could still carry internally
+  // consistent evidence about some other contribution — the same
+  // borrowed-credential shape #7625 removed from the authoring surface, moved
+  // to the wire. Re-derivation is pure and reads only the envelope.
+  const derivedLabel = derivedContributionId({ kind: envelope.kind, id: envelope.foundationId, body: envelope.body });
+  if (envelope.contributionId !== derivedLabel) {
+    reasons.push(`this envelope claims to have been replayed as "${envelope.contributionId}", but its own kind and body derive "${derivedLabel}" — the evidence is not about the payload`);
   }
 
   const assayRefusal = assayEvidenceRefusal(envelope.assay, requiredDisturbances, envelope.contributionId);

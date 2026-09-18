@@ -96,7 +96,7 @@ describe('buildDistrictTemplateAugmentOperations', () => {
 describe('buildDistrictTemplateFoundationDraft', () => {
   const base = {
     id: 'garden-arcade', title: 'Garden Arcade', summary: 'A colonnade of lanterns around the arrival plaza.',
-    contributionId: 'beacon-relay', materialId: 'sunbaked-clay', motifId: 'lantern-row', anchor: ANCHOR,
+    materialId: 'sunbaked-clay', motifId: 'lantern-row', anchor: ANCHOR,
   };
 
   it('parses as a valid eidoverseFoundationInputSchema input, with no style leak in body', () => {

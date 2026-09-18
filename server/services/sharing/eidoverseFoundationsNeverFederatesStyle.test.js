@@ -14,6 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
+  derivedContributionId,
   eidoverseFoundationCandidateSchema,
   packageFoundationCandidate,
   styleLeakFindings,
@@ -21,8 +22,14 @@ import {
 
 const DISTURBANCES = ['reconnect', 'restart-world-host', 'missing-optional-deps'];
 const NOW = '2026-03-04T05:06:07.000Z';
+const BODY = { schema: { pulses: 'integer' }, affordance: { inspect: 'reads the pulse count' } };
 
-const passingAssay = (contributionId = 'lantern-relay-demo') => ({
+// The binding label is DERIVED from the record's own kind/body (#7625), never
+// chosen — so the fixture derives it too rather than naming one packaging would
+// refuse as evidence about some other contribution.
+const CONTRIBUTION_ID = derivedContributionId({ kind: 'controller', id: 'tide-lantern', body: BODY });
+
+const passingAssay = (contributionId = CONTRIBUTION_ID) => ({
   harness: 'eidoverse-resilience-assay',
   contributionId,
   pass: true,
@@ -40,8 +47,8 @@ const makeRecord = (overrides = {}) => ({
   kind: 'controller',
   title: 'Tide Lantern',
   summary: 'A lantern that keeps pulsing between mind wakes.',
-  contributionId: 'lantern-relay-demo',
-  body: { schema: { pulses: 'integer' }, affordance: { inspect: 'reads the pulse count' } },
+  contributionId: CONTRIBUTION_ID,
+  body: BODY,
   style: { palette: ['#102030'], motif: 'weathered brass', districtId: 'commons', accent: '#ffaa00' },
   provenance: { originInstanceId: 'instance-example-0001', authorKind: 'mind', createdAt: NOW },
   disclosure: { requires: [], effects: ['emits a pulse each tick'], license: null, notes: null },

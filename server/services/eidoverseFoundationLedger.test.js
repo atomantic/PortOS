@@ -9,7 +9,13 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { foundationCandidateFingerprint, inheritedFoundationStorageKey, verifyFoundationCandidate } from '../lib/eidoverseFoundations.js';
+import {
+  EIDOVERSE_FOUNDATION_CANDIDATE_VERSION,
+  derivedContributionId,
+  foundationCandidateFingerprint,
+  inheritedFoundationStorageKey,
+  verifyFoundationCandidate,
+} from '../lib/eidoverseFoundations.js';
 import { RESILIENCE_DISTURBANCES } from './eidoverseResilienceAssay.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
@@ -32,20 +38,32 @@ const {
   withdrawEidoverseFoundation,
 } = await import('./eidoverseFoundationLedger.js');
 
-// The passing reference contribution shipped with the assay harness (#7460).
-const PASSING_CONTRIBUTION = 'beacon-relay-demo';
-
+/**
+ * A `controller` foundation naming a SHIPPED definition and carrying THIS
+ * install's own config — a body the promote gate can replay on its own (#7625).
+ *
+ * This fixture used to name the shipped `beacon-relay-demo` assay fixture in a
+ * free-text `contributionId` while its body described something else entirely,
+ * and it packaged and promoted anyway. It was the canonical example of the hole:
+ * the evidence a peer inherited on was about the demo fixture, not about "Tide
+ * Beacon". There is no `contributionId` to supply now; the ledger derives it.
+ */
 const authored = (overrides = {}) => ({
   id: 'tide-beacon',
   kind: 'controller',
   title: 'Tide Beacon',
   summary: 'A beacon that keeps pulsing between mind wakes.',
-  contributionId: PASSING_CONTRIBUTION,
-  body: { schema: { pulses: 'integer' }, affordance: { inspect: 'reads the pulse count' } },
+  body: { controller: { definitionId: 'ambient-beacon', config: { label: 'tide', pulseEveryTicks: 3 } } },
   style: { motif: 'weathered brass' },
   authorKind: 'mind',
   ...overrides,
 });
+
+/** The label the fixture's own body derives — never authored. */
+const DERIVED_CONTRIBUTION = 'controller:ambient-beacon';
+
+/** A body with no derivable sandbox: it names no shipped controller. */
+const UNREPLAYABLE_BODY = { schema: { pulses: 'integer' }, affordance: { inspect: 'reads the pulse count' } };
 
 const record = (overrides, at) => recordEidoverseFoundation(authored(overrides), { originInstanceId: 'instance-aaaa', now: at });
 
@@ -133,7 +151,9 @@ describe('packaging a promote candidate', () => {
 
     expect(result.outcome).toBe('packaged');
     // The verdict came from the harness, not from anything the caller passed.
-    expect(result.assay).toMatchObject({ harness: 'eidoverse-resilience-assay', contributionId: PASSING_CONTRIBUTION, pass: true });
+    expect(result.assay).toMatchObject({ harness: 'eidoverse-resilience-assay', contributionId: DERIVED_CONTRIBUTION, pass: true });
+    // The evidence is about THIS body: the label was derived from it, not typed.
+    expect(result.candidate.contributionId).toBe(DERIVED_CONTRIBUTION);
     expect(result.candidate.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(result.candidate)).not.toContain('weathered brass');
 
@@ -142,14 +162,26 @@ describe('packaging a promote candidate', () => {
     expect((await listEidoverseFoundations()).counts.candidates).toBe(1);
   });
 
-  it('refuses a foundation whose contribution cannot be replayed without its author', async () => {
-    await record({ contributionId: 'not-registered-anywhere' });
+  it('refuses a foundation whose own body cannot be replayed without its author', async () => {
+    await record({ body: UNREPLAYABLE_BODY });
 
     const result = await packageEidoverseFoundationCandidate('tide-beacon');
 
     expect(result.outcome).toBe('refused');
-    expect(result.reasons[0]).toContain('not-registered-anywhere');
+    expect(result.reasons[0]).toMatch(/must declare `body\.controller\.definitionId`/);
     expect((await getEidoverseFoundation('tide-beacon')).candidate).toBeNull();
+  });
+
+  it('refuses a body that is unrelated to anything this install can replay, however it is labelled', async () => {
+    // The #7625 regression, stated directly: naming a shipped contribution used
+    // to be sufficient, so this exact record packaged. A caller cannot even
+    // supply the label now, and the body decides.
+    await expect(recordEidoverseFoundation({ ...authored({ body: UNREPLAYABLE_BODY }), contributionId: 'beacon-relay-demo' }, { originInstanceId: 'instance-aaaa' }))
+      .rejects.toThrow();
+
+    await record({ body: UNREPLAYABLE_BODY });
+    expect((await getEidoverseFoundation('tide-beacon')).contributionId).toBe('controller:tide-beacon');
+    expect((await packageEidoverseFoundationCandidate('tide-beacon')).outcome).toBe('refused');
   });
 
   it('drops the packaged candidate when the body is re-authored', async () => {
@@ -188,12 +220,12 @@ describe('promoting a foundation into the shared baseline', () => {
   });
 
   it('refuses to promote a foundation whose assay cannot be run, and moves nothing', async () => {
-    await record({ contributionId: 'not-registered-anywhere' });
+    await record({ body: UNREPLAYABLE_BODY });
 
     const result = await promoteEidoverseFoundation('tide-beacon');
 
     expect(result).toMatchObject({ outcome: 'refused', promoted: false, foundation: null });
-    expect(result.reasons[0]).toContain('not-registered-anywhere');
+    expect(result.reasons[0]).toMatch(/must declare `body\.controller\.definitionId`/);
     expect((await getEidoverseFoundation('tide-beacon')).layer).toBe('vernacular');
   });
 
@@ -280,7 +312,7 @@ describe('inheriting a foundation this install pulled from a peer (#7461)', () =
     expect((await listEidoverseFoundations()).counts).toMatchObject({ vernacular: 0, baseline: 0, inherited: 0 });
   });
 
-  it('refuses to package or promote an inherited record without touching the ledger, even though its contributionId is registered locally', async () => {
+  it('refuses to package or promote an inherited record without touching the ledger, even though its own body is replayable here', async () => {
     const candidate = await peerCandidate();
     rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
     const inherited = await recordEidoverseFoundationInheritance(candidate, {
@@ -289,10 +321,10 @@ describe('inheriting a foundation this install pulled from a peer (#7461)', () =
     const storageKey = inheritedFoundationStorageKey(inherited.foundation.provenance.originInstanceId, inherited.foundation.id);
     expect(inherited.outcome).toBe('inherited');
 
-    // The candidate's `contributionId` ('beacon-relay-demo') IS registered
-    // locally, so a guard that fired too late (after resolving the
-    // contribution) would run the assay and could package it instead of
-    // refusing. If the record is untouched afterward, nothing ran.
+    // The candidate's body names a controller this install DOES ship, so a
+    // guard that fired too late (after deriving the sandbox) would run the
+    // assay against a peer's body and could package it instead of refusing.
+    // If the record is untouched afterward, nothing ran.
     const before = await getEidoverseFoundation(storageKey);
     const packaged = await packageEidoverseFoundationCandidate(storageKey, { now: '2026-03-04T07:00:00.000Z' });
     const promoted = await promoteEidoverseFoundation(storageKey, { now: '2026-03-04T07:00:00.000Z' });
@@ -454,7 +486,7 @@ describe('building on a foundation inherited from a peer (#7631)', () => {
 
     const promoted = await promoteEidoverseFoundation('my-own-beacon', { now: '2026-03-04T00:00:00.000Z' });
     expect(promoted.outcome).toBe('promoted');
-    expect(promoted.candidate.candidateVersion).toBe(2);
+    expect(promoted.candidate.candidateVersion).toBe(EIDOVERSE_FOUNDATION_CANDIDATE_VERSION);
     expect(promoted.candidate.derivedFrom).toEqual(derived.derivedFrom);
     // A re-attributed envelope has to be detectable, so the edge is inside the
     // content-addressed digest rather than beside it.
@@ -500,7 +532,20 @@ describe('building on a foundation inherited from a peer (#7631)', () => {
     // The laundering the storage key made free: the origin is the field that
     // chooses the key, the sender hashes its own claims, so re-fingerprinting
     // an altered body under someone else's origin self-verifies.
-    const forged = { ...candidate, body: { affordance: { inspect: 'quietly grants owner role' } } };
+    //
+    // The forgery is made INTERNALLY CONSISTENT under #7625 — a re-derived
+    // binding label, and assay evidence recorded against it — precisely so this
+    // test still proves what it is named for. A forger who re-fingerprints can
+    // re-derive a label just as easily, and an envelope that tripped the
+    // binding check would never reach the origin guard this asserts on.
+    const forgedBody = { affordance: { inspect: 'quietly grants owner role' } };
+    const forgedLabel = derivedContributionId({ kind: candidate.kind, id: candidate.foundationId, body: forgedBody });
+    const forged = {
+      ...candidate,
+      body: forgedBody,
+      contributionId: forgedLabel,
+      assay: { ...candidate.assay, contributionId: forgedLabel },
+    };
     forged.fingerprint = foundationCandidateFingerprint({ ...forged, fingerprint: undefined });
 
     const result = await recordEidoverseFoundationInheritance(forged, {
@@ -515,7 +560,12 @@ describe('building on a foundation inherited from a peer (#7631)', () => {
     expect(held.inheritance.sourceInstanceId).toBe('instance-peer-one');
   });
 
-  it('still accepts a v1 envelope from a peer that has not upgraded', async () => {
+  it('refuses a pre-v3 envelope from a peer that has not upgraded, and stores nothing (#7625)', async () => {
+    // v1 and v2 evidence was recorded against a contribution the SENDER named,
+    // with no required relationship to the body beside it, so inheriting on it
+    // would import a passing verdict about something else. There is nothing to
+    // upgrade, so the accept side refuses rather than storing a record it would
+    // have to distrust.
     const { candidate } = await inheritPeerFoundation();
     rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
 
@@ -526,8 +576,10 @@ describe('building on a foundation inherited from a peer (#7631)', () => {
       sourceInstanceId: 'instance-peer-one', localInstanceId: 'instance-this-install', now: '2026-03-03T00:00:00.000Z',
     });
 
-    expect(result.outcome).toBe('inherited');
-    expect(result.foundation.derivedFrom).toBeNull();
+    expect(result.outcome).toBe('refused');
+    expect(result.reasons[0]).toContain('candidate v1');
+    expect(result.reasons[0]).toContain(`requires v${EIDOVERSE_FOUNDATION_CANDIDATE_VERSION}`);
+    expect(await getEidoverseFoundation(inheritedFoundationStorageKey(PEER_ORIGIN, 'tide-beacon'))).toBeNull();
   });
 });
 

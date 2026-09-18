@@ -35,7 +35,6 @@ import {
   recordEidoverseFoundation,
   withdrawEidoverseFoundation,
 } from '../services/eidoverseFoundationLedger.js';
-import { listRegisteredContributionIds } from '../services/eidoverseResilienceContributions.js';
 import { describeControllerDefinitions } from '../services/eidoverseControllerRegistry.js';
 import {
   getEidoverseControllerInstall,
@@ -118,12 +117,12 @@ router.get('/foundations', asyncHandler(async (_req, res) => {
   res.json(await listEidoverseFoundations());
 }));
 
-// GET /api/eidoverse/world/contributions — the resilience-assay contributions
-// a foundation may bind itself to. Its own path rather than a
-// `/foundations/<something>` one, so no foundation id can ever shadow it.
-router.get('/contributions', asyncHandler(async (_req, res) => {
-  res.json({ contributions: await listRegisteredContributionIds() });
-}));
+// `GET /contributions` lived here until #7625. It listed the resilience-assay
+// contribution ids a foundation could bind itself to — and naming one was
+// sufficient to clear the promote gate, which is the hole #7625 closed. The
+// gate now derives the sandbox from the foundation's own body, so there is
+// nothing to bind to; an author choosing a `controller` behaviour reads
+// `GET /controllers` below, which already projects the shipped registry.
 
 // POST /api/eidoverse/world/foundations — record (or re-author) a local
 // vernacular foundation. The ownership layer is not accepted from the caller:

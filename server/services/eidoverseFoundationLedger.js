@@ -22,10 +22,15 @@
  * install's own work'.
  *
  * **The promote gate runs the agent-free assay; it never accepts a verdict.**
- * `packageEidoverseFoundationCandidate()` resolves the foundation's declared
- * contribution by ID through `eidoverseResilienceContributions.js`, replays it
+ * `packageEidoverseFoundationCandidate()` DERIVES the sandbox from the
+ * foundation's own body (`lib/eidoverseFoundationSandbox.js`, #7625), replays it
  * through `runResilienceAssay()` (#7460), and packages against the verdict it
- * just produced. A caller — a route, a mind tool — therefore cannot assert that
+ * just produced. Deriving rather than resolving a caller-supplied
+ * `contributionId` is what makes 'what was evaluated' and 'what gets promoted'
+ * the same object: the id used to be free text, so a local build could name a
+ * shipped demo fixture and promote on evidence about the fixture.
+ *
+ * A caller — a route, a mind tool — therefore cannot assert that
  * its build survived its author's absence; it can only ask for the check. That
  * is the same proposal-versus-consequence separation #7454 gave the
  * construction tools, applied to promotion.
@@ -60,6 +65,7 @@ import { getPortosVersion } from '../lib/schemaVersions.js';
 import {
   DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
   assayEvidenceFromVerdict,
+  derivedContributionId,
   eidoverseFoundationInputSchema,
   foundationFromInheritedCandidate,
   foundationLedgerKey,
@@ -79,7 +85,8 @@ import {
   tombstoneTimestamp,
 } from '../lib/tombstones.js';
 import { RESILIENCE_DISTURBANCES, runResilienceAssay } from './eidoverseResilienceAssay.js';
-import { findContributionById } from './eidoverseResilienceContributions.js';
+import { foundationSandbox } from '../lib/eidoverseFoundationSandbox.js';
+import { findControllerDefinitionById } from './eidoverseControllerRegistry.js';
 
 /**
  * Storage-layout version stamped on `data/eidoverse/foundations.json`.
@@ -402,7 +409,12 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
       kind: authored.kind,
       title: authored.title,
       summary: authored.summary,
-      contributionId: authored.contributionId,
+      // DERIVED, never authored (#7625): the assay replays this foundation's
+      // own body, so the label that binds evidence to it is computed from that
+      // body — the STORED one derived just above, which is what the sandbox
+      // will actually replay. A caller that could name the label could point
+      // the gate at a shipped demo fixture and inherit its passing verdict.
+      contributionId: derivedContributionId({ kind: authored.kind, id: authored.id, body }),
       body,
       style: authored.style,
       provenance: existing?.provenance || { originInstanceId, authorKind: authored.authorKind, createdAt: now },
@@ -465,11 +477,10 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
   if (!existing) return unknownFoundation(id);
   // Refused before resolving or replaying ANYTHING: `packageFoundationCandidate`
   // (the pure lib) refuses an inherited record too, but only after running the
-  // assay against whatever `contributionId` it names. This is a local copy of a
-  // PEER's declared contribution id — replaying it here would be exactly the
-  // "run arbitrary code pulled from a peer" this install's own assay harness
-  // exists to keep off every OTHER install, even though `findContributionById`
-  // only ever resolves this install's own fixed local registry.
+  // assay against the body it carries. That body came from a PEER — replaying
+  // it here would be exactly the "run arbitrary code pulled from a peer" this
+  // install's own assay harness exists to keep off every OTHER install, even
+  // though the derivation only ever executes code PortOS itself ships.
   if (existing.inheritance) {
     return verdict('refused', [`inherited from another install (${existing.inheritance.originInstanceId}) — promotion re-shares only foundations this install authored`]);
   }
@@ -477,10 +488,14 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
   // Outside the ledger lock: replaying a contribution is the slow part, and it
   // reads nothing from the ledger. The lock below re-reads the record and
   // re-checks that the body has not been re-authored underneath the verdict.
-  const contribution = await findContributionById(existing.contributionId);
-  if (!contribution) {
-    return verdict('refused', [`no resilience-assay contribution is registered under "${existing.contributionId}" — a foundation is promotable only once it can be replayed without its author`]);
-  }
+  //
+  // The sandbox is derived from THIS FOUNDATION'S OWN BODY (#7625). It used to
+  // be resolved by the id the author typed, so the gate replayed whatever
+  // module was named and the verdict described that module rather than this
+  // build. A body with no derivable sandbox is refused with the reason, which
+  // is the honest answer: nothing can replay it without its author.
+  const { contribution, refusal } = await foundationSandbox(existing, { findControllerDefinition: findControllerDefinitionById });
+  if (refusal) return verdict('refused', [refusal]);
   const assay = assayEvidenceFromVerdict(runResilienceAssay(contribution), { ranAt: now });
   // Read after the early returns: `getPortosVersion()` re-reads and re-parses
   // package.json on every call, and a request naming an id this install never
@@ -495,8 +510,12 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
       return verdict('refused', ['the foundation was re-authored while the assay was running — package it again']);
     }
 
+    // `contributionId` is re-derived here rather than read off the record, so a
+    // record written before #7625 (or restored from a backup that predates it)
+    // heals on its next package attempt instead of failing the pure gate's
+    // binding backstop forever.
     const result = packageFoundationCandidate({
-      record: { ...current, assay, candidate: null },
+      record: { ...current, contributionId: contribution.id, assay, candidate: null },
       requiredDisturbances: RESILIENCE_DISTURBANCES,
       portosVersion,
       now,
@@ -506,7 +525,7 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
     // report a re-authoring that never happened. A refusal also clears any
     // previously packaged candidate — the verdict that vouched for it no
     // longer holds, even though the bytes are unchanged.
-    foundations[id] = { ...current, assay, candidate: result.candidate };
+    foundations[id] = { ...current, contributionId: contribution.id, assay, candidate: result.candidate };
     await writeLedger({ foundations, tombstones });
     return { ...result, assay };
   });
