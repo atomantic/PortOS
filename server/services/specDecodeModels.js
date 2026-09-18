@@ -118,9 +118,23 @@ export function pickGgufSibling(model, { file, quant, repo, role = 'model' }) {
   if (!all.length) {
     throw new ServerError(`Hugging Face repo ${repo} publishes no .gguf file`, { status: 422, code: 'SPEC_NO_GGUF' });
   }
+  const wantsProjector = role === 'projector';
   if (file) {
     const exact = all.find((name) => name === file);
-    if (exact) return exact;
+    // A pin disambiguates WITHIN a role; it does not reassign the role. Before
+    // the projector role existed, naming an `mmproj-` file by hand was the only
+    // way to fetch one, so the pin was allowed to escape the filter below —
+    // which now means a `model`-role pin could land a 629 MB vision sidecar in
+    // the path the launcher hands `-m`, and llama-server would fail at load with
+    // the file sitting there satisfying every existence check. The role has its
+    // own entry now, so the escape hatch is closed rather than kept.
+    if (exact && isProjectorName(exact) === wantsProjector) return exact;
+    if (exact) {
+      throw new ServerError(
+        `The ${SPEC_ROLE_LABELS[role] || role} for this preset pins ${file}, which is ${wantsProjector ? 'not a projector (mmproj) sidecar' : 'a projector (mmproj) sidecar, not loadable weights'} — fix the preset entry rather than downloading it into that path.`,
+        { status: 422, code: 'SPEC_FILE_ROLE_MISMATCH' },
+      );
+    }
     // A pin is authoritative, never a preference: a preset carries `file` only
     // because its repo's quant tag CANNOT discriminate the target (Muse-Glimmer
     // tags the projector and the drafter Q4_K_M too). Falling through to the
@@ -138,9 +152,9 @@ export function pickGgufSibling(model, { file, quant, repo, role = 'model' }) {
   // so for a language-weight role shortest-name-wins below would hand one back —
   // and it would then satisfy the launcher's existence check and fail at load.
   // For the `projector` role the same test inverts: the language packs are the
-  // files that must not be selected. Either way an explicit `file` outranks this,
-  // which is why the filter sits after the exact-match branch.
-  const wantsProjector = role === 'projector';
+  // files that must not be selected. An explicit `file` still outranks the quant
+  // hint — that is why the pin branch sits above — but it is held to this same
+  // partition, so neither path can cross roles.
   const ggufs = all.filter((name) => isProjectorName(name) === wantsProjector);
   if (!ggufs.length) {
     throw new ServerError(

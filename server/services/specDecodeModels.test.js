@@ -91,10 +91,22 @@ describe('pickGgufSibling', () => {
       .toThrow(/projector \(mmproj\) sidecars/i);
   });
 
-  it('still honours an explicit projector filename', () => {
+  // Naming an `mmproj-` file by hand used to be the only way to fetch a
+  // projector, so the pin was allowed to escape the projector filter. The
+  // `projector` role replaced that escape hatch (#7611), and a pin is now held
+  // to its role's half of the repo — otherwise a `model`-role pin would land a
+  // vision sidecar in the path the launcher hands `-m`, where it satisfies every
+  // existence check and fails at load.
+  it('honours an explicit projector filename only under the projector role', () => {
     const model = siblings('model-Q4_K_M.gguf', 'mmproj-model-Q4_K_M.gguf');
-    expect(pickGgufSibling(model, { file: 'mmproj-model-Q4_K_M.gguf', quant: 'Q4_K_M', repo: 'o/r' }))
+    expect(pickGgufSibling(model, { file: 'mmproj-model-Q4_K_M.gguf', quant: 'Q4_K_M', repo: 'o/r', role: 'projector' }))
       .toBe('mmproj-model-Q4_K_M.gguf');
+    expect(() => pickGgufSibling(model, { file: 'mmproj-model-Q4_K_M.gguf', quant: 'Q4_K_M', repo: 'o/r' }))
+      .toThrow(/projector \(mmproj\) sidecar, not loadable weights/i);
+    // And the mirror: a projector role pinned at language weights is the same
+    // authoring mistake, caught rather than downloaded into the mmproj path.
+    expect(() => pickGgufSibling(model, { file: 'model-Q4_K_M.gguf', repo: 'o/r', role: 'projector' }))
+      .toThrow(/not a projector/i);
   });
 
   // The preset pins `file` precisely because the quant hint is ambiguous here;
