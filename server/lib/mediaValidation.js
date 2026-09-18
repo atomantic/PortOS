@@ -250,6 +250,10 @@ export const localLlmMigrateSchema = z.object({
   mode: z.enum(['link', 'copy']).optional().default('link'),
 });
 export const localLlmInstallBackendSchema = z.object({ backend: localLlmBackendSchema });
+// The jev scorer route input IS the service contract — declared once beside the
+// pinned model descriptor (lib/jev.js) and re-exported here so routes keep
+// importing every schema from validation.js.
+export { jevScoreRequestSchema as localLlmJevScoreSchema } from './jev.js';
 export const localPersistentMindSetupApplySchema = z.object({
   setMindProfile: z.boolean().optional(),
   modelId: z.string().trim().max(200).optional(),

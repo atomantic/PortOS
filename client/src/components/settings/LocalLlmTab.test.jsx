@@ -16,6 +16,9 @@ vi.mock('./LocalLlmLibraryView.jsx', () => ({
 vi.mock('../models/ModelAbuseGuardPanel.jsx', () => ({
   default: () => <div data-testid="abuse-view">abuse</div>,
 }));
+vi.mock('../models/JevPanel.jsx', () => ({
+  default: () => <div data-testid="jev-view">jev</div>,
+}));
 
 import { LocalLlmTab } from './LocalLlmTab';
 
@@ -61,7 +64,7 @@ describe('LocalLlmTab view dispatch', () => {
   it('no longer advertises Runtimes as one of its pills', () => {
     renderTab();
 
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard', 'jev']);
   });
 
   it('navigates between the focused panels with a shareable URL', () => {
@@ -71,6 +74,8 @@ describe('LocalLlmTab view dispatch', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/library');
     fireEvent.click(screen.getByRole('tab', { name: 'Abuse Guard' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/abuse');
+    fireEvent.click(screen.getByRole('tab', { name: 'jev' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/jev');
   });
 
   it('describes the selected panel under the pills', () => {

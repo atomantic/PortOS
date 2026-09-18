@@ -123,6 +123,7 @@ const PORTS = {
   WHISPER: 5562,       // Loopback whisper.cpp speech-to-text server
   EIDOVERSE_HOST: 5563, // Optional HTTPS/WebSocket bridge to Eidoverse Worlds on :8940
   SLOTSTREAM: 5564,    // Loopback SSD-streaming MoE runtime (never 11434 — that collides with Ollama)
+  JEV: 5566,           // Loopback openjev entailment scorer. On-demand sidecar started by services/jev.js on first score, reaped when idle.
   LLAMA_SERVER: 5568,  // Loopback llama.cpp speculative-decoding server
   FLEET_LLM: 18022, // Authenticated shared inference queue for dedicated hosts
 

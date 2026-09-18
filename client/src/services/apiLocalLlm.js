@@ -38,6 +38,24 @@ export const cancelModelAbuseGuardInstall = (options) =>
     ...options,
   });
 
+// The jev entailment scorer's own lifecycle, separate from the chat catalog
+// and from Prompt Guard's.
+export const getJevStatus = (options) => request('/local-llm/jev/status', options);
+
+export const installJev = (options) =>
+  request('/local-llm/jev/install', { method: 'POST', body: '{}', ...options });
+
+export const cancelJevInstall = (options) =>
+  request('/local-llm/jev/install/cancel', { method: 'POST', body: '{}', ...options });
+
+// Starts the sidecar on first use, so this is only ever called from an explicit
+// operator action.
+export const scoreJev = (body, options) =>
+  request('/local-llm/jev/score', { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const unloadJev = (options) =>
+  request('/local-llm/jev/unload', { method: 'POST', body: '{}', ...options });
+
 export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12) =>
   request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
 

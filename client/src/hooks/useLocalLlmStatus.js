@@ -63,7 +63,7 @@ export default function useLocalLlmStatus({ onRefresh, onReload } = {}) {
       // per model, so answering them would reload the status AND re-query the
       // Hugging Face catalog once per measured model, all night. This tab owns
       // the unscoped install/migrate/upgrade frames only.
-      if (data?.scope === 'assessment' || data?.scope === 'assessment-sweep' || data?.scope === 'security-guard') return;
+      if (data?.scope === 'assessment' || data?.scope === 'assessment-sweep' || data?.scope === 'security-guard' || data?.scope === 'jev') return;
       clearTimeout(progressTimer.current);
       setProgressMsg(data.message || '');
       if (data.event === 'complete') {

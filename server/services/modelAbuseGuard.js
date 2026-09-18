@@ -43,6 +43,7 @@ import {
   normalizeModelAbuseGuardResult,
 } from '../lib/modelAbuseGuard.js';
 import { findCachedRepoFiles, getHfCacheRoot } from '../lib/hfCache.js';
+import { diagnosePythonRuntimeText } from '../lib/pythonRuntimeDiagnosis.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { publicReviewProviderBlock, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
@@ -328,21 +329,14 @@ function availableGuardPython() {
 
 // Never return raw subprocess output: it can contain tokens, private paths,
 // or authenticated package-index URLs. Match evidence to static diagnoses.
-function setupIssue(text, fallback = 'runtime-check-failed') {
-  const missing = MODEL_ABUSE_GUARD_PYTHON_IMPORTS.find((name) => String(text || '').includes(`No module named '${name}'`));
-  if (missing) return { code: 'package-missing', package: missing, message: `The classifier package ${missing} is missing.`, action: 'Repair model-abuse guard to install the pinned packages.' };
-  const diagnoses = [
-    [/No module named/, 'package-missing', 'A classifier package or dependency is missing.', 'Repair model-abuse guard to install the pinned packages.'],
-    [/CERTIFICATE_VERIFY_FAILED|certificate verify failed/i, 'certificate-failed', 'Python could not verify the package server certificate.', 'Repair Python certificate trust, then retry installation.'],
-    [/No matching distribution|Could not find a version that satisfies/i, 'wheel-unavailable', 'A pinned package has no matching distribution for this Python and platform.', 'Use a Python version and platform supported by the pinned packages, then repair the runtime.'],
-    [/ResolutionImpossible|conflicting dependencies/i, 'dependency-conflict', 'The classifier dependencies could not be resolved.', 'Check the pinned package compatibility before retrying.'],
-    [/No space left on device/i, 'disk-full', 'There is not enough disk space for the classifier.', 'Free disk space, then retry installation.'],
-    [/timed? ?out|ReadTimeout|ConnectionError|NameResolution|Temporary failure|Network is unreachable|No route to host|connection error|NewConnectionError/i, 'network-failed', 'The download could not reach its server.', 'Check this machine’s network and Python connection to the download server, then retry.'],
-  ];
-  const match = diagnoses.find(([pattern]) => pattern.test(String(text || '')));
-  if (match) return { code: match[1], message: match[2], action: match[3] };
-  return { code: fallback, message: 'The dedicated classifier runtime could not be verified.', action: 'Repair model-abuse guard and inspect the reported install stage and exit code.' };
-}
+// The table itself is shared with the jev scorer (lib/pythonRuntimeDiagnosis.js)
+// — same failure vocabulary, different package noun and repair label.
+const setupIssue = (text, fallback = 'runtime-check-failed') => diagnosePythonRuntimeText(text, {
+  subject: 'classifier',
+  repairLabel: 'model-abuse guard',
+  imports: MODEL_ABUSE_GUARD_PYTHON_IMPORTS,
+  fallback,
+});
 
 function probeScript() {
   const imports = MODEL_ABUSE_GUARD_PYTHON_IMPORTS

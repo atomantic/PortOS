@@ -19,6 +19,7 @@ import {
   localLlmUnloadSchema,
   localLlmMigrateSchema,
   localLlmInstallBackendSchema,
+  localLlmJevScoreSchema,
   localLlmOllamaServiceSchema,
   localLlmHuggingFaceSearchSchema,
   localLlmTestSchema,
@@ -60,6 +61,7 @@ import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDo
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/providerReadiness.js'
 import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
+import { JEV_MODEL } from '../lib/jev.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import {
@@ -74,6 +76,7 @@ import {
   describeInstallProgress
 } from '../services/localLlm.js'
 import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall } from '../services/modelAbuseGuard.js'
+import { cancelJevInstall, decide, getJevStatus, installJev, stopJevSidecar } from '../services/jev.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
@@ -212,6 +215,10 @@ router.get('/catalog', asyncHandler(async (req, res) => {
     // the catalog response so the UI can highlight the safety recommendation
     // without making it selectable in any normal provider/model picker.
     securityGuards: [MODEL_ABUSE_GUARD],
+    // Same guarantee, separate key: jev is a managed entailment scorer, not a
+    // chat model. Neither descriptor is ever merged into `models`, so no
+    // provider/model picker can offer either one.
+    decisionScorers: [JEV_MODEL],
     systemMemoryGb: Math.round(systemMemoryBytes / 1024 ** 3),
   })
 }))
@@ -251,6 +258,53 @@ router.post('/security-guard/install', asyncHandler(async (req, res) => {
 router.post('/security-guard/install/cancel', asyncHandler(async (_req, res) => {
   cancelModelAbuseGuardInstall()
   res.json({ cancelled: true })
+}))
+
+// The jev scorer mirrors the guard's lifecycle: a pinned, offline model with
+// its own venv and its own installer, never reachable through the general
+// chat-model path.
+router.get('/jev/status', asyncHandler(async (_req, res) => {
+  res.json(await getJevStatus())
+}))
+
+router.post('/jev/install', asyncHandler(async (req, res) => {
+  const emit = emitter(req)
+  const result = await installJev({
+    onEvent: ({ event, message, stage }) => emit(event, message, { scope: 'jev', stage }),
+  })
+  if (!result?.ok) {
+    const code = result?.code || 'jev-install-failed'
+    const message = code === 'jev-python-unavailable'
+      ? 'Install Python 3.10 or newer on this machine, restart PortOS if needed to detect it, then refresh jev status.'
+      : code === 'jev-runtime-install-failed'
+        ? 'Scorer package installation failed. Check internet access and Python compatibility, then retry from Models > LLMs > jev.'
+        : code === 'jev-model-download-failed'
+          ? 'The pinned jev model snapshot could not be downloaded. Check internet access and free disk space, then retry.'
+          : code
+    const detail = result?.diagnostic
+    const actionableMessage = detail ? `${message} ${detail.message} ${detail.action}` : message
+    emit('error', actionableMessage, { scope: 'jev', stage: detail?.stage })
+    throw new ServerError(actionableMessage, { status: 502, code })
+  }
+  res.json(result)
+}))
+
+router.post('/jev/install/cancel', asyncHandler(async (_req, res) => {
+  cancelJevInstall()
+  res.json({ cancelled: true })
+}))
+
+// An explicit operator action in the same request, per the AI Provider Usage
+// Policy: this is the only path that starts the sidecar, and it starts it
+// because someone asked for a score.
+router.post('/jev/score', asyncHandler(async (req, res) => {
+  const { premise, hypotheses, minMargin } = validateRequest(localLlmJevScoreSchema, req.body)
+  res.json(await decide({ premise, options: hypotheses, minMargin }))
+}))
+
+// Free the resident weights without waiting out the idle timer.
+router.post('/jev/unload', asyncHandler(async (_req, res) => {
+  res.json({ unloaded: stopJevSidecar() })
 }))
 
 // GET /api/local-llm/huggingface-search?backend=ollama&q=qwen&category=coding
