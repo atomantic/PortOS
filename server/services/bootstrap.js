@@ -114,6 +114,7 @@ import { startBeeperAttachmentGc } from './beeperAttachmentGc.js';
 import { initBridge as initBrainMemoryBridge } from './brainMemoryBridge.js';
 import { initDrillCache } from './meatspacePostDrillCache.js';
 import { registerPostReminderSchedule } from './meatspacePostReminder.js';
+import { registerAutobiographyReminderSchedule } from './autobiographyReminder.js';
 import { recoverInterruptedRepoClones, recoverStuckClassifications } from './brain.js';
 import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
@@ -440,6 +441,10 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // was down (or during a redeploy) still fires once we're back up, instead of
   // silently waiting for tomorrow's tick (#2015).
   registerPostReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ POST reminder init failed', err));
+  // Register the optional daily autobiography story prompt (opt-in, off by
+  // default, and only when the instance feature is on) — deterministic prompt
+  // bank, no LLM calls. Same catch-up rationale as the POST reminder above.
+  registerAutobiographyReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ Autobiography reminder init failed', err));
   // Initialize backup scheduler for daily data backups
   startBackupScheduler().catch(err => logBootstrapFailure('❌ Backup scheduler init failed', err));
   // Automatic PortOS self-update — OFF by default. When the user turns it on

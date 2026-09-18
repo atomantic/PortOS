@@ -766,9 +766,10 @@ export async function getDigitalTwinSnapshot() {
   // re-materialized whenever the dir fingerprint changes (every sync cycle on a
   // checksum-cache miss), so the parallelism is worth it.
   // autobiography/config.json (the prompt schedule: enabled, intervalHours,
-  // lastPromptAt) is deliberately NOT in the snapshot — it is machine-local
-  // scheduling state, and a fresh peer must not inherit another machine's
-  // cadence or have prompts enabled without local opt-in. Only the stories sync.
+  // lastPromptAt, and the daily reminder's enabled/time) is deliberately NOT in
+  // the snapshot — it is machine-local scheduling state, and a fresh peer must
+  // not inherit another machine's cadence, wake-up time, or have prompts
+  // enabled without local opt-in. Only the stories sync.
   const [identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, stories, socialAccounts] =
     await Promise.all([
       readJSONFile(IDENTITY_FILE, null, { strict: true }),

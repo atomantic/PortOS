@@ -18,6 +18,7 @@ const mockNotificationExists = vi.fn(() => false);
 vi.mock('./notifications.js', () => ({
   addNotification: (...args) => mockAddNotification(...args),
   NOTIFICATION_TYPES: { AUTOBIOGRAPHY_PROMPT: 'autobiography_prompt' },
+  PRIORITY_LEVELS: { LOW: 'low', MEDIUM: 'medium', HIGH: 'high', CRITICAL: 'critical' },
   exists: (...args) => mockNotificationExists(...args)
 }));
 
@@ -81,7 +82,13 @@ import {
   depthGuidanceForChain,
   generateFollowUps,
   getStoryChain,
-  weaveChainNarrative
+  weaveChainNarrative,
+  getPromptSuggestions,
+  sendStoryPrompt,
+  evaluateStory,
+  autobiographyConfigEvents,
+  PROMPT_SUGGESTION_COUNT,
+  CUSTOM_PROMPT_ID
 } from './autobiography.js';
 
 // Helper: build stories data
@@ -111,6 +118,18 @@ const setupMocks = (storiesData, configData) => {
   });
 };
 
+// Capture what the service writes to stories.json (config writes are routed to
+// the same mocked writeFile, so the discriminator lives here rather than in
+// each test). `.value` stays null when nothing was written, which is itself
+// the assertion in the "must not persist" cases.
+const captureSavedStories = () => {
+  const box = { value: null };
+  writeFile.mockImplementation(async (filePath, content) => {
+    if (!filePath.includes('config.json')) box.value = JSON.parse(content);
+  });
+  return box;
+};
+
 const setupPersistentMocks = (storiesData, configData) => {
   let storedStories = JSON.parse(JSON.stringify(storiesData));
   let storedConfig = JSON.parse(JSON.stringify(configData));
@@ -133,14 +152,18 @@ const setupPersistentMocks = (storiesData, configData) => {
 };
 
 describe('Autobiography - getThemes', () => {
-  it('should return all 12 themes with prompt counts', () => {
+  it('should return all 12 bank themes with prompt counts, plus the custom pseudo-theme', () => {
     const themes = getThemes();
 
-    expect(themes).toHaveLength(12);
+    // 12 bank themes of 5 prompts each, then 'custom' — which has no bank
+    // prompts by definition but needs a filter chip for the stories written
+    // against a question the user typed themselves.
+    expect(themes).toHaveLength(13);
     expect(themes[0]).toHaveProperty('id');
     expect(themes[0]).toHaveProperty('label');
     expect(themes[0]).toHaveProperty('promptCount');
-    expect(themes.every(t => t.promptCount === 5)).toBe(true);
+    expect(themes.slice(0, 12).every(t => t.promptCount === 5)).toBe(true);
+    expect(themes[12]).toEqual({ id: 'custom', label: 'Your Own Question', promptCount: 0 });
   });
 
   it('should include expected theme IDs', () => {
@@ -638,16 +661,19 @@ describe('Autobiography - checkAndPrompt', () => {
     expect(result.reason).toBe('not_due');
   });
 
-  it('should return pending_notification when one already exists', async () => {
+  // Regression: the cadence guard is the interval since `lastPromptAt`, NOT
+  // "does a notification of this type already exist". `notifications.exists`
+  // matches ANY notification of the type ever created, read or not — gating on
+  // it silenced the daily prompt permanently after its very first nudge.
+  it('prompts again on the next interval even though earlier prompts are still in the tray', async () => {
     mockNotificationExists.mockResolvedValue(true);
     const oldTime = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(); // 48 hours ago
     setupMocks(makeStoriesData(), makeConfigData({ lastPromptAt: oldTime }));
 
     const result = await checkAndPrompt();
 
-    expect(result.prompted).toBe(false);
-    expect(result.reason).toBe('pending_notification');
-    expect(mockNotificationExists).toHaveBeenCalledWith('autobiography_prompt');
+    expect(result.prompted).toBe(true);
+    expect(mockAddNotification).toHaveBeenCalledTimes(1);
   });
 
   it('should create notification when prompt is due', async () => {
@@ -897,5 +923,238 @@ describe('Autobiography - weaveChainNarrative', () => {
 
     const result = await weaveChainNarrative('s1');
     expect(result.error).toMatch(/empty narrative/);
+  });
+});
+
+// =============================================================================
+// STORY IDEAS, OWN QUESTIONS, THE DAILY PROMPT, AND CRAFT EVALUATION
+// =============================================================================
+
+describe('Autobiography - getPromptSuggestions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    writeFile.mockImplementation(async () => {});
+  });
+
+  it('offers a menu of ideas drawn from DISTINCT themes', async () => {
+    setupMocks(makeStoriesData(), makeConfigData());
+
+    const suggestions = await getPromptSuggestions();
+
+    expect(suggestions).toHaveLength(PROMPT_SUGGESTION_COUNT);
+    const themeIds = suggestions.map(p => p.themeId);
+    expect(new Set(themeIds).size).toBe(themeIds.length);
+  });
+
+  it('never re-offers a prompt already written against', async () => {
+    const allButThree = getThemes()
+      .filter(t => t.promptCount > 0)
+      .flatMap(t => Array.from({ length: t.promptCount }, (_, i) => `${t.id}-${i}`))
+      .slice(0, -3);
+    setupMocks(makeStoriesData({ usedPrompts: allButThree }), makeConfigData());
+
+    const suggestions = await getPromptSuggestions();
+
+    expect(suggestions).toHaveLength(3);
+    for (const prompt of suggestions) {
+      expect(allButThree).not.toContain(prompt.id);
+    }
+  });
+});
+
+describe('Autobiography - stories answering your own question', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    writeFile.mockImplementation(async () => {});
+  });
+
+  it('files a custom-question story under the custom theme with the question as its promptText', async () => {
+    setupMocks(makeStoriesData(), makeConfigData());
+
+    const story = await saveStory({
+      promptId: CUSTOM_PROMPT_ID,
+      content: 'It started at my grandmother’s kitchen table.',
+      customPromptText: 'Why do I like black licorice?'
+    });
+
+    expect(story.themeId).toBe('custom');
+    expect(story.themeLabel).toBe('Your Own Question');
+    expect(story.promptText).toBe('Why do I like black licorice?');
+  });
+
+  it('does not burn a bank slot on the custom sentinel', async () => {
+    const savedStories = captureSavedStories();
+    setupMocks(makeStoriesData(), makeConfigData());
+
+    await saveStory({
+      promptId: CUSTOM_PROMPT_ID,
+      content: 'A story.',
+      customPromptText: 'Why do I like black licorice?'
+    });
+
+    // 'custom' in usedPrompts would occupy a slot no bank prompt can match,
+    // delaying the bank's cycle reset forever.
+    expect(savedStories.value.usedPrompts).not.toContain(CUSTOM_PROMPT_ID);
+  });
+});
+
+describe('Autobiography - sendStoryPrompt', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAddNotification.mockResolvedValue({});
+    mockNotificationExists.mockResolvedValue(false);
+    writeFile.mockImplementation(async () => {});
+  });
+
+  it('carries the whole menu of ideas, not just the one it leads with', async () => {
+    setupMocks(makeStoriesData(), makeConfigData());
+
+    const result = await sendStoryPrompt();
+
+    expect(result.prompted).toBe(true);
+    expect(result.suggestions).toHaveLength(PROMPT_SUGGESTION_COUNT);
+    const notification = mockAddNotification.mock.calls[0][0];
+    expect(notification.metadata.suggestions).toHaveLength(PROMPT_SUGGESTION_COUNT);
+    // The alternates are visible in the description too — a notification the
+    // user reads without opening the app should still offer the choice.
+    expect(notification.description).toContain(result.suggestions[1].text);
+  });
+
+  // sendStoryPrompt has no cadence guard of its own by design — each caller
+  // owns one appropriate to it (the job's interval, the cron's local-day
+  // check). Pinned because the removed `exists(type)` guard was permanent, not
+  // per-day, and reinstating it here would silence the reminder for good.
+  it('sends regardless of how many earlier prompts are still in the tray', async () => {
+    mockNotificationExists.mockResolvedValue(true);
+    setupMocks(makeStoriesData(), makeConfigData());
+
+    const result = await sendStoryPrompt();
+
+    expect(result.prompted).toBe(true);
+    expect(mockAddNotification).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Autobiography - config reminder slice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    writeFile.mockImplementation(async () => {});
+  });
+
+  it('defaults the reminder to off at 09:00 on a config saved before it existed', async () => {
+    setupMocks(makeStoriesData(), makeConfigData());
+
+    const config = await getConfig();
+
+    expect(config.reminder).toEqual({ enabled: false, time: '09:00' });
+  });
+
+  it('keeps the saved time when a patch only flips enabled, and stamps updatedAt', async () => {
+    setupMocks(makeStoriesData(), makeConfigData({ reminder: { enabled: false, time: '07:30' } }));
+
+    const config = await updateConfig({ reminder: { enabled: true } });
+
+    expect(config.reminder.time).toBe('07:30');
+    expect(config.reminder.enabled).toBe(true);
+    // The scheduler's catch-up refuses to replay a slot older than this.
+    expect(new Date(config.reminder.updatedAt).toISOString()).toBe(config.reminder.updatedAt);
+  });
+
+  it('announces the save so the scheduler can re-register without a route hook', async () => {
+    setupMocks(makeStoriesData(), makeConfigData());
+    const seen = [];
+    const listener = (payload) => seen.push(payload);
+    autobiographyConfigEvents.on('autobiography-config:updated', listener);
+
+    await updateConfig({ reminder: { time: '06:15' } });
+    autobiographyConfigEvents.off('autobiography-config:updated', listener);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].updates.reminder).toEqual({ time: '06:15' });
+    expect(seen[0].config.reminder.time).toBe('06:15');
+  });
+});
+
+describe('Autobiography - evaluateStory', () => {
+  const storyFixture = makeStoriesData({
+    stories: [{
+      id: 's1',
+      promptId: 'custom',
+      themeId: 'custom',
+      themeLabel: 'Your Own Question',
+      promptText: 'Why do I like black licorice?',
+      content: 'It started at my grandmother’s kitchen table.',
+      wordCount: 7,
+      createdAt: '2026-09-01T00:00:00.000Z'
+    }]
+  });
+
+  const wellFormedAnswer = JSON.stringify({
+    moves: {
+      curiosity: { score: 4, evidence: 'opens on a question', suggestion: 'hold the answer one beat longer' },
+      tension: { score: 3, evidence: '', suggestion: 'raise the stakes' },
+      specificity: { score: 5, evidence: 'the kitchen table', suggestion: 'keep it' },
+      pace: { score: 3, evidence: '', suggestion: 'slow the tasting' },
+      unexpected: { score: 2, evidence: '', suggestion: 'add a turn' },
+      personal: { score: 4, evidence: 'grandmother', suggestion: 'name the room' },
+      takeaway: { score: 1, evidence: '', suggestion: 'say what it meant' }
+    },
+    cart: {
+      context: { present: true, note: 'kitchen table' },
+      action: { present: true, note: 'the first taste' },
+      result: { present: true, note: '' },
+      takeaway: { present: false, note: 'missing' }
+    },
+    answersQuestion: true,
+    revision: 'End on what the taste stands in for.'
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    writeFile.mockImplementation(async () => {});
+    mockGetActiveProvider.mockResolvedValue({ id: 'p1', defaultModel: 'm1' });
+    mockCallProviderAISimple.mockResolvedValue({ text: wellFormedAnswer });
+  });
+
+  it('scores the story and persists the evaluation on it', async () => {
+    const savedStories = captureSavedStories();
+    setupMocks(storyFixture, makeConfigData());
+
+    const result = await evaluateStory('s1');
+
+    expect(result.evaluation.overallScore).toBe(3.1); // 22/7 = 3.14…
+    expect(result.evaluation.moves).toHaveLength(7);
+    expect(result.evaluation.weakestMoveId).toBe('takeaway');
+    expect(savedStories.value.stories[0].evaluation.overallScore).toBe(3.1);
+  });
+
+  it('sends the story and its question to the provider', async () => {
+    setupMocks(storyFixture, makeConfigData());
+
+    await evaluateStory('s1');
+
+    const prompt = mockCallProviderAISimple.mock.calls[0][2];
+    expect(prompt).toContain('Why do I like black licorice?');
+    expect(prompt).toContain('It started at my grandmother’s kitchen table.');
+  });
+
+  it('reports an unparseable answer instead of persisting an all-zero score', async () => {
+    const savedStories = captureSavedStories();
+    setupMocks(storyFixture, makeConfigData());
+    mockCallProviderAISimple.mockResolvedValue({ text: 'Sure! Here is my feedback…' });
+
+    const result = await evaluateStory('s1');
+
+    expect(result.error).toMatch(/parse/i);
+    expect(savedStories.value).toBeNull();
+  });
+
+  it('errors for an unknown story and when no provider is configured', async () => {
+    setupMocks(storyFixture, makeConfigData());
+
+    expect((await evaluateStory('nope')).error).toMatch(/not found/i);
+
+    mockGetActiveProvider.mockResolvedValue(null);
+    expect((await evaluateStory('s1')).error).toMatch(/provider/i);
   });
 });

@@ -61,9 +61,24 @@ async function goalCheckInGate() {
   return { shouldRun: false, reason: 'No active goals with target dates' };
 }
 
+/**
+ * Autobiography gate: the story prompt is an optional per-install feature, so
+ * the job stays silent on an install where the user turned it off — the job's
+ * own `enabled` flag governs the cadence, the feature flag governs whether the
+ * feature exists here at all.
+ */
+async function autobiographyPromptGate() {
+  const { isInstanceFeatureEnabled } = await import('./instanceFeatures.js');
+  if (await isInstanceFeatureEnabled('autobiography')) {
+    return { shouldRun: true, reason: 'Autobiography feature enabled' };
+  }
+  return { shouldRun: false, reason: 'Autobiography feature disabled on this instance' };
+}
+
 const GATES = Object.assign(Object.create(null), {
   'job-brain-review': brainReviewGate,
-  'job-goal-check-in': goalCheckInGate
+  'job-goal-check-in': goalCheckInGate,
+  'job-autobiography-prompt': autobiographyPromptGate
 });
 
 /**

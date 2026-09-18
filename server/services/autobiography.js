@@ -1,24 +1,50 @@
 /**
  * Autobiography Service
  *
- * Prompts the user on a regular basis to write 5-minute life stories
- * based on thematic prompts, building an autobiography over time.
+ * Prompts the user on a regular basis to write 5-minute life stories, building
+ * an autobiography over time. Every story answers a QUESTION — either one of
+ * the thematic prompts below (where the question is often implied: "Describe
+ * the house you grew up in") or a question the user writes themselves ("Why do
+ * I like black licorice?"). That framing is what the storytelling-craft
+ * evaluation scores against: a story that never answers its question has not
+ * landed, however well written it is.
  *
  * Stories are stored as part of the digital twin data.
  */
 
+import { EventEmitter } from 'events';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { deepMerge } from '../lib/objects.js';
 import { recordTombstone } from '../lib/tombstones.js';
 import { countWords } from '../lib/textUtils.js';
+import {
+  buildStoryCraftEvaluationPrompt,
+  normalizeStoryCraftEvaluation
+} from '../lib/storytellingCraft.js';
 import {
   queueAutobiographyConfigWrite,
   queueAutobiographyStoriesWrite
 } from './autobiographyFileQueues.js';
-import { addNotification, NOTIFICATION_TYPES, exists as notificationExists } from './notifications.js';
+import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
+
+// Tiny pub/sub, mirroring meatspacePost.js's postConfigEvents: the reminder
+// scheduler subscribes so ANY caller of updateConfig() reschedules the cron for
+// free, without this module importing back into the scheduler (a service cycle).
+export const autobiographyConfigEvents = new EventEmitter();
+
+// How many story ideas a prompt notification offers. One would be a command;
+// a short menu is an invitation, and the user picks whichever memory is
+// actually live for them today.
+export const PROMPT_SUGGESTION_COUNT = 3;
+
+// The promptId stories written against the user's own question carry. Not a
+// bank id, so getPromptById() returns null for it and the story's own
+// promptText is the only question of record.
+export const CUSTOM_PROMPT_ID = 'custom';
 
 const DATA_DIR = join(PATHS.digitalTwin, 'autobiography');
 const STORIES_FILE = join(DATA_DIR, 'stories.json');
@@ -164,7 +190,13 @@ const DEFAULT_CONFIG = {
   intervalHours: 24,
   enabled: false,
   lastPromptAt: null,
-  lastPromptId: null
+  lastPromptId: null,
+  // Opt-in daily reminder at a chosen local time (default OFF), the same shape
+  // and default the POST reminder uses. `enabled` above still governs the
+  // interval-based autonomous job; this slice governs the time-of-day cron in
+  // autobiographyReminder.js. Both funnel into sendStoryPrompt(), which is
+  // idempotent for the day, so turning on both cannot double-nudge.
+  reminder: { enabled: false, time: '09:00' }
 };
 
 const DEFAULT_DATA = {
@@ -193,7 +225,13 @@ async function saveStories(data) {
 
 async function loadConfig() {
   await ensureDir(DATA_DIR);
-  return readJSONFile(CONFIG_FILE, DEFAULT_CONFIG, { strict: true });
+  // Deep-merge onto a fresh clone of the defaults so a config written before
+  // the `reminder` slice existed still reads back with it — otherwise the
+  // scheduler would see `config.reminder` as undefined on every install that
+  // saved settings before this shipped.
+  const defaults = structuredClone(DEFAULT_CONFIG);
+  const stored = await readJSONFile(CONFIG_FILE, defaults, { strict: true });
+  return deepMerge(defaults, stored);
 }
 
 async function saveConfig(config) {
@@ -201,15 +239,106 @@ async function saveConfig(config) {
   await atomicWrite(CONFIG_FILE, config);
 }
 
+// Stories written against a question the user typed themselves file under this
+// pseudo-theme rather than 'unknown' — it is a real, nameable category (the
+// questions they chose to answer), and it keeps the theme filter honest. Its id
+// IS the custom promptId sentinel, so the two can never disagree.
+export const CUSTOM_THEME = Object.freeze({ id: CUSTOM_PROMPT_ID, label: 'Your Own Question' });
+
 /**
- * Get all available themes with their prompt counts
+ * Get all available themes with their prompt counts.
+ *
+ * The custom pseudo-theme is included with a zero prompt count: it has no bank
+ * entries by definition, but stories land in it and the filter row needs a chip
+ * to reach them.
  */
 export function getThemes() {
-  return PROMPT_THEMES.map(theme => ({
-    id: theme.id,
-    label: theme.label,
-    promptCount: theme.prompts.length
-  }));
+  return [
+    ...PROMPT_THEMES.map(theme => ({
+      id: theme.id,
+      label: theme.label,
+      promptCount: theme.prompts.length
+    })),
+    { ...CUSTOM_THEME, promptCount: 0 }
+  ];
+}
+
+// The bank flattened once at module load — it is derived purely from the
+// module-level PROMPT_THEMES, so rebuilding its 60 entries per request bought
+// nothing. Frozen because callers receive these objects by reference.
+const ALL_PROMPTS = Object.freeze(PROMPT_THEMES.flatMap(theme =>
+  theme.prompts.map((text, idx) => Object.freeze({
+    id: `${theme.id}-${idx}`,
+    themeId: theme.id,
+    themeLabel: theme.label,
+    text
+  }))
+));
+
+/**
+ * Rank every still-unused prompt, least-written theme first, and hand back the
+ * top `count`. Shared by getNextPrompt (count 1) and getPromptSuggestions.
+ *
+ * The ranking itself is a plain read — `getPromptSuggestions` runs on every
+ * Autobiography tab open, and taking the stories write queue for it would
+ * serialize a read-only page load behind any in-flight story save or
+ * digital-twin sync write. Only the bank-exhaustion branch actually writes
+ * (it resets `usedPrompts`), so only that branch enters the queue.
+ *
+ * Suggestions come from DISTINCT themes where the bank allows it: three
+ * variations on childhood read as one idea, while childhood/work/travel read
+ * as a genuine choice. Once the distinct-theme picks run out (late in a cycle,
+ * or with `count` above the theme count) it falls back to the remaining
+ * ranking rather than returning short.
+ */
+async function pickPrompts(count, excludePromptId) {
+  const data = await loadStories();
+  const usedPrompts = new Set(data.usedPrompts || []);
+
+  let available = ALL_PROMPTS.filter(p => !usedPrompts.has(p.id));
+
+  // If all prompts used, reset and start over
+  if (available.length === 0) {
+    await queueAutobiographyStoriesWrite(async () => {
+      // Re-read inside the queue so the reset merges onto the freshest stories
+      // rather than clobbering a save that landed while we were ranking.
+      const current = await loadStories();
+      current.usedPrompts = [];
+      await saveStories(current);
+    });
+    available = [...ALL_PROMPTS];
+  }
+
+  // Exclude the currently displayed prompt so skip returns a different one
+  if (excludePromptId) {
+    const filtered = available.filter(p => p.id !== excludePromptId);
+    if (filtered.length > 0) {
+      available = filtered;
+    }
+  }
+
+  // Pick from the least-used theme to keep balance
+  const themeCounts = {};
+  for (const story of data.stories) {
+    themeCounts[story.themeId] = (themeCounts[story.themeId] || 0) + 1;
+  }
+
+  // Sort available prompts by theme usage (least written first)
+  available.sort((a, b) => (themeCounts[a.themeId] || 0) - (themeCounts[b.themeId] || 0));
+
+  // One theme's best prompt first, then everything else in the same ranked
+  // order — so the menu reads as a genuine choice rather than three variations
+  // on childhood, and still fills to `count` late in a cycle when fewer themes
+  // than that are left.
+  const seenThemes = new Set();
+  const firstPerTheme = [];
+  const remainder = [];
+  for (const prompt of available) {
+    (seenThemes.has(prompt.themeId) ? remainder : firstPerTheme).push(prompt);
+    seenThemes.add(prompt.themeId);
+  }
+
+  return [...firstPerTheme, ...remainder].slice(0, count);
 }
 
 /**
@@ -217,49 +346,16 @@ export function getThemes() {
  * @param {string} [excludePromptId] - Prompt ID to exclude (used by skip to avoid returning the same prompt)
  */
 export async function getNextPrompt(excludePromptId) {
-  return queueAutobiographyStoriesWrite(async () => {
-    const data = await loadStories();
-    const usedPrompts = data.usedPrompts || [];
+  const [prompt] = await pickPrompts(1, excludePromptId);
+  return prompt;
+}
 
-    // Build flat list of all prompts with IDs
-    const allPrompts = PROMPT_THEMES.flatMap(theme =>
-      theme.prompts.map((text, idx) => ({
-        id: `${theme.id}-${idx}`,
-        themeId: theme.id,
-        themeLabel: theme.label,
-        text
-      }))
-    );
-
-    // Filter out used prompts
-    let available = allPrompts.filter(p => !usedPrompts.includes(p.id));
-
-    // If all prompts used, reset and start over
-    if (available.length === 0) {
-      data.usedPrompts = [];
-      await saveStories(data);
-      available = allPrompts;
-    }
-
-    // Exclude the currently displayed prompt so skip returns a different one
-    if (excludePromptId) {
-      const filtered = available.filter(p => p.id !== excludePromptId);
-      if (filtered.length > 0) {
-        available = filtered;
-      }
-    }
-
-    // Pick from the least-used theme to keep balance
-    const themeCounts = {};
-    for (const story of data.stories) {
-      themeCounts[story.themeId] = (themeCounts[story.themeId] || 0) + 1;
-    }
-
-    // Sort available prompts by theme usage (least written first)
-    available.sort((a, b) => (themeCounts[a.themeId] || 0) - (themeCounts[b.themeId] || 0));
-
-    return available[0];
-  });
+/**
+ * A short menu of story ideas — what the daily prompt offers instead of one
+ * assignment, and what the UI shows when the user opens the tab cold.
+ */
+export async function getPromptSuggestions(count = PROMPT_SUGGESTION_COUNT) {
+  return pickPrompts(count);
 }
 
 /**
@@ -292,11 +388,21 @@ export async function saveStory({ promptId, content, parentStoryId, customPrompt
     const isFollowUp = !!parentStoryId;
     const parentStory = isFollowUp ? data.stories.find(s => s.id === parentStoryId) : null;
 
+    // Resolve which of the three origins owns this story's theme ONCE, so the
+    // id and the label can't come from different sources and leave a record
+    // that's unfalsifiable after the fact. A follow-up inherits its parent's
+    // theme; a bank prompt carries its own; a question the user typed
+    // themselves has no bank prompt behind it and files under the custom
+    // pseudo-theme, with its own promptText as the only question of record.
+    const themeSource = isFollowUp
+      ? parentStory
+      : (prompt || (customPromptText ? CUSTOM_THEME : null));
+
     const story = {
       id: uuidv4(),
       promptId: isFollowUp ? `followup-${parentStoryId}` : promptId,
-      themeId: isFollowUp ? (parentStory?.themeId || 'unknown') : (prompt?.themeId || 'unknown'),
-      themeLabel: isFollowUp ? (parentStory?.themeLabel || 'Unknown') : (prompt?.themeLabel || 'Unknown'),
+      themeId: themeSource?.themeId ?? themeSource?.id ?? 'unknown',
+      themeLabel: themeSource?.themeLabel ?? themeSource?.label ?? 'Unknown',
       promptText: customPromptText || prompt?.text || '',
       content,
       wordCount: countWords(content),
@@ -306,10 +412,14 @@ export async function saveStory({ promptId, content, parentStoryId, customPrompt
 
     data.stories.push(story);
 
-    // Mark prompt as used
-    if (!data.usedPrompts) data.usedPrompts = [];
-    if (!data.usedPrompts.includes(promptId)) {
-      data.usedPrompts.push(promptId);
+    // Mark prompt as used — only for real bank prompts. Pushing 'custom' or a
+    // `followup-…` id would permanently occupy a slot in the used-list that no
+    // bank prompt can ever match, delaying the cycle reset for nothing.
+    if (prompt) {
+      if (!data.usedPrompts) data.usedPrompts = [];
+      if (!data.usedPrompts.includes(promptId)) {
+        data.usedPrompts.push(promptId);
+      }
     }
 
     await saveStories(data);
@@ -428,13 +538,30 @@ export async function getConfig() {
  * Update configuration
  */
 export async function updateConfig(updates) {
-  return queueAutobiographyConfigWrite(async () => {
+  const updated = await queueAutobiographyConfigWrite(async () => {
     const config = await loadConfig();
-    const updated = { ...config, ...updates };
-    await saveConfig(updated);
-    console.log(`📖 Autobiography config updated: interval=${updated.intervalHours}h, enabled=${updated.enabled}`);
-    return updated;
+    const merged = { ...config, ...updates };
+    if (updates?.reminder) {
+      // Merge rather than replace so a patch that only flips `enabled` keeps
+      // the saved time, and stamp WHEN the slice last changed — the missed-slot
+      // catch-up in autobiographyReminder.js uses it to refuse replaying a slot
+      // that elapsed under a different (possibly disabled) configuration.
+      merged.reminder = {
+        ...config.reminder,
+        ...updates.reminder,
+        updatedAt: new Date().toISOString()
+      };
+    }
+    await saveConfig(merged);
+    console.log(`📖 Autobiography config updated: interval=${merged.intervalHours}h, enabled=${merged.enabled}, reminder=${merged.reminder?.enabled ? merged.reminder.time : 'off'}`);
+    return merged;
   });
+  // Emit AFTER the write succeeds so the reminder scheduler never reschedules
+  // against a config change that did not persist. `updates` rides along so a
+  // subscriber can gate on the slice it cares about instead of rescheduling on
+  // every unrelated save.
+  autobiographyConfigEvents.emit('autobiography-config:updated', { config: updated, updates });
+  return updated;
 }
 
 /**
@@ -637,6 +764,73 @@ Rules:
 }
 
 /**
+ * Send one story-prompt notification offering a short menu of ideas.
+ *
+ * Deterministic — it picks from the on-disk prompt bank and makes NO provider
+ * call, so it is safe on a cold install (AGENTS.md's AI Provider Usage Policy).
+ *
+ * This is the single notification path — both the interval-based autonomous job
+ * (`checkAndPrompt`) and the time-of-day cron (`autobiographyReminder.js`) send
+ * through it — but it does NOT decide whether a nudge is due. Each caller owns
+ * a cadence guard appropriate to it: the job gates on `intervalHours` since
+ * `lastPromptAt`, and the cron gates on whether a prompt already went out on
+ * the user's local day (dailyReminderScheduler.js). Because this stamps
+ * `lastPromptAt`, an install running both still cannot nudge twice.
+ *
+ * It deliberately does NOT gate on `notifications.exists(AUTOBIOGRAPHY_PROMPT)`:
+ * that matches ANY notification of the type ever created, read or not, so it
+ * would silence the daily prompt permanently after its very first nudge.
+ */
+export async function sendStoryPrompt() {
+  return queueAutobiographyConfigWrite(sendStoryPromptUnqueued);
+}
+
+/**
+ * The body of sendStoryPrompt, minus acquiring the config write queue.
+ *
+ * checkAndPrompt runs its due-check and this sender inside ONE queue task, so
+ * two concurrent due-checks cannot both read the same stale `lastPromptAt` and
+ * each send a prompt. The file write queue is a plain tail, not a re-entrant
+ * lock, so that task cannot call the queue-acquiring wrapper.
+ */
+async function sendStoryPromptUnqueued(loadedConfig) {
+  const suggestions = await getPromptSuggestions();
+  const [prompt, ...alternates] = suggestions;
+  if (!prompt) {
+    return { prompted: false, reason: 'no_prompts_available' };
+  }
+
+  const alternateLine = alternates.length
+    ? ` Or: ${alternates.map(p => p.text).join(' · ')}`
+    : '';
+
+  await addNotification({
+    type: NOTIFICATION_TYPES.AUTOBIOGRAPHY_PROMPT,
+    title: '5-Minute Story Time',
+    description: `${prompt.themeLabel}: ${prompt.text}${alternateLine}`,
+    priority: PRIORITY_LEVELS.LOW,
+    link: `/digital-twin/autobiography?prompt=${prompt.id}`,
+    metadata: {
+      promptId: prompt.id,
+      themeId: prompt.themeId,
+      suggestions: suggestions.map(p => ({ id: p.id, themeId: p.themeId, themeLabel: p.themeLabel, text: p.text }))
+    }
+  });
+
+  // checkAndPrompt already read the config inside this same queue task, so it
+  // hands it down rather than paying for a second read of a file nothing else
+  // can have touched in between.
+  const config = loadedConfig || await loadConfig();
+  config.lastPromptAt = new Date().toISOString();
+  config.lastPromptId = prompt.id;
+  await saveConfig(config);
+
+  console.log(`📖 Autobiography prompt sent: ${prompt.themeLabel} - ${prompt.text.substring(0, 50)}... (+${alternates.length} more ideas)`);
+
+  return { prompted: true, prompt, suggestions };
+}
+
+/**
  * Check if a new story prompt is due and create a notification if so.
  * Called by the autonomous job system or can be triggered manually.
  */
@@ -656,35 +850,66 @@ export async function checkAndPrompt() {
       return { prompted: false, reason: 'not_due' };
     }
 
-    // Check if there's already an unread autobiography notification
-    const alreadyNotified = await notificationExists(
-      NOTIFICATION_TYPES.AUTOBIOGRAPHY_PROMPT
-    );
-
-    if (alreadyNotified) {
-      return { prompted: false, reason: 'pending_notification' };
-    }
-
-    const prompt = await getNextPrompt();
-
-    await addNotification({
-      type: NOTIFICATION_TYPES.AUTOBIOGRAPHY_PROMPT,
-      title: '5-Minute Story Time',
-      description: `${prompt.themeLabel}: ${prompt.text}`,
-      priority: 'low',
-      link: `/digital-twin/autobiography?prompt=${prompt.id}`,
-      metadata: {
-        promptId: prompt.id,
-        themeId: prompt.themeId
-      }
-    });
-
-    config.lastPromptAt = new Date().toISOString();
-    config.lastPromptId = prompt.id;
-    await saveConfig(config);
-
-    console.log(`📖 Autobiography prompt sent: ${prompt.themeLabel} - ${prompt.text.substring(0, 50)}...`);
-
-    return { prompted: true, prompt };
+    return sendStoryPromptUnqueued(config);
   });
+}
+
+/**
+ * Score a story against the storytelling rubric in lib/storytellingCraft.js —
+ * the seven moves plus CART — and persist the result on the story.
+ *
+ * Explicitly user-triggered (a button, or the evaluate route): this is the one
+ * provider call the autobiography feature makes outside follow-ups and weaving,
+ * and nothing schedules it.
+ */
+export async function evaluateStory(storyId, providerId) {
+  const data = await loadStories();
+  const story = data.stories.find(s => s.id === storyId);
+  if (!story) return { error: 'Story not found' };
+
+  const provider = providerId
+    ? await getProviderById(providerId)
+    : await getActiveProvider();
+  if (!provider) return { error: 'No AI provider available' };
+
+  const result = await callProviderAISimple(
+    provider,
+    provider.defaultModel,
+    buildStoryCraftEvaluationPrompt({ question: story.promptText, story: story.content }),
+    {
+      // Low temperature: a rubric score the user will act on should be the same
+      // answer twice, not a different reading each time they press the button.
+      temperature: 0.2,
+      max_tokens: 2000,
+      op: 'autobiography-evaluate',
+      opLabel: 'Scoring your story…'
+    }
+  );
+
+  if (result.error) return { error: result.error };
+
+  let parsed;
+  try { parsed = parseLLMJSON(result.text); } catch { /* invalid JSON */ }
+  const evaluation = normalizeStoryCraftEvaluation(parsed);
+  if (!evaluation) {
+    return { error: 'Failed to parse the story evaluation from the AI response' };
+  }
+  evaluation.evaluatedAt = new Date().toISOString();
+
+  // Re-read inside the file queue so a story edit that landed while the
+  // provider was running is preserved in the write-back.
+  const stored = await queueAutobiographyStoriesWrite(async () => {
+    const currentData = await loadStories();
+    const currentStory = currentData.stories.find(s => s.id === storyId);
+    if (!currentStory) return null;
+    currentStory.evaluation = evaluation;
+    await saveStories(currentData);
+    return currentStory.evaluation;
+  });
+
+  if (!stored) return { error: 'Story not found' };
+
+  console.log(`📖 Autobiography story scored: ${story.themeLabel} — ${stored.overallScore}/${stored.maxScore}`);
+
+  return { evaluation: stored };
 }

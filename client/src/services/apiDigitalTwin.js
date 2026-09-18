@@ -257,6 +257,8 @@ export const getAutobiographyThemes = () => request('/digital-twin/autobiography
 export const getAutobiographyPrompt = (exclude, options = {}) =>
   request(`/digital-twin/autobiography/prompt${exclude ? `?exclude=${exclude}` : ''}`, options);
 export const getAutobiographyPromptById = (id) => request(`/digital-twin/autobiography/prompt/${id}`);
+export const getAutobiographySuggestions = (options = {}) =>
+  request('/digital-twin/autobiography/suggestions', options);
 export const getAutobiographyStories = (theme = null) =>
   request(`/digital-twin/autobiography/stories${theme ? `?theme=${theme}` : ''}`);
 export const saveAutobiographyStory = (promptId, content, { parentStoryId, customPromptText } = {}, options = {}) =>
@@ -284,6 +286,12 @@ export const weaveAutobiographyNarrative = (storyId, providerId) =>
   request(`/digital-twin/autobiography/stories/${storyId}/weave`, {
     method: 'POST',
     body: JSON.stringify({ providerId })
+  });
+export const evaluateAutobiographyStory = (storyId, providerId, options = {}) =>
+  request(`/digital-twin/autobiography/stories/${storyId}/evaluate`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId }),
+    ...options
   });
 
 // Digital Twin - Assessment Analyzer
