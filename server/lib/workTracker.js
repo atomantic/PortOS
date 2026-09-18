@@ -591,6 +591,7 @@ export async function resolveRepoForgeTarget(repoPath, { preferredForge = null }
       fullName: origin.fullName,
       repoSpec: githubSpec,
       apiHost: githubApiHost(origin.host),
+      webHost: githubApiHost(origin.host),
     };
   }
   // Reuse the URL `getOriginInfo` already read rather than spawning a second
@@ -605,6 +606,7 @@ export async function resolveRepoForgeTarget(repoPath, { preferredForge = null }
       fullName: origin?.fullName || gitlabProjectPath(originUrl) || host,
       repoSpec: null,
       apiHost: null,
+      webHost: host,
     };
   }
   if (preferredForge === 'github' && origin?.fullName && host) {
@@ -613,9 +615,36 @@ export async function resolveRepoForgeTarget(repoPath, { preferredForge = null }
       fullName: origin.fullName,
       repoSpec: `${host}/${origin.fullName}`,
       apiHost: githubApiHost(host),
+      webHost: githubApiHost(host),
     };
   }
   return null;
+}
+
+/**
+ * The browsable issue-tracker base URL for a resolved forge target — append
+ * `/<number>` for one issue. GitLab nests its tracker under `/-/`; the
+ * GitHub family serves it directly off the project path (and redirects a pull
+ * request's number there, so one base covers both kinds of reference).
+ *
+ * This is where the forge-shape knowledge STOPS: a caller stamps the finished
+ * base onto its record, so nothing downstream — least of all the browser — has
+ * to classify a hostname or know that GitLab spells the path differently. That
+ * matters because hostname classification is not authoritative: a self-hosted
+ * forge on a neutral domain is resolved only by the user's own `workTracker`
+ * pin, which `resolveAppForgeTarget` has already applied by the time a target
+ * reaches here.
+ *
+ * Null when the target can't name a project: `resolveRepoForgeTarget` falls
+ * `fullName` back to the bare host for an unparseable GitLab remote, which
+ * would otherwise compose `https://host/host/-/issues`.
+ *
+ * @param {{forge:string, fullName:string|null, webHost:string|null}|null} target
+ * @returns {string|null}
+ */
+export function repoIssueUrlBase(target) {
+  if (!target?.webHost || !target.fullName || target.fullName === target.webHost) return null;
+  return `https://${target.webHost}/${target.fullName}/${target.forge === 'gitlab' ? '-/issues' : 'issues'}`;
 }
 
 /**

@@ -60,6 +60,7 @@ export * from './installFailureTask.js';
 export * from './letteringDensity.js';
 export * from './isSafeHref.js';
 export * from './issueLength.js';
+export * from './issueRefs.js';
 export * from './musicDuration.js';
 export * from './muscriptorModels.js';
 export * from './pipelineImageDefaults.js';

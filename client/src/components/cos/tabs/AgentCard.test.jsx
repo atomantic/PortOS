@@ -885,3 +885,24 @@ describe('AgentCard truncated task description', () => {
     expect(api.hydrateCosAgentDescription).not.toHaveBeenCalled();
   });
 });
+
+// End-to-end for #7676: the run record carries its tracker, so a bare `#N` the
+// agent wrote in its own sentinel summary is followable from the card. The
+// pattern lives in lib/issueRefs.test.js — this pins the WIRING, the half that
+// silently regresses when a prop is dropped in a refactor.
+it('links a task-summary issue reference at the tracker the run was stamped with', () => {
+  render(
+    <MemoryRouter>
+      <AgentCard
+        agent={{ ...agent, metadata: {
+          ...agent.metadata,
+          taskSummary: 'Closes #7640.',
+          repoIssueUrl: 'https://github.com/atomantic/PortOS/issues',
+        } }}
+        completed
+      />
+    </MemoryRouter>
+  );
+  expect(screen.getByRole('link', { name: '#7640' }))
+    .toHaveAttribute('href', 'https://github.com/atomantic/PortOS/issues/7640');
+});

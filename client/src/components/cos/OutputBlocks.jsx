@@ -16,7 +16,7 @@ export const isLifecycleLine = (line) =>
 const INITIAL_BLOCKS = 80;
 const LOAD_MORE_BLOCKS = 120;
 
-function renderBlock(block, i) {
+function renderBlock(block, i, linkifyText) {
   if (block.type === 'tool') {
     const line = block.line;
     if (line.startsWith('🔧')) {
@@ -33,10 +33,12 @@ function renderBlock(block, i) {
   if (block.type === 'lifecycle') {
     return <div key={i} className="py-0.5 text-xs text-gray-400 break-words">{block.line}</div>;
   }
-  return <MarkdownOutput key={i} content={block.content} />;
+  return <MarkdownOutput key={i} content={block.content} linkifyText={linkifyText} />;
 }
 
-export default function OutputBlocks({ output }) {
+// `linkifyText` is forwarded to MarkdownOutput so a caller that knows the
+// record (a CoS run and its tracker) can link the bare `#7640` in its prose.
+export default function OutputBlocks({ output, linkifyText = null }) {
   const [visibleCount, setVisibleCount] = useState(INITIAL_BLOCKS);
 
   // Group consecutive lines: tool lines render as monospace, lifecycle markers
@@ -73,7 +75,7 @@ export default function OutputBlocks({ output }) {
 
   return (
     <div className="space-y-0.5 min-w-0 overflow-hidden">
-      {blocks.slice(0, visibleCount).map(renderBlock)}
+      {blocks.slice(0, visibleCount).map((block, i) => renderBlock(block, i, linkifyText))}
       {hasMore && (
         <button
           onClick={() => setVisibleCount(prev => prev + LOAD_MORE_BLOCKS)}

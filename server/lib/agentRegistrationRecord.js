@@ -42,6 +42,7 @@ export function buildAgentRegistration({
   instanceId,
   workspacePath,
   sourceWorkspace,
+  repoIssueUrl,
   primaryCheckoutBaseline,
   worktreeInfo,
   explicitWorktree,
@@ -72,6 +73,19 @@ export function buildAgentRegistration({
     // worktree. Non-throwing: an unreadable checkout yields null, which the
     // detector reads as "nothing to check".
     primaryCheckoutBaseline,
+    // The issue-tracker base URL of the repository this run worked in, already
+    // shaped for its forge (`repoIssueUrlBase`) so the browser appends a number
+    // and knows nothing about forges. It is what a bare `#7640` in the agent's
+    // own completion summary refers to, so the run card renders that reference
+    // as a link without the agent having to build a URL it has no reliable way
+    // to know.
+    //
+    // Stamped rather than resolved at render time for the two reasons the
+    // baseline above is: it is immutable run provenance (re-pointing an app at
+    // a different origin later must not silently relabel finished runs), and
+    // the alternative is a `git` shell-out per card render. A record written
+    // before this shipped carries null, which the card reads as plain text.
+    repoIssueUrl,
     worktreeBranch: worktreeInfo?.branchName || null,
     isWorktree: !!worktreeInfo,
     isPersistentWorktree: !!worktreeInfo?.isPersistentWorktree,

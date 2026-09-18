@@ -39,6 +39,7 @@ import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { AgentProgress, AgentRuntimeStatus } from './AgentRuntimeStatus';
+import { agentIssueLinkifier } from '../../../lib/issueRefs';
 
 // Pre-compiled regexes for normalizeDescriptionToMarkdown
 // Avoid lookbehind to support older Safari/iOS runtimes
@@ -86,6 +87,7 @@ function TaskDescription({ agent, remote }) {
   const [hydrated, setHydrated] = useState(null);
   const text = hydrated ?? preview;
   const md = useMemo(() => normalizeDescriptionToMarkdown(text), [text]);
+  const linkifyIssues = useMemo(() => agentIssueLinkifier(agent), [agent]);
   // `!remote` for the same reason the transcript fetch below carries it: a peer's
   // agent id means nothing to THIS instance's /cos/agents/:id, so hydrating it
   // would either 404 or read a local run that happens to share the id.
@@ -109,7 +111,7 @@ function TaskDescription({ agent, remote }) {
         forceToggle={clipped}
         onExpand={clipped ? hydrate : null}
       >
-        <MarkdownOutput content={md} />
+        <MarkdownOutput content={md} linkifyText={linkifyIssues} />
       </CollapsibleText>
     </div>
   );
@@ -239,6 +241,9 @@ function GoalFidelityPanel({ review }) {
 export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName, initiallyExpanded = false }) {
   const [expanded, setExpanded] = useState(initiallyExpanded);
   const [now, setNow] = useState(Date.now());
+  // Every surface of this card that renders the agent's own prose resolves a
+  // bare `#7640` against the run's tracker through the one resolver.
+  const linkifyIssues = useMemo(() => agentIssueLinkifier(agent), [agent]);
   const [fullOutput, setFullOutput] = useState(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
   // Pipeline stage output: track which stage tab is active and cached outputs per stage agentId
@@ -994,7 +999,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               <Sparkles size={10} aria-hidden="true" className="text-emerald-400" />
               Task Summary
             </div>
-            {agent.metadata?.taskSummary && <MarkdownOutput content={agent.metadata.taskSummary} />}
+            {agent.metadata?.taskSummary && <MarkdownOutput content={agent.metadata.taskSummary} linkifyText={linkifyIssues} />}
             {agent.metadata?.malwareScan?.reportUrl && (
               <a
                 href={api.normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}
@@ -1168,7 +1173,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 return (
                   <>
                     <TranscriptTruncationNotice transcript={stageOut} />
-                    {stageOut.lines.length > 0 && <OutputBlocks key={activeStage.agentId} output={stageOut.lines} />}
+                    {stageOut.lines.length > 0 && <OutputBlocks key={activeStage.agentId} output={stageOut.lines} linkifyText={linkifyIssues} />}
                   </>
                 );
               }
@@ -1192,7 +1197,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               return (
                 <>
                   {truncated && <TranscriptTruncationNotice transcript={fullOutput} />}
-                  {output.length > 0 && <OutputBlocks output={output} />}
+                  {output.length > 0 && <OutputBlocks output={output} linkifyText={linkifyIssues} />}
                 </>
               );
             }
