@@ -28,6 +28,23 @@ import {
   ingestCatalogBrain,
 } from '../services/apiCatalog';
 import { markBrainInboxSentToCatalog } from '../services/apiBrain';
+import { listUniverseNames } from '../services/apiUniverseBuilder';
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
+
+// The explicit "no universe" choice, preserving today's behavior exactly
+// (source link only, no catalog_ingredient_refs row).
+const UNASSIGNED_UNIVERSE = 'unassigned';
+// Where the last-picked "Catalogue into" universe id is remembered across
+// visits (#7615). A capture-source ingest (brain-bridge / voice-memo)
+// defaults to a universe named "Reality" instead, when one exists — captured
+// thought is factual by default.
+const LAST_UNIVERSE_STORAGE_KEY = 'catalog-ingest-last-universe';
+const REALITY_UNIVERSE_NAME = 'Reality';
+// Ingest source kinds that default to the Reality universe rather than the
+// last-used pick — mirrors SCRAP_SOURCE_KINDS' `factual: true` entries
+// (server/lib/catalogSourceKinds.js): brain-bridge and voice-memo capture the
+// user's own lived material, not invented story text.
+const FACTUAL_INGEST_KINDS = new Set(['brain', 'voice']);
 
 // One review section per ingredient type. The first three are bible-shaped
 // (character/place/object) and use `physicalDescription`/`description` as the
@@ -98,6 +115,10 @@ export default function CatalogIngest() {
   const [url, setUrl] = useState('');
   const [recording, setRecording] = useState(false);
   const recorderRef = useRef(null);
+  // "Catalogue into" — the universe every committed ingredient binds to
+  // (#7615). Populated on mount; defaulted per-ingest in enterReviewFromResult.
+  const [universes, setUniverses] = useState([]);
+  const [universeRef, setUniverseRef] = useState(UNASSIGNED_UNIVERSE);
   const brainHandledRef = useRef(false);
   // Creative inbox note ids handed off from the Brain batch-send. Once the
   // commit below succeeds we stamp these consumed so they drop out of the
@@ -113,6 +134,26 @@ export default function CatalogIngest() {
   // Stop the mic if the page unmounts mid-recording (navigating away), so the
   // MediaRecorder stream isn't left live with no UI to stop it.
   useEffect(() => () => { recorderRef.current?.cancel?.(); }, []);
+
+  // Load the "Catalogue into" options once. Best-effort — an empty list just
+  // leaves Unassigned as the only choice.
+  useEffect(() => {
+    listUniverseNames({ silent: true }).then((list) => setUniverses(Array.isArray(list) ? list : [])).catch(() => {});
+  }, []);
+
+  // Default the "Catalogue into" pick for a freshly-entered review phase.
+  // Capture-source ingests (brain-bridge / voice-memo) default to the Reality
+  // universe when one exists; everything else defaults to the last-used
+  // choice (persisted through safeReadStorage), falling back to Reality, then
+  // Unassigned. `sourceKind` is one of 'paste' | 'url' | 'file' | 'voice' |
+  // 'brain' | 'babble'.
+  const defaultUniverseForSource = (sourceKind) => {
+    const reality = universes.find((u) => u.name === REALITY_UNIVERSE_NAME);
+    if (FACTUAL_INGEST_KINDS.has(sourceKind)) return reality?.id || UNASSIGNED_UNIVERSE;
+    const lastUsed = safeReadStorage(LAST_UNIVERSE_STORAGE_KEY);
+    if (lastUsed && (lastUsed === UNASSIGNED_UNIVERSE || universes.some((u) => u.id === lastUsed))) return lastUsed;
+    return reality?.id || UNASSIGNED_UNIVERSE;
+  };
 
   // Any transition OUT of the paste phase that isn't the voice flow's own
   // stop-and-transcribe (which nulls recorderRef before switching) must release
@@ -183,9 +224,10 @@ export default function CatalogIngest() {
   // Shared review-entry: every ingest path (paste / url / file / voice) yields
   // a `{ scrap, draft }` response with the same draft shape, so they all funnel
   // through here to populate the review phase.
-  const enterReviewFromResult = (result) => {
+  const enterReviewFromResult = (result, sourceKind) => {
     if (!result?.draft) { setPhase('paste'); return false; }
     if (result.scrap?.id) setScrapId(result.scrap.id);
+    setUniverseRef(defaultUniverseForSource(sourceKind));
     const d = Object.fromEntries(KIND_SECTIONS.map((s) => [
       s.key,
       Array.isArray(result.draft[s.key]) ? result.draft[s.key] : [],
@@ -227,7 +269,7 @@ export default function CatalogIngest() {
       : extractFromCatalogScrap(created.scrap.id, {}, { silent: true }))
       .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
     setSubmitting(false);
-    enterReviewFromResult(result);
+    enterReviewFromResult(result, babble ? 'babble' : 'paste');
   };
 
   const handleUrlIngest = async (e) => {
@@ -240,7 +282,7 @@ export default function CatalogIngest() {
     const result = await ingestCatalogUrl({ url: trimmed }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'URL ingest failed'); return null; });
     setSubmitting(false);
-    enterReviewFromResult(result);
+    enterReviewFromResult(result, 'url');
   };
 
   // Brain → catalog handoff: the brain UI navigates here with
@@ -253,7 +295,7 @@ export default function CatalogIngest() {
     const result = await ingestCatalogBrain({ brainType, brainId }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Brain ingest failed'); return null; });
     setSubmitting(false);
-    enterReviewFromResult(result);
+    enterReviewFromResult(result, 'brain');
   };
 
   // Handle inbound router-state handoffs once on mount:
@@ -304,7 +346,7 @@ export default function CatalogIngest() {
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'File ingest failed'); return null; });
     setSubmitting(false);
-    enterReviewFromResult(result);
+    enterReviewFromResult(result, 'file');
   };
 
   const startRecording = async () => {
@@ -339,7 +381,7 @@ export default function CatalogIngest() {
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Voice ingest failed'); return null; });
     setSubmitting(false);
-    enterReviewFromResult(result);
+    enterReviewFromResult(result, 'voice');
   };
 
   const handleBulkImport = async () => {
@@ -412,7 +454,10 @@ export default function CatalogIngest() {
       return;
     }
     setCommitting(true);
-    const result = await commitCatalogScrapDraft(scrapId, accepted, { silent: true }).catch((err) => {
+    const result = await commitCatalogScrapDraft(scrapId, accepted, {
+      universeRef: universeRef === UNASSIGNED_UNIVERSE ? undefined : universeRef,
+      silent: true,
+    }).catch((err) => {
       toast.error(err?.message || 'Commit failed');
       return null;
     });
@@ -653,8 +698,25 @@ export default function CatalogIngest() {
 
         {phase === 'review' && (
           <div className="space-y-5">
-            <div className="bg-port-card border border-port-border rounded-lg p-4 text-sm text-gray-300">
-              Review the candidates below. Uncheck anything you don&apos;t want, edit names and descriptions inline, then commit the rest.
+            <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+              <p className="text-sm text-gray-300">
+                Review the candidates below. Uncheck anything you don&apos;t want, edit names and descriptions inline, then commit the rest.
+              </p>
+              <div className="max-w-xs">
+                <label htmlFor="ingest-universe-ref" className="block text-sm font-medium mb-1 text-white">Catalogue into</label>
+                <select id="ingest-universe-ref" value={universeRef}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setUniverseRef(next);
+                    safeWriteStorage(LAST_UNIVERSE_STORAGE_KEY, next);
+                  }}
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent">
+                  <option value={UNASSIGNED_UNIVERSE}>Unassigned</option>
+                  {universes.map((u) => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             {KIND_SECTIONS.map((section) => (
               <ReviewSection

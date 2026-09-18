@@ -177,6 +177,8 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
     scrapId: scrap.id,
     accepted: body.accepted,
     embeds,
+    universeRef: body.universeRef,
+    role: body.role,
   });
 
   res.status(201).json({ scrap, ingredients: created });

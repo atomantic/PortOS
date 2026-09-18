@@ -403,11 +403,17 @@ export const catalogMediaVoiceMemoSchema = z.object({
   role: z.string().trim().max(64).optional().nullable(),
 }).strict();
 
+// `universeRef` (+ optional `role`) mirrors catalogBulkImportSchema.defaults
+// below — same field name, same shape — so the two ingest paths (bulk-import,
+// scrap-commit) cannot drift (#7615). Omitting `universeRef` reproduces
+// today's behavior exactly: source link only, no homing ref.
 export const catalogScrapCommitSchema = z.object({
   accepted: z.array(catalogIngredientCreateSchema.extend({
     // Optional source-span hint (server forwards as-is to linkIngredientToSource).
     span: z.record(z.string(), z.unknown()).optional(),
   })).min(0).max(200),
+  universeRef: z.string().trim().min(1).max(120).optional(),
+  role: z.string().trim().min(1).max(64).optional(),
 }).strict();
 
 // /scraps/:id/extract — optional provider override (e.g., force a specific

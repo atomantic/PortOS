@@ -7,6 +7,7 @@ vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } })
 vi.mock('../hooks/useProviderModels', () => ({ default: () => ({ providers: [], selectedProviderId: 'example-provider', selectedModel: 'example-model', availableModels: [], loading: false }) }));
 vi.mock('../components/ProviderModelSelector', () => ({ default: ({ onEffortChange }) => <button type="button" onClick={() => onEffortChange('high')}>High effort</button> }));
 vi.mock('../services/apiCatalog', () => ({ createCatalogScrap: vi.fn(), pruneCatalogScrap: vi.fn(), commitCatalogScrapDraft: vi.fn() }));
+vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn().mockResolvedValue([]) }));
 it('prunes only on request, keeps the brainstorm, and saves edited selected suggestions', async () => {
   createCatalogScrap.mockResolvedValue({ scrap: { id: 'example-scrap' } });
   pruneCatalogScrap.mockResolvedValue({ scrap: { id: 'example-scrap' }, draft: { ideas: [{ name: 'Moon story', summary: 'A missing moon.' }], scenes: [{ name: 'Argument', summary: 'Two travelers argue.' }] } });

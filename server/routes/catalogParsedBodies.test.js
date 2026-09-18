@@ -252,6 +252,28 @@ describe('Catalog parsed write bodies', () => {
       scrapId: 'scrap-1',
       accepted,
       embeds: [{ embedding: null, model: null }],
+      universeRef: undefined,
+      role: undefined,
+    });
+  });
+
+  it('forwards universeRef and role from the commit body (#7615)', async () => {
+    mocks.embedBatch.mockResolvedValue([{ embedding: null, model: null }]);
+    const response = await request(makeApp())
+      .post('/api/catalog/scraps/scrap-1/commit')
+      .send({
+        accepted: [{ type: 'idea', name: 'Draft' }],
+        universeRef: 'universe-1',
+        role: 'canon-idea',
+      });
+
+    expect(response.status).toBe(201);
+    expect(mocks.commitScrap).toHaveBeenCalledWith({
+      scrapId: 'scrap-1',
+      accepted: [{ type: 'idea', name: 'Draft' }],
+      embeds: [{ embedding: null, model: null }],
+      universeRef: 'universe-1',
+      role: 'canon-idea',
     });
   });
 });

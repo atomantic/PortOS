@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   client: { query: vi.fn() },
   createIngredient: vi.fn(),
   linkIngredientToSource: vi.fn(),
+  linkIngredientToRef: vi.fn(),
+  linkIngredientRelation: vi.fn(),
   withTransaction: vi.fn(),
 }));
 
@@ -17,6 +19,11 @@ vi.mock('./catalogDB/ingredients.js', () => ({
 
 vi.mock('./catalogDB/refs.js', () => ({
   linkIngredientToSource: mocks.linkIngredientToSource,
+  linkIngredientToRef: mocks.linkIngredientToRef,
+  linkIngredientRelation: mocks.linkIngredientRelation,
+  // Real implementation — a small pure lookup, not worth mocking away from
+  // the type→role contract the tests below assert against.
+  universeRefRoleForType: (type) => ({ character: 'canon-character', place: 'canon-place', object: 'canon-object' }[type] || 'reference'),
 }));
 
 import { commitScrap } from './catalogDB/commit.js';
@@ -24,6 +31,12 @@ import { commitScrap } from './catalogDB/commit.js';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.withTransaction.mockImplementation((fn) => fn(mocks.client));
+  // clearAllMocks resets call history but not a prior mockRejectedValue —
+  // reset the default resolution so one test's induced failure can't bleed
+  // into the next.
+  mocks.linkIngredientToSource.mockResolvedValue(undefined);
+  mocks.linkIngredientToRef.mockResolvedValue(undefined);
+  mocks.linkIngredientRelation.mockResolvedValue(undefined);
 });
 
 describe('commitScrap', () => {
@@ -90,5 +103,85 @@ describe('commitScrap', () => {
       scrapId: 'cat-scrap-example',
       accepted: [{ type: 'idea', name: 'Example Idea' }],
     })).rejects.toBe(failure);
+  });
+
+  it('links every ingredient to universeRef with the type-derived role, in the transaction client (#7615)', async () => {
+    mocks.createIngredient
+      .mockResolvedValueOnce({ id: 'cat-chr-example' })
+      .mockResolvedValueOnce({ id: 'cat-idea-example' });
+
+    await commitScrap({
+      scrapId: 'cat-scrap-example',
+      accepted: [
+        { type: 'character', name: 'Example Character' },
+        { type: 'idea', name: 'Example Idea' },
+      ],
+      universeRef: 'universe-1',
+    });
+
+    expect(mocks.linkIngredientToRef).toHaveBeenNthCalledWith(1, 'cat-chr-example', 'universe', 'universe-1', 'canon-character', { client: mocks.client });
+    expect(mocks.linkIngredientToRef).toHaveBeenNthCalledWith(2, 'cat-idea-example', 'universe', 'universe-1', 'reference', { client: mocks.client });
+  });
+
+  it('an explicit role overrides the type-derived default', async () => {
+    mocks.createIngredient.mockResolvedValueOnce({ id: 'cat-idea-example' });
+
+    await commitScrap({
+      scrapId: 'cat-scrap-example',
+      accepted: [{ type: 'idea', name: 'Example Idea' }],
+      universeRef: 'universe-1',
+      role: 'canon-idea',
+    });
+
+    expect(mocks.linkIngredientToRef).toHaveBeenCalledWith('cat-idea-example', 'universe', 'universe-1', 'canon-idea', { client: mocks.client });
+  });
+
+  it('links no universe ref when universeRef is omitted — prior behavior preserved', async () => {
+    mocks.createIngredient.mockResolvedValueOnce({ id: 'cat-idea-example' });
+
+    await commitScrap({ scrapId: 'cat-scrap-example', accepted: [{ type: 'idea', name: 'Example Idea' }] });
+
+    expect(mocks.linkIngredientToRef).not.toHaveBeenCalled();
+  });
+
+  it('mints one related-to edge per unordered pair, from_id = lexicographically smaller id', async () => {
+    mocks.createIngredient
+      .mockResolvedValueOnce({ id: 'cat-idea-b' })
+      .mockResolvedValueOnce({ id: 'cat-idea-a' })
+      .mockResolvedValueOnce({ id: 'cat-idea-c' });
+
+    await commitScrap({
+      scrapId: 'cat-scrap-example',
+      accepted: [
+        { type: 'idea', name: 'B' },
+        { type: 'idea', name: 'A' },
+        { type: 'idea', name: 'C' },
+      ],
+    });
+
+    // 3 ingredients (created in order b, a, c) → 3 unordered pairs, each
+    // oriented smaller-id-first regardless of creation order: cat-idea-a <
+    // cat-idea-b < cat-idea-c lexicographically.
+    expect(mocks.linkIngredientRelation).toHaveBeenCalledTimes(3);
+    expect(mocks.linkIngredientRelation).toHaveBeenCalledWith('cat-idea-a', 'cat-idea-b', 'related-to', { client: mocks.client });
+    expect(mocks.linkIngredientRelation).toHaveBeenCalledWith('cat-idea-b', 'cat-idea-c', 'related-to', { client: mocks.client });
+    expect(mocks.linkIngredientRelation).toHaveBeenCalledWith('cat-idea-a', 'cat-idea-c', 'related-to', { client: mocks.client });
+  });
+
+  it('mints no relation edges for a single-item batch', async () => {
+    mocks.createIngredient.mockResolvedValueOnce({ id: 'cat-idea-solo' });
+
+    await commitScrap({ scrapId: 'cat-scrap-example', accepted: [{ type: 'idea', name: 'Solo' }] });
+
+    expect(mocks.linkIngredientRelation).not.toHaveBeenCalled();
+  });
+
+  it('mints no relation edges for a batch over the 25-row bound', async () => {
+    const accepted = Array.from({ length: 26 }, (_, i) => ({ type: 'idea', name: `Idea ${i}` }));
+    for (let i = 0; i < 26; i++) mocks.createIngredient.mockResolvedValueOnce({ id: `cat-idea-${i}` });
+
+    await commitScrap({ scrapId: 'cat-scrap-example', accepted });
+
+    expect(mocks.linkIngredientRelation).not.toHaveBeenCalled();
   });
 });
