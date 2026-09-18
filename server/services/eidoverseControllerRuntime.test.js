@@ -21,12 +21,26 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { summarizeControllerInstall } from '../lib/eidoverseControllers.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-eidoverse-controllers-'),
 }));
 
 const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
+
+// `deliverControllerEffects()` (the default `deliver` the runtime uses when a
+// test does not inject its own) lazily imports this module, so mocking it is
+// what lets a test drive a REAL world refusal through the REAL delivery path
+// instead of only through an injected `deliver` stand-in (#7628).
+const { augmentEidoverseWorldMock, sayInEidoverseWorldMock } = vi.hoisted(() => ({
+  augmentEidoverseWorldMock: vi.fn(),
+  sayInEidoverseWorldMock: vi.fn(),
+}));
+vi.mock('./eidoverseWorld.js', () => ({
+  augmentEidoverseWorld: augmentEidoverseWorldMock,
+  sayInEidoverseWorld: sayInEidoverseWorldMock,
+}));
 
 const {
   __resetEidoverseControllerRuntimeForTests,
@@ -73,6 +87,8 @@ async function runSupervisorPasses(passes, { fromMs = 0, everyMs = MINUTE, ...op
 beforeEach(() => {
   rmSync(lazyTempDataRoot('portos-eidoverse-controllers-'), { recursive: true, force: true });
   __resetEidoverseControllerRuntimeForTests();
+  augmentEidoverseWorldMock.mockReset();
+  sayInEidoverseWorldMock.mockReset();
 });
 
 afterEach(() => __resetEidoverseControllerRuntimeForTests());
@@ -207,6 +223,63 @@ describe('the supervised tick path', () => {
     // write would double-count everything it did.
     expect(record.state.pulses).toBe(1);
     expect(record.lastOutcome).toMatchObject({ ok: true, delivered: 0, deliveryError: 'world host is down' });
+  });
+
+  // #7628: `augmentEidoverseWorld()` never throws on a world refusal — the
+  // verdict is its return value. This drives that refusal through the REAL
+  // `deliverControllerEffects()` (no `deliver` override), the seam the old
+  // fixture skipped by mocking a throw instead, and follows it all the way to
+  // the projection a mind or the panel actually reads.
+  it('reads a world refusal instead of counting it as delivered, and disarms after enough of them', async () => {
+    augmentEidoverseWorldMock.mockResolvedValue({
+      success: false,
+      applied: 0,
+      operations: [{ verb: 'light', id: 'missing-lantern', outcome: 'refused', proposed: null, committed: null, reason: 'unknown entity id' }],
+    });
+    await install({
+      id: 'lamp-keeper', controllerId: 'lantern-keeper', deliverEffects: true, tickIntervalMs: MINUTE,
+      config: { relightEveryTicks: 1, lanterns: [{ id: 'missing-lantern', pos: [0, 2, 0] }] },
+    });
+
+    await runSupervisorPasses(3);
+
+    expect(augmentEidoverseWorldMock).toHaveBeenCalledTimes(3);
+    const record = await getEidoverseControllerInstall('lamp-keeper');
+    // The step succeeded every tick — #7628's whole point is that this alone
+    // used to be reported as "ok" with no trace of the refusal anywhere.
+    expect(record.lastOutcome.ok).toBe(true);
+    expect(record.lastOutcome).toMatchObject({ delivered: 0, deliveryError: 'unknown entity id' });
+    expect(record.consecutiveDeliveryFailures).toBe(3);
+    // A run of refused deliveries disarms exactly like a run of failed steps.
+    expect(record.armed).toBe(false);
+    expect(record.disarmedReason).toMatch(/3 consecutive delivery failures: unknown entity id/);
+    expect(isEidoverseControllerSupervisorRegistered()).toBe(false);
+
+    // The projection every reader (route, mind tool, panel) actually consumes
+    // carries the refusal as its own verdict, separate from the tick.
+    const summary = summarizeControllerInstall(record);
+    expect(summary.lastTickOk).toBe(true);
+    expect(summary.lastDelivery).toEqual({ ok: false, delivered: 0, reason: 'unknown entity id' });
+  });
+
+  it('does not disarm on a rewritten delivery — the world landed different args, not nothing', async () => {
+    augmentEidoverseWorldMock.mockResolvedValue({
+      success: true,
+      applied: 1,
+      operations: [{ verb: 'light', id: 'plaza-lantern', outcome: 'rewritten', proposed: { id: 'plaza-lantern' }, committed: { id: 'plaza-lantern', pos: [0, 1, 0] } }],
+    });
+    await install({
+      id: 'lamp-keeper', controllerId: 'lantern-keeper', deliverEffects: true, tickIntervalMs: MINUTE,
+      config: { relightEveryTicks: 1, lanterns: [{ id: 'plaza-lantern', pos: [0, 2, 0] }] },
+    });
+
+    await runSupervisorPasses(3);
+
+    const record = await getEidoverseControllerInstall('lamp-keeper');
+    expect(record.lastOutcome).toMatchObject({ ok: true, delivered: 1, deliveryError: null });
+    expect(record.consecutiveDeliveryFailures).toBe(0);
+    expect(record.armed).toBe(true);
+    expect(summarizeControllerInstall(record).lastDelivery).toEqual({ ok: true, delivered: 1, reason: null });
   });
 });
 

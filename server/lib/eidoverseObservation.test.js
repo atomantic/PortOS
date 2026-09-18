@@ -181,6 +181,26 @@ describe('buildEidoverseObservation', () => {
     expect(third.changes.controllersNeedingAttention).toEqual(['newly-broken']);
   });
 
+  it('flags a controller whose step is clean but whose delivery the world refused (#7628)', () => {
+    // `lastTickOk: true` and `consecutiveFailures: 0` on their own describe a
+    // healthy controller — that used to be the whole story. A controller
+    // whose every world write is refused steps cleanly forever, so the
+    // filter has to read `lastDelivery` too or this never surfaces.
+    const installs = [
+      {
+        id: 'refused-lantern', controllerId: 'lanternKeeper', armed: true, lastTickOk: true, consecutiveFailures: 0,
+        lastDelivery: { ok: false, delivered: 0, reason: 'unknown entity id' },
+      },
+      {
+        id: 'delivering-fine', controllerId: 'ambientBeacon', armed: true, lastTickOk: true, consecutiveFailures: 0,
+        lastDelivery: { ok: true, delivered: 1, reason: null },
+      },
+    ];
+    const { report } = observe({ controllerInstalls: installs });
+    expect(report.controllers.needsAttention.map((entry) => entry.id)).toEqual(['refused-lantern']);
+    expect(report.controllers.needsAttention[0].lastDelivery).toEqual({ ok: false, delivered: 0, reason: 'unknown entity id' });
+  });
+
   it('bounds the inherited list and says when it truncated', () => {
     const many = Array.from({ length: 30 }, (_, index) => inheritedFoundation(`peer:alpha:${index}`, PEER_ALPHA));
     const { report } = observe({ source: { peers: [peerSignal(PEER_ALPHA)] }, foundations: many });

@@ -205,14 +205,19 @@ function observePeers(source, byPeer) {
  *
  * `lastTickOk === null` means the controller has never stepped yet, which is
  * the normal state one interval after an install and deliberately NOT an
- * alarm.
+ * alarm. `lastDelivery` is the SEPARATE verdict #7628 added: a step can read
+ * `ok: true` while every effect it produced was refused by the world, so a
+ * clean step alone does not clear this filter — `lastDelivery.ok === false`
+ * is checked too. `lastDelivery.ok === null` (delivery off, or nothing to
+ * deliver this tick) is deliberately NOT an alarm either.
  */
 function observeControllers(installs) {
   if (!Array.isArray(installs)) return null;
   return installs
     .filter((install) => install?.disarmedReason
       || (install?.consecutiveFailures ?? 0) > 0
-      || install?.lastTickOk === false)
+      || install?.lastTickOk === false
+      || install?.lastDelivery?.ok === false)
     .slice(0, MAX_ATTENTION_CONTROLLERS)
     .map((install) => ({
       id: install.id,
@@ -221,6 +226,7 @@ function observeControllers(installs) {
       lastTickOk: install.lastTickOk ?? null,
       lastTickReason: install.lastTickReason ?? null,
       consecutiveFailures: install.consecutiveFailures ?? 0,
+      lastDelivery: install.lastDelivery ?? null,
       disarmedReason: install.disarmedReason ?? null,
     }));
 }
