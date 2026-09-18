@@ -709,7 +709,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // the change: 113,350 — the pre-change tree had already eroded to within single
 // digits of the old ceiling, so this restores the ~350 of headroom the recent
 // entries carry rather than leaving the next unrelated commit to trip it.
-const MAX_STATIC_INSTANTIATIONS = 113700;
+// 113,700 → 114,200 (#7609 catalog extraction lens): `lib/catalogSourceKinds.js`
+// is a dependency-free leaf — the scrap source-kind vocabulary plus the
+// extraction lens each kind implies — so it adds one node per closure that
+// reaches it: `lib/catalogValidation.js` (which builds its ingest enum from
+// the ids), `services/catalogExtraction.js`, the lib barrel, and its own
+// suite. No subtree, and no widely-reached module gained an edge into one.
+// Measured before 113,568, after 113,814; its whole share is 246. The
+// alternative is what this issue exists to close: the lens re-declared as a
+// private Set inside the extractor, parallel to the source-kind list at the
+// Zod boundary, where a new ingest source silently reads a memoir through the
+// fiction lens. Restores the ~390 of headroom the recent entries carry.
+const MAX_STATIC_INSTANTIATIONS = 114200;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
