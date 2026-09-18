@@ -5,6 +5,7 @@ import socket from '../services/socket';
 import * as api from '../services/api';
 import OutputBlocks from '../components/cos/OutputBlocks';
 import { isAgentHandoff } from '../lib/agentOutcome';
+import { agentIssueLinkifier } from '../lib/issueRefs';
 
 const AUTO_DISMISS_MS = 15000;
 
@@ -94,7 +95,7 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
               Loading output...
             </div>
           ) : output.length > 0 ? (
-            <OutputBlocks output={output} />
+            <OutputBlocks output={output} linkifyText={agentIssueLinkifier(agentData)} />
           ) : (
             <div className="text-xs text-gray-500">No output captured</div>
           )}

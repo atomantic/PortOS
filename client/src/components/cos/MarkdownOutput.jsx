@@ -10,13 +10,38 @@ const INLINE_RE = /(!\[[^\]]*\]\([^)]+\)|`[^`]*`|\*\*[^*]+\*\*|\*[^*]+\*|(?<!\w)
 
 const safeSrc = (url) => (/^(https?:\/\/|\/[^/])/.test(url) ? url : null);
 
-function parseInline(text) {
+const LINK_CLASS = 'text-port-accent hover:underline';
+
+// Literal text — outside code spans, links, and image syntax — is the ONE place
+// an optional `linkifyText` resolver gets to add links of its own. This renderer
+// is shared across unrelated domains, so it knows only the segment shape the
+// resolver returns; what counts as a reference, and where it points, stays with
+// the caller that holds the record (components/cos/tabs/AgentCard.jsx).
+function renderText(text, linkifyText, key) {
+  const segments = linkifyText ? linkifyText(text) : null;
+  // The common case by far: nothing to link. Hand back the bare string so the
+  // no-reference path costs exactly what it did before the resolver existed.
+  if (!segments || (segments.length === 1 && typeof segments[0] === 'string')) return [text];
+  return segments.map((seg, i) => {
+    // `safeSrc` for the same reason a markdown link's href gets it: the
+    // resolver is supplied by the caller, and a `javascript:`/`data:`
+    // destination must not become an anchor just because it arrived through a
+    // different door. A rejected destination degrades to the literal text.
+    const href = seg?.url ? safeSrc(seg.url) : null;
+    if (!seg?.url) return seg;
+    return href
+      ? <a key={`${key}-${i}`} href={href} className={LINK_CLASS} target="_blank" rel="noopener noreferrer">{seg.ref}</a>
+      : seg.ref;
+  });
+}
+
+function parseInline(text, linkifyText) {
   const parts = [];
   let last = 0;
   let m;
   INLINE_RE.lastIndex = 0;
   while ((m = INLINE_RE.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
+    if (m.index > last) parts.push(...renderText(text.slice(last, m.index), linkifyText, `t${m.index}`));
     const s = m[0];
     if (s[0] === '!') {
       const im = s.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
@@ -30,21 +55,21 @@ function parseInline(text) {
     } else if (s[0] === '`') {
       parts.push(<code key={m.index} className="bg-port-bg px-1 py-0.5 rounded text-port-accent font-mono text-xs break-all">{s.slice(1, -1)}</code>);
     } else if (s.startsWith('**')) {
-      parts.push(<strong key={m.index} className="text-white font-semibold">{s.slice(2, -2)}</strong>);
+      parts.push(<strong key={m.index} className="text-white font-semibold">{renderText(s.slice(2, -2), linkifyText, `b${m.index}`)}</strong>);
     } else if (s[0] === '*' || s[0] === '_') {
-      parts.push(<em key={m.index} className="text-gray-300 italic">{s.slice(1, -1)}</em>);
+      parts.push(<em key={m.index} className="text-gray-300 italic">{renderText(s.slice(1, -1), linkifyText, `i${m.index}`)}</em>);
     } else {
       const lm = s.match(/\[([^\]]+)\]\(([^)]+)\)/);
       if (lm) {
         const href = safeSrc(lm[2]);
         parts.push(href
-          ? <a key={m.index} href={href} className="text-port-accent hover:underline" target="_blank" rel="noopener noreferrer">{lm[1]}</a>
+          ? <a key={m.index} href={href} className={LINK_CLASS} target="_blank" rel="noopener noreferrer">{lm[1]}</a>
           : <span key={m.index} className="text-port-accent">{lm[1]}</span>);
       }
     }
     last = m.index + s.length;
   }
-  if (last < text.length) parts.push(text.slice(last));
+  if (last < text.length) parts.push(...renderText(text.slice(last), linkifyText, `t${last}`));
   return parts;
 }
 
@@ -60,7 +85,7 @@ const H_STYLES = [
   'text-xs font-semibold text-gray-300 mt-2 mb-0.5',
 ];
 
-function parseBlocks(md, baseLevel) {
+function parseBlocks(md, baseLevel, linkifyText) {
   const lines = (md || '').split('\n');
   const blocks = [];
   let i = 0;
@@ -83,7 +108,7 @@ function parseBlocks(md, baseLevel) {
     const hm = line.match(/^(#{1,6})\s+(.*)/);
     if (hm) {
       const Tag = `h${Math.min(6, baseLevel + hm[1].length - 1)}`;
-      blocks.push(<Tag key={i} className={H_STYLES[hm[1].length - 1]}>{parseInline(hm[2])}</Tag>);
+      blocks.push(<Tag key={i} className={H_STYLES[hm[1].length - 1]}>{parseInline(hm[2], linkifyText)}</Tag>);
       i++; continue;
     }
 
@@ -97,7 +122,7 @@ function parseBlocks(md, baseLevel) {
     if (line.startsWith('> ')) {
       const bqLines = [];
       while (i < lines.length && lines[i].startsWith('> ')) { bqLines.push(lines[i].slice(2)); i++; }
-      blocks.push(<blockquote key={`bq${i}`} className="border-l-2 border-port-accent/50 pl-2 my-1 text-gray-400 italic">{bqLines.map((l, j) => <p key={j} className="text-xs text-gray-300 my-0.5">{parseInline(l)}</p>)}</blockquote>);
+      blocks.push(<blockquote key={`bq${i}`} className="border-l-2 border-port-accent/50 pl-2 my-1 text-gray-400 italic">{bqLines.map((l, j) => <p key={j} className="text-xs text-gray-300 my-0.5">{parseInline(l, linkifyText)}</p>)}</blockquote>);
       continue;
     }
 
@@ -105,7 +130,7 @@ function parseBlocks(md, baseLevel) {
     if (/^[-*+] /.test(line)) {
       const items = [];
       while (i < lines.length && /^[-*+] /.test(lines[i])) { items.push(lines[i].replace(/^[-*+] /, '')); i++; }
-      blocks.push(<ul key={`ul${i}`} className="my-0.5 pl-4 space-y-0.5">{items.map((it, j) => <li key={j} className="text-xs text-gray-300 list-disc">{parseInline(it)}</li>)}</ul>);
+      blocks.push(<ul key={`ul${i}`} className="my-0.5 pl-4 space-y-0.5">{items.map((it, j) => <li key={j} className="text-xs text-gray-300 list-disc">{parseInline(it, linkifyText)}</li>)}</ul>);
       continue;
     }
 
@@ -113,7 +138,7 @@ function parseBlocks(md, baseLevel) {
     if (/^\d+\. /.test(line)) {
       const items = [];
       while (i < lines.length && /^\d+\. /.test(lines[i])) { items.push(lines[i].replace(/^\d+\. /, '')); i++; }
-      blocks.push(<ol key={`ol${i}`} className="my-0.5 pl-4 space-y-0.5 list-decimal">{items.map((it, j) => <li key={j} className="text-xs text-gray-300">{parseInline(it)}</li>)}</ol>);
+      blocks.push(<ol key={`ol${i}`} className="my-0.5 pl-4 space-y-0.5 list-decimal">{items.map((it, j) => <li key={j} className="text-xs text-gray-300">{parseInline(it, linkifyText)}</li>)}</ol>);
       continue;
     }
 
@@ -127,8 +152,8 @@ function parseBlocks(md, baseLevel) {
       blocks.push(
         <div key={`tbl${i}`} className="overflow-x-auto my-1">
           <table className="text-xs border-collapse w-full">
-            <thead className="border-b border-port-border"><tr className="border-b border-port-border/50">{headers.map((h, j) => <th key={j} className="text-left px-2 py-1 text-gray-400 font-medium">{parseInline(h)}</th>)}</tr></thead>
-            <tbody>{rows.map((row, j) => <tr key={j} className="border-b border-port-border/50">{row.map((cell, k) => <td key={k} className="px-2 py-1 text-gray-300">{parseInline(cell)}</td>)}</tr>)}</tbody>
+            <thead className="border-b border-port-border"><tr className="border-b border-port-border/50">{headers.map((h, j) => <th key={j} className="text-left px-2 py-1 text-gray-400 font-medium">{parseInline(h, linkifyText)}</th>)}</tr></thead>
+            <tbody>{rows.map((row, j) => <tr key={j} className="border-b border-port-border/50">{row.map((cell, k) => <td key={k} className="px-2 py-1 text-gray-300">{parseInline(cell, linkifyText)}</td>)}</tr>)}</tbody>
           </table>
         </div>
       );
@@ -144,17 +169,21 @@ function parseBlocks(md, baseLevel) {
       if (lines[i].includes('|') && RE_TABLE_SEP.test(lines[i + 1] || '')) break;
       para.push(lines[i]); i++;
     }
-    if (para.length) blocks.push(<p key={`p${i}`} className="text-xs text-gray-300 my-0.5">{parseInline(para.join(' '))}</p>);
+    if (para.length) blocks.push(<p key={`p${i}`} className="text-xs text-gray-300 my-0.5">{parseInline(para.join(' '), linkifyText)}</p>);
     if (para.length === 0) i++; // skip unconsumed line to prevent infinite loop
   }
 
   return blocks;
 }
 
-export default function MarkdownOutput({ content, baseLevel = 3 }) {
+// `linkifyText(text) => Array<string | { ref, url }>` optionally turns spans of
+// literal text into links — how a CoS run card resolves the bare `#7640` an
+// agent wrote in its summary against that run's own tracker. Omit it and the
+// text renders exactly as before.
+export default function MarkdownOutput({ content, baseLevel = 3, linkifyText = null }) {
   return (
     <div className="markdown-output min-w-0 overflow-hidden break-words">
-      {parseBlocks(content, baseLevel)}
+      {parseBlocks(content, baseLevel, linkifyText)}
     </div>
   );
 }

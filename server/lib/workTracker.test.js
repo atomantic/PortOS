@@ -9,7 +9,7 @@ vi.mock('./gitRemote.js', () => ({
 }));
 
 import { getOriginInfo, readOriginRemoteUrl } from './gitRemote.js';
-import { resolveAppForgeTarget } from './workTracker.js';
+import { repoIssueUrlBase, resolveAppForgeTarget } from './workTracker.js';
 import {
   WORK_TRACKERS,
   CONCRETE_WORK_TRACKERS,
@@ -310,5 +310,49 @@ describe('resolveAppForgeTarget', () => {
     const { tracker, target } = await resolveAppForgeTarget({});
     expect(tracker).toBe('plan');
     expect(target).toBeNull();
+  });
+});
+
+// The base a run card stamps and the browser appends a number to. Composed
+// against the REAL resolver rather than hand-built targets, because the case
+// worth pinning is the one a hostname cannot answer: a self-hosted forge whose
+// domain spells neither "github." nor "gitlab.", where only the app's own pin
+// decides whether the tracker path is `/issues` or `/-/issues`.
+describe('repoIssueUrlBase', () => {
+  const CUSTOM = { host: 'git.example-corp.com', fullName: 'acme/widget', url: 'git@git.example-corp.com:acme/widget.git' };
+
+  const useOrigin = ({ host, fullName, url, isGithub = false }) => {
+    getOriginInfo.mockResolvedValue({ isGithub, host, fullName });
+    readOriginRemoteUrl.mockResolvedValue(url);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('nests the tracker under /-/ for a gitlab-pinned self-hosted origin', async () => {
+    useOrigin(CUSTOM);
+    const { target } = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'gitlab' });
+    expect(repoIssueUrlBase(target)).toBe('https://git.example-corp.com/acme/widget/-/issues');
+  });
+
+  it('serves it off the project path for the github family, enterprise included', async () => {
+    useOrigin({ host: 'github.com', fullName: 'acme/widget', url: 'git@github.com:acme/widget.git', isGithub: true });
+    const gh = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'auto' });
+    expect(repoIssueUrlBase(gh.target)).toBe('https://github.com/acme/widget/issues');
+
+    useOrigin(CUSTOM);
+    const enterprise = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'github' });
+    expect(repoIssueUrlBase(enterprise.target)).toBe('https://git.example-corp.com/acme/widget/issues');
+  });
+
+  it('is null when nothing named a queryable project', async () => {
+    useOrigin(CUSTOM);
+    const { target } = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'plan' });
+    expect(target).toBeNull();
+    expect(repoIssueUrlBase(target)).toBeNull();
+    // The GitLab branch falls `fullName` back to the bare host for an
+    // unparseable remote; that must not compose `https://host/host/-/issues`.
+    expect(repoIssueUrlBase({ forge: 'gitlab', fullName: 'git.example-corp.com', webHost: 'git.example-corp.com' })).toBeNull();
   });
 });

@@ -75,3 +75,46 @@ describe('MarkdownOutput heading levels', () => {
     expect(screen.getByRole('heading', { level: 6, name: 'Three' }).tagName).toBe('H6');
   });
 });
+
+// The renderer takes a resolver, not a repository (#7676): what counts as a
+// reference and where it points belongs to the caller that holds the record.
+describe('linkifyText resolver', () => {
+  // A stand-in for lib/issueRefs.js — deliberately not that module, so these
+  // assertions pin the RENDERER contract and not the issue-ref pattern.
+  const linkifyText = (text) => text.split(/(#\d+)/).map(seg =>
+    /^#\d+$/.test(seg) ? { ref: seg, url: `https://forge.example.com/issues/${seg.slice(1)}` } : seg
+  ).filter(Boolean);
+  const link = (name) => screen.getByRole('link', { name });
+
+  it('links resolver segments inside paragraphs, headings, list items, and bold runs', () => {
+    render(<MarkdownOutput content={'Closes #1.\n\n## Fixes #2\n\n- refs #3\n\n**and #4**'} linkifyText={linkifyText} />);
+    for (const n of [1, 2, 3, 4]) {
+      expect(link(`#${n}`)).toHaveAttribute('href', `https://forge.example.com/issues/${n}`);
+    }
+  });
+
+  it('never offers the resolver text inside a code span or a fenced block', () => {
+    render(<MarkdownOutput content={'use `#7640` here\n\n```\ngrep #7640\n```'} linkifyText={linkifyText} />);
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('does not let the resolver rewrite an existing markdown link', () => {
+    render(<MarkdownOutput content="[#7640](https://example.com/elsewhere)" linkifyText={linkifyText} />);
+    expect(link('#7640')).toHaveAttribute('href', 'https://example.com/elsewhere');
+  });
+
+  it('renders plain text when no resolver is passed', () => {
+    render(<MarkdownOutput content="Closes #7640" />);
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByText('Closes #7640')).toBeInTheDocument();
+  });
+});
+
+it('refuses a resolver destination that would not pass as a markdown link href', () => {
+  // The resolver is caller-supplied, so a `javascript:`/`data:` destination must
+  // not become an anchor just because it arrived through a different door.
+  const hostile = (text) => [{ ref: text, url: 'javascript:alert(1)' }];
+  render(<MarkdownOutput content="click me" linkifyText={hostile} />);
+  expect(screen.queryByRole('link')).toBeNull();
+  expect(screen.getByText('click me')).toBeInTheDocument();
+});
