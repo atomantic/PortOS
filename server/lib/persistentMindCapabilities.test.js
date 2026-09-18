@@ -48,6 +48,18 @@ describe('persistent mind capabilities', () => {
     expect(normalizePersistentMindCapabilities({ createTasks: 'true', readPortos: 'true' })).toMatchObject({ createTasks: false, readPortos: false });
   });
 
+  it('defaults the progressive tool-exposure retention window and clamps hand-edited values', () => {
+    expect(createDefaultPersistentMindCapabilities()).toMatchObject({ toolExposureRetentionTurns: 3, toolExposureAllSchemas: false });
+    expect(normalizePersistentMindCapabilities({ toolExposureRetentionTurns: 0 })).toMatchObject({ toolExposureRetentionTurns: 0 });
+    expect(normalizePersistentMindCapabilities({ toolExposureRetentionTurns: 5, toolExposureAllSchemas: true }))
+      .toMatchObject({ toolExposureRetentionTurns: 5, toolExposureAllSchemas: true });
+    // Out-of-range or malformed values fall back to the default rather than
+    // silently clamping to the nearest bound, which would hide a corrupt file.
+    expect(normalizePersistentMindCapabilities({ toolExposureRetentionTurns: -1 })).toMatchObject({ toolExposureRetentionTurns: 3 });
+    expect(normalizePersistentMindCapabilities({ toolExposureRetentionTurns: 21 })).toMatchObject({ toolExposureRetentionTurns: 3 });
+    expect(normalizePersistentMindCapabilities({ toolExposureRetentionTurns: 'three' })).toMatchObject({ toolExposureRetentionTurns: 3 });
+  });
+
   it('validates and merges the explicit task-creation grant', () => {
     expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, manageMind: true, manageEidoverse: true, readPortos: true, writePortos: false }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 2, createTasks: true }).success).toBe(true);
@@ -56,10 +68,11 @@ describe('persistent mind capabilities', () => {
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 8 }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 11 }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 12 }).success).toBe(true);
-    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 13 }).success).toBe(false);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 13 }).success).toBe(true);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 14 }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ taskModelAllowlist: [{ providerId: 'ollama', model: 'example-local' }] }).success).toBe(true);
     expect(normalizePersistentMindCapabilities({ schemaVersion: 2, createTasks: true }))
-      .toMatchObject({ schemaVersion: 12, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, callUser: false, adjustLocalContext: false });
+      .toMatchObject({ schemaVersion: 13, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, callUser: false, adjustLocalContext: false });
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: ['example-app', 'second-app'] }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: Array.from({ length: 51 }, (_, index) => `app-${index}`) }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, shell: true }).success).toBe(false);

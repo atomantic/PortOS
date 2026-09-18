@@ -7,6 +7,7 @@ import Banner from '../components/ui/Banner';
 import PersistentMindRecipeLibrary from '../components/cos/PersistentMindRecipeLibrary';
 import PersistentMindTaskAccessControls from '../components/cos/PersistentMindTaskAccessControls';
 import PersistentMindTaskModelAllowlistControls from '../components/cos/PersistentMindTaskModelAllowlistControls';
+import PersistentMindToolExposureControls from '../components/cos/PersistentMindToolExposureControls';
 
 export default function PersistentMindTools({ onCapabilitiesChange, onSavingChange }) {
   const [data, setData] = useState(null);
@@ -88,7 +89,14 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
                 <div className="mt-3 grid gap-2 md:grid-cols-2">
                   {(data.semanticTools || []).map((tool) => (
                     <details key={tool.name} className="min-w-0 rounded border border-port-border p-2 text-xs">
-                      <summary className="cursor-pointer break-words font-medium text-port-text">{tool.name} · {tool.granted ? 'Granted' : 'Disabled'}</summary>
+                      <summary className="cursor-pointer break-words font-medium text-port-text">
+                        {tool.name} · {tool.granted ? 'Granted' : 'Disabled'}
+                        {tool.family && (
+                          <span className={`ml-2 rounded-full border px-2 py-0.5 text-[10px] font-normal normal-case ${tool.family === 'core' ? 'border-port-accent/40 text-port-accent' : 'border-port-border text-port-text-muted'}`}>
+                            {tool.family === 'core' ? 'core' : `${tool.family} family`}
+                          </span>
+                        )}
+                      </summary>
                       <p className="mt-2 text-port-text-muted">{tool.description}</p>
                       {tool.recipe && (
                         <div className="mt-2 rounded border border-port-border bg-port-bg p-2 text-port-text-muted">
@@ -141,6 +149,12 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
                     onSavingChange={handleCapabilitiesSavingChange}
                   />
                 </div>
+                <PersistentMindToolExposureControls
+                  capabilities={data.capabilities}
+                  disabled={capabilitiesSaving}
+                  onSaved={updateCapabilities}
+                  onSavingChange={handleCapabilitiesSavingChange}
+                />
               </section>
 
               {taskCatalog && (

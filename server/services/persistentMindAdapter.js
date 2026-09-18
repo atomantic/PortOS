@@ -414,7 +414,12 @@ export function createPersistentMindTurnAdapter() {
       // already redacted, no grant required. Deeper lookbacks use the
       // readPortos-gated user-actions.query tool.
       const userActionsPrompt = await readPersistentMindUserActionsPrompt();
-      const toolCapabilityPrompt = buildPersistentMindToolPrompt(taskAccess, await readPersistentMindRecipeCatalog(taskAccess));
+      // Only the very first build of the turn ages the lease and traces —
+      // every later rebuild (after a tool round) reuses the same turnId with
+      // isUserTurn omitted so a multi-round turn can't age its own tools out
+      // from under itself.
+      const isUserTurn = wake?.kind === 'message';
+      const toolCapabilityPrompt = await buildPersistentMindToolPrompt(taskAccess, await readPersistentMindRecipeCatalog(taskAccess), { turnId, isUserTurn, trace: true });
       const callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: taskAccess.callUser });
       const screenshots = (Array.isArray(wake?.message?.images) ? wake.message.images : []).map((image) => {
         const path = resolveScreenshot(image?.filename);
@@ -567,8 +572,12 @@ export function createPersistentMindTurnAdapter() {
         });
         completedToolResults.push(...toolResults);
         const liveCapabilities = normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities);
+        // Same turnId, isUserTurn/trace both omitted (default false): a tool
+        // call may have just activated or renewed a family, so re-read the
+        // live lease state, but this in-turn rebuild must never age it again
+        // or log a second trace line for the same turn.
         basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
-          toolCapabilityPrompt: buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities)),
+          toolCapabilityPrompt: await buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities), { turnId }),
         });
         const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;
         providerPrompt = `${basePrompt}\n\n# Completed tool results\n${JSON.stringify(completedToolResults)}\n\n${parsed.taskRequests.length > 0 ? 'Task requests from this intermediate round were not queued. Include only the final desired taskRequests in a terminal response with toolCalls: [].\n' : ''}${budgetExhausted ? 'The tool-call budget is exhausted. Return a final response with toolCalls: [] and do not repeat completed actions.' : 'Use these results to continue. Do not repeat a completed requestId.'}`;

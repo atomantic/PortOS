@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  root: { persistentMind: { toolActivation: { leases: {}, lastAgedTurnId: null } } },
   dispatch: vi.fn(),
   executeTasks: vi.fn(),
   cleanupMind: vi.fn(),
@@ -83,7 +84,17 @@ vi.mock('./instanceIdentity.js', () => ({
 vi.mock('./userActions.js', () => ({
   listUserActions: (...args) => mocks.listUserActions(...args),
 }));
+// Only the progressive tool-exposure lease (#7624) reaches cosState.js
+// directly — every other adapter's own state access goes through a mock
+// above. A bare, mutable in-memory root keeps every existing executeCosToolCall
+// test hermetic instead of touching the real state file.
+vi.mock('./cosState.js', () => ({
+  loadState: vi.fn(async () => mocks.root),
+  saveState: vi.fn(async (root) => { mocks.root = root; }),
+  withStateLock: vi.fn(async (fn) => fn()),
+}));
 
+import { DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS } from '../lib/persistentMindToolActivation.js';
 import {
   __testing,
   buildPersistentMindToolPrompt,
@@ -96,6 +107,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   __testing.toolCalls.clear();
   __testing.toolCallFingerprints.clear();
+  mocks.root = { persistentMind: { toolActivation: { leases: {}, lastAgedTurnId: null } } };
   mocks.dispatch.mockResolvedValue({ ok: true });
   mocks.executeTasks.mockResolvedValue([{ success: true, task: { id: 'task-1' }, duplicate: false }]);
   mocks.cleanupMind.mockResolvedValue({ ok: true, success: true, state: 'completed', historyEventsCleared: 8 });
@@ -229,7 +241,7 @@ describe('cosToolRegistry', () => {
     await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { writePortos: true, createTasks: true } } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
     await expect(executeCosToolCall({ call: { ...call, arguments: { ...call.arguments, endpoint: 'https://example.com' } }, authority: { scope: 'mind', capabilities: { chooseThinkingPreset: true } } })).rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
     await expect(executeCosToolCall({ call, authority: { scope: 'agent', capabilities: { chooseThinkingPreset: true } } })).rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
-    expect(getCosToolCatalog({ scope: 'mind', capabilities: { chooseThinkingPreset: true } }).tools.filter((tool) => tool.granted).map((tool) => tool.name)).toEqual(['mind.thinking-presets', 'mind.request-thinking-preset']);
+    expect(getCosToolCatalog({ scope: 'mind', capabilities: { chooseThinkingPreset: true } }).tools.filter((tool) => tool.granted).map((tool) => tool.name)).toEqual(['tools.activate', 'tools.deactivate', 'mind.thinking-presets', 'mind.request-thinking-preset']);
   });
 
   it('gates the forge-issue tools on their own grant and routes them to the issue adapter', async () => {
@@ -246,12 +258,13 @@ describe('cosToolRegistry', () => {
     expect(result).toMatchObject({ name: 'issues.file', state: 'completed', result: { number: 42 } });
     expect(mocks.fileIssue).toHaveBeenCalledWith(call.arguments);
     expect(getCosToolCatalog({ scope: 'mind', capabilities: { fileIssues: true } }).tools.filter((tool) => tool.granted).map((tool) => tool.name))
-      .toEqual(['issues.list', 'issues.file']);
+      .toEqual(['tools.activate', 'tools.deactivate', 'issues.list', 'issues.file']);
   });
 
   it('exports a compact canonical catalog and provider translations', () => {
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
     expect(catalog.tools.map((tool) => tool.name)).toEqual([
+      'tools.activate', 'tools.deactivate',
       'mind.recipes.create', 'mind.recipes.list', 'mind.recipes.read', 'mind.recipes.update', 'mind.recipes.archive', 'mind.recipes.restore',
       'mind.thinking-presets',
       'mind.request-thinking-preset',
@@ -292,17 +305,19 @@ describe('cosToolRegistry', () => {
     expect(catalog.tools.find((tool) => tool.name === 'brain.capture').granted).toBe(false);
     const openai = formatCosToolCatalog(catalog, 'openai');
     expect(openai.tools).toEqual([
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'tools_activate' }) }),
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'tools_deactivate' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'user_actions_query' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_chat' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_status' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'brain_search' }) }),
     ]);
     const mcp = formatCosToolCatalog(catalog, 'mcp');
-    expect(mcp.tools[0].annotations).toMatchObject({ readOnlyHint: true, openWorldHint: false });
+    expect(mcp.tools.find((tool) => tool.name === 'user_actions_query').annotations).toMatchObject({ readOnlyHint: true, openWorldHint: false });
   });
 
-  it('includes only granted tools in the Persistent Mind prompt', () => {
-    const prompt = buildPersistentMindToolPrompt({ readPortos: true });
+  it('includes only granted tools in the Persistent Mind prompt when the all-schemas escape hatch is on', async () => {
+    const prompt = await buildPersistentMindToolPrompt({ readPortos: true, toolExposureAllSchemas: true });
     // Catalog entries are JSON.stringified as `"name":"<tool>"`. A granted
     // tool's input schema may list the same token as an enum (user-actions.query
     // type `brain.capture`, #5596) — that must not be mistaken for advertising
@@ -573,6 +588,134 @@ describe('cosToolRegistry', () => {
       state: 'failed',
       error: 'Queue unavailable',
       result: { ok: false, state: 'failed', error: 'Queue unavailable' },
+    });
+  });
+
+  describe('progressive tool exposure (#7624)', () => {
+    it('hides a family behind a one-line discoverable index until tools.activate expands it', async () => {
+      const capabilities = { manageMind: true };
+      const before = await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-1', isUserTurn: true });
+      expect(before).not.toContain('"name":"mind.cleanup"');
+      expect(before).toContain('mind.cleanup');
+      expect(before).toContain('tools.activate');
+
+      const activated = await executeCosToolCall({
+        call: { requestId: 'activate-mind', name: 'tools.activate', arguments: { families: ['mind'] } },
+        authority: { scope: 'mind', capabilities },
+      });
+      expect(activated).toMatchObject({ state: 'completed', result: { activated: ['mind'], retentionTurns: 3 } });
+
+      const after = await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-1' });
+      expect(after).toContain('"name":"mind.cleanup"');
+    });
+
+    it('never exposes an ungranted tool at full schema even with a live lease for its family (fail-closed)', async () => {
+      mocks.root.persistentMind.toolActivation = { leases: { mind: 3 }, lastAgedTurnId: 'turn-1' };
+      const prompt = await buildPersistentMindToolPrompt({ manageMind: false, readPortos: true }, [], { turnId: 'turn-1' });
+      expect(prompt).not.toContain('mind.cleanup');
+    });
+
+    it('drops a leased tool immediately once its capability grant is revoked between turns', async () => {
+      mocks.root.persistentMind.toolActivation = { leases: { mind: 3 }, lastAgedTurnId: 'turn-1' };
+      const stillGranted = await buildPersistentMindToolPrompt({ manageMind: true }, [], { turnId: 'turn-1' });
+      expect(stillGranted).toContain('"name":"mind.cleanup"');
+
+      const revoked = await buildPersistentMindToolPrompt({ manageMind: false }, [], { turnId: 'turn-2', isUserTurn: true });
+      expect(revoked).not.toContain('mind.cleanup');
+    });
+
+    it('does not age the lease across tool-round loops within one turn, only across a new user turn', async () => {
+      mocks.root.persistentMind.toolActivation = { leases: { mind: 2 }, lastAgedTurnId: null };
+      const capabilities = { manageMind: true };
+      // Round 0 of turn-1 ages it (2 -> 1); rounds 1 and 2 of the SAME turn
+      // must reuse that aged value rather than aging it again each call.
+      await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-1', isUserTurn: true });
+      expect(mocks.root.persistentMind.toolActivation.leases.mind).toBe(1);
+      await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-1' });
+      await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-1' });
+      expect(mocks.root.persistentMind.toolActivation.leases.mind).toBe(1);
+      // A genuinely new user turn ages it exactly once more.
+      await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-2', isUserTurn: true });
+      expect(mocks.root.persistentMind.toolActivation.leases.mind).toBe(0);
+    });
+
+    it('keeps a family exposed through every round-refresh of the turn it ages to its floor', async () => {
+      mocks.root.persistentMind.toolActivation = { leases: { mind: 1 }, lastAgedTurnId: null };
+      const capabilities = { manageMind: true };
+      const round0 = await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-1', isUserTurn: true });
+      expect(round0).toContain('"name":"mind.cleanup"');
+      // A later round of the SAME turn re-reads persisted state (no
+      // isUserTurn) and must still see the family the first round exposed.
+      const round1 = await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-1' });
+      expect(round1).toContain('"name":"mind.cleanup"');
+      // The turn after that is the one that actually drops it back to the
+      // discoverable index (still named, but without its full schema).
+      const nextTurn = await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-2', isUserTurn: true });
+      expect(nextTurn).not.toContain('"name":"mind.cleanup"');
+      expect(nextTurn).toContain('mind.cleanup');
+    });
+
+    it('tools.deactivate clears both this turn\'s selection and the persisted lease', async () => {
+      const capabilities = { manageMind: true };
+      await executeCosToolCall({
+        call: { requestId: 'activate-mind-2', name: 'tools.activate', arguments: { families: ['mind'] } },
+        authority: { scope: 'mind', capabilities },
+      });
+      expect(mocks.root.persistentMind.toolActivation.leases.mind).toBe(3);
+
+      const deactivated = await executeCosToolCall({
+        call: { requestId: 'deactivate-mind', name: 'tools.deactivate', arguments: { families: ['mind'] } },
+        authority: { scope: 'mind', capabilities },
+      });
+      expect(deactivated).toMatchObject({ state: 'completed', result: { deactivated: ['mind'] } });
+      expect(mocks.root.persistentMind.toolActivation.leases.mind).toBeUndefined();
+
+      const prompt = await buildPersistentMindToolPrompt(capabilities, [], { turnId: 'turn-3', isUserTurn: true });
+      expect(prompt).not.toContain('"name":"mind.cleanup"');
+    });
+
+    it('renews only the family a successful call actually used', async () => {
+      const capabilities = { manageMind: true };
+      mocks.root.persistentMind.toolActivation = { leases: { mind: 1 }, lastAgedTurnId: null };
+      mocks.protectMemory.mockResolvedValue({ ok: true, success: true, protection: 'core-identity' });
+      await executeCosToolCall({
+        call: { requestId: 'protect-renew', name: 'mind.protect-memory', arguments: { memoryId: 'memory-1', protection: 'core-identity' } },
+        authority: { scope: 'mind', capabilities },
+      });
+      // mind.protect-memory's family is 'mind' — using it renews 'mind' back
+      // to the full default retention window rather than leaving it decayed.
+      expect(mocks.root.persistentMind.toolActivation.leases.mind).toBe(DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS);
+    });
+
+    it('reproduces the pre-#7624 catalog exactly under the all-schemas escape hatch', async () => {
+      const capabilities = { manageMind: true, toolExposureAllSchemas: true };
+      // Even with no lease at all, every granted tool's full schema is sent —
+      // family exposure never applies under the escape hatch.
+      const prompt = await buildPersistentMindToolPrompt(capabilities, []);
+      expect(prompt).toContain('"name":"mind.cleanup"');
+      expect(prompt).not.toContain('Discoverable-only families');
+    });
+
+    it('reports semantic tool access as OFF exactly as before when nothing meaningful is granted', async () => {
+      const prompt = await buildPersistentMindToolPrompt({}, []);
+      expect(prompt).toBe(`# PortOS semantic tools
+Semantic tool access is OFF. Return an empty toolCalls array. Never invent a tool name or claim that a PortOS action ran.`);
+    });
+
+    it('logs one aggregate trace line per turn with no tool name or user text', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await buildPersistentMindToolPrompt({ manageMind: true }, [], { turnId: 'turn-trace', isUserTurn: true, trace: true });
+        // A mid-turn refresh must not log a second line for the same turn.
+        await buildPersistentMindToolPrompt({ manageMind: true }, [], { turnId: 'turn-trace' });
+        const traceLines = logSpy.mock.calls.map(([line]) => line).filter((line) => line.includes('Mind tool exposure'));
+        expect(traceLines).toHaveLength(1);
+        expect(traceLines[0]).toMatch(/registered=\d+ eligible=\d+ core=\d+ activated=\d+ retained=\d+ excluded\(/);
+        expect(traceLines[0]).not.toContain('mind.cleanup');
+        expect(traceLines[0]).not.toContain('secret text');
+      } finally {
+        logSpy.mockRestore();
+      }
     });
   });
 });

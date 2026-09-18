@@ -15,9 +15,20 @@ import { canonicalStringify } from '../lib/objects.js';
 import { sha256Text } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
+  normalizePersistentMindCapabilities,
   persistentMindCleanupRequestSchema,
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
+import {
+  TOOL_ACTIVATION_FAMILIES,
+  activatePersistentMindToolActivationFamilies,
+  agePersistentMindToolActivation,
+  deactivatePersistentMindToolActivationFamilies,
+  normalizePersistentMindToolActivation,
+  renewPersistentMindToolActivationFamily,
+  toolsActivateInputSchema,
+  toolsDeactivateInputSchema,
+} from '../lib/persistentMindToolActivation.js';
 import {
   persistentMindIssueFileSchema,
   persistentMindIssueListSchema,
@@ -239,6 +250,53 @@ const mindChooseNameTool = Object.freeze({
     idempotent: true, async: false, confirmation: 'capability-grant',
   },
   adapter: { kind: 'persistent-mind-name' },
+});
+
+// Progressive tool exposure (#7624): a small always-on core (this pair, plus
+// user-actions.query below) is the only thing every mind turn sees at full
+// schema by default. Everything else is grouped into a family and shown only
+// as a one-line discoverable index until the mind calls tools.activate for
+// it — see buildPersistentMindToolPrompt. Neither tool requires a capability:
+// they only ever change what is SHOWN, never what a granted tool may do, so
+// gating them on a grant would make that invariant harder to see, not easier.
+const toolsActivateTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'tools.activate',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName('tools.activate'),
+  aliases: [providerToolName('tools.activate')],
+  description: `Expand full schemas for one or more tool families (${TOOL_ACTIVATION_FAMILIES.join(', ')}) for the rest of this turn, plus a short retention window afterward. This only changes which schemas you are shown here — it never grants a capability this mind does not already hold.`,
+  input_schema: zodToOpenApiSchema(toolsActivateInputSchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'],
+    requiredCapabilities: [],
+    sideEffect: 'write',
+    idempotent: true,
+    async: false,
+    confirmation: 'none',
+  },
+  adapter: { kind: 'tools-activate' },
+});
+
+const toolsDeactivateTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'tools.deactivate',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName('tools.deactivate'),
+  aliases: [providerToolName('tools.deactivate')],
+  description: 'Collapse one or more tool families back to their one-line discoverable index. Clears both this turn\'s selection and any retained lease. Omit families to clear all of them.',
+  input_schema: zodToOpenApiSchema(toolsDeactivateInputSchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'],
+    requiredCapabilities: [],
+    sideEffect: 'write',
+    idempotent: true,
+    async: false,
+    confirmation: 'none',
+  },
+  adapter: { kind: 'tools-deactivate' },
 });
 
 // One mind turn must not be able to dump the whole ledger into context — the
@@ -501,9 +559,53 @@ const localContextTools = (() => {
     },
   ];
 })();
-const toolCatalog = (intent) => [...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+// Everything except the voice tools, which are sourced dynamically per intent
+// from voice/tools.js. Kept separate so the fail-fast family check below can
+// validate it without forcing voiceTools() (and the module it lazily depends
+// on) to evaluate at cosToolRegistry.js's own import time.
+const staticToolCatalog = [toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools];
+const toolCatalog = (intent) => [...staticToolCatalog, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
+
+// Family membership per tool (#7624), mirroring the TOOL_GROUPS/GROUP_INTENT
+// shape in voice/tools.js: a lookup table rather than a field on every tool
+// literal, so the mapping and the fail-fast guard below can't drift apart
+// silently. 'core' tools are always shown at full schema; everything else is
+// hidden behind its family until tools.activate names it.
+const CORE_TOOL_NAMES = Object.freeze(new Set(['tools.activate', 'tools.deactivate', 'user-actions.query']));
+const MIND_FAMILY_BY_TOOL_NAME = Object.freeze({
+  'cos.create-task': 'tasks',
+  'issues.list': 'issues',
+  'issues.file': 'issues',
+  'mind.cleanup': 'mind',
+  'mind.protect-memory': 'mind',
+  'mind.choose-name': 'mind',
+  'mind.thinking-presets': 'mind',
+  'mind.request-thinking-preset': 'mind',
+  'mind.local-context': 'mind',
+  'mind.adjust-local-context': 'mind',
+});
+
+const familyForTool = (tool) => {
+  if (!tool) return null;
+  if (CORE_TOOL_NAMES.has(tool.name)) return 'core';
+  if (tool.recipe || tool.adapter?.kind === 'recipe-management' || tool.adapter?.kind === 'recipe') return 'recipes';
+  if (tool.adapter?.kind === 'voice-tool') return 'voice';
+  if (tool.name.startsWith('eidoverse.')) return 'eidoverse';
+  return MIND_FAMILY_BY_TOOL_NAME[tool.name] || null;
+};
+
+// Fail-fast at import time: every mind-scope tool must resolve to a real
+// family or a forgotten mapping would silently make that tool
+// undiscoverable — never shown even by name — once progressive exposure
+// hides its schema. Saved recipes are exempt: they arrive at runtime from
+// outside toolCatalog() and are always classified 'recipes' via `tool.recipe`.
+for (const tool of staticToolCatalog) {
+  if (tool.policy.scopes.includes('mind') && !familyForTool(tool)) {
+    throw new Error(`cosToolRegistry: no tool-activation family mapped for mind-scope tool "${tool.name}"`);
+  }
+}
 
 const normalizeToolCapabilities = (raw) => ({
   ...normalizePortosSemanticToolGrants(raw),
@@ -536,6 +638,10 @@ const publicTool = (tool, { scope, capabilities }) => {
     input_schema: tool.input_schema,
     output_schema: tool.output_schema,
     policy: tool.policy,
+    // 'core' for the small always-on set, a family name for everything else
+    // gated behind tools.activate, or null for a tool outside mind/agent
+    // scope that progressive exposure never applies to. See #7624.
+    family: familyForTool(tool),
     availableInScope: scope === 'all' || tool.policy.scopes.includes(scope),
     granted: !['agent', 'mind'].includes(scope)
       ? null
@@ -599,24 +705,146 @@ export const readCosToolRecipeCatalog = async ({ scope = 'mind' } = {}) => {
   return readRecipeToolsForScope(scope, getCosToolCatalog({ scope }).tools);
 };
 
-export const buildPersistentMindToolPrompt = (capabilities, recipes = []) => {
+const TOOL_EXPOSURE_HEADER = 'You may request up to five calls from the exact catalog below. These are semantic actions, not raw HTTP routes. Never invent a name, route, or argument. Use a stable requestId when practical and never submit the same action in both toolCalls and taskRequests.';
+const TOOL_EXPOSURE_FOOTER = 'Calls without requestId are coalesced by canonical tool name and arguments within this turn. Supply distinct requestId values only when two intentionally identical actions must both run.';
+const TOOL_PURPOSE_MAX_CHARS = 160;
+
+const renderToolPrompt = (tools, discoverableLines = []) => {
+  const discoverableBlock = discoverableLines.length
+    ? `\n\nDiscoverable-only families (schemas hidden to save context; call tools.activate with a "families" array to expand one for this turn and a short retention window after):\n${discoverableLines.join('\n')}`
+    : '';
+  return `# PortOS semantic tools
+${TOOL_EXPOSURE_HEADER}
+
+${JSON.stringify(tools)}${discoverableBlock}
+
+${TOOL_EXPOSURE_FOOTER}`;
+};
+
+// First sentence, hard-capped: the whole point of the discoverable index is
+// spending far fewer tokens per hidden tool than its full schema would.
+const toolPurpose = (description) => {
+  const text = String(description || '').replace(/\s+/g, ' ').trim();
+  const firstSentence = (text.match(/^.*?[.!?](?:\s|$)/)?.[0] || text).trim();
+  return firstSentence.length > TOOL_PURPOSE_MAX_CHARS
+    ? `${firstSentence.slice(0, TOOL_PURPOSE_MAX_CHARS - 1)}…`
+    : firstSentence;
+};
+
+const fullSchemaShape = (tool) => ({
+  name: tool.name,
+  description: tool.description,
+  input_schema: tool.input_schema,
+  sideEffect: tool.policy.sideEffect,
+});
+
+// One aggregate, tool-name-free line per turn (never per intermediate tool
+// round — see the `trace` option below) so the exposure/retention behavior is
+// observable in logs without ever naming a tool, an argument, or user text.
+const logToolExposureTrace = (stats) => {
+  const excluded = Object.entries(stats.excludedByReason)
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(' ') || 'none';
+  console.log(`🧰 Mind tool exposure: registered=${stats.registered} eligible=${stats.eligible} core=${stats.core} activated=${stats.activated} retained=${stats.retained} excluded(${excluded})`);
+};
+
+/**
+ * Build the Persistent Mind's tool-catalog prompt section.
+ *
+ * Progressive exposure (#7624): a small always-on core plus family-scoped
+ * explicit activation with a short turn-scoped retention lease, so a small
+ * local model is never handed every granted tool's full JSON Schema on every
+ * turn. `turnId`/`isUserTurn` age the lease at most once per USER turn — pass
+ * `isUserTurn: false` (or omit it) for a self-directed wake and for every
+ * intermediate tool-round rebuild within one turn. `trace: true` on exactly
+ * one call per turn (the first) logs the one aggregate line for it.
+ *
+ * `capabilities.toolExposureAllSchemas` reproduces the pre-#7624 behavior
+ * (every granted tool's full schema, always) for debugging.
+ */
+export const buildPersistentMindToolPrompt = async (capabilities, recipes = [], { turnId = null, isUserTurn = false, trace = false } = {}) => {
+  const grants = normalizePersistentMindCapabilities(capabilities);
   const catalog = getCosToolCatalog({ scope: 'mind', capabilities, recipes });
-  const tools = catalog.tools.filter((tool) => tool.granted).map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: tool.input_schema,
-    sideEffect: tool.policy.sideEffect,
-  }));
-  if (tools.length === 0) {
+  const granted = catalog.tools.filter((tool) => tool.granted);
+  // tools.activate/tools.deactivate are withheld along with everything else
+  // when there is nothing else granted to activate — matching the pre-#7624
+  // "semantic tool access is OFF" contract exactly for a fully ungranted mind.
+  const meaningful = granted.filter((tool) => !['tools.activate', 'tools.deactivate'].includes(tool.name));
+  if (meaningful.length === 0) {
+    if (trace) {
+      logToolExposureTrace({
+        registered: catalog.tools.length, eligible: 0, core: 0, activated: 0, retained: 0,
+        excludedByReason: { ungranted: catalog.tools.length },
+      });
+    }
     return `# PortOS semantic tools
 Semantic tool access is OFF. Return an empty toolCalls array. Never invent a tool name or claim that a PortOS action ran.`;
   }
-  return `# PortOS semantic tools
-You may request up to five calls from the exact catalog below. These are semantic actions, not raw HTTP routes. Never invent a name, route, or argument. Use a stable requestId when practical and never submit the same action in both toolCalls and taskRequests.
 
-${JSON.stringify(tools)}
+  if (grants.toolExposureAllSchemas) {
+    if (trace) {
+      logToolExposureTrace({
+        registered: catalog.tools.length, eligible: granted.length, core: granted.length, activated: 0, retained: 0,
+        excludedByReason: { ungranted: catalog.tools.length - granted.length },
+      });
+    }
+    return renderToolPrompt(granted.map(fullSchemaShape));
+  }
 
-Calls without requestId are coalesced by canonical tool name and arguments within this turn. Supply distinct requestId values only when two intentionally identical actions must both run.`;
+  const { loadState, saveState, withStateLock } = await import('./cosState.js');
+  const readCurrentLeases = async () => normalizePersistentMindToolActivation((await loadState()).persistentMind?.toolActivation);
+  let activation = await readCurrentLeases();
+  if (isUserTurn && turnId && activation.lastAgedTurnId !== turnId) {
+    activation = await withStateLock(async () => {
+      const root = await loadState();
+      const latest = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
+      if (latest.lastAgedTurnId === turnId) return latest;
+      const { leases } = agePersistentMindToolActivation(latest.leases);
+      const next = { leases, lastAgedTurnId: turnId };
+      root.persistentMind = { ...root.persistentMind, toolActivation: next };
+      await saveState(root);
+      return next;
+    });
+  }
+
+  const exposedFamilies = new Set(Object.keys(activation.leases));
+  const controlTools = granted.filter((tool) => ['tools.activate', 'tools.deactivate'].includes(tool.name));
+  const exposedTools = [];
+  const discoverableByFamily = new Map();
+  for (const tool of meaningful) {
+    if (tool.family === 'core' || exposedFamilies.has(tool.family)) {
+      exposedTools.push(tool);
+    } else {
+      if (!discoverableByFamily.has(tool.family)) discoverableByFamily.set(tool.family, []);
+      discoverableByFamily.get(tool.family).push(tool);
+    }
+  }
+
+  if (trace) {
+    // A family sitting at its full retention value looks freshly
+    // (re)activated; one that has aged down is coasting on retention alone.
+    // This distinguishes the two counts without any extra persisted state.
+    const leaseValues = Object.values(activation.leases);
+    const activated = leaseValues.filter((turnsLeft) => turnsLeft === grants.toolExposureRetentionTurns).length;
+    logToolExposureTrace({
+      registered: catalog.tools.length,
+      eligible: granted.length,
+      core: controlTools.length + meaningful.filter((tool) => tool.family === 'core').length,
+      activated,
+      retained: leaseValues.length - activated,
+      excludedByReason: {
+        ungranted: catalog.tools.length - granted.length,
+        notActivated: [...discoverableByFamily.values()].reduce((sum, tools) => sum + tools.length, 0),
+      },
+    });
+  }
+
+  const discoverableLines = [...discoverableByFamily.entries()].map(([family, tools]) => (
+    `- ${family} (${tools.length}): ${tools.map((tool) => `${tool.name} — ${toolPurpose(tool.description)}`).join('; ')}`
+  ));
+
+  return renderToolPrompt([...controlTools, ...exposedTools].map(fullSchemaShape), discoverableLines);
 };
 
 export const readPersistentMindRecipeCatalog = (capabilities) => readMindRecipeTools(capabilities, getCosToolCatalog({ scope: 'mind' }).tools);
@@ -661,6 +889,22 @@ const validateArguments = (tool, args) => {
 const executeAdapter = async (tool, args, context, authority) => {
   if (tool.adapter.kind === 'recipe-management') return executeRecipeManagement(tool, args, context);
   if (tool.adapter.kind === 'recipe') return executeRecipe(tool, args, context, authority);
+  if (tool.adapter.kind === 'tools-activate' || tool.adapter.kind === 'tools-deactivate') {
+    const { loadState, saveState, withStateLock } = await import('./cosState.js');
+    const grants = normalizePersistentMindCapabilities(authority?.capabilities);
+    return withStateLock(async () => {
+      const root = await loadState();
+      const current = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
+      const leases = tool.adapter.kind === 'tools-activate'
+        ? activatePersistentMindToolActivationFamilies(current.leases, args.families, grants.toolExposureRetentionTurns)
+        : deactivatePersistentMindToolActivationFamilies(current.leases, args.families);
+      root.persistentMind = { ...root.persistentMind, toolActivation: { leases, lastAgedTurnId: current.lastAgedTurnId } };
+      await saveState(root);
+      return tool.adapter.kind === 'tools-activate'
+        ? { ok: true, activated: args.families, retentionTurns: grants.toolExposureRetentionTurns, families: Object.keys(leases) }
+        : { ok: true, deactivated: args.families || Object.keys(current.leases), families: Object.keys(leases) };
+    });
+  }
   if (tool.adapter.kind.startsWith('thinking-')) {
     const { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } = await import('./persistentMindThinkingRequests.js');
     return tool.adapter.kind === 'thinking-catalog'
@@ -871,6 +1115,28 @@ const normalizeAdapterResult = ({ parsedCall, tool, result }) => {
   };
 };
 
+// A successful mind-scope call from a leased/activatable family renews only
+// that family's window — an unrelated activated-but-unused family still ages
+// normally. Never runs for 'core'/unclassified tools (nothing to renew) or
+// under the all-schemas escape hatch (leases are inert there). Errors are
+// swallowed: a lease-bookkeeping failure must never turn a completed tool
+// call into a failed one.
+const renewToolActivationLeaseOnUse = async (tool, authority, succeeded) => {
+  if (!succeeded || authority?.scope !== 'mind') return;
+  const family = familyForTool(tool);
+  if (!family || family === 'core') return;
+  const grants = normalizePersistentMindCapabilities(authority.capabilities);
+  if (grants.toolExposureAllSchemas || !(grants.toolExposureRetentionTurns > 0)) return;
+  const { loadState, saveState, withStateLock } = await import('./cosState.js');
+  await withStateLock(async () => {
+    const root = await loadState();
+    const current = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
+    const leases = renewPersistentMindToolActivationFamily(current.leases, family, grants.toolExposureRetentionTurns);
+    root.persistentMind = { ...root.persistentMind, toolActivation: { leases, lastAgedTurnId: current.lastAgedTurnId } };
+    await saveState(root);
+  });
+};
+
 export const executeCosToolCall = async ({ call, authority, context = {} }) => {
   const parsedCall = cosToolCallSchema.parse(call);
   let tool = resolveTool(parsedCall.name);
@@ -921,7 +1187,11 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
         duplicate: false,
         error: String(error?.message || error || 'Tool execution failed').slice(0, 500),
       }),
-    );
+    )
+    .then(async (normalized) => {
+      await renewToolActivationLeaseOnUse(tool, authority, normalized.state === 'completed').catch(() => {});
+      return normalized;
+    });
   toolCallFingerprints.set(parsedCall.requestId, {
     fingerprint,
     expiresAt: Date.now() + IDEMPOTENCY_RETENTION_MS,

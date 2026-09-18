@@ -19,7 +19,7 @@ import PersistentMindTools from './PersistentMindTools';
 
 const response = (overrides = {}) => ({
   schemaVersion: 1,
-  capabilities: { schemaVersion: 1, createTasks: false },
+  capabilities: { schemaVersion: 1, createTasks: false, toolExposureRetentionTurns: 3, toolExposureAllSchemas: false },
   tools: [{
     id: 'cos.create-task',
     capability: 'createTasks',
@@ -252,6 +252,34 @@ describe('PersistentMindTools', () => {
       { persistentMindCapabilities: expect.objectContaining({ fileIssues: true, allowedAppIds: ['example-app'] }) },
       { silent: true },
     ));
+  });
+
+  it('saves the progressive tool-exposure retention window on blur and shows its current value', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const retentionInput = await screen.findByLabelText('Retention window (extra turns)');
+    expect(retentionInput).toHaveValue(3);
+    await user.clear(retentionInput);
+    await user.type(retentionInput, '5');
+    await user.tab();
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
+      persistentMindCapabilities: { toolExposureRetentionTurns: 5 },
+    }, { silent: true }));
+  });
+
+  it('saves the all-schemas escape hatch as its own toggle without disturbing other grants', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const allSchemasToggle = await screen.findByRole('checkbox', { name: /Send every schema on every turn/ });
+    expect(allSchemasToggle).not.toBeChecked();
+    await user.click(allSchemasToggle);
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
+      persistentMindCapabilities: { toolExposureAllSchemas: true },
+    }, { silent: true }));
   });
 
   it('keeps the failure visible instead of presenting an empty inventory', async () => {

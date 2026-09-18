@@ -13,13 +13,17 @@ import {
   normalizePortosSemanticToolGrants,
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
+import {
+  DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS,
+  TOOL_ACTIVATION_LIMITS,
+} from './persistentMindToolActivation.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 12;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 13;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -265,6 +269,17 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   callUser: z.boolean().optional(),
   chooseThinkingPreset: z.boolean().optional(),
   adjustLocalContext: z.boolean().optional(),
+  // Progressive tool exposure (#7624): how many ADDITIONAL user turns after
+  // the one that called tools.activate a family's full schemas stay shown.
+  // 0 is deliberately one-turn-only. This is a selection hint, never an
+  // authority grant — it never widens what a granted tool may do.
+  toolExposureRetentionTurns: z.number().int()
+    .min(TOOL_ACTIVATION_LIMITS.MIN_RETENTION_TURNS)
+    .max(TOOL_ACTIVATION_LIMITS.MAX_RETENTION_TURNS)
+    .optional(),
+  // Escape hatch for debugging: reproduces the pre-#7624 behavior of sending
+  // every granted tool's full schema on every turn.
+  toolExposureAllSchemas: z.boolean().optional(),
   thinkingPresetAllowlist: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   // An empty list preserves the legacy unrestricted task catalog. Once any
   // entries are configured, requests must name one of these exact pairs.
@@ -342,6 +357,8 @@ export function createDefaultPersistentMindCapabilities() {
     callUser: false,
     chooseThinkingPreset: false,
     adjustLocalContext: false,
+    toolExposureRetentionTurns: DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS,
+    toolExposureAllSchemas: false,
     thinkingPresetAllowlist: [],
     thinkingPresetGrants: {},
     readPortos: false,
@@ -403,6 +420,12 @@ export function normalizePersistentMindCapabilities(raw) {
     callUser: source.callUser === true,
     chooseThinkingPreset: source.chooseThinkingPreset === true,
     adjustLocalContext: source.adjustLocalContext === true,
+    toolExposureRetentionTurns: Number.isSafeInteger(source.toolExposureRetentionTurns)
+      && source.toolExposureRetentionTurns >= TOOL_ACTIVATION_LIMITS.MIN_RETENTION_TURNS
+      && source.toolExposureRetentionTurns <= TOOL_ACTIVATION_LIMITS.MAX_RETENTION_TURNS
+      ? source.toolExposureRetentionTurns
+      : DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS,
+    toolExposureAllSchemas: source.toolExposureAllSchemas === true,
     thinkingPresetAllowlist: z.array(z.string().min(1).max(64)).max(20).safeParse(source.thinkingPresetAllowlist).data || [],
     thinkingPresetGrants: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)).safeParse(source.thinkingPresetGrants).data || {},
     ...semanticGrants,
