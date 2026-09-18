@@ -29,7 +29,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'writers-room-places.md': 'a7f68e51dd6b4421d20f5bd9d855d9b4', // post-022 (setting → place rename)
+  'writers-room-places.md': '5d323f7aea4c2658e7e29afae2bdb7a4', // post-394 (non-fiction lens); a7f68e5… lives on in 394's accepted-old
 };
 
 export default {

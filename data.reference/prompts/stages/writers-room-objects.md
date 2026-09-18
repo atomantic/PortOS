@@ -16,6 +16,16 @@ The writer may have already edited some entries. Treat any non-empty field below
 {{existingObjectsJson}}
 ```
 
+{{#factual}}
+## Lens: non-fiction
+
+This text is **first-person non-fiction about real objects** — a memoir, journal entry, voice memo, or captured thought. The things in it existed. Read it as a record, not as a story:
+
+- **Name each object as the writer names it** — `Dad's watch`, `the blue car`. Keep the writer's article and possessive; do not rename a real belonging.
+- **Do not manufacture symbolism.** An object earns its entry by actually recurring or carrying weight in the text, not by being available to mean something.
+- **Describe only what the text states.** Omit `description` or `significance` rather than inventing provenance or meaning for a real possession. **A wrong guess is worse than a gap.**
+{{/factual}}
+
 ## Source prose
 
 ```
