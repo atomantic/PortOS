@@ -138,6 +138,19 @@ export const SPEC_DECODE_PRESETS = Object.freeze([
       quant: 'PQ2_0',
     },
     draftModel: { path: '' },
+    // The vision tower, in the same repo as the language weights. A `file` PIN
+    // rather than a quant hint: both projectors carry a quant tag (`Q8_0`,
+    // `BF16`) that also matches language packs in this repo, so the hint alone
+    // cannot say which of the two to fetch. Q8_0 (629 MB) over BF16 (931 MB) —
+    // the projector is a fraction of the 6.7 GiB target either way, and Q8_0 is
+    // what the evaluation in docs/research/2026-09-18-ternary-bonsai-2-27b.md
+    // ran. Optional: the preset launches text-only until this is downloaded.
+    projector: {
+      path: 'models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
+      repo: 'prism-ml/Ternary-Bonsai-2-27B-gguf',
+      file: 'Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf',
+      quant: 'Q8_0',
+    },
   },
   {
     id: 'custom',
@@ -198,7 +211,21 @@ export const isDraftSpecType = (type) => String(type).startsWith('draft-');
 
 // The preset the launcher mounts on, and the roles a download request may name.
 export const DEFAULT_SPEC_PRESET_ID = 'qwen3.8-27b-dspark';
-export const SPEC_MODEL_ROLES = Object.freeze(['model', 'draftModel']);
+// `projector` is llama.cpp's `--mmproj` multimodal sidecar — a third weight the
+// launcher may load, not a second drafter. It is a full role rather than a
+// free-text path field because every other weight the card shows already has
+// on-disk status, a Download button, progress frames, a remove path and orphan
+// GC; a projector outside that would be the one file the user had to fetch by
+// hand, with its `.partial` invisible to the sweep (#7611).
+export const SPEC_MODEL_ROLES = Object.freeze(['model', 'draftModel', 'projector']);
+
+// What each role is called in a user-facing message. Server-side counterpart of
+// the card's own `ROLE_LABELS`; keep the two in step.
+export const SPEC_ROLE_LABELS = Object.freeze({
+  model: 'base model',
+  draftModel: 'drafter',
+  projector: 'vision projector',
+});
 
 export const findSpecDecodePreset = (id) =>
   SPEC_DECODE_PRESETS.find((preset) => preset.id === id) || null;

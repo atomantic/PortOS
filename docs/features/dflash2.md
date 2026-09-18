@@ -179,6 +179,35 @@ has no entry in the Ollama/LM Studio catalog. Build recipe, PATH wiring, and the
 measured cost of using the fork's *prebuilt* macOS binary instead of a
 from-source build: [Ternary Bonsai 2 27B on Apple M5 Max](../research/2026-09-18-ternary-bonsai-2-27b.md).
 
+### 2e. Vision — the `--mmproj` projector
+
+A multimodal GGUF keeps its vision tower in a **separate projector sidecar**, and
+llama.cpp loads it only when the launch line names one. Without the flag the
+model still loads and answers — text-only, with no error to read, which is why
+PortOS carries the projector as a weight of its own rather than a path you are
+expected to remember:
+
+```bash
+llama-server \
+  -m models/Ternary-Bonsai-2-27B-PQ2_0.gguf \
+  --mmproj models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf \
+  --spec-type none --port 5568 --host 127.0.0.1 --alias dflash --parallel 1
+```
+
+In PortOS, a preset with a projector shows a third **Vision projector** row in
+the weights list — same on-disk state, Download button, progress and delete as
+the base model and the drafter — and the path lands in **Advanced options →
+Vision Projector / --mmproj**. Notes:
+
+- **It is independent of Spec Type.** Nothing about speculative decoding turns
+  vision on or off, so unlike the drafter the projector is never dropped from a
+  launch line that still names it.
+- **It is optional, and empty means text-only.** A preset whose sidecar is not
+  downloaded starts exactly as it did before — clear the field to go back to a
+  text-only launch on a model that has one.
+- **A path that isn't on disk fails before the process spawns**, the same way a
+  missing base model or drafter does.
+
 ### 3. Use in PortOS
 1. Navigate to **AI Providers** (`/ai`) or **Models → Runtimes**.
 2. Verify **OpenCode llama TUI** is enabled.

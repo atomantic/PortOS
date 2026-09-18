@@ -372,7 +372,7 @@ describe('LocalLlmTab runtime context window', () => {
 
 // The launcher presets (and their weights' on-disk state) come from the server
 // on the llama-server status response — the component holds no copy.
-const specPresets = ({ baseExists = true, draftExists = true } = {}) => ([
+const specPresets = ({ baseExists = true, draftExists = true, projectorExists = false } = {}) => ([
   {
     id: 'qwen3.8-27b-dspark',
     label: 'Qwen 3.8 27B + DSpark Drafter (Recommended — stock llama.cpp)',
@@ -426,7 +426,36 @@ const specPresets = ({ baseExists = true, draftExists = true } = {}) => ([
       downloading: false,
     },
   },
-  { id: 'custom', label: 'Custom GGUF / Manual Paths', specType: 'draft-dspark', model: null, draftModel: null },
+  // A multimodal preset: one language pack plus a `--mmproj` vision sidecar and
+  // no drafter at all. The mixed shape the other two fixtures cannot stand in
+  // for, and what the projector rows below are rendered from (#7611).
+  {
+    id: 'vision-preset',
+    label: 'Example Vision 27B — no drafter',
+    specType: 'none',
+    model: {
+      role: 'model',
+      path: 'models/Example-Vision-27B-Q4_K_M.gguf',
+      exists: true,
+      sizeBytes: 6_700_000_000,
+      repo: 'example-org/Example-Vision-27B-GGUF',
+      repoUrl: 'https://huggingface.co/example-org/Example-Vision-27B-GGUF',
+      downloadable: true,
+      downloading: false,
+    },
+    draftModel: null,
+    projector: {
+      role: 'projector',
+      path: 'models/Example-Vision-27B-mmproj-Q8_0.gguf',
+      exists: projectorExists,
+      sizeBytes: projectorExists ? 629_000_000 : null,
+      repo: 'example-org/Example-Vision-27B-GGUF',
+      repoUrl: 'https://huggingface.co/example-org/Example-Vision-27B-GGUF',
+      downloadable: true,
+      downloading: false,
+    },
+  },
+  { id: 'custom', label: 'Custom GGUF / Manual Paths', specType: 'draft-dspark', model: null, draftModel: null, projector: null },
 ]);
 
 const llamaReady = (overrides = {}) => ({
@@ -671,6 +700,114 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     await waitFor(() => {
       expect(downloadSpecDecodeModel).toHaveBeenCalledWith('qwen3.8-27b-dspark', 'model', { silent: true });
     });
+  });
+
+  // #7611: a multimodal preset launched text-only and silently, because the
+  // launcher had no projector role at all. The user-visible contract is the
+  // whole round trip — a row with its own Download button, and the fetched
+  // sidecar landing on the launch payload as `projector` — so it is asserted
+  // end to end rather than as three separate wiring checks.
+  it('downloads a preset projector and sends it on the next start', async () => {
+    const { getLlamaServerStatus, downloadSpecDecodeModel, startLlamaServer } = await import('../../services/api');
+    // The transfer really does put the file on disk, so the status the card
+    // re-reads afterwards has to say so — otherwise this asserts against a
+    // state the server can never report.
+    let projectorOnDisk = false;
+    getLlamaServerStatus.mockImplementation(async () => (
+      llamaReady({ presets: specPresets({ projectorExists: projectorOnDisk }) })
+    ));
+    downloadSpecDecodeModel.mockImplementationOnce(async () => {
+      projectorOnDisk = true;
+      return { success: true, path: 'models/Example-Vision-27B-mmproj-Q8_0.gguf' };
+    });
+    startLlamaServer.mockResolvedValueOnce({ success: true, pid: 4242 });
+
+    await renderRuntimes();
+    await screen.findByText(/Launch Speculative Decoding Server/);
+    fireEvent.change(screen.getByLabelText('Preset'), { target: { value: 'vision-preset' } });
+
+    // Two rows for a drafter-free multimodal preset: the base model (on disk)
+    // and the projector (not yet), so exactly one Download button is offered.
+    expect(await screen.findByText('Vision projector')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Download$/ }));
+    await clickStartDownload();
+    await waitFor(() => {
+      expect(downloadSpecDecodeModel).toHaveBeenCalledWith('vision-preset', 'projector', { silent: true });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Start Speculative Server/ }));
+    await waitFor(() => {
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'models/Example-Vision-27B-Q4_K_M.gguf',
+        projector: 'models/Example-Vision-27B-mmproj-Q8_0.gguf',
+      }));
+    });
+  });
+
+  // The other half of the same contract: the projector is OPTIONAL, so a preset
+  // whose sidecar was never fetched must still start — text-only, with an empty
+  // `projector` the server leaves off the launch line entirely.
+  it('starts a multimodal preset text-only when its projector is not on disk', async () => {
+    const { getLlamaServerStatus, startLlamaServer } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets() }));
+    startLlamaServer.mockResolvedValueOnce({ success: true, pid: 4243 });
+
+    await renderRuntimes();
+    await screen.findByText(/Launch Speculative Decoding Server/);
+    fireEvent.change(screen.getByLabelText('Preset'), { target: { value: 'vision-preset' } });
+    await screen.findByText('Vision projector');
+
+    const startBtn = screen.getByRole('button', { name: /Start Speculative Server/ });
+    expect(startBtn).toBeEnabled();
+    fireEvent.click(startBtn);
+    await waitFor(() => {
+      expect(startLlamaServer).toHaveBeenCalledWith(expect.objectContaining({ projector: '' }));
+    });
+  });
+
+  // A projector already on disk is armed from the moment the preset is picked —
+  // there is no second action to discover, and the field under Advanced is where
+  // a user clears it back to a text-only launch.
+  it('pre-fills the projector field from a preset whose sidecar is already downloaded', async () => {
+    const { getLlamaServerStatus } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets({ projectorExists: true }) }));
+
+    await renderRuntimes();
+    await screen.findByText(/Launch Speculative Decoding Server/);
+    fireEvent.change(screen.getByLabelText('Preset'), { target: { value: 'vision-preset' } });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Advanced options/ }));
+    expect(screen.getByLabelText(/Vision Projector/)).toHaveValue('models/Example-Vision-27B-mmproj-Q8_0.gguf');
+  });
+
+  // Deleting the sidecar to reclaim disk must not leave its path behind arming a
+  // launch line that can no longer load it — that would block Start on a file the
+  // user deliberately removed, with the only way to clear it under Advanced.
+  it('releases the projector field when its sidecar is deleted', async () => {
+    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/api');
+    let projectorOnDisk = true;
+    getLlamaServerStatus.mockImplementation(async () => (
+      llamaReady({ presets: specPresets({ projectorExists: projectorOnDisk }) })
+    ));
+    removeSpecDecodeModel.mockImplementationOnce(async () => {
+      projectorOnDisk = false;
+      return { success: true, deleted: true, path: 'models/Example-Vision-27B-mmproj-Q8_0.gguf' };
+    });
+
+    await renderRuntimes();
+    await screen.findByText(/Launch Speculative Decoding Server/);
+    fireEvent.change(screen.getByLabelText('Preset'), { target: { value: 'vision-preset' } });
+
+    const projectorRow = (await screen.findByText('Vision projector')).closest('div').parentElement;
+    fireEvent.click(within(projectorRow).getByRole('button', { name: /Delete/ }));
+    fireEvent.click(within(projectorRow).getByRole('button', { name: /Yes, delete/ }));
+
+    await waitFor(() => {
+      expect(removeSpecDecodeModel).toHaveBeenCalledWith('vision-preset', 'projector', { silent: true });
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /Advanced options/ }));
+    await waitFor(() => expect(screen.getByLabelText(/Vision Projector/)).toHaveValue(''));
+    expect(screen.getByRole('button', { name: /Start Speculative Server/ })).toBeEnabled();
   });
 
   // A dropped request (reload, proxy idle timeout) does not stop the transfer —

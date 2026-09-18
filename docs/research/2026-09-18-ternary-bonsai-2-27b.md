@@ -116,14 +116,26 @@ The preset launches with no drafter (`--spec-type none`). Sampling the
 publisher recommends: thinking mode `temperature=1.0, top_p=0.95, top_k=20`;
 instruct mode `temperature=0.7, top_p=0.80, top_k=20`.
 
-## Known gaps
+### Turning on vision
 
-- **Vision is not reachable through PortOS.** The model's image input needs
-  `--mmproj` pointed at a sidecar (`Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf`,
-  629 MB), and the launcher builds no such flag — `pickGgufSibling` in
-  `server/services/specDecodeModels.js` actively filters projector files out of
-  the download candidates. A text-only launch is what the preset delivers;
-  tracked as #7611.
+The model's image input is a separate 629 MB projector sidecar. The preset
+carries it as a third weight, so **Models → Runtimes** shows a *Vision
+projector* row beside the base model with its own Download button; fetching it
+fills the **Vision Projector / --mmproj** field under Advanced options, and the
+next Start puts `--mmproj` on the launch line. Clearing that field launches the
+model text-only, which is what a preset with no projector on disk does. By hand:
+
+```bash
+curl -L -o ~/.portos/models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf \
+  https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf
+```
+
+The repo also publishes a `BF16` projector (931 MB). PortOS pins the `Q8_0` one:
+the projector is a fraction of the 6.7 GiB target either way, and a pin rather
+than a quant hint because both projectors carry tags that also match language
+packs in the same repo.
+
+## Known gaps
 - **Speculative decoding is untested here.** The preset drafts with nothing.
   PrismML's demo repository documents a speculative setup; nothing in this
   evaluation measured whether a drafter helps this pack.
