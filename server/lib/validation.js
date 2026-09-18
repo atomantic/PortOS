@@ -31,6 +31,7 @@ import {
 import { isPlainObject } from './objects.js';
 import { isValidCronExpression, isCronShaped } from './cronValidation.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from './userActionTypes.js';
+import { MIND_BUNDLE_PASSPHRASE_MAX_CHARS, MIND_BUNDLE_PASSPHRASE_MIN_CHARS, PERSISTENT_MIND_BUNDLE_SCOPES } from './mindBundleCrypto.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -2313,3 +2314,28 @@ export const providerPresetCreateSchema = z.object({
 /** `PUT /api/providers/harnesses/:id` — flip one harness's enablement. */
 export const harnessEnablementUpdateSchema = z.object({ enabled: z.boolean() }).strict();
 export const harnessIdParamSchema = z.enum(PROVIDER_HARNESS_IDS);
+
+// =============================================================================
+// PERSISTENT MIND BUNDLE (server/routes/cosMindRoutes.js)
+// =============================================================================
+
+/**
+ * `POST /api/cos/mind/bundle/export` (#7621) — seal the Mind into a downloadable,
+ * passphrase-encrypted bundle.
+ *
+ * The scope vocabulary and passphrase floor come from `mindBundleCrypto.js`, the
+ * module that owns the container contract, so the route, the sealer, and the UI
+ * cannot drift apart on what a bundle may declare. The passphrase is bounded but
+ * deliberately unconstrained in composition: it is a user-chosen secret, and a
+ * validation failure here must never echo it (`validateRequest` reports paths
+ * and messages, never values).
+ */
+export const mindBundleExportSchema = z.object({
+  scopes: z.array(z.enum(PERSISTENT_MIND_BUNDLE_SCOPES))
+    .min(1)
+    .max(PERSISTENT_MIND_BUNDLE_SCOPES.length)
+    .refine((scopes) => new Set(scopes).size === scopes.length, 'bundle scopes must be unique'),
+  passphrase: z.string()
+    .min(MIND_BUNDLE_PASSPHRASE_MIN_CHARS, `Passphrase must be at least ${MIND_BUNDLE_PASSPHRASE_MIN_CHARS} characters`)
+    .max(MIND_BUNDLE_PASSPHRASE_MAX_CHARS),
+}).strict();

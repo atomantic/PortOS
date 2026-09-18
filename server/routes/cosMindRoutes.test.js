@@ -612,4 +612,31 @@ describe('persistent mind routes', () => {
     expect(mocks.appendPersistentMindAnnotation).not.toHaveBeenCalled();
     expect(mocks.promotePersistentMindMemory).not.toHaveBeenCalled();
   });
+
+  it('serves the sealed bundle as a download and refuses a short passphrase', async () => {
+    expect((await post('/mind/bundle/export', { scopes: ['profile'], passphrase: 'short' })).status).toBe(400);
+    const res = await post('/mind/bundle/export', { scopes: ['profile'], passphrase: 'an example bundle passphrase' });
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/octet-stream');
+    expect(res.headers['content-disposition']).toMatch(/^attachment; filename="portos-mind-.+\.portos-mind"$/);
+    expect(res.headers['cache-control']).toBe('no-store');
+    const [magicLine, headerLine] = res.text.split('\n');
+    expect(magicLine).toBe('portos-mind-bundle/1');
+    expect(JSON.parse(headerLine).scopes).toEqual(['profile']);
+    // The response body is the sealed file; nothing readable rides along with it.
+    expect(res.text).not.toContain('Resident mind');
+  });
+
+  it('refuses an unknown scope rather than exporting the ones it recognizes', async () => {
+    const res = await post('/mind/bundle/export', { scopes: ['profile', 'everything'], passphrase: 'an example bundle passphrase' });
+    expect(res.status).toBe(400);
+  });
+
+  it('refuses the whole export when a selected scope cannot be read', async () => {
+    mocks.readPersistentMindMemories.mockRejectedValue(new Error('memory backend is unavailable'));
+    const res = await post('/mind/bundle/export', { scopes: ['profile', 'memories'], passphrase: 'an example bundle passphrase' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('MIND_BUNDLE_SCOPE_UNREADABLE');
+    expect(res.body.error).toContain('memories');
+  });
 });

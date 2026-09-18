@@ -32,7 +32,7 @@ import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PER
 import { resolvePersistentMindPlaybookPhase } from '../services/persistentMindPlaybookSignals.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
-import { validateRequest } from '../lib/validation.js';
+import { mindBundleExportSchema, validateRequest } from '../lib/validation.js';
 import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agentRunEventLog.js';
 import { loadState } from '../services/cosState.js';
 import {
@@ -48,6 +48,7 @@ import {
 import { getProviderById } from '../services/providers.js';
 import { persistentMindHarnessInfo } from '../services/persistentMindAdapter.js';
 import { cleanupPersistentMind } from '../services/persistentMindMaintenance.js';
+import { exportPersistentMindBundle } from '../services/persistentMindBundle.js';
 import { resolvePersistentMindImageCapability } from '../services/persistentMindImageCapability.js';
 import { readPersistentMindTaskCatalog } from '../services/persistentMindTaskCapability.js';
 import { inspectPersistentMindRuntime } from '../services/persistentMindRuntime.js';
@@ -343,6 +344,25 @@ router.post('/mind/cleanup', asyncHandler(async (req, res) => {
   const result = await cleanupPersistentMind({ ...input, requestedBy: 'user' });
   const state = await getPersistentMindState();
   res.json({ ...result, state: publicPersistentMindState(state) });
+}));
+
+/**
+ * Seal the Mind into a downloadable, passphrase-encrypted bundle (#7621).
+ *
+ * Machine-local and user-initiated: the bytes are streamed straight back to the
+ * caller and never written to disk, never logged, and never offered to a peer.
+ * The passphrase is used once, inside the sealer, and appears in no log line
+ * and no error body (`validateRequest` reports paths, not values).
+ */
+router.post('/mind/bundle/export', asyncHandler(async (req, res) => {
+  const { scopes, passphrase } = validateRequest(mindBundleExportSchema, req.body);
+  const { bundle, filename } = await exportPersistentMindBundle({ scopes, passphrase });
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  // A sealed identity must not sit in a shared/proxy cache on its way to the
+  // browser, even though the bytes are encrypted.
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(bundle);
 }));
 
 router.post('/mind/attachments', asyncHandler(async (req, res) => {
