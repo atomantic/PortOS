@@ -76,9 +76,9 @@ The Commons is established but something is broken, stale, or aging. Each wake, 
 
 End with a short user-visible working note starting "Phase: Maintain" — what you repaired or retired, and what still needs attention.`,
 
-  coordinate: `PLAYBOOK PHASE — Coordinate (peers waiting)
+  coordinate: `PLAYBOOK PHASE — Coordinate (new peer contributions since your last look)
 
-Federated peers have activity worth your attention. Each wake, prefer this loop:
+Since this mind last observed, foundations arrived from a federated peer, or a new peer joined. Nobody asked you to come — the signal is what changed in the ledger, not a message. Each wake, prefer this loop:
 
 1) Check eidoverse.status, then run eidoverse.observe FIRST: its peers section already shows which peers this install inherited foundations through, and foundations.inherited names those contributions. Read what a peer built before you go ask about it. Then, when visitEidoversePeers is granted, review eidoverse.destinations and visit a peer with new activity (eidoverse.visit, eidoverse.visit-chat, then eidoverse.leave).
 2) Favor stewarding the shared baseline over solo construction this wake — build on what a peer contributed, respond, and note anything worth bringing home. An inherited foundation keeps working without its author narrating it; chat is for what observation could not answer.
