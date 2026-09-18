@@ -481,16 +481,34 @@ describe('catalogExtraction — extraction lens (#7609)', () => {
     expect(light).not.toMatch(/\{\{/);
   });
 
-  it('renders a title-less paste exactly as it renders today', async () => {
+  it('gives a title-less paste the same instructions it got before the lens existed', async () => {
+    // A scrap with neither field (a peer-synced row can have both null) must
+    // not render a half-empty framing stub or leak the non-fiction rules.
     catalogDB.getScrap.mockResolvedValue(scrap({ title: null, sourceKind: null }));
 
     await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
 
-    // Empty strings keep the mustache sections closed, so the prompt body is
-    // byte-identical to the pre-#7609 render.
     const { context } = bibleExtractor.extractBible.mock.calls[0][0];
     expect(context.work).toEqual({ title: '', kind: '', wordCount: 2 });
     expect(context.factual).toBe(false);
+
+    // Empty strings are what keep the mustache sections CLOSED. The guarantee
+    // is instruction-level, not byte-level: promptTemplate deliberately does
+    // not strip a standalone section line, so a closed section collapses to a
+    // blank line (the same convention {{#sceneMap}} already uses). What must
+    // hold is that none of the non-fiction rules reach a fiction extraction.
+    for (const name of ['writers-room-characters', 'writers-room-places', 'writers-room-objects']) {
+      const rendered = applyTemplate(stagePrompt(name), { ...context, draftBody: 'x' });
+      expect(rendered).not.toContain('## Lens: non-fiction');
+      expect(rendered).not.toMatch(/\{\{/);
+    }
+    const [, lightVars] = stageRunner.runStagedLLM.mock.calls[0];
+    const light = applyTemplate(stagePrompt('catalog-ideas-scenes-concepts'), lightVars);
+    expect(light).not.toContain('## Lens: non-fiction');
+    // The Source block is gated on the capture kind, so a kind-less scrap gets
+    // no empty "## Source" stub either.
+    expect(light).not.toContain('## Source\n');
+    expect(light).not.toMatch(/\{\{/);
   });
 });
 

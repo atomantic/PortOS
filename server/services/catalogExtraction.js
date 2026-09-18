@@ -52,7 +52,10 @@ const REAL_PERSON_TAG = 'real-person';
 /**
  * Derive the extraction lens from a stored scrap row. Empty strings (not
  * omitted keys) are what keep the prompts' mustache sections closed, so a
- * title-less paste renders exactly the prompt it renders today.
+ * title-less paste gets the same instructions it gets today. (`promptTemplate`
+ * does not strip a standalone section line, so a closed section collapses to a
+ * blank line rather than to nothing — same convention as the `{{#sceneMap}}` /
+ * `{{#characterEvolution}}` sections in the editorial prompts.)
  *
  * @param {{ title?: string, sourceKind?: string }} scrap
  * @returns {{ title: string, sourceKind: string, factual: boolean }}
@@ -66,15 +69,15 @@ function scrapExtractionContext(scrap) {
 /**
  * Append tags to a sanitized entry list without mutating the entries or
  * duplicating a tag the model already emitted. An empty tag list returns the
- * list unchanged, so every fiction-lens extraction keeps today's tags
- * byte-for-byte and allocates nothing.
+ * SAME array reference, so every fiction-lens extraction carries exactly the
+ * tags it carries today and allocates nothing.
  */
 const stampTags = (entries, tags) => {
   if (tags.length === 0) return entries;
   return entries.map((entry) => {
     const existing = Array.isArray(entry.tags) ? entry.tags : [];
     // Compare by the catalog's own tag identity, so a model that emitted
-    // `Real-Person` or `factual ` doesn't put a visible duplicate in the
+    // `Real-Person` or a trailing-space `factual` doesn't put a visible duplicate in the
     // review draft that `normalizeTags` would only collapse at persist time.
     const seen = new Set(existing.map(canonicalTagKey));
     const missing = tags.filter((tag) => !seen.has(canonicalTagKey(tag)));

@@ -15,8 +15,9 @@
  * both lenses — the catalog path previously rendered every framing slot empty.
  *
  * Both blocks are mustache-gated, so an install extracting invented fiction
- * renders the same prompts it rendered before this migration. Hash replacement
- * preserves a user-customized template.
+ * gets the same instructions it got before this migration — a closed section
+ * collapses to a blank line, which is how every other gated section in these
+ * prompts already behaves. Hash replacement preserves a customized template.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';
