@@ -45,6 +45,8 @@ function toMs(value) {
  * @param {Object} spec
  * @param {string} spec.id - eventScheduler registration id (also the cancel key)
  * @param {string} spec.logPrefix - emoji-prefixed label for this reminder's logs
+ * @param {string} spec.source - `metadata.source` recorded on the scheduled event
+ *   (the declaring module, which is what the scheduler's own error logs name)
  * @param {string} spec.featureId - instance feature that gates the whole reminder
  * @param {() => Promise<{enabled?: boolean, time?: string, updatedAt?: string}>} spec.readReminderSlice
  * @param {string} spec.notificationType - type used for the day-scoped duplicate guard
@@ -56,6 +58,7 @@ function toMs(value) {
 export function createDailyReminderScheduler({
   id,
   logPrefix,
+  source,
   featureId,
   readReminderSlice,
   notificationType,
@@ -191,8 +194,12 @@ export function createDailyReminderScheduler({
     }
 
     const timezone = await getUserTimezone();
+    // Stamped AFTER the registration it describes: if `schedule` throws, the
+    // subscriptions catch and log, and a `lastAppliedTimezone` naming a zone
+    // that was never applied would make every later reconcile short-circuit —
+    // leaving the reminder unregistered until a zone change or a restart.
+    schedule({ id, type: 'cron', cron, timezone, handler: fire, metadata: { source } });
     lastAppliedTimezone = timezone;
-    schedule({ id, type: 'cron', cron, timezone, handler: fire, metadata: { source: id } });
     console.log(`${logPrefix}: registered daily at ${time} (${timezone})`);
 
     if (shouldCatchUp) {

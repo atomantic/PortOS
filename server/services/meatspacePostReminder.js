@@ -23,6 +23,7 @@ export const POST_REMINDER_EVENT_ID = 'post-daily-reminder';
 const scheduler = createDailyReminderScheduler({
   id: POST_REMINDER_EVENT_ID,
   logPrefix: '🔔 POST reminder',
+  source: 'meatspacePostReminder',
   featureId: 'post',
   notificationType: NOTIFICATION_TYPES.DAILY_POST_REMINDER,
   readReminderSlice: async () => (await getPostConfig()).reminder,

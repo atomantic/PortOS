@@ -388,21 +388,32 @@ export async function saveStory({ promptId, content, parentStoryId, customPrompt
     const isFollowUp = !!parentStoryId;
     const parentStory = isFollowUp ? data.stories.find(s => s.id === parentStoryId) : null;
 
-    // Resolve which of the three origins owns this story's theme ONCE, so the
-    // id and the label can't come from different sources and leave a record
-    // that's unfalsifiable after the fact. A follow-up inherits its parent's
-    // theme; a bank prompt carries its own; a question the user typed
-    // themselves has no bank prompt behind it and files under the custom
-    // pseudo-theme, with its own promptText as the only question of record.
-    const themeSource = isFollowUp
-      ? parentStory
-      : (prompt || (customPromptText ? CUSTOM_THEME : null));
+    // Resolve which of the three origins owns this story's theme ONCE, as an
+    // explicit {themeId, themeLabel} pair, so the id and the label can't come
+    // from different sources and leave a record that's unfalsifiable after the
+    // fact. A follow-up inherits its parent's theme; a bank prompt carries its
+    // own; a question the user typed themselves has no bank prompt behind it
+    // and files under the custom pseudo-theme, with its own promptText as the
+    // only question of record.
+    //
+    // Each branch names the fields it reads rather than falling back to a
+    // generic `.id`/`.label`: a parent story's `.id` is a story UUID, so a
+    // generic fallback would stamp a UUID as a themeId on any parent whose own
+    // theme is missing (a peer-synced or hand-edited record), producing a
+    // byTheme bucket no filter chip can reach.
+    const theme = isFollowUp
+      ? { themeId: parentStory?.themeId || 'unknown', themeLabel: parentStory?.themeLabel || 'Unknown' }
+      : prompt
+        ? { themeId: prompt.themeId, themeLabel: prompt.themeLabel }
+        : customPromptText
+          ? { themeId: CUSTOM_THEME.id, themeLabel: CUSTOM_THEME.label }
+          : { themeId: 'unknown', themeLabel: 'Unknown' };
 
     const story = {
       id: uuidv4(),
       promptId: isFollowUp ? `followup-${parentStoryId}` : promptId,
-      themeId: themeSource?.themeId ?? themeSource?.id ?? 'unknown',
-      themeLabel: themeSource?.themeLabel ?? themeSource?.label ?? 'Unknown',
+      themeId: theme.themeId,
+      themeLabel: theme.themeLabel,
       promptText: customPromptText || prompt?.text || '',
       content,
       wordCount: countWords(content),
@@ -782,7 +793,14 @@ Rules:
  * would silence the daily prompt permanently after its very first nudge.
  */
 export async function sendStoryPrompt() {
-  return queueAutobiographyConfigWrite(sendStoryPromptUnqueued);
+  // The arrow is load-bearing: createFileWriteQueue runs a task as
+  // `tail.then(fn, fn)`, so a bare function reference is invoked with the
+  // PREVIOUS queued task's resolved value. Passing `sendStoryPromptUnqueued`
+  // directly handed that value in as `loadedConfig` — e.g. checkAndPrompt's
+  // `{ prompted: false, reason: 'not_due' }` — and saveConfig then wrote it
+  // over config.json, silently erasing `enabled`, `intervalHours` and the whole
+  // `reminder` slice (which reads back as the defaults, turning the reminder off).
+  return queueAutobiographyConfigWrite(() => sendStoryPromptUnqueued());
 }
 
 /**

@@ -26,6 +26,7 @@ export const AUTOBIOGRAPHY_REMINDER_EVENT_ID = 'autobiography-daily-prompt';
 const scheduler = createDailyReminderScheduler({
   id: AUTOBIOGRAPHY_REMINDER_EVENT_ID,
   logPrefix: '📖 Autobiography reminder',
+  source: 'autobiographyReminder',
   featureId: 'autobiography',
   notificationType: NOTIFICATION_TYPES.AUTOBIOGRAPHY_PROMPT,
   readReminderSlice: async () => (await getConfig()).reminder,

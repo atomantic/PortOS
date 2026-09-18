@@ -161,10 +161,16 @@ Return ONLY JSON, no prose or markdown fences, in exactly this shape:
 export function normalizeStoryCraftEvaluation(parsed) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
 
-  const rawMoves = (parsed.moves && typeof parsed.moves === 'object') ? parsed.moves : {};
+  // One definition of "the model did not give me this entry", so the move and
+  // CART blocks below cannot drift on what missing means.
+  const entryOf = (container, id) => {
+    const bag = (container && typeof container === 'object') ? container : {};
+    const entry = bag[id];
+    return (entry && typeof entry === 'object') ? entry : {};
+  };
+
   const moves = STORY_CRAFT_MOVES.map((move) => {
-    const entry = rawMoves[move.id];
-    const source = (entry && typeof entry === 'object') ? entry : {};
+    const source = entryOf(parsed.moves, move.id);
     return {
       id: move.id,
       label: move.label,
@@ -174,10 +180,8 @@ export function normalizeStoryCraftEvaluation(parsed) {
     };
   });
 
-  const rawCart = (parsed.cart && typeof parsed.cart === 'object') ? parsed.cart : {};
   const cart = CART_STAGES.map((stage) => {
-    const entry = rawCart[stage.id];
-    const source = (entry && typeof entry === 'object') ? entry : {};
+    const source = entryOf(parsed.cart, stage.id);
     return {
       id: stage.id,
       label: stage.label,
@@ -189,20 +193,21 @@ export function normalizeStoryCraftEvaluation(parsed) {
   const total = moves.reduce((sum, m) => sum + m.score, 0);
   const overallScore = Math.round((total / moves.length) * 10) / 10;
 
-  // Strongest/weakest are the row the writer should keep doing and the row to
-  // work on next. Ties resolve to rubric order, which is the order the video
-  // teaches them in — a deterministic answer beats an arbitrary one.
-  const strongest = moves.reduce((best, m) => (m.score > best.score ? m : best), moves[0]);
-  const weakest = moves.reduce((worst, m) => (m.score < worst.score ? m : worst), moves[0]);
-
+  // No strongest/weakest fields: they are derivable from `moves` at the point
+  // of display, and this object is persisted into every story on every install
+  // that presses the button — a derived field shipped once is a compatibility
+  // surface you keep writing forever.
   return {
     moves,
     cart,
     overallScore,
     maxScore: STORY_CRAFT_MAX_SCORE,
-    strongestMoveId: strongest.id,
-    weakestMoveId: weakest.id,
-    answersQuestion: parsed.answersQuestion !== false,
+    // Tri-state, for the same reason a missing move scores 0: an ABSENT
+    // judgement is "not assessed", which is neither a pass nor an accusation.
+    // `!== false` claimed the story answered its question on a truncated
+    // response; a bare `=== true` would accuse it of not answering. `null` lets
+    // the UI show the warning only on an explicit false.
+    answersQuestion: typeof parsed.answersQuestion === 'boolean' ? parsed.answersQuestion : null,
     revision: cleanText(parsed.revision, MAX_REVISION),
   };
 }

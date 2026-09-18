@@ -108,14 +108,18 @@ describe('normalizeStoryCraftEvaluation', () => {
     expect(result.maxScore).toBe(STORY_CRAFT_MAX_SCORE);
   });
 
-  it('names the strongest and weakest move, breaking ties in rubric order', () => {
+  it('persists only what the UI reads — no derived strongest/weakest fields', () => {
     const result = normalizeStoryCraftEvaluation(fullAnswer([5, 5, 1, 1, 3, 3, 3]));
 
-    expect(result.strongestMoveId).toBe(STORY_CRAFT_MOVE_IDS[0]);
-    expect(result.weakestMoveId).toBe(STORY_CRAFT_MOVE_IDS[2]);
+    // This object is written into every story, so a derived field shipped once
+    // becomes a compatibility surface. "Your weakest move" is one reduce over
+    // `moves` at the point of display.
+    expect(Object.keys(result).sort()).toEqual(
+      ['answersQuestion', 'cart', 'maxScore', 'moves', 'overallScore', 'revision']
+    );
   });
 
-  it('trims prose and defaults answersQuestion to true when the model omits it', () => {
+  it('trims prose, and reports an omitted answersQuestion as not assessed', () => {
     const answer = fullAnswer([3, 3, 3, 3, 3, 3, 3]);
     delete answer.answersQuestion;
 
@@ -123,7 +127,14 @@ describe('normalizeStoryCraftEvaluation', () => {
 
     expect(result.revision).toBe('tighten the opening');
     expect(result.moves[0].evidence).toBe(`evidence ${STORY_CRAFT_MOVE_IDS[0]}`);
-    expect(result.answersQuestion).toBe(true);
+    // null, not true: a truncated response must not CLAIM the story answered
+    // its question, and must not ACCUSE it of failing to either. The UI shows
+    // its warning only on an explicit false.
+    expect(result.answersQuestion).toBeNull();
+  });
+
+  it('carries an explicit answersQuestion:true through', () => {
+    expect(normalizeStoryCraftEvaluation(fullAnswer([3, 3, 3, 3, 3, 3, 3])).answersQuestion).toBe(true);
   });
 
   it('carries an explicit answersQuestion:false through', () => {

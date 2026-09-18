@@ -1124,7 +1124,7 @@ describe('Autobiography - evaluateStory', () => {
 
     expect(result.evaluation.overallScore).toBe(3.1); // 22/7 = 3.14…
     expect(result.evaluation.moves).toHaveLength(7);
-    expect(result.evaluation.weakestMoveId).toBe('takeaway');
+    expect(result.evaluation.moves.find(m => m.id === 'takeaway').score).toBe(1);
     expect(savedStories.value.stories[0].evaluation.overallScore).toBe(3.1);
   });
 
@@ -1156,5 +1156,85 @@ describe('Autobiography - evaluateStory', () => {
 
     mockGetActiveProvider.mockResolvedValue(null);
     expect((await evaluateStory('s1')).error).toMatch(/provider/i);
+  });
+});
+
+describe('Autobiography - config write-queue task shape', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAddNotification.mockResolvedValue({});
+    mockNotificationExists.mockResolvedValue(false);
+  });
+
+  // Regression: createFileWriteQueue runs a task as `tail.then(fn, fn)`, so a
+  // task passed BY REFERENCE is invoked with the previous task's resolved
+  // value. sendStoryPrompt used to hand `sendStoryPromptUnqueued` over bare,
+  // which received e.g. checkAndPrompt's `{prompted:false, reason:'not_due'}`
+  // as its config and wrote THAT over config.json — erasing enabled,
+  // intervalHours and the whole reminder slice, which reads back as defaults
+  // and silently turns the daily reminder off.
+  it('never writes a previous queued result over the config file', async () => {
+    const saved = [];
+    writeFile.mockImplementation(async (filePath, content) => {
+      if (filePath.includes('config.json')) saved.push(JSON.parse(content));
+    });
+    setupMocks(makeStoriesData(), makeConfigData({
+      lastPromptAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+      reminder: { enabled: true, time: '07:30' }
+    }));
+
+    // Two tasks on the same tail: the second is handed the first's return value.
+    await Promise.all([checkAndPrompt(), sendStoryPrompt()]);
+
+    expect(saved.length).toBeGreaterThan(0);
+    for (const config of saved) {
+      expect(config.reminder).toEqual({ enabled: true, time: '07:30' });
+      expect(config.intervalHours).toBe(24);
+      expect(config).not.toHaveProperty('prompted');
+      expect(config).not.toHaveProperty('reason');
+    }
+  });
+});
+
+describe('Autobiography - follow-up theme inheritance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    writeFile.mockImplementation(async () => {});
+  });
+
+  // Regression: resolving the theme through a generic `.id` fallback stamped
+  // the PARENT STORY's UUID as the follow-up's themeId whenever the parent
+  // carried no theme of its own (a peer-synced or hand-edited record) — a
+  // byTheme bucket keyed on a UUID that no filter chip can ever reach.
+  it('files a follow-up under "unknown" when its parent has no theme, never the parent id', async () => {
+    setupMocks(makeStoriesData({
+      stories: [{ id: 'parent-uuid', content: 'x', createdAt: '2026-09-01T00:00:00.000Z' }]
+    }), makeConfigData());
+
+    const story = await saveStory({
+      promptId: 'ignored',
+      content: 'A follow-up.',
+      parentStoryId: 'parent-uuid',
+      customPromptText: 'What happened next?'
+    });
+
+    expect(story.themeId).toBe('unknown');
+    expect(story.themeLabel).toBe('Unknown');
+  });
+
+  it('inherits the parent theme when the parent has one', async () => {
+    setupMocks(makeStoriesData({
+      stories: [{ id: 'p2', themeId: 'childhood', themeLabel: 'Childhood', content: 'x', createdAt: '2026-09-01T00:00:00.000Z' }]
+    }), makeConfigData());
+
+    const story = await saveStory({
+      promptId: 'ignored',
+      content: 'A follow-up.',
+      parentStoryId: 'p2',
+      customPromptText: 'What happened next?'
+    });
+
+    expect(story.themeId).toBe('childhood');
+    expect(story.themeLabel).toBe('Childhood');
   });
 });
