@@ -350,6 +350,11 @@ describe('building on a foundation inherited from a peer (#7631)', () => {
     // Nothing was written: a refusal that still saved the record would leave
     // the republish one promote away.
     expect(await getEidoverseFoundation('my-own-beacon')).toBeNull();
+
+    // The refusal is thrown from inside the ledger mutex, so a later write
+    // proves the lock was released rather than left held forever.
+    const unrelated = await record({ id: 'my-own-work', body: { affordance: { inspect: 'entirely my own' } } }, '2026-03-03T01:00:00.000Z');
+    expect(unrelated.derivedFrom).toBeNull();
   });
 
   it('records the same body as a DERIVATION and publishes the edge on the promote envelope', async () => {
