@@ -16,7 +16,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useLocation } from 'react-router';
 import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus, Settings as SettingsIcon } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Drawer from '../components/Drawer';
@@ -62,6 +62,7 @@ const REMIX_TARGETS = [
 
 export default function Catalog() {
   const navigate = useNavigate();
+  const location = useLocation();
   // Catalog type definitions belong to this feature, so keep their settings
   // drawer deep-linkable while leaving the catalog filters in the same URL.
   const [settingsParam, setSettingsParam] = useDrawerTab('settings', null, ['1']);
@@ -81,7 +82,15 @@ export default function Catalog() {
   const selectedUniverse = searchParams.get('universe') || '';
   const selectedSeries = searchParams.get('series') || '';
   const selectedTag = searchParams.get('tag') || '';
-  const view = searchParams.get('view') === 'albums' ? 'albums' : 'grid';
+  // Source-scrap filter (#7617) — "everything extracted from this piece", set by
+  // the "From the same source" link on the ingredient detail page. Orthogonal to
+  // the album view: it always renders as a flat grid (a scrap's siblings aren't
+  // grouped by universe), and a click-through carries the scrap's title via
+  // router state for the filter banner label — a nice-to-have that a reload/
+  // share loses, while the filter itself (URL-driven) survives either.
+  const selectedScrap = searchParams.get('scrap') || '';
+  const scrapTitle = location.state?.scrapTitle || '';
+  const view = selectedScrap ? 'grid' : (searchParams.get('view') === 'albums' ? 'albums' : 'grid');
 
   // Two-stage search: `searchInput` is what the user is typing; `q` is the
   // debounced value that drives the list fetch (and is mirrored to the URL).
@@ -168,8 +177,9 @@ export default function Catalog() {
     if (q) p.q = q;
     if (selectedSeries) { p.refKind = 'series'; p.refId = selectedSeries; }
     else if (selectedUniverse) { p.refKind = 'universe'; p.refId = selectedUniverse; }
+    if (selectedScrap) p.scrapId = selectedScrap;
     return p;
-  }, [selectedType, selectedTag, q, selectedSeries, selectedUniverse]);
+  }, [selectedType, selectedTag, q, selectedSeries, selectedUniverse, selectedScrap]);
 
   // Fetch one page for the current filters; returns the items array (or null on
   // error, already toasted). The caller owns replace-vs-append and its loading
@@ -261,12 +271,12 @@ export default function Catalog() {
     return all.filter((s) => s.universeId === selectedUniverse);
   }, [facets, selectedUniverse]);
 
-  const hasActiveFilters = !!(selectedType || selectedUniverse || selectedSeries || selectedTag || q);
+  const hasActiveFilters = !!(selectedType || selectedUniverse || selectedSeries || selectedTag || q || selectedScrap);
 
   const clearFilters = () => {
     setSearchInput('');
     setQ('');
-    updateParams({ type: '', universe: '', series: '', tag: '', q: '' });
+    updateParams({ type: '', universe: '', series: '', tag: '', q: '', scrap: '' });
   };
 
   const handleCreate = async (e) => {
@@ -657,6 +667,23 @@ export default function Catalog() {
           </button>
         ))}
       </div>
+
+      {/* Source-scrap filter banner (#7617) — set by the "From the same source"
+          link on an ingredient's detail page. Shows the title when it arrived
+          via that link's router state; a reload/share still filters correctly
+          (the URL owns the filter) but falls back to a generic label since the
+          title didn't travel with it. */}
+      {selectedScrap && (
+        <div className="flex items-center justify-between gap-2 mb-4 px-3 py-2 rounded-lg border border-port-border bg-port-card text-sm text-gray-300">
+          <span className="truncate">
+            Filtered by source{scrapTitle ? <>: <span className="text-white font-medium">{scrapTitle}</span></> : ' scrap'}
+          </span>
+          <button type="button" onClick={() => updateParams({ scrap: '' })}
+            className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-white shrink-0">
+            <X size={12} aria-hidden="true" /> Clear
+          </button>
+        </div>
+      )}
 
       {/* Universe / Series / Tag dropdowns + Clear filters. Two columns on a
           phone (a fixed min-width would overflow a 320px viewport), free-flowing

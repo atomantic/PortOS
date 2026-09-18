@@ -268,6 +268,15 @@ describe('catalogValidation — catalogIngredientQuerySchema', () => {
   it('rejects an unknown refKind', () => {
     expect(() => catalogIngredientQuerySchema.parse({ refKind: 'galaxy', refId: 'g-1' })).toThrow();
   });
+
+  it('accepts scrapId and composes it with a ref/album filter (#7617, orthogonal provenance dimension)', () => {
+    expect(catalogIngredientQuerySchema.parse({ scrapId: 'cat-scrap-1' }).scrapId).toBe('cat-scrap-1');
+    // Unlike unlinked/orphaned/refKind, scrapId is NOT part of the mutual
+    // exclusivity refinement — it composes with a ref filter without throwing.
+    const out = catalogIngredientQuerySchema.parse({ refKind: 'universe', refId: 'u-1', scrapId: 'cat-scrap-1' });
+    expect(out.scrapId).toBe('cat-scrap-1');
+    expect(out.refId).toBe('u-1');
+  });
 });
 
 describe('catalogValidation — catalogIngredientLinkSchema', () => {

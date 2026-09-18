@@ -1431,6 +1431,13 @@ function GalleryPickerModal({ onClose, onPick }) {
   );
 }
 
+// Source scraps + "From the same source" siblings (#7617). Each source scrap's
+// TITLE is the click-through to `/catalog?scrap=<id>` — every other extraction
+// from that piece, one click, one shareable link (selection lives in the URL
+// per client/src/AGENTS.md). The scrap's id is a fallback label only for a
+// scrap whose title didn't come through (e.g. hard-deleted; `scrapTitle` is
+// null via the route's LEFT JOIN). A scrap with no OTHER live extractions
+// renders no "From the same source" stub — an empty list is not useful chrome.
 function SourcesPanel({ sources }) {
   const list = Array.isArray(sources) ? sources : [];
   return (
@@ -1439,13 +1446,44 @@ function SourcesPanel({ sources }) {
       {list.length === 0 ? (
         <p className="text-xs text-gray-500">Created manually — no source scrap.</p>
       ) : (
-        <ul className="space-y-1.5">
-          {list.map((s, i) => (
-            <li key={s.scrapId || i} className="text-xs text-gray-300 flex items-center justify-between gap-2">
-              <span className="font-mono truncate" title={s.scrapId}>{s.scrapId}</span>
-              {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{formatDateTime(s.extractedAt)}</span>}
-            </li>
-          ))}
+        <ul className="space-y-3">
+          {list.map((s, i) => {
+            const siblings = Array.isArray(s.siblings) ? s.siblings : [];
+            return (
+              <li key={s.scrapId || i} className="text-xs text-gray-300">
+                <div className="flex items-center justify-between gap-2">
+                  {s.scrapId ? (
+                    <Link to={`/catalog?scrap=${encodeURIComponent(s.scrapId)}`}
+                      state={{ scrapTitle: s.scrapTitle || undefined }}
+                      className="truncate hover:text-port-accent hover:underline"
+                      title={s.scrapTitle || s.scrapId}>
+                      {s.scrapTitle || s.scrapId}
+                    </Link>
+                  ) : (
+                    <span className="font-mono truncate">(unknown source)</span>
+                  )}
+                  {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{formatDateTime(s.extractedAt)}</span>}
+                </div>
+                {siblings.length > 0 && (
+                  <div className="mt-1.5 pl-2 border-l border-port-border">
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">From the same source</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {siblings.map((sib) => {
+                        const badge = CATALOG_BADGE_BY_ID[sib.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+                        return (
+                          <Link key={sib.id} to={`/catalog/${encodeURIComponent(sib.type || 'idea')}/${encodeURIComponent(sib.id)}`}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200 hover:opacity-80">
+                            <span className="truncate max-w-[12rem]">{sib.name || sib.id}</span>
+                            <span className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${badge}`}>{sib.type}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

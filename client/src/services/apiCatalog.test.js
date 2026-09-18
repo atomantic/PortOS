@@ -83,6 +83,13 @@ describe('listCatalogIngredients filter passthrough (#1762)', () => {
     expect(path).not.toContain('unlinked');
     expect(path).not.toContain('orphaned');
   });
+
+  it('sends scrapId for the source-scrap filter, composed with a ref filter (#7617)', async () => {
+    await listCatalogIngredients({ scrapId: 'cat-scrap-1', refKind: 'universe', refId: 'u-1' });
+    const [path] = request.mock.calls[0];
+    expect(decodeURIComponent(path)).toContain('scrapId=cat-scrap-1');
+    expect(decodeURIComponent(path)).toContain('refKind=universe');
+  });
 });
 
 describe('getCatalogFacets (#1762)', () => {

@@ -200,6 +200,7 @@ router.get('/ingredients', asyncHandler(async (req, res) => {
     refId: params.refId,
     unlinked: params.unlinked === true,
     orphaned: params.orphaned === true,
+    scrapId: params.scrapId,
     limit: params.limit ?? 50,
     offset: params.offset ?? 0,
   }));
@@ -250,12 +251,23 @@ router.get('/ingredients/:id/details', asyncHandler(async (req, res) => {
     catalogDB.listMediaForIngredient(req.params.id),
     catalogDB.getMissingMediaForIngredient(req.params.id),
   ]);
+  // "From the same source" (#7617): sibling ingredients extracted from each of
+  // THIS ingredient's source scraps, batched in one query so the detail page
+  // needs no second round-trip to answer "what else came out of this piece?".
+  const siblingsByScrap = await catalogDB.listSiblingIngredientsBySource(
+    req.params.id,
+    sources.map((s) => s.scrapId),
+  );
+  const sourcesWithSiblings = sources.map((s) => ({
+    ...s,
+    siblings: siblingsByScrap.get(s.scrapId) || [],
+  }));
   const includeEmbedding = req.query.includeEmbedding === 'true';
   const { embedding, ...rest } = ing;
   res.json({
     ingredient: includeEmbedding ? { ...rest, embedding } : rest,
     refs,
-    sources,
+    sources: sourcesWithSiblings,
     relations,                                 // { outbound, inbound }
     revisions: Array.isArray(revisions?.items) ? revisions.items : [],
     media,                                      // array of attachments
