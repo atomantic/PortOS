@@ -718,7 +718,18 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // accepts a v1 offering unchanged (the edge is absent by construction there),
   // and a v1 receiver gently skips a v2 one rather than storing an envelope
   // whose attribution it would read as plain local authorship.
-  eidoverseFoundations: 2,
+  //
+  // v3 (#7632): the WRAPPER gained `tombstones` — withdrawal, so a promoted
+  // foundation can be recalled from the installs that pulled it. `candidateVersion`
+  // does NOT move with it: a tombstone names a candidate by the fingerprint it
+  // already had, and no envelope field changed. A v2 sender simply omits the
+  // key and a v3 receiver reads that as "nothing to retract"; a v2 RECEIVER
+  // gently skips a v3 offering and therefore keeps a copy it should have
+  // dropped — the degradation is deliberate and documented in
+  // `docs/features/eidoverse.md`, because the alternative (a receiver acting on
+  // a wrapper it cannot fully read) is worse, and a retraction that reaches
+  // nobody is still better than one that corrupts.
+  eidoverseFoundations: 3,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would

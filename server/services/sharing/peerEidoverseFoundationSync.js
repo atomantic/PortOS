@@ -33,6 +33,17 @@
  * payload carrying machine identity, PII or credentials rather than redacting
  * it — on both sides, because a peer's payload is untrusted input and this
  * install's own ledger is a file a human can edit.
+ *
+ * **The offering also RETRACTS (#7632).** It used to converge only upward: a
+ * receiver applied what the sender listed and never reconciled what it held
+ * against what the sender had stopped listing, so a promoted foundation could
+ * never be recalled from an install that had pulled it. The payload now carries
+ * `tombstones: [{ fingerprint, deletedAt }]` beside `candidates`, in its own
+ * separately-capped array — a retraction must never be displaced by the entry
+ * cap to make room for a publication. Both lists feed the `listHash`, so a
+ * withdrawal with no other change still breaks the receiver's short-circuit.
+ * A tombstone carries a content-addressed fingerprint and nothing else: it
+ * names one published body without re-transmitting any of it.
  */
 import { createHash } from 'crypto';
 import { isPlainObject } from '../../lib/objects.js';
@@ -54,6 +65,17 @@ import { FORCE_REVALIDATE_EVERY } from './peerSyncShared.js';
  */
 const OFFERING_ENTRY_CAP = 500;
 const OFFERING_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Tombstones cap on their OWN budget, never against `OFFERING_ENTRY_CAP`
+ * (#7632). Sharing one cap would let a large promoted population silently
+ * truncate the retractions — publishing crowding out recall, which is the one
+ * trade this feature must never make. A tombstone is two short strings, so
+ * 500 of them is a rounding error against a 16 KiB body; the ledger caps the
+ * stored list at the same order and drops the OLDEST deletion first, which by
+ * then has long since reached every peer.
+ */
+const TOMBSTONE_ENTRY_CAP = 500;
 
 /**
  * Deliberately NOT `ASSET_PULL_TIMEOUT_MS`: that constant is sized for
@@ -86,9 +108,19 @@ const peerLabel = (peer) => peer.name || peer.instanceId;
 /** Content-address the offering so a receiver can short-circuit an unchanged
  * one. Each envelope already carries a sha256 of its own body, and the list is
  * sorted by it, so hashing the fingerprints alone is both sufficient and
- * order-independent. */
-const offeringListHash = (candidates) => createHash('sha256')
+ * order-independent.
+ *
+ * The tombstones hash in too (#7632), under a separator that cannot appear in
+ * either list, so a withdrawal is never mistaken for "nothing changed": a
+ * retraction is usually the ONLY delta on the tick it lands (the candidate left
+ * the offering at the same moment, but a receiver that had already skipped
+ * would not look), and hashing candidates alone would hide it until the next
+ * forced re-pull. `deletedAt` is included because re-withdrawing a fingerprint
+ * refreshes the stamp and is a real change to what the sender is asserting. */
+const offeringListHash = (candidates, tombstones) => createHash('sha256')
   .update(candidates.map((candidate) => String(candidate.fingerprint)).join('\n'))
+  .update('\n--tombstones--\n')
+  .update(tombstones.map((entry) => `${entry.fingerprint}@${entry.deletedAt}`).join('\n'))
   .digest('hex');
 
 /**
@@ -101,20 +133,26 @@ const offeringListHash = (candidates) => createHash('sha256')
  * @returns {Promise<{ schemaVersion:number, listHash:string, candidates:Array }>}
  */
 export async function buildEidoverseFoundationOffering() {
-  const offering = (candidates) => ({
+  const offering = (candidates, tombstones = []) => ({
     schemaVersion: PORTOS_SCHEMA_VERSIONS.eidoverseFoundations,
-    listHash: offeringListHash(candidates),
+    listHash: offeringListHash(candidates, tombstones),
     candidates,
+    tombstones,
   });
   if (!(await eidoverseEnabled())) return offering([]);
   const mod = await ledger();
-  if (!mod?.listPromotedFoundationCandidates) return offering([]);
+  if (!mod?.listPromotedFoundationCandidates || !mod?.listWithdrawnFoundationTombstones) return offering([]);
   const candidates = await mod.listPromotedFoundationCandidates();
+  const tombstones = await mod.listWithdrawnFoundationTombstones();
+  if (tombstones.length > TOMBSTONE_ENTRY_CAP) {
+    console.log(`⚠️ peerSync: eidoverse-foundations offering hit the ${TOMBSTONE_ENTRY_CAP}-tombstone cap — truncating`);
+  }
   if (candidates.length > OFFERING_ENTRY_CAP) {
     console.log(`⚠️ peerSync: eidoverse-foundations offering hit the ${OFFERING_ENTRY_CAP}-entry cap — truncating`);
-    return offering(candidates.slice(0, OFFERING_ENTRY_CAP));
   }
-  return offering(candidates);
+  // Each list slices against its OWN cap, so a full candidate list can never
+  // cost a retraction its slot.
+  return offering(candidates.slice(0, OFFERING_ENTRY_CAP), tombstones.slice(0, TOMBSTONE_ENTRY_CAP));
 }
 
 // Receiver-side bookkeeping — mirrors the cos-tasks sweep.
@@ -202,7 +240,7 @@ export async function syncEidoverseFoundationsFromPeer(peer) {
       }
       offeringUnchangedSkips.set(peer.instanceId, 0); // forced re-pull — fall through
     }
-    const applied = await applyOffering(payload.candidates, { peer, localInstanceId });
+    const applied = await applyOffering(payload.candidates, payload.tombstones, { peer, localInstanceId });
     // Only remember the offering once it was actually applied: recording the
     // hash after a `ledger-unavailable` pass would short-circuit the next
     // FORCE_REVALIDATE_EVERY ticks on work that never happened.
@@ -213,6 +251,9 @@ export async function syncEidoverseFoundationsFromPeer(peer) {
     if (applied.refused > 0) {
       console.log(`⚠️ peerSync: eidoverse-foundations sweep from ${peerLabel(peer)} — refused ${applied.refused} candidate(s) at the accept-side gate`);
     }
+    if (applied.removed > 0) {
+      console.log(`🗑️ peerSync: eidoverse-foundations sweep from ${peerLabel(peer)} — dropped ${applied.removed} withdrawn foundation(s)`);
+    }
     return applied;
   } finally {
     offeringSweepInFlight.delete(peer.instanceId);
@@ -220,18 +261,37 @@ export async function syncEidoverseFoundationsFromPeer(peer) {
 }
 
 /**
- * Hand each candidate to the accept-side gate, skipping the ones this install
- * already holds at the same content-addressed fingerprint.
+ * Reconcile this install against the peer's offering in BOTH directions:
+ * drop what the peer withdrew, then inherit what it newly offers, skipping the
+ * candidates this install already holds at the same content-addressed
+ * fingerprint.
+ *
+ * **Retractions apply FIRST**, before `held` is read. The sender clears a
+ * fingerprint's tombstone when it re-promotes that exact body, so the two lists
+ * do not normally overlap — but a sender whose ledger was hand-edited could
+ * send both, and reaping first means the survivor is whatever the CANDIDATE
+ * list says. That is the safe order: a re-inherited foundation is re-verified
+ * through the whole accept-side gate on its way back in, while the opposite
+ * order would leave a retracted body in place with nothing to re-check it.
  *
  * Sequential on purpose: `recordEidoverseFoundationInheritance` serializes on
  * the ledger's own mutex, so a `Promise.all` here would buy nothing but a
  * deeper queue and a less readable failure.
  */
-async function applyOffering(candidates, { peer, localInstanceId }) {
+async function applyOffering(candidates, tombstones, { peer, localInstanceId }) {
   const mod = await ledger();
-  if (!mod?.recordEidoverseFoundationInheritance || !mod?.listEidoverseFoundations) {
-    return { inherited: 0, refused: 0, skipped: 'ledger-unavailable' };
+  if (!mod?.recordEidoverseFoundationInheritance || !mod?.listEidoverseFoundations || !mod?.applyEidoverseFoundationTombstones) {
+    return { inherited: 0, refused: 0, removed: 0, skipped: 'ledger-unavailable' };
   }
+  const { removed = 0 } = (await mod.applyEidoverseFoundationTombstones(tombstones, {
+    sourceInstanceId: peer.instanceId,
+  }).catch((err) => {
+    // Counted as "reaped nothing" and pressed on: the sender keeps advertising
+    // the tombstone until its candidate comes back, so a failed retraction
+    // retries on the next sweep rather than being lost.
+    console.log(`⚠️ peerSync: eidoverse-foundations retraction from ${peerLabel(peer)} failed: ${err.message}`);
+    return null;
+  })) || {};
   const held = new Set((await mod.listEidoverseFoundations()).foundations
     .filter((entry) => entry.inheritance)
     .map((entry) => entry.inheritance.fingerprint));
@@ -249,7 +309,7 @@ async function applyOffering(candidates, { peer, localInstanceId }) {
     if (result?.outcome === 'inherited') inherited += 1;
     else refused += 1;
   }
-  return { inherited, refused };
+  return { inherited, refused, removed };
 }
 
 /**

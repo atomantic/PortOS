@@ -772,6 +772,33 @@ Re-authoring a promoted foundation returns it to `vernacular` and clears
 keeping the stamp would also be a dead end, since the gate refuses to package a
 `baseline` foundation.
 
+**Withdrawing retracts a publication, and it reaches the peers that pulled it
+(#7632).** `POST /api/eidoverse/world/foundations/:id/withdraw` de-promotes the
+record — `vernacular`, `promotedAt` and `candidate` cleared, the body kept — and
+records a **tombstone** for the fingerprint it had published. That tombstone
+rides the peer offering, and a receiving install *deletes* its inherited copy
+rather than merely ceasing to re-pull it. Re-authoring a promoted foundation
+tombstones the replaced envelope for the same reason: it retracts a published
+body, and before this it did so silently. Promotion used to be one-way, so a
+foundation carrying something its author regretted — a personal detail the
+regex-shaped federation-safety scan cannot recognize, a wrong attribution, a
+body that turned out to be harmful — stayed on every install that had pulled it,
+for good.
+
+`DELETE /api/eidoverse/world/foundations/:id` removes a record outright, and
+**withdraws it first if it was promoted** — so the most natural gesture an
+author makes cannot orphan a peer's copy beyond recall. `?originInstanceId=`
+addresses an INHERITED copy; a bare id always means this install's own work,
+because the two id spaces legitimately overlap.
+
+**What withdrawal does not promise.** A peer running a PortOS older than the
+`tombstones` wrapper key (schema v3) gently skips the whole offering and keeps
+its copy, saying so in its log. That is unavoidable by construction — retraction
+is best-effort across versions, never a guarantee — and it is the right failure
+mode: the old peer degrades to the previous add-only behavior instead of acting
+on a wrapper it cannot fully read. Deleting a record whose tombstone has already
+aged out of the capped list is likewise final.
+
 **Where the user does this.** Eidoverse > World controls > **Foundations**
 (`client/src/components/eidoverse/EidoverseFoundationsPanel.jsx`) lists every
 foundation with its ownership-layer badge, records or re-authors one, runs the
@@ -849,8 +876,8 @@ which it accepts is `recordEidoverseFoundationInheritance()`. It owns the
 payload wrapper, the version gate, the caps and the sweep.
 
 **Outbound.** `GET /api/peer-sync/eidoverse-foundations` advertises
-`{ schemaVersion, listHash, candidates: [...] }`. The offering is exactly the
-foundations this install PROMOTED and AUTHORED:
+`{ schemaVersion, listHash, candidates: [...], tombstones: [...] }`. The
+`candidates` are exactly the foundations this install PROMOTED and AUTHORED:
 
 - `layer === 'baseline'` — a merely *packaged* candidate is a dry run ("would
   this pass?"), not a publication, and is never served.
@@ -862,6 +889,18 @@ foundations this install PROMOTED and AUTHORED:
   `foundations.json` is a file a human can edit, and refuse-never-redact
   applies outbound as well as inbound, so a candidate that no longer passes is
   withheld from the offering and logged.
+- the fingerprint must not be tombstoned. Promoting clears a fingerprint's
+  tombstone, so the two lists cannot normally disagree; a hand-edited ledger can
+  make them, and an offering that both published and retracted one fingerprint
+  would resolve differently on every receiver. The retraction wins.
+
+`tombstones` is `[{ fingerprint, deletedAt }]` — a content-addressed name and an
+instant, never any of the body. It caps on its **own** budget, never against
+`OFFERING_ENTRY_CAP`: sharing one cap would let a large promoted population
+silently truncate the retractions, which is the one trade this must never make.
+Both lists feed the `listHash`, so a withdrawal with no other change still
+breaks a receiver's unchanged short-circuit instead of waiting for the next
+forced re-pull.
 
 Unlike the older peer-pull routes, this one does not ride the warn-first
 authorization ramp: it passes `alwaysEnforce`, so only a registered,
@@ -882,16 +921,33 @@ fingerprint this install already holds is skipped, so the periodic forced
 re-pull (there so a local deletion self-heals) never rewrites `inheritedAt`
 on an unchanged copy.
 
+The sweep applies the peer's **retractions first**, before it reads what this
+install holds: a fingerprint the same offering re-publishes is then re-verified
+through the whole accept-side gate on its way back in, rather than surviving in
+place unchecked. A retraction authorizes dropping only a record this install
+pulled from *that same peer* (`inheritance.sourceInstanceId`) — a fingerprint is
+public inside the federation the moment it is offered, so it identifies a record
+but authorizes nothing, and without the scope any registered peer could retract
+a third install's work by naming it. A tombstone for a fingerprint this install
+does not hold is a silent no-op. Peer tombstones are not persisted: this install
+never re-offers an inherited record, and the sender keeps advertising the
+tombstone while its candidate stays absent, so storing them would only let a
+peer crowd out this install's own retractions.
+
 Both directions are gated on the `eidoverse` instance feature: an install with
 Eidoverse turned off neither offers nor accumulates.
 
-**Compatibility.** `PORTOS_SCHEMA_VERSIONS.eidoverseFoundations` (v1) is the
+**Compatibility.** `PORTOS_SCHEMA_VERSIONS.eidoverseFoundations` (v3) is the
 transport contract, registered in `NON_RECORD_SCHEMA_CATEGORIES` because this
 is a receiver-pull category with no push to gate — a foundation is not a
 peer-subscribable record kind. It is deliberately separate from the envelope's
 own `candidateVersion`, which pins one envelope's shape and is hashed into its
 fingerprint: a change to the envelope bumps both, a change to the wrapper or
-the caps bumps only the category.
+the caps bumps only the category. v3 (#7632) added `tombstones` to the wrapper
+and moved only the category, because a tombstone names a candidate by the
+fingerprint it already had and no envelope field changed. A v2 sender omits the
+key and a v3 receiver reads that as "nothing to retract"; a v2 **receiver**
+gently skips a v3 offering and therefore keeps a copy it should have dropped.
 
 ### Creative toolkit for minds (#7459, wired end-to-end in #7627)
 

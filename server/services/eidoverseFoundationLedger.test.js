@@ -17,6 +17,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await im
 }));
 
 const {
+  applyEidoverseFoundationTombstones,
+  deleteEidoverseFoundation,
   getEidoverseFoundation,
   listEidoverseFoundations,
   packageEidoverseFoundationCandidate,
@@ -24,6 +26,8 @@ const {
   recordEidoverseFoundation,
   recordEidoverseFoundationInheritance,
   listPromotedFoundationCandidates,
+  listWithdrawnFoundationTombstones,
+  withdrawEidoverseFoundation,
 } = await import('./eidoverseFoundationLedger.js');
 
 // The passing reference contribution shipped with the assay harness (#7460).
@@ -522,5 +526,201 @@ describe('building on a foundation inherited from a peer (#7631)', () => {
 
     expect(result.outcome).toBe('inherited');
     expect(result.foundation.derivedFrom).toBeNull();
+  });
+});
+
+/**
+ * #7632: promotion used to be irreversible. A foundation left the install once
+ * and every peer that pulled it kept that copy forever — the offering only
+ * added, and the sweep converged upward toward whatever the sender currently
+ * listed. De-promoting (by re-authoring, the only way there was) dropped the
+ * record from the offering and told nobody.
+ *
+ * These pin the retraction path end to end, because no single-install
+ * assertion can: the ORIGIN's tombstone is meaningless unless a RECEIVER acts
+ * on it, and the receiver's reaper is meaningless unless the origin emits one.
+ *
+ * The two installs are simulated the way the #7631 suite above already does —
+ * one temp data root at a time, wiped to "become" the receiver — so the
+ * candidate and the tombstone list have to be captured on the origin before
+ * the switch, exactly as they would be carried over the wire.
+ */
+
+/** This install's own origin id, as `record()` above stamps it. */
+const LOCAL_ORIGIN = 'instance-aaaa';
+/** The peer a simulated receiver pulled from. */
+const PEER = 'instance-peer-one';
+
+/** Promote on this install and hand back what a peer would have pulled. */
+const promoteLocally = async () => {
+  await record({}, '2026-03-01T00:00:00.000Z');
+  const promoted = await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+  expect(promoted.outcome).toBe('promoted');
+  return promoted.candidate;
+};
+
+describe('withdrawing a promoted foundation (#7632)', () => {
+  /** Become a second install holding `candidate` inherited from `PEER`. */
+  const becomeReceiverHolding = async (candidate) => {
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+    const inherited = await recordEidoverseFoundationInheritance(candidate, {
+      sourceInstanceId: PEER, localInstanceId: 'instance-this-install', now: '2026-03-02T00:00:00.000Z',
+    });
+    expect(inherited.outcome).toBe('inherited');
+    return inherited.foundation;
+  };
+
+  it('de-promotes the record, stops offering it, and records a tombstone for what was published', async () => {
+    const candidate = await promoteLocally();
+
+    const result = await withdrawEidoverseFoundation('tide-beacon', { now: '2026-03-05T00:00:00.000Z' });
+
+    expect(result.outcome).toBe('withdrawn');
+    expect(result.foundation).toMatchObject({ layer: 'vernacular', promotedAt: null, candidate: null });
+    expect(await listPromotedFoundationCandidates()).toEqual([]);
+    // The body is KEPT — withdrawal un-publishes, it does not delete local work.
+    expect((await getEidoverseFoundation('tide-beacon')).body).toEqual(candidate.body);
+    expect(await listWithdrawnFoundationTombstones())
+      .toEqual([{ fingerprint: candidate.fingerprint, deletedAt: '2026-03-05T00:00:00.000Z' }]);
+  });
+
+  // The whole point of the feature, and the one thing only a two-install cycle
+  // can prove: a copy already on another machine actually goes away.
+  it('drops a peer\'s inherited copy across a full promote → inherit → withdraw → sweep cycle', async () => {
+    const candidate = await promoteLocally();
+    await withdrawEidoverseFoundation('tide-beacon', { now: '2026-03-05T00:00:00.000Z' });
+    const offered = await listWithdrawnFoundationTombstones();
+
+    await becomeReceiverHolding(candidate);
+    const heldKey = inheritedFoundationStorageKey(LOCAL_ORIGIN, 'tide-beacon');
+    expect(await getEidoverseFoundation(heldKey)).toBeTruthy();
+
+    expect(await applyEidoverseFoundationTombstones(offered, { sourceInstanceId: PEER })).toEqual({ removed: 1 });
+
+    expect(await getEidoverseFoundation(heldKey)).toBeNull();
+    expect((await listEidoverseFoundations()).counts.inherited).toBe(0);
+  });
+
+  it('is a silent no-op for a fingerprint this install does not hold', async () => {
+    const candidate = await promoteLocally();
+    await becomeReceiverHolding(candidate);
+
+    // A receiver that never pulled the foundation (or already dropped it) is
+    // already in the state the retraction asks for — not an error to surface.
+    expect(await applyEidoverseFoundationTombstones(
+      [{ fingerprint: 'b'.repeat(64), deletedAt: '2026-03-05T00:00:00.000Z' }], { sourceInstanceId: PEER },
+    )).toEqual({ removed: 0 });
+    expect((await listEidoverseFoundations()).counts.inherited).toBe(1);
+  });
+
+  // A fingerprint is public inside the federation the moment it is offered, so
+  // it identifies a record but authorizes nothing. Without the scope, any
+  // registered peer could retract a third install's work by naming it.
+  it('refuses to act on a retraction from a peer this install did not inherit from', async () => {
+    const candidate = await promoteLocally();
+    await becomeReceiverHolding(candidate);
+
+    expect(await applyEidoverseFoundationTombstones(
+      [{ fingerprint: candidate.fingerprint, deletedAt: '2026-03-05T00:00:00.000Z' }],
+      { sourceInstanceId: 'instance-peer-two' },
+    )).toEqual({ removed: 0 });
+    expect((await listEidoverseFoundations()).counts.inherited).toBe(1);
+  });
+
+  // `packagedAt` is hashed into the envelope, so an ordinary re-promote mints a
+  // NEW fingerprint. That is the common case and it is already correct: the old
+  // tombstone keeps retracting the bytes peers actually hold, while the fresh
+  // envelope publishes beside it.
+  it('keeps retracting the withdrawn envelope while offering the re-promoted one', async () => {
+    const candidate = await promoteLocally();
+    await withdrawEidoverseFoundation('tide-beacon', { now: '2026-03-05T00:00:00.000Z' });
+
+    const again = await promoteEidoverseFoundation('tide-beacon', { now: '2026-03-06T00:00:00.000Z' });
+
+    expect(again.candidate.fingerprint).not.toBe(candidate.fingerprint);
+    expect((await listPromotedFoundationCandidates()).map((entry) => entry.fingerprint)).toEqual([again.candidate.fingerprint]);
+    expect((await listWithdrawnFoundationTombstones()).map((entry) => entry.fingerprint)).toEqual([candidate.fingerprint]);
+  });
+
+  // The edge the clear-on-promote exists for: promote → withdraw → promote all
+  // stamped at one instant re-mints the SAME fingerprint. Without the clear the
+  // offering would publish and retract one fingerprint at once, and the
+  // outbound backstop would then withhold the candidate — a re-promote that
+  // silently did nothing.
+  it('clears the tombstone when a re-promote re-mints the identical fingerprint', async () => {
+    const at = '2026-03-01T01:00:00.000Z';
+    await record({}, '2026-03-01T00:00:00.000Z');
+    const candidate = (await promoteEidoverseFoundation('tide-beacon', { now: at })).candidate;
+    await withdrawEidoverseFoundation('tide-beacon', { now: at });
+
+    const again = await promoteEidoverseFoundation('tide-beacon', { now: at });
+
+    expect(again.candidate.fingerprint).toBe(candidate.fingerprint);
+    expect(await listWithdrawnFoundationTombstones()).toEqual([]);
+    expect((await listPromotedFoundationCandidates()).map((entry) => entry.fingerprint)).toEqual([candidate.fingerprint]);
+  });
+
+  // The originally-reported shape: re-authoring already de-promoted the record
+  // locally and silently left every peer holding the retracted bytes.
+  it('tombstones the published fingerprint when a promoted foundation is re-authored', async () => {
+    const candidate = await promoteLocally();
+
+    await record({ body: { affordance: { inspect: 'reads the pulse count and the tide' } } }, '2026-03-05T00:00:00.000Z');
+
+    expect(await listWithdrawnFoundationTombstones())
+      .toEqual([{ fingerprint: candidate.fingerprint, deletedAt: '2026-03-05T00:00:00.000Z' }]);
+  });
+
+  it('records nothing for a foundation that was only ever packaged, never promoted', async () => {
+    await record({}, '2026-03-01T00:00:00.000Z');
+    await packageEidoverseFoundationCandidate('tide-beacon', { now: '2026-03-01T01:00:00.000Z' });
+
+    expect(await withdrawEidoverseFoundation('tide-beacon', { now: '2026-03-05T00:00:00.000Z' }))
+      .toMatchObject({ outcome: 'not-promoted' });
+    // A packaged candidate never left the install, so a tombstone for it would
+    // broadcast a retraction no peer could possibly act on.
+    expect(await listWithdrawnFoundationTombstones()).toEqual([]);
+  });
+
+  it('refuses to withdraw an inherited copy — this install never published it', async () => {
+    await becomeReceiverHolding(await promoteLocally());
+
+    const result = await withdrawEidoverseFoundation(inheritedFoundationStorageKey(LOCAL_ORIGIN, 'tide-beacon'));
+
+    expect(result.outcome).toBe('refused');
+    expect(result.reasons[0]).toContain(LOCAL_ORIGIN);
+  });
+});
+
+describe('deleting a foundation record (#7632)', () => {
+  it('withdraws a promoted local record before deleting it, so no peer is orphaned', async () => {
+    const candidate = await promoteLocally();
+
+    expect(await deleteEidoverseFoundation('tide-beacon', { now: '2026-03-05T00:00:00.000Z' }))
+      .toMatchObject({ outcome: 'deleted', withdrawn: true });
+
+    expect(await getEidoverseFoundation('tide-beacon')).toBeNull();
+    // Deleting is the most natural gesture a regretful author makes; without
+    // this the record vanishes locally and lives on every peer forever.
+    expect(await listWithdrawnFoundationTombstones())
+      .toEqual([{ fingerprint: candidate.fingerprint, deletedAt: '2026-03-05T00:00:00.000Z' }]);
+  });
+
+  it('addresses an inherited copy by { id, originInstanceId } rather than its storage key', async () => {
+    const candidate = await promoteLocally();
+    rmSync(lazyTempDataRoot('portos-eidoverse-foundations-'), { recursive: true, force: true });
+    await recordEidoverseFoundationInheritance(candidate, {
+      sourceInstanceId: 'instance-peer-one', localInstanceId: 'instance-this-install', now: '2026-03-02T00:00:00.000Z',
+    });
+
+    // The bare id reaches only local work, on purpose: the two id spaces
+    // legitimately overlap.
+    expect(await deleteEidoverseFoundation('tide-beacon')).toMatchObject({ outcome: 'unknown-foundation' });
+    expect(await deleteEidoverseFoundation('tide-beacon', { originInstanceId: 'instance-aaaa' }))
+      .toMatchObject({ outcome: 'deleted', withdrawn: false });
+    expect((await listEidoverseFoundations()).foundations).toEqual([]);
+    // Deleting a copy this install merely holds retracts nothing: it was never
+    // this install's to publish.
+    expect(await listWithdrawnFoundationTombstones()).toEqual([]);
   });
 });

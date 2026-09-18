@@ -134,6 +134,13 @@ export const promoteEidoverseFoundation = (id, options = {}) => request(`/eidove
   method: 'POST',
   ...options,
 });
+// Withdrawal (#7632) — retract a promoted foundation so peers that inherited it
+// DROP their copy. Like promote, a refusal ("this is an inherited copy", "it was
+// never promoted") is a 200 carrying `outcome` + `reasons`.
+export const withdrawEidoverseFoundation = (id, options = {}) => request(`/eidoverse/world/foundations/${encodeURIComponent(id)}/withdraw`, {
+  method: 'POST',
+  ...options,
+});
 
 // Eidoverse world controllers — the install/arm/retire surface beside the
 // `eidoverse.controllers` mind-tool group (#7456, #7488). An install/arm
