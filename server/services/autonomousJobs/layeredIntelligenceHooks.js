@@ -78,7 +78,7 @@ import { recordFiledProposal, listOutcomesResult, reconcileOutcomes, listOutcome
 function outcomesTrackerSupported(filer) {
   return filer === 'forge' || filer === 'jira' || filer === 'plan'
 }
-import { resolveAppWorkTracker } from '../../lib/workTracker.js'
+import { resolveAppWorkTracker, resolveRepoForgeTarget } from '../../lib/workTracker.js'
 import { tryReadFile } from '../../lib/fileUtils.js'
 import { resolveAgentProviderPin } from '../appTaskProviderPin.js'
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js'
@@ -109,11 +109,16 @@ async function resolveLiContext(app) {
   const filer = filerForTracker(tracker.resolved)
   const forgeCli = tracker.forge // 'gh' | 'glab' | null
   const cwd = app.repoPath
+  const preferredForge = (tracker.resolved === 'github' || tracker.resolved === 'gitlab')
+    ? tracker.resolved
+    : null
+  const forgeTarget = await resolveRepoForgeTarget(cwd, { preferredForge })
+  const apiHost = forgeTarget?.apiHost || null
   const jira = (filer === 'jira' && app.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
     ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey, issueType: app.jira.issueType || 'Task' }
     : null
 
-  return { isPortos, config, tracker, filer, forgeCli, cwd, jira }
+  return { isPortos, config, tracker, filer, forgeCli, cwd, apiHost, jira }
 }
 
 /**
@@ -238,7 +243,7 @@ function buildCompletionContract() {
 export async function buildTaskInput({ app } = {}) {
   if (!app) return { skip: { reason: 'no-app' } }
   const ctx = await resolveLiContext(app)
-  const { isPortos, config, tracker, filer, forgeCli, cwd, jira } = ctx
+  const { isPortos, config, tracker, filer, forgeCli, cwd, apiHost, jira } = ctx
 
   // A skip means no agent spawns, so processTaskOutput never records the run —
   // record the last-run outcome HERE (mirrors the old handler's settle()) so the
@@ -264,14 +269,11 @@ export async function buildTaskInput({ app } = {}) {
   // forge, so running the reasoner now would burn a provider call on a proposal
   // we could neither dedup nor file. Skip with the probe's single log line.
   if (filer === 'forge' && forgeCli === 'gh') {
-    const [{ ensureForgeReachable }, { githubApiHost }] = await Promise.all([
-      import('../github.js'),
-      import('../../lib/workTracker.js')
-    ])
-    // Probed against the app's OWN forge host (`tracker.host`), not gh's
+    const { ensureForgeReachable } = await import('../github.js')
+    // Probed against the app's OWN forge API host, not gh's
     // default: a bare probe would skip a healthy GitHub Enterprise app whenever
     // github.com is unreachable, and run one whose enterprise host is down.
-    const forge = await ensureForgeReachable('layered-intelligence', { hostname: githubApiHost(tracker.host) })
+    const forge = await ensureForgeReachable('layered-intelligence', { hostname: apiHost })
     if (!forge.ok) return skip('skipped', 'forge-unreachable')
   }
 
@@ -444,10 +446,11 @@ async function resolveProposalPlanner(agentId) {
 /**
  * File the proposal via the resolved tracker's filer (forge / jira / plan).
  */
-async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira, planner }) {
+async function fileProposal({ filer, forgeCli, cwd, apiHost, app, proposal, jira, planner }) {
   if (filer === 'forge' && forgeCli) {
     return fileProposalToForge({
-      cli: forgeCli, cwd, title: proposal.title, body: proposal.body, slug: proposal.slug,
+      cli: forgeCli, cwd, hostname: forgeCli === 'gh' ? apiHost : null,
+      title: proposal.title, body: proposal.body, slug: proposal.slug,
       model: proposal.model, effort: proposal.effort,
       goodFirstIssue: proposal.goodFirstIssue, helpWanted: proposal.helpWanted, planner
     })
@@ -556,7 +559,7 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
   if (success === false) return settle({ action: 'no-op', reason: 'agent-failed' })
 
   const ctx = await resolveLiContext(app)
-  const { isPortos, config, tracker, filer, forgeCli, cwd, jira } = ctx
+  const { isPortos, config, tracker, filer, forgeCli, cwd, apiHost, jira } = ctx
 
   // The payload IS the reasoner's JSON object (parsed from the sentinel). A null/
   // malformed payload is the "returned nothing usable" case.
@@ -663,7 +666,7 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
       // that was scheduled. Unresolvable (a pre-upgrade record, or no agentId) ⇒
       // no planner label, never a guess.
       const planner = await resolveProposalPlanner(agentId)
-      const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira, planner })
+      const filed = await fileProposal({ filer, forgeCli, cwd, apiHost, app, proposal, jira, planner })
       if (filed.success && filed.duplicate) {
         // The tracker already carries this slug's tag (a checked PLAN item the
         // reasoner re-proposed — normally caught by the dedup guard since #2620,

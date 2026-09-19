@@ -14,7 +14,8 @@ vi.mock('../../lib/workTracker.js', async (importActual) => {
     // Real pure host→API-host mapping so the forge gate is exercised through
     // the exact enterprise-aware resolution production uses (#3358).
     githubApiHost: actual.githubApiHost,
-    resolveAppWorkTracker: vi.fn().mockResolvedValue({ resolved: 'github', forge: 'gh', host: 'github.com' })
+    resolveAppWorkTracker: vi.fn().mockResolvedValue({ resolved: 'github', forge: 'gh', host: 'github.com' }),
+    resolveRepoForgeTarget: vi.fn().mockResolvedValue({ forge: 'github', apiHost: 'github.com' })
   };
 });
 
@@ -133,7 +134,7 @@ import { buildTaskInput, isTaskOutputPayload, processTaskOutput } from './layere
 import * as li from '../layeredIntelligence.js';
 import { recordFiledProposal, listOutcomesResult, reconcileOutcomes, listOutcomes } from '../layeredIntelligenceOutcomes.js';
 import * as apps from '../apps.js';
-import { resolveAppWorkTracker } from '../../lib/workTracker.js';
+import { resolveAppWorkTracker, resolveRepoForgeTarget } from '../../lib/workTracker.js';
 import { tryReadFile } from '../../lib/fileUtils.js';
 import { getProviderById } from '../providers.js';
 import { getTaskInterval } from '../taskSchedule.js';
@@ -150,6 +151,7 @@ const APP = { id: 'app-1', name: 'App One', repoPath: '/repo', taskTypeOverrides
 beforeEach(() => {
   vi.clearAllMocks();
   resolveAppWorkTracker.mockResolvedValue({ resolved: 'github', forge: 'gh' });
+  resolveRepoForgeTarget.mockResolvedValue({ forge: 'github', apiHost: 'github.com' });
   getProviderById.mockImplementation(async (id) => ({ id, type: 'cli' }));
   getTaskInterval.mockResolvedValue({ providerId: null, model: null });
   li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
@@ -693,6 +695,7 @@ describe('processTaskOutput', () => {
     li.fileProposalToForge.mockResolvedValue({ success: true, number: 77 });
     const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } });
     expect(li.fileProposalToForge).toHaveBeenCalled();
+    expect(li.fileProposalToForge).toHaveBeenCalledWith(expect.objectContaining({ hostname: 'github.com' }));
     expect(out).toMatchObject({ action: 'filed', filedNumber: 77, reason: null });
     expect(apps.updateAppLayeredIntelligence).toHaveBeenCalledWith('app-1', expect.objectContaining({ lastRunAction: 'filed', lastRunRef: '#77' }));
   });
