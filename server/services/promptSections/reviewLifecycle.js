@@ -483,8 +483,7 @@ const prSidePhaseTexts = (prNumber) => ({
   procedureNote: '',
   hardStopAction: (forge, { verbose = false } = {}) => `post a ${forge.noun} comment summarising ${verbose ? 'the unresolved ' : ''}blockers and exit`,
   crossPhaseNote: () => '',
-  fixStep: ({ hasCopilot }) => '2. If unresolved findings: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By)'
-    + ', push' + (hasCopilot ? ', and (for Copilot) resolve the addressed threads.' : '.'),
+  fixStep: () => '2. Fix EVERY finding from the review in this worktree, including non-blocking findings and nits; run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, and resolve ALL review threads from that review, including non-blocking findings and nits.',
 });
 
 /**
@@ -903,7 +902,7 @@ ${extraNotes.length ? '\n' + extraNotes.join('\n') + '\n' : ''}
 **Run this loop UNTIL all configured reviewers are satisfied (or the stop mode triggers), capped at 10 iterations per reviewer:**
 
 1. ${waitOrInvokeStep}
-2. If there are unresolved review findings, fix them in this worktree, run the project's tests, commit (\`feat:\`/\`fix:\` prefix, no Co-Authored-By), push, and (for Copilot) resolve the addressed threads.
+2. Fix EVERY finding from the review in this worktree, including non-blocking findings and nits; run the project's tests, commit (\`feat:\`/\`fix:\` prefix, no Co-Authored-By), push, and resolve ALL review threads from that review, including non-blocking findings and nits.
 3. Re-review with the same reviewer until it reports clean, then advance to the next reviewer in the list.
 ${closingSteps.join('\n')}
 
