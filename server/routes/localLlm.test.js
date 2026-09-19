@@ -183,6 +183,20 @@ describe('local LLM playground routes', () => {
     expect(res.body.models.some((model) => model.id === 'llama-prompt-guard-2-86m')).toBe(false);
   });
 
+  // Same guarantee for the jev scorer: a descriptor that leaked into `models`
+  // would be offered by every provider/model picker that reads the catalog.
+  it('GET /catalog exposes the jev decision scorer separately from chat models', async () => {
+    const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama');
+
+    expect(res.status).toBe(200);
+    expect(res.body.decisionScorers).toEqual([expect.objectContaining({
+      id: 'openjev-qwen3.5-4b-nli',
+      pipelineTag: 'text-classification',
+      runtime: 'python-transformers',
+    })]);
+    expect(res.body.models.some((model) => model.id === 'openjev-qwen3.5-4b-nli')).toBe(false);
+  });
+
   it('keeps the Prompt Guard lifecycle out of the general model installer', async () => {
     const status = await request(makeApp()).get('/api/local-llm/security-guard/status');
     expect(status.status).toBe(200);

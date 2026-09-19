@@ -37,6 +37,7 @@ Common port labels:
 | 5562 | portos-whisper | whisper-server | Loopback whisper.cpp speech-to-text server. |
 | 5563 | portos-server | eidoverse-host | Optional legacy HTTPS/WebSocket bridge for Eidoverse Worlds (on demand → loopback `:8940`). Prefer the same-origin path on `:5555` — `/eidoverse-host` plus root allowlist proxies — so a single-port tailcat forward (`:15555` → `:5555`) can embed the iframe. |
 | 5564 | portos-slotstream | - | Loopback SSD-streaming MoE runtime. Optional PM2 process, started/stopped from Models → Runtimes. Never 11434 — that port is a PortOS-managed Ollama. |
+| 5566 | jev sidecar (loopback) | - | Loopback openjev entailment scorer. Not a PM2 process: `server/services/jev.js` starts it on the first scoring call and reaps it after ten idle minutes. See [JEV_SETUP.md](./JEV_SETUP.md). |
 | 5568 | portos-llama-server | - | Loopback llama.cpp speculative-decoding server. Optional PM2 process, started/stopped from Models → Runtimes. |
 | 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → Runtimes. See [features/mtplx.md](./features/mtplx.md). |
 | 18022 | PortOS model host | - | Opt-in bearer-authenticated inference queue for dedicated hosts; one active generation. See [fleet host](./features/fleet-llm-host.md). |
@@ -142,7 +143,7 @@ PortOS automatically detects ports from env vars:
 | Range | Purpose |
 |-------|---------|
 | 5553-5561 | PortOS core services (includes the `:5553` loopback mirror and the `portos-db` Docker container on `:5561`) |
-| 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5568 llama-server. Unassigned but still reserved: 5566-5567, 5569 |
+| 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5566 jev scorer (on demand), 5568 llama-server. Unassigned but still reserved: 5567, 5569 |
 | 5570-5599 | User applications — **put managed apps here** |
 
 > **A collision inside `5553-5569` is silent, not loud.** The natural assumption is
@@ -157,7 +158,7 @@ PortOS automatically detects ports from env vars:
 > without an error, PortOS logged `🌐 Eidoverse host listening`, and the Eidoverse page
 > served the other app's admin UI. Nothing in either process reported a problem.
 >
-> The on-demand ports (5563, 5564, 5568) are the easiest to get wrong, because they are free
+> The on-demand ports (5563, 5564, 5566, 5568) are the easiest to get wrong, because they are free
 > at boot and only bind once a user opens the relevant page — so a port scan taken at
 > install time shows them available. Treat the whole band as taken regardless.
 >
