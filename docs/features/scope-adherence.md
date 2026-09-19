@@ -14,18 +14,20 @@ Under an expanded row in an app's **Issues** tab, and under each row in its **Pu
 ## How a verdict is produced
 
 ```
+parse PRD.md + GOALS.md           ← server/lib/prdClauses.js. No model.
+  ↓ clauses
+retrieve top-k candidates         ← BM25 × 2 views, fused with RRF. No model.
+  ↓ ≤ k clauses
 screenUntrustedContent()          ← Prompt Guard. Unchanged, and not optional.
   ↓ safe
-parse PRD.md + GOALS.md           ← server/lib/prdClauses.js
-  ↓ clauses
-retrieve top-k candidates         ← BM25 × 2 views, fused with RRF
-  ↓ ≤ k clauses
-decide() per clause               ← server/services/jev.js. Abstains on a near-tie.
+runJevDecision('scope-adherence') ← once per clause. Abstains on a near-tie.
   ↓
 one advisory naming the clause
 ```
 
-An issue or PR body is attacker-controlled text, so it passes phase 1 of the untrusted-content ladder before anything reasons over it — the same contract described in [messages-security](./messages-security.md). Scope adherence is a **phase-2 reasoner**, never a replacement for the screen.
+An issue or PR body is attacker-controlled text, so it passes phase 1 of the untrusted-content ladder before any model reasons over it — the same contract described in [messages-security](./messages-security.md). Scope adherence is a **phase-2 reasoner**, never a replacement for the screen.
+
+The screen is not the first step, because the two steps above it are inert with respect to that text: reading the operator's own files, and tokenizing the change for an in-process BM25 query. A managed app with no PRD, or a change nothing in the corpus matches, can never produce an advisory — and making it pay a full model-abuse classifier run (possibly a sidecar cold start) to be told so is the only cost on this path that repeats per click. **The exact string that is screened is the exact string that enters every premise**, so the screened text and the scored text cannot drift apart.
 
 ### Clause parsing
 
@@ -35,11 +37,11 @@ A clause id is `<sourceFile>#<heading-path-slug>:<content-hash>` — **no line n
 
 ### Retrieval, not exhaustive scoring
 
-Each clause is a separate forward pass through a 4B model, so scoring all of them would cost minutes for a verdict that cites one. `selectCandidateClauses` builds two BM25 rankings of the same corpus — one from the change's prose (title + body), one from its code-side vocabulary (changed files, or the branch pair when the listing carries no description) — and fuses them with the `fuseRankingsRRF` the memory retrieval stack already uses. Fusing beats concatenating: whichever view is longer would otherwise dominate the term frequencies. Only the top `k` (default 3) are scored.
+Each clause is a separate forward pass through a 4B model, so scoring all of them would cost minutes for a verdict that cites one. `selectCandidateClauses` builds two BM25 rankings of the same corpus — one from the change's prose (title + body), one from its code-side vocabulary (a changed-file list, when the caller has one) — and fuses them with the `fuseRankingsRRF` the memory retrieval stack already uses. Fusing beats concatenating: whichever view is longer would otherwise dominate the term frequencies. Only the top `k` (default 3) are scored. The Pull Requests tab passes title alone: that listing carries no description, and PortOS branch names (`claim/issue-N`, `cos/<task>/<agent>`) would feed the code-side view noise rather than vocabulary.
 
 ### The three hypotheses
 
-Frozen in `server/lib/scopeAdherence.js`, for the same reason `lib/jevDecisions.js` freezes its own: they are the entire instruction surface of the feature, and a caller that inlined its own phrasing would drift from the wording any recorded verdict was produced under.
+Frozen as the `scope-adherence` entry in `server/lib/jevDecisions.js`, beside the four untrusted-content rungs — PortOS's one registry of closed-set questions the local scorer may answer. They are the entire instruction surface of the feature, so one diff shows every question that can be asked, and registering there is also what gives this decision its abstention counters in the jev panel and its scorability contract test. It is the only entry with `source: null`: it asks about the operator's own documents, not about text that arrived on a channel.
 
 | Verdict | Hypothesis |
 |---|---|
@@ -47,11 +49,11 @@ Frozen in `server/lib/scopeAdherence.js`, for the same reason `lib/jevDecisions.
 | `unrelated` | The proposed change is unrelated to the stated product goal. |
 | `contradicts` | The proposed change works against the stated product goal. |
 
-The premise is the clause first and in full, then the change — the change is what gets truncated if the pair does not fit, because a clipped goal would have the scorer answering about half a requirement with no way to tell.
+The premise is the clause first and in full, then the change. Both halves are capped well below the scorer's 32k premise bound — the clause at 2,000 characters and the change at 4,000 — because the change text is byte-identical in all k × 3 forward passes, so an unbounded issue body makes every pass prefill the same thousands of tokens to tell apart clauses that differ by at most 2,000 characters. Measured, that turns a ~5 s click into a ~40 s one.
 
 ### Abstention and reporting
 
-The floor is `0.20` top-1 margin, wider than the scorer's own `0.15` default: `unrelated` and `contradicts` read very differently to a human, and calling a PR "works against" a goal on a hair's separation would burn the feature's credibility faster than saying nothing. Below it the row reads *No advisory*.
+The floor is the decision's `minMargin: 0.2`, wider than the scorer's own `0.15` default: `unrelated` and `contradicts` read very differently to a human, and calling a PR "works against" a goal on a hair's separation would burn the feature's credibility faster than saying nothing. Below it the row reads *No advisory*.
 
 When several clauses answer, the reported one is ranked by **informativeness**, not retrieval position: `contradicts` → `aligned` → `unrelated`, widest margin breaking a tie. A contradiction found on the third-ranked clause is the single most useful thing this feature can say, and ranking by margin alone would bury it under a confident `aligned`.
 
@@ -85,7 +87,9 @@ Each reads as "no advisory" in the UI, never as a verdict.
 | Piece | File |
 |---|---|
 | Clause parser | `server/lib/prdClauses.js` |
-| Hypotheses, retrieval, premise, route schema | `server/lib/scopeAdherence.js` |
+| The three hypotheses and the abstention floor | `server/lib/jevDecisions.js` (`scope-adherence`) |
+| Retrieval, premise composition, route schema | `server/lib/scopeAdherence.js` |
 | The ladder (screen → retrieve → decide) | `server/services/scopeAdherence.js` |
 | HTTP surface | `server/routes/apps/scopeAdherence.js` |
 | UI | `client/src/components/apps/ScopeAdherenceCheck.jsx` |
+| Failure labels (client mirror) | `client/src/lib/scopeAdherenceReasons.js` |

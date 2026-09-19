@@ -23,7 +23,12 @@
  * shortening the display cap does not re-key the corpus.
  */
 
+// Direct `crypto`, not `sha256Text` from `fileCore.js`: that module's closure
+// reaches `fs` and `child_process`, and this file advertises itself as a pure
+// leaf on the request path (`server/lib/importScoping.test.js`).
 import { createHash } from 'crypto';
+import { kebabCase, truncateOnBoundary, clampToCharLimit } from './textUtils.js';
+import { stripMarkdownEmphasis } from './markdownText.js';
 
 /** The documents PortOS scores its own changes against. */
 export const PRD_CLAUSE_SOURCES = Object.freeze(['PRD.md', 'GOALS.md']);
@@ -49,19 +54,19 @@ const TABLE_ROW = /^\s*\|.*\|\s*$/;
 const TABLE_DIVIDER = /^\s*\|[\s:|-]+\|\s*$/;
 const BLOCKQUOTE = /^\s*>+\s?/;
 
-const slug = (text) => text
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, '-')
-  .replace(/^-+|-+$/g, '')
-  .slice(0, 60);
+// `truncateOnBoundary`, not a bare `.slice()`: a clause id is meant to be read
+// by a human, and a hard cut leaves it ending mid-word with a dangling hyphen.
+const slug = (text) => truncateOnBoundary(kebabCase(text), 60);
 
 /** Strip the markdown that carries no meaning for an entailment scorer. */
 function flatten(text) {
-  return text
+  // Images are unwrapped first: the shared helper's link rule would otherwise
+  // leave the `!` behind. `stripMarkdownEmphasis` additionally drops HTML
+  // comments — an editorial `<!-- note -->` in a PRD would otherwise become
+  // part of a scored "product goal" — and replaces a lone `*_~` with a space
+  // rather than deleting it, so an unbalanced marker cannot fuse two words.
+  return stripMarkdownEmphasis(String(text).replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1'))
     .replace(/^\s*>+\s?/gm, '')
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/[*_`]+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -97,7 +102,7 @@ function countTopLevelHeadings(lines) {
  *
  * @param {string} markdown Raw file contents.
  * @param {{ sourceFile?: string }} options `sourceFile` is part of every id.
- * @returns {Array<{ id, heading, headingPath, text, sourceFile, line }>}
+ * @returns {Array<{ id, headingPath, text, sourceFile, line }>}
  */
 export function parsePrdClauses(markdown, { sourceFile = 'PRD.md' } = {}) {
   if (typeof markdown !== 'string' || !markdown.trim()) return [];
@@ -136,9 +141,11 @@ export function parsePrdClauses(markdown, { sourceFile = 'PRD.md' } = {}) {
     seen.set(key, occurrence + 1);
     clauses.push({
       id: `${sourceFile}#${slug(path) || 'document'}:${hash}${occurrence ? `~${occurrence}` : ''}`,
-      heading: headings.filter(Boolean).at(-1) || sourceFile,
       headingPath: path,
-      text: raw.length > PRD_MAX_CLAUSE_CHARS ? `${raw.slice(0, PRD_MAX_CLAUSE_CHARS - 1)}…` : raw,
+      // `clampToCharLimit` backs off to a sentence/clause boundary; a hard cut
+      // mid-word reads as a different requirement to a cross-encoder than the
+      // one that was written.
+      text: clampToCharLimit(raw, PRD_MAX_CLAUSE_CHARS).text,
       sourceFile,
       line,
     });

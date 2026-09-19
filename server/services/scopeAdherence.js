@@ -2,13 +2,22 @@
  * Score a filed issue or an opened pull request against what the product says
  * it is for, using the local entailment scorer instead of a chat completion.
  *
- *     screenUntrustedContent()   ← phase 1, Prompt Guard. UNCHANGED.
+ *     read PRD.md + GOALS.md        ← the operator's own checkout. No model.
+ *       ↓ clauses
+ *     retrieve top-k candidates     ← BM25 + RRF, in process. No model.
+ *       ↓ ≤ k clauses
+ *     screenUntrustedContent()      ← Prompt Guard. Unchanged, and not optional.
  *       ↓ safe
- *     retrieve top-k clauses     ← BM25 + RRF over PRD.md / GOALS.md
+ *     runJevDecision() per clause   ← the shared `scope-adherence` rung.
  *       ↓
- *     decide() per clause        ← phase 2, local. Abstains rather than guessing.
- *       ↓
- *     one advisory line naming the clause
+ *     one advisory naming the clause
+ *
+ * The two inert steps run FIRST on purpose. A managed app with no `PRD.md`, or
+ * a change nothing in the corpus matches, can never produce an advisory, and
+ * making it pay a full model-abuse classifier run — possibly a sidecar cold
+ * start — to be told so is the one cost on this path that repeats per click.
+ * The screen still lands before the first `decide()`, which is where the
+ * untrusted-content contract actually requires it.
  *
  * ADVISORY, NEVER A GATE. This module has no write path: it closes nothing,
  * labels nothing, blocks nothing, and no caller of it may either. That is a
@@ -20,25 +29,32 @@
  *
  * Machine-local throughout: the corpus is two files in the checkout, the
  * scorer is a loopback sidecar, and nothing here is persisted, federated, or
- * included in a status or capability payload.
+ * included in a status or capability payload. The one thing that IS recorded
+ * is the shared jev agreement counter — counts only, never a premise.
  */
 
 import { join } from 'path';
 import { stat } from 'fs/promises';
 import { tryReadFileStrict } from '../lib/jsonIo.js';
-import { PATHS } from '../lib/paths.js';
-import { parsePrdClauses, PRD_CLAUSE_SOURCES } from '../lib/prdClauses.js';
+import { formatClauseCitation, parsePrdClauses, PRD_CLAUSE_SOURCES } from '../lib/prdClauses.js';
 import {
+  buildClauseIndex,
   composeAdherencePremise,
-  formatAdherenceAdvisory,
-  SCOPE_ADHERENCE_HYPOTHESES,
-  SCOPE_ADHERENCE_MIN_MARGIN,
+  formatChangeEvidence,
+  SCOPE_ADHERENCE_DECISION_ID,
   SCOPE_ADHERENCE_TOP_K,
   selectCandidateClauses,
-  verdictForHypothesis,
 } from '../lib/scopeAdherence.js';
 
-/** Every way `scoreAdherence` can decline to produce a verdict. */
+/**
+ * The codes this service adds on top of the shared `JEV_FAILURE_CODES` and the
+ * untrusted-content ones, which it forwards unchanged.
+ *
+ * Load-bearing: `server/services/scopeAdherence.reasons.parity.test.js` asserts
+ * the client's operator-facing label map covers every one of them, so a code
+ * added here without a label fails rather than silently rendering as the
+ * generic fallback.
+ */
 export const SCOPE_ADHERENCE_FAILURE_CODES = Object.freeze([
   'scope-adherence-disabled',
   'scope-adherence-change-empty',
@@ -59,9 +75,10 @@ const failure = (code) => ({ ok: false, code });
  */
 const VERDICT_RANK = { contradicts: 0, aligned: 1, unrelated: 2 };
 
-// Cache the parsed corpus per repository, invalidated on either file's mtime.
-// Parsing ~400 lines is cheap, but the scorer is called from a UI button and
-// re-reading two files on every click for an unchanged checkout is waste.
+// Cache the parsed corpus AND its BM25 index per repository, invalidated on
+// either file's mtime. The index is the larger half: building it over PortOS's
+// own ~175 clauses measures ~13 ms, three times the parse this cache was
+// introduced to avoid, and it is per-corpus rather than per-change.
 const corpusCache = new Map();
 
 async function fileStamp(path) {
@@ -71,32 +88,34 @@ async function fileStamp(path) {
 /**
  * Parse `PRD.md` and `GOALS.md` from one checkout into a clause corpus.
  *
- * `ok: false` distinguishes "this repository states no product intent" from
- * "we could not read the files that state it" — the first is a legitimate
- * empty an operator can fix by writing a PRD, the second is a broken install,
- * and collapsing them would advertise the wrong remedy.
+ * `repoPath` is REQUIRED and has no default. Defaulting it to this install's
+ * own checkout would mean an app record with a missing `repoPath` silently
+ * gets graded against PortOS's PRD instead of its own.
+ *
+ * Three outcomes, never collapsed: a corpus, `corpus-missing` (this repository
+ * states no product intent — fixable by writing a PRD), and
+ * `corpus-unreadable` (the files are there and we could not read them — a
+ * broken install). The middle and last point at opposite remedies.
  */
-export async function loadClauseCorpus(repoPath = PATHS.root) {
-  // An app record with no checkout has no product intent to score against, and
-  // silently falling back to THIS install's PRD would grade someone else's
-  // repository against PortOS's goals.
+export async function loadClauseCorpus(repoPath) {
   if (typeof repoPath !== 'string' || !repoPath.trim()) return failure('scope-adherence-corpus-missing');
-  const stamps = await Promise.all(PRD_CLAUSE_SOURCES.map((name) => fileStamp(join(repoPath, name))));
-  const key = `${repoPath}|${stamps.join('|')}`;
+  const paths = PRD_CLAUSE_SOURCES.map((name) => join(repoPath, name));
+  const stamps = await Promise.all(paths.map(fileStamp));
+  const key = stamps.join('|');
   const cached = corpusCache.get(repoPath);
   if (cached?.key === key) return cached.result;
 
+  const reads = await Promise.all(paths.map((path) => tryReadFileStrict(path)));
   const clauses = [];
   let unreadable = false;
-  for (const sourceFile of PRD_CLAUSE_SOURCES) {
-    const { ok, value } = await tryReadFileStrict(join(repoPath, sourceFile));
-    if (!ok) { unreadable = true; continue; }
-    if (typeof value === 'string') clauses.push(...parsePrdClauses(value, { sourceFile }));
-  }
+  reads.forEach(({ ok, value }, position) => {
+    if (!ok) { unreadable = true; return; }
+    if (typeof value === 'string') clauses.push(...parsePrdClauses(value, { sourceFile: PRD_CLAUSE_SOURCES[position] }));
+  });
 
-  const result = unreadable && !clauses.length
-    ? failure('scope-adherence-corpus-unreadable')
-    : { ok: true, clauses };
+  const result = clauses.length
+    ? { ok: true, clauses, index: buildClauseIndex(clauses) }
+    : failure(unreadable ? 'scope-adherence-corpus-unreadable' : 'scope-adherence-corpus-missing');
   corpusCache.set(repoPath, { key, result });
   return result;
 }
@@ -112,75 +131,78 @@ export const resetClauseCorpusCache = () => corpusCache.clear();
  * @param {string} change.title
  * @param {string} [change.body]
  * @param {string} [change.diffSummary] Changed-file list or a short diff digest.
- * @param {string} [change.repoPath] Checkout holding the PRD; defaults to this install's.
+ * @param {string} change.repoPath Checkout holding the product documents. Required.
  * @param {number} [change.topK] Clause budget. Bounds the number of forward passes.
- * @returns {Promise<{ok: true, verdict: 'aligned'|'unrelated'|'contradicts'|'abstained', clauseId: string|null, clause: object|null, margin: number|null, advisory: string, scored: number} | {ok: false, code: string}>}
+ * @returns {Promise<{ok: true, verdict: 'aligned'|'unrelated'|'contradicts'|'abstained', clauseId: string|null, clause: object|null, margin: number|null, scored: number} | {ok: false, code: string}>}
  */
 export async function scoreAdherence({
   kind = 'issue',
   title = '',
   body = '',
   diffSummary = '',
-  repoPath = PATHS.root,
+  repoPath,
   topK = SCOPE_ADHERENCE_TOP_K,
 } = {}) {
-  // Deferred: `jevRouter` reaches the instance-feature graph and `jev.js`
-  // carries the sidecar lifecycle and the 9 GB model contract. An install that
+  // Deferred: `jevRouter` reaches the instance-feature graph and, through it,
+  // the sidecar lifecycle and the pinned 9 GB model contract. An install that
   // never opts in must not pay for either in its static import closure
   // (`server/lib/importScoping.test.js`).
-  const { isJevFeatureEnabled } = await import('./jevRouter.js');
+  const { isJevFeatureEnabled, recordJevObservations, runJevDecision } = await import('./jevRouter.js');
   if (!await isJevFeatureEnabled()) return failure('scope-adherence-disabled');
 
+  // Normalized ONCE, here. The route's schema has already trimmed what it
+  // validates, but this is also the entry point for a direct service caller.
   const change = { kind, title: String(title || '').trim(), body: String(body || '').trim(), diffSummary: String(diffSummary || '').trim() };
   if (!change.title && !change.body) return failure('scope-adherence-change-empty');
 
+  const corpus = await loadClauseCorpus(repoPath);
+  if (!corpus.ok) return corpus;
+  const candidates = selectCandidateClauses(corpus.clauses, change, { k: topK, index: corpus.index });
+  if (!candidates.length) return failure('scope-adherence-no-clause');
+
   // Phase 1 of the ladder, unchanged and not optional: an issue or PR body is
-  // attacker-controlled text, and it reaches a model here the same way it does
-  // everywhere else in the untrusted-content contract.
+  // attacker-controlled text. The screened string is the SAME string that goes
+  // into every premise — screening a separately-assembled subset is what lets
+  // the screened text and the scored text drift apart.
+  const evidence = formatChangeEvidence(change);
   const { screenUntrustedContent } = await import('./untrustedContent.js');
   const screened = await screenUntrustedContent({
-    content: [change.title, change.body].filter(Boolean).join('\n\n'),
+    content: evidence,
     source: kind === 'pr' ? 'github-pr' : 'github-issue',
   });
   if (!screened.ok) return failure(screened.code || 'untrusted-content-screening-failed');
 
-  const corpus = await loadClauseCorpus(repoPath);
-  if (!corpus.ok) return corpus;
-  if (!corpus.clauses.length) return failure('scope-adherence-corpus-missing');
-
-  const candidates = selectCandidateClauses(corpus.clauses, change, { k: topK });
-  if (!candidates.length) return failure('scope-adherence-no-clause');
-
-  const { decide } = await import('./jev.js');
   const decided = [];
+  const observations = [];
   let widestAbstention = null;
   for (const clause of candidates) {
-    const premise = composeAdherencePremise({ clause, change });
+    const premise = composeAdherencePremise({ clause, evidence });
     if (!premise) continue;
-    const scored = await decide({ premise, options: [...SCOPE_ADHERENCE_HYPOTHESES], minMargin: SCOPE_ADHERENCE_MIN_MARGIN });
-    // An unavailable scorer is reported once, as itself. Falling through to a
-    // chat completion is what the untrusted-content ladder does; there is no
-    // such fallback here, because an advisory nobody asked for is not worth
+    const scored = await runJevDecision({ decisionId: SCOPE_ADHERENCE_DECISION_ID, premise });
+    observations.push({ decisionId: SCOPE_ADHERENCE_DECISION_ID, kind: scored.kind });
+    // An unavailable scorer is reported once, as itself, and stops the loop —
+    // the remaining clauses would fail identically. Falling through to a chat
+    // completion is what the untrusted-content ladder does; there is no such
+    // fallback here, because an advisory nobody asked for is not worth
     // provider quota.
-    if (!scored.ok) return failure(scored.code);
+    if (!scored.ok) {
+      await recordJevObservations(observations);
+      return failure(scored.code);
+    }
     if (scored.abstained) {
       if (widestAbstention === null || scored.margin > widestAbstention) widestAbstention = scored.margin;
       continue;
     }
-    const verdict = verdictForHypothesis(scored.choice);
-    if (verdict) decided.push({ verdict, clause, margin: scored.margin });
+    decided.push({ verdict: scored.value, clause, margin: scored.margin });
   }
 
+  // Counts only — which decision, which bucket. Never a premise, a clause, or
+  // anything about what was analyzed. This is what puts the scope scorer's
+  // abstention rate in the same panel table as the triage decisions.
+  await recordJevObservations(observations);
+
   if (!decided.length) {
-    return {
-      ok: true,
-      verdict: 'abstained',
-      clauseId: null,
-      clause: null,
-      margin: widestAbstention,
-      advisory: formatAdherenceAdvisory({}),
-      scored: candidates.length,
-    };
+    return { ok: true, verdict: 'abstained', clauseId: null, clause: null, margin: widestAbstention, scored: candidates.length };
   }
 
   decided.sort((a, b) => (VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict]) || (b.margin - a.margin));
@@ -189,9 +211,11 @@ export async function scoreAdherence({
     ok: true,
     verdict: best.verdict,
     clauseId: best.clause.id,
-    clause: best.clause,
+    // The citation ships as a FIELD rather than being re-spelled in the
+    // browser: the separator and the no-heading-path case would otherwise have
+    // two implementations, and a change to one would leave the other green.
+    clause: { ...best.clause, citation: formatClauseCitation(best.clause) },
     margin: best.margin,
-    advisory: formatAdherenceAdvisory(best),
     scored: candidates.length,
   };
 }

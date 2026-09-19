@@ -13,9 +13,8 @@ const ADVISORY = {
   ok: true,
   verdict: 'contradicts',
   clauseId: 'PRD.md#out-of-scope:abc12345',
-  clause: { id: 'PRD.md#out-of-scope:abc12345', sourceFile: 'PRD.md', headingPath: 'Out of Scope', text: '…', line: 12 },
+  clause: { id: 'PRD.md#out-of-scope:abc12345', sourceFile: 'PRD.md', headingPath: 'Out of Scope', citation: 'PRD.md § Out of Scope', text: '…', line: 12 },
   margin: 0.41,
-  advisory: 'Advisory: this change works against PRD.md § Out of Scope (margin 0.41). Not a gate — read the clause and decide.',
   scored: 3,
 };
 
@@ -56,15 +55,15 @@ describe('POST /api/apps/:id/scope-adherence', () => {
     expect(scoreAdherence).not.toHaveBeenCalled();
   });
 
-  it('never falls back to this install\'s own checkout for an app with no repository', async () => {
+  it('forwards an app\'s missing repository as-is rather than inventing one', async () => {
     appsService.getAppById.mockResolvedValue({ id: 'app-002', name: 'Docs only' });
 
     await request(app).post('/api/apps/app-002/scope-adherence').send({ kind: 'issue', title: 'Something' });
 
-    // An absent `repoPath` must reach the service as an explicit empty, not as
-    // `undefined` — the service defaults an ABSENT path to PortOS's own
-    // checkout, which would grade another repository against PortOS's PRD.
-    expect(scoreAdherence).toHaveBeenCalledWith(expect.objectContaining({ repoPath: '' }));
+    // `scoreAdherence` requires `repoPath` and has no default, so an app with
+    // no checkout answers `scope-adherence-corpus-missing` instead of being
+    // graded against PortOS's own PRD.
+    expect(scoreAdherence).toHaveBeenCalledWith(expect.objectContaining({ repoPath: undefined }));
   });
 
   it('404s for an unknown app without scoring anything', async () => {

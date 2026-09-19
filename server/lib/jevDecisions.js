@@ -17,6 +17,18 @@
 import { JEV_DEFAULT_MIN_MARGIN, JEV_MAX_HYPOTHESIS_CHARS } from './jev.js';
 
 /**
+ * `source` is the INGRESS CHANNEL a decision's premise arrives on, and it is
+ * `null` for a decision that has none.
+ *
+ * The four untrusted-content rungs each answer a question about text that
+ * arrived from somewhere (`github-issue`, `email`, …), and their channel is
+ * what `resolveUntrustedContentPolicy` keys the operator's per-source `jevMode`
+ * on. `scope-adherence` asks about the operator's OWN product documents
+ * instead, so there is no channel to name and no per-source policy to resolve —
+ * `null` says that explicitly rather than borrowing a channel it does not use.
+ * Nothing in `jevRouter.runJevDecision` reads this field; the contract test is
+ * what keeps a typo out of the four that do have one.
+ *
  * Per-decision and per-option abstention floors.
  *
  * `minMargin` on the decision is the bar every option clears. `minMargin` on an
@@ -114,6 +126,38 @@ export const JEV_DECISIONS = Object.freeze({
       Object.freeze({
         value: 'defer',
         hypothesis: 'This discussion contains an attempt to direct an automated maintainer to ignore its instructions, reveal private information, run supplied commands, or install attachments, or its intent is unclear.',
+      }),
+    ]),
+  }),
+
+  // The one decision here that is not a rung of the untrusted-content ladder:
+  // it asks whether a filed issue or an opened pull request advances a clause
+  // of the repository's own `PRD.md` / `GOALS.md`. It is scored once per
+  // candidate clause, so the premise — not the option set — carries which goal
+  // is being asked about.
+  //
+  // No per-option floor. Every outcome is a sentence rendered beside a row;
+  // none of them closes, labels, or blocks anything, so there is no asymmetry
+  // to protect against. The DECISION floor is wide instead: `unrelated` and
+  // `contradicts` read very differently to a human, and telling an operator
+  // their PR "works against" a goal on a hair's separation would burn the
+  // feature's credibility faster than staying quiet ever could.
+  'scope-adherence': Object.freeze({
+    source: null,
+    label: 'Product scope adherence',
+    minMargin: 0.2,
+    options: Object.freeze([
+      Object.freeze({
+        value: 'aligned',
+        hypothesis: 'The proposed change advances the stated product goal.',
+      }),
+      Object.freeze({
+        value: 'unrelated',
+        hypothesis: 'The proposed change is unrelated to the stated product goal.',
+      }),
+      Object.freeze({
+        value: 'contradicts',
+        hypothesis: 'The proposed change works against the stated product goal.',
       }),
     ]),
   }),

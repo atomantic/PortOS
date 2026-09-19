@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { Scale } from 'lucide-react';
 import Pill from '../ui/Pill';
 import BrailleSpinner from '../BrailleSpinner';
+import { scopeAdherenceReasonLabel } from '../../lib/scopeAdherenceReasons';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 import { scoreAppScopeAdherence } from '../../services/api';
 
@@ -12,33 +13,18 @@ import { scoreAppScopeAdherence } from '../../services/api';
  * Three deliberate constraints:
  *
  *  1. **Nothing is gated on it.** No button is disabled by a verdict, no row is
- *     hidden, no claim or merge is blocked. The output is a sentence naming a
- *     clause the reader can go and argue with.
+ *     hidden, no claim or merge is blocked. The output is a clause the reader
+ *     can go and argue with.
  *  2. **It runs only when clicked.** The scorer is a 9 GB local model that
  *     loads on first use; scoring every visible row on mount would be exactly
  *     the cold-bootstrap work the AI Provider Usage Policy forbids.
- *  3. **It disappears when the feature is off.** An install that has not
- *     opted into the jev scorer never sees a button whose only outcome would
- *     be "not installed".
+ *  3. **It disappears when the feature is off.** An install that has not opted
+ *     into the jev scorer never sees a button whose only outcome would be
+ *     "not installed".
  */
 
 const TONE = { aligned: 'success', contradicts: 'warning', unrelated: 'muted' };
 const LABEL = { aligned: 'Advances', contradicts: 'Works against', unrelated: 'Unrelated' };
-
-// Operator-facing wording for the failure codes this surface can actually
-// produce. An unmapped code is a bug, not something to render raw at someone.
-const REASON = {
-  'scope-adherence-disabled': 'The local scope scorer is turned off for this install.',
-  'scope-adherence-change-empty': 'This row has no title or description to score.',
-  'scope-adherence-corpus-missing': 'This repository has no PRD.md or GOALS.md to score against.',
-  'scope-adherence-corpus-unreadable': 'This repository\'s PRD.md / GOALS.md could not be read.',
-  'scope-adherence-no-clause': 'No stated goal in this repository is close enough to score against.',
-  'jev-not-installed': 'The local scorer is not installed yet — see Models > LLMs > jev.',
-  'jev-start-failed': 'The local scorer could not start. Check Models > LLMs > jev.',
-  'jev-timeout': 'The local scorer did not answer in time.',
-};
-
-const reasonFor = (code) => REASON[code] || 'The local scorer could not answer for this change.';
 
 export default function ScopeAdherenceCheck({ appId, kind, title, body = '', diffSummary = '' }) {
   const { isFeatureEnabled } = useInstanceFeatures();
@@ -58,6 +44,8 @@ export default function ScopeAdherenceCheck({ appId, kind, title, body = '', dif
 
   if (!isFeatureEnabled('jev')) return null;
 
+  const verdict = result?.ok ? result.verdict : null;
+
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
       <button
@@ -71,23 +59,21 @@ export default function ScopeAdherenceCheck({ appId, kind, title, body = '', dif
         {scoring ? 'Scoring…' : 'Check scope'}
       </button>
 
-      {result?.ok && result.verdict !== 'abstained' && (
+      {verdict && verdict !== 'abstained' && (
         <>
-          <Pill tone={TONE[result.verdict]} size="xs">{LABEL[result.verdict]}</Pill>
-          {/* The clause, not just the score. A bare margin is noise. */}
-          <span className="text-gray-400">
-            {result.clause?.sourceFile}
-            {result.clause?.headingPath ? ` § ${result.clause.headingPath}` : ''}
-          </span>
+          <Pill tone={TONE[verdict]} size="xs">{LABEL[verdict]}</Pill>
+          {/* The clause, not just the score. A bare margin is noise. The
+              citation is composed server-side so its spelling has one home. */}
+          <span className="text-gray-400">{result.clause?.citation}</span>
           <span className="text-gray-600 italic">advisory only</span>
         </>
       )}
 
-      {result?.ok && result.verdict === 'abstained' && (
+      {verdict === 'abstained' && (
         <span className="text-gray-500">No advisory — the scorer could not separate the options.</span>
       )}
 
-      {result && !result.ok && <span className="text-gray-500">{reasonFor(result.code)}</span>}
+      {result && !result.ok && <span className="text-gray-500">{scopeAdherenceReasonLabel(result.code)}</span>}
     </div>
   );
 }

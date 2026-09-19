@@ -651,15 +651,11 @@ export default function PullRequestsTab({ appId, appName }) {
                     </div>
 
                     {/* Advisory only — never gates the merge button beside it.
-                        The listing carries no PR description, so the branch
-                        pair stands in for the change's code-side vocabulary;
-                        it is the second retrieval view, not the premise. */}
-                    <ScopeAdherenceCheck
-                      appId={appId}
-                      kind="pr"
-                      title={pullRequest.title || ''}
-                      diffSummary={[pullRequest.headBranch, pullRequest.baseBranch].filter(Boolean).join(' → ')}
-                    />
+                        Title alone: this listing carries no PR description,
+                        and branch names here are `claim/issue-N` /
+                        `cos/<task>/<agent>`, which would feed the code-side
+                        retrieval view pure noise rather than vocabulary. */}
+                    <ScopeAdherenceCheck appId={appId} kind="pr" title={pullRequest.title || ''} />
                   </div>
 
                   <div className="shrink-0 lg:pt-0.5 flex flex-wrap items-start gap-2">

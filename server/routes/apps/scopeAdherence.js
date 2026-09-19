@@ -38,10 +38,7 @@ router.post('/:id/scope-adherence', loadApp, asyncHandler(async (req, res) => {
     title,
     body,
     diffSummary,
-    // `?? ''` rather than letting it fall through as `undefined`: the service
-    // defaults an ABSENT path to this install's own checkout, and an app
-    // record with no repository would then be graded against PortOS's PRD.
-    repoPath: req.loadedApp.repoPath ?? '',
+    repoPath: req.loadedApp.repoPath,
   }));
 }));
 

@@ -40,7 +40,7 @@ describe('ScopeAdherenceCheck', () => {
       ok: true,
       verdict: 'contradicts',
       clauseId: 'PRD.md#out-of-scope:abc12345',
-      clause: { sourceFile: 'PRD.md', headingPath: 'Out of Scope' },
+      clause: { sourceFile: 'PRD.md', headingPath: 'Out of Scope', citation: 'PRD.md § Out of Scope' },
       margin: 0.41,
     });
 
