@@ -804,10 +804,18 @@ export default function IssuesTab({ appId, appName }) {
                           href={issue.url}
                           target="_blank"
                           rel="noreferrer"
+                          role="button"
                           aria-label={`Open issue ${issue.number} on ${forgeLabel}`}
-                          className="text-gray-500 hover:text-port-accent transition-colors self-center"
+                          title={`Open issue ${issue.number} on ${forgeLabel}`}
+                          onKeyDown={(e) => {
+                            if (e.key === ' ' || e.key === 'Spacebar') {
+                              e.preventDefault();
+                              window.open(issue.url, '_blank', 'noreferrer');
+                            }
+                          }}
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-lg border border-port-border bg-port-bg text-gray-400 hover:text-port-accent hover:border-port-accent/40 hover:bg-port-border/40 transition-colors shrink-0 self-center"
                         >
-                          <ExternalLink size={12} />
+                          <ExternalLink size={14} />
                         </a>
                       )}
                     </div>
