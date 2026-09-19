@@ -346,7 +346,7 @@ describe('cleanupMerged', () => {
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
 
     const res = await cleanupMerged('/repo', 'main', [
-      { branch: 'claim/issue-', worktreePath: '/repo/data/cos/worktrees/claim-issue-', worktreeAgeMs: 60 * 1000 }
+      { branch: 'claim/issue-', worktreePath: '/repo/data/cos/worktrees/claim-issue-', worktreeAgeMs: 2 * 60 * 60 * 1000 }
     ]);
 
     expect(res.cleaned).toEqual(['claim/issue-']);

@@ -943,7 +943,7 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
     const retired = await retireBranch(repoPath, b, {
       activeAgentIds,
       staleClaimIdleMs: isMalformedClaimBranch(b.branch)
-        ? 0
+        ? SHIPPED_CLAIM_IDLE_MS
         : b.upstreamGone ? SHIPPED_CLAIM_IDLE_MS : STALE_CLAIM_IDLE_MS,
       label: `🔀 branch-reconcile: remove worktree for ${b.branch}`,
     });
