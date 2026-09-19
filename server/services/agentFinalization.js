@@ -47,6 +47,8 @@ import {
   MAX_OBJECTIVE_CHARS,
   formatGoalFidelitySummary,
   goalFidelityHoldsRun,
+  mergeOutcomeObjective,
+  mergeOutcomeReview,
   taskObjective,
 } from '../lib/goalFidelity.js';
 import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies } from '../lib/goalFidelityFollowUp.js';
@@ -646,6 +648,34 @@ ${JSON.stringify({ title: issue.title, body })}`;
   return objective.length <= MAX_OBJECTIVE_CHARS ? objective : null;
 }
 
+/** The gate's no-verdict sentinel: nothing judged this run, so leave it alone. */
+const noFidelityVerdict = (error = null) => ({ verdict: null, review: null, error });
+
+/**
+ * The goal-fidelity answer for a run whose objective is to LAND a change
+ * request (`mergeOutcomeObjective`), established from forge state instead of
+ * from a model's read of a diff.
+ *
+ * Fail-OPEN on everything but a merge, matching the gate it stands in for. A PR
+ * still OPEN is what a blocked required review correctly leaves behind, and one
+ * CLOSED as superseded can be a correct resolution — both decline SILENTLY, since
+ * the caller warns on a reason and neither is a gate miss. Only an unreadable
+ * forge is worth saying out loud: it means the check did not happen.
+ *
+ * @param {string} workspacePath - the run's worktree; supplies the forge remote
+ * @param {{ number: number, branch: string }} mergeObjective
+ */
+async function verifyMergeOutcome(workspacePath, mergeObjective) {
+  const { probeChangeRequestState } = await import('./prProbe.js');
+  const probe = await probeChangeRequestState(workspacePath, mergeObjective).catch(() => null);
+  if (!probe?.readable) {
+    return noFidelityVerdict(`Could not read the state of #${mergeObjective.number}; a merge objective is not graded from a diff.`);
+  }
+  const review = mergeOutcomeReview({ number: mergeObjective.number, prState: probe.prState });
+  if (!review) return noFidelityVerdict();
+  return { verdict: review.verdict, review: { ...review, checkedAt: new Date().toISOString() }, error: null };
+}
+
 /**
  * Goal-fidelity completion gate (#5994).
  *
@@ -664,37 +694,43 @@ ${JSON.stringify({ title: issue.title, body })}`;
  * the transcript; the outer claim prompt describes execution, not the feature.
  *
  * Fail-OPEN throughout. Every decline path — gate off, no local backend, no
- * objective, no readable diff, a reviewer that errored or answered with prose —
- * returns a result carrying NO verdict, and the caller leaves the run's outcome
- * exactly as it found it. A gate that could hold a run because a local model was
- * down would be worse than no gate: it would convert an ollama restart into a
- * queue of runs marked needs-attention.
+ * objective, no readable diff, a merge objective the forge could not confirm, a
+ * reviewer that errored or answered with prose — returns a result carrying NO
+ * verdict, and the caller leaves the run's outcome exactly as it found it. A
+ * gate that could hold a run because a local model was down would be worse than
+ * no gate: it would convert an ollama restart into a queue of runs marked
+ * needs-attention.
  *
  * @returns {Promise<{verdict: string|null, review: Object|null, error: string|null}>}
  */
 async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
-  const none = (error = null) => ({ verdict: null, review: null, error });
-  if (!workspacePath || !task?.id) return none();
+  if (!workspacePath || !task?.id) return noFidelityVerdict();
   // A coordinator's run-window diff cannot represent work delegated across
   // worker branches. Judge individual tasks, not the aggregate swarm objective.
   // Stored Markdown metadata may carry numeric values as strings.
   const workers = Number(task.metadata?.swarmCount);
   if ((Number.isSafeInteger(workers) && workers > 1)
-      || resolveTaskHookType(task) === 'branch-reconcile') return none();
+      || resolveTaskHookType(task) === 'branch-reconcile') return noFidelityVerdict();
+  // Resolved before the merge diversion below so the gate's off-switch suppresses
+  // BOTH paths — an install that turned the gate off gets no verdict of any kind.
   const config = await getGoalFidelityConfig().catch(() => null);
-  if (!config) return none();
+  if (!config) return noFidelityVerdict();
+  // A merge-shaped objective is answered by the FORGE, never by a diff — see
+  // `mergeOutcomeObjective` for the run this gate wrongly held.
+  const mergeObjective = mergeOutcomeObjective(task);
+  if (mergeObjective) return verifyMergeOutcome(workspacePath, mergeObjective);
   const claimFlow = task.metadata?.claimFlow === true || task.metadata?.claimFlow === 'true'
     || CLAIM_FLOW_TASK_TYPES.has(resolveTaskHookType(task));
   const objective = claimFlow
     ? await claimedIssueObjective(workspacePath).catch(() => null)
     : taskObjective(task);
-  if (!objective) return none(claimFlow ? 'Claimed issue requirements unavailable; claim workflow is not a code objective.' : null);
+  if (!objective) return noFidelityVerdict(claimFlow ? 'Claimed issue requirements unavailable; claim workflow is not a code objective.' : null);
 
   const { diff, reason, truncated } = await runWindowDiff(workspacePath, startedAt, { maxChars: MAX_FIDELITY_DIFF_CHARS });
   // `reason` = git could not answer; `''` = the run committed nothing. Both skip
   // the review, and neither is a finding: a run with no diff is judged by the
   // commit criterion, which is the check that actually owns that question.
-  if (reason || !diff) return none();
+  if (reason || !diff) return noFidelityVerdict();
 
   const result = await runLocalGoalFidelityReview({
     backend: config.backend,
@@ -703,7 +739,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     objective,
     diff,
   }).catch(err => ({ ok: false, error: err.message }));
-  if (!result?.ok) return none(result?.error || 'goal-fidelity review returned no verdict');
+  if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');
   return {
     verdict: result.verdict,
     review: {

@@ -728,6 +728,17 @@ describe('AgentCard missing shell explanation', () => {
 describe('AgentCard goal fidelity', () => {
   const withReview = (goalFidelity) => ({ ...agent, result: { ...agent.result, goalFidelity } });
 
+  // A merge-shaped objective is settled by forge state, not by a model reading a
+  // diff — so the card must not leave a reader assuming a local model said so.
+  it('names the forge as the source of a verdict no model produced', () => {
+    render(<MemoryRouter><AgentCard agent={withReview({
+      verdict: 'ship', source: 'forge-outcome', evidence: 'The forge reports #7653 MERGED', missing: [], unrequested: [],
+    })} completed /></MemoryRouter>);
+    expect(screen.getByText(/forge-verified/)).toBeInTheDocument();
+    expect(screen.getByText('Goal fidelity:', { exact: false })).toHaveTextContent('Delivers the objective');
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+  });
+
   it('queues an isolated investigation with the original prompt and app, then links to the task', async () => {
     api.getCosAgentPrompt.mockResolvedValue({ prompt: 'Resolve issue #123 acceptance criteria' });
     api.addCosTask.mockResolvedValue({ id: 'task-investigation', approvalRequired: false });

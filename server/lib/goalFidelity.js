@@ -200,3 +200,65 @@ export function formatGoalFidelitySummary(review) {
     ? `Goal-fidelity verdict: ${review.verdict} (${counts.join(', ')})`
     : `Goal-fidelity verdict: ${review.verdict}`;
 }
+
+/**
+ * `review.source` for a verdict established from FORGE STATE rather than from a
+ * model's read of a diff. Rendered in place of the reviewer model, so "this run
+ * delivered" is never mistaken for a local model's opinion. Mirrored as a literal
+ * in `client/src/components/cos/tabs/AgentCard.jsx`, alongside the verdict keys.
+ */
+export const GOAL_FIDELITY_SOURCE_FORGE = 'forge-outcome';
+
+/**
+ * The change request a task's objective is to LAND, or `null` when the task's
+ * objective is ordinary code.
+ *
+ * A review-loop follow-up (`metadata.reviewLoopFollowUp`, queued by
+ * `agentWorktreeCleanup.js` or the PR page's resolve button) is asked for a
+ * STATE CHANGE on a change request — "resolve and merge PR #N" — not for a
+ * feature. Nothing in `git diff` evidences a merge, so the diff-reading gate is
+ * structurally unable to answer it, and it answers anyway: PR #7653 merged, and
+ * its run was then graded `rethink` on the unrelated `main` commits the branch
+ * had absorbed, failing the run and re-queueing the task against an
+ * already-merged PR.
+ *
+ * `reviewLoopLeaveOpen` follow-ups are excluded on purpose: their objective is
+ * to address review feedback and LEAVE the PR open, so a merge proves nothing
+ * about them and their fix commits are ordinary diff the normal gate can read.
+ */
+export function mergeOutcomeObjective(task) {
+  const metadata = task?.metadata;
+  if (!metadata || typeof metadata !== 'object') return null;
+  // Stored Markdown metadata may carry booleans as strings.
+  const truthy = (value) => value === true || value === 'true';
+  if (!truthy(metadata.reviewLoopFollowUp) || truthy(metadata.reviewLoopLeaveOpen)) return null;
+  const number = Number(metadata.reviewLoopPRNumber);
+  const branch = typeof metadata.reviewLoopPRBranch === 'string' ? metadata.reviewLoopPRBranch.trim() : '';
+  // Both are required: the number is what the forge is asked about, and the
+  // branch is what a forge without a cheap by-number state read is asked about.
+  if (!Number.isSafeInteger(number) || number <= 0 || !branch) return null;
+  return { number, branch };
+}
+
+/**
+ * The verdict a probed change-request state establishes, or `null` for one that
+ * establishes none.
+ *
+ * ONLY `MERGED` produces a verdict, and it is always `ship`. The polarity is
+ * deliberate and matches the module's fail-open doctrine: a merge is positive
+ * proof the objective landed, while `OPEN` and `CLOSED` are not proof it did
+ * not. A review loop legitimately leaves a PR open when a required review is
+ * blocked or CI never went green, and a PR closed as superseded can be a
+ * correct resolution — both are owned by the merge-gate contract, the repo-state
+ * audit, and pr-watcher, none of which this gate should second-guess.
+ */
+export function mergeOutcomeReview({ number, prState }) {
+  if (String(prState || '').toUpperCase() !== 'MERGED') return null;
+  return {
+    verdict: 'ship',
+    missing: [],
+    unrequested: [],
+    evidence: `The forge reports #${number} MERGED — this run's objective is established by forge state, not by reading a diff.`,
+    source: GOAL_FIDELITY_SOURCE_FORGE,
+  };
+}
