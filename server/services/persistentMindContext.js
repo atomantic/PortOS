@@ -33,6 +33,7 @@ import {
   extractPersistentMindJournal,
   readPersistentMindJournal,
 } from './persistentMindJournal.js';
+import { persistentMindJournalDigest } from '../lib/persistentMindJournal.js';
 import { PERSISTENT_MIND_CHOSEN_NAME_TAG, persistentMindChooseNameSchema, resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
 import * as memoryBackend from './memoryBackend.js';
 import {
@@ -331,7 +332,7 @@ export async function preparePersistentMindContext({
     memories,
     events: history,
     rollups,
-    journal,
+    journalDigest: persistentMindJournalDigest(journal, mindId),
     maxChars,
     recentEventLimit,
     promptVersion,

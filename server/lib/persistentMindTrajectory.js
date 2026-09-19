@@ -10,7 +10,6 @@
 import { z } from 'zod';
 import { comparePersistentMindMemories, persistentMindMemoryProtection } from './persistentMindMemory.js';
 import { PERSISTENT_MIND_PROMPT_LIMITS } from './persistentMindPrompt.js';
-import { persistentMindJournalDigest } from './persistentMindJournal.js';
 
 export const PERSISTENT_MIND_ID = 'cos-persistent-mind';
 // v2 seals from the decision journal rather than from the raw range, so a v1
@@ -335,7 +334,7 @@ export function assemblePersistentMindContext({
   memories = [],
   events = [],
   rollups = [],
-  journal = [],
+  journalDigest = null,
   maxChars = PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars,
   recentEventLimit = PERSISTENT_MIND_TRAJECTORY_LIMITS.recentContextEvents,
   promptVersion = PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
@@ -412,8 +411,13 @@ export function assemblePersistentMindContext({
     PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars
   );
   // Superseded wording never reaches the prompt: the digest carries only what
-  // is still true plus the settled history that explains it.
-  const journalSummary = persistentMindJournalDigest(Array.isArray(journal) ? journal : [], mindId);
+  // is still true plus the settled history that explains it. The caller renders
+  // it — this module is reached by ~300 suites for its id/kind constants alone,
+  // so importing the journal renderer here would pull that leaf into every one
+  // of them (server suite import budget, #6156).
+  const journalSummary = journalDigest && typeof journalDigest === 'object'
+    ? journalDigest
+    : { text: '', activeCount: 0, resolvedCount: 0, supersededCount: 0 };
   const journalText = bounded(journalSummary.text, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxJournalChars);
   const prefix = [
     `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`,
