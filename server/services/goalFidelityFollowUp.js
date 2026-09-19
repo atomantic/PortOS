@@ -20,6 +20,16 @@
  * the issue and run the project's normal claim flow instead of re-deriving the
  * work from prose.
  *
+ * The queued task is told to CHECK THE FINDING before acting on it. A verdict is
+ * one local model's reading of a diff it saw without the repository, and an
+ * agent told only to reconcile will reconcile — inventing a change to satisfy a
+ * finding that had nothing behind it. When the objective turns out to have been
+ * delivered, the investigator reports the blind spot instead
+ * (`services/goalFidelityCalibration.js`), which queues the fix for the detector
+ * rather than for the run. The instructions come from
+ * `lib/goalFidelityCalibration.js`; this module supplies the loopback API base,
+ * which is the one half of it a pure builder cannot resolve.
+ *
  * DUPLICATE SUPPRESSION is the load-bearing part, because the producer is a
  * scheduled unattended loop: a perpetual task that keeps drifting the same way
  * would otherwise file the same issue every cadence, forever. Two guards, both
@@ -50,9 +60,12 @@ import { PORTOS_APP_ID, getAppById } from './apps.js';
 import { getSettings } from './settings.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
 import { fileForgeIssue, probeForgeReachability, scrubForgeIssueText } from './appIssues.js';
+import { investigationOutcome } from '../lib/investigationTasks.js';
 import { forgeCliForTracker, resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
+import { localApiBaseUrl } from '../lib/networkExposure.js';
+import { buildGoalFidelityFalsePositiveReportBlock } from '../lib/goalFidelityCalibration.js';
 import {
   GOAL_FIDELITY_ISSUE_LABEL,
   GOAL_FIDELITY_ISSUE_LABEL_SPEC,
@@ -328,7 +341,15 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
  * nothing will pick up is the one wrong thing to say about it.
  */
 async function queueFollowUpTask({ task, review, fingerprint, issue }) {
-  const description = buildGoalFidelityFollowUpTask({ task, review, fingerprint, issue });
+  // The API base is resolved here because it is this layer's to know: the pure
+  // builder cannot read the install's live network exposure to find the loopback
+  // port the agent should call.
+  const falsePositiveBlock = buildGoalFidelityFalsePositiveReportBlock({
+    apiBase: localApiBaseUrl(),
+    findingFingerprint: fingerprint,
+    taskId: task?.id,
+  });
+  const description = buildGoalFidelityFollowUpTask({ task, review, fingerprint, issue, falsePositiveBlock });
   const filed = await fileInvestigationTask({
     fingerprint,
     description,
@@ -337,15 +358,10 @@ async function queueFollowUpTask({ task, review, fingerprint, issue }) {
     context: `Auto-generated from a goal-fidelity ${review?.verdict} verdict`,
     ...(task?.metadata?.app ? { app: task.metadata.app } : {}),
   });
-  if (!filed?.task) return { task: null, loopReason: filed?.loopReason || null };
-  return {
-    task: filed.task,
-    approvalRequired: filed.approvalRequired === true,
-    // A duplicate fold is addTask's signal that an open task already tracks
-    // this cause — a usable outcome, not a failure.
-    duplicate: filed.task.duplicate === true,
-    loopReason: filed.loopReason || null,
-  };
+  // One reading of the producer's return, shared with the calibration producer:
+  // a HELD task is not a queued one, and a duplicate fold is a usable outcome
+  // rather than a failure. Both are easy to re-derive slightly differently.
+  return investigationOutcome(filed, { subject: 'the follow-up task' });
 }
 
 /**
@@ -385,21 +401,18 @@ export async function runGoalFidelityFollowUp({ agentId, task, review }) {
         console.error(`❌ goal-fidelity follow-up: could not queue a task for ${agentId}: ${err.message}`);
         return null;
       });
-    result.task = queued?.task
+    result.task = queued?.queued
       ? {
-        id: queued.task.id,
-        approvalRequired: queued.approvalRequired === true,
-        duplicate: queued.duplicate === true,
+        id: queued.taskId,
+        approvalRequired: queued.approvalRequired,
+        duplicate: queued.duplicate,
         ...(queued.loopReason ? { loopReason: queued.loopReason } : {}),
       }
       : null;
-    // Name the loop policy's own reason when it has one: "could not be queued"
-    // is the least actionable thing we could say about a deliberate suppression.
-    if (!result.task) {
-      result.taskError = queued?.loopReason
-        ? `the follow-up task was suppressed (${queued.loopReason})`
-        : 'the follow-up task could not be queued';
-    }
+    // The producer's own refusal sentence, which names the loop policy's reason
+    // when it has one — "could not be queued" is the least actionable thing we
+    // could say about a deliberate suppression.
+    if (!result.task) result.taskError = queued?.reason || 'the follow-up task could not be queued';
   }
 
   return result;

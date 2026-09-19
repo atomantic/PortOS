@@ -67,6 +67,7 @@ vi.mock('../services/apps.js', () => ({ getAppById: vi.fn(), getAppWorkTracker: 
 vi.mock('../services/streamingDetect.js', () => ({ NON_PM2_TYPES: new Set() }));
 vi.mock('../services/instances.js', () => ({ getAssignableInstances: vi.fn() }));
 vi.mock('../services/managedAppRepositories.js', () => ({ resolveManagedAppIssueTarget: vi.fn() }));
+vi.mock('../services/goalFidelityCalibration.js', () => ({ reportGoalFidelityFalsePositive: vi.fn() }));
 
 import * as cos from '../services/cos.js';
 import { getAssignableInstances } from '../services/instances.js';
@@ -76,6 +77,7 @@ import cosTaskRoutes from './cosTaskRoutes.js';
 import { listUserActions } from '../services/userActions.js';
 import { __resetInvestigationCircuit } from '../services/investigationTaskProducer.js';
 import { clientInvestigationFingerprint } from '../lib/investigationTasks.js';
+import { reportGoalFidelityFalsePositive } from '../services/goalFidelityCalibration.js';
 
 const SELF = 'self-instance-id';
 const PEER = 'peer-instance-id';
@@ -510,5 +512,51 @@ describe('GET /api/cos/tasks — the spawn window (lib/cosSpawnWindow.js)', () =
 
     expect(res.status).toBe(200);
     expect(res.body.user.grouped.pending.map((t) => t.id)).toEqual(['user/42', 'user/43']);
+  });
+});
+
+// The agent-facing half of the calibration loop (`lib/goalFidelityCalibration.js`).
+// A follow-up investigator that overturned a fidelity finding POSTs here; the
+// route's whole job is to keep the gap vocabulary honest and to never turn a
+// queue decision into an error the reporting agent would try to recover from.
+describe('POST /api/cos/goal-fidelity/false-positive', () => {
+  const post = (body) => request(buildApp()).post('/api/cos/goal-fidelity/false-positive').send(body);
+
+  it('passes a well-formed report through and answers with what was queued', async () => {
+    reportGoalFidelityFalsePositive.mockResolvedValue({ queued: true, gap: 'rubric-gap', taskId: 'calib-1' });
+    const res = await post({ gap: 'rubric-gap', detail: 'A supporting change read as unrequested.', taskId: 'task-7' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ queued: true, taskId: 'calib-1' });
+    expect(reportGoalFidelityFalsePositive).toHaveBeenCalledWith(
+      expect.objectContaining({ gap: 'rubric-gap', taskId: 'task-7' }),
+    );
+  });
+
+  // The gap is a BOUNDED STRING here, not the enum: a report costs an agent an
+  // investigation, and `normalizeGoalFidelityContextGap` folds a near-miss onto
+  // `other` with the prose diagnosis intact. Rejecting here would throw the
+  // expensive part away over a word.
+  it('accepts a gap outside the vocabulary and lets the service fold it', async () => {
+    reportGoalFidelityFalsePositive.mockResolvedValue({ queued: true, gap: 'other', taskId: 'calib-1' });
+    const res = await post({ gap: 'the-model-was-confused', detail: 'the cap was already on main' });
+    expect(res.status).toBe(200);
+    expect(reportGoalFidelityFalsePositive).toHaveBeenCalledWith(
+      expect.objectContaining({ gap: 'the-model-was-confused' }),
+    );
+  });
+
+  it('still requires a gap — a report naming no missing context cannot be keyed at all', async () => {
+    expect((await post({ detail: 'it was wrong' })).status).toBe(400);
+    expect(reportGoalFidelityFalsePositive).not.toHaveBeenCalled();
+  });
+
+  // A refusal is an outcome, not an error: the reporting agent cannot fix a
+  // disabled gate or an open circuit breaker, and a 4xx would send it into a
+  // retry loop over a decision it does not own.
+  it('answers 200 with the reason when the calibration was not queued', async () => {
+    reportGoalFidelityFalsePositive.mockResolvedValue({ queued: false, gap: 'other', reason: 'the goal-fidelity gate is disabled on this install' });
+    const res = await post({ gap: 'other' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ queued: false, reason: expect.stringContaining('disabled') });
   });
 });

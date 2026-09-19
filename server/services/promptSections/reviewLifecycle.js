@@ -7,7 +7,7 @@ import { oversizedBodyPointer } from '../../lib/slashdoInvocation.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
 import { shellQuote } from '../../lib/shellQuote.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
-import { AGENT_API_AUTH_CURL_ARG } from '../../lib/agentApiToken.js';
+import { agentApiAuthNote, agentApiCurl } from '../../lib/agentApiToken.js';
 import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../../lib/localReviewBridge.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
@@ -818,9 +818,13 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const challengeProtocolNote = [
     '**Challenge protocol (dispute a wrong rejection — use sparingly):** If a reviewer raises a BLOCKING finding you have strong, specific evidence is a false positive (it misread the diff, flagged intended behavior, or contradicts a documented repo convention), do NOT silently "fix" it or accept a false block — dispute it **exactly once** for this task:',
     '```bash',
-    `curl -sS -X POST ${apiBase}/api/cos/tasks/${sourceTaskId}/challenge -H 'Content-Type: application/json' ${AGENT_API_AUTH_CURL_ARG} -d '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}'`,
+    agentApiCurl({
+      apiBase,
+      path: `/api/cos/tasks/${sourceTaskId}/challenge`,
+      payload: '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}',
+    }),
     '```',
-    `Keep that \`Authorization\` header on every PortOS API call you make, including the \`/resolve\` POST below: this install gates \`/api/*\` behind its instance password, and \`$PORTOS_API_TOKEN\` is the session token PortOS put in your environment for exactly this. A bare \`401 AUTH_REQUIRED\` means the header was dropped, not that the endpoint is unavailable.`,
+    agentApiAuthNote({ alsoCovering: 'including the `/resolve` POST below' }),
     `A \`409\` (\`CHALLENGE_EXHAUSTED\` = the one challenge is spent, or \`CHALLENGE_BUDGET_EXHAUSTED\` = the task is out of retry budget) means you can't dispute — then fix the finding or, if genuinely blocked, ${phase.challengeBlockedText(forge)}. After filing, RE-CHECK: re-run the disputed reviewer (or another configured reviewer) against the current diff, then resolve — overturned → \`POST .../challenge/resolve\` with \`{"outcome":"upheld"}\` and continue to ${phase.challengeContinueText}; confirmed → fix it, or send \`{"outcome":"escalated"}\` to hand the dispute to the user.` + (hasLocalLlm ? ` For a local reviewer you may instead POST \`{"recheck":{"backend":"${localLlmBackendToken}","diff":"<unified diff>"}}\` and let the server re-run it and auto-derive the outcome.` : ''),
   ].join('\n');
   // Per-reviewer round caps. This prompt drives the loop in PROSE (it isn't
