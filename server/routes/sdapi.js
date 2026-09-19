@@ -25,7 +25,7 @@ import { getSettings } from '../services/settings.js';
 import { generateImage, getMode, getActiveJob, IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { local as localImage } from '../services/imageGen/index.js';
 import { createImageGenWaiter } from '../services/imageGenWaiter.js';
-import { listVideoModels, defaultVideoModelId } from '../services/videoGen/local.js';
+import { listVideoModels, defaultVideoModelId, warmByovLoraCapabilities } from '../services/videoGen/local.js';
 
 const router = Router();
 
@@ -101,9 +101,15 @@ router.get('/samplers', (_req, res) => {
 
 // LTX models surfaced as a PortOS extension — clients that know about us can
 // list video options without hitting a separate endpoint.
-router.get('/portos/video-models', (_req, res) => {
+// Warmed for the same reason the Video Gen model routes are: each entry's
+// `runtimeLoraCapable` is stamped from a sync accessor that reads an unprobed
+// runtime as "not capable" (see warmByovLoraCapabilities in
+// services/videoGen/runtimes.js). An external client has even less recourse
+// than our own — it has no second surface to reconcile against.
+router.get('/portos/video-models', asyncHandler(async (_req, res) => {
+  await warmByovLoraCapabilities();
   res.json({ models: listVideoModels(), defaultModel: defaultVideoModelId() });
-});
+}));
 
 // Live progress — A1111 clients poll this every ~500ms while a generation is
 // running. The dispatcher's getActiveJob() surfaces the current generation

@@ -24,7 +24,7 @@ import {
   byovRuntimeLoraCapable, invalidateByovLoraCapabilityCache, invalidateByovReadyCache,
   isByovRuntimeCurrent, isByovRuntimeReady, isPinnedSourceStatusClean, modelAnchorsLastFrame,
   resolveByovRuntimeLoraCapable, runtimeIsCacheOnly, runtimeNeedsProcessGroupKill, runtimeUsesMlx,
-  routesToWindowsHelper, LTX25_EXPECTED_REVISION,
+  routesToWindowsHelper, warmByovLoraCapabilities, LTX25_EXPECTED_REVISION,
 } from './runtimes.js';
 
 const REVISION = 'fcd9e9b79a1d6018d91ac477c0968de1fa067e49';
@@ -281,6 +281,15 @@ describe('MiniMax H3 LoRA capability', () => {
     await resolveByovRuntimeLoraCapable('minimax_h3');
     expect(byovRuntimeLoraCapable('minimax_h3')).toBe(true);
     expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  // What the model-list routes await so their payloads never ship the cold read
+  // above as if it were a probed verdict. Both route suites double this
+  // function, so that it reaches the gated runtime at all is only checked here.
+  it('makes the sync accessor authoritative once it resolves', async () => {
+    runtimeMocks.spawn.mockImplementationOnce(() => exitChild(0));
+    await warmByovLoraCapabilities();
+    expect(byovRuntimeLoraCapable('minimax_h3')).toBe(true);
   });
 
   it.each(['ltx2', 'ltx25', 'wan22'])('never probes %s, which has no LoRA runtime path', async (runtime) => {
