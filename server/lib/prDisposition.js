@@ -30,6 +30,47 @@ export const PR_COMPLETION_VALUES = Object.freeze(Object.values(PR_COMPLETIONS))
 const PR_COMPLETION_SET = new Set(PR_COMPLETION_VALUES);
 
 /**
+ * WHO performs the code review an action triggers — orthogonal to
+ * `PR_COMPLETIONS` above, which decides whether a review happens at all.
+ *
+ * - `delegated` — the historical shape. The agent running the action is an
+ *   ORCHESTRATOR: it spawns the install's Code Review Defaults roster (or a
+ *   per-run override) as separate reviewer processes, collects their findings,
+ *   and applies them. Several models, several invocations, the most coverage.
+ * - `self` — one agent. The provider the action runs on reviews the change
+ *   itself and no reviewer CLI is spawned. Cheaper and faster, and the right
+ *   answer when the top-level provider is already the model you wanted the
+ *   review from; the orchestration layer was pure overhead in that case.
+ *
+ * Deliberately a mode rather than "an empty reviewer roster": an empty roster
+ * already means *no review at all* (`spawnReviewLoopFollowUp`'s merge-only
+ * path), and collapsing "nobody reviews this" into "I review this myself" would
+ * make the two indistinguishable at every layer downstream.
+ *
+ * Lives here, beside `PR_COMPLETIONS`, because both halves of the PR lifecycle
+ * read it: the routes that queue an action and the prompt sections that tell the
+ * agent what it is responsible for. This module imports nothing, so the client
+ * mirrors the vocabulary by importing it rather than restating it.
+ */
+export const PR_REVIEW_MODES = Object.freeze({
+  DELEGATED: 'delegated',
+  SELF: 'self',
+});
+
+export const PR_REVIEW_MODE_VALUES = Object.freeze(Object.values(PR_REVIEW_MODES));
+
+/** What an action runs under when the caller names no mode. */
+export const DEFAULT_PR_REVIEW_MODE = PR_REVIEW_MODES.DELEGATED;
+
+/**
+ * True when this run's review is the running agent's own job. Written as a
+ * predicate so a caller never compares against the string literal — the two
+ * spellings that matter (`'self'` and "not delegated") would otherwise drift
+ * apart the first time a third mode appears.
+ */
+export const isSelfReviewMode = (mode) => mode === PR_REVIEW_MODES.SELF;
+
+/**
  * Resolve a task's PR completion policy without migrating stored task data.
  *
  * New tasks persist `prCompletion`; legacy records retain their `reviewLoop`

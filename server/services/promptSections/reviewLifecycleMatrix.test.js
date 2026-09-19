@@ -379,3 +379,110 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).not.toContain('glab mr merge');
   });
 });
+
+/**
+ * Self-review is the third reason a follow-up has no reviewer roster, and the
+ * only one where the agent still owes the change a review. It shares the
+ * merge-only section, so the failure mode is a prompt that reads like the other
+ * two: an agent told "no code review was requested" lands the branch unread,
+ * which is the opposite of what the user asked for by choosing self-review.
+ */
+describe('buildReviewLoopFollowUpSection — self-review follow-up', () => {
+  const selfReview = (over = {}, opts = {}) => buildReviewLoopFollowUpSection(
+    fixture({ reviewLoopMergeOnly: true, reviewLoopSelfReview: true, ...over }),
+    { verbose: false, ...opts },
+  );
+
+  it('asks the agent to review the change before the CI gate, and renumbers the gate around it', () => {
+    const section = selfReview();
+
+    expect(section).toContain('## Self-Review & Merge Follow-up (PRIMARY OBJECTIVE)');
+    expect(section).toContain('1. **Review the change yourself, before the CI gate.**');
+    expect(section).toContain('2. **Fix what you found, on this branch.**');
+    // The CI gate's four steps start after the two review steps rather than at 1.
+    expect(section).toContain('3. **Wait for CI to finish**');
+    expect(section).toContain('6. **Confirm the merge before exiting**');
+    // …and its merge command is untouched: only who reads the diff changed.
+    expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
+  });
+
+  it('never tells a self-reviewing agent that no review was requested', () => {
+    const section = selfReview();
+
+    expect(section).toContain('you are its reviewer');
+    expect(section).not.toContain('No code review was requested for this task');
+    expect(section).not.toContain('do NOT start a code review');
+    expect(section).toContain('do NOT delegate a second code review');
+  });
+
+  it('leaves a plain merge-only follow-up unchanged', () => {
+    const section = buildReviewLoopFollowUpSection(
+      fixture({ reviewLoopMergeOnly: true }),
+      { verbose: false },
+    );
+
+    expect(section).toContain('## Merge Follow-up (PRIMARY OBJECTIVE)');
+    expect(section).toContain('No code review was requested for this task');
+    expect(section).toContain('1. **Wait for CI to finish**');
+    expect(section).not.toContain('Review the change yourself');
+  });
+
+  // The marker round-trips through the markdown task file as a string, exactly
+  // like every other follow-up flag.
+  it('accepts the string form the task file round-trips', () => {
+    const section = selfReview({ reviewLoopMergeOnly: 'true', reviewLoopSelfReview: 'true' });
+    expect(section).toContain('## Self-Review & Merge Follow-up (PRIMARY OBJECTIVE)');
+  });
+
+  // A self-review marker is meaningless without the no-roster path that selects
+  // this section — a run with reviewers configured already reviews.
+  it('ignores the marker when a reviewer roster is configured', () => {
+    const section = buildReviewLoopFollowUpSection(fixture({ reviewLoopSelfReview: true }), { verbose: false });
+    expect(section).not.toContain('Self-Review & Merge');
+  });
+
+  // Resolve & merge is offered on a GitLab MR too, and every other command in
+  // this section is forge-derived (#6846) — a hardcoded `gh pr diff` in the
+  // self-review step would hand a `glab` run a CLI it does not have.
+  it('names the forge\'s own diff command in the self-review step', () => {
+    expect(selfReview()).toContain('(`gh pr diff` against its head');
+
+    const gitlab = buildReviewLoopFollowUpSection(
+      fixture({
+        reviewLoopMergeOnly: true, reviewLoopSelfReview: true,
+        reviewLoopPRHost: FORGES.glab.host,
+      }),
+      { verbose: false, forgeCli: FORGES.glab.forgeCli },
+    );
+    expect(gitlab).toContain('(`glab mr diff` against its head');
+    expect(gitlab).not.toContain('gh pr diff');
+  });
+
+  it('renders the inline arm as a self-review gate', () => {
+    const section = selfReview({}, { inlineExitStep: INLINE_EXIT_STEP });
+
+    expect(section).toContain('## Self-Review & Merge Gate');
+    expect(section).toContain('Review it yourself, then land it once CI is green.');
+    expect(section).toContain('Do NOT delegate a second code review');
+  });
+
+  // The third no-roster reason: a pre-PR LOCAL phase already reviewed, so only
+  // the PR-side roster is empty. It shares the section with the other two and
+  // had no coverage of its own, which is the gap a per-reason record is supposed
+  // to close — a mode whose sentences nothing pins can be given another mode's.
+  it('keeps the pre-PR local-review variant saying what that phase already did', () => {
+    const section = buildReviewLoopFollowUpSection(
+      fixture({ reviewLoopMergeOnly: true }),
+      { verbose: false, localPhaseReviewers: ['mtplx', 'ollama'], localPhaseReviewRequired: true },
+    );
+
+    expect(section).toContain('## Merge Follow-up (PRIMARY OBJECTIVE)');
+    expect(section).toContain('The pre-PR local review for `mtplx`, `ollama` has completed');
+    // The `review-blocked` clause is a backticked literal inside a nested
+    // template — exactly the thing a refactor of these strings can flatten.
+    expect(section).toContain('a `review-blocked` result leaves the PR/MR open until the required review completes');
+    expect(section).toContain('do NOT start a second PR-side code review');
+    expect(section).not.toContain('No code review was requested');
+    expect(section).not.toContain('Self-Review');
+  });
+});

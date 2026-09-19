@@ -19,14 +19,21 @@
  * `pr-reviewer` covers untrusted contributors alone. `/merge` is the one that
  * queues nothing and spends nothing: the forge's own merge button, for a change
  * the user has already read.
+ *
+ * That split is why the two agent routes PortOS composes itself (`/resolve`,
+ * `/do-review`) take `pullRequestRunSettingsSchema` — the provider pin PLUS this
+ * run's review settings — while `/review` takes the provider pin alone: its run
+ * is a `pr-reviewer` task whose reviewers come from that scheduled task's own
+ * stages, so a review setting sent there would be one the server accepts and
+ * nothing applies.
  */
 
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { pullRequestProviderOverrideSchema } from '../../lib/cosValidation.js';
+import { pullRequestProviderOverrideSchema, pullRequestRunSettingsSchema, reviewerConfigMetadata } from '../../lib/cosValidation.js';
 import { claimSafeReviewers, normalizeReviewers, validateRequest } from '../../lib/validation.js';
-import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
+import { PR_COMPLETIONS, isSelfReviewMode } from '../../lib/prDisposition.js';
 import { isTruthyMeta } from '../../services/agentState.js';
 import { resolveReviewLoopOptions } from '../../services/codeReview.js';
 import { getAllTasks } from '../../services/cos.js';
@@ -267,8 +274,11 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
   const { number } = validateRequest(pullRequestParamsSchema, req.params);
   // Optional provider/model/effort pin from the tab's "Run with" picker — left
   // blank, the follow-up resolves the install's active provider exactly as it
-  // always did.
-  const { provider, model, effort } = validateRequest(pullRequestProviderOverrideSchema, req.body || {});
+  // always did — plus this run's review settings (mode, and any reviewer
+  // override layered over the install's Code Review Defaults).
+  const runSettings = validateRequest(pullRequestRunSettingsSchema, req.body || {});
+  const { provider, model, effort } = runSettings;
+  const selfReview = isSelfReviewMode(runSettings.reviewMode);
   const { result, tasks } = await listWithActionState(app);
   throwForgeReadError(result);
 
@@ -299,10 +309,18 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     return;
   }
 
-  // Code Review Defaults are the one source for the installed review roster.
+  // Code Review Defaults are the one source for the installed review roster, and
+  // this run's own reviewer override (when the panel supplied one) layers over
+  // them with the same task-over-default precedence every other dispatch surface
+  // uses — `resolveReviewLoopOptions` takes the override in the metadata slot.
   // `claimSafeReviewers` removes forge-side Copilot and supplies PortOS's
   // unattended coding-review fallback when the defaults contain only Copilot.
-  const reviewOptions = await resolveReviewLoopOptions({}, {
+  //
+  // Resolved even under self-review, and handed over intact: emptying the roster
+  // is `spawnReviewLoopFollowUp`'s job, not this route's (see its `selfReview`
+  // contract), and the stop-mode / applies fields alongside it are not roster
+  // fields at all.
+  const reviewOptions = await resolveReviewLoopOptions(reviewerConfigMetadata(runSettings), {
     normalize: normalizeReviewers,
     isTruthyMeta,
   });
@@ -345,6 +363,7 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     ...reviewOptions,
     reviewers,
     optionalReviewers,
+    selfReview,
     // This button IS the user's approval — start the agent now instead of leaving
     // the follow-up as a pending system task the autonomous dequeue only picks up
     // while CoS auto-run is in `execute` and under its daily budget (which is why
@@ -520,8 +539,12 @@ router.post('/:id/pull-requests/:number/do-review', loadApp, asyncHandler(async 
   const { number } = validateRequest(pullRequestParamsSchema, req.params);
   // Optional provider/model/effort pin from the tab's "Run with" picker, applied
   // exactly as /resolve applies it: this is a directly user-triggered agent run,
-  // not a scheduled task with saved stage providers.
-  const { provider, model, effort } = validateRequest(pullRequestProviderOverrideSchema, req.body || {});
+  // not a scheduled task with saved stage providers. The review settings ride
+  // along the same way — `/do:review` resolves its own roster at prompt-build
+  // time, so both the mode and any reviewer override are handed to the task
+  // rather than rendered into a flag here.
+  const runSettings = validateRequest(pullRequestRunSettingsSchema, req.body || {});
+  const { provider, model, effort } = runSettings;
   // Deliberately NOT `listWithActionState`: that annotates every row with all
   // four action fields, and its `resolveReviewEligibility` spends a `gh repo
   // view`, a `gh api user`, and one collaborator-permission call per distinct PR
@@ -578,6 +601,8 @@ router.post('/:id/pull-requests/:number/do-review', loadApp, asyncHandler(async 
     provider,
     model,
     effort,
+    selfReview: isSelfReviewMode(runSettings.reviewMode),
+    reviewerConfig: reviewerConfigMetadata(runSettings),
   });
   if (!queued.task) {
     throw new ServerError('Could not queue the pull-request review agent', {
