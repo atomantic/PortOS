@@ -241,9 +241,16 @@ export function buildDistrictTemplateAugmentOperations({ layoutId, anchor, propC
  * positions) is the promotable substance and goes in `body`; the material
  * and motif choice are cosmetics and go in `style`, exactly as
  * `styleLeakFindings` expects.
+ *
+ * The placement is emitted BESIDE the `{ layoutId, anchor, propCount, seed,
+ * facing }` it was generated from, which is what makes the draft promotable:
+ * the promote gate re-derives the placement from those declarations and refuses
+ * one that no longer reproduces (`lib/eidoverseFoundationSandbox.js`, #7625).
+ * There is no `contributionId` to pass — the gate replays this body, so the
+ * binding label is derived from it.
  */
 export function buildDistrictTemplateFoundationDraft({
-  id, title, summary, contributionId, layoutId, materialId, motifId, anchor, propCount = 6, seed, facing = 0, disclosure,
+  id, title, summary, layoutId, materialId, motifId, anchor, propCount = 6, seed, facing = 0, disclosure,
 }) {
   const material = requireCatalogEntry(EIDOVERSE_CREATIVE_MATERIALS, materialId, 'material');
   const motif = requireCatalogEntry(EIDOVERSE_CREATIVE_MOTIFS, motifId, 'motif');
@@ -254,7 +261,6 @@ export function buildDistrictTemplateFoundationDraft({
     kind: 'district-template',
     title,
     summary,
-    contributionId,
     body: {
       layoutId,
       anchor: anchor.map((value) => Number(value)),
@@ -309,15 +315,16 @@ export const eidoversePlaceLayoutInputSchema = z.object({
  * `eidoverse.draft-foundation`: compose a layout, material, and motif choice
  * into an `eidoverseFoundationInputSchema`-ready `district-template` input,
  * ready to pass straight to `eidoverse.record`. The `id`/`title`/`summary`/
- * `contributionId`/`disclosure` fields are lifted from
- * `eidoverseFoundationInputSchema` itself rather than re-declared, so a limit
- * change there cannot silently diverge from what this schema accepts.
+ * `disclosure` fields are lifted from `eidoverseFoundationInputSchema` itself
+ * rather than re-declared, so a limit change there cannot silently diverge
+ * from what this schema accepts. There is no `contributionId`: the promote
+ * gate derives the binding label from the drafted body (#7625), so a drafter
+ * has nothing to name.
  */
 export const eidoverseDraftFoundationInputSchema = z.object({
   id: eidoverseFoundationInputSchema.shape.id,
   title: eidoverseFoundationInputSchema.shape.title,
   summary: eidoverseFoundationInputSchema.shape.summary,
-  contributionId: eidoverseFoundationInputSchema.shape.contributionId,
   disclosure: eidoverseFoundationInputSchema.shape.disclosure,
   layoutId: eidoverseCreativeLayoutIdSchema,
   materialId: eidoverseCreativeMaterialIdSchema,

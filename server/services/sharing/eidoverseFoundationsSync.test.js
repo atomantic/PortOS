@@ -63,7 +63,7 @@ const fingerprint = (seed) => seed.repeat(64).slice(0, 64);
 // matter here — the envelope's own contract is the accept gate's to enforce,
 // and mocking the ledger is precisely what keeps this suite from re-testing it.
 const candidate = (id, seed = 'a') => ({
-  candidateVersion: 1,
+  candidateVersion: 2,
   foundationId: id,
   kind: 'controller',
   title: id,

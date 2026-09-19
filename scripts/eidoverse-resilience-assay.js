@@ -9,9 +9,11 @@
  *   node scripts/eidoverse-resilience-assay.js
  *     Runs every registered contribution — the shipped fixtures AND every
  *     executable world controller (#7456), both resolved through
- *     server/services/eidoverseResilienceContributions.js, which the promote
- *     path in eidoverseFoundationLedger.js resolves through as well, by
- *     contribution id rather than by path.
+ *     server/services/eidoverseResilienceContributions.js by contribution id
+ *     rather than by path. The promote path no longer shares this resolver:
+ *     since #7625 it derives its sandbox from the foundation's own body
+ *     (server/lib/eidoverseFoundationSandbox.js), so naming a fixture listed
+ *     here can no longer clear the gate.
  *
  *   node scripts/eidoverse-resilience-assay.js <module-path> [...more]
  *     Runs the assay against specific contribution modules instead. Each

@@ -120,7 +120,6 @@ export const projectEidoverseWorld = (options = {}) => request('/eidoverse/world
 // refusal verdict when a gate says no, so callers read `outcome` rather than
 // treating a rejection as the failure signal.
 export const listEidoverseFoundations = (options) => request('/eidoverse/world/foundations', options);
-export const getEidoverseContributions = (options) => request('/eidoverse/world/contributions', options);
 export const recordEidoverseFoundation = (payload, options = {}) => request('/eidoverse/world/foundations', {
   method: 'POST',
   body: JSON.stringify(payload),

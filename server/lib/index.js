@@ -585,6 +585,7 @@ export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
 export * from './eidoverseCreativeToolkit.js';
 export * from './eidoverseControllers.js';
+export * from './eidoverseFoundationSandbox.js';
 export * from './eidoverseFoundations.js';
 export * from './eidoverseObservation.js';
 export * from './federationSafety.js';

@@ -19,7 +19,6 @@ const mocks = vi.hoisted(() => ({
   listFoundations: vi.fn(),
   promoteFoundation: vi.fn(),
   recordFoundation: vi.fn(),
-  listContributions: vi.fn(),
   ensureInstanceId: vi.fn(),
 }));
 
@@ -78,9 +77,6 @@ vi.mock('./eidoverseFoundationLedger.js', () => ({
   listEidoverseFoundations: (...args) => mocks.listFoundations(...args),
   promoteEidoverseFoundation: (...args) => mocks.promoteFoundation(...args),
   recordEidoverseFoundation: (...args) => mocks.recordFoundation(...args),
-}));
-vi.mock('./eidoverseResilienceContributions.js', () => ({
-  listRegisteredContributionIds: (...args) => mocks.listContributions(...args),
 }));
 vi.mock('./instanceIdentity.js', () => ({
   ensureInstanceId: (...args) => mocks.ensureInstanceId(...args),
@@ -171,7 +167,7 @@ describe('cosToolRegistry', () => {
       name: 'eidoverse.record',
       arguments: {
         id: 'lantern-arcade', kind: 'district-template', title: 'Lantern Arcade', summary: 'A row of lanterns around the plaza.',
-        contributionId: 'beacon-relay', body: { layoutId: 'radial-ring' }, authorKind: 'user',
+        body: { layoutId: 'radial-ring' }, authorKind: 'user',
       },
     };
     await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { promoteEidoverseFoundations: true } } }))
@@ -182,7 +178,7 @@ describe('cosToolRegistry', () => {
     mocks.ensureInstanceId.mockResolvedValue('instance-example');
     mocks.recordFoundation.mockResolvedValue({
       id: 'lantern-arcade', layer: 'vernacular', kind: 'district-template', title: 'Lantern Arcade', summary: 'A row of lanterns around the plaza.',
-      contributionId: 'beacon-relay', updatedAt: '2026-03-04T06:00:00.000Z', promotedAt: null, assay: null, candidate: null,
+      contributionId: 'district-template:lantern-arcade', updatedAt: '2026-03-04T06:00:00.000Z', promotedAt: null, assay: null, candidate: null,
     });
     const result = await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } });
 
@@ -253,13 +249,15 @@ describe('cosToolRegistry', () => {
     expect(result.result.install.derivedFrom).toMatchObject({ originInstanceId: 'instance-aaaa' });
   });
 
-  it('lists registered resilience-assay contributions and the creative catalog', async () => {
-    mocks.listContributions.mockResolvedValue(['beacon-relay']);
-    const contributions = await executeCosToolCall({
+  it('no longer offers a contribution list for a foundation to bind to, and still serves the creative catalog', async () => {
+    // #7625: naming a registered contribution was sufficient to clear the
+    // promote gate, so advertising the ids to a mind was advertising the hole.
+    // `eidoverse.controllers` is what a mind needs now — which behaviours this
+    // install ships for a `controller` body to name.
+    await expect(executeCosToolCall({
       call: { requestId: 'contrib-1', name: 'eidoverse.contributions', arguments: {} },
       authority: { scope: 'mind', capabilities: { manageEidoverse: true } },
-    });
-    expect(contributions.result).toEqual({ contributions: ['beacon-relay'] });
+    })).rejects.toThrow(/Unknown tool/);
 
     const catalog = await executeCosToolCall({
       call: { requestId: 'catalog-1', name: 'eidoverse.creative-catalog', arguments: {} },
@@ -291,11 +289,19 @@ describe('cosToolRegistry', () => {
       name: 'eidoverse.draft-foundation',
       arguments: {
         id: 'garden-arcade', title: 'Garden Arcade', summary: 'A colonnade of lanterns around the arrival plaza.',
-        contributionId: 'beacon-relay', layoutId: 'radial-ring', materialId: 'sunbaked-clay', motifId: 'lantern-row', anchor: [4, 0, -6],
+        layoutId: 'radial-ring', materialId: 'sunbaked-clay', motifId: 'lantern-row', anchor: [4, 0, -6],
       },
     };
     const result = await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } });
     expect(result.result.foundation).toMatchObject({ id: 'garden-arcade', kind: 'district-template' });
+    // A drafter has no `contributionId` to offer: the promote gate derives the
+    // binding label from the body it replays (#7625), so naming one is refused
+    // rather than quietly carried into the record.
+    expect(result.result.foundation.contributionId).toBeUndefined();
+    await expect(executeCosToolCall({
+      call: { ...call, arguments: { ...call.arguments, contributionId: 'beacon-relay' } },
+      authority: { scope: 'mind', capabilities: { manageEidoverse: true } },
+    })).rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
     expect(result.result.foundation.body.placement.length).toBeGreaterThan(0);
     expect(result.result.foundation.style).toMatchObject({ materialId: 'sunbaked-clay', motifId: 'lantern-row' });
   });
@@ -349,7 +355,6 @@ describe('cosToolRegistry', () => {
       'eidoverse.leave',
       'eidoverse.foundations',
       'eidoverse.foundation',
-      'eidoverse.contributions',
       'eidoverse.record',
       'eidoverse.adopt',
       'eidoverse.promote',
