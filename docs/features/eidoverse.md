@@ -842,6 +842,8 @@ relay of another install's work.
 
 ### The peer pull/inherit transport (#7455)
 
+Authorized to cross the federation layer by the
+[federated Eidoverse foundations ADR](../decisions/2026-09-18-federated-eidoverse-foundations.md).
 `server/services/sharing/peerEidoverseFoundationSync.js` is the wire between
 the two gates above. It owns no policy of its own — which foundations an
 install offers is `listPromotedFoundationCandidates()` in the ledger, and

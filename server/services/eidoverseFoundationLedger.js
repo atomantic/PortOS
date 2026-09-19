@@ -341,7 +341,8 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
  * `listPromotedFoundationCandidates()` reads it for the peer-facing offering
  * at `GET /api/peer-sync/eidoverse-foundations`. The promoted record keeps its
  * `style` locally — only the candidate envelope, which has no style layer at
- * all, is ever authorized to cross.
+ * all, is authorized to cross, per the federated Eidoverse foundations ADR
+ * (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).
  *
  * @returns {Promise<{ outcome: 'promoted'|'refused'|'unknown-foundation', promoted: boolean, foundation: object|null, candidate: object|null, assay: object|null, reasons: string[], findings: Array }>}
  */

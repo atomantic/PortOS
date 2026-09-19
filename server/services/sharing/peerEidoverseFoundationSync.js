@@ -28,8 +28,9 @@
  *
  * **What crosses.** Only the promote envelope, which has no `style` layer by
  * construction: an inheriting peer gets the substance and keeps its own
- * cosmetics. The machine-local privacy ADR authorizes exactly this one
- * Eidoverse artifact to cross, and the federation-safety scan REFUSES a
+ * cosmetics. The federated Eidoverse foundations ADR
+ * (docs/decisions/2026-09-18-federated-eidoverse-foundations.md) authorizes
+ * exactly this envelope to cross, and the federation-safety scan REFUSES a
  * payload carrying machine identity, PII or credentials rather than redacting
  * it — on both sides, because a peer's payload is untrusted input and this
  * install's own ledger is a file a human can edit.
