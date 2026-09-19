@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
@@ -89,6 +89,46 @@ describe('ThreadsTab', () => {
     expect(api.updateThread).toHaveBeenCalledWith('op', { status: 'done' }, { silent: true });
     await waitFor(() => expect(screen.queryByText('Plain loop')).toBeNull());
     expect(api.listThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes a source-closed thread explicitly from its drawer and preserves hydrated links', async () => {
+    const thread = { ...ROWS[2], externalState: 'closed', notes: 'body', resolvedRefs: RESOLVED };
+    api.getThread.mockResolvedValue(thread);
+    let finish;
+    api.updateThread.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    renderTab('/brain/threads?thread=op');
+    const dialog = within(await screen.findByRole('dialog'));
+    const complete = await dialog.findByRole('button', { name: 'Mark "Plain loop" done' });
+    expect(api.updateThread).not.toHaveBeenCalled();
+    fireEvent.change(dialog.getByLabelText('Title'), { target: { value: 'My title' } });
+    expect(complete).toBeDisabled();
+    fireEvent.change(dialog.getByLabelText('Title'), { target: { value: thread.title } });
+    fireEvent.click(complete);
+    expect(complete).toBeDisabled();
+    expect(dialog.getByLabelText('Title')).toBeDisabled();
+    expect(api.updateThread).toHaveBeenCalledWith('op', { status: 'done' }, { silent: true });
+    await act(async () => { finish({ ...ROWS[2], notes: 'body', externalState: 'closed', status: 'done' }); });
+    expect(dialog.getByLabelText('Status')).toHaveValue('done');
+    expect(dialog.queryByText('Source closed — mark done?')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Mark "Plain loop" done' })).toBeNull();
+    fireEvent.click(dialog.getByRole('tab', { name: 'Links' }));
+    expect(await dialog.findByText('example')).toBeTruthy();
+    expect(api.listThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not replace a different drawer when completion finishes after navigation', async () => {
+    api.getThread.mockImplementation(async (id) => ({ ...ROWS.find((r) => r.id === id), externalState: 'closed', notes: 'body', resolvedRefs: RESOLVED }));
+    let finish;
+    api.updateThread.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    renderTab('/brain/threads?thread=op');
+    const dialog = within(await screen.findByRole('dialog'));
+    fireEvent.click(await dialog.findByRole('button', { name: 'Mark "Plain loop" done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close thread' }));
+    fireEvent.click(screen.getByText('Waiting loop'));
+    await waitFor(() => expect(screen.getByLabelText('Title')).toHaveValue('Waiting loop'));
+    await act(async () => { finish({ ...ROWS[2], status: 'done' }); });
+    expect(screen.getByLabelText('Title')).toHaveValue('Waiting loop');
+    expect(screen.getByLabelText('Status')).toHaveValue('waiting');
   });
 
   it('creates a thread from the capture box and opens it', async () => {
