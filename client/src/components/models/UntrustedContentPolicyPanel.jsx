@@ -3,12 +3,17 @@ import { getSettings, updateSettings } from '../../services/api';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
+import {
+  PRIVATE_UNTRUSTED_CONTENT_SOURCES,
+  UNTRUSTED_CONTENT_SOURCES,
+  UNTRUSTED_CONTENT_SOURCE_LABELS,
+} from '../../lib/untrustedContentSources';
 
 const SOURCES = [
-  ['defaults', 'Shared defaults'], ['github-issue', 'GitHub issues'], ['github-pr', 'GitHub pull requests'],
-  ['messages', 'Messages'], ['email', 'Email'], ['imessage', 'iMessage'], ['signal', 'Signal'],
+  ['defaults', 'Shared defaults'],
+  ...UNTRUSTED_CONTENT_SOURCES.map(source => [source, UNTRUSTED_CONTENT_SOURCE_LABELS[source] || source]),
 ];
-const PRIVATE_SOURCES = ['messages', 'email', 'imessage', 'signal'];
+const PRIVATE_SOURCES = PRIVATE_UNTRUSTED_CONTENT_SOURCES;
 const apiProvider = provider => provider.type === 'api';
 const localApiProvider = provider => {
   if (!apiProvider(provider) || !URL.canParse(provider.endpoint)) return false;
