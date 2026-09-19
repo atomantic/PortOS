@@ -208,11 +208,15 @@ function InvestigateFindingsButton({ agent }) {
 function GoalFidelityPanel({ review }) {
   const tone = GOAL_FIDELITY_TONE[review?.verdict];
   if (!tone) return null;
+  const overturned = review.overturned;
+  const presentation = overturned
+    ? { border: 'border-port-success/30', text: 'text-port-success', label: 'Overturned' }
+    : tone;
   return (
-    <div className={`mt-2 bg-port-bg/50 border rounded p-2.5 ${tone.border}`}>
-      <div className={`text-[11px] flex flex-wrap items-center gap-1 ${tone.text}`}>
+    <div className={`mt-2 bg-port-bg/50 border rounded p-2.5 ${presentation.border}`}>
+      <div className={`text-[11px] flex flex-wrap items-center gap-1 ${presentation.text}`}>
         <Target size={10} aria-hidden="true" />
-        Goal fidelity: {tone.label}
+        Goal fidelity: {presentation.label}
         <span className="min-w-0 [overflow-wrap:anywhere] text-gray-500">
           {/* A forge-established verdict has no reviewer model and read no diff —
               say where it came from rather than leaving the reader to assume a
@@ -221,6 +225,11 @@ function GoalFidelityPanel({ review }) {
           {review.model ? ` · ${review.model}` : ''}{review.diffTruncated ? ' · partial diff' : ''})
         </span>
       </div>
+      {overturned && (
+        <p className="mt-1.5 text-xs text-gray-400">
+          Overturned after investigation · context gap: {overturned.gap}
+        </p>
+      )}
       {review.missing?.length > 0 && (
         <div className="mt-1.5 text-xs text-gray-400">
           <span className="text-gray-500">Asked for but missing:</span>
@@ -1036,7 +1045,8 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             panel above links the one that exists instead. That holds for a task
             HELD for approval too: the answer there is to approve the task that
             exists, not to queue an unheld duplicate beside it. */}
-        {completed && !remote && !agent.result?.goalFidelity?.followUp?.taskId
+        {completed && !remote && !agent.result?.goalFidelity?.overturned
+          && !agent.result?.goalFidelity?.followUp?.taskId
           && ['fix-first', 'rethink'].includes(agent.result?.goalFidelity?.verdict) && (
           <InvestigateFindingsButton key={agent.id} agent={agent} />
         )}

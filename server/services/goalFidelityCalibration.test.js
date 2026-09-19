@@ -22,8 +22,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const getSettings = vi.fn();
 const fileInvestigationTask = vi.fn();
 const updateTask = vi.fn();
+const getAgents = vi.fn();
+const updateAgent = vi.fn();
 
 vi.mock('./cos.js', () => ({ updateTask }));
+vi.mock('./cosAgentLifecycle.js', () => ({ getAgents, updateAgent }));
 vi.mock('./settings.js', () => ({ getSettings }));
 vi.mock('./investigationTaskProducer.js', () => ({ fileInvestigationTask }));
 
@@ -46,6 +49,8 @@ const filed = () => ({ args: fileInvestigationTask.mock.calls[0][0], opts: fileI
 beforeEach(() => {
   vi.clearAllMocks();
   getSettings.mockResolvedValue({ codeReview: { goalFidelity: { enabled: true } } });
+  getAgents.mockResolvedValue([]);
+  updateAgent.mockResolvedValue({});
   updateTask.mockResolvedValue({});
   fileInvestigationTask.mockResolvedValue({ task: { id: 'calib-1' }, approvalRequired: false, loopReason: null });
 });
@@ -73,6 +78,33 @@ describe('reportGoalFidelityFalsePositive', () => {
   it('records the misjudged run as an affected task, so repeat reports accumulate', async () => {
     await reportGoalFidelityFalsePositive(REPORT);
     expect(filed().args.affectedTasks).toEqual(['task-7']);
+  });
+
+  it('stamps every matching run when the calibration was queued without rewriting its verdict', async () => {
+    getAgents.mockResolvedValue([
+      { id: 'agent-1', taskId: 'task-7', result: { success: false, goalFidelity: { verdict: 'rethink', evidence: 'partial diff' } } },
+      { id: 'agent-2', metadata: { taskId: 'task-7' }, result: { goalFidelity: { verdict: 'fix-first' } } },
+      { id: 'agent-other', taskId: 'task-8', result: { goalFidelity: { verdict: 'rethink' } } },
+    ]);
+
+    await reportGoalFidelityFalsePositive(REPORT);
+
+    expect(updateAgent).toHaveBeenCalledTimes(2);
+    expect(updateAgent).toHaveBeenCalledWith('agent-1', {
+      result: {
+        success: false,
+        goalFidelity: {
+          verdict: 'rethink',
+          evidence: 'partial diff',
+          overturned: {
+            gap: 'work-outside-diff',
+            calibrationTaskId: 'calib-1',
+            at: expect.any(String),
+          },
+        },
+      },
+    });
+    expect(updateAgent.mock.calls[1][1].result.goalFidelity.verdict).toBe('fix-first');
   });
 
   it('sends no affected tasks when the report named no run', async () => {
@@ -105,6 +137,8 @@ describe('reportGoalFidelityFalsePositive', () => {
     expect(result.queued).toBe(false);
     expect(result.reason).toMatch(/disabled/);
     expect(fileInvestigationTask).not.toHaveBeenCalled();
+    expect(getAgents).not.toHaveBeenCalled();
+    expect(updateAgent).not.toHaveBeenCalled();
   });
 
   it('runs on an install that configured nothing, since the gate defaults on', async () => {
