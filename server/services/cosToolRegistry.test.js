@@ -291,6 +291,7 @@ describe('cosToolRegistry', () => {
       'eidoverse.place-layout',
       'eidoverse.draft-foundation',
       'eidoverse.controllers',
+      'eidoverse.inspect-controller',
       'eidoverse.install-controller',
       'eidoverse.arm-controller',
       'eidoverse.retire-controller',

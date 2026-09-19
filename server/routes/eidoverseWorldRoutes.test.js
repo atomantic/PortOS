@@ -19,9 +19,11 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   describeControllerDefinitions: vi.fn(),
   listControllers: vi.fn(),
+  getControllerInstall: vi.fn(),
   installController: vi.fn(),
   retireController: vi.fn(),
   armController: vi.fn(),
+  updateControllerConfig: vi.fn(),
 }));
 
 vi.mock('../services/eidoverseWorld.js', () => ({
@@ -61,9 +63,11 @@ vi.mock('../services/eidoverseControllerRuntime.js', async (importOriginal) => {
   return {
     ...actual,
     listEidoverseControllers: mocks.listControllers,
+    getEidoverseControllerInstall: mocks.getControllerInstall,
     installEidoverseController: mocks.installController,
     retireEidoverseController: mocks.retireController,
     setEidoverseControllerArmed: mocks.armController,
+    updateEidoverseControllerConfig: mocks.updateControllerConfig,
   };
 });
 
@@ -331,6 +335,41 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
       expect(response.body.outcome).toBe('installed');
       expect(response.body.install).toMatchObject({ id: 'tide-beacon', controllerId: 'resource-tick' });
       expect(response.body.install.state).toEqual({ count: 0 });
+    });
+
+    // #7629: the panel's Config block always rendered `{}` because the list
+    // projection never carries `config`/`state` — this is the INSPECT that
+    // does, on its own route.
+    it('inspects one install with config and state, and 404s an unknown install id', async () => {
+      mocks.getControllerInstall.mockResolvedValueOnce(install({ config: { label: 'tide' }, state: { count: 4 } }));
+      mocks.getControllerInstall.mockResolvedValueOnce(null);
+
+      const found = await request(makeApp()).get('/api/eidoverse/world/controllers/tide-beacon');
+      const unknown = await request(makeApp()).get('/api/eidoverse/world/controllers/ghost-install');
+
+      expect(found.status).toBe(200);
+      expect(found.body).toMatchObject({ id: 'tide-beacon', config: { label: 'tide' }, state: { count: 4 } });
+      expect(unknown.status).toBe(404);
+    });
+
+    it('changes config through the config-only route while state stays whatever the service returned, and 404s an unknown install id', async () => {
+      mocks.updateControllerConfig.mockResolvedValueOnce({ outcome: 'updated', install: install({ config: { label: 'quay' }, state: { count: 4 } }), reasons: [] });
+      mocks.updateControllerConfig.mockResolvedValueOnce({ outcome: 'unknown-install', install: null, reasons: ['no controller is installed under "ghost-install"'] });
+
+      const updated = await request(makeApp()).patch('/api/eidoverse/world/controllers/tide-beacon/config').send({ config: { label: 'quay' } });
+      const unknown = await request(makeApp()).patch('/api/eidoverse/world/controllers/ghost-install/config').send({ config: {} });
+
+      expect(updated.status).toBe(200);
+      expect(updated.body.install).toMatchObject({ config: { label: 'quay' }, state: { count: 4 } });
+      expect(mocks.updateControllerConfig).toHaveBeenCalledWith('tide-beacon', { label: 'quay' });
+      expect(unknown.status).toBe(404);
+    });
+
+    it('refuses a config update whose body is not a JSON object before the service is asked to resolve a definition', async () => {
+      const response = await request(makeApp()).patch('/api/eidoverse/world/controllers/tide-beacon/config').send({ config: 'not-an-object' });
+
+      expect(response.status).toBe(400);
+      expect(mocks.updateControllerConfig).not.toHaveBeenCalled();
     });
 
     it('arms and disarms an install by id, and 404s an unknown install id', async () => {

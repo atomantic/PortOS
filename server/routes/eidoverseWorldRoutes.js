@@ -17,6 +17,7 @@ import {
 import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema } from '../lib/eidoverseFoundations.js';
 import {
   eidoverseControllerArmSchema,
+  eidoverseControllerConfigUpdateSchema,
   eidoverseControllerIdParamSchema,
   eidoverseControllerInstallSchema,
 } from '../lib/eidoverseControllers.js';
@@ -30,11 +31,13 @@ import {
 import { listRegisteredContributionIds } from '../services/eidoverseResilienceContributions.js';
 import { describeControllerDefinitions } from '../services/eidoverseControllerRegistry.js';
 import {
+  getEidoverseControllerInstall,
   installEidoverseController,
   listEidoverseControllers,
   retireEidoverseController,
   setEidoverseControllerArmed,
   summarizeControllerInstall,
+  updateEidoverseControllerConfig,
 } from '../services/eidoverseControllerRuntime.js';
 import { ensureInstanceId } from '../services/instanceIdentity.js';
 import {
@@ -191,6 +194,29 @@ router.get('/controllers', asyncHandler(async (_req, res) => {
 router.post('/controllers', asyncHandler(async (req, res) => {
   const input = validateRequest(eidoverseControllerInstallSchema, req.body || {});
   const result = await installEidoverseController(input, { installedBy: 'user' });
+  res.json({ ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null });
+}));
+
+// GET /api/eidoverse/world/controllers/:id — one installed controller's full
+// record, config and state included. This is the INSPECT
+// `summarizeControllerInstall`'s own header promises and the LIST route above
+// deliberately withholds (#7629) — the panel's Details view reads this rather
+// than a list row, which never carries `config` at all.
+router.get('/controllers/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(eidoverseControllerIdParamSchema, req.params || {});
+  const install = await getEidoverseControllerInstall(id);
+  if (!install) throw new ServerError('Controller install not found', { status: 404 });
+  res.json(summarizeControllerInstall(install, { includeState: true }));
+}));
+
+// PATCH /api/eidoverse/world/controllers/:id/config — change an installed
+// controller's config while its accumulated state survives (#7629). A
+// re-install of the same id would rebuild state from scratch instead; this is
+// the "inherit and modify" verb the epic names.
+router.patch('/controllers/:id/config', asyncHandler(async (req, res) => {
+  const { id, config } = validateRequest(eidoverseControllerConfigUpdateSchema, { ...(req.body || {}), id: req.params.id });
+  const result = await updateEidoverseControllerConfig(id, config);
+  if (result.outcome === 'unknown-install') throw new ServerError('Controller install not found', { status: 404 });
   res.json({ ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null });
 }));
 
