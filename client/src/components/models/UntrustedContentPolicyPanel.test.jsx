@@ -73,4 +73,41 @@ describe('content safety policy configuration', () => {
       sources: { messages: { providerId: 'local-api', classifierMode: 'required', minBenignScore: 0.98 } },
     } }));
   });
+
+  it('saves a per-source scorer mode and margin, and warns about the skip posture', async () => {
+    render(<UntrustedContentPolicyPanel />);
+    fireEvent.change(await screen.findByLabelText('Source'), { target: { value: 'github-issue' } });
+    fireEvent.change(screen.getByLabelText('Local scorer'), { target: { value: 'prefer' } });
+    expect(screen.queryByText(/Skipped items are reported/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Local scorer'), { target: { value: 'only' } });
+    // The skip posture is the one an operator can misread as "no action needed".
+    expect(screen.getByText(/Skipped items are reported/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Minimum decision margin'), { target: { value: '0.4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save content policies' }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ untrustedContent: {
+      defaults: { classifierMode: 'required', minBenignScore: 0.95 },
+      sources: {
+        'github-pr': { maxInputChars: 50000 },
+        'github-issue': { jevMode: 'only', jevMinMargin: 0.4 },
+      },
+    } }));
+  });
+
+  it('drops a cleared scorer field instead of pinning an empty value', async () => {
+    getSettings.mockResolvedValueOnce({ untrustedContent: {
+      defaults: { jevMode: 'prefer' },
+      sources: { email: { jevMode: 'only', jevMinMargin: 0.7 } },
+    } });
+    render(<UntrustedContentPolicyPanel />);
+    fireEvent.change(await screen.findByLabelText('Source'), { target: { value: 'email' } });
+    fireEvent.change(screen.getByLabelText('Minimum decision margin'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Local scorer'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save content policies' }));
+    // Re-inheriting means the KEY is gone: a persisted null would be layered on
+    // top of the default it is supposed to defer to.
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({ untrustedContent: {
+      defaults: { jevMode: 'prefer' },
+      sources: { email: {} },
+    } }));
+  });
 });

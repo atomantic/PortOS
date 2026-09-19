@@ -76,6 +76,7 @@ import {
 } from '../services/localLlm.js'
 import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall } from '../services/modelAbuseGuard.js'
 import { cancelJevInstall, decide, getJevStatus, installJev, stopJevSidecar } from '../services/jev.js'
+import { readJevDecisionStats } from '../services/jevRouter.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
@@ -264,6 +265,12 @@ router.post('/security-guard/install/cancel', asyncHandler(async (_req, res) => 
 // chat-model path.
 router.get('/jev/status', asyncHandler(async (_req, res) => {
   res.json(await getJevStatus())
+}))
+
+// Per-decision agreement and abstention counters. Counts only — never a
+// premise, a choice tied to one, or anything about what was analyzed.
+router.get('/jev/decisions', asyncHandler(async (_req, res) => {
+  res.json(await readJevDecisionStats())
 }))
 
 router.post('/jev/install', asyncHandler(async (req, res) => {

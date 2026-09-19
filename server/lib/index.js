@@ -461,6 +461,7 @@ export * from './huggingfaceModel.js';
 export * from './localLlmCatalog.js';
 export * from './localPersistentMindRecommendation.js';
 export * from './jev.js';
+export * from './jevDecisions.js';
 export * from './modelAbuseGuard.js';
 export * from './pythonRuntimeDiagnosis.js';
 export * from './diffHiddenContentScan.js';

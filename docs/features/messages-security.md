@@ -20,7 +20,31 @@ The GitHub role split does not change explicitly configured Jira or existing Git
 1. **Screen complete accepted input.** Reject oversized content before inference rather than scanning a prefix. Deterministic hidden-content checks precede the offline Prompt Guard classifier: invisible/direction-control Unicode (including filenames), HTML comments and collapsed markup (`hidden`, `aria-hidden`, `display:none`) that address a model, encoded/compressed payloads, a new symlink that leaves the tree or a new git submodule, a non-media binary patch, and inline script in SVG/HTML. PR review also screens commit messages with the same title/body/diff pass. The classifier is required by default. Invalid policies, a broken/partial installation, malformed results and incomplete token-window coverage stop processing.
 2. **Analyze without tools or private context.** `runUntrustedContentAnalysis` uses an API text completion, offers no tools or agent harness, and disables provider fallback. Private message sources require a loopback endpoint. Raw messages are not combined with digital-twin identity documents. External text is framed as evidence; framing itself is not an injection detector.
 
-   **Optional phase-2 reasoner: the local jev entailment scorer.** Where the required answer is one of a fixed set of options rather than prose, `server/services/jev.js` can answer it locally with no provider call, no generated text, and no tool surface — and it **abstains** when the top two options are too close to separate, which returns the question to the generative path above rather than producing a confident guess. It is off by default, installs its own pinned model, and is never selectable as a chat provider. It does not replace layer 1: Prompt Guard still screens the content before anything, including jev, reasons over it. See [JEV_SETUP.md](../JEV_SETUP.md) and the ADR [local jev decision service](../decisions/2026-09-18-local-jev-decision-service.md). No caller is switched to it yet.
+   **Optional phase-2 reasoner: the local jev entailment scorer.** Where the required answer is one of a fixed set of options rather than prose, `server/services/jev.js` can answer it locally with no provider call, no generated text, and no tool surface — and it **abstains** when the top two options are too close to separate. It is off by default, installs its own pinned model, and is never selectable as a chat provider. It does not replace layer 1: Prompt Guard still screens the content before anything, including jev, reasons over it. See [JEV_SETUP.md](../JEV_SETUP.md) and the ADR [local jev decision service](../decisions/2026-09-18-local-jev-decision-service.md).
+
+   **The fallback ladder.** Three rungs, in this order, per source:
+
+   ```
+   screenUntrustedContent()        ← layer 1, Prompt Guard. Always. Unchanged.
+     ↓ safe
+   jev decision                    ← optional. Abstains rather than guessing.
+     ↓ abstained / unavailable / off
+   runUntrustedContentAnalysis()   ← the chat completion above, unchanged.
+   ```
+
+   `jevMode` picks what happens on each source:
+
+   | `jevMode` | Behavior |
+   |---|---|
+   | `off` | The shipped default. The chat model answers every question, exactly as it did before jev existed. If the scorer is installed, PortOS still asks it the same question afterwards and records whether it agreed — see *Measuring before you switch*. |
+   | `prefer` | The scorer answers first; an abstention or an unavailable scorer falls through to the chat model. |
+   | `only` | The scorer answers first, and an abstention **skips the item** with a recorded reason rather than spending provider quota. A skipped item is never recorded as `none`, `defer` or `allowed` — "cannot tell" must stay distinguishable from a verdict. |
+
+   Every caller keeps the same Zod contract either way: jev either produces a value that satisfies it or produces nothing. The hypothesis wording for each decision lives in `server/lib/jevDecisions.js`, with a per-decision abstention floor and a higher per-OPTION floor on the choices that throw something away or release a task (`delete` on a message, `inspect-trusted-change` on a maintenance discussion). `jevMinMargin` can only **raise** those floors, never lower one.
+
+   **Measuring before you switch.** While a source is `off` and the scorer is installed, PortOS asks it each closed-set question after the chat model has answered, discards the answer, and folds the comparison into per-decision counters shown in **Models > LLMs > jev**. The counters are counts only — decision id, which bucket it landed in, and whether it agreed. No premise, message body, comment or diff is recorded, and neither side's verdict is kept.
+
+   **Which decisions are routed.** The issue-watcher reply gate (`reply` / `none`), message triage (action and priority, as two independent decisions over one premise — one abstention retires the whole message), and the forge-maintenance disposition. A jev `reply` verdict still wakes the chat model to write the body; the gate only decides whether waking it is worth it. Stacker News is **not** routed: `server/services/stackerNews.js` does not call `screenUntrustedContent` at all, so routing it today would hand unscreened text to the scorer.
 3. **Validate and authorize effects in code.** Callers supply strict response contracts and check source identities and fresh state before acting. Issue replies and assignments use known issue/comment IDs; model prose never becomes a shell command. Maintenance analysis returns only fixed enums, not a freeform model summary that could repeat an attack. Issue maintenance separately receives screened requirements authored by a trusted account and a verified merge commit on the default branch; it can inspect that accepted code without importing outside PR descriptions. Message triage remains recommendations; replies remain drafts under the existing send-authorization flow.
 
 PR review does not execute contributor tests or apply patches in its default stages. Read-only filesystem access and a disposable worktree are not equivalent to denying tools or isolating malicious code. A provider must expose an actual maintained recipe for the requested posture; unsupported stage pins must be corrected in schedule settings. A screening pass never grants broader permissions.
@@ -35,7 +59,7 @@ After an approval, the deterministic coordinator merges a green, mergeable PR or
 
 Open **Models > LLMs > Abuse Guard** (`/models/llms/abuse`). Install the classifier explicitly, then choose an enabled text API provider and model for shared analysis. Use a local API endpoint for private messages. The page exposes shared policy defaults and source overrides; a failed or incomplete installation offers a repair path. Opening the page and reading status never runs inference or downloads a model.
 
-The shared settings slice is `untrustedContent`, validated on settings writes. It has `defaults` and `sources` overrides for `github-issue`, `github-pr`, `messages`, `email`, `imessage` and `signal`. Supported fields are `providerId`, `model`, `classifierMode`, `minBenignScore`, `maxInputChars` and `maxOutputChars`. Explicit provider changes clear an inherited model pin. Invalid stored settings stop processing instead of silently choosing weaker defaults.
+The shared settings slice is `untrustedContent`, validated on settings writes. It has `defaults` and `sources` overrides for `github-issue`, `github-pr`, `messages`, `email`, `imessage` and `signal`. Supported fields are `providerId`, `model`, `classifierMode`, `minBenignScore`, `maxInputChars`, `maxOutputChars`, `jevMode` and `jevMinMargin`. Explicit provider changes clear an inherited model pin. Invalid stored settings stop processing instead of silently choosing weaker defaults.
 
 ```json
 {
@@ -43,7 +67,7 @@ The shared settings slice is `untrustedContent`, validated on settings writes. I
     "defaults": { "classifierMode": "required", "minBenignScore": 0.9 },
     "sources": {
       "messages": { "providerId": "local-text", "model": "installed-text-model" },
-      "github-issue": { "maxInputChars": 100000, "maxOutputChars": 16000 }
+      "github-issue": { "maxInputChars": 100000, "maxOutputChars": 16000, "jevMode": "prefer" }
     }
   }
 }
@@ -69,5 +93,7 @@ Message triage and replies use `email` by default. Channel-aware outreach select
 - `server/services/modelAbuseGuard.js` and `scripts/run_prompt_guard.py`: passive readiness, explicit install/scan, offline classification.
 - `client/src/components/models/ModelAbuseGuardPanel.jsx`: install/repair and source-policy settings.
 - `server/lib/jev.js`, `server/services/jev.js` and `scripts/run_jev.py`: the optional local entailment scorer — pinned contract, sidecar lifecycle, and the abstaining `decide()`.
+- `server/lib/jevDecisions.js`: the frozen hypothesis sets and abstention floors for every routed decision.
+- `server/services/jevRouter.js`: the jev rung — mode resolution, one consultation, and the counts-only agreement store (`data/local-llm/jev-shadow.json`).
 
 Remediation plans: [#6255](https://github.com/atomantic/PortOS/issues/6255), [#6256](https://github.com/atomantic/PortOS/issues/6256), [#6257](https://github.com/atomantic/PortOS/issues/6257), [#6258](https://github.com/atomantic/PortOS/issues/6258).
