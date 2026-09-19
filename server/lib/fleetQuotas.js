@@ -50,10 +50,14 @@ function sanitizeLimit(raw) {
   const key = str(raw?.key, 120);
   if (!key) return null;
   const percentUsed = pct(raw?.percentUsed);
-  const periodHours = Number.isFinite(raw?.periodHours) && raw.periodHours > 0 ? raw.periodHours : null;
+  const periodHours = Number.isFinite(raw?.periodHours) && raw.periodHours > 0 && raw.periodHours <= 366 * 24
+    ? raw.periodHours
+    : null;
+  const scope = str(raw?.scope, 60);
   return {
     key,
     label: str(raw?.label, 200) || key,
+    ...(scope ? { scope } : {}),
     percentUsed,
     percentRemaining: percentUsed === null ? null : 100 - percentUsed,
     resetsAt: str(raw?.resetsAt, 60),

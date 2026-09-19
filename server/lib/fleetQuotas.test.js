@@ -56,18 +56,21 @@ describe('sanitizeQuotaCards', () => {
 
   // #7662: periodHours has to survive the wire rebuild, or a federated merge
   // can only classify a peer's window from its scope/label text.
-  it('carries a stated periodHours through, and omits it when absent', () => {
+  it('carries a stated periodHours through, and omits it when absent or excessive', () => {
     const [card] = sanitizeQuotaCards([{
       family: 'codex', label: 'Codex', fetchedAt: '2026-09-03T10:00:00.000Z',
       limits: [
-        { key: 'session', percentUsed: 10, periodHours: 7 },
+        { key: 'session', percentUsed: 10, periodHours: 7, scope: 'session' },
         { key: 'week', percentUsed: 10 },
         { key: 'burst', percentUsed: 10, periodHours: 0 },
+        { key: 'millennium', percentUsed: 10, periodHours: 1e9 },
       ],
     }]);
-    expect(card.limits[0]).toMatchObject({ key: 'session', periodHours: 7 });
+    expect(card.limits[0]).toMatchObject({ key: 'session', periodHours: 7, scope: 'session' });
     expect(Object.hasOwn(card.limits[1], 'periodHours')).toBe(false);
+    expect(Object.hasOwn(card.limits[1], 'scope')).toBe(false);
     expect(Object.hasOwn(card.limits[2], 'periodHours')).toBe(false);
+    expect(Object.hasOwn(card.limits[3], 'periodHours')).toBe(false);
   });
 });
 
