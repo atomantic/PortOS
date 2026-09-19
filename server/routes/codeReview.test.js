@@ -12,6 +12,7 @@ vi.mock('../services/codeReview.js', () => ({
   getCodeReviewDefaults: vi.fn(),
   getReviewerCliInstalled: vi.fn(),
   getProviderReviewUnsupported: vi.fn(),
+  reportReviewerFailure: vi.fn(),
 }))
 
 vi.mock('../services/settings.js', () => ({
