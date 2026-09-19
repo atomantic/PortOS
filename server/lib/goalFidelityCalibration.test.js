@@ -26,6 +26,7 @@ import {
   GOAL_FIDELITY_CONTEXT_GAPS,
   GOAL_FIDELITY_REVIEW_SURFACES,
   buildGoalFidelityCalibrationTask,
+  goalFidelityReportIsSubstantive,
   buildGoalFidelityFalsePositiveReportBlock,
   describeGoalFidelityContextGap,
   formatGoalFidelityCalibrationSummary,
@@ -142,6 +143,42 @@ describe('buildGoalFidelityCalibrationTask', () => {
     const body = buildGoalFidelityCalibrationTask({ gap: 'rubric-gap' });
     expect(body.startsWith('[Auto] Goal-fidelity calibration (rubric-gap)')).toBe(true);
     expect(body).toContain('## What to do');
+  });
+});
+
+describe('the unfilled-template guard', () => {
+  // The report block hands the agent a ready-to-run curl whose every field is a
+  // `<…>` placeholder. Running it verbatim used to queue an `other` calibration
+  // whose "diagnosis" was the template — a task that reads like a report, says
+  // nothing, and costs a whole agent run to discover that.
+  it('rejects the template exactly as the report block emits it', () => {
+    expect(goalFidelityReportIsSubstantive({
+      gap: '<one of: truncated-diff | other>',
+      detail: '<what the reviewer could not see, in one or two sentences>',
+      evidence: '<file:line, commit, or PR that shows the objective WAS delivered>',
+    })).toBe(false);
+  });
+
+  it('accepts a report that filled in ANY one field, since a partial report still points somewhere', () => {
+    expect(goalFidelityReportIsSubstantive({ gap: 'rubric-gap' })).toBe(true);
+    expect(goalFidelityReportIsSubstantive({ gap: '<one of: …>', detail: 'the cap was already on main' })).toBe(true);
+    expect(goalFidelityReportIsSubstantive({ gap: '<one of: …>', evidence: 'server/lib/retry.js:88' })).toBe(true);
+  });
+
+  it('rejects an empty report, which carries no more than the template does', () => {
+    expect(goalFidelityReportIsSubstantive({})).toBe(false);
+    expect(goalFidelityReportIsSubstantive({ gap: 'nonsense', detail: '  ' })).toBe(false);
+  });
+
+  it('keeps placeholder prose out of the task body when other fields were filled', () => {
+    const body = buildGoalFidelityCalibrationTask({
+      gap: 'rubric-gap',
+      detail: '<what the reviewer could not see, in one or two sentences>',
+      evidence: 'server/lib/retry.js:88',
+    });
+    expect(body).not.toContain('what the reviewer could not see');
+    expect(body).toContain('_The report named no detail beyond the gap._');
+    expect(body).toContain('server/lib/retry.js:88');
   });
 });
 

@@ -40,13 +40,16 @@
  * a report does not currently carry.
  */
 
+import { updateTask } from './cos.js';
 import { getSettings } from './settings.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
 import { SUPERVISED_INVESTIGATION_DELIVERY, investigationOutcome } from '../lib/investigationTasks.js';
 import {
+  GOAL_FIDELITY_CONTEXT_GAPS,
   buildGoalFidelityCalibrationTask,
   formatGoalFidelityCalibrationSummary,
   goalFidelityCalibrationFingerprint,
+  goalFidelityReportIsSubstantive,
   normalizeGoalFidelityContextGap,
 } from '../lib/goalFidelityCalibration.js';
 
@@ -66,17 +69,19 @@ const gateEnabled = (codeReview) => codeReview?.goalFidelity?.enabled !== false;
  *
  * @param {Object} args
  * @param {string} args.gap - which context the reviewer was missing
- *   (`GOAL_FIDELITY_CONTEXT_GAPS`); anything unknown normalizes to `other`
+ *   (`GOAL_FIDELITY_CONTEXT_GAPS`); an unrecognized value normalizes to `other`
  *   rather than being refused, because a report with a bad enum still carries a
- *   real diagnosis in its prose.
+ *   real diagnosis in its prose. The one refusal is a report with no recognized
+ *   gap AND no filled-in prose — the unrun template.
  * @param {string} [args.detail] - the investigator's diagnosis, free text.
  * @param {string} [args.evidence] - what proves the objective was delivered.
  * @param {string} [args.fingerprint] - the overturned finding's own key, kept as
  *   provenance only. Never the dedup key: that is derived from the gap here, so
  *   a caller cannot choose (or collide with) the identity its report files under.
  * @param {string} [args.taskId] - the task whose run was misjudged, recorded on
- *   the calibration as an affected task so a repeat report accumulates rather
- *   than replacing.
+ *   the calibration as an affected task. A repeat report for the same gap folds
+ *   into the open calibration and unions its run id in (`unionAffectedRun`), so
+ *   the task names every run the gap cost rather than only the first.
  * @param {string} [args.verdict] - the verdict that was overturned, for the body.
  * @returns {Promise<{queued: boolean, gap: string, fingerprint: string,
  *   taskId?: string, approvalRequired?: boolean, duplicate?: boolean,
@@ -85,6 +90,19 @@ const gateEnabled = (codeReview) => codeReview?.goalFidelity?.enabled !== false;
 export async function reportGoalFidelityFalsePositive({ gap, detail, evidence, fingerprint, taskId, verdict } = {}) {
   const resolvedGap = normalizeGoalFidelityContextGap(gap);
   const calibrationFingerprint = goalFidelityCalibrationFingerprint(resolvedGap);
+  // The report block hands the agent a ready-to-run `curl` full of `<…>`
+  // placeholders. One run verbatim would queue an `other` calibration whose
+  // diagnosis is the template — a task that reads like a report and says
+  // nothing, which an agent then spends a run on. Refused with an actionable
+  // reason rather than 400'd, since the caller is an agent reading the body.
+  if (!goalFidelityReportIsSubstantive({ gap, detail, evidence })) {
+    return report({
+      queued: false,
+      gap: resolvedGap,
+      fingerprint: calibrationFingerprint,
+      reason: `the report was still the unfilled template — send a gap from ${GOAL_FIDELITY_CONTEXT_GAPS.join('/')}, and say in 'detail' what the reviewer could not see`,
+    });
+  }
   const settings = await getSettings().catch(() => null);
   if (!gateEnabled(settings?.codeReview)) {
     return report({
@@ -118,7 +136,34 @@ export async function reportGoalFidelityFalsePositive({ gap, detail, evidence, f
     // CI, look like a fix, and silently disarm the gate for good.
   }, { delivery: SUPERVISED_INVESTIGATION_DELIVERY });
 
-  return report({ gap: resolvedGap, fingerprint: calibrationFingerprint, ...investigationOutcome(filed, { subject: 'the calibration task' }) });
+  const outcome = investigationOutcome(filed, { subject: 'the calibration task' });
+  if (outcome.duplicate) await unionAffectedRun(filed.task, taskId);
+  return report({ gap: resolvedGap, fingerprint: calibrationFingerprint, ...outcome });
+}
+
+/**
+ * Fold a repeat report's run into the calibration that already tracks this gap.
+ *
+ * `addTask`'s dedup returns the surviving task untouched — only the
+ * agent-failure producer carries a union of its own — so without this the
+ * calibration names the FIRST misjudged run and no other, however many times
+ * the gap fired. That count is exactly the evidence the task body tells the
+ * agent to size the fix by ("every run the gap cost"), so losing it makes a
+ * recurring blind spot look like a one-off.
+ *
+ * Same shape as the agent-failure producer's union: metadata AND a line in the
+ * body, because the body is what the agent reads. Best-effort — a calibration
+ * that is queued but missing one run id is worth more than a failed report.
+ */
+async function unionAffectedRun(task, taskId) {
+  const affected = Array.isArray(task?.metadata?.affectedTasks) ? task.metadata.affectedTasks : [];
+  if (!taskId || !task?.id || affected.includes(taskId)) return;
+  await updateTask(task.id, {
+    description: `${task.description}\n- Also misjudged task \`${taskId}\` (same context gap).`,
+    metadata: { affectedTasks: [...affected, taskId] },
+  }, 'internal').catch((err) => {
+    console.error(`❌ goal-fidelity calibration: could not union ${taskId} into ${task.id}: ${err.message}`);
+  });
 }
 
 /**

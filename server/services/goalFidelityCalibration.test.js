@@ -21,7 +21,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const getSettings = vi.fn();
 const fileInvestigationTask = vi.fn();
+const updateTask = vi.fn();
 
+vi.mock('./cos.js', () => ({ updateTask }));
 vi.mock('./settings.js', () => ({ getSettings }));
 vi.mock('./investigationTaskProducer.js', () => ({ fileInvestigationTask }));
 
@@ -44,6 +46,7 @@ const filed = () => ({ args: fileInvestigationTask.mock.calls[0][0], opts: fileI
 beforeEach(() => {
   vi.clearAllMocks();
   getSettings.mockResolvedValue({ codeReview: { goalFidelity: { enabled: true } } });
+  updateTask.mockResolvedValue({});
   fileInvestigationTask.mockResolvedValue({ task: { id: 'calib-1' }, approvalRequired: false, loopReason: null });
 });
 
@@ -121,6 +124,64 @@ describe('reportGoalFidelityFalsePositive', () => {
     fileInvestigationTask.mockResolvedValue({ task: { id: 'calib-1', duplicate: true }, approvalRequired: false });
     const result = await reportGoalFidelityFalsePositive(REPORT);
     expect(result).toMatchObject({ queued: true, duplicate: true, taskId: 'calib-1' });
+  });
+
+  // `addTask`'s dedup returns the surviving task untouched, so without an explicit
+  // union the calibration names only the FIRST misjudged run however many times
+  // the gap fires — and the task body tells the agent to size the fix by exactly
+  // that count.
+  it('unions a repeat report\'s run into the calibration that already tracks the gap', async () => {
+    fileInvestigationTask.mockResolvedValue({
+      task: { id: 'calib-1', duplicate: true, description: '[Auto] Goal-fidelity calibration', metadata: { affectedTasks: ['task-1'] } },
+    });
+    await reportGoalFidelityFalsePositive({ ...REPORT, taskId: 'task-9' });
+    expect(updateTask).toHaveBeenCalledWith('calib-1', expect.objectContaining({
+      metadata: { affectedTasks: ['task-1', 'task-9'] },
+    }), 'internal');
+    // The body is what the agent actually reads, so the run has to land there too.
+    expect(updateTask.mock.calls[0][1].description).toContain('task-9');
+  });
+
+  it('does not re-add a run the calibration already names', async () => {
+    fileInvestigationTask.mockResolvedValue({
+      task: { id: 'calib-1', duplicate: true, description: 'x', metadata: { affectedTasks: ['task-7'] } },
+    });
+    await reportGoalFidelityFalsePositive(REPORT);
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('leaves a freshly-created calibration alone — there is nothing to union into', async () => {
+    await reportGoalFidelityFalsePositive(REPORT);
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('still reports the queued calibration when the union write fails', async () => {
+    fileInvestigationTask.mockResolvedValue({
+      task: { id: 'calib-1', duplicate: true, description: 'x', metadata: {} },
+    });
+    updateTask.mockRejectedValue(new Error('state locked'));
+    const result = await reportGoalFidelityFalsePositive({ ...REPORT, taskId: 'task-9' });
+    expect(result).toMatchObject({ queued: true, duplicate: true });
+  });
+
+  // The report block emits a curl whose fields are all `<…>` placeholders; an
+  // agent running it verbatim must not queue a task whose diagnosis is the template.
+  it('refuses the unfilled template with a reason naming what to send instead', async () => {
+    const result = await reportGoalFidelityFalsePositive({
+      gap: '<one of: truncated-diff | other>',
+      detail: '<what the reviewer could not see, in one or two sentences>',
+      evidence: '<file:line, commit, or PR that shows the objective WAS delivered>',
+    });
+    expect(result.queued).toBe(false);
+    expect(result.reason).toMatch(/unfilled template/);
+    expect(result.reason).toContain('rubric-gap');
+    expect(fileInvestigationTask).not.toHaveBeenCalled();
+  });
+
+  it('refuses the template before reading settings, so a disabled gate is not the reported cause', async () => {
+    getSettings.mockResolvedValue({ codeReview: { goalFidelity: { enabled: false } } });
+    const result = await reportGoalFidelityFalsePositive({ gap: '<one of: …>' });
+    expect(result.reason).toMatch(/unfilled template/);
   });
 
   it('names the loop policy\'s own reason when it suppressed the calibration', async () => {

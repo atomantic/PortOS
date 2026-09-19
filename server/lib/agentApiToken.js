@@ -5,9 +5,12 @@
  * (`services/agentApiAuth.js` and the three env-composition sites) and the
  * prompt builders that write the `curl` snippets an agent copy-pastes.
  *
- * Pure and dependency-free so a prompt section can name the credential without
- * pulling the auth/settings subtree into its import closure.
+ * Pure so a prompt section can name the credential without pulling the
+ * auth/settings subtree into its import closure; `shellQuote.js` is itself a
+ * zero-import leaf, so the one edge costs nothing.
  */
+
+import { shellQuote } from './shellQuote.js';
 
 export const AGENT_API_TOKEN_ENV = 'PORTOS_API_TOKEN';
 
@@ -31,11 +34,17 @@ export const AGENT_API_AUTH_CURL_ARG = `-H "Authorization: Bearer \${${AGENT_API
  *
  * Every prompt that hands an agent an API call needs the same five pieces in
  * the same order, and a call assembled by hand is one `-H` away from a bare
- * `401` the agent reads as a broken endpoint. `payload` is emitted inside
- * single quotes, so it is JSON the caller built — never interpolated shell.
+ * `401` the agent reads as a broken endpoint.
+ *
+ * `payload` is JSON the caller built, and it goes through `shellQuote` rather
+ * than into hand-written `'…'`: the agent pastes this line into a shell, so a
+ * single apostrophe anywhere in it — one interpolated task id or fingerprint is
+ * enough — would close the quoting and turn the rest of the JSON into shell
+ * words. Today's payloads happen not to contain one, which is exactly why the
+ * bug would ship silently.
  */
 export const agentApiCurl = ({ apiBase, path, payload }) => (
-  `curl -sS -X POST ${apiBase}${path} -H 'Content-Type: application/json' ${AGENT_API_AUTH_CURL_ARG}${payload ? ` -d '${payload}'` : ''}`
+  `curl -sS -X POST ${apiBase}${path} -H 'Content-Type: application/json' ${AGENT_API_AUTH_CURL_ARG}${payload ? ` -d ${shellQuote(payload)}` : ''}`
 );
 
 /**

@@ -28,7 +28,8 @@
  *  1. The fingerprint is keyed on the GAP, not on the run. Ten false positives
  *     from one missing piece of context are ONE fix, and keying on the run
  *     would mint ten agents to make it. Keying on the gap folds them into one
- *     task that accumulates `affectedTasks` (see `goalFidelityCalibrationFingerprint`).
+ *     task, which the service then unions each further run into (see
+ *     `goalFidelityCalibrationFingerprint`).
  *  2. The calibration lands on PORTOS, never on the app the finding was about.
  *     The finding belonged to the app; the judge that produced it is PortOS
  *     code. Filing the fix where the finding was would put a PortOS prompt
@@ -203,10 +204,10 @@ export const GOAL_FIDELITY_CALIBRATION_FREE_TEXT_CHARS = 4_000;
  * every one of those would mint its own agent to make the SAME edit to the same
  * prompt, and the second one would land on a tree the first already changed.
  *
- * Keyed on the gap they all fold into one task, and `fileInvestigationTask`'s
- * dedup unions the later reports' `affectedTasks` into it — so the agent that
- * picks it up sees every run the gap cost, which is the evidence that tells it
- * how far to go.
+ * Keyed on the gap they all fold into one task, and the producer unions each
+ * later report's run into it (`unionAffectedRun` in the service — `addTask`'s
+ * own dedup returns the survivor untouched) — so the agent that picks it up
+ * sees every run the gap cost, which is the evidence that tells it how far to go.
  *
  * Nothing about the app is in the key on purpose: the judge is one piece of
  * PortOS code shared by every app, so two apps hitting the same blind spot are
@@ -218,11 +219,40 @@ export function goalFidelityCalibrationFingerprint(gap) {
   return `${CALIBRATION_CATEGORY}:${CALIBRATION_KIND}:${normalizeGoalFidelityContextGap(gap)}`;
 }
 
-/** Bounded free text, or a stated absence — never a silent empty section. */
-const reported = (text, empty) => {
+/**
+ * Is this value still the `<…>` placeholder the report block handed the agent?
+ *
+ * The block gives the investigator a ready-to-run `curl` with every field
+ * spelled as `<what the reviewer could not see, …>`. An agent that runs it
+ * unchanged sends those literals, and without this they land in the calibration
+ * body as if they were a diagnosis — a task that reads like a real report and
+ * says nothing. Shape-matched rather than compared against the exact template
+ * strings, so rewording the block cannot quietly stop detecting it.
+ */
+const isPlaceholder = (text) => /^<[^>]*>$/.test(String(text ?? '').trim());
+
+/** One reported free-text field, or `''` when it is absent or still the template. */
+export const reportedField = (text) => {
   const trimmed = typeof text === 'string' ? text.trim() : '';
-  return trimmed ? trimTo(trimmed, GOAL_FIDELITY_CALIBRATION_FREE_TEXT_CHARS) : empty;
+  return !trimmed || isPlaceholder(trimmed) ? '' : trimTo(trimmed, GOAL_FIDELITY_CALIBRATION_FREE_TEXT_CHARS);
 };
+
+/**
+ * Did this report carry anything real at all?
+ *
+ * False only for the wholly-unfilled template: no recognized gap (so it
+ * normalized to `other`) AND no usable detail or evidence. A partially-filled
+ * report still queues — a named gap alone points at a file, which is more than
+ * nothing — so this refuses the one case that is pure noise.
+ */
+export function goalFidelityReportIsSubstantive({ gap, detail, evidence } = {}) {
+  return GOAL_FIDELITY_CONTEXT_GAPS.includes(gap)
+    || Boolean(reportedField(detail))
+    || Boolean(reportedField(evidence));
+}
+
+/** Bounded free text, or a stated absence — never a silent empty section. */
+const reported = (text, empty) => reportedField(text) || empty;
 
 /**
  * The CoS task body for one calibration.
