@@ -344,12 +344,13 @@ export const scrubForgeIssueText = (value) => scrubSecretTokens(scrubHomePath(va
  * cheap reachability probe (`ensureForgeReachable` is gh-specific), so a
  * non-`gh` cli is always reported reachable. One definition instead of the
  * two near-duplicate inline blocks `persistentMindIssueCapability.js` and
- * `goalFidelityFollowUp.js` each carried, plus the probe `forgeFiler.js` never
- * had at all (#7687).
+ * `goalFidelityFollowUp.js` each carried (#7687). `forgeFiler.js`'s callers
+ * don't currently resolve a hostname to pass in, so this doesn't by itself
+ * close that filer's reachability gap — tracked in #7695.
  */
 export async function probeForgeReachability({ cli, hostname, env = null, label }) {
   if (cli !== 'gh' || !hostname) return { ok: true };
-  const forge = await ensureForgeReachable(label, { hostname, ...(env ? { env } : {}) });
+  const forge = await ensureForgeReachable(label, { hostname, env });
   if (forge.ok) return { ok: true };
   return { ok: false, error: `GitHub is not reachable (${forge.status}); ${forge.remedy || 'check `gh auth status`'}` };
 }
@@ -362,7 +363,7 @@ export async function probeForgeReachability({ cli, hostname, env = null, label 
  * and a caller that already has an injectable exec (`runCli`, or a test
  * double shaped like it) can pass it straight through instead.
  */
-async function execForgeIssueCli(cli, args, { cwd = undefined, env = undefined } = {}) {
+async function execForgeIssueCli(cli, args, { cwd, env } = {}) {
   const run = cli === 'glab'
     ? execGlab(args, cwd, undefined, { env, rejectOnError: true })
     : execGh(args, undefined, { cwd, env });
@@ -375,14 +376,16 @@ async function execForgeIssueCli(cli, args, { cwd = undefined, env = undefined }
 /**
  * Create every label an issue is about to carry, before the issue itself.
  * Both CLIs 422 the whole `issue create` on an undefined label, so this always
- * runs first. One label-failure policy for every filer (#7687): an "already
+ * runs first. One label-failure policy for every filer (#7687) — including
+ * `applyBlockingLabel`'s own label-only path in `forgeFiler.js`, which delegates
+ * here rather than re-running its own "already exists" check: an "already
  * exists" reply is expected and fine (label creation is otherwise idempotent),
  * anything else aborts the file — a permission or auth problem should surface
  * now rather than let the caller proceed to a create that is doomed anyway (or,
  * worse, silently ships without the label a caller assumed would exist).
  * Returns the first hard-failure message, or `null` when every label is ready.
  */
-async function ensureForgeIssueLabels({ cli, exec, cwd, env, repo, labels }) {
+export async function ensureForgeIssueLabels({ cli, exec, cwd, env, repo = null, labels }) {
   const results = await Promise.all(labels.map(async (spec) => {
     const { code, stdout, stderr } = await exec(cli, forgeLabelCreateArgs(cli, spec, { repo }), { cwd, env });
     if (code === 0) return null;

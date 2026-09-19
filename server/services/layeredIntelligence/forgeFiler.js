@@ -8,12 +8,11 @@
 import { dispatchLabelSpec, forgeIssueLabels, isDispatchModel, isDispatchEffort } from '../../lib/dispatchLabels.js';
 import { safeJSONParse } from '../../lib/fileUtils.js';
 import { normalizeIssueState } from '../../lib/forgeIssueState.js';
-import { LI_LABEL, LI_BLOCKING_LABEL } from './constants.js';
+import { LI_LABEL, LI_BLOCKING_LABEL, LI_LABEL_SPEC, LI_BLOCKING_LABEL_SPEC } from './constants.js';
 import { slugMarker, extractSlugFromBody } from './dedup.js';
 import { runCli } from './runCli.js';
 import { withGlabJson } from '../../lib/glabArgs.js';
-import { forgeLabelCreateArgs } from '../../lib/forgeIssueCli.js';
-import { fileForgeIssue } from '../appIssues.js';
+import { fileForgeIssue, ensureForgeIssueLabels } from '../appIssues.js';
 
 export { normalizeIssueState };
 
@@ -220,29 +219,21 @@ export async function listBlockingIssues({ cli, cwd, env, exec = runCli } = {}) 
 
 /**
  * Ensure the layered-intelligence labels exist before the first `issue create`
- * (gh/glab both fail creating an issue with a non-existent label). An existing
- * label is deliberately left unchanged: it belongs to the repository, so only
- * that expected duplicate error is treated as success.
+ * (gh/glab both fail creating an issue with a non-existent label). Delegates
+ * the actual create-and-tolerate-duplicates loop to `ensureForgeIssueLabels`
+ * (#7687) — the same label-failure policy every forge filer now shares —
+ * rather than re-running its own "already exists" check, and re-throws its
+ * one hard-failure message so this function's own (pre-#7687) throwing
+ * contract stays intact for `applyBlockingLabel` below.
  */
 export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec = runCli } = {}) {
   const labels = [
-    { name: LI_LABEL, color: '1d76db', desc: 'Filed by the Layered Intelligence loop' },
-    { name: LI_BLOCKING_LABEL, color: 'b60205', desc: 'Layered Intelligence loop is paused on this issue' },
-    ...extraLabels.map((name) => dispatchLabelSpec(name, { cli })).filter(Boolean).map((s) => ({
-      name: s.name, color: s.color, desc: s.description
-    }))
+    LI_LABEL_SPEC,
+    LI_BLOCKING_LABEL_SPEC,
+    ...extraLabels.map((name) => dispatchLabelSpec(name, { cli })).filter(Boolean),
   ];
-  for (const l of labels) {
-    const { code, stdout, stderr } = await exec(
-      cli,
-      forgeLabelCreateArgs(cli, { name: l.name, color: l.color, description: l.desc }),
-      { cwd, env }
-    );
-    const output = `${stderr || ''}\n${stdout || ''}`;
-    if (code !== 0 && !/label.*already exists|already exists.*label/i.test(output)) {
-      throw new Error(`${cli} label create failed for "${l.name}": ${stderr || `exited with code ${code}`}`);
-    }
-  }
+  const error = await ensureForgeIssueLabels({ cli, exec, cwd, env, labels });
+  if (error) throw new Error(error);
 }
 
 /**
@@ -261,8 +252,9 @@ export async function fileProposalToForge({
   if (!isDispatchModel(model) || !isDispatchEffort(effort)) {
     return { success: false, error: 'Issue filing requires valid model and effort dispatch labels; investigate and supply both before retrying' };
   }
-  const names = [LI_LABEL, ...forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli })];
-  const labels = names.map((name) => dispatchLabelSpec(name, { cli }) || { name, color: '1d76db', description: 'Filed by the Layered Intelligence loop' });
+  const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli })
+    .map((name) => dispatchLabelSpec(name, { cli }));
+  const labels = [LI_LABEL_SPEC, ...extras.filter(Boolean)];
   const result = await fileForgeIssue({ cli, cwd, env, title, body: `${body}\n\n${slugMarker(slug)}`, labels, exec });
   return result.ok
     ? { success: true, number: result.number, url: result.url }

@@ -162,7 +162,10 @@ export async function filePersistentMindIssue(args) {
   }
   // Scrubbed BEFORE the duplicate check, not just before the create: the title
   // that dedupes has to be the title that gets filed, or an issue whose only
-  // leaked path was in its title would re-file itself on every wake.
+  // leaked path was in its title would re-file itself on every wake. Used only
+  // for the dedup key here — `fileForgeIssue` below gets the RAW args and
+  // scrubs its own copy, so the text is scrubbed exactly once rather than
+  // twice for the same request.
   const title = scrubForgeIssueText(args.title);
   const body = scrubForgeIssueText(args.body);
 
@@ -193,7 +196,7 @@ export async function filePersistentMindIssue(args) {
   ].filter((name, index, all) => all.indexOf(name) === index);
 
   const created = await fileForgeIssue({
-    cli, title, body, repoPath: app.repoPath,
+    cli, title: args.title, body: args.body, repoPath: app.repoPath,
     repo: cli === 'glab' ? null : app.repoSpec,
     labels: labels.map((name) => labelSpec(name, cli)).filter(Boolean),
   });
