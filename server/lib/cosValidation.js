@@ -657,6 +657,11 @@ export const taskTemplateFromTaskSchema = z.object({
 // `claudeModel` doubles as the Ollama model id when the user runs an
 // Ollama-backed `claude` (isOllamaClaudeProvider) as their reviewer.
 export const codeReviewSettingsSchema = z.object({
+  reviewerFallbackGroups: z.preprocess(
+    v => Array.isArray(v) ? v : undefined,
+    z.array(z.array(reviewerSchema).min(1)).optional()
+  ),
+  reviewerHealth: z.record(z.object({ pausedUntil: z.number().int().positive(), reason: z.string().optional(), lastFailureAt: z.number().int().positive().optional() })).optional(),
   providerModels: z.preprocess(normalizeReviewerModels, z.record(z.string()).optional()),
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,

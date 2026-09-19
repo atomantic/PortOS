@@ -51,7 +51,37 @@ import {
   resolveGoalFidelityConfig,
 } from '../lib/goalFidelity.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
-import { getSettings, settingsEvents } from './settings.js'
+import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
+
+export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
+const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|allowance|credit|capacity|exhausted|too many requests|429/i
+export const isReviewerQuotaFailure = (error) => QUOTA_FAILURE.test(String(error || ''))
+
+const normalizeFallbackGroups = (groups) => Array.isArray(groups)
+  ? groups.map(group => Array.from(new Set((Array.isArray(group) ? group : []).map(r => REVIEWER_ALIASES[r] || r).filter(isReviewer)))).filter(group => group.length)
+  : []
+
+export function pickAvailableReviewerGroups(raw, now = Date.now()) {
+  const groups = normalizeFallbackGroups(raw?.reviewerFallbackGroups)
+  const health = raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? raw.reviewerHealth : {}
+  return groups.find(group => group.length && group.every(reviewer => !(Number(health[reviewer]?.pausedUntil) > now))) || groups[0] || null
+}
+
+export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
+  if (!isReviewerQuotaFailure(error) || !isReviewer(reviewer)) return false
+  await updateSettingsWith((settings) => ({
+    ...settings,
+    codeReview: {
+      ...(settings.codeReview || {}),
+      reviewerHealth: {
+        ...(settings.codeReview?.reviewerHealth || {}),
+        [reviewer]: { pausedUntil: now + REVIEWER_PAUSE_MS, reason: 'quota', lastFailureAt: now },
+      },
+    },
+  }))
+  cachedDefaults = null
+  return true
+}
 
 // LM Studio (`:1234`), Ollama (`:11434`) and MTPLX (`:8000/v1`) all ship
 // OpenAI-compatible `/v1/chat/completions`. Resolve through each manager's live
@@ -104,8 +134,12 @@ export function pickCodeReviewDefaults(settings) {
   const raw = settings && typeof settings === 'object' ? settings.codeReview : null
   const effortDefaults = reviewerEffortsFromDefaults(raw)
   const reviewers = configuredReviewers(settings)
+  const fallbackGroups = normalizeFallbackGroups(raw?.reviewerFallbackGroups)
+  const activeFallbackGroup = pickAvailableReviewerGroups(raw, Date.now())
   return {
-    reviewers: reviewers.length ? reviewers : [...DEFAULT_REVIEWERS],
+    reviewers: activeFallbackGroup || (reviewers.length ? reviewers : [...DEFAULT_REVIEWERS]),
+    ...(Array.isArray(raw?.reviewerFallbackGroups) ? { reviewerFallbackGroups: fallbackGroups } : {}),
+    ...(raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? { reviewerHealth: raw.reviewerHealth } : {}),
     // Arbitrary GitHub reviewer usernames appended to `--review-with` to gate the
     // merge. Normalized so a hand-edited settings.json can't smuggle in unsafe
     // tokens. Empty array = none configured.
