@@ -100,7 +100,9 @@ describe('reviewLifecycle reviewer invocation details', () => {
     const section = buildReviewLoopFollowUpSection(metadata);
 
     expect(section).toContain('An `HTTP 401` is not a review result');
-    expect(section).toContain('server/scripts/run-local-code-review.mjs');
+    // Basename only: the path is built with `join()`, so a Windows checkout
+    // renders it with backslashes.
+    expect(section).toContain('run-local-code-review.mjs');
   });
 
   // `opencode run -m <provider/model>`: rendering `--model` here had agents

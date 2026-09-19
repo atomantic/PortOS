@@ -21,6 +21,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { join } from 'path';
+import { shellQuote } from '../../lib/shellQuote.js';
 
 // The section embeds two agent-facing `curl` commands aimed at this install's
 // own API. Pin the origin so the matrix is byte-stable regardless of the host's
@@ -126,7 +128,18 @@ const PHASES = {
   },
 };
 
-const render = ({ phase, forge, leaveOpen, verbose }) => buildReviewLoopFollowUpSection(
+// The 401 fallback names the review bridge through `join()` + `shellQuote()`, both
+// of which are platform-sensitive: a Windows checkout renders
+// `'\portos\server\…'` — backslashes, and quoted, because shellQuote quotes a
+// path containing them. Every file snapshot below would then differ from the
+// POSIX spelling committed here. Reproduce that exact fragment with the same two
+// functions and normalize it to one canonical form before snapshotting; the
+// prompt still hands a Windows agent the Windows path its shell needs.
+const BRIDGE_IN_SNAPSHOTS = '/portos/server/scripts/run-local-code-review.mjs';
+const RENDERED_BRIDGE = shellQuote(join('/portos', 'server/scripts/run-local-code-review.mjs'));
+const stable = (section) => section.split(RENDERED_BRIDGE).join(BRIDGE_IN_SNAPSHOTS);
+
+const render = ({ phase, forge, leaveOpen, verbose }) => stable(buildReviewLoopFollowUpSection(
   fixture({ reviewLoopPRHost: FORGES[forge].host, reviewLoopLeaveOpen: leaveOpen }),
   {
     verbose,
@@ -135,7 +148,7 @@ const render = ({ phase, forge, leaveOpen, verbose }) => buildReviewLoopFollowUp
     reviewerPositions: REVIEWER_POSITIONS,
     ...PHASES[phase].opts,
   },
-);
+));
 
 const CELL = (phase, forge, leaveOpen, verbose) => ({ phase, forge, leaveOpen, verbose });
 
@@ -180,7 +193,7 @@ describe('buildReviewLoopFollowUpSection — phase × forge × leaveOpen × verb
       fixture({ reviewLoopReviewers: ['copilot', 'codex'], reviewLoopOptionalReviewers: [] }),
       { verbose: false, localAgentLoopBody: CLI_REVIEW_RECIPE, reviewerPositions: REVIEWER_POSITIONS, baseBranch: 'main' },
     );
-    await expect(section).toMatchFileSnapshot(SNAP('followup-copilot-first'));
+    await expect(stable(section)).toMatchFileSnapshot(SNAP('followup-copilot-first'));
   });
 
   // The merge-only variant (Review Loop off) returns from `buildMergeFollowUpSection`
@@ -199,7 +212,7 @@ describe('buildReviewLoopFollowUpSection — phase × forge × leaveOpen × verb
             ...(phase === 'inline' ? { inlineExitStep: INLINE_EXIT_STEP } : {}),
           },
         );
-        await expect(section).toMatchFileSnapshot(SNAP(name));
+        await expect(stable(section)).toMatchFileSnapshot(SNAP(name));
       });
     }
   }
