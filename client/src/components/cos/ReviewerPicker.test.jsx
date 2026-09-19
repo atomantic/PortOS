@@ -61,6 +61,58 @@ describe('ReviewerPicker', () => {
     });
   });
 
+  // #7660: an enabled, present provider that still has no enforceable tool-free
+  // review transport is the one case nothing used to say out loud — the user
+  // found out only when every PR it gated sat unmergeable forever.
+  describe("provider reviewer that can't review (#7660)", () => {
+    const providers = [{ id: 'hosted-harness', name: 'Hosted Harness', command: 'opencode', enabled: true, models: [] }];
+
+    it('flags an enabled provider reported as unable to run a tool-free review', () => {
+      render(
+        <ReviewerPicker
+          reviewers={['provider:hosted-harness']}
+          modelOptions={{ loaded: true, providers }}
+          providerReviewUnsupported={{ 'provider:hosted-harness': 'REVIEWER_UNSUPPORTED' }}
+          onChange={() => {}}
+        />
+      );
+      expect(screen.getByText("can't review")).toBeInTheDocument();
+    });
+
+    it('says nothing about a provider absent from the map, or when it was never fetched', () => {
+      const { rerender } = render(
+        <ReviewerPicker
+          reviewers={['provider:hosted-harness']}
+          modelOptions={{ loaded: true, providers }}
+          providerReviewUnsupported={{ 'provider:other': 'REVIEWER_UNSUPPORTED' }}
+          onChange={() => {}}
+        />
+      );
+      expect(screen.queryByText("can't review")).not.toBeInTheDocument();
+      rerender(
+        <ReviewerPicker
+          reviewers={['provider:hosted-harness']}
+          modelOptions={{ loaded: true, providers }}
+          onChange={() => {}}
+        />
+      );
+      expect(screen.queryByText("can't review")).not.toBeInTheDocument();
+    });
+
+    it('keeps the more specific word for a switched-off provider rather than badging it twice', () => {
+      render(
+        <ReviewerPicker
+          reviewers={['provider:hosted-harness']}
+          modelOptions={{ loaded: true, providers: [{ ...providers[0], enabled: false }] }}
+          providerReviewUnsupported={{ 'provider:hosted-harness': 'REVIEWER_UNSUPPORTED' }}
+          onChange={() => {}}
+        />
+      );
+      expect(screen.getByText('disabled')).toBeInTheDocument();
+      expect(screen.queryByText("can't review")).not.toBeInTheDocument();
+    });
+  });
+
   // The Add row lists what this machine can actually run. Hidden, not dropped:
   // both signals are local-machine-only and the reviewer list is
   // federation-wide config, so a peer's reviewer stays configurable from here.

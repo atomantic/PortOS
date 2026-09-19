@@ -724,6 +724,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               reviewerEfforts={config.taskMetadata?.reviewerEfforts ?? seededPins.efforts}
               modelOptions={reviewerModelOptions}
               installed={reviewDefaults.installed}
+              providerReviewUnsupported={reviewDefaults.providerReviewUnsupported}
               stopMode={config.taskMetadata?.reviewStopMode || reviewDefaults.stopMode || DEFAULT_REVIEW_STOP_MODE}
               reviewerApplies={config.taskMetadata?.reviewerApplies !== undefined
                 ? (config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true')

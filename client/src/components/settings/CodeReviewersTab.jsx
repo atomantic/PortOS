@@ -33,6 +33,7 @@ export default function CodeReviewersTab() {
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [goalFidelity, setGoalFidelity] = useState({ enabled: true, backend: null, model: null, effort: null });
   const [installed, setInstalled] = useState({});
+  const [providerReviewUnsupported, setProviderReviewUnsupported] = useState({});
   const modelOptions = useReviewerModelOptions();
 
   const loadDefaults = useCallback(() => {
@@ -62,6 +63,7 @@ export default function CodeReviewersTab() {
             effort: defaults.goalFidelity?.effort || null,
           });
           setInstalled(defaults.installed && typeof defaults.installed === 'object' && !Array.isArray(defaults.installed) ? defaults.installed : {});
+          setProviderReviewUnsupported(defaults.providerReviewUnsupported && typeof defaults.providerReviewUnsupported === 'object' && !Array.isArray(defaults.providerReviewUnsupported) ? defaults.providerReviewUnsupported : {});
         } else {
           setLoadError(true);
         }
@@ -150,6 +152,7 @@ export default function CodeReviewersTab() {
             reviewerEfforts={reviewerEfforts}
             modelOptions={modelOptions}
             installed={installed}
+            providerReviewUnsupported={providerReviewUnsupported}
             stopMode={stopMode}
             reviewerApplies={reviewerApplies}
             disabled={saving || loadError}

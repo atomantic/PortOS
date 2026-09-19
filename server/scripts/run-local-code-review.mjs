@@ -7,7 +7,7 @@
 import { getCodeReviewDefaults, runLocalClaimCommentReview, runLocalCodeReview } from '../services/codeReview.js';
 
 import { Console } from 'node:console';
-import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
+import { isReviewerConfigFault, reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 
 // Provider/runtime diagnostics belong on stderr; stdout is exactly one JSON
 // response for the claim procedure's jq gate.
@@ -26,7 +26,13 @@ try {
   const result = await review({ ...request, model, effort });
   process.stdout.write(`${JSON.stringify(result)}\n`);
   if (!result.ok) {
-    process.stderr.write(`${result.error}\n`);
+    // A reviewer that CAN'T be satisfied reads identically to one that merely
+    // timed out, and the claim procedure answers both with `review-blocked` —
+    // leaving the PR open to wait out an outage that will never end (#7660). Say
+    // which it is, naming the reviewer, so the operator sees a config fault.
+    process.stderr.write(isReviewerConfigFault(result.code)
+      ? `Reviewer configuration fault (${result.code}) for ${request.backend}: ${result.error}\n`
+      : `${result.error}\n`);
     process.exitCode = 1;
   }
 } catch (err) {

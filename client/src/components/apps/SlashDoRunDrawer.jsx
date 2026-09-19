@@ -208,6 +208,7 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
                 reviewerEfforts={reviewValue.reviewerEfforts}
                 modelOptions={reviewerModelOptions}
                 installed={codeReviewDefaults.installed}
+                providerReviewUnsupported={codeReviewDefaults.providerReviewUnsupported}
                 // The claim flows substitute a reviewer CSV into their prompt and have
                 // no slashdo flag string, so stop-mode / reviewer-applies can't be honored.
                 showRunFlags={false}

@@ -1,9 +1,9 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
-import { validateRequest, isToolFreeReviewer, isProviderReviewer, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
+import { validateRequest, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
 import { getSettings } from '../services/settings.js'
-import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled } from '../services/codeReview.js'
+import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewUnsupported } from '../services/codeReview.js'
 
 const router = Router()
 
@@ -45,9 +45,17 @@ const localReviewRequestSchema = z.object({
 // `installed` (per-CLI-reviewer boolean, TTL-probed) rides alongside so a
 // picker can flag a configured reviewer whose binary isn't on this machine
 // (#3606) — warn-only, never filters the `reviewers` list above.
+// `providerReviewUnsupported` is its provider-backed counterpart (#7660): the
+// `provider:<id>` reviewers that would refuse a tool-free review outright, so
+// the picker warns at selection time instead of letting the user discover it as
+// a review gate that never clears. Warn-only in exactly the same way.
 router.get('/defaults', asyncHandler(async (_req, res) => {
-  const [defaults, installed] = await Promise.all([getCodeReviewDefaults(), getReviewerCliInstalled()])
-  res.json({ ...defaults, installed })
+  const [defaults, installed, providerReviewUnsupported] = await Promise.all([
+    getCodeReviewDefaults(),
+    getReviewerCliInstalled(),
+    getProviderReviewUnsupported(),
+  ])
+  res.json({ ...defaults, installed, providerReviewUnsupported })
 }))
 
 // POST /api/code-review/local — run a single review pass against the
@@ -78,11 +86,12 @@ router.post('/local', asyncHandler(async (req, res) => {
     timeoutMs: body.timeoutMs,
   })
   if (!result.ok) {
-    // A model neither the request, the panel, nor the backend's own listing could
-    // supply is the caller's config gap (400) — the 502 bucket is for a reviewer
-    // that was actually asked and failed.
+    // A refusal the caller can fix by changing configuration — no model, a
+    // missing/disabled provider, or one that can never run a tool-free review —
+    // is a config gap (400). The 502 bucket is for a reviewer that was actually
+    // asked and failed, which is the only kind a caller should retry.
     throw new ServerError(result.error || 'Code review failed', {
-      status: result.code === 'NO_MODEL' ? 400 : 502,
+      status: isReviewerConfigFault(result.code) ? 400 : 502,
       context: { backend: result.backend, model: result.model }
     })
   }

@@ -123,6 +123,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // of freezing today's values into the new task permanently (#6219).
   const [reviewOverrides, setReviewOverrides] = useState({});
   const [reviewerCliInstalled, setReviewerCliInstalled] = useState({});
+  const [providerReviewUnsupported, setProviderReviewUnsupported] = useState({});
   // Which federated instance runs this task (#4520). '' = any instance, the
   // opportunistic default. Hidden entirely on a single-instance install.
   const [targetInstanceId, setTargetInstanceId] = useState('');
@@ -266,6 +267,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           reviewerApplies: d.reviewerApplies === true,
         });
         if (d.installed && typeof d.installed === 'object' && !Array.isArray(d.installed)) setReviewerCliInstalled(d.installed);
+        if (d.providerReviewUnsupported && typeof d.providerReviewUnsupported === 'object' && !Array.isArray(d.providerReviewUnsupported)) setProviderReviewUnsupported(d.providerReviewUnsupported);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -1380,6 +1382,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                     reviewerEfforts={reviewOverrides.reviewerEfforts ?? reviewDefaults.reviewerEfforts}
                     modelOptions={reviewerModelOptions}
                     installed={reviewerCliInstalled}
+                    providerReviewUnsupported={providerReviewUnsupported}
                     stopMode={reviewOverrides.stopMode ?? reviewDefaults.stopMode}
                     reviewerApplies={reviewOverrides.reviewerApplies ?? reviewDefaults.reviewerApplies}
                     // The same fallback the props above were seeded from — the
