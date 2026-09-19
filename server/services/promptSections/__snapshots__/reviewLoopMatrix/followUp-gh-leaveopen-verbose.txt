@@ -26,7 +26,7 @@ else
 fi
 ```
 Only a successfully extracted `.findings` value is the review text; treat it like any other reviewer's findings. This run pins settings for `ollama` → `"model": "qwen3-coder"` — add those keys to the JSON object (`jq -Rs '{ backend: "ollama", model: "…", timeoutMs: 1800000, diff: . }'`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk. **@github reviewers**: request `@example-user` as PR reviewer (`gh pr edit 42 --add-reviewer <user>`, drop the `@`), then wait for their review (poll every 5–15s) and address any findings; their approval gates the merge.
-2. If there are unresolved review findings, fix them in this worktree, run the project's tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, and (for Copilot) resolve the addressed threads.
+2. Fix EVERY finding from the review in this worktree, including non-blocking findings and nits; run the project's tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, and resolve ALL review threads from that review, including non-blocking findings and nits.
 3. Re-review with the same reviewer until it reports clean, then advance to the next reviewer in the list.
 4. When the reviewer list is exhausted (or the stop mode triggers), **leave the PR open** — do NOT merge it, and do NOT delete the branch. Its JIRA ticket is sitting in review and a human lands both together; merging here would leave the work merged and the ticket stuck in review.
 5. Post a short comment on the PR summarising what the reviewers raised and what you fixed, so the human landing it knows the state: `gh pr comment "https://github.com/example-org/example-repo/pull/42" --body "<summary>"`.
