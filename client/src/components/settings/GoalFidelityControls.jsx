@@ -1,5 +1,17 @@
 import { LOCAL_LLM_EFFORT_LEVELS, LOCAL_LLM_REVIEWERS, reviewerLabel } from '../cos/constants';
-import { sanitizeReviewerModelInput } from '../../lib/reviewerPins';
+import {
+  DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER,
+  sanitizeReviewerModelInput,
+} from '../../lib/reviewerPins';
+
+// What each trigger means in the user's terms. The values mirror the server's
+// `GOAL_FIDELITY_FOLLOW_UP_TRIGGERS` enum; the prose is why one would pick the
+// wider one — `fix-first` never downgrades a run, so an issue is the only thing
+// that carries those findings past the run record.
+const FOLLOW_UP_TRIGGER_OPTIONS = [
+  { value: 'rethink', label: 'Only “rethink” — the run built the wrong thing' },
+  { value: 'any-finding', label: 'Any finding — also the advisory “fix-first”' },
+];
 
 // The goal-fidelity gate's controls (#5994) — the SECOND review, which asks
 // whether a finished run's diff delivers the objective the task stated, rather
@@ -15,7 +27,22 @@ import { sanitizeReviewerModelInput } from '../../lib/reviewerPins';
 export default function GoalFidelityControls({ value, modelOptions, disabled = false, onChange }) {
   const enabled = value?.enabled !== false;
   const backend = value?.backend || '';
-  const patch = (fields) => onChange({ enabled, backend: value?.backend || null, model: value?.model || null, effort: value?.effort || null, ...fields });
+  const fileIssue = value?.fileIssue === true;
+  const queueTask = value?.queueTask === true;
+  const followUpOn = value?.followUpOn || DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER;
+  const patch = (fields) => onChange({
+    enabled,
+    backend: value?.backend || null,
+    model: value?.model || null,
+    effort: value?.effort || null,
+    fileIssue,
+    queueTask,
+    followUpOn,
+    ...fields,
+  });
+  // The trigger only means something once one of the two actions is on, and
+  // both are meaningless with the gate itself off.
+  const followUpDisabled = disabled || !enabled;
 
   // Only a chosen backend has a catalog to offer. With none chosen the model and
   // effort fields are inert on purpose: a pin typed against "whatever the chain
@@ -100,6 +127,59 @@ export default function GoalFidelityControls({ value, modelOptions, disabled = f
             <option value="">Model’s own default</option>
             {LOCAL_LLM_EFFORT_LEVELS.map((level) => (
               <option key={level} value={level}>{level}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="border-t border-port-border/60 pt-2.5 space-y-2">
+        <p className="text-[11px] uppercase tracking-wide text-gray-500">When the review finds a problem</p>
+
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            id="goal-fidelity-file-issue"
+            checked={fileIssue}
+            disabled={followUpDisabled}
+            onChange={(e) => patch({ fileIssue: e.target.checked })}
+            className="mt-0.5 accent-port-accent disabled:opacity-50"
+          />
+          <span>
+            <span className="text-sm text-white">File an issue on the project’s tracker</span>
+            <span className="block text-xs text-gray-500">
+              Writes the finding to whichever tracker the app actually uses — GitHub, GitLab, or JIRA — so it outlives the run record. Re-filing is suppressed by a key carried in the issue body: an existing issue for the same finding is reused even after it has been closed, and a tracker PortOS can’t read refuses the filing rather than risking a duplicate.
+            </span>
+          </span>
+        </label>
+
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            id="goal-fidelity-queue-task"
+            checked={queueTask}
+            disabled={followUpDisabled}
+            onChange={(e) => patch({ queueTask: e.target.checked })}
+            className="mt-0.5 accent-port-accent disabled:opacity-50"
+          />
+          <span>
+            <span className="text-sm text-white">Queue an agent to reconcile it</span>
+            <span className="block text-xs text-gray-500">
+              Adds a CoS task that claims the filed issue — or, with no issue filed, works the finding directly. Runs in a worktree behind a PR, and shares the investigation queue’s duplicate guard and hourly circuit breaker, so a repeated drift can’t spawn one agent per run.
+            </span>
+          </span>
+        </label>
+
+        <div>
+          <label htmlFor="goal-fidelity-follow-up-on" className="block text-[11px] text-gray-500 mb-1">Act on which verdicts</label>
+          <select
+            id="goal-fidelity-follow-up-on"
+            value={followUpOn}
+            disabled={followUpDisabled || (!fileIssue && !queueTask)}
+            onChange={(e) => patch({ followUpOn: e.target.value })}
+            className="w-full sm:w-2/3 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
+          >
+            {FOLLOW_UP_TRIGGER_OPTIONS.map(({ value: option, label }) => (
+              <option key={option} value={option}>{label}</option>
             ))}
           </select>
         </div>

@@ -49,6 +49,7 @@ import {
   goalFidelityHoldsRun,
   taskObjective,
 } from '../lib/goalFidelity.js';
+import { formatGoalFidelityFollowUpSummary } from '../lib/goalFidelityFollowUp.js';
 import { getGoalFidelityConfig, runLocalGoalFidelityReview } from './codeReview.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
@@ -1190,6 +1191,31 @@ export async function finalizeAgent({
     // built the wrong thing is exactly the case a human has to look at, and the
     // named missing/unrequested items are what make the hold actionable.
     cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
+  }
+  // A finding that lives only in this run's record dies with the agent card
+  // nobody opened. When the user has configured it, the follow-up files the
+  // finding on the project's own tracker and/or queues the run that fixes it.
+  // Lazily imported: the filer reaches the apps roster, both forge CLIs, and
+  // (for a JIRA-tracked app) the JIRA client, and a static edge would put all
+  // of it on the closure of every suite that reaches finalization.
+  if (fidelity.review) {
+    const followUp = await import('./goalFidelityFollowUp.js')
+      .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review }))
+      .catch(err => {
+        emitLog('warn', `⚠️ Goal-fidelity follow-up failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
+        return null;
+      });
+    if (followUp?.ran) {
+      emitLog('info', `📌 ${formatGoalFidelityFollowUpSummary(followUp)} for ${agentId}`, { agentId, taskId: task?.id });
+      // Recorded on the review so the agent card can link the issue and the
+      // queued task without re-deriving either from the tracker.
+      fidelity.review.followUp = {
+        ...(followUp.issue ? { issue: { number: followUp.issue.number, url: followUp.issue.url, duplicate: followUp.issue.duplicate === true } } : {}),
+        ...(followUp.issueError ? { issueError: followUp.issueError } : {}),
+        ...(followUp.task?.id ? { taskId: followUp.task.id } : {}),
+        ...(followUp.taskError ? { taskError: followUp.taskError } : {}),
+      };
+    }
   }
 
   if (verdict.success && isTruthyMetaFn) {

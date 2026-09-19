@@ -50,6 +50,10 @@ import {
   normalizeGoalFidelityVerdict,
   resolveGoalFidelityConfig,
 } from '../lib/goalFidelity.js'
+import {
+  DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER,
+  GOAL_FIDELITY_FOLLOW_UP_TRIGGERS,
+} from '../lib/goalFidelityFollowUp.js'
 import { getSettings, settingsEvents } from './settings.js'
 
 // LM Studio (`:1234`), Ollama (`:11434`) and MTPLX (`:8000/v1`) all ship
@@ -131,6 +135,14 @@ export function pickCodeReviewDefaults(settings) {
       backend: typeof raw?.goalFidelity?.backend === 'string' ? raw.goalFidelity.backend : null,
       model: typeof raw?.goalFidelity?.model === 'string' ? raw.goalFidelity.model : null,
       effort: typeof raw?.goalFidelity?.effort === 'string' ? raw.goalFidelity.effort : null,
+      // Follow-up actions. `enabled` above defaults ON, so an absent block reads
+      // as on; these two default OFF, so an absent block reads as off — the
+      // asymmetry is deliberate and matches what the resolver does at runtime.
+      fileIssue: raw?.goalFidelity?.fileIssue === true,
+      queueTask: raw?.goalFidelity?.queueTask === true,
+      followUpOn: GOAL_FIDELITY_FOLLOW_UP_TRIGGERS.includes(raw?.goalFidelity?.followUpOn)
+        ? raw.goalFidelity.followUpOn
+        : DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER,
     },
     // Faithful mirror of the stored scalars, deliberately NOT shape-checked here:
     // `/api/code-review/local` passes these as a JSON request-body field where a

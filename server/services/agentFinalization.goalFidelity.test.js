@@ -71,6 +71,14 @@ vi.mock('./taskTypeHooks.js', () => ({
   getTaskOutputHook: vi.fn(async () => null),
   getTaskOutputPayloadPredicate: vi.fn(async () => null),
 }));
+// The follow-up (file an issue / queue a fix) is dispatched through a LAZY
+// import, so it is doubled here rather than left to load the real filer's
+// apps + forge + JIRA graph into a suite that only cares about the wiring.
+const runGoalFidelityFollowUpMock = vi.fn(async () => ({ ran: false }));
+vi.mock('./goalFidelityFollowUp.js', () => ({
+  runGoalFidelityFollowUp: (...args) => runGoalFidelityFollowUpMock(...args),
+}));
+
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null) }));
 
@@ -358,6 +366,60 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(result.goalFidelity).toBeUndefined();
       expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
     }
+  });
+
+// The follow-up is what carries a finding past this run's record — but the
+  // filer reaches the network, so a failure there must never change the run's
+  // own verdict.
+  describe('follow-up dispatch', () => {
+    beforeEach(() => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', missing: ['the retry'] }));
+    });
+
+    it('hands the follow-up the review, and records what it did on the run', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({
+        ran: true,
+        issue: { number: 42, url: 'https://example.com/issues/42', duplicate: false },
+        task: { id: 'cos-9' },
+      });
+      await finalize();
+      expect(runGoalFidelityFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+        agentId: 'agent-1', review: expect.objectContaining({ verdict: 'rethink' }),
+      }));
+      expect(completion().goalFidelity.followUp).toEqual({
+        issue: { number: 42, url: 'https://example.com/issues/42', duplicate: false },
+        taskId: 'cos-9',
+      });
+    });
+
+    it('records the reason when an arm could not run', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({ ran: true, issueError: 'gh unreachable', task: null, taskError: 'circuit open' });
+      await finalize();
+      expect(completion().goalFidelity.followUp).toEqual({ issueError: 'gh unreachable', taskError: 'circuit open' });
+    });
+
+    it('leaves no followUp key when nothing was configured', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({ ran: false });
+      await finalize();
+      expect(completion().goalFidelity.followUp).toBeUndefined();
+    });
+
+    it('a throwing follow-up does not change the run verdict', async () => {
+      runGoalFidelityFollowUpMock.mockRejectedValue(new Error('forge exploded'));
+      await finalize();
+      // Still held by the rethink verdict — and held for THAT reason, not the throw.
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+      expect(completion().goalFidelity.followUp).toBeUndefined();
+    });
+
+    // A ship verdict is still a verdict: the gate ran and cleared the run, so
+    // the follow-up is asked and declines on the trigger, not skipped here.
+    it('is consulted on a clean verdict too, and stays silent', async () => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'ship' }));
+      await finalize();
+      expect(runGoalFidelityFollowUpMock).toHaveBeenCalled();
+      expect(completion().success).toBe(true);
+    });
   });
 
   it('never re-judges a run that already failed — the original diagnosis is the better one', async () => {
