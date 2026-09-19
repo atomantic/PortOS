@@ -14,9 +14,11 @@ vi.mock('./notifications.js', () => ({
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { HIGH: 'high' },
 }));
+vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}) }));
 
 import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';
 import { addNotification, exists } from './notifications.js';
+import { ensureTaskThread } from './brainTaskThreads.js';
 
 const PR_URL = 'https://github.com/example-org/example-repo/pull/9';
 
@@ -53,6 +55,7 @@ describe('notifyIfPrLeftOrphaned', () => {
     }));
     // The block's own explanation is what tells the user how to unstick it.
     expect(addNotification.mock.calls[0][0].description).toContain("didn't resolve");
+    expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'sys-rl-1', priority: 'high' }));
   });
 
   // ~12 sites set `status: 'blocked'`; a follow-up blocked by max-retries or a

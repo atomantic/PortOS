@@ -1184,7 +1184,7 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
 
   if (isMergeFail) {
     const defaultBr = await git.getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
-    addTask({
+    const recoveryTask = await addTask({
       description: `${RECOVERY_TASK_PREFIX} Resolve merge conflict and clean up stale branch ${staleBranch} in ${appName}`,
       priority: 'HIGH',
       app: appId,
@@ -1198,8 +1198,10 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       useWorktree: false,
     }, 'user').catch(err => {
       emitLog('warn', `Failed to create merge recovery task: ${err.message}`, { agentId, staleBranch });
+      return null;
     });
     emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
+    return recoveryTask;
   } else {
     // PR/MR creation failed — spawn an agent to investigate and retry. Pick gh vs
     // glab based on the repo's forge so the recovery agent gets commands that
@@ -1218,7 +1220,7 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       ? `glab mr create --source-branch ${staleBranch} --target-branch ${targetBase} --title '...' --description '...'`
       : `gh pr create --head ${staleBranch} --base ${targetBase} --title '...' --body '...'`;
 
-    addTask({
+    const recoveryTask = await addTask({
       description: `${RECOVERY_TASK_PREFIX} Investigate and retry failed ${reqWord} for branch ${staleBranch} in ${appName}`,
       priority: 'HIGH',
       app: appId,
@@ -1231,7 +1233,9 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       useWorktree: false,
     }, 'user').catch(err => {
       emitLog('warn', `Failed to create ${reqWord} recovery task: ${err.message}`, { agentId, staleBranch });
+      return null;
     });
     emitLog('info', `🔧 Auto-created ${reqWord} recovery task for branch ${staleBranch}`, { agentId, appName, cli });
+    return recoveryTask;
   }
 }

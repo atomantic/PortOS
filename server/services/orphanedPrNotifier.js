@@ -25,6 +25,7 @@
 
 import { addNotification, exists as notificationExists, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
+import { ensureTaskThread } from './brainTaskThreads.js';
 
 /**
  * Raise a notification when a task that was going to merge a PR gets blocked.
@@ -62,6 +63,13 @@ export async function notifyIfPrLeftOrphaned({ task, previousStatus } = {}) {
     priority: PRIORITY_LEVELS.HIGH,
     link: prUrl,
     metadata: { taskId: task.id, prUrl, prBranch: task.metadata?.reviewLoopPRBranch },
+  });
+  await ensureTaskThread({
+    taskId: task.id,
+    title: 'PR left open: its merge follow-up was blocked',
+    nextAction: 'Fix the blocked merge follow-up or land the pull request manually.',
+    notes: `${prUrl}\n${why}`,
+    priority: 'high',
   });
   return true;
 }
