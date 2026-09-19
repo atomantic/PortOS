@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  MIND_BUNDLE_MAGIC,
-  MIND_BUNDLE_PASSPHRASE_MIN_CHARS,
-  openMindBundle,
-  readMindBundleHeader,
-  sealMindBundle,
-} from './mindBundleCrypto.js';
+import { openMindBundle, readMindBundleHeader, sealMindBundle } from './mindBundleCrypto.js';
+import { MIND_BUNDLE_MAGIC, MIND_BUNDLE_PASSPHRASE_MIN_CHARS } from './mindBundleFormat.js';
 
 // Obviously-fake fixture. Never a record read out of a live install.
 const PASSPHRASE = 'correct horse battery staple';

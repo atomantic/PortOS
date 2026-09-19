@@ -37,41 +37,27 @@
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
+import {
+  MIND_BUNDLE_CONTAINER_VERSION,
+  MIND_BUNDLE_KDF,
+  MIND_BUNDLE_MAGIC,
+  MIND_BUNDLE_MAX_CHARS,
+  MIND_BUNDLE_PASSPHRASE_MAX_CHARS,
+  MIND_BUNDLE_PASSPHRASE_MIN_CHARS,
+  MIND_BUNDLE_PAYLOAD_VERSION,
+  MIND_BUNDLE_REFUSALS,
+  PERSISTENT_MIND_BUNDLE_SCOPES,
+  mindBundleRefusal,
+} from './mindBundleFormat.js';
 
 const scryptAsync = promisify(scrypt);
-
-export const MIND_BUNDLE_MAGIC = 'portos-mind-bundle';
-export const MIND_BUNDLE_CONTAINER_VERSION = 1;
-export const MIND_BUNDLE_PAYLOAD_VERSION = 1;
-export const MIND_BUNDLE_FILE_EXTENSION = '.portos-mind';
-
-/**
- * The scope vocabulary is part of the container contract — it is declared in the
- * cleartext header, so a destination can refuse a scope it cannot apply. Memory
- * export is opt-in (epic #7620): protected memories quote private conversation.
- */
-export const PERSISTENT_MIND_BUNDLE_SCOPES = Object.freeze(['profile', 'avatar', 'memories']);
-export const DEFAULT_PERSISTENT_MIND_BUNDLE_SCOPES = Object.freeze(['profile', 'avatar']);
-
-/**
- * A short passphrase makes the scrypt work factor irrelevant. 12 characters is
- * the floor; the UI says so before the field is ever filled in.
- */
-export const MIND_BUNDLE_PASSPHRASE_MIN_CHARS = 12;
-export const MIND_BUNDLE_PASSPHRASE_MAX_CHARS = 512;
 
 const CIPHER = 'aes-256-gcm';
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const SALT_BYTES = 16;
-const KEY_BYTES = 32;
+const KEY_BYTES = MIND_BUNDLE_KDF.keyBytes;
 
-/**
- * scrypt cost, recorded in the cleartext header so a bundle sealed by a future
- * install that raises them still opens here (the parameters travel with the
- * file) while a bundle declaring absurd ones is refused rather than executed.
- */
-export const MIND_BUNDLE_KDF = Object.freeze({ name: 'scrypt', N: 32_768, r: 8, p: 1, keyBytes: KEY_BYTES });
 // 128 * N * r, with headroom. Node's 32 MB default is below what N=32768 needs.
 const SCRYPT_MAXMEM = 96 * 1024 * 1024;
 // Refuse a header asking for more work than the honest ceiling above: an
@@ -82,21 +68,21 @@ const sha256Hex = (buffer) => createHash('sha256').update(buffer).digest('hex');
 
 function requirePassphrase(passphrase) {
   if (typeof passphrase !== 'string' || passphrase.length < MIND_BUNDLE_PASSPHRASE_MIN_CHARS) {
-    throw new Error(`Mind bundle passphrase must be at least ${MIND_BUNDLE_PASSPHRASE_MIN_CHARS} characters`);
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.PASSPHRASE_INVALID, `Mind bundle passphrase must be at least ${MIND_BUNDLE_PASSPHRASE_MIN_CHARS} characters`);
   }
   if (passphrase.length > MIND_BUNDLE_PASSPHRASE_MAX_CHARS) {
-    throw new Error(`Mind bundle passphrase must be at most ${MIND_BUNDLE_PASSPHRASE_MAX_CHARS} characters`);
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.PASSPHRASE_INVALID, `Mind bundle passphrase must be at most ${MIND_BUNDLE_PASSPHRASE_MAX_CHARS} characters`);
   }
   return passphrase;
 }
 
 function deriveBundleKey(passphrase, salt, kdf) {
-  if (kdf.name !== 'scrypt') throw new Error(`Unsupported mind bundle key derivation "${kdf.name}"`);
+  if (kdf.name !== 'scrypt') throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.KDF_UNSUPPORTED, `Unsupported mind bundle key derivation "${kdf.name}"`);
   if (!Number.isInteger(kdf.N) || kdf.N < 2 || kdf.N > MAX_ACCEPTED_KDF_N
       || !Number.isInteger(kdf.r) || kdf.r < 1 || kdf.r > 32
       || !Number.isInteger(kdf.p) || kdf.p < 1 || kdf.p > 16
       || kdf.keyBytes !== KEY_BYTES) {
-    throw new Error('Mind bundle declares key-derivation parameters this install will not run');
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.KDF_UNSUPPORTED, 'Mind bundle declares key-derivation parameters this install will not run');
   }
   return scryptAsync(passphrase, salt, KEY_BYTES, {
     N: kdf.N, r: kdf.r, p: kdf.p, maxmem: SCRYPT_MAXMEM,
@@ -174,40 +160,44 @@ const isPlainRecord = (value) => Boolean(value) && typeof value === 'object' && 
  * the user for one. Returns `{ header, headerLine, ciphertext, tag }`.
  */
 export function readMindBundleHeader(text) {
-  if (typeof text !== 'string' || !text.trim()) throw new Error('Mind bundle is empty');
+  if (typeof text !== 'string' || !text.trim()) throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.NOT_A_BUNDLE, 'Mind bundle is empty');
+  // Refuse by length before running scrypt over a file from somewhere else.
+  if (text.length > MIND_BUNDLE_MAX_CHARS) {
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.TOO_LARGE, `Mind bundle is larger than this install will open (limit ${MIND_BUNDLE_MAX_CHARS} characters)`);
+  }
   const [magicLine, headerLine, ciphertextB64, tagB64] = text.split('\n');
   const [magic, containerVersion] = String(magicLine || '').split('/');
-  if (magic !== MIND_BUNDLE_MAGIC) throw new Error('This file is not a PortOS Mind bundle');
+  if (magic !== MIND_BUNDLE_MAGIC) throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.NOT_A_BUNDLE, 'This file is not a PortOS Mind bundle');
   if (Number(containerVersion) !== MIND_BUNDLE_CONTAINER_VERSION) {
-    throw new Error(`Mind bundle container version ${containerVersion} is not supported by this install (expected ${MIND_BUNDLE_CONTAINER_VERSION})`);
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.VERSION_UNSUPPORTED, `Mind bundle container version ${containerVersion} is not supported by this install (expected ${MIND_BUNDLE_CONTAINER_VERSION})`);
   }
-  if (!headerLine || !ciphertextB64 || !tagB64) throw new Error('Mind bundle is truncated or damaged');
+  if (!headerLine || !ciphertextB64 || !tagB64) throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.DAMAGED, 'Mind bundle is truncated or damaged');
 
   const header = JSON.parse(headerLine);
   if (!isPlainRecord(header) || header.magic !== MIND_BUNDLE_MAGIC
       || header.containerVersion !== MIND_BUNDLE_CONTAINER_VERSION) {
-    throw new Error('Mind bundle header does not describe a PortOS Mind bundle');
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.NOT_A_BUNDLE, 'Mind bundle header does not describe a PortOS Mind bundle');
   }
   if (header.payloadVersion !== MIND_BUNDLE_PAYLOAD_VERSION) {
-    throw new Error(`Mind bundle payload version ${header.payloadVersion} is not supported by this install (expected ${MIND_BUNDLE_PAYLOAD_VERSION})`);
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.VERSION_UNSUPPORTED, `Mind bundle payload version ${header.payloadVersion} is not supported by this install (expected ${MIND_BUNDLE_PAYLOAD_VERSION})`);
   }
   if (!Array.isArray(header.scopes) || header.scopes.length === 0
       || header.scopes.some((scope) => !PERSISTENT_MIND_BUNDLE_SCOPES.includes(scope))) {
-    throw new Error('Mind bundle declares a scope this install does not understand');
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.UNKNOWN_SCOPE, 'Mind bundle declares a scope this install does not understand');
   }
   if (!isPlainRecord(header.cipher) || header.cipher.name !== CIPHER || typeof header.cipher.ivB64 !== 'string') {
-    throw new Error('Mind bundle declares a cipher this install does not support');
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.CIPHER_UNSUPPORTED, 'Mind bundle declares a cipher this install does not support');
   }
   if (!isPlainRecord(header.kdf) || typeof header.kdf.saltB64 !== 'string') {
-    throw new Error('Mind bundle is missing its key-derivation parameters');
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.KDF_UNSUPPORTED, 'Mind bundle is missing its key-derivation parameters');
   }
-  if (!Array.isArray(header.manifest)) throw new Error('Mind bundle is missing its entry manifest');
+  if (!Array.isArray(header.manifest)) throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.DAMAGED, 'Mind bundle is missing its entry manifest');
 
   const ciphertext = Buffer.from(ciphertextB64, 'base64');
   const tag = Buffer.from(tagB64, 'base64');
   const iv = Buffer.from(header.cipher.ivB64, 'base64');
   if (tag.length !== TAG_BYTES || iv.length !== IV_BYTES || ciphertext.length === 0) {
-    throw new Error('Mind bundle is truncated or damaged');
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.DAMAGED, 'Mind bundle is truncated or damaged');
   }
   return { header, headerLine, ciphertext, tag, iv };
 }
@@ -225,17 +215,26 @@ export async function openMindBundle({ text, passphrase }) {
   const decipher = createDecipheriv(CIPHER, key, iv);
   decipher.setAAD(Buffer.from(headerLine, 'utf8'));
   decipher.setAuthTag(tag);
-  const payload = JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8'));
+  // GCM cannot tell a wrong passphrase from a modified file, and neither may
+  // this refusal: naming which one it was would make the error an oracle for
+  // anyone holding the file. `final()` throws synchronously, so the
+  // translation rides a promise chain rather than a try/catch (AGENTS.md).
+  const plaintext = await Promise.resolve()
+    .then(() => Buffer.concat([decipher.update(ciphertext), decipher.final()]))
+    .catch(() => {
+      throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.AUTH_FAILED, 'Could not open this Mind bundle: the passphrase is wrong, or the file changed after it was sealed.');
+    });
+  const payload = JSON.parse(plaintext.toString('utf8'));
 
   if (!isPlainRecord(payload) || payload.payloadVersion !== MIND_BUNDLE_PAYLOAD_VERSION || !Array.isArray(payload.entries)) {
-    throw new Error('Mind bundle payload is not in a shape this install understands');
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.PAYLOAD_UNSUPPORTED, 'Mind bundle payload is not in a shape this install understands');
   }
   const entries = payload.entries.map((entry) => {
     const data = Buffer.from(entry.dataB64, 'base64');
     const digest = Buffer.from(sha256Hex(data), 'utf8');
     const declared = Buffer.from(String(entry.sha256), 'utf8');
     if (digest.length !== declared.length || !timingSafeEqual(digest, declared)) {
-      throw new Error(`Mind bundle entry "${entry.name}" failed its integrity check`);
+      throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.INTEGRITY_FAILED, `Mind bundle entry "${entry.name}" failed its integrity check`);
     }
     return { name: entry.name, data };
   });
