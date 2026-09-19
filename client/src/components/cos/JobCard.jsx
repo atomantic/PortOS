@@ -22,14 +22,6 @@ const SCHEDULE_MODE_OPTIONS = [
   { value: 'cron', label: 'Cron' }
 ];
 
-export const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-export const AUTONOMY_OPTIONS = [
-  { value: 'standby', label: 'Standby', desc: 'Creates tasks but waits for approval' },
-  { value: 'assistant', label: 'Assistant', desc: 'Creates tasks, notifies you' },
-  { value: 'manager', label: 'Manager', desc: 'Executes tasks autonomously' },
-  { value: 'yolo', label: 'YOLO', desc: 'Full autonomy, no guardrails' }
-];
-
 export const TRIGGER_ACTION_OPTIONS = [
   { value: 'log-only', label: 'Log Only' },
   { value: 'spawn-agent', label: 'Spawn Agent' },
@@ -546,24 +538,6 @@ export default function JobCard({
                     {isScript && <option value="script">Script Handler</option>}
                   </select>
                 )}
-                <select
-                  aria-label="Priority"
-                  value={editData.priority}
-                  onChange={e => setEditData(d => ({ ...d, priority: e.target.value }))}
-                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                >
-                  {PRIORITY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
-                {editData.type !== 'shell' && (
-                  <select
-                    aria-label="Autonomy level"
-                    value={editData.autonomyLevel}
-                    onChange={e => setEditData(d => ({ ...d, autonomyLevel: e.target.value }))}
-                    className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                  >
-                    {AUTONOMY_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                  </select>
-                )}
               </div>
               <ScheduleFields data={editData} timezone={timezone} onChange={(key, val) => setEditData(d => ({ ...d, [key]: val }))} />
               {isAgentJobType(editData.type) && !hasFixedApp && (
@@ -672,8 +646,6 @@ export default function JobCard({
                 </div>
               )}
               <div className="flex flex-wrap gap-4 text-xs text-gray-500">
-                <span>Priority: <span className="text-gray-300">{job.priority}</span></span>
-                {!isShell && <span>Autonomy: <span className="text-gray-300">{job.autonomyLevel}</span></span>}
                 {isAgentJobType(job.type) && job.providerId && (
                   <span>AI: <span className="text-gray-300">{providers?.find(p => p.id === job.providerId)?.name || job.providerId}{job.model ? ` / ${job.model}` : ''}{job.effort ? ` · ${job.effort}` : ''}</span></span>
                 )}
