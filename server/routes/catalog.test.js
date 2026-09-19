@@ -325,6 +325,113 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
   });
 });
 
+describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe binding + relations (#7615)', () => {
+  const UNI = `commit-uni-${NONCE}`;
+  afterAll(async () => {
+    await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = $1', [UNI]).catch(() => {});
+    await query('DELETE FROM universes WHERE id = $1', [UNI]).catch(() => {});
+  });
+
+  it('links every committed ingredient to the universe with the type-derived role, and clusters the batch with related-to edges', async () => {
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [UNI, `Commit Universe ${NONCE}`]);
+    const scrap = await catalogDB.createScrap({ rawText: `Commit binding source ${NONCE}` });
+    createdScrapIds.add(scrap.id);
+
+    const r = await request(makeApp())
+      .post(`/api/catalog/scraps/${scrap.id}/commit`)
+      .send({
+        accepted: [
+          { type: 'character', name: `Commit Hero ${NONCE}` },
+          { type: 'idea', name: `Commit Idea ${NONCE}` },
+        ],
+        universeRef: UNI,
+      });
+
+    expect(r.status).toBe(201);
+    expect(r.body.ingredients).toHaveLength(2);
+    const [hero, idea] = r.body.ingredients;
+    createdIngredientIds.add(hero.id);
+    createdIngredientIds.add(idea.id);
+
+    const heroRefs = await catalogDB.listRefsForIngredient(hero.id);
+    expect(heroRefs).toEqual([expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'canon-character' })]);
+    const ideaRefs = await catalogDB.listRefsForIngredient(idea.id);
+    expect(ideaRefs).toEqual([expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'reference' })]);
+
+    // HAS_ANY_HOMING_REF is true for both — neither buckets as unlinked (#7615 core symptom).
+    const facets = await request(makeApp()).get('/api/catalog/facets');
+    const uniBucket = facets.body.universes.find((u) => u.refId === UNI);
+    expect(uniBucket?.count).toBeGreaterThanOrEqual(2);
+
+    // A single scrap's extractions form a connected cluster: one related-to
+    // edge for the pair, direction = lexicographically smaller id first.
+    const heroRelations = await catalogDB.listRelationsForIngredient(hero.id);
+    const [smallerId, largerId] = [hero.id, idea.id].sort();
+    const edge = [...heroRelations.outbound, ...heroRelations.inbound].find((e) => e.kind === 'related-to');
+    expect(edge).toBeTruthy();
+    expect(edge.fromId).toBe(smallerId);
+    expect(edge.toId).toBe(largerId);
+  });
+
+  it('omitting universeRef reproduces prior behavior exactly — source link only, no homing ref', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: `Commit no-universe source ${NONCE}` });
+    createdScrapIds.add(scrap.id);
+
+    const r = await request(makeApp())
+      .post(`/api/catalog/scraps/${scrap.id}/commit`)
+      .send({ accepted: [{ type: 'idea', name: `Commit Unbound Idea ${NONCE}` }] });
+
+    expect(r.status).toBe(201);
+    const ing = r.body.ingredients[0];
+    createdIngredientIds.add(ing.id);
+
+    const refs = await catalogDB.listRefsForIngredient(ing.id);
+    expect(refs).toHaveLength(0);
+    const sources = await catalogDB.listSourcesForIngredient(ing.id);
+    expect(sources).toHaveLength(1);
+  });
+
+  it('mints no relation edges for a single-item batch or a batch over the 25-row bound', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: `Commit bound source ${NONCE}` });
+    createdScrapIds.add(scrap.id);
+    const accepted = Array.from({ length: 26 }, (_, i) => ({ type: 'idea', name: `Commit Bound Idea ${i} ${NONCE}` }));
+
+    const r = await request(makeApp())
+      .post(`/api/catalog/scraps/${scrap.id}/commit`)
+      .send({ accepted });
+
+    expect(r.status).toBe(201);
+    expect(r.body.ingredients).toHaveLength(26);
+    for (const ing of r.body.ingredients) createdIngredientIds.add(ing.id);
+
+    for (const ing of r.body.ingredients) {
+      const rel = await catalogDB.listRelationsForIngredient(ing.id);
+      expect(rel.outbound).toHaveLength(0);
+      expect(rel.inbound).toHaveLength(0);
+    }
+  });
+
+  it('rolls back every ingredient, ref, and relation edge on a mid-batch failure', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: `Commit rollback source ${NONCE}` });
+    createdScrapIds.add(scrap.id);
+    // A null `name` clears the route/Zod boundary (commitScrap itself does no
+    // input validation — that's the route layer's job) but violates the
+    // `catalog_ingredients.name TEXT NOT NULL` DB constraint on the second
+    // insert, forcing a real mid-transaction failure.
+    await expect(catalogDB.commitScrap({
+      scrapId: scrap.id,
+      accepted: [
+        { type: 'idea', name: `Commit Rollback First ${NONCE}` },
+        { type: 'idea', name: null },
+      ],
+      universeRef: UNI,
+    })).rejects.toThrow();
+
+    const { items } = await catalogDB.listIngredients({ query: `Commit Rollback First ${NONCE}` });
+    expect(items).toHaveLength(0); // the first insert did not survive the rollback
+  });
+});
+
 describe.skipIf(!runDb)('GET /api/catalog/facets + ingredient filters (#1762)', () => {
   const UNI = `route-uni-${NONCE}`;
   afterAll(async () => {
