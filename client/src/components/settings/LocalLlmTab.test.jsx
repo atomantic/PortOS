@@ -19,6 +19,14 @@ vi.mock('../models/ModelAbuseGuardPanel.jsx', () => ({
 vi.mock('../models/JevPanel.jsx', () => ({
   default: () => <div data-testid="jev-view">jev</div>,
 }));
+// jev is an optional, default-OFF instance feature, so which pills the bar
+// advertises depends on live feature state rather than the static view list.
+const disabledFeatures = new Set();
+vi.mock('../../hooks/useInstanceFeatures.js', () => ({
+  useInstanceFeatures: () => ({
+    isFeatureEnabled: (featureId) => !featureId || !disabledFeatures.has(featureId),
+  }),
+}));
 
 import { LocalLlmTab } from './LocalLlmTab';
 
@@ -36,6 +44,7 @@ const renderTab = (view) => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  disabledFeatures.clear();
 });
 
 describe('LocalLlmTab view dispatch', () => {
@@ -76,6 +85,29 @@ describe('LocalLlmTab view dispatch', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/abuse');
     fireEvent.click(screen.getByRole('tab', { name: 'jev' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/jev');
+  });
+
+  // Settings > Features ships jev OFF, precisely so a fresh install does not
+  // advertise a page whose model is a ~9 GB download. The manifest entry is
+  // feature-tagged, so the sidebar and ⌘K already drop it; the pill bar is the
+  // third browse surface and has to apply the same gate or the opt-out leaks.
+  it('drops the jev pill while the feature is disabled', () => {
+    disabledFeatures.add('jev');
+    renderTab();
+
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard']);
+  });
+
+  // Gating covers BROWSE surfaces only. A bookmark, a shared link, or voice
+  // `ui_navigate` still resolves /models/llms/jev, so the panel must mount —
+  // and its pill must stay visible while it is the one on screen, or the tab
+  // bar would render with nothing selected.
+  it('still mounts jev from a direct URL while the feature is disabled', () => {
+    disabledFeatures.add('jev');
+    renderTab('jev');
+
+    expect(screen.getByTestId('jev-view')).toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard', 'jev']);
   });
 
   it('describes the selected panel under the pills', () => {
