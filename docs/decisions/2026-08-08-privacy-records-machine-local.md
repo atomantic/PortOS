@@ -92,6 +92,30 @@ that no user-authored text may ever be addressed to a peer: its one scoped
 carve-out, submitted image/video job bodies, is decided in ADR
 [federated visual prompts](./2026-08-20-federated-visual-prompts.md) (#4682).
 
+### Covered paths beyond the Privacy Center tables
+
+The rule was written for the nine `privacy_*` tables, but it governs a *class* of
+record — private data about the operator, held on one machine — not a table
+prefix. Later work has added derived records of the same class, each with its own
+guard test modelled on `privacyNeverFederates.test.js`:
+
+| Path | What it holds | Guard |
+|---|---|---|
+| the nine `privacy_*` tables | the PII vault, orgs, holdings, broker cases | `privacyNeverFederates.test.js` |
+| `beeper_*` tables | mirrored conversation bodies and attachment metadata | `beeperNeverFederates.test.js` |
+| `ai_connections` / `ai_*_bindings` | this machine's endpoints and credential material | `providerGraphNeverFederates.test.js` |
+| **`data/jev/`** (#7689) | **trained project heads, their training corpora, and cached frozen-encoder outputs** | `jevNeverFederates.test.js` |
+
+`data/jev/` earns its place for a reason worth stating: nothing in it *looks* like
+PII. A corpus is this install's merged pull requests, closed-unmerged ones and
+issues closed as not planned, rendered as premises; a trained head is a few
+thousand floats fit on exactly that. Both are **derived records of private
+repository history and the operator's own judgement calls about what was worth
+shipping** — a corpus quotes it directly, and a head encodes it. Pooling corpora
+across peers to train a better shared head is the obvious feature request and is
+refused for the same reason the vault is: it would move that history across the
+federation layer, and a model's weights are not an anonymization step.
+
 ### Why not "federate, but gate it on HTTPS + the instance password"
 
 This was seriously considered, and the machinery for it already exists: the

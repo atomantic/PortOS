@@ -211,7 +211,26 @@ export const DEFAULT_EXCLUDES = [
   // directory that turns a nightly snapshot into an hour.
   // Overridable, because an archive of a conversation is more useful with its
   // photos in it, and someone keeping one may well want to pay for them.
-  { path: '/beeper/attachments/', reason: 'Beeper attachment byte mirror — a lazy cache re-fetchable from Beeper Desktop; the message bodies and attachment metadata live in Postgres and ARE backed up', overridable: true }
+  { path: '/beeper/attachments/', reason: 'Beeper attachment byte mirror — a lazy cache re-fetchable from Beeper Desktop; the message bodies and attachment metadata live in Postgres and ARE backed up', overridable: true },
+  // Anchored with a leading `/`, like every entry here — an unanchored
+  // `corpora/` would match at any depth and silently drop unrelated user data.
+  //
+  // Two of the three jev directories are excluded and the third is deliberately
+  // NOT, because they fail differently:
+  //
+  //   corpora/     a snapshot of forge history, rebuildable by `gh` reads.
+  //                Overridable: the forge moves on, so someone archiving a
+  //                measured adoption decision may well want the exact corpus
+  //                the numbers came from.
+  //   embeddings/  frozen-encoder outputs, keyed by (pair, model revision).
+  //                Pure cache — byte-identical on re-encode, and gigabytes.
+  //   heads/       NOT excluded. A trained head is a few thousand floats and
+  //                is NOT regenerable once its corpus is gone: the queries that
+  //                produced one a month ago return different rows today. It is
+  //                also the only artifact here an operator made a decision
+  //                about, on the strength of three measured numbers.
+  { path: '/jev/corpora/', reason: 'jev training corpora — rebuildable from the forge by scripts/jev-corpus.js. Trained heads in data/jev/heads/ are NOT excluded: a head is not regenerable once its corpus is stale.', overridable: true },
+  { path: '/jev/embeddings/', reason: 'Cached frozen-encoder outputs for jev head training — keyed by (pair, model revision) and byte-identical on re-encode', overridable: false }
   // NOTE: legacy file→Postgres migration artifacts (`.imported` / `.bak-NNN`)
   // are intentionally NOT excluded here. They are deleted on disk by the
   // boot-time prune (pruneImportedLegacyFiles.js) the same boot the migration

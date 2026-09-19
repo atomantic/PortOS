@@ -61,6 +61,7 @@ import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/providerReadiness.js'
 import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
 import { JEV_MODEL, jevScoreRequestSchema } from '../lib/jev.js'
+import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import {
@@ -77,6 +78,8 @@ import {
 import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall } from '../services/modelAbuseGuard.js'
 import { cancelJevInstall, decide, getJevStatus, installJev, stopJevSidecar } from '../services/jev.js'
 import { readJevDecisionStats } from '../services/jevRouter.js'
+import { adoptJevHead, describeJevHeads, discardJevHead } from '../services/jevHeads.js'
+import { isJevTrainingRunning, trainScopeAdherenceHead } from '../services/jevTraining.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
@@ -311,6 +314,44 @@ router.post('/jev/score', asyncHandler(async (req, res) => {
 // Free the resident weights without waiting out the idle timer.
 router.post('/jev/unload', asyncHandler(async (_req, res) => {
   res.json({ unloaded: stopJevSidecar() })
+}))
+
+// ── Project-specific trained heads ────────────────────────────────────────
+// Every artifact under `data/jev/` is a derived record of this install's own
+// repository history. These routes report metrics and adoption state; none of
+// them returns a corpus row, a premise, or a path.
+router.get('/jev/heads', asyncHandler(async (_req, res) => {
+  res.json({ ...await describeJevHeads(), training: isJevTrainingRunning() })
+}))
+
+// An explicit operator action in the same request, per the AI Provider Usage
+// Policy — and the only path that builds a corpus or starts a training run.
+// Trains against THIS install's own checkout: a head learns the product the
+// operator is actually running, and there is no client-supplied path to reach
+// anything else.
+router.post('/jev/heads/train', asyncHandler(async (req, res) => {
+  const { architecture } = validateRequest(jevHeadTrainRequestSchema, req.body || {})
+  const result = await trainScopeAdherenceHead({ architecture })
+  if (!result?.ok) throw new ServerError('Training a project head failed.', { status: 502, code: result?.code || 'jev-head-training-failed' })
+  res.json(result)
+}))
+
+// THE ADOPTION GATE is in `adoptJevHead`, not here: a head that does not beat
+// both the stock zero-shot and the majority-class baseline cannot be promoted
+// through any surface, and hiding a button is a suggestion, not a gate.
+router.post('/jev/heads/adopt', asyncHandler(async (req, res) => {
+  const { decisionId } = validateRequest(jevHeadActionRequestSchema, req.body || {})
+  const result = await adoptJevHead(decisionId)
+  if (!result?.ok) throw new ServerError('This head cannot be adopted.', { status: 400, code: result?.code || 'jev-head-invalid' })
+  res.json({ adopted: true, decisionId, metrics: result.head.metrics })
+}))
+
+// Discarding the ADOPTED head returns the decision to the stock zero-shot
+// classifier — the state every install ships in, so nothing is lost but the
+// training run.
+router.post('/jev/heads/discard', asyncHandler(async (req, res) => {
+  const { decisionId, adopted } = validateRequest(jevHeadActionRequestSchema, req.body || {})
+  res.json(await discardJevHead(decisionId, { candidate: adopted !== true }))
 }))
 
 // GET /api/local-llm/huggingface-search?backend=ollama&q=qwen&category=coding

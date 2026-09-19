@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Circle, Download, ExternalLink, RefreshCw, Scale } from 'lucide-react';
+import { CheckCircle2, Circle, Download, ExternalLink, GraduationCap, RefreshCw, Scale } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, formatCount, formatPercent } from '../../utils/formatters';
 import {
+  adoptJevHead,
   cancelJevInstall,
+  discardJevHead,
   getJevDecisionStats,
+  getJevHeads,
   getJevStatus,
   installJev,
   scoreJev,
+  trainJevHead,
   unloadJev,
 } from '../../services/api';
 import socket from '../../services/socket';
@@ -33,6 +37,20 @@ const parseHypotheses = (text) => text.split('\n').map((line) => line.trim()).fi
 // unmeasured decision must not argue against itself.
 const formatRate = (rate) => formatPercent(rate === null ? null : rate * 100);
 
+// The one decision a project head can be trained for today. The triage
+// decisions share the same machinery but their cutover waits on shadow-mode
+// evidence, so there is deliberately nothing to pick between yet.
+const TRAINABLE_DECISION_ID = 'scope-adherence';
+
+// Why a measured head cannot be adopted, in the operator's words. Naming the
+// losing baseline matters: "did not beat the stock scorer" and "did not beat
+// always guessing the most common answer" send them to different places.
+const BLOCKER_LABELS = {
+  'jev-head-below-zero-shot': 'Did not beat the stock zero-shot scorer, which needs no corpus at all.',
+  'jev-head-below-majority-class': 'Did not beat always predicting the most common answer, so it learned the label balance rather than the product.',
+  'jev-head-metrics-invalid': 'This head carries no readable scores.',
+};
+
 export default function JevPanel() {
   const [status, setStatus] = useState(null);
   const [statusError, setStatusError] = useState(false);
@@ -45,6 +63,9 @@ export default function JevPanel() {
   const [scoring, setScoring] = useState(false);
   const [decision, setDecision] = useState(null);
   const [decisionStats, setDecisionStats] = useState(null);
+  const [headState, setHeadState] = useState(null);
+  const [training, setTraining] = useState(false);
+  const [headError, setHeadError] = useState('');
   const progressTimer = useRef(null);
 
   const loadStatus = useCallback(() => (
@@ -56,6 +77,14 @@ export default function JevPanel() {
       .catch(() => { setStatusError(true); return null; })
   ), []);
 
+  // Metrics and adoption state only — no corpus row, premise, or path crosses
+  // this boundary, so it is as safe to load on mount as the counters are.
+  const loadHeads = useCallback(() => (
+    getJevHeads({ silent: true })
+      .then((res) => { setHeadState(res); return res; })
+      .catch(() => { setHeadState(null); return null; })
+  ), []);
+
   useEffect(() => {
     let active = true;
     loadStatus();
@@ -63,6 +92,9 @@ export default function JevPanel() {
     getJevDecisionStats({ silent: true })
       .then((res) => { if (active) setDecisionStats(res); })
       .catch(() => { if (active) setDecisionStats(null); });
+    getJevHeads({ silent: true })
+      .then((res) => { if (active) setHeadState(res); })
+      .catch(() => { if (active) setHeadState(null); });
     return () => { active = false; };
   }, [loadStatus]);
 
@@ -124,6 +156,32 @@ export default function JevPanel() {
       // than as a toast: the operator is iterating on this input right here.
       .catch((error) => setDecision({ ok: false, code: error.message || 'jev-request-invalid' }))
       .finally(() => { setScoring(false); loadStatus(); });
+  };
+
+  const runTraining = () => {
+    setHeadError('');
+    setTraining(true);
+    return trainJevHead({}, { silent: true })
+      .then(() => loadHeads())
+      // Shown in the section beside the button, not as a toast: the operator is
+      // reading the three scores right here, and the reason a run produced none
+      // belongs with them.
+      .catch((error) => { setHeadError(error.message || 'Training failed.'); return loadHeads(); })
+      .finally(() => setTraining(false));
+  };
+
+  const adoptHead = (decisionId) => {
+    setHeadError('');
+    return adoptJevHead(decisionId, { silent: true })
+      .then(() => { toast.success('Project head adopted'); return loadHeads(); })
+      .catch((error) => { setHeadError(error.message || 'This head cannot be adopted.'); return loadHeads(); });
+  };
+
+  const discardHead = (decisionId, adopted) => {
+    setHeadError('');
+    return discardJevHead(decisionId, { adopted }, { silent: true })
+      .then(() => loadHeads())
+      .catch((error) => { setHeadError(error.message || 'Discard failed.'); return loadHeads(); });
   };
 
   const stages = stagesFromStatus(status);
@@ -304,6 +362,110 @@ export default function JevPanel() {
           </div>
         )}
         <a href="/models/llms/abuse" className="text-xs text-port-accent hover:underline">Set a source to Prefer in Content safety policies</a>
+      </div>
+
+      <div className="space-y-3 border-t border-port-border pt-4">
+        <h3 className="text-sm font-semibold text-white">Project-specific head</h3>
+        <p className="text-xs text-gray-400 max-w-2xl">
+          Fits a small classifier on the frozen scorer using this machine&rsquo;s own history — merged pull requests,
+          closed-unmerged ones, and issues closed as not planned or parked — so scope adherence learns <em>this</em>{' '}
+          codebase&rsquo;s notion of in-scope instead of answering zero-shot. Everything stays on this machine: the corpus,
+          the cached embeddings and the trained head never leave it and never reach a peer.
+        </p>
+        <p className="text-xs text-gray-400 max-w-2xl">
+          A trained head is <strong>only adoptable if it beats both baselines</strong> on a held-out set it was never
+          trained on — the stock zero-shot scorer and always predicting the most common answer. A head that does not is
+          discarded, which is an ordinary result rather than a failure.
+        </p>
+
+        {(headState?.heads || []).length === 0 ? (
+          <p className="text-xs text-gray-500">No project head trained on this machine. Scope adherence answers zero-shot.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs" data-testid="jev-head-table">
+              <thead>
+                <tr className="text-gray-400 text-left">
+                  <th scope="col" className="py-1 pr-3 font-medium">Head</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Trained</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Zero-shot</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Majority class</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {headState.heads.map((row) => (
+                  <tr key={`${row.decisionId}-${row.adopted}`} className="border-t border-port-border/60 text-gray-300 align-top">
+                    <th scope="row" className="py-1.5 pr-3 font-normal text-white">
+                      {row.decisionId}
+                      <span className="block text-[11px] text-gray-500">
+                        {row.adopted ? 'Adopted' : 'Candidate'}
+                        {row.ok && row.compatible === false && ' · fit on a different model revision'}
+                      </span>
+                    </th>
+                    {row.ok ? (
+                      <>
+                        <td className="py-1.5 pr-3 text-white">{formatRate(row.metrics.trained)}</td>
+                        <td className="py-1.5 pr-3">{formatRate(row.metrics.stockZeroShot)}</td>
+                        <td className="py-1.5 pr-3">{formatRate(row.metrics.majorityClass)}</td>
+                      </>
+                    ) : (
+                      <td className="py-1.5 pr-3 text-port-warning" colSpan={3}>Unreadable: {row.code}</td>
+                    )}
+                    <td className="py-1.5 pr-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {!row.adopted && row.ok && (
+                          <button
+                            type="button"
+                            onClick={() => adoptHead(row.decisionId)}
+                            disabled={row.beatsBaselines !== true || row.compatible === false}
+                            className="px-2 py-0.5 text-[11px] bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Adopt
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => discardHead(row.decisionId, row.adopted)}
+                          className="px-2 py-0.5 text-[11px] border border-port-border text-gray-300 rounded"
+                        >
+                          Discard
+                        </button>
+                      </div>
+                      {row.ok && row.blocker && (
+                        <p className="text-[11px] text-port-warning mt-1 max-w-xs">{BLOCKER_LABELS[row.blocker] || row.blocker}</p>
+                      )}
+                      {row.ok && (
+                        <p className="text-[11px] text-gray-500 mt-1">
+                          {formatCount(row.metrics.goldSize, { fallback: '0' })} held-out ·{' '}
+                          {formatCount(row.metrics.trainSize, { fallback: '0' })} trained
+                        </p>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={runTraining}
+            disabled={!ready || training || headState?.training === true}
+            className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+          >
+            <GraduationCap size={12} /> {training ? 'Training…' : 'Train a project head'}
+          </button>
+          {!ready && <span className="text-xs text-gray-500">Install jev first.</span>}
+          {training && (
+            <span className="flex items-center gap-1.5 text-xs text-gray-300">
+              <BrailleSpinner /> Reading this repository&rsquo;s history and encoding it once — minutes on a cold cache, seconds after.
+            </span>
+          )}
+          <span className="text-[11px] text-gray-500">Trains {TRAINABLE_DECISION_ID}. Never adopts on its own.</span>
+        </div>
+        {headError && <p role="alert" className="text-xs text-port-warning">{headError}</p>}
       </div>
 
       <div className="space-y-3 border-t border-port-border pt-4">

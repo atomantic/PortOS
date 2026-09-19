@@ -8,13 +8,20 @@ vi.mock('../../services/api', () => ({
   cancelJevInstall: vi.fn(),
   scoreJev: vi.fn(),
   unloadJev: vi.fn(),
+  getJevHeads: vi.fn(),
+  trainJevHead: vi.fn(),
+  adoptJevHead: vi.fn(),
+  discardJevHead: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
 }));
 
-import { cancelJevInstall, getJevDecisionStats, getJevStatus, installJev, scoreJev, unloadJev } from '../../services/api';
+import {
+  adoptJevHead, cancelJevInstall, discardJevHead, getJevDecisionStats, getJevHeads,
+  getJevStatus, installJev, scoreJev, trainJevHead, unloadJev,
+} from '../../services/api';
 import socket from '../../services/socket';
 import JevPanel from './JevPanel';
 
@@ -45,6 +52,27 @@ beforeEach(() => {
   installJev.mockResolvedValue({ ok: true, ready: true });
   cancelJevInstall.mockResolvedValue({ cancelled: true });
   unloadJev.mockResolvedValue({ unloaded: true });
+  getJevHeads.mockResolvedValue({ heads: [], training: false });
+  trainJevHead.mockResolvedValue({ ok: true });
+  adoptJevHead.mockResolvedValue({ adopted: true });
+  discardJevHead.mockResolvedValue({ ok: true, removed: true });
+});
+
+/** A described head as `GET /jev/heads` returns one. */
+const headRow = (overrides = {}) => ({
+  decisionId: 'scope-adherence',
+  adopted: false,
+  ok: true,
+  architecture: 'linear',
+  metrics: { trained: 0.71, stockZeroShot: 0.58, majorityClass: 0.52, goldSize: 40, trainSize: 120 },
+  corpusHash: 'deadbeefcafe0001',
+  corpusSources: ['merged-pr'],
+  trainedAt: '2026-09-19T00:00:00.000Z',
+  baseRevision: 'abc123',
+  compatible: true,
+  beatsBaselines: true,
+  blocker: null,
+  ...overrides,
 });
 
 const renderPanel = async () => {
@@ -194,5 +222,106 @@ describe('JevPanel decision agreement', () => {
     getJevDecisionStats.mockRejectedValue(new Error('unavailable'));
     await renderPanel();
     expect(await screen.findByText('No decisions measured yet on this machine.')).toBeInTheDocument();
+  });
+});
+
+describe('JevPanel project head', () => {
+  it('says scope adherence answers zero-shot when no head is trained', async () => {
+    await renderPanel();
+    expect(await screen.findByText(/answers zero-shot/)).toBeInTheDocument();
+    expect(screen.queryByTestId('jev-head-table')).not.toBeInTheDocument();
+  });
+
+  // The whole point of the feature's honesty: the operator sees the trained
+  // head NEXT TO both baselines it has to beat, not a single score.
+  it('shows the trained head beside both baselines', async () => {
+    getJevHeads.mockResolvedValue({ heads: [headRow()], training: false });
+    await renderPanel();
+    const row = within(await screen.findByTestId('jev-head-table')).getByRole('row', { name: /scope-adherence/ });
+    expect(row).toHaveTextContent('71%');
+    expect(row).toHaveTextContent('58%');
+    expect(row).toHaveTextContent('52%');
+    expect(row).toHaveTextContent('40 held-out');
+  });
+
+  it('adopts a candidate that beats both baselines', async () => {
+    getJevHeads.mockResolvedValue({ heads: [headRow()], training: false });
+    await renderPanel();
+    await screen.findByTestId('jev-head-table');
+    fireEvent.click(screen.getByRole('button', { name: 'Adopt' }));
+    await waitFor(() => expect(adoptJevHead).toHaveBeenCalledWith('scope-adherence', { silent: true }));
+  });
+
+  it('refuses to offer adoption for a head that lost to the stock zero-shot scorer', async () => {
+    getJevHeads.mockResolvedValue({
+      heads: [headRow({
+        metrics: { trained: 0.55, stockZeroShot: 0.62, majorityClass: 0.40, goldSize: 40, trainSize: 120 },
+        beatsBaselines: false,
+        blocker: 'jev-head-below-zero-shot',
+      })],
+      training: false,
+    });
+    await renderPanel();
+    await screen.findByTestId('jev-head-table');
+    expect(screen.getByRole('button', { name: 'Adopt' })).toBeDisabled();
+    expect(screen.getByText(/Did not beat the stock zero-shot scorer/)).toBeInTheDocument();
+    // Discard stays available: a head that lost is meant to be thrown away.
+    expect(screen.getByRole('button', { name: 'Discard' })).toBeEnabled();
+  });
+
+  it('refuses to offer adoption for a head that lost to the majority class', async () => {
+    getJevHeads.mockResolvedValue({
+      heads: [headRow({
+        metrics: { trained: 0.74, stockZeroShot: 0.61, majorityClass: 0.80, goldSize: 40, trainSize: 120 },
+        beatsBaselines: false,
+        blocker: 'jev-head-below-majority-class',
+      })],
+      training: false,
+    });
+    await renderPanel();
+    const table = await screen.findByTestId('jev-head-table');
+    expect(screen.getByRole('button', { name: 'Adopt' })).toBeDisabled();
+    // Scoped to the table: the section's intro prose explains the same rule, so
+    // an unscoped query would pass on the explanation rather than the verdict.
+    expect(within(table).getByText(/always predicting the most common answer/)).toBeInTheDocument();
+  });
+
+  // A head fit on a different encoder revision is a correct artifact for
+  // another checkpoint, so it is stated rather than hidden — an absence would
+  // read as "no head trained".
+  it('names an incompatible head instead of hiding it', async () => {
+    getJevHeads.mockResolvedValue({
+      heads: [headRow({ adopted: true, compatible: false, baseRevision: 'stale' })],
+      training: false,
+    });
+    await renderPanel();
+    const row = within(await screen.findByTestId('jev-head-table')).getByRole('row', { name: /scope-adherence/ });
+    expect(row).toHaveTextContent('fit on a different model revision');
+  });
+
+  it('cannot start a training run before jev is installed', async () => {
+    await renderPanel();
+    expect(await screen.findByRole('button', { name: /Train a project head/ })).toBeDisabled();
+  });
+
+  it('trains on an explicit click and reloads the head state without adopting', async () => {
+    getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true) }));
+    await renderPanel();
+    const button = await screen.findByRole('button', { name: /Train a project head/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    await act(async () => { fireEvent.click(button); });
+    expect(trainJevHead).toHaveBeenCalledWith({}, { silent: true });
+    // Training NEVER promotes: the run's only follow-up is re-reading state.
+    expect(adoptJevHead).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed training run beside the scores rather than as a toast', async () => {
+    getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true) }));
+    trainJevHead.mockRejectedValue(new Error('jev-corpus-too-small'));
+    await renderPanel();
+    const button = await screen.findByRole('button', { name: /Train a project head/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    await act(async () => { fireEvent.click(button); });
+    expect(await screen.findByRole('alert')).toHaveTextContent('jev-corpus-too-small');
   });
 });

@@ -10,9 +10,15 @@ It is deliberately a classifier, not an agent: it accepts no tools, fetches no
 URLs, executes no repository code, and never emits the premise or hypothesis
 text back in an error.
 
-  POST /score   {"premise": str, "hypotheses": [str, ...]}
+  POST /score   {"premise": str, "hypotheses": [str, ...], "head": str|None}
              -> {"schemaVersion": 1, "complete": true, "scores": [...]}
   GET  /health -> {"ready": bool, "model": str, "revision": str, "device": str}
+
+`head` names a project-specific trained head under `--heads-dir` (see
+`jev_head_kit.py`). It replaces the checkpoint's own classifier layer on a
+FROZEN encoder, emits the same three labels in the same order, and is refused
+outright when it was fit on a different model revision. Absent or null, the
+stock zero-shot classifier answers exactly as it always has.
 """
 
 import argparse
@@ -21,6 +27,14 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
+
+# This file's own directory, so the sibling import below resolves however the
+# script was loaded. A normal `python <path>` spawn already puts it on the path;
+# `runpy.run_path` (which the wire-contract test uses to drive this file with
+# synthetic model doubles) does not.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from jev_head_kit import HeadError, apply_head, load_head, pool_pair  # noqa: E402 - needs the sys.path line above.
 
 # Mirrors of the bounds in server/lib/jev.js. Repeated rather than imported so
 # this boundary still holds if the script is ever invoked directly.
@@ -51,6 +65,9 @@ def validate_request(payload):
         raise JevError("jev-request-invalid")
     premise = payload.get("premise")
     hypotheses = payload.get("hypotheses")
+    head = payload.get("head")
+    if head is not None and not isinstance(head, str):
+        raise JevError("jev-request-invalid")
     if not isinstance(premise, str) or not premise.strip():
         raise JevError("jev-request-invalid")
     if len(premise) > MAX_PREMISE_CHARS:
@@ -62,7 +79,7 @@ def validate_request(payload):
             raise JevError("jev-request-invalid")
         if len(hypothesis) > MAX_HYPOTHESIS_CHARS:
             raise JevError("jev-request-invalid")
-    return premise, hypotheses
+    return premise, hypotheses, head or None
 
 
 def load_state(model_dir: Path):
@@ -132,6 +149,19 @@ def resolve_window(tokenizer, config) -> int:
     return min(candidates)
 
 
+def score_with_head(state, head, premise: str, hypotheses):
+    """Score every pair through a trained head on the FROZEN encoder.
+
+    Identical contract to `score_pairs` — same labels, same order, same
+    response shape — so nothing on the Node side can tell which classifier
+    answered except by having asked for one.
+    """
+    return [
+        {"hypothesis": hypothesis, **apply_head(head, pool_pair(state, premise, hypothesis)[0])}
+        for hypothesis in hypotheses
+    ]
+
+
 def score_pairs(state, premise: str, hypotheses):
     """One forward pass per premise/hypothesis pair, in request order."""
     torch = state["torch"]
@@ -160,8 +190,21 @@ def score_pairs(state, premise: str, hypotheses):
     return scores
 
 
-def make_handler(state, model_id: str, revision: str):
+def make_handler(state, model_id: str, revision: str, heads_dir):
     lock = Lock()
+    # Validated heads, keyed by slug. A head is a few thousand floats, the
+    # revision gate has already run, and the alternative is re-reading and
+    # re-validating the same file on every forward pass.
+    head_cache = {}
+
+    def resolve_head(slug):
+        if slug is None:
+            return None
+        if heads_dir is None:
+            raise HeadError("jev-head-not-found")
+        if slug not in head_cache:
+            head_cache[slug] = load_head(heads_dir, slug, revision=revision)
+        return head_cache[slug]
 
     class JevHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -209,11 +252,21 @@ def make_handler(state, model_id: str, revision: str):
                 return
             raw = self.rfile.read(int(length))
             try:
-                premise, hypotheses = validate_request(json.loads(raw.decode("utf-8")))
+                premise, hypotheses, head_slug = validate_request(json.loads(raw.decode("utf-8")))
                 # One model, one accelerator queue: serialize so two concurrent
                 # callers cannot interleave forward passes on the same weights.
                 with lock:
-                    scores = score_pairs(state, premise, hypotheses)
+                    head = resolve_head(head_slug)
+                    scores = (score_with_head(state, head, premise, hypotheses) if head
+                              else score_pairs(state, premise, hypotheses))
+            except HeadError as error:
+                # A head failure is the operator's to fix and must never fall
+                # back to the stock classifier: they asked for the head that
+                # their adoption decision was measured on, and silently
+                # answering with a different one would make that measurement a
+                # lie. Reported as its own code, not as a scoring failure.
+                self._respond(400, {"error": error.code})
+                return
             except JevError as error:
                 self._respond(error.status, {"error": error.code})
                 return
@@ -232,6 +285,11 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--model-id", default="openjev")
     parser.add_argument("--revision", default="")
+    # Optional: the directory holding adopted project-specific heads. A request
+    # names a head by SLUG, never by path, and the slug is resolved inside this
+    # directory — so an install that passes no heads directory has no way to
+    # reach one, whatever a caller asks for.
+    parser.add_argument("--heads-dir", default=None)
     args = parser.parse_args()
 
     if args.host not in LOOPBACK_HOSTS:
@@ -242,8 +300,18 @@ def main() -> int:
     if not model_dir.is_dir():
         raise ValueError("model snapshot is unavailable")
 
+    # Deliberately NOT checked for existence here. The directory is created the
+    # first time a head is saved, which may be long after this process started —
+    # latching "no heads directory" at start-up would make a head adopted later
+    # unreachable until the next cold start. `load_head` reports
+    # `jev-head-not-found` when the file is absent, which is the same answer.
+    heads_dir = Path(args.heads_dir) if args.heads_dir else None
+
     state = load_state(model_dir)
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(state, args.model_id, args.revision))
+    server = ThreadingHTTPServer(
+        (args.host, args.port),
+        make_handler(state, args.model_id, args.revision, heads_dir),
+    )
     # The single readiness signal the Node service waits on before polling
     # /health. Nothing else is ever written to stdout.
     sys.stdout.write(json.dumps({"ready": True, "port": args.port, "device": state["device"]}) + "\n")

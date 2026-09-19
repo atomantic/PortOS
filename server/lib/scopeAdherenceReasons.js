@@ -48,6 +48,17 @@ export const SCOPE_ADHERENCE_REASONS = Object.freeze({
   'jev-request-invalid': 'The local scorer rejected the request for this change.',
   'jev-response-invalid': 'The local scorer returned an answer PortOS could not read.',
   'jev-premise-too-large': 'This change is too large for the local scorer to read at once.',
+  // A trained project head the scorer could not apply. Each one reads as "no
+  // advisory" and points at Models > LLMs > jev, where the head can be
+  // discarded — which returns the decision to the stock scorer immediately.
+  // Never answered by silently falling back: the operator adopted this head on
+  // three measured numbers, and quietly substituting a different classifier
+  // would make that measurement describe something other than what ran.
+  'jev-head-not-found': 'The adopted project head is missing — discard it in Models > LLMs > jev to go back to the stock scorer.',
+  'jev-head-invalid': 'The adopted project head could not be read — discard it in Models > LLMs > jev.',
+  'jev-head-too-large': 'The adopted project head is larger than PortOS will load — discard it in Models > LLMs > jev.',
+  'jev-head-unreadable': 'The adopted project head\'s file could not be read — discard it in Models > LLMs > jev.',
+  'jev-head-revision-mismatch': 'The adopted project head was trained on a different scorer version — retrain or discard it in Models > LLMs > jev.',
 });
 
 export const SCOPE_ADHERENCE_REASON_FALLBACK = 'The local scorer could not answer for this change.';

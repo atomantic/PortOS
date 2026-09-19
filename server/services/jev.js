@@ -49,6 +49,10 @@ import { diagnosePythonRuntimeText } from '../lib/pythonRuntimeDiagnosis.js';
 import { createVenv, detectVenvBasePythonSync, installPackages } from '../lib/pythonSetup.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { downloadHfRepo } from './hfDownload.js';
+// One path helper, from the module that owns the directory. Re-deriving
+// `data/jev/heads` here is how the sidecar's `--heads-dir` and the store's
+// writes end up pointing at two different directories.
+import { jevHeadsDir } from './jevHeads.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -132,6 +136,17 @@ function availableJevPython() {
   if (existsSync(FALLBACK_JEV_PYTHON)) return FALLBACK_JEV_PYTHON;
   return null;
 }
+
+/**
+ * The dedicated jev interpreter, or null.
+ *
+ * Exported for ONE caller: `services/jevTraining.js`, which has to run the head
+ * trainer under exactly the interpreter and environment the scorer runs under,
+ * or the "offline, no provider call, no second download" guarantee describes a
+ * process that is not the one executing. Nothing else may spawn against this
+ * venv — the sidecar lifecycle above owns it.
+ */
+export const jevPythonPath = () => availableJevPython();
 
 async function isBasePythonSupported(pythonPath) {
   if (!pythonPath) return false;
@@ -365,6 +380,11 @@ async function startSidecar() {
   // Every required file sits in the pinned subfolder, so its parent IS the
   // directory `from_pretrained` loads.
   const modelDir = dirname(files[0]);
+  // Where adopted project heads live. Passed as a path, never created here: the
+  // head store owns that directory, and the sidecar resolves a head inside it
+  // per request rather than latching its existence at start-up — so a head
+  // adopted while the sidecar is resident is reachable without a cold start.
+  const headsDir = jevHeadsDir();
 
   const proc = spawn(
     pythonPath,
@@ -375,6 +395,7 @@ async function startSidecar() {
       '--host', '127.0.0.1',
       '--model-id', JEV_MODEL.id,
       '--revision', JEV_MODEL.revision,
+      '--heads-dir', headsDir,
     ],
     safeChildProcessOptions({
       cwd: dirname(pythonPath),
@@ -434,8 +455,16 @@ function ensureSidecar() {
  *
  * Returns the per-hypothesis entailment distribution in REQUEST ORDER, or a
  * failure code. Never a Python traceback, never the premise, never a path.
+ *
+ * `head` names an adopted project-specific head (`services/jevHeads.js`) to
+ * apply in place of the checkpoint's own classifier, on the SAME frozen
+ * encoder. It is a slug the server resolved, never a caller-supplied path, and
+ * it is deliberately absent from `jevScoreRequestSchema`: which classifier
+ * answers a decision is an install-level adoption, not something an HTTP body
+ * may choose. The response shape is identical either way, so everything
+ * downstream — margins, abstention floors — is unchanged.
  */
-export async function scoreHypotheses({ premise, hypotheses, timeoutMs = JEV_REQUEST_TIMEOUT_MS } = {}) {
+export async function scoreHypotheses({ premise, hypotheses, head = null, timeoutMs = JEV_REQUEST_TIMEOUT_MS } = {}) {
   const parsed = jevScoreRequestSchema.safeParse({ premise, hypotheses });
   if (!parsed.success) {
     // The one length failure an operator can act on gets its own code; every
@@ -450,7 +479,11 @@ export async function scoreHypotheses({ premise, hypotheses, timeoutMs = JEV_REQ
   const response = await fetch(`${SIDECAR_ORIGIN}/score`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ premise: parsed.data.premise, hypotheses: parsed.data.hypotheses }),
+    body: JSON.stringify({
+      premise: parsed.data.premise,
+      hypotheses: parsed.data.hypotheses,
+      ...(typeof head === 'string' && head ? { head } : {}),
+    }),
     signal: AbortSignal.timeout(timeoutMs),
   }).catch((error) => (error?.name === 'TimeoutError' || error?.name === 'AbortError' ? 'timeout' : null));
 
@@ -480,11 +513,11 @@ function safeErrorCode(body) {
  * the top option anyway discards the only signal this service adds over a
  * coin flip.
  */
-export async function decide({ premise, options, minMargin } = {}) {
+export async function decide({ premise, options, minMargin, head = null } = {}) {
   // Checked BEFORE scoring: a single option has no runner-up, so there is no
   // margin to compute and no reason to pay for a forward pass to learn that.
   if (!Array.isArray(options) || options.length < 2) return failure('jev-request-invalid');
-  const scored = await scoreHypotheses({ premise, hypotheses: options });
+  const scored = await scoreHypotheses({ premise, hypotheses: options, head });
   if (!scored.ok) return scored;
   return decideFromScores(scored.scores, minMargin);
 }
