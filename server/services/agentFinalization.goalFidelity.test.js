@@ -21,6 +21,7 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn(),
   findPullRequestForBranch: vi.fn(async () => ({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: 'Closes #42' })),
   ensureForgeReachable: vi.fn(async () => ({ ok: true, status: 'ok' })),
+  getPullRequestState: vi.fn(async () => ({ status: 'known', state: 'MERGED', detail: null })),
 }));
 vi.mock('./gitlab.js', () => ({ findMergeRequestForBranch: vi.fn(), execGlab: vi.fn() }));
 vi.mock('./git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
@@ -91,7 +92,7 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
 }));
 
 import { execGit } from '../lib/execGit.js';
-import { execGh, findPullRequestForBranch } from './github.js';
+import { execGh, findPullRequestForBranch, getPullRequestState } from './github.js';
 import { execGlab } from './gitlab.js';
 import { resolveForgeForRepo } from './git.js';
 import { getAgentRecord } from './cosAgentLifecycle.js';
@@ -447,6 +448,58 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(runGoalFidelityFollowUpMock).toHaveBeenCalled();
       // fix-first is advisory — it records a finding without holding the run.
       expect(completion().success).toBe(true);
+    });
+  });
+
+  // #7653 — see `mergeOutcomeObjective` (lib/goalFidelity.js) for the run this
+  // gate wrongly held.
+  describe('a merge-shaped objective is settled by the forge, not by a diff', () => {
+    const mergeFollowUp = (metadata = {}) => ({
+      id: 'task-1',
+      taskType: 'internal',
+      description: '[Review Loop] Resolve and merge PR #7653 for PortOS',
+      metadata: {
+        reviewLoopFollowUp: true,
+        reviewLoopPRNumber: 7653,
+        reviewLoopPRBranch: 'claim/issue-7625',
+        ...metadata,
+      },
+    });
+
+    it('records a forge-established ship without reading a diff or calling a model', async () => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', unrequested: ['Resolve and merge PR #7653'] }));
+      await finalize({ task: mergeFollowUp() });
+
+      expect(getPullRequestState).toHaveBeenCalledWith('7653', { cwd: '/example/worktree', env: { GH_TOKEN: 'synthetic-token' } });
+      expect(runWindowDiffMock).not.toHaveBeenCalled();
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toMatchObject({ verdict: 'ship', source: 'forge-outcome' });
+      expect(completion().goalFidelity.model).toBeUndefined();
+      expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
+    });
+
+    it.each([
+      ['an unmerged PR', { status: 'known', state: 'OPEN', detail: null }],
+      ['an unreadable forge', { status: 'unavailable', state: null, detail: 'gh failed' }],
+    ])('leaves the run untouched and the model uncalled for %s', async (_label, view) => {
+      getPullRequestState.mockResolvedValue(view);
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink' }));
+      await finalize({ task: mergeFollowUp() });
+
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toBeUndefined();
+    });
+
+    // A leave-open follow-up's objective is the review fixes, which ARE ordinary
+    // diff — it must keep the model review a merge objective skips.
+    it('does not divert a leave-open follow-up, whose deliverable is a diff', async () => {
+      await finalize({ task: mergeFollowUp({ reviewLoopLeaveOpen: 'true' }) });
+
+      expect(getPullRequestState).not.toHaveBeenCalled();
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledOnce();
+      expect(completion().goalFidelity).toMatchObject({ verdict: 'ship', model: 'example-model' });
     });
   });
 

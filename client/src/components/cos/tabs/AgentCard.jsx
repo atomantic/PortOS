@@ -214,7 +214,11 @@ function GoalFidelityPanel({ review }) {
         <Target size={10} aria-hidden="true" />
         Goal fidelity: {tone.label}
         <span className="min-w-0 [overflow-wrap:anywhere] text-gray-500">
-          ({review.verdict}{review.model ? ` · ${review.model}` : ''}{review.diffTruncated ? ' · partial diff' : ''})
+          {/* A forge-established verdict has no reviewer model and read no diff —
+              say where it came from rather than leaving the reader to assume a
+              local model produced it. */}
+          ({review.verdict}{review.source === 'forge-outcome' ? ' · forge-verified' : ''}
+          {review.model ? ` · ${review.model}` : ''}{review.diffTruncated ? ' · partial diff' : ''})
         </span>
       </div>
       {review.missing?.length > 0 && (
