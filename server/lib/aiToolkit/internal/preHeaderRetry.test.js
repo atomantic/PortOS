@@ -98,6 +98,44 @@ describe('pre-header retry policy', () => {
     expect(fetchAttempt).toHaveBeenCalledTimes(2);
   });
 
+  it('replays a GOAWAY the dead attempt held past the elapsed budget', async () => {
+    // The regression: `maxElapsedMs` runs from the first attempt, so a gateway
+    // draining a connection it had held open for ~5s spent the whole 2s budget
+    // before the rejection even landed and the one promised replay never fired.
+    const goaway = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('HTTP/2: "GOAWAY" frame received with code 0'), { code: 'UND_ERR_SOCKET' }),
+    });
+    const ok = response(200);
+    const fetchAttempt = vi.fn().mockRejectedValueOnce(goaway).mockResolvedValueOnce(ok);
+    const now = vi.fn().mockReturnValueOnce(0).mockReturnValue(5121);
+
+    await expect(fetchWithPreHeaderRetry(fetchAttempt, { now, delay: vi.fn() })).resolves.toBe(ok);
+    expect(fetchAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it('still refuses the broad transport replay once the elapsed budget is spent', async () => {
+    // The other half of the carve-out: a reset may already have been processed,
+    // so a slow-failing host keeps its brake even for a local, keyless caller.
+    const reset = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+    });
+    const fetchAttempt = vi.fn().mockRejectedValue(reset);
+    const now = vi.fn().mockReturnValueOnce(0).mockReturnValue(5121);
+
+    await expect(fetchWithPreHeaderRetry(fetchAttempt, { allowReplay: true, now, delay: vi.fn() })).rejects.toBe(reset);
+    expect(fetchAttempt).toHaveBeenCalledOnce();
+  });
+
+  it('never replays a GOAWAY past the caller attempt ceiling', async () => {
+    const goaway = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('HTTP/2: "GOAWAY" frame received with code 0'), { code: 'UND_ERR_SOCKET' }),
+    });
+    const fetchAttempt = vi.fn().mockRejectedValue(goaway);
+
+    await expect(fetchWithPreHeaderRetry(fetchAttempt, { maxAttempts: 1, delay: vi.fn() })).rejects.toBe(goaway);
+    expect(fetchAttempt).toHaveBeenCalledOnce();
+  });
+
   it('keeps the rest of the transport family behind the local-and-keyless proof', async () => {
     // A reset may land after the upstream accepted the request, so replaying it
     // against a billable provider could bill a second generation.
