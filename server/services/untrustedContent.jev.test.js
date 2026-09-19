@@ -6,12 +6,15 @@
  * doubled, and that suite's whole point is that the chat path is unchanged when
  * neither exists.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFile, rm } from 'fs/promises';
+import { join } from 'path';
 import { z } from 'zod';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const mocks = vi.hoisted(() => ({
   scan: vi.fn(), fetch: vi.fn(), read: vi.fn(), providers: vi.fn(),
-  decide: vi.fn(), feature: vi.fn(), write: vi.fn(), readJson: vi.fn(),
+  decide: vi.fn(), feature: vi.fn(),
 }));
 vi.mock('./modelAbuseGuard.js', () => ({ runModelAbuseScan: mocks.scan }));
 vi.mock('./settings.js', () => ({ readSettingsStrict: mocks.read }));
@@ -19,14 +22,17 @@ vi.mock('./providers.js', () => ({ getAllProviders: mocks.providers }));
 vi.mock('./providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: async () => ({ success: true }) }));
 vi.mock('./jev.js', () => ({ decide: mocks.decide }));
 vi.mock('./instanceFeatures.js', () => ({ isInstanceFeatureEnabled: mocks.feature }));
-vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  atomicWrite: (...args) => mocks.write(...args),
-  readJSONFile: (...args) => mocks.readJson(...args),
-}));
+// The counters store runs for real against a temp data root, so these
+// assertions describe the bytes an install would actually keep — which is the
+// point of the privacy case below.
+const { makeProxy, tempRoot, cleanup } = mockPathsDataRoot({ prefix: 'portos-jev-shadow-' });
+vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 
 import { JEV_DECISIONS, jevHypotheses } from '../lib/jevDecisions.js';
-import { jevBatchGate, measureJevBatch, runUntrustedContentAnalysis } from './untrustedContent.js';
+// Dynamic: a static import is hoisted above `makeProxy`'s initializer, so the
+// mock factory would run before the temp data root exists.
+const { jevBatchGate, runUntrustedContentAnalysis } = await import('./untrustedContent.js');
+const { resetJevShadowCache } = await import('./jevRouter.js');
 
 const local = { id: 'local', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'example-text' };
 const dispositionSchema = z.object({
@@ -57,18 +63,22 @@ const withPolicy = (policy) => mocks.read.mockResolvedValue({
   corrupt: false, settings: { untrustedContent: { defaults: policy } },
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   vi.stubGlobal('fetch', mocks.fetch);
   mocks.read.mockResolvedValue({ corrupt: false, settings: {} });
   mocks.providers.mockResolvedValue({ providers: [local] });
   mocks.scan.mockResolvedValue({ ok: true, safe: true });
   mocks.feature.mockResolvedValue(true);
-  mocks.readJson.mockResolvedValue(null);
-  mocks.write.mockResolvedValue(undefined);
   mocks.fetch.mockImplementation(async () => completion('{"disposition":"defer","concerns":[]}'));
+  await rm(shadowFile, { force: true });
+  resetJevShadowCache();
 });
 afterEach(() => vi.unstubAllGlobals());
+afterAll(() => cleanup());
+
+const shadowFile = join(tempRoot, 'local-llm', 'jev-shadow.json');
+const readShadow = async () => JSON.parse(await readFile(shadowFile, 'utf8'));
 
 describe('jev rung of the untrusted-content ladder', () => {
   it('answers from the scorer with zero provider calls, and asks the shipped hypotheses in order', async () => {
@@ -96,6 +106,7 @@ describe('jev rung of the untrusted-content ladder', () => {
     });
     expect(mocks.decide).not.toHaveBeenCalled();
     expect(gate.decided.size).toBe(0);
+    expect(gate.pending).toHaveLength(1);
   });
 
   it('holds a destructive option to a wider margin than the option beside it', async () => {
@@ -157,7 +168,7 @@ describe('jev rung of the untrusted-content ladder', () => {
     mocks.feature.mockResolvedValue(false);
     expect(await runUntrustedContentAnalysis({ ...args, jev: jevPlan })).toMatchObject({ ok: true, providerId: 'local' });
     expect(mocks.decide).not.toHaveBeenCalled();
-    expect(mocks.write).not.toHaveBeenCalled();
+    await expect(readFile(shadowFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
     // Feature on, mode off: the chat model still answers, and the scorer's
     // discarded verdict is folded into counters afterwards.
@@ -167,8 +178,8 @@ describe('jev rung of the untrusted-content ladder', () => {
     expect(shadowed).toMatchObject({ ok: true, providerId: 'local', value: { disposition: 'defer' } });
     expect(shadowed.via).toBeUndefined();
     expect(mocks.decide).toHaveBeenCalledTimes(1);
-    const [, recorded] = mocks.write.mock.calls[0];
-    expect(recorded.decisions['forge-maintenance-disposition']).toMatchObject({ observed: 1, decided: 1, compared: 1, agreed: 1 });
+    expect((await readShadow()).decisions['forge-maintenance-disposition'])
+      .toMatchObject({ observed: 1, decided: 1, compared: 1, agreed: 1 });
   });
 
   it('records counts only — never a premise, a body or a choice tied to one', async () => {
@@ -182,9 +193,7 @@ describe('jev rung of the untrusted-content ladder', () => {
         decisions: [{ id: 'forge-maintenance-disposition', premise: 'Example discussion with a distinctive marker phrase.' }],
       },
     });
-    const [path, recorded] = mocks.write.mock.calls[0];
-    expect(path).toMatch(/jev-shadow\.json$/);
-    const serialized = JSON.stringify(recorded);
+    const serialized = await readFile(shadowFile, 'utf8');
     expect(serialized).not.toContain('distinctive marker phrase');
     // Neither side's verdict is kept — only that they differed. A stored
     // `inspect-trusted-change` would say which discussions a local scorer was
@@ -193,7 +202,7 @@ describe('jev rung of the untrusted-content ladder', () => {
     expect(serialized).not.toContain('defer');
     // The chat model said `defer` and the scorer said `inspect-trusted-change`:
     // counted as a disagreement, with neither verdict retained.
-    expect(recorded.decisions['forge-maintenance-disposition']).toMatchObject({ compared: 1, agreed: 0 });
+    expect(JSON.parse(serialized).decisions['forge-maintenance-disposition']).toMatchObject({ compared: 1, agreed: 0 });
   });
 
   it('resolves only the batch items the scorer settled, and measures the rest against the chat answer', async () => {
@@ -207,14 +216,13 @@ describe('jev rung of the untrusted-content ladder', () => {
       .mockResolvedValueOnce(abstained());
     const gate = await jevBatchGate({ content: args.content, source: args.source, items });
     expect([...gate.decided.keys()]).toEqual(['a']);
-    await measureJevBatch({
-      source: args.source, items, outcomes: gate.outcomes,
-      actualByKey: { b: { 'issue-comment-reply': 'reply' } },
-    });
+    expect(gate.pending.map((item) => item.key)).toEqual(['b']);
+    expect(gate.skipped).toEqual([]);
+    await gate.measure({ b: { 'issue-comment-reply': 'reply' } });
     // Two observations, one abstention, and only `b` had a chat verdict to be
     // compared against — `a` never woke the model.
-    const [, recorded] = mocks.write.mock.calls[0];
-    expect(recorded.decisions['issue-comment-reply']).toMatchObject({ observed: 2, decided: 1, abstained: 1, compared: 0 });
+    expect((await readShadow()).decisions['issue-comment-reply'])
+      .toMatchObject({ observed: 2, decided: 1, abstained: 1, compared: 0 });
   });
 
   it('falls through rather than returning a value the caller contract rejects', async () => {

@@ -1134,41 +1134,43 @@ const issueCommentKey = (item) => `${item.issueNumber}:${item.commentId}`;
  * because the reply BODY is generative work an entailment head cannot do — the
  * gate decides *whether* to wake it, never what it writes.
  */
-async function jevIssueReplyGate(input) {
+async function jevIssueReplyGate(input, jevBatchGate) {
   const items = input.safeIssueComments.map((item) => ({
     key: issueCommentKey(item),
-    // The same bytes this comment contributes to the batch the chat model
-    // reads, so a shadow-mode disagreement is about the verdict, not the
-    // evidence.
-    premise: JSON.stringify(item),
+    // A thunk: the default install never opts in, and serializing every comment
+    // on every scheduled tick to build a request the gate discards is pure
+    // waste. The bytes are exactly this comment's slice of the batch the chat
+    // model reads, so a shadow-mode disagreement is about the verdict rather
+    // than the evidence.
+    premise: () => JSON.stringify(item),
     decisionIds: ['issue-comment-reply'],
+    comment: item,
   }));
-  const { jevBatchGate } = await import('./untrustedContent.js');
-  const gate = await jevBatchGate({ content: input.analysisContent, source: 'github-issue', items });
-  const settled = new Set(input.safeIssueComments
-    .filter((item) => gate.decided.get(issueCommentKey(item))?.['issue-comment-reply'] === 'none')
-    .map(issueCommentKey));
-  const unsettled = input.safeIssueComments.filter((item) => !settled.has(issueCommentKey(item)));
+  const gate = await jevBatchGate({
+    content: input.analysisContent, source: 'github-issue', items,
+    // A local `reply` is not a finished decision here: the body is generative
+    // work, so that verdict goes back to the chat model like an abstention.
+    accept: (choices) => choices['issue-comment-reply'] === 'none',
+  });
   return {
     items,
-    outcomes: gate.outcomes,
-    // `only` is the operator's hard zero-quota posture: a comment the scorer
-    // could not settle is left untouched for a human rather than escalated to a
-    // provider. It is NOT recorded as `none` — that would turn "cannot tell"
-    // into "decided no reply was needed" and retire the comment for good.
-    pending: gate.mode === 'only' ? [] : unsettled,
-    skipped: gate.mode === 'only' ? unsettled : [],
-    decisions: input.safeIssueComments.filter((item) => settled.has(issueCommentKey(item))).map((item) => ({
-      issueNumber: item.issueNumber, commentId: item.commentId, action: 'none', body: '',
+    measure: gate.measure,
+    // `skipped` is populated only under the operator's hard zero-quota posture,
+    // where a comment the scorer could not settle is left untouched for a human
+    // rather than escalated to a provider. It is NOT recorded as `none` — that
+    // would turn "cannot tell" into "decided no reply was needed" and retire the
+    // comment for good.
+    pending: gate.pending.map((item) => item.comment),
+    skipped: gate.skipped.map((item) => item.comment),
+    decisions: items.filter((item) => gate.decided.has(item.key)).map(({ comment }) => ({
+      issueNumber: comment.issueNumber, commentId: comment.commentId, action: 'none', body: '',
     })),
   };
 }
 
-async function runScheduledIssueIntake({ app, interval } = {}) {
-  const input = await gatherIssueWatcherInput({ app });
-  if (input.skip) return input;
-  const { measureJevBatch, runUntrustedContentAnalysis } = await import('./untrustedContent.js');
-  const gate = await jevIssueReplyGate(input);
+/** Resolve the configured provider, then analyze the comments jev left over. */
+async function analyzePendingIssueComments({ app, interval, input, pending }) {
+  const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
   const configured = app?.taskTypeOverrides?.['issue-watcher'] || {};
   const providerId = configured.providerId || interval?.providerId;
   const model = configured.providerId ? configured.model || undefined : configured.model || interval?.model;
@@ -1181,29 +1183,35 @@ async function runScheduledIssueIntake({ app, interval } = {}) {
       return { skip: { reason: 'untrusted-provider-unavailable' } };
     }
   }
+  return runUntrustedContentAnalysis({
+    provider, model, prompt: input.prompt,
+    content: JSON.stringify({ issueComments: pending }),
+    source: 'github-issue', responseSchema: issueAnalysisSchema,
+  });
+}
+
+async function runScheduledIssueIntake({ app, interval } = {}) {
+  const input = await gatherIssueWatcherInput({ app });
+  if (input.skip) return input;
+  const { jevBatchGate, runUntrustedContentAnalysis } = await import('./untrustedContent.js');
+  const gate = await jevIssueReplyGate(input, jevBatchGate);
   // Every comment settled locally: the chat model is never woken, which is the
-  // whole point of the gate on the highest-volume decision PortOS makes.
+  // whole point of the gate on the highest-volume decision PortOS makes. The
+  // provider is resolved INSIDE this branch so a fully-settled tick completes on
+  // a machine that has no untrusted-content provider configured at all.
   const analysis = gate.pending.length === 0
     ? { ok: true, value: { issueComments: [], pullRequests: [] } }
-    : await runUntrustedContentAnalysis({
-      provider, model, prompt: input.prompt,
-      content: JSON.stringify({ issueComments: gate.pending }),
-      source: 'github-issue', responseSchema: issueAnalysisSchema,
-    });
+    : await analyzePendingIssueComments({ app, interval, input, pending: gate.pending });
+  if (analysis.skip) return analysis;
   if (!analysis.ok) {
     await persistState(app.id, { lastError: analysis.code, lastAnalysis: { ok: false, code: analysis.code } });
     return { skip: { reason: analysis.code } };
   }
   // Measurement only, and only for what the chat model actually answered: the
   // gate's own settled items have no chat verdict to be compared against.
-  await measureJevBatch({
-    source: 'github-issue',
-    items: gate.items,
-    outcomes: gate.outcomes,
-    actualByKey: Object.fromEntries(analysis.value.issueComments.map((decision) => (
-      [issueCommentKey(decision), { 'issue-comment-reply': decision.action }]
-    ))),
-  });
+  await gate.measure(Object.fromEntries(analysis.value.issueComments.map((decision) => (
+    [issueCommentKey(decision), { 'issue-comment-reply': decision.action }]
+  ))));
   // Strict coverage is what proves no comment was quietly dropped between
   // screening and action, so the settled rows are merged back in and the
   // metadata is narrowed to exactly what this run decided — never left naming a

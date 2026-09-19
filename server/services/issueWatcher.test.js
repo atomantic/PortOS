@@ -37,11 +37,10 @@ vi.mock('./modelAbuseGuard.js', async (importOriginal) => ({
 const runUntrustedContentAnalysisMock = vi.fn();
 // The jev reply gate stubs to "feature off", which is the shipped default, so
 // every assertion below still describes the chat-completion path unchanged.
-const jevBatchGateMock = vi.fn(async () => ({ mode: 'disabled', decided: new Map(), outcomes: new Map() }));
+const jevBatchGateMock = vi.fn();
 vi.mock('./untrustedContent.js', () => ({
   runUntrustedContentAnalysis: (...args) => runUntrustedContentAnalysisMock(...args),
   jevBatchGate: (...args) => jevBatchGateMock(...args),
-  measureJevBatch: async () => null,
   screenUntrustedContent: async ({ content }) => {
     const screening = await runModelAbuseScanMock({ content });
     return { ok: screening.ok && screening.safe === true, screening };
@@ -177,7 +176,11 @@ beforeEach(() => {
   addNotificationMock.mockResolvedValue({ id: 'notification-1' });
   runUntrustedContentAnalysisMock.mockReset();
   jevBatchGateMock.mockReset();
-  jevBatchGateMock.mockImplementation(async () => ({ mode: 'disabled', decided: new Map(), outcomes: new Map() }));
+  // The shipped default: feature off, nothing decided, everything still the
+  // chat model's to answer.
+  jevBatchGateMock.mockImplementation(async ({ items }) => (
+    { decided: new Map(), pending: items, skipped: [], measure: async () => null }
+  ));
   runModelAbuseScanMock.mockReset();
   runModelAbuseScanMock.mockResolvedValue({
     ok: true,
@@ -1441,11 +1444,18 @@ describe('scheduled issue intake trust boundary', () => {
   // The jev reply gate. The scorer itself is covered in
   // `untrustedContent.jev.test.js`; here the gate is doubled so these assertions
   // are about what the WATCHER does with each verdict.
-  const gateDecides = (value) => jevBatchGateMock.mockImplementationOnce(async ({ items }) => ({
-    mode: 'prefer',
-    decided: new Map(items.map((item) => [item.key, { 'issue-comment-reply': value }])),
-    outcomes: new Map(),
-  }));
+  // Mirrors the real gate: a verdict the caller's `accept` refuses is unsettled,
+  // so a local `reply` still lands in `pending` for the chat model.
+  const gateDecides = (value) => jevBatchGateMock.mockImplementationOnce(async ({ items, accept }) => {
+    const choices = { 'issue-comment-reply': value };
+    const taken = accept(choices) ? items : [];
+    return {
+      decided: new Map(taken.map((item) => [item.key, choices])),
+      pending: items.filter((item) => !taken.includes(item)),
+      skipped: [],
+      measure: async () => null,
+    };
+  });
 
   it('answers a local none without waking the chat model at all', async () => {
     installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
@@ -1470,13 +1480,23 @@ describe('scheduled issue intake trust boundary', () => {
 
   it('leaves an unresolvable comment alone under only, instead of recording it as none', async () => {
     installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
-    jevBatchGateMock.mockImplementationOnce(async () => ({ mode: 'only', decided: new Map(), outcomes: new Map() }));
+    jevBatchGateMock.mockImplementationOnce(async ({ items }) => (
+      { decided: new Map(), pending: [], skipped: items, measure: async () => null }
+    ));
     await runScheduledIssueIntake({ app: APP });
     expect(runUntrustedContentAnalysisMock).not.toHaveBeenCalled();
     expect(replies()).toHaveLength(0);
     // Recorded as an abstention, not as a handled comment: a skip that read as
     // `none` would retire the comment permanently on a zero-quota install.
-    expect(apps.get(APP.id).issueWatcherState.lastAnalysis).toMatchObject({ jevAbstained: 1 });
+    const state = apps.get(APP.id).issueWatcherState;
+    expect(state.lastAnalysis).toMatchObject({ jevAbstained: 1 });
+    // And it stays queued, un-ticked, for the next tick to retry. Narrowing the
+    // hook metadata is what keeps it out of `expectedComments`, so the
+    // incomplete-reasoning tick counter never advances on a decision PortOS
+    // deliberately declined to make.
+    expect(state.pendingIssueComments).toEqual([
+      expect.objectContaining({ issueNumber: 42, commentId: 0, ticks: 0 }),
+    ]);
   });
 });
 

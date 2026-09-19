@@ -29,6 +29,10 @@ const stagesFromStatus = (status) => (
 
 const parseHypotheses = (text) => text.split('\n').map((line) => line.trim()).filter(Boolean);
 
+// A rate the install has no evidence for reads as "—", never as 0% — an
+// unmeasured decision must not argue against itself.
+const formatRate = (rate) => formatPercent(rate === null ? null : rate * 100);
+
 export default function JevPanel() {
   const [status, setStatus] = useState(null);
   const [statusError, setStatusError] = useState(false);
@@ -52,12 +56,15 @@ export default function JevPanel() {
       .catch(() => { setStatusError(true); return null; })
   ), []);
 
-  // Counters only, so this is safe to load beside status on every mount.
-  const loadDecisionStats = useCallback(() => (
-    getJevDecisionStats({ silent: true }).then(setDecisionStats).catch(() => setDecisionStats(null))
-  ), []);
-
-  useEffect(() => { loadStatus(); loadDecisionStats(); }, [loadStatus, loadDecisionStats]);
+  useEffect(() => {
+    let active = true;
+    loadStatus();
+    // Counters only, so this is safe to load beside status on every mount.
+    getJevDecisionStats({ silent: true })
+      .then((res) => { if (active) setDecisionStats(res); })
+      .catch(() => { if (active) setDecisionStats(null); });
+    return () => { active = false; };
+  }, [loadStatus]);
 
   useEffect(() => {
     const handleProgress = (data) => {
@@ -285,13 +292,9 @@ export default function JevPanel() {
                   <tr key={row.decisionId} className="border-t border-port-border/60 text-gray-300">
                     <th scope="row" className="py-1.5 pr-3 font-normal text-white">{row.label}</th>
                     <td className="py-1.5 pr-3">{formatCount(row.observed, { fallback: '0' })}</td>
+                    <td className="py-1.5 pr-3">{formatRate(row.abstentionRate)}</td>
                     <td className="py-1.5 pr-3">
-                      {/* A rate with no observations reads as "—", never as 0% —
-                          an unmeasured decision must not argue against itself. */}
-                      {formatPercent(row.abstentionRate === null ? null : row.abstentionRate * 100)}
-                    </td>
-                    <td className="py-1.5 pr-3">
-                      {formatPercent(row.agreementRate === null ? null : row.agreementRate * 100)}
+                      {formatRate(row.agreementRate)}
                       <span className="text-gray-500"> of {formatCount(row.compared, { fallback: '0' })}</span>
                     </td>
                   </tr>

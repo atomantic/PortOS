@@ -52,12 +52,12 @@ export default function UntrustedContentPolicyPanel() {
   };
   // Removing the key is what re-inherits; writing a null/'' would pin the
   // source to an explicit empty value the resolver would then layer on.
-  const clearField = name => setConfig(current => {
-    const { [name]: _cleared, ...rest } = source === 'defaults' ? current?.defaults || {} : current?.sources?.[source] || {};
-    return source === 'defaults'
+  const clearField = name => {
+    const { [name]: _cleared, ...rest } = policy;
+    setConfig(current => source === 'defaults'
       ? { ...current, defaults: rest }
-      : { ...current, sources: { ...current.sources, [source]: rest } };
-  });
+      : { ...current, sources: { ...current.sources, [source]: rest } });
+  };
   const save = () => {
     setSaving(true);
     updateSettings({ untrustedContent: config }).then(() => {

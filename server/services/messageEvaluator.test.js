@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ settings: vi.fn(), provider: vi.fn(), analyze: vi.fn(), jevGate: vi.fn(), jevMeasure: vi.fn() }));
+const mocks = vi.hoisted(() => ({ settings: vi.fn(), provider: vi.fn(), analyze: vi.fn(), jevGate: vi.fn(), measure: vi.fn() }));
+// The gate's default answer is the shipped one: feature off, nothing decided,
+// every item still the chat model's to answer.
+const gateResult = ({ decided = [], pending = [], skipped = [] } = {}) => ({
+  decided: new Map(decided), pending, skipped, measure: mocks.measure,
+});
 vi.mock('./settings.js', () => ({ getSettings: mocks.settings }));
 vi.mock('./providers.js', () => ({ getProviderById: mocks.provider }));
 vi.mock('./messageTriageRules.js', () => ({ getTriageRules: async () => [{ senderPattern: 'rule sender instruction', correctedAction: 'review' }] }));
@@ -8,15 +13,14 @@ vi.mock('./messageTriageRules.js', () => ({ getTriageRules: async () => [{ sende
 vi.mock('./untrustedContent.js', () => ({
   runUntrustedContentAnalysis: mocks.analyze,
   jevBatchGate: (...args) => mocks.jevGate(...args),
-  measureJevBatch: (...args) => mocks.jevMeasure(...args),
 }));
 import { evaluateMessages, generateReplyBody } from './messageEvaluator.js';
 const message = { id: 'message-1', from: { email: 'sender@example.test' }, subject: 'Example meeting', bodyText: 'Meet next Tuesday?' };
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.settings.mockResolvedValue({});
-  mocks.jevGate.mockResolvedValue({ mode: 'disabled', decided: new Map(), outcomes: new Map() });
-  mocks.jevMeasure.mockResolvedValue(null);
+  mocks.measure.mockResolvedValue(null);
+  mocks.jevGate.mockImplementation(async ({ items }) => gateResult({ pending: items }));
   mocks.analyze.mockResolvedValue({ ok: true, value: [{ id: message.id, action: 'review', reason: 'Meeting', priority: 'medium' }] });
 });
 describe('message trust boundary', () => {
@@ -56,9 +60,10 @@ describe('message trust boundary', () => {
   // the margin floors; these assert what the BATCH does with each verdict.
   describe('local decision scorer', () => {
     const second = { ...message, id: 'message-2', subject: 'Example newsletter', bodyText: 'Weekly roundup.' };
-    const settle = (ids, choices) => mocks.jevGate.mockResolvedValue({
-      mode: 'prefer', outcomes: new Map(), decided: new Map(ids.map(id => [id, choices])),
-    });
+    const settle = (ids, choices) => mocks.jevGate.mockImplementation(async ({ items }) => gateResult({
+      decided: ids.map(id => [id, choices]),
+      pending: items.filter(item => !ids.includes(item.key)),
+    }));
 
     it('makes zero provider calls when every message resolves locally', async () => {
       settle([message.id, second.id], { 'message-triage': 'archive', 'message-priority': 'low' });
@@ -88,7 +93,7 @@ describe('message trust boundary', () => {
       // One half of the pair abstained, so the item is not in `decided` at all —
       // the chat model's priority was conditioned on its own action, and mixing
       // the two would produce a pair neither model proposed.
-      mocks.jevGate.mockResolvedValue({ mode: 'prefer', outcomes: new Map(), decided: new Map() });
+      mocks.jevGate.mockImplementation(async ({ items }) => gateResult({ pending: items }));
       mocks.analyze.mockResolvedValue({ ok: true, value: [{ id: message.id, action: 'review', reason: 'Meeting', priority: 'medium' }] });
       const result = await evaluateMessages([message]);
       expect(result.evaluations[message.id]).toMatchObject({ action: 'review', priority: 'medium' });
@@ -96,7 +101,7 @@ describe('message trust boundary', () => {
     });
 
     it('reports an abstained message as skipped under only, never as a triage action', async () => {
-      mocks.jevGate.mockResolvedValue({ mode: 'only', outcomes: new Map(), decided: new Map() });
+      mocks.jevGate.mockImplementation(async ({ items }) => gateResult({ skipped: items }));
       const result = await evaluateMessages([message]);
       expect(mocks.analyze).not.toHaveBeenCalled();
       expect(result.evaluations[message.id]).toBeUndefined();

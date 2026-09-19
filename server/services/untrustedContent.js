@@ -35,7 +35,7 @@ function validateAgainstContract(responseSchema, value) {
  * neither model proposed, so one abstention retires the whole item.
  */
 async function runJevPlan(plan, config) {
-  const { runJevDecision, jevOutcomeKind } = await import('./jevRouter.js');
+  const { runJevDecision } = await import('./jevRouter.js');
   const results = [];
   for (const decision of plan.decisions) {
     const result = await runJevDecision({
@@ -43,7 +43,7 @@ async function runJevPlan(plan, config) {
       premise: decision.premise,
       policyMinMargin: config.jevMinMargin,
     });
-    results.push({ id: decision.id, result, kind: jevOutcomeKind(result) });
+    results.push({ id: decision.id, result });
     // Stop at the first non-answer: the remaining forward passes cannot rescue
     // the item, and each one is a 4B model inference.
     if (result.ok !== true || result.abstained) break;
@@ -58,10 +58,11 @@ async function runJevPlan(plan, config) {
 
 /** Counter rows for a jev plan run, optionally compared against the LLM's answer. */
 function jevObservations(plan, outcome, llmValue) {
-  const comparable = llmValue === undefined ? null : plan.fromValue?.(llmValue) || null;
+  // A plan whose enum values ARE the caller's contract needs no projection.
+  const comparable = llmValue === undefined ? null : (plan.fromValue ? plan.fromValue(llmValue) : llmValue);
   return outcome.results.map(entry => ({
     decisionId: entry.id,
-    kind: entry.kind,
+    kind: entry.result.kind,
     ...(comparable && entry.result.value !== undefined
       ? { agreed: entry.result.value === comparable[entry.id] }
       : {}),
@@ -88,11 +89,13 @@ export async function screenUntrustedContent({ content, source, policy: override
   return { ok: true, safe: true, policy, screening, fingerprint: modelAbuseContentFingerprint(source, {}, content) };
 }
 
-// A batch item's decisions already carry the enum values the caller compares
-// against, so both projections are the identity.
+// A premise may be given as a thunk. The default install never opts in, so the
+// callers would otherwise re-serialize every message body in the batch on every
+// run just to build a request the gate discards on its first check.
+const premiseOf = (item) => (typeof item.premise === 'function' ? item.premise() : item.premise);
+
 const itemPlan = (item) => ({
-  decisions: item.decisionIds.map((id) => ({ id, premise: item.premise })),
-  fromValue: (actual) => actual,
+  decisions: item.decisionIds.map((id) => ({ id, premise: premiseOf(item) })),
 });
 
 const batchRows = (items) => (Array.isArray(items)
@@ -100,15 +103,43 @@ const batchRows = (items) => (Array.isArray(items)
   : []);
 
 /** The resolved policy for a batch, plus whether jev may answer for it. */
-async function jevBatchContext(source, policy) {
+async function jevBatchContext(source) {
+  const { isJevFeatureEnabled, resolveJevMode } = await import('./jevRouter.js');
+  // The feature toggle first, deliberately: it ships OFF, so the common answer
+  // costs one cached lookup instead of a settings read and a policy resolution
+  // this function would then throw away.
+  if (!await isJevFeatureEnabled()) return { mode: 'disabled', config: null };
   const state = await readSettingsStrict();
-  const config = state.corrupt ? null : resolveUntrustedContentPolicy(state.settings.untrustedContent, source, policy || {});
+  const config = state.corrupt ? null : resolveUntrustedContentPolicy(state.settings.untrustedContent, source);
   if (!config) return { mode: 'disabled', config: null };
-  const { resolveJevMode } = await import('./jevRouter.js');
   return { mode: await resolveJevMode(config), config };
 }
 
-const noDecisions = (mode) => ({ mode, decided: new Map(), outcomes: new Map() });
+/**
+ * Fold a finished batch into the agreement counters.
+ *
+ * Always AFTER the completion returns, so in `shadow` mode it changes nothing
+ * about the answer and in `prefer` mode it scores the items that fell through.
+ * `actualByKey` maps an item key to `{ [decisionId]: value }` — the chat model's
+ * own answer. An item the chat model never answered is counted but not compared.
+ */
+async function measureBatch({ rows, config, outcomes, actualByKey }) {
+  const { recordJevObservations } = await import('./jevRouter.js');
+  const observations = [];
+  for (const item of rows) {
+    const plan = itemPlan(item);
+    // In shadow mode the gate scored nothing, so this is where the scorer
+    // actually runs. Otherwise the gate's own outcomes are reused, and no
+    // second forward pass is paid for.
+    const outcome = outcomes.get(item.key) || await runJevPlan(plan, config);
+    observations.push(...jevObservations(plan, outcome, actualByKey?.[item.key]));
+  }
+  return recordJevObservations(observations);
+}
+
+const undecided = (rows, measure = async () => null) => ({
+  decided: new Map(), pending: rows, skipped: [], measure,
+});
 
 /**
  * Resolve as many items of a BATCH as the local scorer can, before any provider
@@ -125,58 +156,53 @@ const noDecisions = (mode) => ({ mode, decided: new Map(), outcomes: new Map() }
  * extra guard scan when jev is enabled, which is the honest price of not
  * carrying a "the caller promises it screened" flag across a trust boundary.
  *
- * Returns `{ mode, decided, outcomes }`. `decided` maps an item key to
- * `{ [decisionId]: value }` for the items jev settled; everything absent from it
- * is still the chat model's to answer. In `shadow` and `disabled` mode nothing
- * is screened, scored, or decided — measurement happens after the fact in
- * `measureJevBatch`.
+ * Returns the whole partition, so **no caller ever sees `jevMode`**:
+ *
+ * - `decided` — key → `{ [decisionId]: value }` for the items jev settled.
+ *
+ * `accept(choices)` lets a caller refuse a verdict it cannot act on alone — the
+ * issue watcher takes a local `none` but sends a local `reply` to the chat model,
+ * because writing the reply body is generative work an entailment head cannot
+ * do. A refused item is treated as unsettled, so it follows the same
+ * pending-or-skipped rule as an abstention instead of needing the caller to
+ * re-derive it (and to learn what `only` means).
+ * - `pending` — the items the chat model still has to answer.
+ * - `skipped` — under `only`, the items the scorer could not separate. They are
+ *   neither decided nor pending: that operator chose a hard zero-quota posture,
+ *   and "cannot tell" must never become a verdict. Keeping the rule HERE is why
+ *   the string `'only'` appears in no service that calls this.
+ * - `measure(actualByKey)` — fold the batch into the agreement counters once the
+ *   chat model has answered. Closes over the outcomes the gate already computed,
+ *   so measurement costs no second policy resolution.
  */
-export async function jevBatchGate({ content, source, policy, items } = {}) {
+export async function jevBatchGate({ content, source, items, accept } = {}) {
   const rows = batchRows(items);
-  if (!rows.length) return noDecisions('disabled');
-  const { mode, config } = await jevBatchContext(source, policy);
-  if (mode !== 'prefer' && mode !== 'only') return noDecisions(mode);
+  if (!rows.length) return undecided(rows);
+  const { mode, config } = await jevBatchContext(source);
+  if (mode === 'disabled') return undecided(rows);
+  const outcomes = new Map();
+  const measure = (actualByKey) => measureBatch({ rows, config, outcomes, actualByKey });
+  // `shadow` scores nothing up front: the chat model answers exactly as it did
+  // before jev existed, and `measure` runs the scorer afterwards to compare.
+  if (mode === 'shadow') return undecided(rows, measure);
   // A screening failure needs no special handling: the analysis call the caller
   // makes next screens the same content and reports the same code, so bailing
   // out to the chat path keeps error reporting in exactly one place.
-  const screened = await screenUntrustedContent({ content, source, policy });
-  if (!screened.ok) return noDecisions('disabled');
+  const screened = await screenUntrustedContent({ content, source });
+  if (!screened.ok) return undecided(rows, measure);
   const decided = new Map();
-  const outcomes = new Map();
   for (const item of rows) {
     const outcome = await runJevPlan(itemPlan(item), config);
     outcomes.set(item.key, outcome);
-    if (outcome.answered) decided.set(item.key, outcome.choices);
+    if (outcome.answered && (!accept || accept(outcome.choices))) decided.set(item.key, outcome.choices);
   }
-  return { mode, decided, outcomes };
-}
-
-/**
- * Record what the scorer would have said, against what the chat model did say.
- *
- * This is the whole measurement story for batched callers, and it runs AFTER
- * the completion returns — so in `shadow` mode it changes nothing about the
- * answer, and in `prefer` mode it scores the items that fell through. The
- * content was screened by the analysis call that just succeeded, so no second
- * guard run is needed.
- *
- * `actualByKey` maps an item key to `{ [decisionId]: value }` — the chat
- * model's own answer, projected onto the same enums. An item the chat model did
- * not answer is counted but not compared.
- */
-export async function measureJevBatch({ source, policy, items, actualByKey, outcomes } = {}) {
-  const rows = batchRows(items);
-  if (!rows.length) return null;
-  const { mode, config } = await jevBatchContext(source, policy);
-  if (mode === 'disabled') return null;
-  const { recordJevObservations } = await import('./jevRouter.js');
-  const observations = [];
-  for (const item of rows) {
-    const plan = itemPlan(item);
-    const outcome = outcomes?.get(item.key) || await runJevPlan(plan, config);
-    observations.push(...jevObservations(plan, outcome, actualByKey?.[item.key]));
-  }
-  return recordJevObservations(observations).catch(() => null);
+  const unsettled = rows.filter((item) => !decided.has(item.key));
+  return {
+    decided,
+    pending: mode === 'only' ? [] : unsettled,
+    skipped: mode === 'only' ? unsettled : [],
+    measure,
+  };
 }
 
 /**
@@ -193,8 +219,9 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
   // plan — or an install with the feature off — takes exactly the path it took
   // before jev existed, down to the provider selection below.
   const plan = Array.isArray(jev?.decisions) && jev.decisions.length ? jev : null;
-  const { resolveJevMode, recordJevObservations } = plan ? await import('./jevRouter.js') : {};
-  const jevMode = plan ? await resolveJevMode(config) : 'disabled';
+  const jevRouter = plan ? await import('./jevRouter.js') : null;
+  // `screened.policy` is already resolved, so this costs no second settings read.
+  const jevMode = jevRouter ? await jevRouter.resolveJevMode(config) : 'disabled';
   let jevOutcome = null;
   if (jevMode === 'prefer' || jevMode === 'only') {
     jevOutcome = await runJevPlan(plan, config);
@@ -204,12 +231,12 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
       // the plan, not a verdict — fall through to the chat model rather than
       // returning a shape the caller's validator just rejected.
       if (candidate.ok) {
-        await recordJevObservations(jevObservations(plan, jevOutcome)).catch(() => null);
+        await jevRouter.recordJevObservations(jevObservations(plan, jevOutcome));
         return { ok: true, value: candidate.value, via: 'jev', fingerprint: screened.fingerprint, screening: screened.screening };
       }
     }
     if (jevMode === 'only') {
-      await recordJevObservations(jevObservations(plan, jevOutcome)).catch(() => null);
+      await jevRouter.recordJevObservations(jevObservations(plan, jevOutcome));
       // Never coerced into the permissive enum member. `only` means the operator
       // chose a hard zero-quota posture, and "the scorer could not tell" has to
       // surface as a skip with a reason, not as a silent approval.
@@ -290,7 +317,7 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
   // returned below is the chat model's, byte for byte.
   if (plan && (jevMode === 'shadow' || jevOutcome)) {
     const measured = jevOutcome || await runJevPlan(plan, config);
-    await recordJevObservations(jevObservations(plan, measured, value)).catch(() => null);
+    await jevRouter.recordJevObservations(jevObservations(plan, measured, value));
   }
   return { ok: true, value, model: effectiveModel, providerId: selected.id, fingerprint: screened.fingerprint, screening: screened.screening };
 }
