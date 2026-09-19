@@ -174,6 +174,16 @@ export const JEV_SIDECAR_FAILURE_CODES = Object.freeze([
   'jev-request-invalid',
   'jev-response-invalid',
   'jev-premise-too-large',
+  // A trained project head the sidecar could not apply. Forwarded rather than
+  // collapsed, and deliberately NOT answered by silently falling back to the
+  // stock classifier: the operator adopted a head on the strength of three
+  // measured numbers, and answering with a different classifier would make
+  // that measurement describe something other than what ran.
+  'jev-head-not-found',
+  'jev-head-invalid',
+  'jev-head-too-large',
+  'jev-head-unreadable',
+  'jev-head-revision-mismatch',
 ]);
 
 export const JEV_FAILURE_CODES = Object.freeze([

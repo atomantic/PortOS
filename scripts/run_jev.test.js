@@ -38,6 +38,13 @@ model.config = SimpleNamespace(
 )
 model.to = lambda *_args: None
 model.eval = lambda: None
+# The base encoder the kit hooks to capture ONLY the final hidden state. The
+# real one is a PreTrainedModel; all the kit needs of it is a place to hang a
+# forward hook, so the double records the handler and lets each test fire it.
+hooks = []
+model.base_model = SimpleNamespace(
+    register_forward_hook=lambda fn: hooks.append(fn) or SimpleNamespace(remove=lambda: None)
+)
 
 def load(value):
     def from_pretrained(_path, **kwargs):
@@ -49,10 +56,16 @@ sys.modules["transformers"] = SimpleNamespace(
     AutoTokenizer=load(tokenizer),
     AutoModelForSequenceClassification=load(model),
 )
+# A tensor double that still compares equal to the plain list the assertions
+# above use, but carries the device move the trained-head path performs.
+class Tensor(list):
+    def to(self, *_args):
+        return self
+
 sys.modules["torch"] = SimpleNamespace(
     set_num_threads=lambda *_: None,
     inference_mode=contextlib.nullcontext,
-    tensor=lambda value: value,
+    tensor=Tensor,
     softmax=lambda *_args, **_kwargs: Probabilities([0.1, 0.85, 0.05]),
     backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
 )
@@ -157,5 +170,96 @@ except ValueError as error:
     print(json.dumps({"refused": "host must be loopback" in str(error)}))
 `));
     expect(raw).toEqual({ refused: true });
+  });
+});
+
+describe.skipIf(!python)('jev trained project head', () => {
+  // The regression this uniquely catches: an adopted head changing the WIRE
+  // SHAPE. `normalizeJevScores` matches the reply against the hypotheses that
+  // were asked about, position for position — a head that dropped a label or
+  // re-ordered the list would be rejected as a contract break rather than
+  // scored, and the install would silently lose the feature it just adopted.
+  it('scores through a head with the same shape and order the stock classifier uses', () => {
+    const raw = JSON.parse(run(`
+# Extend the model double with the hidden states pool_pair reads. The last row
+# is what last-token pooling must select, so a mean or first-token pooling
+# would produce a different winner rather than a slightly different number.
+class Row(list):
+    def to(self, *_args):
+        return self
+    def float(self):
+        return self
+    def tolist(self):
+        return list(self)
+
+class Hidden:
+    def __getitem__(self, key):
+        assert key == (0, -1, slice(None)), key
+        return Row([0.0, 3.0, 0.0])
+
+# The kit hooks the BASE model and reads what the hook captured, so the double
+# fires the registered hook rather than returning hidden states inline — and
+# asserts the caller no longer pays for every layer's activations.
+def model_with_hidden(**inputs):
+    assert "output_hidden_states" not in inputs, inputs
+    for hook in hooks:
+        hook(None, None, (Hidden(),))
+    return SimpleNamespace(logits=[Row([0.0, 0.0, 0.0])])
+model_with_hidden.config = model.config
+state["model"] = model_with_hidden
+
+head = {
+    "schemaVersion": 1, "decisionId": "scope-adherence", "architecture": "linear",
+    "pooling": "last-token",
+    "baseModel": {"id": "m", "repository": "r", "revision": "rev"},
+    "hiddenSize": 3, "labels": ["contradiction", "entailment", "neutral"],
+    "layers": [{"weight": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "bias": [0, 0, 0]}],
+    "metrics": {"trained": 0.7, "stockZeroShot": 0.5, "majorityClass": 0.4, "goldSize": 40, "trainSize": 120},
+    "corpusHash": "deadbeefcafe0001", "corpusSources": ["merged-pr"],
+    "trainedAt": "2026-09-19T00:00:00.000Z",
+}
+scores = helper["score_with_head"](state, head, "A premise.", ["first", "second"])
+print(json.dumps({"scores": scores, "keys": sorted(scores[0].keys())}))
+`));
+    expect(raw.keys).toEqual(['contradiction', 'entailment', 'hypothesis', 'neutral']);
+    expect(raw.scores.map((score) => score.hypothesis)).toEqual(['first', 'second']);
+    // Row 1 of the head reads input 1, which carries the 3.0 — so entailment
+    // wins only if last-token pooling and the label order both held.
+    for (const score of raw.scores) {
+      expect(score.entailment).toBeGreaterThan(score.contradiction);
+      expect(score.entailment).toBeGreaterThan(score.neutral);
+      expect(score.contradiction + score.entailment + score.neutral).toBeCloseTo(1, 9);
+    }
+    expect(normalizeJevScores(
+      { schemaVersion: 1, complete: true, scores: raw.scores },
+      { hypotheses: ['first', 'second'] },
+    ).ok).toBe(true);
+  });
+
+  it('accepts a head name on a scoring request and defaults to none', () => {
+    const raw = JSON.parse(run(`
+def head_for(payload):
+    try:
+        return {"head": helper["validate_request"](payload)[2]}
+    except helper["JevError"] as error:
+        return {"code": error.code}
+
+print(json.dumps({
+    "absent": head_for({"premise": "p", "hypotheses": ["a"]}),
+    "named": head_for({"premise": "p", "hypotheses": ["a"], "head": "scope-adherence"}),
+    "null": head_for({"premise": "p", "hypotheses": ["a"], "head": None}),
+    "blank": head_for({"premise": "p", "hypotheses": ["a"], "head": ""}),
+    "notAString": head_for({"premise": "p", "hypotheses": ["a"], "head": 7}),
+}))
+`));
+    expect(raw).toEqual({
+      // Absent, null and blank all mean "the stock classifier answers" — the
+      // state every install ships in.
+      absent: { head: null },
+      named: { head: 'scope-adherence' },
+      null: { head: null },
+      blank: { head: null },
+      notAString: { code: 'jev-request-invalid' },
+    });
   });
 });

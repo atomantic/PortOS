@@ -99,6 +99,22 @@ export const CATEGORIES = {
   'image-to-3d': { label: 'Image to 3D', description: 'Generated GLB meshes — the only copy; records live in Postgres', archivable: false, deletable: false },
   'images': { label: 'Images', description: 'Uploaded and generated images — delete individually; gallery, pipeline, and collection records point at these files', archivable: true, deletable: true, purgeScope: 'items' },
   'insights': { label: 'Insights', description: 'Derived goal scorecards and insights — rebuilt on the next insights run', archivable: true, deletable: true, purgeScope: 'category' },
+  // Project-specific jev heads plus the corpora and cached embeddings behind
+  // them.
+  //
+  // NOT deletable: the corpus and the embedding cache regenerate, but a trained
+  // head does not — the forge queries that built its corpus return different
+  // rows a month later, and it is the one artifact here an operator made an
+  // adoption decision about. Purging the category would silently return scope
+  // adherence to the stock scorer with nothing to restore.
+  //
+  // NOT archivable either, and for the opposite reason: this tree is mostly the
+  // embedding cache, which `backup.js` excludes precisely because it is
+  // gigabytes of pure cache. Archiving gzips exactly those gigabytes INTO
+  // `data/backup/` — growing the directory an operator opened this page to
+  // shrink, and blowing the shared tar timeout on the way. The few kilobytes
+  // worth keeping (the heads) are already in every snapshot.
+  'jev': { label: 'jev Project Heads', description: 'Trained project-specific scorer heads, their training corpora, and cached frozen-encoder outputs — machine-local; a head is not regenerable once its corpus is stale, and the cache beside it is bulk that rebuilds', archivable: false, deletable: false },
   'jira-reports': { label: 'Jira Reports', description: 'Generated Jira reports — regenerable from Jira', archivable: true, deletable: true, purgeScope: 'category' },
   'loops': { label: 'Loops', description: 'Output history from scheduled loop runs', archivable: true, deletable: false },
   'lora-datasets': { label: 'LoRA Datasets', description: 'Training images and captions for LoRA runs — uploaded source material, not regenerable', archivable: false, deletable: false },

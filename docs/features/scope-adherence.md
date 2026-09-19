@@ -77,9 +77,72 @@ The repository path comes from the loaded app record, never from the request: `P
 
 Each reads as "no advisory" in the UI, never as a verdict.
 
+## An optional project-specific head
+
+Zero-shot is the default and the only thing a fresh install runs. Optionally, an operator can fit a small classifier on the **frozen** encoder using this machine's own history, so the scorer learns *this* codebase's notion of in-scope rather than answering from the stock checkpoint's general priors.
+
+Nothing about the advisory contract changes. A head emits the checkpoint's own three labels, in the same order, so `decideFromScores`, the `minMargin: 0.2` floor and the informativeness ranking are byte-identical whether one is adopted or not. There is still no auto-close, no gating label, and no CI check.
+
+### Where the corpus comes from
+
+`scripts/jev-corpus.js` (and the panel's Train button, through the same `services/jevCorpusBuilder.js`) reads four weak signals off the forge with `gh`:
+
+| Source | Weak verdict | Why it is evidence |
+|---|---|---|
+| merged PRs on the default branch | `aligned` | the maintainer wanted it |
+| closed-unmerged PRs | `unrelated` | they did not |
+| issues closed `not planned` | `unrelated` | they did not |
+| issues labelled `future` or `needs-input` | `unrelated` | parked rather than refused |
+
+Each row is paired with the clauses the SAME retriever picks at inference time, and the premise is composed by the SAME helpers — so a corpus row asks exactly the question the scorer is asked in production. The output is open-jev **Route A** JSONL (`{"context", "options", "label"}`), which keeps `openjev eval` usable as an independent cross-check on a corpus PortOS built.
+
+**Every label is weak.** A merged pull request is evidence the maintainer wanted it, not an annotation that it advances the clause the retriever happened to pair it with. The held-out split, the two baselines and the adoption gate below exist precisely because "the head trained fine" proves nothing on its own.
+
+Two sources named in the original proposal are deliberately absent, and the reasons are worth keeping:
+
+- **The jev shadow-mode counters** record counts only — decision id, bucket, agreement flag, never a premise. That is exactly what makes shadow mode safe to leave on, and it also means they contain no labelled example and never will. They are carried on the corpus manifest as a readiness signal an operator can read, not folded in as rows.
+- **`messageTriageRules.js`** corrections are email-sender keyed and belong to the `message-triage` decision, whose cutover waits on its own shadow-mode evidence. The builder is decision-generic so those callers can be added without reshaping anything.
+
+### The split refusal
+
+`splitCorpus` assigns train/gold by each example's **own content hash** — deterministic across machines and rebuilds, so a reported score can be reproduced by the person reading it. `assertSplitDisjoint` then **refuses** a split whose halves share an example key, or whose gold set is under 20 rows. A gold set contaminated by its training split reports a score that is partly memorization, and that score is the only evidence the adoption gate reads, so the refusal is a hard stop before anything is written — not a warning beside a corpus somebody might still train on. `dedupeCorpus` runs first, because a goal re-stated across `PRD.md` and `GOALS.md` produces the same question twice and would otherwise land in both halves by definition of the hash.
+
+### Training
+
+`scripts/train_jev_head.py` runs in the existing `venv-jev`, under the same hardened environment the sidecar gets — `HF_HUB_OFFLINE=1`, no API keys, no forge token, no arbitrary `PYTHONPATH`. **The encoder is frozen and never updated.** Frozen-encoder outputs are cached once per `(pair, model revision)` under `data/jev/embeddings/`, so a hyperparameter sweep costs seconds rather than re-paying a 4B forward pass per pair. The head is a linear classifier by default, or one hidden layer, over the last token's final hidden state; weights ship as bounded JSON so the compatibility check, the backup retention decision and code review are all inspectable.
+
+Weak labels map the chosen option to `entailment` and the others to `neutral`, **not** `contradiction`: an option the maintainer did not take is unsupported by the change, not refuted by it — and training the third label on evidence that never meant refutation would teach the head to say *contradicts*, which is the one verdict this feature reports that a human would go and argue with.
+
+### The adoption rule: beat BOTH baselines
+
+A training run produces a **candidate** and three accuracies on the held-out gold set. It never promotes anything.
+
+| Number | What it is |
+|---|---|
+| trained | the fitted head |
+| stock zero-shot | the checkpoint's own classifier — needs no corpus, no training run, no privacy argument |
+| majority class | always predicting the most common gold label |
+
+`headBeatsBaselines` (`server/lib/jevHead.js`) requires the trained head to beat **both**, strictly. Beating only the majority class means it learned the label prior and nothing about the product; beating only zero-shot while losing to a constant prediction means the gold split is skewed enough that accuracy is not measuring anything, and the head would be adopted on the strength of that imbalance. Ties lose.
+
+The gate is enforced in `adoptJevHead`, server-side. The panel also disables the button, but a hidden button is a suggestion — the refusal has to be on the function every surface goes through.
+
+**A real outcome of a training run is that no head ships.** That is an acceptable result, not a failure.
+
+### Revision compatibility
+
+A head records the encoder revision it was fit on, and both the Node loader (`isHeadCompatible`) and the Python sidecar (`jev_head_kit.validate_head`) refuse one that does not match the installed checkpoint. Embeddings from a different revision are a different vector space: applying a head across one produces confident numbers with nothing anywhere to signal they are meaningless. An incompatible head falls back to the stock classifier and says so in the panel, rather than reading as "no head trained".
+
+### Privacy and backup
+
+Everything under `data/jev/` is a derived record of private repository history and is **machine-local**: never federated, never in a peer sync, never in a status or capability payload. The covered-path table in the ADR [privacy records machine-local](../decisions/2026-08-08-privacy-records-machine-local.md) names it, and `server/services/sharing/jevNeverFederates.test.js` is the guard. Cross-install or federated training is refused, not unimplemented.
+
+Backup tiers are decided explicitly ([BACKUP.md](../BACKUP.md)): corpora and cached embeddings are regenerable bulk and are excluded, while **trained heads are retained** — a head is not regenerable once its corpus is stale.
+
 ## What is deliberately not here
 
-- **A trained, project-specific head.** Fitting a small head on the frozen encoder from this install's merged PRs, closed-unmerged PRs and triage corrections — with a hand-labeled gold set and a "must beat both the stock zero-shot and the majority-class baseline to be adopted" rule — is tracked separately. Zero-shot ships first because it is useful on its own and needs no corpus.
+- **Fine-tuning the encoder.** Frozen encoder plus a small head, only.
+- **Trained heads for the triage decisions.** The same machinery serves them; that cutover belongs with those callers once their shadow-mode logs have accumulated.
 - **Any enforcement**, now or later. See the opening paragraph.
 
 ## Source
@@ -93,3 +156,9 @@ Each reads as "no advisory" in the UI, never as a verdict.
 | HTTP surface | `server/routes/apps/scopeAdherence.js` |
 | UI | `client/src/components/apps/ScopeAdherenceCheck.jsx` |
 | Failure labels | `server/lib/scopeAdherenceReasons.js` (re-exported to the client) |
+| Trained-head contract and the adoption gate | `server/lib/jevHead.js` |
+| Corpus schema, split and the overlap refusal | `server/lib/jevCorpus.js` |
+| Corpus builder (forge reads) | `server/services/jevCorpusBuilder.js`, CLI `scripts/jev-corpus.js` |
+| Head store, adoption, discard | `server/services/jevHeads.js` |
+| Training orchestration | `server/services/jevTraining.js` |
+| Trainer and shared pooling/head application | `scripts/train_jev_head.py`, `scripts/jev_head_kit.py` |

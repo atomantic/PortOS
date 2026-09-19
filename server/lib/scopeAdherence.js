@@ -69,6 +69,20 @@ export const buildClauseIndex = (clauses) =>
   buildInvertedIndex(clauses.map((clause) => ({ id: clause.id, text: clause.text })));
 
 /**
+ * The scorable clauses and an id lookup over them.
+ *
+ * Both are per-CORPUS, not per-change, so a caller that runs many changes
+ * against one corpus builds them once. The advisory endpoint scores a single
+ * change and does not notice; the corpus builder scores up to a thousand forge
+ * rows against the same few hundred clauses, which turns an O(C) prep into
+ * O(R·C) the moment it is rebuilt inside the loop.
+ */
+export function prepareClauseCorpus(clauses) {
+  const corpus = Array.isArray(clauses) ? clauses.filter((clause) => clause?.id && clause.text) : [];
+  return { corpus, byId: new Map(corpus.map((clause) => [clause.id, clause])) };
+}
+
+/**
  * Pick the clauses worth scoring, best match first.
  *
  * TWO BM25 rankings, fused with RRF — not one query over a concatenated blob.
@@ -81,11 +95,14 @@ export const buildClauseIndex = (clauses) =>
  *
  * @param {Array} clauses The corpus.
  * @param {{title?: string, body?: string, diffSummary?: string}} change Already normalized.
- * @param {{k?: number, index?: object}} options A prebuilt `index` skips the rebuild.
+ * @param {{k?: number, index?: object, prepared?: {corpus: Array, byId: Map}}} options
+ *   A prebuilt `index` skips the BM25 rebuild; a prebuilt `prepared`
+ *   (`prepareClauseCorpus`) skips the per-call filter and id map. Both matter
+ *   only to a caller in a loop — see `prepareClauseCorpus`.
  * @returns {Array} up to `k` clauses, in fused-rank order.
  */
-export function selectCandidateClauses(clauses, change, { k = SCOPE_ADHERENCE_TOP_K, index } = {}) {
-  const corpus = Array.isArray(clauses) ? clauses.filter((clause) => clause?.id && clause.text) : [];
+export function selectCandidateClauses(clauses, change, { k = SCOPE_ADHERENCE_TOP_K, index, prepared } = {}) {
+  const { corpus, byId } = prepared || prepareClauseCorpus(clauses);
   if (!corpus.length || k <= 0) return [];
 
   const narrative = [change?.title, change?.body].filter(Boolean).join('\n');
@@ -102,7 +119,6 @@ export function selectCandidateClauses(clauses, change, { k = SCOPE_ADHERENCE_TO
     { ftsWeight: NARRATIVE_WEIGHT, vectorWeight: CODE_WEIGHT },
   );
 
-  const byId = new Map(corpus.map((clause) => [clause.id, clause]));
   return [...fused.entries()]
     .sort((a, b) => b[1].rrfScore - a[1].rrfScore)
     .slice(0, k)
