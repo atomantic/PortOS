@@ -561,8 +561,9 @@ export async function updateWith(type, id, fn) {
  * pass the FULL desired record (this does not merge unknown fields the way
  * `update()` does). `emitEvent:false` lets a caller (e.g. brainJournal) emit its
  * own richer, bridge-shaped event instead of the generic one.
+ * createOnly:true returns null for any existing record, including tombstones.
  */
-export async function upsertWithId(type, id, recordData, { emitEvent = true } = {}) {
+export async function upsertWithId(type, id, recordData, { emitEvent = true, createOnly = false } = {}) {
   const store = storeFor(type);
   // A malformed id can't name a valid per-record dir — mirror the other write
   // paths and no-op rather than letting the store's write-queue assertion throw.
@@ -572,6 +573,9 @@ export async function upsertWithId(type, id, recordData, { emitEvent = true } = 
   const fallbackOrigin = await getInstanceId();
   return store.queueRecordWrite(id, async () => {
     const existing = await store.loadOne(id);
+    // Ingestion must not overwrite an edit or resurrect a tombstone.
+    // Test presence inside the queue so a peer or local write cannot race.
+    if (createOnly && existing) return null;
     const live = existing && !isTombstone(existing) ? existing : null;
     const timestamp = now();
     const originInstanceId = live?.originInstanceId ?? fallbackOrigin;

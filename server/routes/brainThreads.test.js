@@ -13,6 +13,8 @@ vi.mock('../services/brainStorage.js', () => ({
 
 // The resolver has its own suite (services/threadRefs.test.js) and reaches
 // Postgres; here it is a seam so these tests assert the ROUTE's contract.
+vi.mock('../services/threadSync.js', () => ({ syncGithubThreads: vi.fn(async () => ({ created: 1 })) }));
+
 vi.mock('../services/threadRefs.js', () => ({ resolveThreadRefs: vi.fn() }));
 
 import * as brainStorage from '../services/brainStorage.js';
@@ -71,6 +73,16 @@ describe('Brain Threads routes', () => {
     vi.clearAllMocks();
     resolveThreadRefs.mockResolvedValue([]);
     app = buildApp();
+  });
+
+  it('validates explicit sync requests before dispatch and supplies creation defaults', async () => {
+    const { syncGithubThreads } = await import('../services/threadSync.js');
+    expect((await request(app).post('/api/brain/threads/sync').send({ appId: 'example-app', source: {} })).status).toBe(400);
+    expect(syncGithubThreads).not.toHaveBeenCalled();
+    const result = await request(app).post('/api/brain/threads/sync').send({ appId: 'example-app' });
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ created: 1 });
+    expect(syncGithubThreads).toHaveBeenCalledWith({ appId: 'example-app', pinned: false });
   });
 
   // ===========================================================================

@@ -21,7 +21,8 @@ import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
 import { chipColors } from '../../../lib/chipContrast';
 import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
-import { timeAgo } from '../../../utils/formatters';
+import { timeAgo, formatCount } from '../../../utils/formatters';
+import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import AddToThreadButton from '../../threads/AddToThreadButton';
 import RunActionButton from './RunActionButton';
 
@@ -231,6 +232,12 @@ function LabelFilterChip({ facet, hidden, onToggle }) {
  * offered alongside Claim rather than instead of it.
  */
 export default function IssuesTab({ appId, appName }) {
+  const [trackAssigned, trackingAssigned] = useAsyncAction(async () => {
+    const result = await api.syncGithubThreads({ appId }, { silent: true });
+    const summary = `${appName}: ${formatCount(result.created)} threads added, ${formatCount(result.updated)} updated`;
+    if (result.possiblyTruncated) toast(`${summary}. More assigned issues may exist beyond this batch.`, { icon: '⚠️' });
+    else toast.success(summary);
+  });
   const searchId = useId();
   const filedById = useId();
   const overrideContextId = useId();
@@ -587,6 +594,20 @@ export default function IssuesTab({ appId, appName }) {
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
+
+      {data?.forge === 'github' && (
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <button
+            type="button"
+            onClick={trackAssigned}
+            disabled={trackingAssigned || loading}
+            className="px-3 py-1.5 rounded-lg border border-port-border text-port-accent hover:bg-port-accent/10 disabled:opacity-50"
+          >
+            {trackingAssigned ? 'Tracking assigned issues…' : 'Track my assigned issues in Brain'}
+          </button>
+          <Link to="/brain/threads" className="text-port-accent hover:underline">Open Threads</Link>
+        </div>
+      )}
 
       {labelFacets.length > 0 && (
         <div

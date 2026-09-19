@@ -73,7 +73,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 
 | File | Purpose |
 |---|---|
-| `apiBrainThreads.js` | Brain threads — the bullet journal's open loops (`/brain/threads`, Brain `threads` entity; a *thread* is a tracked topic, never a message thread): filtered list (`listThreads({ status, priority, tag, pinned, refKind, q })`), full record with `resolvedRefs` (`getThread`), create / defaults-free PUT / tombstone delete, per-ref attach/detach (`addThreadRef`, `removeThreadRef`), and attach (`attachToThread`). |
+| `apiBrainThreads.js` | Brain threads — the bullet journal's open loops (`/brain/threads`, Brain `threads` entity; a *thread* is a tracked topic, never a message thread): filtered list (`listThreads({ status, priority, tag, pinned, refKind, q })`), full record with `resolvedRefs` (`getThread`), create / defaults-free PUT / tombstone delete, per-ref attach/detach (`addThreadRef`, `removeThreadRef`), attach (`attachToThread`), and explicit assigned GitHub ingestion (`syncGithubThreads({ appId, pinned })`). |
 | `apiBrain.js` | Brain (second-brain) search + ingest + edit, plus the federation parity audit (`getBrainParityReports`, `runBrainParityCheck`). |
 | `apiMemory.js` | Memory CRUD. |
 | `apiNotes.js` | Notes vault. |
