@@ -9,7 +9,7 @@
  * match-or-create, POSTing `/api/brain/threads/attach`.
  */
 
-import { useState, useEffect, useMemo, useId } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { ListTodo, X } from 'lucide-react';
 import * as api from '../../services/api';
@@ -39,7 +39,6 @@ export default function AddToThreadButton({
   const [loading, setLoading] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [query, setQuery] = useState('');
-  const inputId = useId();
 
   const computedRef = useMemo(() => {
     const base = refItem || threadRef;
@@ -190,6 +189,7 @@ export default function AddToThreadButton({
             </div>
           )}
 
+          <label htmlFor="add-to-thread-search" className="sr-only">Search threads</label>
           <EntityCombobox
             items={comboboxItems}
             value={query}
@@ -197,7 +197,7 @@ export default function AddToThreadButton({
             onPick={handlePick}
             onCreate={handleCreate}
             busy={loading || attaching}
-            inputId={inputId}
+            inputId="add-to-thread-search"
             noun="thread"
             placeholder="Search open threads or type name…"
             createPrefix="New thread"
