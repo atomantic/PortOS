@@ -32,6 +32,7 @@ import ProviderHarnessesTab from '../components/providers/ProviderHarnessesTab';
 import ProviderServicesTab from '../components/providers/ProviderServicesTab';
 import ProviderCompatibilityMatrix from '../components/providers/ProviderCompatibilityMatrix';
 import ProviderComposePopover from '../components/providers/ProviderComposePopover';
+import DefaultProviderHelper from '../components/providers/DefaultProviderHelper';
 
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
@@ -741,7 +742,18 @@ export default function AIProviders() {
   }, [loading, loadError, editingProviderId, editingProvider, navigate]);
 
   const selectedRunProvider = providers.find(p => p.id === activeProviderId);
+  const defaultProvider = selectedRunProvider || null;
   const runProviderIsTui = isTuiProvider(selectedRunProvider);
+
+  const scrollToDefaultCard = useCallback(() => {
+    if (!activeProviderId) return;
+    const el = document.getElementById(`provider-card-${activeProviderId}`)
+      || document.querySelector(`[data-mode-ids~="${activeProviderId}"]`);
+    if (el) {
+      el.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      el.focus?.();
+    }
+  }, [activeProviderId]);
 
   if (loading) {
     return (
@@ -836,6 +848,12 @@ export default function AIProviders() {
 
       {activeTab === 'presets' && (
       <>
+      {!loadError && (
+        <DefaultProviderHelper
+          provider={defaultProvider}
+          onScrollToCard={scrollToDefaultCard}
+        />
+      )}
 
       {/* A retirement only becomes observable when a catalog refresh lands, so
           the panel re-reads on every refresh — see RetiredModelPinsPanel. */}
