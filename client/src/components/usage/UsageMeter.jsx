@@ -41,20 +41,19 @@ export function meterTone(percentUsed) {
   return 'success';
 }
 
-// How old a STAND-IN reading has to be before the meter says so. A federated
-// card takes the freshest reading per window across machines, so a meter can be
-// another instance's — fine when it was read moments ago, misleading once it is
-// hours behind, because the account it describes has been spent since. Local
-// readings (`readBy` null) are never captioned: their age is the card's own.
-const STALE_READING_MS = 60 * 60 * 1000;
-
+// Staleness itself is decided server-side, against the window's own period
+// (a fraction of it, not a flat constant) — see `lib/quotaWindows.js`. This
+// component only formats the verdict it's handed on `limit.stale`. A
+// federated card's meter can be another instance's stand-in reading
+// (`readBy` set); a purely local reading ages the same way, just without the
+// "on <machine>" attribution.
 export function readingAttribution(limit) {
-  if (!limit?.readBy) return null;
-  // `?? ''` because an undated contribution carries `readAt: null`, and
+  if (!limit?.stale) return null;
+  // `?? ''` because an undated reading carries `readAt: null`, and
   // `new Date(null)` is the epoch — a date, and a very stale one.
   const readMs = new Date(limit.readAt ?? '').getTime();
   const dated = Number.isFinite(readMs);
-  if (dated && Date.now() - readMs < STALE_READING_MS) return null;
+  if (!limit.readBy) return dated ? `read ${timeAgo(readMs)}` : null;
   const who = limit.readByName || 'another instance';
   return dated ? `read ${timeAgo(readMs)} on ${who}` : `read on ${who}`;
 }

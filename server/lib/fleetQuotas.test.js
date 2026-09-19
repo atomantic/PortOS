@@ -53,6 +53,25 @@ describe('sanitizeQuotaCards', () => {
   it('ignores a non-array payload', () => {
     expect(sanitizeQuotaCards({ family: 'claude' })).toEqual([]);
   });
+
+  // #7662: periodHours has to survive the wire rebuild, or a federated merge
+  // can only classify a peer's window from its scope/label text.
+  it('carries a stated periodHours through, and omits it when absent or excessive', () => {
+    const [card] = sanitizeQuotaCards([{
+      family: 'codex', label: 'Codex', fetchedAt: '2026-09-03T10:00:00.000Z',
+      limits: [
+        { key: 'session', percentUsed: 10, periodHours: 7, scope: 'session' },
+        { key: 'week', percentUsed: 10 },
+        { key: 'burst', percentUsed: 10, periodHours: 0 },
+        { key: 'millennium', percentUsed: 10, periodHours: 1e9 },
+      ],
+    }]);
+    expect(card.limits[0]).toMatchObject({ key: 'session', periodHours: 7, scope: 'session' });
+    expect(Object.hasOwn(card.limits[1], 'periodHours')).toBe(false);
+    expect(Object.hasOwn(card.limits[1], 'scope')).toBe(false);
+    expect(Object.hasOwn(card.limits[2], 'periodHours')).toBe(false);
+    expect(Object.hasOwn(card.limits[3], 'periodHours')).toBe(false);
+  });
 });
 
 describe('latestFetchedAt', () => {
@@ -173,6 +192,30 @@ describe('mergeQuotaCard', () => {
       [peerEntry({ quotas: [{ ...peerEntry().quotas[0], family: 'claude', plan: 'Max 20x', fetchedAt: '2026-09-03T11:00:00.000Z' }] })],
     )[0];
     expect(merged.plan).toBe('Max 20x');
+  });
+
+  // #7662: the merged limit's `stale` verdict is re-derived at merge time from
+  // the WINNING contribution's own readAt, not carried over from whichever
+  // side stamped it first — a peer's periodHours-aware reading must age the
+  // same way a local one does.
+  it('recomputes stale against the winning readAt and the limit\'s own period', () => {
+    const now = Date.parse('2026-09-03T12:00:00.000Z');
+    // Peer's session (5h window) reading is 55 minutes old at merge time —
+    // past the 30-minute threshold — while the local weekly reading is fresh.
+    const peer = peerEntry({
+      quotas: [{
+        family: 'claude', limits: [limit('session', 65, { periodHours: 5 })],
+        fetchedAt: '2026-09-03T11:05:00.000Z',
+      }],
+    });
+    const merged = mergeFleetQuotaCards(
+      [localCard({ limits: [limit('week', 20, { periodHours: 168 })], fetchedAt: '2026-09-03T11:59:00.000Z' })],
+      [peer],
+      { now },
+    )[0];
+    const bySession = Object.fromEntries(merged.limits.map((l) => [l.key, l]));
+    expect(bySession.session).toMatchObject({ stale: true, readBy: 'peer-1' });
+    expect(bySession.week).toMatchObject({ stale: false, readBy: null });
   });
 
   it('collapses the name list past three instances', () => {

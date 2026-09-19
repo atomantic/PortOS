@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyWindows, windowLabelOf, windowPeriodHours } from './quotaWindows.js';
+import { classifyWindows, isLimitStale, staleThresholdMs, windowLabelOf, windowPeriodHours } from './quotaWindows.js';
 
 // The scope/label vocabulary the four in-tree adapters actually emit — the point
 // of the classifier is that each of these resolves, so a real card is never
@@ -101,6 +101,40 @@ describe('classifyWindows', () => {
   it('returns nulls for an empty set', () => {
     expect(classify([])).toEqual({ target: null, limiting: null });
     expect(classify(null)).toEqual({ target: null, limiting: null });
+  });
+});
+
+describe('staleThresholdMs / isLimitStale', () => {
+  it('scales the threshold to 10% of the window, floored at 5 minutes', () => {
+    // 5h session: 10% is 30min, well above the floor.
+    expect(staleThresholdMs(5)).toBe(30 * 60 * 1000);
+    // Weekly: 10% of 168h is ~16.8h.
+    expect(staleThresholdMs(168)).toBe(16.8 * 60 * 60 * 1000);
+    // A hypothetical fast-moving window still floors at 5 minutes rather than
+    // going permanently stale.
+    expect(staleThresholdMs(0.5)).toBe(5 * 60 * 1000);
+  });
+
+  it('returns null for an unclassifiable period', () => {
+    expect(staleThresholdMs(null)).toBeNull();
+    expect(staleThresholdMs(0)).toBeNull();
+    expect(staleThresholdMs(-1)).toBeNull();
+  });
+
+  it('flags a 5-hour session meter read 55 minutes ago, but not a weekly one read 70 minutes ago', () => {
+    const session = { scope: 'session', label: 'Current session' };
+    const weekly = { scope: 'week', label: 'Weekly' };
+    expect(isLimitStale(session, 55 * 60 * 1000)).toBe(true);
+    expect(isLimitStale(weekly, 70 * 60 * 1000)).toBe(false);
+  });
+
+  it('never flags a window whose period is unknown, however old the reading', () => {
+    expect(isLimitStale({ scope: 'burst', label: 'Burst' }, 999 * 60 * 60 * 1000)).toBe(false);
+  });
+
+  it('never flags an unparseable age', () => {
+    expect(isLimitStale({ scope: 'session' }, null)).toBe(false);
+    expect(isLimitStale({ scope: 'session' }, NaN)).toBe(false);
   });
 });
 
