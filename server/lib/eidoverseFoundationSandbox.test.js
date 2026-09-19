@@ -159,6 +159,38 @@ describe('deriving the assay sandbox from a foundation body', () => {
     expect(replayed.reasons.join(' ')).toMatch(/pulses was/);
   });
 
+  it('replays a step that returns nothing as "this tick changed no state", exactly as the live path does', async () => {
+    // `runControllerStep()` documents a bare `return` (and a `{ effects }`
+    // with no `state`) as "left the state unchanged". A gate that read
+    // `.state` off the outcome threw on that contract, so a controller that
+    // ticks correctly in production failed the promote gate — an assay verdict
+    // about a tick path the install does not actually run.
+    const intermittent = {
+      id: 'every-other-beacon',
+      title: 'Every-other beacon',
+      summary: 'Only writes state on alternate ticks.',
+      configSchema: z.object({}).strict(),
+      createState: () => ({ ticks: 0, pulses: 0 }),
+      step: (state, { tick }) => {
+        if (tick % 2 === 0) return undefined;                       // nothing at all
+        if (tick % 3 === 0) return { effects: [] };                 // effects, no state
+        return { state: { ...state, ticks: state.ticks + 1, pulses: state.pulses + 1 } };
+      },
+      invariants: [function countersStayIntegers(state) {
+        return (Number.isInteger(state.ticks) && Number.isInteger(state.pulses)) || { ok: false, reason: 'counters left the integers' };
+      }],
+    };
+
+    const derived = await foundationSandbox(
+      { kind: 'controller', id: 'every-other-beacon', body: { controller: { definitionId: 'every-other-beacon', config: {} } } },
+      { findControllerDefinition: async (id) => (id === 'every-other-beacon' ? intermittent : null) },
+    );
+
+    expect(derived.refusal).toBeNull();
+    const replayed = runResilienceAssay(derived.contribution, { disturbances: RESILIENCE_DISTURBANCES });
+    expect(replayed.pass).toBe(true);
+  });
+
   it('refuses a kind with no derivation and a body that is not an object', async () => {
     expect((await foundationSandbox({ kind: 'mystery', id: 'x', body: {} }, resolvers)).refusal).toMatch(/has no sandbox derivation/);
     expect((await foundationSandbox({ kind: 'schema', id: 'x', body: null }, resolvers)).refusal).toMatch(/no body to replay/);

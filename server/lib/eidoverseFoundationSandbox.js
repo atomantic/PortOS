@@ -130,7 +130,18 @@ function controllerSandbox({ body, definition, definitionId, contributionId }) {
       return {
         worldState: definition.createState(scenarioConfig),
         controller: {
-          step: (worldState, tick) => definition.step(worldState, { tick, config: scenarioConfig }).state,
+          // `outcome?.state === undefined` mirrors `runControllerStep()`'s own
+          // rule, and has to: a step that returns nothing (or returns effects
+          // with no `state`) is asserting "this tick changed no state", which
+          // is ordinary for a controller that acts every Nth tick. Reading
+          // `.state` off the result directly would throw on the live contract
+          // and fail the promote gate for a controller that runs correctly —
+          // an assay verdict about something other than the real tick path,
+          // which is the very thing this module exists to stop.
+          step: (worldState, tick) => {
+            const outcome = definition.step(worldState, { tick, config: scenarioConfig });
+            return outcome?.state === undefined ? worldState : outcome.state;
+          },
           // Every disturbance in the suite is an ENVIRONMENT event; a
           // controller that keeps its durable state in `state` survives all
           // three, and the round-trip proves it holds no in-process handle.
