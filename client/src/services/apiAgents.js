@@ -116,6 +116,13 @@ export const updatePersistentMindMemory = (memoryId, body, options = {}) => requ
 export const cleanupPersistentMind = (body, options = {}) => request('/cos/mind/cleanup', {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+// Seal the Mind into a portable bundle (#7621). The response is the sealed file
+// itself, not JSON — `responseType: 'text'` hands the caller the bytes to save.
+// `silent` because the panel renders its own inline refusal: the server's
+// "could not read <scope>" reason is the whole point of the failure.
+export const exportPersistentMindBundle = (body, options = {}) => request('/cos/mind/bundle/export', {
+  method: 'POST', body: JSON.stringify(body), responseType: 'text', silent: true, ...options,
+});
 
 // Chief of Staff
 export const getCosStatus = () => request('/cos');
