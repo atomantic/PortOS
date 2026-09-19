@@ -6,7 +6,7 @@ import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import * as api from '../../../services/api';
 import { parseCronToRecurrence, buildCronFromRecurrence } from '../../../utils/cronHelpers';
 import AgentJobProviderFields from '../../cos/AgentJobProviderFields';
-import JobCard, { AUTONOMY_OPTIONS, PRIORITY_OPTIONS, ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
+import JobCard, { ScheduleFields, TaskMetadataFields } from '../../cos/JobCard';
 import { filterRunnableProviders } from '../../../utils/providers';
 import TaskDataInputs from '../../cos/TaskDataInputs';
 import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from '../../cos/JobFormFields';
@@ -119,26 +119,6 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
       </FormField>
 
       <ScheduleFields data={form} timezone={timezone} onChange={update} />
-
-      {/* Priority + autonomy */}
-      <div className="flex gap-3">
-        <select
-          aria-label="Priority"
-          value={form.priority}
-          onChange={e => update('priority', e.target.value)}
-          className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-        >
-          {PRIORITY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <select
-          aria-label="Autonomy level"
-          value={form.autonomyLevel}
-          onChange={e => update('autonomyLevel', e.target.value)}
-          className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-        >
-          {AUTONOMY_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-        </select>
-      </div>
 
       <AgentJobProviderFields
         data={form}
