@@ -100,6 +100,20 @@ describe('PersistentMindImportPanel', () => {
     expect(await screen.findByText(/Used the imported identity/)).toBeInTheDocument();
   });
 
+  it('reports skipped memories even when nothing new was added', async () => {
+    api.applyPersistentMindBundle.mockResolvedValue({ applied: ['memories'], kept: [], memories: { imported: 0, skipped: 3 } });
+    const user = userEvent.setup();
+    render(<PersistentMindImportPanel />);
+    await openBundle(user);
+
+    await user.click(screen.getByRole('radio', { name: /Import them/ }));
+    await user.click(screen.getByRole('button', { name: /Apply these choices/ }));
+
+    // An all-duplicate import adds nothing; saying only "used the imported
+    // memories" would read as though records had arrived.
+    expect(await screen.findByText(/3 were already here and were skipped/)).toBeInTheDocument();
+  });
+
   it('discards the open preview when the passphrase changes, so a confirm cannot apply a stale one', async () => {
     const user = userEvent.setup();
     render(<PersistentMindImportPanel />);

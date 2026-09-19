@@ -399,3 +399,63 @@ describe('persistentMindBundle apply', () => {
     expect(createPersistentMindMemory.mock.calls.map(([input]) => input.content)).not.toContain(OTHER_MIND.chosenName);
   });
 });
+
+describe('persistentMindBundle import refuses a hand-built file rather than applying part of it', () => {
+  it('omits a profile group the bundle does not carry, instead of offering this build\'s defaults', async () => {
+    // Normalizing an absent `soul` yields the SHIPPED default identity. Offered
+    // as "use imported", a confirm would replace an authored personality with
+    // stock text presented as the other Mind's.
+    const text = await sealOther({ profile: { chosenName: 'Other Example Mind' }, scopes: ['profile'] });
+    const groups = (await previewPersistentMindBundle({ text, passphrase: PASSPHRASE })).groups.map(({ group }) => group);
+    expect(groups).toEqual(['identity']);
+
+    await expect(applyPersistentMindBundle({ text, passphrase: PASSPHRASE, choices: { personality: 'use-imported' } }))
+      .rejects.toMatchObject({ code: 'MIND_BUNDLE_UNKNOWN_GROUP' });
+    noWrites();
+  });
+
+  it('refuses an unusable memory record rather than importing the rest without it', async () => {
+    const text = await sealOther({ memories: [OTHER_MEMORIES[0], { type: 'fact', content: '   ' }], scopes: ['memories'] });
+    await expect(previewPersistentMindBundle({ text, passphrase: PASSPHRASE }))
+      .rejects.toMatchObject({ context: { reason: MIND_BUNDLE_REFUSALS.DAMAGED } });
+    await expect(applyPersistentMindBundle({ text, passphrase: PASSPHRASE, choices: { memories: 'use-imported' } }))
+      .rejects.toMatchObject({ context: { reason: MIND_BUNDLE_REFUSALS.DAMAGED } });
+    noWrites();
+  });
+
+  it('refuses more memories than one bundle can hold, rather than importing a silent prefix', async () => {
+    const memories = Array.from({ length: 101 }, (_unused, index) => ({
+      type: 'fact', content: `Example protected memory ${index}`, protection: 'important',
+    }));
+    await expect(previewPersistentMindBundle({ text: await sealOther({ memories, scopes: ['memories'] }), passphrase: PASSPHRASE }))
+      .rejects.toThrow(/more memories than one bundle can hold/);
+    noWrites();
+  });
+
+  it('refuses an entry for a scope the bundle never declared, rather than applying it anyway', async () => {
+    const text = await sealMindBundle({
+      scopes: ['profile'],
+      passphrase: PASSPHRASE,
+      entries: [
+        { name: 'profile.json', data: JSON.stringify(OTHER_MIND) },
+        // Sealed but undeclared: the cleartext header is what a destination
+        // refuses on, so an entry outside it must not sneak a group in.
+        { name: 'avatar.json', data: JSON.stringify({ style: 'svg' }) },
+      ],
+    });
+    await expect(previewPersistentMindBundle({ text, passphrase: PASSPHRASE }))
+      .rejects.toMatchObject({ context: { reason: MIND_BUNDLE_REFUSALS.UNKNOWN_SCOPE } });
+    noWrites();
+  });
+
+  it('refuses a declared scope whose entry is missing, rather than reading it as empty', async () => {
+    const text = await sealMindBundle({
+      scopes: ['profile', 'memories'],
+      passphrase: PASSPHRASE,
+      entries: [{ name: 'profile.json', data: JSON.stringify(OTHER_MIND) }],
+    });
+    await expect(previewPersistentMindBundle({ text, passphrase: PASSPHRASE }))
+      .rejects.toThrow(/declares the "memories" scope but carries no memories.json/);
+    noWrites();
+  });
+});

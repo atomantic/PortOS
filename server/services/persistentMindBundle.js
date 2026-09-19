@@ -217,14 +217,20 @@ const sameValue = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Normalize one imported memory through the same bounds a locally-created one
- * gets. A bundle is a file from another machine: its records are foreign input,
- * not trusted rows, so anything that is not a usable record is dropped here
- * rather than handed to the memory backend.
+ * gets. A bundle is a file from another machine, so its records are foreign
+ * input — but an unusable one REFUSES the bundle rather than vanishing from
+ * the set. Silently importing 9 of 10 memories is the same failure the export
+ * refuses to produce: the user believes they carried everything across, and
+ * finds out otherwise only once the source install is gone.
  */
-function normalizeImportedMemory(raw) {
-  if (!isPlainRecord(raw)) return null;
+function normalizeImportedMemory(raw, index) {
+  if (!isPlainRecord(raw)) {
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.DAMAGED, `Mind bundle memory #${index + 1} is not a record`);
+  }
   const content = typeof raw.content === 'string' ? raw.content.trim().slice(0, IMPORTED_MEMORY_CONTENT_MAX) : '';
-  if (!content) return null;
+  if (!content) {
+    throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.DAMAGED, `Mind bundle memory #${index + 1} carries no text`);
+  }
   return {
     type: typeof raw.type === 'string' && raw.type.trim() ? raw.type.trim().slice(0, IMPORTED_MEMORY_TYPE_MAX) : 'observation',
     content,
@@ -254,6 +260,12 @@ function decodeBundleEntries({ header, entries }) {
     }
     if (!header.scopes.includes(scope)) {
       throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.UNKNOWN_SCOPE, `Mind bundle carries a "${scope}" entry it never declared`);
+    }
+    if (decoded[scope]) {
+      // The sealer rejects duplicate names, so two entries for one scope means
+      // a hand-built file. "Last one wins" would let the winning copy be chosen
+      // by parse order rather than by anything the user can see.
+      throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.DAMAGED, `Mind bundle carries more than one "${entry.name}"`);
     }
     const parsed = JSON.parse(entry.data.toString('utf8'));
     if (!isPlainRecord(parsed)) {
@@ -293,7 +305,9 @@ const refuse = (error) => new ServerError(
  */
 const readBundle = ({ text, passphrase }) => Promise.resolve()
   .then(() => openMindBundle({ text, passphrase }))
-  .then((result) => ({ header: result.header, scopes: decodeBundleEntries(result) }))
+  // Group-building runs inside this chain, not after it: it validates the same
+  // foreign records, so its refusals need the same named translation.
+  .then((result) => ({ header: result.header, groups: incomingGroups(decodeBundleEntries(result)) }))
   .catch((error) => { throw refuse(error); });
 
 /** What this install currently holds, in the same shapes the bundle carries. */
@@ -338,19 +352,29 @@ function incomingGroups(scopeData) {
   if (profile) {
     const chosenName = typeof profile.chosenName === 'string' ? profile.chosenName.trim() : '';
     if (chosenName) groups.identity = { chosenName };
-    const soul = normalizePersistentMindPrompt(profile.soul);
-    groups.personality = { identity: soul.identity, instructions: soul.instructions };
-    const playbook = normalizePersistentMindPlaybook(profile.playbook);
-    groups.playbook = { mode: playbook.mode, customInstructions: playbook.customInstructions };
-    // `enabled` is never read off a bundle: importing a Mind must not start one.
-    const policy = normalizePersistentMindProfile({ ...(isPlainRecord(profile.modelPolicy) ? profile.modelPolicy : {}), enabled: false });
-    groups.modelPolicy = {
-      providerId: policy.providerId || null,
-      model: policy.model || null,
-      effort: policy.effort || null,
-      thinkingInterface: policy.thinkingInterface,
-      wakeIntervalMinutes: policy.wakeIntervalMinutes,
-    };
+    // Each of these is offered ONLY when the bundle carries the key. The
+    // normalizers turn an absent one into THIS build's shipped defaults, and a
+    // group presenting stock text as the other Mind's personality is how a
+    // confirm wipes an authored one with something nobody wrote.
+    if (isPlainRecord(profile.soul)) {
+      const soul = normalizePersistentMindPrompt(profile.soul);
+      groups.personality = { identity: soul.identity, instructions: soul.instructions };
+    }
+    if (isPlainRecord(profile.playbook)) {
+      const playbook = normalizePersistentMindPlaybook(profile.playbook);
+      groups.playbook = { mode: playbook.mode, customInstructions: playbook.customInstructions };
+    }
+    if (isPlainRecord(profile.modelPolicy)) {
+      // `enabled` is never read off a bundle: importing a Mind must not start one.
+      const policy = normalizePersistentMindProfile({ ...profile.modelPolicy, enabled: false });
+      groups.modelPolicy = {
+        providerId: policy.providerId || null,
+        model: policy.model || null,
+        effort: policy.effort || null,
+        thinkingInterface: policy.thinkingInterface,
+        wakeIntervalMinutes: policy.wakeIntervalMinutes,
+      };
+    }
   }
   if (scopeData.avatar) {
     const style = scopeData.avatar.style;
@@ -358,7 +382,13 @@ function incomingGroups(scopeData) {
   }
   if (scopeData.memories) {
     const raw = Array.isArray(scopeData.memories.memories) ? scopeData.memories.memories : [];
-    groups.memories = raw.slice(0, MIND_MEMORY_PAGE_LIMIT).map(normalizeImportedMemory).filter(Boolean);
+    if (raw.length > MIND_MEMORY_PAGE_LIMIT) {
+      // The exporter refuses rather than truncating, so an over-long set is a
+      // hand-built file. Importing its prefix would report a `total` that had
+      // already silently dropped the rest.
+      throw mindBundleRefusal(MIND_BUNDLE_REFUSALS.DAMAGED, `Mind bundle carries more memories than one bundle can hold (limit ${MIND_MEMORY_PAGE_LIMIT})`);
+    }
+    groups.memories = raw.map(normalizeImportedMemory);
   }
   return groups;
 }
@@ -393,8 +423,7 @@ function planMemoryImport(incomingMemories, currentMemories, incomingName) {
  * apply step a decision rather than a leap.
  */
 export async function previewPersistentMindBundle({ text, passphrase }) {
-  const { header, scopes } = await readBundle({ text, passphrase });
-  const incoming = incomingGroups(scopes);
+  const { header, groups: incoming } = await readBundle({ text, passphrase });
   const current = await readCurrentGroups();
   const incomingName = incoming.identity?.chosenName || null;
 
@@ -437,8 +466,7 @@ export async function previewPersistentMindBundle({ text, passphrase }) {
  * happened.
  */
 export async function applyPersistentMindBundle({ text, passphrase, choices }) {
-  const { scopes } = await readBundle({ text, passphrase });
-  const incoming = incomingGroups(scopes);
+  const { groups: incoming } = await readBundle({ text, passphrase });
   const selection = isPlainRecord(choices) ? choices : {};
 
   const unknown = Object.keys(selection).filter((group) => incoming[group] === undefined);

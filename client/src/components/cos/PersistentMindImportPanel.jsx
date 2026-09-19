@@ -62,6 +62,10 @@ function GroupValue({ value, empty = 'Nothing set' }) {
 export default function PersistentMindImportPanel() {
   const idPrefix = useId();
   const [file, setFile] = useState(null);
+  // Bumped after a successful apply to REMOUNT the file input. Clearing `file`
+  // only clears the label: the <input> keeps its DOM value, so re-picking the
+  // same file fires no change event and the panel looks stuck.
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [bundleText, setBundleText] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [preview, setPreview] = useState(null);
@@ -86,6 +90,9 @@ export default function PersistentMindImportPanel() {
     setFile(picked);
     setBundleText('');
     if (!picked) return;
+    // `size` is bytes and the cap is characters. A bundle is base64 + JSON, so
+    // the two are equal in practice, and where they are not this errs toward
+    // rejecting early — the server bound is the authority either way.
     if (picked.size > MIND_BUNDLE_MAX_CHARS) {
       setError('That file is larger than a Mind bundle can be. Check that you picked the right file.');
       return;
@@ -125,6 +132,7 @@ export default function PersistentMindImportPanel() {
         setPassphrase('');
         setBundleText('');
         setFile(null);
+        setFileInputKey((current) => current + 1);
       })
       .catch((nextError) => setError(nextError?.message || 'Could not apply that bundle'))
       .finally(() => setPending(null));
@@ -149,6 +157,7 @@ export default function PersistentMindImportPanel() {
         <div>
           <label htmlFor={`${idPrefix}-file`} className="flex items-center gap-2 text-xs font-medium text-port-text"><FileUp size={14} aria-hidden="true" /> Bundle file</label>
           <input
+            key={fileInputKey}
             id={`${idPrefix}-file`}
             type="file"
             accept={MIND_BUNDLE_FILE_EXTENSION}
@@ -195,9 +204,11 @@ export default function PersistentMindImportPanel() {
         <div className="mt-4">
           <Banner tone="success" title="Bundle applied">
             {applied.applied.length > 0 ? `Used the imported ${applied.applied.join(', ')}.` : 'Nothing was changed — every group kept this install\'s value.'}
-            {applied.memories.imported > 0 && ` Added ${formatCount(applied.memories.imported)} memories`}
-            {applied.memories.imported > 0 && applied.memories.skipped > 0 && ` (${formatCount(applied.memories.skipped)} already here)`}
-            {applied.memories.imported > 0 && '.'}
+            {/* `skipped` stands on its own: importing a bundle whose memories
+                you already hold adds nothing, and a bare "used the imported
+                memories" would read as though records had arrived. */}
+            {applied.memories.imported > 0 && ` Added ${formatCount(applied.memories.imported)} memories.`}
+            {applied.memories.skipped > 0 && ` ${formatCount(applied.memories.skipped)} were already here and were skipped.`}
           </Banner>
         </div>
       )}
