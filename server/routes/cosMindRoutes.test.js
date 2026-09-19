@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   listMindToolRecipes: vi.fn(),
   resolveImageCapability: vi.fn(),
   cleanupPersistentMind: vi.fn(),
+  readPersistentMindJournal: vi.fn(),
+  correctPersistentMindJournalEvent: vi.fn(),
 }));
 
 vi.mock('../services/agentRunEventLog.js', () => ({
@@ -49,6 +51,10 @@ vi.mock('../services/persistentMindContext.js', () => ({
   readPersistentMindName: async () => resolvePersistentMindChosenName(await mocks.readPersistentMindMemories()),
   readPersistentMindRollups: mocks.readPersistentMindRollups,
   updatePersistentMindMemory: mocks.updatePersistentMindMemory,
+}));
+vi.mock('../services/persistentMindJournal.js', () => ({
+  readPersistentMindJournal: mocks.readPersistentMindJournal,
+  correctPersistentMindJournalEvent: mocks.correctPersistentMindJournalEvent,
 }));
 vi.mock('../services/providers.js', () => ({ getProviderById: mocks.getProviderById }));
 vi.mock('../services/persistentMindAdapter.js', () => ({
@@ -144,6 +150,7 @@ describe('persistent mind routes', () => {
     mocks.resolveImageCapability.mockResolvedValue({ status: 'unknown', reason: 'No authoritative metadata.', settingsPath: '/settings?tab=ai-providers' });
     mocks.readPersistentMindMemories.mockResolvedValue([{ id: 'memory-1', content: 'A durable fact', sourceAgentId: 'cos-persistent-mind' }]);
     mocks.readPersistentMindRollups.mockResolvedValue([]);
+    mocks.readPersistentMindJournal.mockResolvedValue([]);
     mocks.preparePersistentMindContext.mockResolvedValue({ text: '# Context', chars: 9, approximateTokens: 3, summaryState: 'empty' });
     mocks.createPersistentMindMemory.mockResolvedValue({ id: 'memory-2', content: 'A new fact', sourceAgentId: 'cos-persistent-mind' });
     mocks.updatePersistentMindMemory.mockResolvedValue({ id: 'memory-1', content: 'An edited fact', sourceAgentId: 'cos-persistent-mind' });
@@ -638,5 +645,60 @@ describe('persistent mind routes', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('MIND_BUNDLE_SCOPE_UNREADABLE');
     expect(res.body.error).toContain('memories');
+  });
+
+  it('serves the journal filtered by kind and status, and never exposes the stored envelope', async () => {
+    const entry = (overrides) => ({
+      schemaVersion: 1, id: 'decision-1', mindId: 'cos-persistent-mind', kind: 'decision',
+      statement: 'We ship the importer first.', status: 'active',
+      source: { sequences: [12] }, supersedes: null, supersededBy: null, resolution: null, retiredBy: null,
+      provenance: { providerId: 'demo', model: 'demo-model', promptVersion: 1, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
+      ...overrides,
+    });
+    mocks.readPersistentMindJournal.mockResolvedValue([
+      entry({}),
+      entry({ id: 'decision-0', status: 'superseded', supersededBy: 'decision-1', retiredBy: 'mind', statement: 'We ship the exporter first.' }),
+    ]);
+
+    const res = await get('/mind/journal?kind=decision&status=active');
+    expect(res.status).toBe(200);
+    expect(mocks.readPersistentMindJournal).toHaveBeenCalledWith('cos-persistent-mind', { kind: 'decision', status: 'active' });
+    expect(res.body.counts).toEqual({ active: 1, superseded: 1, resolved: 0 });
+    // The wire shape is the public projection: no schemaVersion, no mindId, no
+    // nested provenance envelope.
+    expect(res.body.events[0]).toEqual({
+      id: 'decision-1', kind: 'decision', statement: 'We ship the importer first.', status: 'active',
+      sourceSequences: [12], supersedes: null, supersededBy: null, resolution: null, retiredBy: null,
+      createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
+      providerId: 'demo', model: 'demo-model',
+    });
+    expect((await get('/mind/journal?status=invented')).status).toBe(400);
+  });
+
+  it('lets the user retire or settle one entry, and refuses any other status write', async () => {
+    mocks.correctPersistentMindJournalEvent.mockResolvedValue({
+      success: true,
+      changed: true,
+      event: {
+        schemaVersion: 1, id: 'decision-1', mindId: 'cos-persistent-mind', kind: 'decision',
+        statement: 'We ship the importer first.', status: 'superseded',
+        source: { sequences: [12] }, supersedes: null, supersededBy: null, resolution: null, retiredBy: 'user',
+        provenance: { providerId: null, model: null, promptVersion: 1, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-02T00:00:00.000Z' },
+      },
+    });
+    const res = await post('/mind/journal/decision-1/correct', { action: 'retire' });
+    expect(res.status).toBe(200);
+    expect(res.body.event).toMatchObject({ status: 'superseded', retiredBy: 'user' });
+    expect(mocks.correctPersistentMindJournalEvent).toHaveBeenCalledWith({
+      mindId: 'cos-persistent-mind', eventId: 'decision-1', action: 'retire',
+    });
+
+    // No free status write and no delete verb: a retired statement can only be
+    // brought back by the mind's own supersede operation.
+    expect((await post('/mind/journal/decision-1/correct', { action: 'delete' })).status).toBe(400);
+    expect((await post('/mind/journal/decision-1/correct', { status: 'active' })).status).toBe(400);
+
+    mocks.correctPersistentMindJournalEvent.mockResolvedValue({ success: false, error: 'Journal entry not found', status: 404, code: 'NOT_FOUND' });
+    expect((await post('/mind/journal/missing/correct', { action: 'resolve' })).status).toBe(404);
   });
 });

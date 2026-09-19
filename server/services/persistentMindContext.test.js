@@ -47,9 +47,10 @@ const {
   promotePersistentMindMemory,
   readPersistentMindRollups,
 } = await import('./persistentMindContext.js');
-const { buildPersistentMindCallDenial } = await import('../lib/persistentMindTrajectory.js');
+const { buildPersistentMindCallDenial, PERSISTENT_MIND_ROLLUP_PROMPT_VERSION } = await import('../lib/persistentMindTrajectory.js');
 
 const ROLLUPS = join(CONTEXT_DIR, 'persistent-mind-rollups.json');
+const JOURNAL = join(CONTEXT_DIR, 'persistent-mind-journal.json');
 
 const event = (sequence, kind = 'mind.message.accepted') => ({
   schemaVersion: 1,
@@ -67,6 +68,7 @@ const event = (sequence, kind = 'mind.message.accepted') => ({
 
 beforeEach(() => {
   if (existsSync(ROLLUPS)) rmSync(ROLLUPS);
+  if (existsSync(JOURNAL)) rmSync(JOURNAL);
   mkdirSync(CONTEXT_DIR, { recursive: true });
   mock.history = [];
   mock.appendMindEvent.mockClear();
@@ -129,13 +131,13 @@ describe('persistent mind rollups', () => {
       mindId: 'cos-persistent-mind',
       source: expect.objectContaining({ fromSequence: 1, toSequence: 2 }),
       events: mock.history.slice(0, 2),
-      promptVersion: 1,
+      promptVersion: PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
     }));
     expect(rollup).toMatchObject({
       status: 'ready',
       summary: 'The older events established a useful decision.',
       source: { fromSequence: 1, toSequence: 2, fromEventId: 'event-1', toEventId: 'event-2' },
-      provenance: { providerId: 'example-provider', model: 'example-model', promptVersion: 1 },
+      provenance: { providerId: 'example-provider', model: 'example-model', promptVersion: PERSISTENT_MIND_ROLLUP_PROMPT_VERSION },
     });
     expect(context.summaryState).toBe('ready');
     expect(context.chars).toBeLessThanOrEqual(1_500);
@@ -178,6 +180,42 @@ describe('persistent mind rollups', () => {
     expect(second.summaryState).toBe('unavailable');
     expect(mock.appendMindEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'mind.summary' }));
     expect(mock.history).toHaveLength(3);
+  });
+
+  it('extracts the journal before sealing the range, feeds it to the summarizer, and renders it into the next context', async () => {
+    // The whole point of the journal: what the mind still owes the user has to
+    // reach the summarizer that compacts the range AND the context assembled
+    // for the next wake. Extracting after the seal would give the summary
+    // nothing to compact from.
+    mock.history = [event(1), event(2), event(3)];
+    const order = [];
+    const extractJournal = vi.fn(async () => {
+      order.push('extract');
+      return JSON.stringify({ operations: [{ op: 'append', kind: 'commitment', statement: 'I owe a migration plan.', sourceSequences: [1] }] });
+    });
+    const summarize = vi.fn(async () => { order.push('summarize'); return 'Sealed from the journal.'; });
+
+    const context = await preparePersistentMindContext({ recentEventLimit: 1, summarize, extractJournal });
+
+    expect(order).toEqual(['extract', 'summarize']);
+    expect(summarize).toHaveBeenCalledWith(expect.objectContaining({
+      journal: [expect.objectContaining({ statement: 'I owe a migration plan.', status: 'active' })],
+    }));
+    expect(context.text).toContain('# Decision journal');
+    expect(context.text).toContain('I owe a migration plan.');
+    expect(context.journalActiveCount).toBe(1);
+  });
+
+  it('seals the range anyway when journal extraction fails', async () => {
+    mock.history = [event(1), event(2), event(3)];
+    const extractJournal = vi.fn(async () => 'not json');
+    const summarize = vi.fn(async () => 'Sealed without a journal.');
+
+    const context = await preparePersistentMindContext({ recentEventLimit: 1, summarize, extractJournal });
+
+    expect(summarize).toHaveBeenCalledWith(expect.objectContaining({ journal: [] }));
+    expect(context.summaryState).toBe('ready');
+    expect((await readPersistentMindRollups())[0]).toMatchObject({ status: 'ready' });
   });
 
   it('rejects an empty or whitespace-only summary as a failed attempt', async () => {
@@ -238,7 +276,7 @@ describe('persistent mind rollups', () => {
       source: expect.objectContaining({ fromSequence: 1, toSequence: 3 }),
       events: [mock.history[2]],
       previousSummary: 'First cumulative summary.',
-      previousProvenance: expect.objectContaining({ promptVersion: 1 }),
+      previousProvenance: expect.objectContaining({ promptVersion: PERSISTENT_MIND_ROLLUP_PROMPT_VERSION }),
     }));
     expect(rollups.at(-1)).toMatchObject({
       status: 'ready',

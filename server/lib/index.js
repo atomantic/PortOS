@@ -328,6 +328,7 @@ export * from './agentRegistrationRecord.js';
 export * from './persistentMind.js';
 export * from './persistentMindCapabilities.js';
 export * from './persistentMindIssues.js';
+export * from './persistentMindJournal.js';
 export * from './persistentMindTrajectory.js';
 export * from './persistentMindProfile.js';
 export * from './persistentMindMemory.js';

@@ -29,6 +29,11 @@ import {
   appendMindEvent,
   readPersistentMindHistory,
 } from './agentRunEventLog.js';
+import {
+  extractPersistentMindJournal,
+  readPersistentMindJournal,
+} from './persistentMindJournal.js';
+import { persistentMindJournalDigest } from '../lib/persistentMindJournal.js';
 import { PERSISTENT_MIND_CHOSEN_NAME_TAG, persistentMindChooseNameSchema, resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
 import * as memoryBackend from './memoryBackend.js';
 import {
@@ -204,13 +209,16 @@ export async function preparePersistentMindContext({
   providerId = null,
   model = null,
   summarize = null,
+  extractJournal = null,
   forceSummary = false,
 } = {}) {
-  const [history, initialRollups] = await Promise.all([
+  const [history, initialRollups, initialJournal] = await Promise.all([
     readPersistentMindHistory(mindId),
     readPersistentMindRollups(mindId),
+    readPersistentMindJournal(mindId),
   ]);
   let rollups = initialRollups;
+  let journal = initialJournal;
   const older = history.slice(0, Math.max(0, history.length - Math.max(1, recentEventLimit)));
   let coverageGap = null;
 
@@ -244,11 +252,30 @@ export async function preparePersistentMindContext({
       };
       const rollupId = `${mindId}:${source.fromSequence}-${source.toSequence}:v${promptVersion}`;
       const alreadyAttempted = rollups.some((rollup) => rollup.id === rollupId);
+      // The journal is extracted BEFORE the range is sealed, so the summary
+      // compacts from typed events — what is still decided, owed, open and
+      // risky — instead of re-compressing the transcript. A failed extraction
+      // never blocks the seal: the rollup is still strictly better than losing
+      // the range, and a later turn can re-extract.
+      if (!coverageGap && typeof extractJournal === 'function' && (forceSummary || !alreadyAttempted)) {
+        const extraction = await extractPersistentMindJournal({
+          mindId,
+          events: rangeEvents,
+          range: { fromSequence: rangeEvents[0].sequence, toSequence: rangeEvents.at(-1).sequence },
+          extract: extractJournal,
+          providerId,
+          model,
+          isCallDenial: isPersistentMindCallDenial,
+        });
+        if (extraction.attempted) journal = await readPersistentMindJournal(mindId);
+        if (extraction.error) console.error(`❌ Persistent mind journal extraction failed: ${extraction.error}`);
+      }
       if (!coverageGap && typeof summarize === 'function' && (forceSummary || !alreadyAttempted)) {
         const outcome = await summaryOutcome(summarize, {
           mindId,
           source,
           events: rangeEvents,
+          journal,
           previousSummary: previous?.summary ?? null,
           previousProvenance: previous?.provenance ?? null,
           promptVersion,
@@ -305,6 +332,7 @@ export async function preparePersistentMindContext({
     memories,
     events: history,
     rollups,
+    journalDigest: persistentMindJournalDigest(journal, mindId),
     maxChars,
     recentEventLimit,
     promptVersion,
