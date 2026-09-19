@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { Link } from 'react-router';
 import { ListTodo, Pin } from 'lucide-react';
 import * as api from '../../../services/api';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import { isThreadOverdue, threadNextLine } from '../../../lib/brainThreads.js';
 import { formatCount, formatDateShort } from '../../../utils/formatters';
+import ThreadSourceClosedAction from '../../brain/ThreadSourceClosedAction';
 
 // The Brain bullet journal's open loops (#7664) with the next action on each,
 // so what you are on the hook for is one glance away. A *thread* here is a
@@ -19,6 +21,7 @@ const ROWS = 6;
 const WIDGET_STATUSES = 'open,waiting';
 
 export default function OpenThreadsWidget() {
+  const [completed, setCompleted] = useState({});
   const { data, loading } = useAutoRefetch(
     () => api.listThreads({ status: WIDGET_STATUSES, limit: ROWS, offset: 0 }, { silent: true }),
     60_000,
@@ -26,8 +29,12 @@ export default function OpenThreadsWidget() {
 
   if (loading && !data) return null;
 
-  const rows = Array.isArray(data?.threads) ? data.threads : [];
-  const total = Number.isFinite(data?.total) ? data.total : rows.length;
+  const fetchedRows = Array.isArray(data?.threads) ? data.threads : [];
+  // Retain successful writes over a poll that started before completion.
+  // A genuinely newer record (e.g. reopened in Brain) becomes visible again.
+  const rows = fetchedRows.filter((t) => !completed[t.id] || t.updatedAt > completed[t.id]);
+  const total = (Number.isFinite(data?.total) ? data.total : fetchedRows.length) - (fetchedRows.length - rows.length);
+  const onCompleted = (thread) => setCompleted((prev) => ({ ...prev, [thread.id]: thread.updatedAt }));
 
   return (
     <div className="@container bg-port-card border border-port-border rounded-xl p-4 h-full">
@@ -41,7 +48,9 @@ export default function OpenThreadsWidget() {
 
       {rows.length === 0 ? (
         <p className="text-xs text-gray-500">
-          No open loops. <Link to="/brain/threads" className="text-port-accent hover:underline">Track one</Link>
+          {total > 0
+            ? 'More open loops are available in Brain.'
+            : <>No open loops. <Link to="/brain/threads" className="text-port-accent hover:underline">Track one</Link></>}
         </p>
       ) : (
         <ul className="space-y-2">
@@ -61,6 +70,7 @@ export default function OpenThreadsWidget() {
                     <span className={`shrink-0 ${isThreadOverdue(t) ? 'text-port-error' : 'text-gray-500'}`}>{formatDateShort(t.dueAt)}</span>
                   )}
                 </Link>
+                <ThreadSourceClosedAction thread={t} onCompleted={onCompleted} />
               </li>
             );
           })}
