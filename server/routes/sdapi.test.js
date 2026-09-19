@@ -26,6 +26,7 @@ vi.mock('../services/imageGenEvents.js', async () => {
 vi.mock('../services/videoGen/local.js', () => ({
   listVideoModels: vi.fn(() => []),
   defaultVideoModelId: vi.fn(() => 'ltx_video'),
+  warmByovLoraCapabilities: vi.fn(async () => {}),
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -37,6 +38,7 @@ import { getSettings } from '../services/settings.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { imageGenEvents as realEmitter } from '../services/imageGenEvents.js';
 import { tryReadFile } from '../lib/fileUtils.js';
+import * as videoGenService from '../services/videoGen/local.js';
 import sdapiRoutes from './sdapi.js';
 
 const enabled = () => getSettings.mockResolvedValue({ imageGen: { expose: { a1111: true } } });
@@ -87,6 +89,30 @@ describe('sdapi routes — A1111-compatible surface', () => {
       const r = await request(app).get('/sdapi/v1/options');
       expect(r.status).toBe(200);
       expect(r.body.sd_model_checkpoint).toBe('portos-external');
+    });
+  });
+
+  describe('GET /portos/video-models', () => {
+    // Every entry's `runtimeLoraCapable` is stamped from a sync accessor that
+    // reads an unprobed runtime as "not capable" (see warmByovLoraCapabilities
+    // in services/videoGen/runtimes.js). This surface has no second endpoint an
+    // external client could reconcile against, so the list must not be built
+    // until the warm has settled.
+    it('builds the model list only after the LoRA warm has settled', async () => {
+      enabled();
+      let probed = false;
+      videoGenService.warmByovLoraCapabilities.mockImplementationOnce(async () => {
+        await new Promise((resolve) => { setImmediate(resolve); });
+        probed = true;
+      });
+      videoGenService.listVideoModels.mockImplementationOnce(() => [{
+        id: 'minimax_h3_8bit', runtime: 'minimax_h3', runtimeLoraCapable: probed,
+      }]);
+
+      const r = await request(app).get('/sdapi/v1/portos/video-models');
+      expect(r.status).toBe(200);
+      expect(r.body.models[0].runtimeLoraCapable).toBe(true);
+      expect(r.body.defaultModel).toBe('ltx_video');
     });
   });
 

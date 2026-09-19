@@ -649,18 +649,19 @@ describe('videoGen routes', () => {
       expect(checkPackages).not.toHaveBeenCalled();
     });
 
-    // Each model's `runtimeLoraCapable` is stamped from a SYNC accessor that
-    // reads a not-yet-probed runtime as "not capable" — the gate fails closed.
-    // That default is indistinguishable from a probed `false` once it is in the
-    // payload, and the client fetches this list ONCE: an install whose H3
-    // runtime passes the probe was told "this H3 runtime did not pass PortOS's
-    // quantization-aware LoRA probe" for the life of the page, because the
-    // background warm corrected the server and nothing corrected the client.
-    it('reports the probed LoRA verdict, not the pre-probe fail-closed default', async () => {
+    // The payload's `runtimeLoraCapable` is only as good as the probe having
+    // ANSWERED first — the reason is on warmByovLoraCapabilities in
+    // services/videoGen/runtimes.js. Calling the warm is not enough: the list
+    // must be built after it SETTLES, so the warm here resolves on a later tick
+    // and a route that fired it without awaiting reads `probed` as false.
+    it('builds the model list only after the LoRA warm has settled', async () => {
       let probed = false;
-      runtimeProbes.warmByovLoraCapabilities.mockImplementationOnce(async () => { probed = true; });
+      runtimeProbes.warmByovLoraCapabilities.mockImplementationOnce(async () => {
+        await new Promise((resolve) => { setImmediate(resolve); });
+        probed = true;
+      });
       // Stands in for decorateVideoModel, which stamps the sync read at the
-      // moment the list is built — so this is `false` unless the warm ran first.
+      // moment the list is built.
       videoGenService.listVideoModels.mockImplementationOnce(() => [{
         id: 'minimax_h3_8bit', name: 'MiniMax H3 MLX 8-bit', runtime: 'minimax_h3',
         supportedModes: ['text'], runtimeLoraCapable: probed,

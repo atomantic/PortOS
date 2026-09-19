@@ -563,17 +563,20 @@ export function byovRuntimeLoraCapable(runtimeId) {
 // the life of the page on an install where the probe passes.
 //
 // Cheap enough to await on a request path: the probe is a bare MLX import with
-// no model load (tens of ms), and BOTH verdicts cache for the life of the
-// process — so this is one spawn per server start, not the per-request python
-// probe that /model-context exists to avoid. An uninstalled runtime spawns
-// nothing; resolve short-circuits on the missing venv.
+// no model load (tens of ms), and an INSTALLED runtime's verdict caches either
+// way for the life of the process — so this is one spawn per server start, not
+// the per-request python probe that /model-context exists to avoid. Its worst
+// case is runVenvProbe's 30s SIGKILL ceiling, paid once by whichever request
+// warms a wedged interpreter. Runtimes that declare no `loraProbeArgs`, and
+// installed-but-absent venvs, are answered without a child at all — resolve
+// short-circuits on both before it reaches the probe.
 export async function warmByovLoraCapabilities() {
+  // No `loraProbeArgs` filter here: resolve owns that predicate and returns
+  // early on it, so re-encoding the gate would only give it a second home.
+  // `.catch` because this runs on a request path where a future throw must not
+  // take the whole model-list response down with it — the values are discarded.
   await Promise.all(Object.keys(BYOV_RUNTIME_INFO)
-    .filter((runtimeId) => BYOV_RUNTIME_INFO[runtimeId].loraProbeArgs)
-    // resolve never rejects today (runVenvProbe resolves every outcome), but
-    // this runs on a request path where a future throw must not take the whole
-    // model-list response down with it.
-    .map((runtimeId) => resolveByovRuntimeLoraCapable(runtimeId).catch(() => false)));
+    .map((runtimeId) => resolveByovRuntimeLoraCapable(runtimeId).catch(() => {})));
 }
 
 // Single user-facing reason a video model can't take LoRAs. Lives here, beside

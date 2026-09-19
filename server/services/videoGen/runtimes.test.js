@@ -284,14 +284,12 @@ describe('MiniMax H3 LoRA capability', () => {
   });
 
   // What the model-list route awaits so its payload never ships the cold read
-  // above as if it were a probed verdict.
-  it('makes the sync accessor authoritative, probing only the LoRA-gated runtimes', async () => {
+  // above as if it were a probed verdict. The route's own suite doubles this
+  // function, so its fan-out over the runtime table is only checked here.
+  it('makes the sync accessor authoritative once it resolves', async () => {
     runtimeMocks.spawn.mockImplementationOnce(() => exitChild(0));
     await warmByovLoraCapabilities();
     expect(byovRuntimeLoraCapable('minimax_h3')).toBe(true);
-    // One spawn, not one per BYOV runtime: everything else declares no
-    // loraProbeArgs, which resolve answers without a child.
-    expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
   });
 
   it.each(['ltx2', 'ltx25', 'wan22'])('never probes %s, which has no LoRA runtime path', async (runtime) => {

@@ -93,15 +93,12 @@ import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 const router = Router();
 
 const hardwareAwareVideoModels = async () => {
-  // Warm the LoRA-capability verdicts BEFORE decorating: listVideoModels()
-  // stamps each entry's `runtimeLoraCapable` from the sync accessor, which
-  // reads an unprobed runtime as "not capable". Serving that unprobed default
-  // is what made an install whose H3 runtime passes the probe show "this H3
-  // runtime did not pass PortOS's quantization-aware LoRA probe" until the page
-  // was reloaded — the client fetches this list once, so the background warm
-  // never reached it. Concurrent with the hardware probe (both cache for the
-  // process) so the first call after a restart is the only one that pays, and
-  // pays nothing extra in wall time.
+  // Warm BEFORE decorating: listVideoModels() stamps each entry's
+  // `runtimeLoraCapable` from a sync accessor that reads an unprobed runtime as
+  // "not capable", and shipping that default is a bug the client cannot recover
+  // from — see warmByovLoraCapabilities in services/videoGen/runtimes.js.
+  // Joined to the hardware probe this function already awaits for the same
+  // reason; both cache for the process, so only the first call pays.
   const [capabilities] = await Promise.all([detectSystemCapabilities(), warmByovLoraCapabilities()]);
   return {
     capabilities,
