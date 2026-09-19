@@ -6,7 +6,7 @@ import {
   MIND_BUNDLE_PASSPHRASE_MIN_CHARS,
 } from '../../lib/mindBundle.js';
 import * as api from '../../services/api';
-import { formatCount } from '../../utils/formatters.js';
+import { formatCount, formatDateTime } from '../../utils/formatters.js';
 import Banner from '../ui/Banner';
 
 // Labels and the "what this group means" copy live here because they are UI
@@ -205,7 +205,7 @@ export default function PersistentMindImportPanel() {
       {preview && (
         <div className="mt-4 space-y-3">
           <p className="text-xs text-port-text-muted">
-            Sealed {preview.createdAt ? new Date(preview.createdAt).toLocaleString() : 'at an unknown time'} · carries {preview.scopes.join(', ')}. Choose one side per group.
+            Sealed {formatDateTime(preview.createdAt, 'at an unknown time')} · carries {preview.scopes.join(', ')}. Choose one side per group.
           </p>
 
           {preview.groups.map(({ group, identical, additive, incoming, current }) => {
