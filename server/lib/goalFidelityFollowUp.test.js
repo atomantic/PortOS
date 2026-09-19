@@ -256,6 +256,20 @@ describe('buildGoalFidelityFollowUpTask', () => {
     expect(body).toContain('task-7');
   });
 
+  it('carries the full bounded task objective into the investigator prompt', () => {
+    const body = buildGoalFidelityFollowUpTask({
+      task: {
+        ...task,
+        description: 'Complete the requested change',
+        metadata: { prompt: 'Also verify the shipped outcome and preserve the existing contract.' },
+      },
+      review: review(),
+      fingerprint,
+    });
+    expect(body).toContain('## What was asked\nComplete the requested change\n\nAlso verify the shipped outcome and preserve the existing contract.');
+    expect(body).toContain('Re-read the task above against what actually shipped');
+  });
+
   // The fingerprint rides in the headline for the same reason the investigation
   // producer's does: `addTask`'s first-line dedup is what catches a repeat whose
   // metadata scan has not landed yet.
