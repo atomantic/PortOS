@@ -7,8 +7,8 @@
  *
  * A Brain *thread* is a tracked topic or commitment, not a message thread.
  *
- * Named exports only, and only the two the client renders with — the registry
- * table and the server-side predicates stay out of the client barrel until
- * something here needs them.
+ * Named exports only: the two the client renders with plus the kind id list
+ * the Threads tab's ref picker enumerates. The server-side predicates stay out
+ * of the client barrel until something here needs them.
  */
-export { threadRefLabel, threadRefUrl } from '../../../server/lib/threadRefKinds.js';
+export { THREAD_REF_KIND_IDS, threadRefLabel, threadRefUrl } from '../../../server/lib/threadRefKinds.js';

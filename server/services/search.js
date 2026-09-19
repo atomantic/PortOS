@@ -5,7 +5,7 @@
  * Uses Promise.allSettled for fault isolation — a failing adapter never
  * blocks results from the other sources.
  *
- * Sources: Brain (inbox/people/projects/ideas/admin/memories/links, served from
+ * Sources: Brain (inbox/people/projects/ideas/admin/memories/links/threads, served from
  *          the in-memory projections in brainSearchIndex.js), CoS Memory
  *          (BM25/hybrid), Apps, History, Health metrics
  */
@@ -109,6 +109,16 @@ const BRAIN_SOURCES = Object.freeze([
     title: (r) => r.title || r.url,
     snippet: (r) => r.description || r.url,
     url: () => '/brain/links'
+  },
+  {
+    // A tracked open loop (#7664), not a message thread. `?thread=` opens the
+    // record's drawer on the Threads tab — the same deep-link the widget uses.
+    type: 'threads',
+    resultType: 'thread',
+    match: ['title', 'nextAction', 'waitingOn', 'notes'],
+    title: (r) => r.title,
+    snippet: (r) => r.nextAction || r.waitingOn || r.notes,
+    url: (r) => `/brain/threads?thread=${encodeURIComponent(r.id)}`
   }
 ]);
 
@@ -117,7 +127,7 @@ const BRAIN_SOURCES = Object.freeze([
  *
  * Reads field projections from `brainSearchIndex` rather than
  * `brainStorage.getAll()`, so a keystroke costs an in-memory scan instead of a
- * full stat+read+parse of every record file across seven collection dirs
+ * full stat+read+parse of every record file across eight collection dirs
  * (issue #3506). The index also removes the old `limit: 200` cap on inbox
  * entries — that cap existed only to bound the per-query disk cost.
  */

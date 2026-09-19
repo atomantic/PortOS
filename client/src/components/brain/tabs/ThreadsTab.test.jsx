@@ -1,0 +1,112 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router';
+
+vi.mock('../../../services/api', () => ({
+  listThreads: vi.fn(),
+  getThread: vi.fn(),
+  createThread: vi.fn(),
+  updateThread: vi.fn(),
+  deleteThread: vi.fn(),
+  addThreadRef: vi.fn(),
+  removeThreadRef: vi.fn(),
+}));
+vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+
+import * as api from '../../../services/api';
+import ThreadsTab from './ThreadsTab';
+
+const FAR_FUTURE = '2999-01-01T00:00:00.000Z';
+const PAST = '2000-01-01T00:00:00.000Z';
+
+const ROWS = [
+  { id: 'pin', title: 'Pinned loop', status: 'open', pinned: true, refs: [], tags: [] },
+  { id: 'late', title: 'Overdue loop', status: 'open', dueAt: PAST, refs: [{ kind: 'url', id: 'https://example.com' }], tags: ['ops'] },
+  { id: 'op', title: 'Plain loop', status: 'open', nextAction: 'Call back', dueAt: FAR_FUTURE, refs: [], tags: [] },
+  { id: 'wait', title: 'Waiting loop', status: 'waiting', waitingOn: 'Acme Corp', refs: [], tags: [] },
+  { id: 'done', title: 'Finished loop', status: 'done', refs: [], tags: [] },
+];
+
+function Location() {
+  return <output data-testid="location">{useLocation().search}</output>;
+}
+
+const renderTab = (entry = '/brain/threads') =>
+  render(<MemoryRouter initialEntries={[entry]}><ThreadsTab /><Location /></MemoryRouter>);
+
+describe('ThreadsTab', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.listThreads.mockResolvedValue({ threads: ROWS, total: ROWS.length });
+    api.getThread.mockImplementation(async (id) => ({
+      ...ROWS.find((r) => r.id === id),
+      notes: 'body',
+      resolvedRefs: [{ kind: 'url', id: 'https://example.com', label: 'example', url: 'https://example.com', resolved: true }],
+    }));
+  });
+
+  it('groups the working set (pinned, overdue, open, waiting) and hides finished threads', async () => {
+    renderTab();
+    await screen.findByText('Pinned loop');
+    const groupTitles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent.trim());
+    expect(groupTitles).toEqual(['Pinned 1', 'Overdue 1', 'Open 1', 'Waiting 1']);
+    expect(screen.getByText('Waiting on Acme Corp')).toBeTruthy();
+    expect(screen.queryByText('Finished loop')).toBeNull();
+    expect(api.listThreads).toHaveBeenCalledWith({ q: '', tag: '' });
+  });
+
+  it('reads the status, tag and search filters from the URL and sends them to the server', async () => {
+    api.listThreads.mockResolvedValue({ threads: [ROWS[4]], total: 1 });
+    renderTab('/brain/threads?status=done&tag=ops&q=fin');
+    await screen.findByText('Finished loop');
+    expect(api.listThreads).toHaveBeenCalledWith({ q: 'fin', tag: 'ops', status: 'done' });
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent.trim())).toEqual(['Done 1']);
+  });
+
+  it('opens the drawer for the thread named in the URL on load', async () => {
+    renderTab('/brain/threads?thread=late&threadTab=links');
+    await screen.findByRole('dialog');
+    expect(api.getThread).toHaveBeenCalledWith('late', { silent: true });
+    // The Links tab renders the hydrated ref with its click-through.
+    const chip = await screen.findByText('example');
+    expect(chip.closest('a')).toHaveAttribute('href', 'https://example.com');
+  });
+
+  it('puts the selected thread in the URL when a row is clicked, not in local state', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByText('Plain loop'));
+    expect(screen.getByTestId('location').textContent).toBe('?thread=op');
+    await screen.findByRole('dialog');
+    expect(screen.getByDisplayValue('Call back')).toBeTruthy();
+  });
+
+  it('checks a thread off in place without refetching the list', async () => {
+    api.updateThread.mockResolvedValue({ ...ROWS[2], status: 'done', closedAt: FAR_FUTURE });
+    renderTab();
+    await screen.findByText('Plain loop');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mark "Plain loop" done' })); });
+    expect(api.updateThread).toHaveBeenCalledWith('op', { status: 'done' }, { silent: true });
+    await waitFor(() => expect(screen.queryByText('Plain loop')).toBeNull());
+    expect(api.listThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates a thread from the capture box and opens it', async () => {
+    api.createThread.mockResolvedValue({ id: 'new', title: 'Chase invoice', status: 'open', refs: [], tags: [] });
+    renderTab();
+    await screen.findByText('Pinned loop');
+    fireEvent.change(screen.getByLabelText('New thread'), { target: { value: 'Chase invoice' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })); });
+    expect(api.createThread).toHaveBeenCalledWith({ title: 'Chase invoice' }, { silent: true });
+    expect(screen.getByTestId('location').textContent).toBe('?thread=new');
+  });
+
+  it('is the component the Brain page renders for its threads tab', () => {
+    const clientSrc = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    const brainPage = readFileSync(join(clientSrc, 'pages', 'Brain.jsx'), 'utf8');
+    expect(brainPage).toContain("import('../components/brain/tabs/ThreadsTab')");
+    expect(brainPage).toMatch(/case 'threads':[\s\S]{0,120}<ThreadsTab\b/);
+  });
+});
