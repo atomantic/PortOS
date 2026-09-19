@@ -1168,6 +1168,49 @@ describe('AI Toolkit runner service', () => {
       .toBe('thought so far');
   });
 
+  // A peer dropping the connection MID-BODY is the same transport family the
+  // pre-header fetch already flattens, but the reader's rejection was
+  // classified on `err.message` alone — `terminated`, with the code hidden on
+  // `.cause`. It matched nothing, so the run persisted `errorCategory: null`,
+  // which the host's cascade reads as UNKNOWN and escalates to a tier-4
+  // investigation task instead of a bounded retry.
+  it('classifies a mid-stream transport drop as a network error, not UNKNOWN', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const encoder = new TextEncoder();
+    const chunks = [
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Here' } }] })}\n`),
+    ];
+    let i = 0;
+    // undici's exact shape: an opaque outer TypeError over a coded cause.
+    const midStreamDrop = () => Object.assign(new TypeError('terminated'), {
+      cause: Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' }),
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => (i < chunks.length
+        ? { done: false, value: chunks[i++] }
+        : Promise.reject(midStreamDrop())) }) },
+    })));
+    const runner = createRunnerService({
+      dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) },
+    });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-midstream-drop', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+    const metadata = await completed;
+
+    expect(metadata.success).toBe(false);
+    expect(metadata.errorCategory).toBe('network-error');
+    // The flattened chain, not the opaque outer message, is what the run record
+    // and any investigation task quote.
+    expect(metadata.error).toContain('UND_ERR_SOCKET');
+  });
+
   // The hidden channel is named `reasoning_content` by NVIDIA NIM, vLLM and the
   // DeepSeek-R1-compatible servers — only OpenRouter-style endpoints say
   // `reasoning`. Reading the one name discarded every reasoning token from NIM
