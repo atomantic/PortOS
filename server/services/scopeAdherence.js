@@ -45,23 +45,10 @@ import {
   SCOPE_ADHERENCE_TOP_K,
   selectCandidateClauses,
 } from '../lib/scopeAdherence.js';
-
-/**
- * The codes this service adds on top of the shared `JEV_FAILURE_CODES` and the
- * untrusted-content ones, which it forwards unchanged.
- *
- * Load-bearing: `server/services/scopeAdherence.reasons.parity.test.js` asserts
- * the client's operator-facing label map covers every one of them, so a code
- * added here without a label fails rather than silently rendering as the
- * generic fallback.
- */
-export const SCOPE_ADHERENCE_FAILURE_CODES = Object.freeze([
-  'scope-adherence-disabled',
-  'scope-adherence-change-empty',
-  'scope-adherence-corpus-missing',
-  'scope-adherence-corpus-unreadable',
-  'scope-adherence-no-clause',
-]);
+// Re-exported, not re-declared: the codes live beside their operator-facing
+// labels in a pure leaf, so the test that pairs them need not import this
+// service's closure (`lib/importScoping.test.js`).
+export { SCOPE_ADHERENCE_FAILURE_CODES } from '../lib/scopeAdherenceReasons.js';
 
 const failure = (code) => ({ ok: false, code });
 

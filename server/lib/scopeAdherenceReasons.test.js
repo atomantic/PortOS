@@ -1,17 +1,20 @@
 /**
  * Coverage for the scope-adherence failure labels.
  *
- * `services/scopeAdherence.js` owns the CODES and the labels live beside them
- * in `lib/scopeAdherenceReasons.js`, so there is nothing to keep in parity —
- * the client re-exports this module rather than copying it. What still needs
- * guarding is the vocabulary: a code the service can return with no label here
+ * The codes and their labels live in ONE leaf, and the client re-exports it
+ * rather than copying it, so there is no parity to assert. What still needs
+ * guarding is the vocabulary: a code the service can return with no label
  * renders as the generic fallback with a fully green suite.
+ *
+ * The leaf also declares the codes so this test never has to import the
+ * service — a lib test that drags a service closure is the shape
+ * `lib/importScoping.test.js` budgets against, and it cost a CI round.
  */
 
 import { describe, it, expect } from 'vitest';
 import { JEV_FAILURE_CODES } from './jev.js';
-import { SCOPE_ADHERENCE_FAILURE_CODES } from '../services/scopeAdherence.js';
 import {
+  SCOPE_ADHERENCE_FAILURE_CODES,
   SCOPE_ADHERENCE_REASONS,
   SCOPE_ADHERENCE_REASON_FALLBACK,
   scopeAdherenceReasonLabel,

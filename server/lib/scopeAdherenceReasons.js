@@ -17,6 +17,23 @@
  * not answer has said nothing about the change.
  */
 
+/**
+ * The codes `scoreAdherence` adds on top of the shared `JEV_FAILURE_CODES` and
+ * the untrusted-content ones, which it forwards unchanged.
+ *
+ * Declared HERE, beside the labels, rather than in the service: the sibling
+ * test asserts every code has a label, and importing the service to read them
+ * would drag its whole closure into a leaf test file — the shape
+ * `lib/importScoping.test.js` budgets against. The service imports this.
+ */
+export const SCOPE_ADHERENCE_FAILURE_CODES = Object.freeze([
+  'scope-adherence-disabled',
+  'scope-adherence-change-empty',
+  'scope-adherence-corpus-missing',
+  'scope-adherence-corpus-unreadable',
+  'scope-adherence-no-clause',
+]);
+
 export const SCOPE_ADHERENCE_REASONS = Object.freeze({
   // Reachable only in a race — the panel hides itself when the feature is off,
   // but the toggle can move between render and response.
