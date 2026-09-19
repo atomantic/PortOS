@@ -38,7 +38,6 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { buildVendorSpawnConfig } from '../lib/providerVendors.js';
 import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../lib/providerModels.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
-import { resolveAgentApiEnv } from './agentApiAuth.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -208,7 +207,12 @@ export async function spawnDirectly({
     : await Promise.all([
       isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
       providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
-      resolveAgentApiEnv({ safetyProfile }),
+      // Deferred, not a static import: `agentApiAuth.js` pulls the auth/session
+      // subtree, and this module is reached by enough of the suite that the eager
+      // edge added ~190 static module instantiations — over the budget
+      // `lib/importScoping.test.js` holds. The sibling TUI and runner spawn sites
+      // import it normally; almost nothing reaches those, so they cost nothing.
+      import('./agentApiAuth.js').then(({ resolveAgentApiEnv }) => resolveAgentApiEnv({ safetyProfile })),
     ]);
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +
