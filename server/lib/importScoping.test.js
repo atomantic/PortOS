@@ -720,7 +720,20 @@ describe('deferred imports stay deferred (#6156)', () => {
 // private Set inside the extractor, parallel to the source-kind list at the
 // Zod boundary, where a new ingest source silently reads a memoir through the
 // fiction lens. Restores the ~390 of headroom the recent entries carry.
-const MAX_STATIC_INSTANTIATIONS = 114200;
+// 114,200 → 114,650 (agent loopback API token): two dependency-free-by-design
+// leaves and one small service. `lib/agentApiToken.js` (the env-var name plus the
+// `curl` argument that spends it) adds one node to the 22 closures that reach a
+// prompt builder; `lib/localReviewBridge.js` (the review-bridge script path,
+// over `fileUtils`, which those closures already carry) adds one to 75, most of
+// them via `services/cosTaskPrompts.js` — it replaces the same `join(PATHS.root,
+// …)` that builder open-coded. `services/agentApiAuth.js` reaches the auth/session
+// subtree, so the widely-reached direct-CLI spawner takes it through an
+// `await import()` instead; the TUI and runner spawn sites keep the static edge,
+// which 12 closures pay. No existing widely-reached module gained an eager edge
+// into a subtree. Measured before 114,119, after 114,253; its whole share is 134.
+// Restores the ~400 of headroom the recent entries carry — main had eroded to 81,
+// which is why an unrelated parallel merge kept tripping this.
+const MAX_STATIC_INSTANTIATIONS = 114650;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
