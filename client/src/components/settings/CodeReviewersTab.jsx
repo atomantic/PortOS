@@ -8,6 +8,7 @@ import GoalFidelityControls from './GoalFidelityControls';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerModelsToDefaults, reviewerEffortsFromDefaults, reviewerEffortsToDefaults } from '../../lib/reviewerModels';
 import { DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER } from '../../lib/reviewerPins';
+import { formatDateTime } from '../../utils/formatters';
 import {
   DEFAULT_REVIEWERS,
   DEFAULT_REVIEW_STOP_MODE,
@@ -169,7 +170,7 @@ export default function CodeReviewersTab() {
         <>
           {Object.entries(reviewerHealth).filter(([, health]) => Number(health?.pausedUntil) > Date.now()).map(([reviewer, health]) => (
             <Banner key={reviewer} tone="warning" size="sm" align="left">
-              {reviewer} is temporarily paused after a quota or usage-limit failure until {new Date(health.pausedUntil).toLocaleString()}.
+              {reviewer} is temporarily paused after a quota or usage-limit failure until {formatDateTime(health.pausedUntil)}.
             </Banner>
           ))}
           <div className="space-y-1">
