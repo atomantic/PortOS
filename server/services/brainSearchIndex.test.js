@@ -30,7 +30,7 @@ describe('brainSearchIndex', () => {
 
   it('covers every brain type unified search reads', () => {
     expect([...BRAIN_SEARCH_TYPES]).toEqual([
-      'inbox', 'people', 'projects', 'ideas', 'admin', 'memories', 'links'
+      'inbox', 'people', 'projects', 'ideas', 'admin', 'memories', 'links', 'threads'
     ])
   })
 

@@ -205,6 +205,7 @@ export * from './terminalScroll.js';
 export * from './terminalTheme.js';
 export * from './textUtils.js';
 export * from './threadRefKinds.js';
+export * from './brainThreads.js';
 export * from './threejsAnimation.js';
 export * from './threejsEnvironment.js';
 export * from './threejsExplode.js';

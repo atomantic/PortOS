@@ -11,7 +11,7 @@
  * (`data/brain/<type>/<id>/index.json`) with NO whole-store cache — every
  * `brainStorage.getAll(type)` lists the directory and `loadOne`s each record.
  * That is the right trade for the write paths, but the ⌘K palette fans out to
- * seven of those stores on EVERY keystroke, so a brain of a few thousand
+ * eight of those stores on EVERY keystroke, so a brain of a few thousand
  * records turns each character typed into thousands of stat+read+JSON.parse
  * calls. This module reads each store at most once and then keeps the
  * projection fresh from `brainEvents`.
@@ -45,7 +45,8 @@ import { safeDate } from '../lib/fileUtils.js';
  * consumer reads:
  *   - `searchBrain` (server/services/search.js) matches on and renders snippets
  *     from `capturedText` / `name` / `context` / `title` / `oneLiner` / `notes`
- *     / `nextAction` / `content` / `mood` / `url` / `description`.
+ *     / `nextAction` / `content` / `mood` / `url` / `description` /
+ *     `waitingOn`.
  *   - `getBrainGraphSearchIndex` (server/services/brainGraph.js) derives each
  *     node's label from `name || title` and drops archived records, while the
  *     edge-bearing graph views also need tags, status, and summary fields.
@@ -73,6 +74,10 @@ const PROJECTED_FIELDS = Object.freeze({
   links: Object.freeze(['title', 'url', 'description']),
   journals: Object.freeze(['date']),
   songs: GRAPH_PROJECTION_FIELDS,
+  // A Brain *thread* is a tracked open loop (#7664), not a message thread.
+  // Search matches the fields a person would type to find one; `notes` is the
+  // markdown body (capped at 20k, the same order as an admin item's notes).
+  threads: Object.freeze(['title', 'nextAction', 'waitingOn', 'notes']),
 });
 
 /**
@@ -103,7 +108,7 @@ const DERIVED_FIELDS = Object.freeze({
  * indexed here or its `getBrainProjections` call throws.
  */
 export const BRAIN_SEARCH_TYPES = Object.freeze([
-  'inbox', 'people', 'projects', 'ideas', 'admin', 'memories', 'links',
+  'inbox', 'people', 'projects', 'ideas', 'admin', 'memories', 'links', 'threads',
 ]);
 
 /** Every brain entity type this index projects (search sources + graph-only). */

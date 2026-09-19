@@ -29,7 +29,7 @@ vi.mock('./history.js', () => ({
 
 import { fanOutSearch } from './search.js'
 import { getAll } from './brainStorage.js'
-import { __resetBrainSearchIndex } from './brainSearchIndex.js'
+import { __resetBrainSearchIndex, BRAIN_SEARCH_TYPES } from './brainSearchIndex.js'
 import { searchBM25 } from './memoryBM25.js'
 import { getMemories, ensureBackend, hybridSearchMemories } from './memoryBackend.js'
 import { getAllApps } from './apps.js'
@@ -122,6 +122,22 @@ describe('search service', () => {
       expect(linkResult.type).toBe('link')
     })
 
+    it('should search across threads and deep-link the record drawer', async () => {
+      setBrainRecords('threads', [
+        { id: 'th1', title: 'Renew the domain', nextAction: 'Log into the registrar', notes: 'Expires soon' },
+        { id: 'th2', title: 'Unrelated', nextAction: 'Nothing here', notes: '' }
+      ])
+
+      const results = await fanOutSearch('registrar')
+      const brainSource = results.find(s => s.id === 'brain')
+      expect(brainSource.results.map(r => r.id)).toEqual(['th1'])
+      expect(brainSource.results[0]).toMatchObject({
+        type: 'thread',
+        title: 'Renew the domain',
+        url: '/brain/threads?thread=th1'
+      })
+    })
+
     it('should search across admin items', async () => {
       setBrainRecords('admin', [
         { id: 'ad1', title: 'Renew registration', notes: 'Due next month', nextAction: 'Book appointment' }
@@ -157,15 +173,15 @@ describe('search service', () => {
 
       // One scan per brain source on the first query; every later keystroke is
       // served from the in-memory projection (issue #3506).
-      expect(afterFirst).toBe(7)
-      expect(getAll).toHaveBeenCalledTimes(7)
+      expect(afterFirst).toBe(BRAIN_SEARCH_TYPES.length)
+      expect(getAll).toHaveBeenCalledTimes(BRAIN_SEARCH_TYPES.length)
     })
 
     it('should not re-scan a brain store that is legitimately empty', async () => {
       await fanOutSearch('anything')
       await fanOutSearch('anything else')
 
-      expect(getAll).toHaveBeenCalledTimes(7)
+      expect(getAll).toHaveBeenCalledTimes(BRAIN_SEARCH_TYPES.length)
     })
 
     it('should search apps', async () => {

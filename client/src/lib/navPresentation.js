@@ -97,6 +97,7 @@ import {
   Drama,
   UserRound,
   Video,
+  ListTodo,
   Plug,
   TerminalSquare,
 } from 'lucide-react';
@@ -122,6 +123,7 @@ export const NAV_PRESENTATION = {
   '/brain/memory': { icon: Database },
   '/brain/notes': { icon: FileText },
   '/brain/spotify': { icon: Music },
+  '/brain/threads': { icon: ListTodo },
   '/brain/youtube': { icon: Video },
   '/rapid-reader': { icon: Zap },
   '/songbook': { icon: ListMusic },

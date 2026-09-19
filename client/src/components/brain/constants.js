@@ -1,4 +1,4 @@
-import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText, Music, Video } from 'lucide-react';
+import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText, Music, Video, ListTodo } from 'lucide-react';
 import { getPageNavTabs } from '../../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
@@ -10,6 +10,7 @@ import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 // drift between the manifest and this map.
 const TAB_PRESENTATION = {
   inbox: { icon: MessageSquare },
+  threads: { icon: ListTodo, fullBleed: true },
   ideas: { icon: Lightbulb },
   'daily-log': { icon: NotebookPen, fullBleed: true },
   links: { icon: Link2 },

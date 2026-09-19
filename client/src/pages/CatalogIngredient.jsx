@@ -36,6 +36,7 @@ import { useGalleryPage } from '../hooks/useGalleryPage';
 import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { threadRefLabel, threadRefUrl } from '../lib/threadRefKinds.js';
+import ThreadRefChip from '../components/brain/ThreadRefChip';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
@@ -53,9 +54,9 @@ import { timeAgo, formatDateTime } from '../utils/formatters';
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
 // where `kind` is 'text' (single line) or 'textarea' (multi-line).
 
-// Ref chips deep-link through the SHARED kind→route registry
-// (`client/src/lib/threadRefKinds.js`, a re-export of the server leaf), not a
-// switch local to this page — one table, so a kind added for a Brain thread and
+// Ref chips are the SHARED `ThreadRefChip`, deep-linking through the shared
+// kind→route registry (`client/src/lib/threadRefKinds.js`, a re-export of the
+// server leaf), not a switch local to this page — one table, so a kind added for a Brain thread and
 // a kind stored on a catalog ingredient can never disagree about where it goes
 // (#7664). Same contract this page always had: `threadRefUrl` returns null for a
 // kind we can't deep-link (the chip renders unlinked) and `threadRefLabel` falls
@@ -1491,25 +1492,16 @@ function RefsPanel({ refsByKind }) {
                 {threadRefLabel(kind)}
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {refsByKind[kind].map((r, i) => {
-                  const path = threadRefUrl(kind, r.refId);
-                  const label = r.refName || r.refId || '(unnamed)';
-                  const role = r.role ? ` · ${r.role}` : '';
-                  const chip = (
-                    // biome-ignore lint/correctness/useJsxKeyInIterable: `chip` is a child of the keyed <Link>/<span> returned below, not the list element itself.
-                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200">
-                      {label}{role}
-                      {path && <ExternalLink size={10} aria-hidden="true" />}
-                    </span>
-                  );
-                  return path ? (
-                    <Link key={`${kind}-${r.refId}-${i}`} to={path} className="hover:opacity-80">
-                      {chip}
-                    </Link>
-                  ) : (
-                    <span key={`${kind}-${r.refId}-${i}`}>{chip}</span>
-                  );
-                })}
+                {refsByKind[kind].map((r, i) => (
+                  <ThreadRefChip
+                    key={`${kind}-${r.refId}-${i}`}
+                    kind={kind}
+                    id={r.refId}
+                    label={`${r.refName || r.refId || '(unnamed)'}${r.role ? ` · ${r.role}` : ''}`}
+                    url={threadRefUrl(kind, r.refId)}
+                    showKind={false}
+                  />
+                ))}
               </div>
             </div>
           ))}
