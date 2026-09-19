@@ -117,7 +117,11 @@ export default function CatalogIngest() {
   const recorderRef = useRef(null);
   // "Catalogue into" — the universe every committed ingredient binds to
   // (#7615). Populated on mount; defaulted per-ingest in enterReviewFromResult.
+  // Mirrored into a ref because the brain-bridge handoff runs from the
+  // mount effect, whose closure would otherwise see the pre-load empty list
+  // forever and never resolve the Reality default.
   const [universes, setUniverses] = useState([]);
+  const universesRef = useRef([]);
   const [universeRef, setUniverseRef] = useState(UNASSIGNED_UNIVERSE);
   const brainHandledRef = useRef(false);
   // Creative inbox note ids handed off from the Brain batch-send. Once the
@@ -138,7 +142,11 @@ export default function CatalogIngest() {
   // Load the "Catalogue into" options once. Best-effort — an empty list just
   // leaves Unassigned as the only choice.
   useEffect(() => {
-    listUniverseNames({ silent: true }).then((list) => setUniverses(Array.isArray(list) ? list : [])).catch(() => {});
+    listUniverseNames({ silent: true }).then((list) => {
+      const rows = Array.isArray(list) ? list : [];
+      universesRef.current = rows;
+      setUniverses(rows);
+    }).catch(() => {});
   }, []);
 
   // Default the "Catalogue into" pick for a freshly-entered review phase.
@@ -148,10 +156,11 @@ export default function CatalogIngest() {
   // Unassigned. `sourceKind` is one of 'paste' | 'url' | 'file' | 'voice' |
   // 'brain' | 'babble'.
   const defaultUniverseForSource = (sourceKind) => {
-    const reality = universes.find((u) => u.name === REALITY_UNIVERSE_NAME);
+    const loaded = universesRef.current;
+    const reality = loaded.find((u) => u.name === REALITY_UNIVERSE_NAME);
     if (FACTUAL_INGEST_KINDS.has(sourceKind)) return reality?.id || UNASSIGNED_UNIVERSE;
     const lastUsed = safeReadStorage(LAST_UNIVERSE_STORAGE_KEY);
-    if (lastUsed && (lastUsed === UNASSIGNED_UNIVERSE || universes.some((u) => u.id === lastUsed))) return lastUsed;
+    if (lastUsed && (lastUsed === UNASSIGNED_UNIVERSE || loaded.some((u) => u.id === lastUsed))) return lastUsed;
     return reality?.id || UNASSIGNED_UNIVERSE;
   };
 
