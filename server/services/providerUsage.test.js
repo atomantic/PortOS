@@ -484,6 +484,31 @@ describe('getProviderQuotas', () => {
     expect(card.error).toMatch(/has since reset/i);
   });
 
+  // #7662. Staleness is judged against the window's OWN period, server-side,
+  // for every card — not just a federated merge's winners — so a purely local
+  // install ages its cached reading by the same rule a peer's would be.
+  it('stamps every limit with readAt and a period-relative stale verdict', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{ id: 'claude', enabled: true, type: 'cli', command: 'claude' }]
+    });
+    // 55 minutes old: past 10% of a 5h session window (30min), well inside
+    // 10% of a weekly one (~16.8h).
+    const fetchedAt = new Date(Date.now() - 55 * 60 * 1000).toISOString();
+    getClaudeCodeUsage.mockResolvedValueOnce({
+      plan: 'subscription',
+      limits: [
+        { key: 'session', label: 'Current session', percentUsed: 40, percentRemaining: 60, resetsAt: '2099-01-01T00:00:00.000Z' },
+        { key: 'week', label: 'Current week', percentUsed: 40, percentRemaining: 60, resetsAt: '2099-01-01T00:00:00.000Z' },
+      ],
+      activity: [], approximate: true, fetchedAt,
+    });
+    const [card] = await getProviderQuotas({ family: 'claude' });
+    const [session, week] = card.limits;
+    expect(session).toMatchObject({ key: 'session', readAt: fetchedAt, stale: true });
+    expect(week).toMatchObject({ key: 'week', readAt: fetchedAt, stale: false });
+  });
+
   // #7496. The scrape kills its PTY on every exit path, and with a credential
   // bootstrap the PTY's direct child is the WRAPPER — node-pty's kill() signals
   // that pid alone, so the harness would go on rendering into a PTY nobody

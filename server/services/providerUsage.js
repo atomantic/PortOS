@@ -9,6 +9,7 @@ import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
 import { applyCredentialBootstrap, needsProcessGroup } from '../lib/credentialBootstrap.js';
 import { createStaleWhileRevalidate, PENDING, WAIT } from '../lib/staleWhileRevalidate.js';
 import { parseHumanReset, limitWindowExpired } from '../lib/quotaReset.js';
+import { isLimitStale } from '../lib/quotaWindows.js';
 import { compareNewerWins, parseTsMs } from '../lib/lwwTimestamp.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { readFileTail } from '../lib/fileUtils.js';
@@ -364,6 +365,28 @@ const pruneExpiredWindows = (card, now) => {
     ...card,
     limits,
     ...(limits.length ? {} : { error: card.error || EXPIRED_ONLY_MESSAGE }),
+  };
+};
+
+/**
+ * Stamp every limit with WHEN it was read and whether that reading has aged
+ * past its own window's staleness threshold (`lib/quotaWindows.js`).
+ *
+ * Applied to EVERY card here — not only the ones a federated merge later
+ * touches — so a purely local install (or a multi-instance one whose card
+ * never gets a second contributor) still ages a cached TUI/log-tail reading by
+ * the same rule a peer's reading is judged by. `mergeQuotaCard`'s
+ * `unifyLimits` recomputes both fields for a MERGED limit, since the winning
+ * reading can come from a peer whose own `fetchedAt` differs from this card's.
+ */
+const stampReadAt = (card, now) => {
+  if (!card?.limits?.length) return card;
+  const readAt = card.fetchedAt || null;
+  const readAtMs = parseTsMs(readAt);
+  const ageMs = readAtMs === null ? null : now - readAtMs;
+  return {
+    ...card,
+    limits: card.limits.map((limit) => ({ ...limit, readAt, stale: isLimitStale(limit, ageMs) })),
   };
 };
 
@@ -900,7 +923,7 @@ async function readProviderQuotas({ wait, family }) {
   // and a rule applied only on the federated path would have a single-machine
   // install rendering a spent meter its federated twin drops.
   const now = Date.now();
-  const prune = (cards) => cards.map((card) => pruneExpiredWindows(card, now));
+  const prune = (cards) => cards.map((card) => stampReadAt(pruneExpiredWindows(card, now), now));
   if (family && family !== IMAGE_GEN_FAMILY) return prune(familyCards);
   const imageCard = await fetchImageGenQuota();
   return prune(imageCard ? [...familyCards, imageCard] : familyCards);

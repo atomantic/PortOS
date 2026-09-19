@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import UsageMeter, { meterTone, formatResetsAt } from './UsageMeter';
+import UsageMeter, { meterTone, formatResetsAt, readingAttribution } from './UsageMeter';
 
 describe('meterTone', () => {
   // The thresholds are the whole reason this meter was extracted rather than
@@ -29,6 +29,36 @@ describe('formatResetsAt', () => {
 
   it('localizes an ISO reset', () => {
     expect(formatResetsAt('2026-03-01T12:00:00.000Z')).toMatch(/\d/);
+  });
+});
+
+describe('readingAttribution', () => {
+  // #7662: staleness is a server-computed flag now, not a client-side clock —
+  // these assert the component renders from `limit.stale`, never re-deriving
+  // an age threshold of its own.
+  it('renders nothing for a fresh reading, however old readAt looks', () => {
+    const ancientButFresh = { readAt: '2000-01-01T00:00:00.000Z', readBy: 'peer-1', readByName: 'Example Box', stale: false };
+    expect(readingAttribution(ancientButFresh)).toBeNull();
+  });
+
+  it('attributes a stale peer reading to the instance that took it', () => {
+    const limit = { readAt: '2026-09-03T11:00:00.000Z', readBy: 'peer-1', readByName: 'Example Box', stale: true };
+    expect(readingAttribution(limit)).toMatch(/^read .+ on Example Box$/);
+  });
+
+  it('captions a stale LOCAL reading too, with no "on <machine>" attribution', () => {
+    const limit = { readAt: '2026-09-03T11:00:00.000Z', readBy: null, stale: true };
+    expect(readingAttribution(limit)).toMatch(/^read .+$/);
+    expect(readingAttribution(limit)).not.toMatch(/ on /);
+  });
+
+  it('falls back to naming the instance without an age when readAt is unparseable', () => {
+    const limit = { readAt: null, readBy: 'peer-1', readByName: 'Example Box', stale: true };
+    expect(readingAttribution(limit)).toBe('read on Example Box');
+  });
+
+  it('renders nothing for an undated stale local reading', () => {
+    expect(readingAttribution({ readAt: null, readBy: null, stale: true })).toBeNull();
   });
 });
 

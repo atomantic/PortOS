@@ -268,11 +268,15 @@ describe('UsagePage federated quota readings', () => {
 
   it("attributes a meter standing on another machine's older reading", async () => {
     const hoursAgo = (h) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
+    // `stale` is now a server-computed verdict (period-relative, see
+    // server/lib/quotaWindows.js) — this fixture stands in for what the API
+    // would have stamped: the 50h-old weekly reading is well past its window's
+    // threshold, the moment-old session reading is not.
     api.getProviderUsage.mockResolvedValue({ providers: [{
       ...fleetCard,
       limits: [
-        { key: 'week', label: 'Weekly', percentUsed: 12, percentRemaining: 88, readAt: hoursAgo(50), readBy: 'inst-peer', readByName: 'Example Box' },
-        { key: 'session', label: 'Session', percentUsed: 30, percentRemaining: 70, readAt: hoursAgo(0), readBy: null, readByName: null },
+        { key: 'week', label: 'Weekly', percentUsed: 12, percentRemaining: 88, readAt: hoursAgo(50), readBy: 'inst-peer', readByName: 'Example Box', stale: true },
+        { key: 'session', label: 'Session', percentUsed: 30, percentRemaining: 70, readAt: hoursAgo(0), readBy: null, readByName: null, stale: false },
       ],
     }] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);

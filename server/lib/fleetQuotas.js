@@ -26,6 +26,7 @@
 
 import { compareNewerWins, parseTsMs } from './lwwTimestamp.js';
 import { limitWindowExpired } from './quotaReset.js';
+import { isLimitStale } from './quotaWindows.js';
 import { isNonBlankStr } from './textUtils.js';
 
 // Structural bounds on ONE peer-supplied quota payload. Same reasoning as the
@@ -49,6 +50,7 @@ function sanitizeLimit(raw) {
   const key = str(raw?.key, 120);
   if (!key) return null;
   const percentUsed = pct(raw?.percentUsed);
+  const periodHours = Number.isFinite(raw?.periodHours) && raw.periodHours > 0 ? raw.periodHours : null;
   return {
     key,
     label: str(raw?.label, 200) || key,
@@ -56,6 +58,12 @@ function sanitizeLimit(raw) {
     percentRemaining: percentUsed === null ? null : 100 - percentUsed,
     resetsAt: str(raw?.resetsAt, 60),
     timezone: str(raw?.timezone, 60),
+    // How long this window's allowance lasts, when the adapter states it
+    // exactly (`lib/quotaWindows.js`'s `windowPeriodHours`). Additive and
+    // back-compatible: an older peer simply omits it, and staleness falls back
+    // to the scope-word classifier. Carried through so a federated merge can
+    // age a peer's reading against its own window, not just a local one.
+    ...(periodHours !== null ? { periodHours } : {}),
   };
 }
 
@@ -124,6 +132,14 @@ export const latestFetchedAt = (cards) => (Array.isArray(cards) ? cards : []).re
  * instance, so a consumer can age a stand-in reading instead of presenting a
  * peer's day-old meter as this moment's number. `readBy` is null for the local
  * contribution, which is how the UI tells "this machine" from a stand-in.
+ *
+ * `stale` is recomputed here rather than carried over from whichever
+ * contribution stamped it: the winning reading's `readAt` becomes the WINNING
+ * contribution's `fetchedAt`, which can differ from what the limit itself was
+ * last judged against (a peer's own stamp, taken at a different `now`) — so
+ * the verdict has to be re-derived against this merge's own `now` and the
+ * limit's own window period (`lib/quotaWindows.js`), the same rule a
+ * single-machine card applies.
  */
 function unifyLimits(contributions, now) {
   const best = new Map();
@@ -144,7 +160,10 @@ function unifyLimits(contributions, now) {
   }
   return order.map((key) => {
     const { limit, fetchedAt, instanceId, name } = best.get(key);
-    return { ...limit, readAt: fetchedAt ?? null, readBy: instanceId, readByName: name };
+    const readAt = fetchedAt ?? null;
+    const readAtMs = parseTsMs(readAt);
+    const ageMs = readAtMs === null ? null : now - readAtMs;
+    return { ...limit, readAt, readBy: instanceId, readByName: name, stale: isLimitStale(limit, ageMs) };
   });
 }
 

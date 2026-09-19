@@ -746,7 +746,14 @@ describe('deferred imports stay deferred (#6156)', () => {
 // resolver through `await import()` so it costs 2 instead of 27. Measured
 // before 114,486, after 114,692; its whole share is 206. Restores the ~400 of
 // headroom the recent entries carry — main had eroded to 164 again.
-const MAX_STATIC_INSTANTIATIONS = 115100;
+// 115,100 → 115,300 (#7662 quota staleness): `lib/fleetQuotas.js` and
+// `services/providerUsage.js` gain a new edge into `lib/quotaWindows.js`, a
+// dependency-free leaf (staleness now needs the same window-period classifier
+// the quota-burn gate already used) — so every closure that reaches either
+// module without already reaching `quotaWindows.js` through `quotaBurn.js`
+// pays one node for it. No subtree. Measured before 114,692, after 114,853;
+// restores the ~400 of headroom the recent entries carry.
+const MAX_STATIC_INSTANTIATIONS = 115300;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
