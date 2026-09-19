@@ -733,7 +733,20 @@ describe('deferred imports stay deferred (#6156)', () => {
 // into a subtree. Measured before 114,119, after 114,253; its whole share is 134.
 // Restores the ~400 of headroom the recent entries carry — main had eroded to 81,
 // which is why an unrelated parallel merge kept tripping this.
-const MAX_STATIC_INSTANTIATIONS = 114650;
+// 114,650 → 115,100 (#7664 Brain threads): a new record type with a route, a
+// ref registry and four suites. `lib/threadRefKinds.js` is a dependency-free
+// leaf (the (kind, id) vocabulary plus its URL builder) and adds one node to
+// the 35 closures reaching `lib/brainValidation.js`, plus the lib barrel.
+// `services/threadRefs.js` keeps its single-kind lookups behind
+// `await import()`, so the only static edges it adds are `lib/db.js` and
+// `services/brainStorage.js` — both already carried by `routes/brain.js`, the
+// one closure that reaches the new route. The rest is the suites themselves:
+// `routes/brainThreads.test.js` is 162 of the 206, which is what ANY route test
+// costs (express + the route under test), and the drift guard reaches the
+// resolver through `await import()` so it costs 2 instead of 27. Measured
+// before 114,486, after 114,692; its whole share is 206. Restores the ~400 of
+// headroom the recent entries carry — main had eroded to 164 again.
+const MAX_STATIC_INSTANTIATIONS = 115100;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
