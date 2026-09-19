@@ -89,12 +89,14 @@ const SERVICE_REF_LOOKUPS = Object.freeze({
     const separator = id.indexOf(':');
     if (separator <= 0) return null;
     const message = await getMessage(id.slice(0, separator), id.slice(separator + 1));
-    return message ? { title: message.subject || message.snippet || message.id } : null;
+    return message ? { title: message.subject } : null;
   },
   'cos.task': async (id) => {
-    const { getTaskById } = await import('./cosTaskStore.js');
+    const { getTaskById, firstLine } = await import('./cosTaskStore.js');
     const task = await getTaskById(id);
-    return task ? { title: task.text || task.title || task.id } : null;
+    // A task's text lives in `description`, which is MULTI-LINE (the body a
+    // generator folds in below line 1) — a chip gets the first line only.
+    return task ? { title: firstLine(task.description) } : null;
   },
 });
 

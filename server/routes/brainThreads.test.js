@@ -234,6 +234,20 @@ describe('Brain Threads routes', () => {
     expect(res.body.threads.map((t) => t.id)).toEqual(['pinned', 'sooner', 'later', 'undated']);
   });
 
+  it('keeps a total order when two threads share a due date — including none at all', async () => {
+    // Regression: two UNDATED threads both key to Infinity, and subtracting
+    // them yields NaN. A comparator that returns NaN abandons the remaining
+    // tiebreaks, so the order goes engine-defined — and the pagination slice
+    // below drops or duplicates rows at its boundary when that happens.
+    brainStorage.getAll.mockResolvedValue([
+      baseThread({ id: 'c', dueAt: null, updatedAt: '2026-09-01T00:00:00.000Z' }),
+      baseThread({ id: 'a', dueAt: null, updatedAt: '2026-09-03T00:00:00.000Z' }),
+      baseThread({ id: 'b', dueAt: null, updatedAt: '2026-09-02T00:00:00.000Z' }),
+    ]);
+    const res = await request(app).get('/api/brain/threads');
+    // Falls through to most-recently-touched, which NaN would have skipped.
+    expect(res.body.threads.map((t) => t.id)).toEqual(['a', 'b', 'c']);
+  });
   it('returns the paginated envelope only when a pagination param is passed', async () => {
     brainStorage.getAll.mockResolvedValue([baseThread({ id: 'a' }), baseThread({ id: 'b' })]);
     const plain = await request(app).get('/api/brain/threads');

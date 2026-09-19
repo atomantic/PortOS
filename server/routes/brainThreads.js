@@ -117,8 +117,13 @@ const dueSortKey = (thread) => {
 // and an unstable one drops or duplicates rows at the slice boundary.
 function compareThreads(a, b) {
   if (Boolean(b.pinned) !== Boolean(a.pinned)) return Boolean(b.pinned) - Boolean(a.pinned);
-  const due = dueSortKey(a) - dueSortKey(b);
-  if (due !== 0) return due;
+  // Compared, not subtracted: two UNDATED threads are both Infinity, and
+  // `Infinity - Infinity` is NaN — a comparator returning NaN skips the
+  // remaining tiebreaks and leaves the order engine-defined, which the
+  // pagination slice below cannot tolerate.
+  const aDue = dueSortKey(a);
+  const bDue = dueSortKey(b);
+  if (aDue !== bDue) return aDue - bDue;
   const touched = Date.parse(b?.updatedAt ?? '') - Date.parse(a?.updatedAt ?? '');
   if (!Number.isNaN(touched) && touched !== 0) return touched;
   return String(a.id).localeCompare(String(b.id));

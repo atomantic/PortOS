@@ -3,10 +3,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const query = vi.fn();
 const getById = vi.fn();
 const getAppById = vi.fn();
+const getTaskById = vi.fn();
 
 vi.mock('../lib/db.js', () => ({ query: (...args) => query(...args) }));
 vi.mock('./brainStorage.js', () => ({ getById: (...args) => getById(...args) }));
 vi.mock('./apps.js', () => ({ getAppById: (...args) => getAppById(...args) }));
+vi.mock('./cosTaskStore.js', () => ({
+  getTaskById: (...args) => getTaskById(...args),
+  firstLine: (s) => (s || '').split('\n').map((l) => l.trim()).find(Boolean) || '',
+}));
 
 const { resolveThreadRefs } = await import('./threadRefs.js');
 
@@ -14,9 +19,11 @@ beforeEach(() => {
   query.mockReset();
   getById.mockReset();
   getAppById.mockReset();
+  getTaskById.mockReset();
   query.mockResolvedValue({ rows: [] });
   getById.mockResolvedValue(null);
   getAppById.mockResolvedValue(null);
+  getTaskById.mockResolvedValue(null);
 });
 
 describe('resolveThreadRefs — hydration', () => {
@@ -55,6 +62,13 @@ describe('resolveThreadRefs — hydration', () => {
     expect(ref).toMatchObject({ label: 'PortOS', url: '/apps/app-1', resolved: true });
   });
 
+  it('labels a CoS task with the first line of its description', async () => {
+    // A task's text lives in `description` (there is no `text` field), and that
+    // description is multi-line — a generator folds the body in below line 1.
+    getTaskById.mockResolvedValue({ id: 'task-1', description: 'Renew the cert\nlong body here' });
+    const [ref] = await resolveThreadRefs([{ kind: 'cos.task', id: 'task-1' }]);
+    expect(ref).toMatchObject({ label: 'Renew the cert', url: '/cos/tasks', resolved: true });
+  });
   it('keys a journal off its date id, which is the only name it has', async () => {
     getById.mockResolvedValue({ id: '2026-09-19', entries: [] });
     const [ref] = await resolveThreadRefs([{ kind: 'brain.journal', id: '2026-09-19' }]);
