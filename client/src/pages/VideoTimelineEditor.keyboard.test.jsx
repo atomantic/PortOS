@@ -74,14 +74,14 @@ const renderEditor = async () => {
 
 // The block is the drag handle, so it is reached through its own remove
 // button's accessible name — the only text that names a specific segment.
-const blockFor = (assetFile) => screen
-  .getByRole('button', { name: `Remove ${assetFile} from timeline` })
+const blockFor = async (assetFile) => (await screen
+  .findByRole('button', { name: `Remove ${assetFile} from timeline` }))
   .closest('[aria-roledescription="sortable"]');
 
 describe('VideoTimelineEditor keyboard clip reordering (#7243)', () => {
   it('reorders segments with Space, arrows and Space', async () => {
     await renderEditor();
-    const first = blockFor('first.png');
+    const first = await blockFor('first.png');
     first.focus();
 
     await pressKey('Space', first);
@@ -99,7 +99,7 @@ describe('VideoTimelineEditor keyboard clip reordering (#7243)', () => {
 
   it('cancels on Escape and leaves the order untouched', async () => {
     await renderEditor();
-    const first = blockFor('first.png');
+    const first = await blockFor('first.png');
     first.focus();
 
     await pressKey('Space', first);
@@ -115,7 +115,7 @@ describe('VideoTimelineEditor keyboard clip reordering (#7243)', () => {
     // the block's own select handler keeps it — that is what lets one element
     // be both the drag handle and the click-to-select target.
     await renderEditor();
-    const second = blockFor('second.png');
+    const second = await blockFor('second.png');
     second.focus();
 
     await pressKey('Enter', second);
