@@ -23,8 +23,9 @@ A previous agent finished task **task-example** and opened **PR https://github.c
 **Repeated comments:** If a fresh review round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on.
 **Challenge protocol (dispute a wrong rejection — use sparingly):** If a reviewer raises a BLOCKING finding you have strong, specific evidence is a false positive (it misread the diff, flagged intended behavior, or contradicts a documented repo convention), do NOT silently "fix" it or accept a false block — dispute it **exactly once** for this task:
 ```bash
-curl -sS -X POST http://127.0.0.1:5555/api/cos/tasks/task-example/challenge -H 'Content-Type: application/json' -d '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}'
+curl -sS -X POST http://127.0.0.1:5555/api/cos/tasks/task-example/challenge -H 'Content-Type: application/json' -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -d '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}'
 ```
+Keep that `Authorization` header on every PortOS API call you make, including the `/resolve` POST below: this install gates `/api/*` behind its instance password, and `$PORTOS_API_TOKEN` is the session token PortOS put in your environment for exactly this. A bare `401 AUTH_REQUIRED` means the header was dropped, not that the endpoint is unavailable.
 A `409` (`CHALLENGE_EXHAUSTED` = the one challenge is spent, or `CHALLENGE_BUDGET_EXHAUSTED` = the task is out of retry budget) means you can't dispute — then fix the finding or, if genuinely blocked, post a PR comment and stop. After filing, RE-CHECK: re-run the disputed reviewer (or another configured reviewer) against the current diff, then resolve — overturned → `POST .../challenge/resolve` with `{"outcome":"upheld"}` and continue to merge; confirmed → fix it, or send `{"outcome":"escalated"}` to hand the dispute to the user.
 
 ### CLI Reviewer Procedure (codex)

@@ -173,6 +173,43 @@ describe('authGate middleware', () => {
     expect(result.called).toBe(true);
   });
 
+  // The whole point of the agent token: a CoS agent holds no browser cookie, so
+  // the credential PortOS injects into its environment has to satisfy this gate
+  // or every canned `curl` in its own prompt is a 401 it reads as a dead
+  // endpoint. Minted through the real service against the real gate — the two
+  // halves are wired far apart (spawn env vs. Express middleware).
+  it('accepts the loopback token PortOS mints for its own agents', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    const { PORTOS_API_TOKEN } = await resolveAgentApiEnv();
+    const { authGate } = await import('./authGate.js');
+
+    const result = await runGate(authGate, {
+      path: '/api/code-review/local',
+      headers: { authorization: `Bearer ${PORTOS_API_TOKEN}` },
+    });
+
+    expect(PORTOS_API_TOKEN).toBeTruthy();
+    expect(result.called).toBe(true);
+  });
+
+  // …and the `${PORTOS_API_TOKEN:-}` default in those prompts is not a bypass:
+  // an agent that never received a token is still refused.
+  it('refuses the empty bearer an unprovisioned agent would send', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { authGate } = await import('./authGate.js');
+
+    const result = await runGate(authGate, {
+      path: '/api/code-review/local',
+      headers: { authorization: 'Bearer ' },
+    });
+
+    expect(result.called).toBe(false);
+    expect(result.res.statusCode).toBe(401);
+  });
+
   it('lets static client paths through when auth is on', async () => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });

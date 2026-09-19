@@ -38,6 +38,7 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { buildVendorSpawnConfig } from '../lib/providerVendors.js';
 import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../lib/providerModels.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
+import { resolveAgentApiEnv } from './agentApiAuth.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -198,11 +199,16 @@ export async function spawnDirectly({
   // entirely when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its
   // explicit credential wins (gh prefers GH_TOKEN, so injecting one would shadow a
   // provider GITHUB_TOKEN).
-  const [claudeSettingsEnv, forgeTokenEnv] = isPublicReviewRestrictedProfile(safetyProfile)
-    ? [{}, {}]
+  // A third rides alongside: the loopback PortOS session token this agent's own
+  // `curl` snippets need when the install has an instance password set (see
+  // agentApiAuth.js). It is `{}` when auth is off, and never resolved for a
+  // public-content stage.
+  const [claudeSettingsEnv, forgeTokenEnv, agentApiEnv] = isPublicReviewRestrictedProfile(safetyProfile)
+    ? [{}, {}, {}]
     : await Promise.all([
       isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
       providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
+      resolveAgentApiEnv({ safetyProfile }),
     ]);
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +
@@ -212,7 +218,7 @@ export async function spawnDirectly({
   // final PATH so a `--dangerously-skip-permissions` agent can't `pm2 kill` the
   // shared daemon.
   const childEnv = buildCliChildEnv({
-    before: { ...forgeTokenEnv, ...claudeSettingsEnv },
+    before: { ...forgeTokenEnv, ...claudeSettingsEnv, ...agentApiEnv },
     provider,
     model,
     cwd,

@@ -82,6 +82,7 @@ import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { buildCliChildEnv, composeProviderEnv } from '../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
+import { resolveAgentApiEnv } from './agentApiAuth.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
 import { shellHasLiveChild } from '../lib/shellLivenessProbe.js';
@@ -148,6 +149,7 @@ export async function createAgentTuiSession({
   tuiConfig,
   cwd,
   forgeTokenEnv = {},
+  agentApiEnv = {},
   doneSentinelPath = null,
   useDurableRunner = false,
   safetyProfile = null,
@@ -168,9 +170,14 @@ export async function createAgentTuiSession({
   // shell, so the operator's rc file can no longer run between this allowlist
   // and the provider and re-export whatever it likes (#6159). The ordinary
   // branch is a DELTA: `createShellSession` unions it onto `buildSafeEnv`.
+  // The credential overlay both branches start from: the repo-owner GH_TOKEN and
+  // the loopback PortOS API token (agentApiAuth.js). Both are resolved by the
+  // caller and both are `{}` for a public-content stage, whose allowlist would
+  // strip them regardless.
+  const credentialEnv = { ...forgeTokenEnv, ...agentApiEnv };
   const env = restricted
-    ? buildCliChildEnv({ before: forgeTokenEnv, provider, model, cwd, guard: true, safetyProfile })
-    : { ...composeProviderEnv({ before: forgeTokenEnv, provider, model }), ...agentGuardEnv() };
+    ? buildCliChildEnv({ before: credentialEnv, provider, model, cwd, guard: true, safetyProfile })
+    : { ...composeProviderEnv({ before: credentialEnv, provider, model }), ...agentGuardEnv() };
   // How this session identifies itself in the Shell UI and the session registry.
   // Identical for all three spawn shapes below — an attached human sees the same
   // tab whichever one opened the PTY.
@@ -1606,6 +1613,12 @@ export async function spawnTuiAgent({
     ? {}
     : await git.resolveForgeTokenEnv(cwd);
 
+  // The loopback PortOS session token this agent's own `curl` snippets need when
+  // the install has an instance password set (agentApiAuth.js). `buildSafeEnv`
+  // allowlist-filters the inherited env for a login-shell PTY, so like GH_TOKEN
+  // it only reaches the agent by riding the explicit delta below.
+  const agentApiEnv = await resolveAgentApiEnv({ safetyProfile });
+
   // Ollama-backed harnesses talk to the daemon directly, so their context
   // window is whatever Ollama loaded the model at — no per-request `num_ctx`
   // reaches them. Hold the daemon at the provider's configured window (or warn
@@ -1645,6 +1658,7 @@ export async function spawnTuiAgent({
       tuiConfig,
       cwd,
       forgeTokenEnv,
+      agentApiEnv,
       doneSentinelPath,
       useDurableRunner,
       safetyProfile,

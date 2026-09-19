@@ -20,6 +20,8 @@ The route checks the TCP socket address, not forwarding headers, and accepts onl
 
 The normal PortOS authentication gate runs before this route. If an instance password is enabled, the MCP client must also send a valid PortOS session, Bearer token, or Basic credential.
 
+A CoS agent spawned by PortOS already holds one: the server mints a loopback session token and injects it as `PORTOS_API_TOKEN` (`server/services/agentApiAuth.js`), so an agent authenticates with `-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"` on any PortOS API call. The variable is empty when no instance password is set, and it is never given to a public-content review stage.
+
 This first transport is intentionally stateless: it emits no MCP session identifier, accepts JSON responses to POST, and returns `405` for GET/DELETE on the MCP endpoint. It implements protocol version `2025-11-25` and recognizes the compatible `2025-03-26` and `2025-06-18` request headers.
 
 ## Disclosure profiles and scopes

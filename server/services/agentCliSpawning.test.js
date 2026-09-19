@@ -52,6 +52,10 @@ vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn().mockResolved
 // pulling in the real worktreeManager → instances module graph. Default: no
 // owner-matched account → empty overlay (ambient gh auth untouched).
 vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
+// The loopback PortOS API token the agent's own `curl`s spend — mocked for the
+// same reason: the real one reads settings.json to learn whether this install
+// has an instance password.
+vi.mock('./agentApiAuth.js', () => ({ resolveAgentApiEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
@@ -1056,6 +1060,26 @@ describe('stream error containment', () => {
       expect.anything(),
       expect.anything(),
       expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'ghp_pinned_owner_token' }) }),
+    );
+
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
+  });
+
+  // The agent's own prompt hands it `curl`s against this install's API, which is
+  // gated whenever an instance password is set. The token is the only way an
+  // agent — which holds no browser cookie — can answer that gate.
+  it('injects the loopback PortOS API token into the spawn env', async () => {
+    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    vi.mocked(resolveAgentApiEnv).mockResolvedValueOnce({ PORTOS_API_TOKEN: 'portos-session-token' });
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await new Promise((r) => setTimeout(r, 10)); // let the resolveAgentApiEnv await settle
+
+    expect(spawn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ env: expect.objectContaining({ PORTOS_API_TOKEN: 'portos-session-token' }) }),
     );
 
     fakeProcess.emit('close', 0);
