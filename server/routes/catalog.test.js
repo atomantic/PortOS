@@ -278,6 +278,31 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     expect(r.status).toBe(404);
   });
 
+  it('joins the source scrap title and lists sibling extractions, without a stub for a solo extraction (#7617)', async () => {
+    const scrap = await catalogDB.createScrap({ title: `Route Scrap ${NONCE}`, rawText: 'Two characters, one page.', sourceKind: 'paste' });
+    createdScrapIds.add(scrap.id);
+    const a = await catalogDB.createIngredient({ type: 'character', name: `Details Sibling A ${NONCE}` });
+    const b = await catalogDB.createIngredient({ type: 'character', name: `Details Sibling B ${NONCE}` });
+    const solo = await catalogDB.createIngredient({ type: 'idea', name: `Details Solo ${NONCE}` });
+    [a, b, solo].forEach((i) => createdIngredientIds.add(i.id));
+    await catalogDB.linkIngredientToSource(a.id, scrap.id);
+    await catalogDB.linkIngredientToSource(b.id, scrap.id);
+
+    const rA = await request(makeApp()).get(`/api/catalog/ingredients/${a.id}/details`);
+    expect(rA.status).toBe(200);
+    expect(rA.body.sources).toHaveLength(1);
+    expect(rA.body.sources[0].scrapTitle).toBe(`Route Scrap ${NONCE}`);
+    expect(rA.body.sources[0].siblings).toEqual([{ id: b.id, name: `Details Sibling B ${NONCE}`, type: 'character' }]);
+
+    // An ingredient with no other extraction from its scrap gets an EMPTY
+    // siblings array, not an absent field — the client renders no stub for it.
+    const soloScrap = await catalogDB.createScrap({ title: `Route Solo Scrap ${NONCE}`, rawText: 'Just one.', sourceKind: 'paste' });
+    createdScrapIds.add(soloScrap.id);
+    await catalogDB.linkIngredientToSource(solo.id, soloScrap.id);
+    const rSolo = await request(makeApp()).get(`/api/catalog/ingredients/${solo.id}/details`);
+    expect(rSolo.body.sources[0].siblings).toEqual([]);
+  });
+
   it('omits dangling "Appears in" refs whose target was soft-deleted (#1812)', async () => {
     const liveUni = `details-live-uni-${NONCE}`;
     const deadUni = `details-dead-uni-${NONCE}`;
@@ -340,5 +365,23 @@ describe.skipIf(!runDb)('GET /api/catalog/facets + ingredient filters (#1762)', 
     expect(noRefId.status).toBe(400);
     const combined = await request(makeApp()).get('/api/catalog/ingredients?unlinked=true&orphaned=true');
     expect(combined.status).toBe(400);
+  });
+});
+
+describe.skipIf(!runDb)('GET /api/catalog/ingredients?scrapId= (#7617)', () => {
+  it('filters to ingredients extracted from the given source scrap', async () => {
+    const scrap = await catalogDB.createScrap({ title: `Filter Scrap ${NONCE}`, rawText: 'Filter probe text.', sourceKind: 'paste' });
+    createdScrapIds.add(scrap.id);
+    const inScrap = await catalogDB.createIngredient({ type: 'character', name: `Scrap Filter In ${NONCE}` });
+    const outOfScrap = await catalogDB.createIngredient({ type: 'character', name: `Scrap Filter Out ${NONCE}` });
+    createdIngredientIds.add(inScrap.id);
+    createdIngredientIds.add(outOfScrap.id);
+    await catalogDB.linkIngredientToSource(inScrap.id, scrap.id);
+
+    const r = await request(makeApp()).get(`/api/catalog/ingredients?scrapId=${scrap.id}`);
+    expect(r.status).toBe(200);
+    const ids = r.body.items.map((i) => i.id);
+    expect(ids).toContain(inScrap.id);
+    expect(ids).not.toContain(outOfScrap.id);
   });
 });

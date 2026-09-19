@@ -260,6 +260,45 @@ describe('CatalogIngredient — character sheet', () => {
     expect(screen.getByDisplayValue('Being underestimated.')).toBeTruthy();
   });
 
+  it('shows the source scrap by TITLE (not the bare id) and links to it, with siblings from the same source (#7617)', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => detailsOf({
+      ...CHAR_FIXTURE,
+      sources: [{
+        scrapId: 'cat-scrap-abc123',
+        scrapTitle: 'Notebook Page Three',
+        extractedAt: '2026-01-01T00:00:00.000Z',
+        siblings: [{ id: 'cat-plc-1', name: 'Sibling Place', type: 'place' }],
+      }],
+    }));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Notebook Page Three')).toBeTruthy());
+    // Never the raw id — that's the bug this issue fixes.
+    expect(screen.queryByText('cat-scrap-abc123')).toBeNull();
+    const scrapLink = screen.getByText('Notebook Page Three').closest('a');
+    expect(scrapLink.getAttribute('href')).toBe('/catalog?scrap=cat-scrap-abc123');
+    // The sibling extraction from the same source scrap is listed and links to
+    // its own detail page.
+    expect(screen.getByText('From the same source')).toBeTruthy();
+    const siblingLink = screen.getByText('Sibling Place').closest('a');
+    expect(siblingLink.getAttribute('href')).toBe('/catalog/place/cat-plc-1');
+  });
+
+  it('renders no "From the same source" stub for a solo extraction or a manually-created ingredient (#7617)', async () => {
+    getCatalogIngredientDetails.mockImplementation(async () => detailsOf({
+      ...CHAR_FIXTURE,
+      sources: [{ scrapId: 'cat-scrap-solo', scrapTitle: 'Lone Page', extractedAt: null, siblings: [] }],
+    }));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Lone Page')).toBeTruthy());
+    expect(screen.queryByText('From the same source')).toBeNull();
+
+    // No source scrap at all (created manually) — the existing message, no stub.
+    getCatalogIngredientDetails.mockImplementation(async () => detailsOf({ ...CHAR_FIXTURE, sources: [] }));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Created manually — no source scrap.')).toBeTruthy());
+    expect(screen.queryByText('From the same source')).toBeNull();
+  });
+
   it('renders EDITABLE array editors (color palette + stats + aliases) seeded from payload', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByRole("button", { name: /Add color/i })).toBeTruthy());

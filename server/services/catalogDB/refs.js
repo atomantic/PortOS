@@ -27,12 +27,19 @@ export async function linkIngredientToSource(ingredientId, scrapId, span = null,
   );
 }
 
+// Joins the scrap's `title` onto each source link (#7617) so the detail page
+// can render "extracted from <title>" instead of the bare `cat-scrap-<uuid>`.
+// `LEFT JOIN` (not `JOIN`) so a source row survives a hard-deleted scrap —
+// `scrapTitle` just comes back null, same posture as an orphaned ref.
 export async function listSourcesForIngredient(ingredientId) {
   const result = await query(
-    `SELECT * FROM catalog_ingredient_sources WHERE ingredient_id = $1`,
+    `SELECT s.*, sc.title AS scrap_title
+       FROM catalog_ingredient_sources s
+       LEFT JOIN catalog_scraps sc ON sc.id = s.scrap_id
+      WHERE s.ingredient_id = $1`,
     [ingredientId],
   );
-  return result.rows.map(rowToSource);
+  return result.rows.map((row) => ({ ...rowToSource(row), scrapTitle: row.scrap_title ?? null }));
 }
 
 export async function listSourcesForScrap(scrapId) {
@@ -41,6 +48,30 @@ export async function listSourcesForScrap(scrapId) {
     [scrapId],
   );
   return result.rows.map(rowToSource);
+}
+
+// Sibling ingredients extracted from the same source scrap(s) as `ingredientId`
+// (#7617) — "what else came out of this piece?" in the ONE `/details` round-trip
+// the detail page already makes, rather than a second fetch per scrap. Batches
+// across every scrap the ingredient sources from in one query (mirrors the
+// `listRefsForIngredients` batching shape). Returns `Map<scrapId, Array<{ id,
+// name, type }>>`; excludes the caller's own row and soft-deleted siblings.
+export async function listSiblingIngredientsBySource(ingredientId, scrapIds) {
+  const ids = [...new Set(scrapIds)].filter(Boolean);
+  if (ids.length === 0) return new Map();
+  const result = await query(
+    `SELECT s.scrap_id, i.id, i.name, i.type
+       FROM catalog_ingredient_sources s
+       JOIN catalog_ingredients i ON i.id = s.ingredient_id
+      WHERE s.scrap_id = ANY($1) AND s.ingredient_id != $2 AND i.deleted = false
+      ORDER BY i.name ASC`,
+    [ids, ingredientId],
+  );
+  const grouped = new Map(ids.map((id) => [id, []]));
+  for (const row of result.rows) {
+    grouped.get(row.scrap_id)?.push({ id: row.id, name: row.name, type: row.type });
+  }
+  return grouped;
 }
 
 export async function linkIngredientToRef(ingredientId, refKind, refId, role) {

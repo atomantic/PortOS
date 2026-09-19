@@ -311,6 +311,11 @@ export const catalogIngredientQuerySchema = z.object({
   refId: z.string().trim().min(1).max(120).optional(),
   unlinked: booleanish.optional(),
   orphaned: booleanish.optional(),
+  // Source-scrap filter (#7617): "everything extracted from this piece" — a
+  // provenance dimension, orthogonal to the universe/series homing album
+  // filters above, so it composes with them instead of joining their
+  // mutual-exclusivity refinement below.
+  scrapId: z.string().trim().min(1).max(120).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 }).strict()
