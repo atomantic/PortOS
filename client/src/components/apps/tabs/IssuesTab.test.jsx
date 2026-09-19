@@ -117,6 +117,7 @@ describe('IssuesTab', () => {
     expect(linkButton).toHaveAttribute('rel', 'noreferrer');
     expect(linkButton.className).toContain('min-h-[44px]');
     expect(linkButton.className).toContain('min-w-[44px]');
+    expect(linkButton).toHaveTextContent('GitHub');
   });
 
   it('activates the issue link button on Space keydown', async () => {
