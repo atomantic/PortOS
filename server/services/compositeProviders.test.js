@@ -53,7 +53,7 @@ const { buildTuiInvocation } = await import('../lib/tuiHandshake.js');
 const { buildTuiShellLaunch } = await import('../lib/tuiShellLaunch.js');
 const { buildCliChildEnv } = await import('../lib/cliChildEnv.js');
 const { applyCredentialBootstrap, needsProcessGroup, resolveCliSpawn } = await import('../lib/credentialBootstrap.js');
-const { PUBLIC_REVIEW_EXECUTION_PROFILES } = await import('../lib/agentExecutionProfiles.js');
+const { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } = await import('../lib/agentExecutionProfiles.js');
 const { createRunnerService } = await import('../lib/aiToolkit/runner.js');
 const { createProviderStatusService } = await import('../lib/aiToolkit/providerStatus.js');
 const { allowedModesFor } = await import('../lib/callerModePolicy.js');
@@ -189,7 +189,7 @@ describe('materializeComposite — the run paths', () => {
     expect(buildCliArgs(provider)).toEqual(expect.arrayContaining(['--oss', '--local-provider', 'lmstudio']));
   });
 
-  it('claude.cli@anthropic+corp-auth: the bootstrap app wraps the spawn, and a public-review posture spawns claude unwrapped', () => {
+  it('claude.cli@anthropic+corp-auth: the bootstrap app wraps the spawn, including a tool-free review but never the actions stage', () => {
     const provider = record('claude.cli@anthropic+corp-auth');
     expect(provider.credentialBootstrap).toEqual({ command: 'corp-auth', args: ['run'], harnessId: 'claude-code', argsSeparator: '--' });
     const args = buildCliArgs(provider);
@@ -202,8 +202,16 @@ describe('materializeComposite — the run paths', () => {
     expect(needsProcessGroup(spawn.wrapped, false)).toBe(true);
     expect(needsProcessGroup(spawn.wrapped, true)).toBe(false);
 
-    const restricted = applyCredentialBootstrap(provider, provider.command, args, { safetyProfile: PUBLIC_REVIEW_EXECUTION_PROFILES[0] });
-    expect(restricted).toEqual({ command: 'claude', args, wrapped: false });
+    // A tool-free reviewer still gets the wrap — spawned bare it would have no
+    // credential at all and the review gate would wait out a round that can
+    // never answer (#7720). The enforced recipe rides through unchanged.
+    const reviewer = applyCredentialBootstrap(provider, provider.command, args, { safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE });
+    expect(reviewer).toEqual({ command: 'corp-auth', args: ['run', 'claude-code', '--', ...args], wrapped: true });
+    // The actions stage is the one posture that fails closed: it EXECUTES the
+    // screened patch inside a sandbox spelled entirely in that argv, so nothing
+    // may sit in front of the harness and rewrite it.
+    const actions = applyCredentialBootstrap(provider, provider.command, args, { safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE });
+    expect(actions).toEqual({ command: 'claude', args, wrapped: false });
   });
 
   it('carries the harness by name into the effort ladder, so a bootstrap-wrapped spawn still offers its rungs', async () => {

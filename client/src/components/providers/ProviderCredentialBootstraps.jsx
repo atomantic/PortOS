@@ -83,7 +83,7 @@ function BootstrapForm({ draft, editing, harnesses, busy, onChange, onSubmit, on
         <FormField label="Arguments" hint="Space-separated, before the harness name" compact>
           <input id="bootstrap-args" type="text" value={draft.args} onChange={set('args')} className={INPUT_CLASS} placeholder="run" />
         </FormField>
-        <FormField label="Review credential command" hint="Tool-free reviews only; wrapper is never used there. Executable then one argument per line; prints KEY=value credentials, never shell code or JSON. Cached for one minute. Keep secrets out of argv." compact>
+        <FormField label="Review credential command" hint="Optional, tool-free reviews only — for an app that PRINTS credentials instead of running the harness; leave it empty and the wrap above credentials the review. Executable then one argument per line; prints KEY=value credentials, never shell code or JSON. Cached for one minute. Keep secrets out of argv." compact>
           <textarea id="bootstrap-env-command" value={draft.envCommand} onChange={set('envCommand')} rows={3} className={INPUT_CLASS} placeholder={'corp-auth\nprint-env'} />
         </FormField>
         <FormField label="Args separator" hint="Inserted between the harness name and its own args, e.g. --" compact>

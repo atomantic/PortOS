@@ -319,11 +319,12 @@ export function buildTuiSpawnConfig(provider, model, {
       safetyProfile,
       tui: true,
     });
-    // Public-review postures never get credential-bootstrap-wrapped — the
-    // enforced recipe above IS the sandbox. `applyCredentialBootstrap` owns
-    // that skip (keyed on `safetyProfile`), so `spawnCommand`/`spawnArgs` come
-    // back identical to `command`/`args` and every branch of this function
-    // returns the same shape.
+    // A `sandboxed-actions` posture never gets credential-bootstrap-wrapped —
+    // the enforced recipe above IS the sandbox there, and it is spelled entirely
+    // in argv. A `no-tool` posture IS wrapped, because spawned bare it would
+    // carry no credential at all (#7720). `applyCredentialBootstrap` owns that
+    // split (keyed on `safetyProfile`); either way this branch returns the same
+    // shape as every other, with `command`/`args` still naming the harness.
     const { command: spawnCommand, args: spawnArgs } = applyCredentialBootstrap(provider, recipe.command, recipe.args, { safetyProfile });
     return {
       command: recipe.command,

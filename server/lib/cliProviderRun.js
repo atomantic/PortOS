@@ -164,13 +164,15 @@ export function runCliProviderPrompt(args = {}) {
     // `resolveCliSpawn` also applies a credential-bootstrap wrap
     // (credentialBootstrap.js) when configured — applied AFTER
     // prepareCliPrompt (above), which still keys prompt-delivery convention
-    // off the harness's own command, not the bootstrap CLI's — and never under
-    // a public-review `safetyProfile`, whose enforced recipe is the sandbox.
+    // off the harness's own command, not the bootstrap CLI's. This is the
+    // tool-free reviewer's spawn too, and it IS wrapped: a reviewer spawned
+    // bare carries no credential at all (#7720). Only the `sandboxed-actions`
+    // `safetyProfile` skips the wrap — see credentialBootstrap.js.
     const { command: spawnCommand, args: wrappedArgs, wrapped } = resolveCliSpawn(provider, provider.command, spawnArgs, childEnv, { safetyProfile });
     // A bootstrap-wrapped child is a supervising WRAPPER, not the harness, so
     // the timeout kill below has to signal the whole process group or it leaves
     // the harness running past the run (#7496). False for every unwrapped
-    // spawn — including a public-review posture, which is never wrapped.
+    // spawn — including the `sandboxed-actions` posture, which is never wrapped.
     const processGroup = needsProcessGroup(wrapped);
     const child = spawn(spawnCommand, wrappedArgs, {
       cwd: effectiveCwd,
