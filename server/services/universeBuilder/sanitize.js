@@ -753,6 +753,16 @@ export const sanitizeTemplate = (raw) => {
     // existing universe keeps its on-disk shape) and kept ON the wire —
     // `universes` v9 gates it against strip-then-LWW by older peers.
     ...(moodBoardId ? { moodBoardId } : {}),
+    // Factual/fiction axis (#7616). `true` means this world is the real one —
+    // the user's own life, people and places — so the catalog extractor reads
+    // its material as lived record rather than invented story material.
+    // Persisted ONLY when true (like `ephemeral`/`importDraft`) so every
+    // existing universe keeps its exact on-disk shape and wire checksum.
+    // Unlike those two this field IS federated: a world's factual nature is a
+    // property of the world, not of one machine. `universes` v12 gates it, or
+    // a ≤v11 peer would sanitize it away and LWW the loss back, silently
+    // reclassifying the user's Reality universe as fiction.
+    ...(raw.factual === true ? { factual: true } : {}),
     // Base "style probe" renders — images generated from the raw style preset
     // (influences embrace/avoid + styleNotes) with NO subject, so the user can
     // see the world's base visual emphasis. Additive + regenerable; sanitized

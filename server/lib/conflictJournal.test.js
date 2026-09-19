@@ -108,6 +108,27 @@ describe('conflictJournal', () => {
     expect(await cj.getSyncBaseHash('universe', 'u-1')).toBe(cj.contentHashForRecord('universe', remote));
   });
 
+  it('a universe divergence on `factual` alone is journaled WITH the field in the diff', async () => {
+    // Regression (#7616): `factual` federates, so it feeds the wire projection
+    // contentHashForRecord hashes — a peer flipping the factual/fiction axis is
+    // a real 3-way divergence. When RESTORABLE_FIELDS.universe omitted it, that
+    // conflict journaled with an EMPTY diffSummary: the Conflicts UI showed a
+    // conflict the user could neither see nor resolve, and the flag this field
+    // exists to protect was lost to LWW in silence.
+    const base = uni();
+    await cj.setSyncBaseHash('universe', 'u-1', cj.contentHashForRecord('universe', base));
+    const local = uni({ factual: true, updatedAt: '2026-05-02T00:00:00Z' });
+    const remote = uni({ starterPrompt: 'REMOTE edit', updatedAt: '2026-05-03T00:00:00Z' });
+
+    await cj.maybeJournalBeforeOverwrite({ kind: 'universe', id: 'u-1', local, remote, source: { via: 'sync' } });
+    const [entry] = await pendingEntries();
+    const factualDiff = entry.diffSummary.find((d) => d.field === 'factual');
+    expect(factualDiff).toBeDefined();
+    expect(factualDiff.localValue).toBe(true);
+    // Absent on the remote side — fiction is the no-key shape sanitizeTemplate writes.
+    expect(factualDiff.remoteValue).toBeUndefined();
+  });
+
   it('idempotent snapshot replay does not create a second entry', async () => {
     const base = uni({ starterPrompt: 'base' });
     await cj.setSyncBaseHash('universe', 'u-1', cj.contentHashForRecord('universe', base));

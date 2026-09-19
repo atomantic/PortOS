@@ -46,6 +46,24 @@ describe('conflictJournalResolver', () => {
     cj.__resetBaseHashCacheForTests();
   });
 
+  it('restores universe `factual` in BOTH directions, including the absent-means-false clear', async () => {
+    // Regression (#7616): sanitizeTemplate persists `factual` only when true, so
+    // a fiction snapshot simply has no key. `pick`'s plain `in` check dropped it,
+    // which made the true→fiction restore a silent no-op while the fiction→true
+    // direction worked — the user hit Restore, saw success, and the universe
+    // stayed misclassified as real. ABSENT_MEANS_FALSE_FIELDS fills the explicit
+    // false; the sanitizer drops that back to absent on write.
+    const setOn = await universeSvc.createUniverse({ name: 'Reality', factual: true });
+    const clearEntry = await seedEntry(setOn.id, { id: setOn.id, name: 'Reality' });
+    await resolver.resolveConflict(clearEntry, { action: 'restore-all' });
+    expect((await universeSvc.getUniverse(setOn.id)).factual).toBeUndefined();
+
+    const setOff = await universeSvc.createUniverse({ name: 'Clandestiny' });
+    const markEntry = await seedEntry(setOff.id, { id: setOff.id, name: 'Clandestiny', factual: true });
+    await resolver.resolveConflict(markEntry, { action: 'merge-fields', fields: ['factual'] });
+    expect((await universeSvc.getUniverse(setOff.id)).factual).toBe(true);
+  });
+
   it('restore-all re-applies the archived snapshot content (bumps updatedAt)', async () => {
     const u = await universeSvc.createUniverse({ name: 'Clandestiny', starterPrompt: 'REMOTE won' });
     const entryId = await seedEntry(u.id, { id: u.id, name: 'Clandestiny', starterPrompt: 'MY local prompt' });

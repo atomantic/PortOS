@@ -105,6 +105,7 @@ export async function listSummaries() {
             data->>'logline' AS logline,
             left(btrim(data->>'starterPrompt'), $1) AS "starterPrompt",
             data->'origin' AS origin,
+            (data->>'factual')::boolean AS factual,
             data->>'createdAt' AS "createdAt",
             data->>'updatedAt' AS "updatedAt",
             data->'styleImageRefs'->>-1 AS "styleImageRef",

@@ -460,13 +460,30 @@ export async function detectConflict({ kind, id, local, remote }) {
   return { isConflict, baseHash, localHash, remoteHash, baseUnavailable: _persistBlocked };
 }
 
+// Restorable fields whose ABSENCE from a wire snapshot is meaningful state
+// rather than "not captured". `sanitizeTemplate` persists universe `factual`
+// only when true, so a fiction snapshot simply omits the key — and a restore
+// that picks fields with a plain `in` check would skip it, silently turning
+// "restore this universe to fiction" into a no-op while the true-direction
+// restore worked. The resolver fills in the explicit `false`, which
+// `sanitizeTemplate` then drops back to absent.
+export const ABSENT_MEANS_FALSE_FIELDS = Object.freeze({
+  universe: Object.freeze(['factual']),
+});
+
 // User-authored content fields a restore/merge may write back, per kind. This
 // is the SINGLE SOURCE OF TRUTH — the resolver imports it for its merge-fields
 // allowlist, and diffSummary filters to it so the Conflicts UI only ever offers
 // fields the resolver will accept (server-owned fields like id/createdAt/
 // schemaVersion/locked/origin/deleted are neither restorable nor shown).
 export const RESTORABLE_FIELDS = Object.freeze({
-  universe: ['name', 'starterPrompt', 'logline', 'premise', 'styleNotes', 'categories', 'compositeSheets', 'influences', 'characters', 'places', 'objects'],
+  // `factual` (#7616) is here because it is FEDERATED and therefore hashed by
+  // contentHashForRecord — a peer flipping the factual/fiction axis is a real
+  // 3-way divergence. Omitting it would journal that conflict with a diff that
+  // cannot mention the field (the phantom-divergence trap `styleImageRefs`
+  // avoids by being stripped from the wire instead) and leave the user no way
+  // to restore it. See ABSENT_MEANS_FALSE_FIELDS for the clear direction.
+  universe: ['name', 'starterPrompt', 'logline', 'premise', 'styleNotes', 'categories', 'compositeSheets', 'influences', 'characters', 'places', 'objects', 'factual'],
   series: ['name', 'logline', 'premise', 'styleNotes', 'styleGuide', 'titleLogo', 'author', 'stylePromptOverride', 'stylePromptOverrideMode', 'targetFormat', 'issueCountTarget', 'arc', 'seasons'],
   // mediaCollection restores only the user-authored content scalars. `items`
   // are union-merged (never lost, nothing to restore); `universeId`/`seriesId`

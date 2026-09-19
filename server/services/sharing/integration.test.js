@@ -2362,7 +2362,7 @@ describe('sharing round-trip', () => {
       const exp = await exporter.exportSeries(s.id, bucket.id);
       const manifest = JSON.parse(readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
       expect(manifest.portosSchemaVersions).toBeDefined();
-      expect(manifest.portosSchemaVersions.universes).toBe(11);
+      expect(manifest.portosSchemaVersions.universes).toBe(12);
     });
 
     it('preserves character production packages when an older peer wins universe LWW', async () => {
