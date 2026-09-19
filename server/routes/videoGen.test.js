@@ -68,6 +68,7 @@ const runtimeProbes = vi.hoisted(() => ({
   isByovRuntimeCurrent: vi.fn(async () => false),
   invalidateByovReadyCache: vi.fn(),
   invalidateByovLoraCapabilityCache: vi.fn(),
+  warmByovLoraCapabilities: vi.fn(async () => {}),
   invalidateRuntimeFingerprintCache: vi.fn(),
 }));
 vi.mock('../services/videoGen/runtimes.js', async (importOriginal) => ({
@@ -646,6 +647,28 @@ describe('videoGen routes', () => {
       expect(r.body.fflfLtx2PixelBudget).toBeGreaterThan(0);
       // The point of the route: no interpreter subprocess in the request path.
       expect(checkPackages).not.toHaveBeenCalled();
+    });
+
+    // Each model's `runtimeLoraCapable` is stamped from a SYNC accessor that
+    // reads a not-yet-probed runtime as "not capable" — the gate fails closed.
+    // That default is indistinguishable from a probed `false` once it is in the
+    // payload, and the client fetches this list ONCE: an install whose H3
+    // runtime passes the probe was told "this H3 runtime did not pass PortOS's
+    // quantization-aware LoRA probe" for the life of the page, because the
+    // background warm corrected the server and nothing corrected the client.
+    it('reports the probed LoRA verdict, not the pre-probe fail-closed default', async () => {
+      let probed = false;
+      runtimeProbes.warmByovLoraCapabilities.mockImplementationOnce(async () => { probed = true; });
+      // Stands in for decorateVideoModel, which stamps the sync read at the
+      // moment the list is built — so this is `false` unless the warm ran first.
+      videoGenService.listVideoModels.mockImplementationOnce(() => [{
+        id: 'minimax_h3_8bit', name: 'MiniMax H3 MLX 8-bit', runtime: 'minimax_h3',
+        supportedModes: ['text'], runtimeLoraCapable: probed,
+      }]);
+
+      const r = await request(app).get('/api/video-gen/model-context');
+      expect(r.status).toBe(200);
+      expect(r.body.models[0].runtimeLoraCapable).toBe(true);
     });
 
     it('agrees with /status on every field the two share', async () => {

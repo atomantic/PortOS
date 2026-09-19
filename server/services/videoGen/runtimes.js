@@ -553,6 +553,29 @@ export function byovRuntimeLoraCapable(runtimeId) {
   return false;
 }
 
+// Resolve every probe-gated runtime's LoRA verdict up front, so a caller that
+// then reads the SYNC accessor above gets a probed answer instead of its
+// fail-closed default. Exists because that default is indistinguishable from a
+// real "no" once it is serialized into a payload: a model list built on a cold
+// cache tells the client the runtime cannot take LoRAs, and the background warm
+// that follows corrects the server without correcting the client, which fetched
+// that list once. The user then sees "this runtime did not pass the probe" for
+// the life of the page on an install where the probe passes.
+//
+// Cheap enough to await on a request path: the probe is a bare MLX import with
+// no model load (tens of ms), and BOTH verdicts cache for the life of the
+// process — so this is one spawn per server start, not the per-request python
+// probe that /model-context exists to avoid. An uninstalled runtime spawns
+// nothing; resolve short-circuits on the missing venv.
+export async function warmByovLoraCapabilities() {
+  await Promise.all(Object.keys(BYOV_RUNTIME_INFO)
+    .filter((runtimeId) => BYOV_RUNTIME_INFO[runtimeId].loraProbeArgs)
+    // resolve never rejects today (runVenvProbe resolves every outcome), but
+    // this runs on a request path where a future throw must not take the whole
+    // model-list response down with it.
+    .map((runtimeId) => resolveByovRuntimeLoraCapable(runtimeId).catch(() => false)));
+}
+
 // Single user-facing reason a video model can't take LoRAs. Lives here, beside
 // the capability data it reads, so the enqueue gate (prepareParams) and the
 // render gate (local.js buildArgs) can't drift into telling the user two
