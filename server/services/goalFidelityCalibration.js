@@ -155,7 +155,9 @@ async function stampOverturnedRuns(taskId, gap, calibrationTaskId) {
     console.error(`❌ goal-fidelity calibration: could not resolve runs for ${taskId}: ${err.message}`);
     return [];
   });
-  const matches = agents.filter(agent => agent.taskId === taskId || agent.metadata?.taskId === taskId);
+  const matches = agents.filter(agent => (
+    agent.taskId === taskId || agent.metadata?.taskId === taskId
+  ) && ['fix-first', 'rethink'].includes(agent.result?.goalFidelity?.verdict));
   const at = new Date().toISOString();
   await Promise.all(matches.map((agent) => {
     const result = isPlainObject(agent.result) ? agent.result : {};

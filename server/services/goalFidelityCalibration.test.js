@@ -84,6 +84,7 @@ describe('reportGoalFidelityFalsePositive', () => {
     getAgents.mockResolvedValue([
       { id: 'agent-1', taskId: 'task-7', result: { success: false, goalFidelity: { verdict: 'rethink', evidence: 'partial diff' } } },
       { id: 'agent-2', metadata: { taskId: 'task-7' }, result: { goalFidelity: { verdict: 'fix-first' } } },
+      { id: 'agent-ship', taskId: 'task-7', result: { goalFidelity: { verdict: 'ship' } } },
       { id: 'agent-other', taskId: 'task-8', result: { goalFidelity: { verdict: 'rethink' } } },
     ]);
 
