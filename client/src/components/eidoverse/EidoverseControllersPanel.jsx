@@ -57,12 +57,23 @@ function parseJsonObject(text, label) {
   return { value: parsed };
 }
 
-/** What the install list needs to tell a user "is this thing alive, and did
- * it work" without reasoning over `lastTickOk`/`lastTickReason` itself. */
+/**
+ * What the install list needs to tell a user "is this thing alive, and did
+ * it work" without reasoning over `lastTickOk`/`lastTickReason` itself.
+ *
+ * `lastDelivery` is a SEPARATE verdict from the step (#7628): a step can
+ * succeed while every effect it produced was refused by the world, so a
+ * green "Last tick ok" is checked against delivery too before it renders.
+ * `lastDelivery.ok === null` means delivery is off or nothing was sent this
+ * tick — that still reads as ok, never as a silent failure.
+ */
 function TickOutcome({ install }) {
   if (install.lastTickOk === null) return <span className="text-gray-500">Never ticked yet</span>;
-  if (install.lastTickOk) return <span className="text-port-success">Last tick ok</span>;
-  return <span className="text-port-error">Last tick failed{install.lastTickReason ? `: ${install.lastTickReason}` : ''}</span>;
+  if (!install.lastTickOk) return <span className="text-port-error">Last tick failed{install.lastTickReason ? `: ${install.lastTickReason}` : ''}</span>;
+  if (install.lastDelivery?.ok === false) {
+    return <span className="text-port-error">Delivery refused{install.lastDelivery.reason ? `: ${install.lastDelivery.reason}` : ''}</span>;
+  }
+  return <span className="text-port-success">Last tick ok</span>;
 }
 
 /**
@@ -368,6 +379,7 @@ export default function EidoverseControllersPanel() {
                     <p className="text-gray-400">
                       Installed {formatDateShort(install.installedAt)} by {install.installedBy} ·
                       {' '}{install.consecutiveFailures > 0 ? `${install.consecutiveFailures} consecutive failure(s)` : 'no consecutive failures'}
+                      {install.consecutiveDeliveryFailures > 0 ? ` · ${install.consecutiveDeliveryFailures} consecutive delivery failure(s)` : ''}
                     </p>
                     <ControllerConfigBlock detail={inspected[install.id]} />
                     {inspected[install.id]?.install && (

@@ -198,6 +198,12 @@ export const eidoverseControllerRecordSchema = eidoverseControllerInstallSchema.
     summary: z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMITS.effectTextMax),
   }).strict()).max(EIDOVERSE_CONTROLLER_LIMITS.recentEffects).default([]),
   consecutiveFailures: z.number().int().min(0).default(0),
+  // A run of ticks whose STEP succeeded but whose delivery into the world was
+  // refused (#7628) — tracked separately from `consecutiveFailures`, which
+  // only counts a throwing/refusing `step()`. A controller can step cleanly
+  // forever while every write it proposes is rejected; this is what lets that
+  // pattern disarm too, instead of reporting "ok" indefinitely.
+  consecutiveDeliveryFailures: z.number().int().min(0).default(0),
   // Set when the supervisor disarms a controller itself (repeated failures, a
   // controller id that no longer resolves). Distinct from `armed: false`
   // chosen by a human, which carries no reason.
@@ -403,9 +409,33 @@ export function summarizeControllerInstall(record, { includeState = false } = {}
     lastTickOk: record?.lastOutcome ? record.lastOutcome.ok === true : null,
     lastTickReason: record?.lastOutcome?.reason ?? null,
     consecutiveFailures: record?.consecutiveFailures ?? 0,
+    // Delivery is a SEPARATE verdict from the step (#7628): a step can read
+    // `ok: true` while every effect it produced was refused by the world.
+    // `null` covers both "delivery is off for this install" and "this tick
+    // produced nothing to deliver" — neither is a failure, so neither
+    // collapses into `false`.
+    lastDelivery: summarizeLastDelivery(record),
+    consecutiveDeliveryFailures: record?.consecutiveDeliveryFailures ?? 0,
     disarmedReason: record?.disarmedReason ?? null,
     note: record?.note ?? null,
     recentEffects: (record?.recentEffects ?? []).slice(0, 5),
     ...(includeState ? { config: record?.config ?? {}, state: record?.state ?? {} } : {}),
   };
+}
+
+/**
+ * The last tick's delivery verdict, distinct from `lastTickOk` (the STEP).
+ * `deliverControllerEffects()` in `services/eidoverseControllerRuntime.js`
+ * reads the world's own ack/refusal for every effect it sends and folds the
+ * result onto `lastOutcome.delivered` / `lastOutcome.deliveryError` — this
+ * just reshapes that into the same `{ ok, reason }` verdict shape the rest of
+ * the controller surfaces already use.
+ */
+function summarizeLastDelivery(record) {
+  if (record?.deliverEffects !== true) return { ok: null, delivered: 0, reason: null };
+  const outcome = record?.lastOutcome;
+  // No tick yet, or the tick that ran produced nothing to send — delivery was
+  // never attempted, so there is no verdict to report yet.
+  if (!outcome || outcome.effects === 0) return { ok: null, delivered: outcome?.delivered ?? 0, reason: null };
+  return { ok: outcome.deliveryError === null, delivered: outcome.delivered, reason: outcome.deliveryError };
 }

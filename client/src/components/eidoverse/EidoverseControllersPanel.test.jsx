@@ -86,6 +86,19 @@ describe('the Eidoverse controllers panel', () => {
     expect(screen.getByRole('button', { name: /Arm/ })).toBeInTheDocument();
   });
 
+  // #7628: a step can succeed every tick while the world refuses everything
+  // it proposes — this is the shape that used to render as a green
+  // "Last tick ok" with no trace of the refusal anywhere in the UI.
+  it('shows a delivery refusal instead of a green "Last tick ok" when the step succeeded but the world refused it', async () => {
+    listEidoverseControllers.mockResolvedValue(listing([
+      install({ deliverEffects: true, lastTickOk: true, lastDelivery: { ok: false, delivered: 0, reason: 'unknown entity id' } }),
+    ]));
+    await renderPanel();
+
+    expect(screen.getByText(/Delivery refused: unknown entity id/)).toBeInTheDocument();
+    expect(screen.queryByText('Last tick ok')).not.toBeInTheDocument();
+  });
+
   it('shows an install refusal with its reasons beside the form, without installing anything', async () => {
     listEidoverseControllers.mockResolvedValue(listing([]));
     installEidoverseController.mockResolvedValue({

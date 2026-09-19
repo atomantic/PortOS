@@ -209,6 +209,7 @@ export async function installEidoverseController(input, {
       lastOutcome: null,
       recentEffects: [],
       consecutiveFailures: 0,
+      consecutiveDeliveryFailures: 0,
       // A re-install that leaves a controller disarmed keeps the reason it was
       // disarmed for, so the author is not left looking at a stopped controller
       // with no explanation. Re-arming answers the reason, so it clears it.
@@ -260,7 +261,12 @@ export async function setEidoverseControllerArmed(id, armed, { now = new Date().
       updatedAt: now,
       // Re-arming restarts the cadence from now rather than firing immediately
       // on the next pass against a `nextTickAt` that went stale while paused.
-      ...(armed === true ? { nextTickAt: nextControllerTickAt(existing, nowMs), consecutiveFailures: 0, disarmedReason: null } : {}),
+      ...(armed === true ? {
+        nextTickAt: nextControllerTickAt(existing, nowMs),
+        consecutiveFailures: 0,
+        consecutiveDeliveryFailures: 0,
+        disarmedReason: null,
+      } : {}),
     };
     installs[id] = record;
     await writeInstalls(installs, storeSchemaVersion);
@@ -326,6 +332,16 @@ const afterGateMove = (reason) => async (result) => {
  * would put that whole subtree in the closure of everything that merely lists
  * controllers. Neither verb calls an AI provider.
  *
+ * `augmentEidoverseWorld()` never throws on a world refusal (#7454) — the
+ * verdict is its RETURN VALUE (`success`, `applied`, per-operation
+ * `outcome`), so it must be read, not assumed delivered because the await
+ * resolved. #7628 was exactly this: the return value was discarded, so a
+ * controller whose every write the world refused counted as delivered every
+ * tick, forever. `delivered` here is the world's own committed count
+ * (`applied`), never the loop's attempt count, and a `rewritten` operation
+ * counts as delivered — the world landed different args, not nothing — only
+ * `refused` does not.
+ *
  * @returns {Promise<{ delivered: number, error: string|null }>}
  */
 async function deliverControllerEffects(effects, { signal } = {}) {
@@ -333,12 +349,24 @@ async function deliverControllerEffects(effects, { signal } = {}) {
   if (outbound.length === 0) return { delivered: 0, error: null };
   const world = await import('./eidoverseWorld.js');
   let delivered = 0;
+  let error = null;
   for (const effect of outbound) {
-    if (effect.kind === 'say') await world.sayInEidoverseWorld(effect.text, { signal });
-    else await world.augmentEidoverseWorld(effect.operations, { signal });
-    delivered += 1;
+    if (effect.kind === 'say') {
+      // `sayInEidoverseWorld` has no rewrite/refusal dimension of its own —
+      // it either resolves (the world acked it) or throws, which the caller
+      // in `deliverPassEffects` already treats as a delivery failure.
+      await world.sayInEidoverseWorld(effect.text, { signal });
+      delivered += 1;
+      continue;
+    }
+    const result = await world.augmentEidoverseWorld(effect.operations, { signal });
+    delivered += result.applied;
+    if (result.success === false && error === null) {
+      const refusal = result.operations.find((operation) => operation.outcome === 'refused');
+      error = refusal?.reason ?? 'Eidoverse refused part of this augment batch.';
+    }
   }
-  return { delivered, error: null };
+  return { delivered, error };
 }
 
 function recordedEffects(existing, effects, { at, tick }) {
@@ -487,19 +515,44 @@ async function deliverPassEffects(stepped, { deliver, signal }) {
  * matches the tick that produced those effects: an install or retire landing
  * between the two phases has replaced what the delivery was about, and
  * stamping a delivery count onto it would describe work that record never did.
+ *
+ * A run of REFUSED deliveries disarms the same way a run of throwing/refusing
+ * `step()`s already does (#7628): `consecutiveFailures` only counts the step,
+ * so a controller that steps cleanly every tick while the world refuses
+ * everything it proposes would otherwise never disarm and never report
+ * anything but "ok". `consecutiveDeliveryFailures` is that same clause, keyed
+ * on the delivery verdict instead.
+ *
+ * @returns {Promise<{ gateMoved: boolean }>}
  */
 async function recordDeliveries(deliveries) {
-  if (deliveries.length === 0) return;
-  await withStoreLock(async () => {
+  if (deliveries.length === 0) return { gateMoved: false };
+  return withStoreLock(async () => {
     const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     let changed = false;
+    let gateMoved = false;
     for (const { id, tick, delivered, error } of deliveries) {
       const current = installs[id];
       if (!current || current.lastOutcome?.tick !== tick) continue;
-      installs[id] = { ...current, lastOutcome: { ...current.lastOutcome, delivered, deliveryError: error } };
+      const consecutiveDeliveryFailures = error ? (current.consecutiveDeliveryFailures ?? 0) + 1 : 0;
+      const exhausted = error && consecutiveDeliveryFailures >= EIDOVERSE_CONTROLLER_LIMITS.maxConsecutiveFailures;
+      if (exhausted) {
+        console.error(`❌ ${LOG_PREFIX}: disarming "${id}" — ${consecutiveDeliveryFailures} consecutive delivery failures: ${error}`);
+      }
+      installs[id] = {
+        ...current,
+        lastOutcome: { ...current.lastOutcome, delivered, deliveryError: error },
+        consecutiveDeliveryFailures,
+        ...(exhausted ? {
+          armed: false,
+          disarmedReason: `disarmed after ${consecutiveDeliveryFailures} consecutive delivery failures: ${error}`,
+        } : {}),
+      };
       changed = true;
+      gateMoved = gateMoved || exhausted;
     }
     if (changed) await writeInstalls(installs, storeSchemaVersion);
+    return { gateMoved };
   });
 }
 
@@ -557,14 +610,15 @@ async function tickOnce({
     };
   });
 
-  await recordDeliveries(await deliverPassEffects(pass.stepped, { deliver, signal }));
+  const { gateMoved: deliveryGateMoved } = await recordDeliveries(await deliverPassEffects(pass.stepped, { deliver, signal }));
 
-  // A pass that disarmed a controller has moved the arming gate, so it
-  // reconciles for the same reason install and retire do. The reconcile is
-  // idempotent and re-reads the gate itself, so it correctly does nothing when
-  // other installs are still armed and stands the supervisor down when the
-  // disarmed one was the last.
-  if (pass.gateMoved) await reconcileEidoverseControllerTicks({ reason: 'supervisor-disarm' });
+  // A pass that disarmed a controller — whether stepping it failed or, per
+  // #7628, delivering its effects into the world did — has moved the arming
+  // gate, so it reconciles for the same reason install and retire do. The
+  // reconcile is idempotent and re-reads the gate itself, so it correctly
+  // does nothing when other installs are still armed and stands the
+  // supervisor down when the disarmed one was the last.
+  if (pass.gateMoved || deliveryGateMoved) await reconcileEidoverseControllerTicks({ reason: 'supervisor-disarm' });
 
   const { stepped: _stepped, gateMoved: _gateMoved, ...result } = pass;
   return result;
