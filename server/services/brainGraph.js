@@ -28,7 +28,7 @@ import { loadBridgeMap, bridgeKey } from './brainMemoryBridge.js';
 import { getBrainProjections, journalHasBody } from './brainSearchIndex.js';
 import { getGoals } from './identity.js';
 
-const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs'];
+const ENTITY_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs', 'threads'];
 
 // Edges shown per node are capped so a densely-tagged hub can't reintroduce the
 // combinatorial blow-up inside a bounded view.
@@ -90,7 +90,7 @@ async function loadNodes() {
   const perType = await Promise.all(ENTITY_TYPES.map((type) => getBrainProjections(type, { ranked: false })));
   ENTITY_TYPES.forEach((type, i) => {
     for (const record of perType[i]) {
-      if (record.archived) continue;
+      if (record.archived || record.status === 'archived') continue;
       nodes.push({
         id: record.id,
         brainType: type,
@@ -161,7 +161,7 @@ export async function getBrainGraphSearchIndex() {
   const perType = await Promise.all(ENTITY_TYPES.map((type) => getBrainProjections(type, { ranked: false })));
   perType.forEach((records, i) => {
     for (const record of records) {
-      if (record.archived) continue;
+      if (record.archived || record.status === 'archived') continue;
       nodes.push({ id: record.id, label: entityLabel(record), brainType: ENTITY_TYPES[i] });
     }
   });

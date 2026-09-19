@@ -37,6 +37,7 @@ import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
 import { threadRefLabel, threadRefUrl } from '../lib/threadRefKinds.js';
 import ThreadRefChip from '../components/brain/ThreadRefChip';
+import AddToThreadButton from '../components/threads/AddToThreadButton';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
@@ -490,6 +491,15 @@ export default function CatalogIngredient() {
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
+            <AddToThreadButton
+              refItem={{
+                kind: 'catalog.ingredient',
+                id: record.id,
+                label: name || record.name || record.id
+              }}
+              buttonText="Thread"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white hover:border-port-accent/40 transition-colors"
+            />
             {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
             {armedDelete ? (
               <span className="inline-flex items-center gap-1 text-sm">

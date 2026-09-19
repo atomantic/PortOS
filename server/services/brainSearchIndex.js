@@ -77,7 +77,8 @@ const PROJECTED_FIELDS = Object.freeze({
   // A Brain *thread* is a tracked open loop (#7664), not a message thread.
   // Search matches the fields a person would type to find one; `notes` is the
   // markdown body (capped at 20k, the same order as an admin item's notes).
-  threads: Object.freeze(['title', 'nextAction', 'waitingOn', 'notes']),
+  // Includes graph projection fields (tags, status, archived) for brainGraph.
+  threads: Object.freeze([...GRAPH_PROJECTION_FIELDS, 'nextAction', 'waitingOn']),
 });
 
 /**

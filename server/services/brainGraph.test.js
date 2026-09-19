@@ -128,11 +128,11 @@ describe('getBrainGraphSearchIndex', () => {
     onlyType('people', [{ id: 'p1', name: 'A' }]);
 
     await getBrainGraphSearchIndex();
-    // 6 entity types (incl. songs) + journals, one scan each.
-    expect(brainStorage.getAll).toHaveBeenCalledTimes(7);
+    // 7 entity types (incl. songs and threads) + journals, one scan each.
+    expect(brainStorage.getAll).toHaveBeenCalledTimes(8);
 
     await getBrainGraphSearchIndex();
-    expect(brainStorage.getAll).toHaveBeenCalledTimes(7);
+    expect(brainStorage.getAll).toHaveBeenCalledTimes(8);
   });
 
   it('keeps unrendered payloads and journal bodies out of the projections it reads', async () => {
@@ -463,5 +463,27 @@ describe('goals and journal nodes', () => {
     onlyType('songs', [{ id: 's1', title: 'Example Song', artist: 'Placeholder Band' }]);
     const { nodes } = await getBrainGraphSearchIndex();
     expect(nodes).toEqual([{ id: 's1', label: 'Example Song', brainType: 'songs' }]);
+  });
+
+  it('includes Thread records as graph nodes labelled by title and skips archived threads (#7664)', async () => {
+    onlyType('threads', [
+      { id: 'th1', title: 'Sprint planning', status: 'open', notes: 'Backlog items', tags: ['planning'] },
+      { id: 'th2', title: 'Old loop', status: 'archived' }
+    ]);
+    const { nodes } = await getBrainGraphSearchIndex();
+    expect(nodes).toEqual([{ id: 'th1', label: 'Sprint planning', brainType: 'threads' }]);
+
+    const overview = await getBrainGraphOverview({ limit: 50 });
+    const thNode = overview.nodes.find(n => n.id === 'th1');
+    expect(thNode).toEqual({
+      id: 'th1',
+      brainType: 'threads',
+      label: 'Sprint planning',
+      summary: 'Backlog items',
+      tags: ['planning'],
+      importance: 0.6,
+      status: 'open'
+    });
+    expect(overview.nodes.find(n => n.id === 'th2')).toBeUndefined();
   });
 });
