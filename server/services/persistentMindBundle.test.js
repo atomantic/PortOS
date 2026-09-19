@@ -1,21 +1,32 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { openMindBundle, readMindBundleHeader } from '../lib/mindBundleCrypto.js';
+import { openMindBundle, readMindBundleHeader, sealMindBundle } from '../lib/mindBundleCrypto.js';
+import { MIND_BUNDLE_REFUSALS } from '../lib/mindBundleFormat.js';
 
 const loadState = vi.fn();
 const readPersistentMindMemories = vi.fn();
 const readPersistentMindName = vi.fn();
+const choosePersistentMindName = vi.fn();
+const createPersistentMindMemory = vi.fn();
+const updateConfig = vi.fn();
 
 vi.mock('./cosState.js', () => ({ loadState: (...args) => loadState(...args) }));
 vi.mock('./persistentMindContext.js', () => ({
+  choosePersistentMindName: (...args) => choosePersistentMindName(...args),
+  createPersistentMindMemory: (...args) => createPersistentMindMemory(...args),
   readPersistentMindMemories: (...args) => readPersistentMindMemories(...args),
   readPersistentMindName: (...args) => readPersistentMindName(...args),
 }));
+// `applyPersistentMindBundle` reaches `updateConfig` through a lazy
+// `await import()` (import scoping); vitest's mock registry covers that too.
+vi.mock('./cos.js', () => ({ updateConfig: (...args) => updateConfig(...args) }));
 
 const {
+  applyPersistentMindBundle,
   collectPersistentMindBundleEntries,
   exportPersistentMindBundle,
   mindBundleFilename,
   normalizeMindBundleScopes,
+  previewPersistentMindBundle,
 } = await import('./persistentMindBundle.js');
 
 const PASSPHRASE = 'an example bundle passphrase';
@@ -182,5 +193,209 @@ describe('persistentMindBundle refusal', () => {
     const { header } = readMindBundleHeader(bundle);
     expect(header.scopes).toEqual(['profile']);
     expect(header.manifest).toEqual([{ name: 'profile.json', bytes: expect.any(Number) }]);
+  });
+});
+
+/* ------------------------------------------------------------------ import */
+
+// A bundle from an obviously-fake OTHER install. Built with the sealer rather
+// than by re-exporting this install, so an import assertion cannot pass just
+// because both sides happen to read the same mock.
+const OTHER_MIND = {
+  chosenName: 'Other Example Mind',
+  soul: { identity: 'I am a different example Mind.', instructions: 'Answer in one paragraph.' },
+  playbook: { mode: 'default', customInstructions: '' },
+  modelPolicy: { providerId: 'other-provider', model: 'other-model', effort: 'low', thinkingInterface: 'text', wakeIntervalMinutes: 90 },
+};
+const OTHER_MEMORIES = [
+  { type: 'fact', content: 'The other example user ships on Tuesdays.', protection: 'core-identity', createdAt: '2026-08-01T09:00:00.000Z' },
+  { type: 'observation', content: 'The other example user dislikes long meetings.', protection: 'important', createdAt: '2026-08-02T09:00:00.000Z' },
+];
+
+const sealOther = ({ profile = OTHER_MIND, avatar = { style: 'svg' }, memories = OTHER_MEMORIES, scopes = ['profile', 'avatar', 'memories'] } = {}) => {
+  const documents = { profile: ['profile.json', profile], avatar: ['avatar.json', avatar], memories: ['memories.json', { memories }] };
+  return sealMindBundle({
+    scopes,
+    passphrase: PASSPHRASE,
+    entries: scopes.map((scope) => ({ name: documents[scope][0], data: JSON.stringify(documents[scope][1]) })),
+  });
+};
+
+const noWrites = () => {
+  expect(updateConfig).not.toHaveBeenCalled();
+  expect(choosePersistentMindName).not.toHaveBeenCalled();
+  expect(createPersistentMindMemory).not.toHaveBeenCalled();
+};
+
+describe('persistentMindBundle preview', () => {
+  it('writes nothing, and reports each group beside what this install holds', async () => {
+    const preview = await previewPersistentMindBundle({ text: await sealOther(), passphrase: PASSPHRASE });
+    noWrites();
+
+    expect(preview.scopes).toEqual(['profile', 'avatar', 'memories']);
+    expect(preview.groups.map(({ group }) => group))
+      .toEqual(['identity', 'personality', 'playbook', 'modelPolicy', 'avatar', 'memories']);
+
+    const identity = preview.groups.find(({ group }) => group === 'identity');
+    expect(identity.incoming).toEqual({ chosenName: 'Other Example Mind' });
+    expect(identity.current).toEqual({ chosenName: 'Example Mind' });
+    expect(identity.identical).toBe(false);
+  });
+
+  it('marks a group whose two sides match, so a choice there is visibly a no-op', async () => {
+    const text = await sealOther({ profile: { ...OTHER_MIND, chosenName: 'Example Mind' }, scopes: ['profile'] });
+    const preview = await previewPersistentMindBundle({ text, passphrase: PASSPHRASE });
+    expect(preview.groups.find(({ group }) => group === 'identity').identical).toBe(true);
+    expect(preview.groups.find(({ group }) => group === 'personality').identical).toBe(false);
+  });
+
+  it('counts an incoming memory this install already holds as already-here, not importable', async () => {
+    const shared = { type: 'fact', content: 'The example user reviews plans on Friday afternoons.', protection: 'core-identity' };
+    const text = await sealOther({ memories: [shared, ...OTHER_MEMORIES], scopes: ['memories'] });
+    const { incoming } = (await previewPersistentMindBundle({ text, passphrase: PASSPHRASE }))
+      .groups.find(({ group }) => group === 'memories');
+    expect(incoming).toMatchObject({ total: 3, importable: 2, alreadyHere: 1 });
+    expect(incoming.memories.map(({ content }) => content)).not.toContain(shared.content);
+  });
+
+  it('omits a group the bundle carries nothing usable for, so no choice can clear it with nothing', async () => {
+    const text = await sealOther({ profile: { ...OTHER_MIND, chosenName: '   ' }, avatar: { style: 'not-a-shipped-style' } });
+    const groups = (await previewPersistentMindBundle({ text, passphrase: PASSPHRASE })).groups.map(({ group }) => group);
+    expect(groups).not.toContain('identity');
+    expect(groups).not.toContain('avatar');
+    expect(groups).toContain('personality');
+  });
+});
+
+describe('persistentMindBundle import refusal', () => {
+  it('refuses a newer container version by name, and applies nothing', async () => {
+    const sealed = await sealOther();
+    const [magicLine, ...rest] = sealed.split('\n');
+    const text = [magicLine.replace(/\/1$/, '/99'), ...rest].join('\n');
+
+    await expect(previewPersistentMindBundle({ text, passphrase: PASSPHRASE }))
+      .rejects.toMatchObject({ code: 'MIND_BUNDLE_REFUSED', context: { reason: MIND_BUNDLE_REFUSALS.VERSION_UNSUPPORTED } });
+    await expect(applyPersistentMindBundle({ text, passphrase: PASSPHRASE, choices: { personality: 'use-imported' } }))
+      .rejects.toMatchObject({ context: { reason: MIND_BUNDLE_REFUSALS.VERSION_UNSUPPORTED } });
+    noWrites();
+  });
+
+  it('fails a tampered bundle before any write, without saying which of the two went wrong', async () => {
+    const sealed = await sealOther();
+    const lines = sealed.split('\n');
+    // Flip one base64 character of the ciphertext.
+    lines[2] = (lines[2][0] === 'A' ? 'B' : 'A') + lines[2].slice(1);
+    const tampered = lines.join('\n');
+
+    const refusal = await applyPersistentMindBundle({ text: tampered, passphrase: PASSPHRASE, choices: { identity: 'use-imported' } })
+      .catch((error) => error);
+    expect(refusal.context.reason).toBe(MIND_BUNDLE_REFUSALS.AUTH_FAILED);
+    // One reason covers both causes on purpose: naming which would make the
+    // refusal an oracle for anyone holding the file.
+    expect(refusal.message).toMatch(/passphrase is wrong, or the file changed/);
+    noWrites();
+
+    const wrongPassphrase = await previewPersistentMindBundle({ text: sealed, passphrase: 'a different long passphrase' })
+      .catch((error) => error);
+    expect(wrongPassphrase.context.reason).toBe(MIND_BUNDLE_REFUSALS.AUTH_FAILED);
+  });
+
+  it('refuses a choice naming a group the bundle does not carry, rather than ignoring the key', async () => {
+    const text = await sealOther({ scopes: ['avatar'] });
+    await expect(applyPersistentMindBundle({ text, passphrase: PASSPHRASE, choices: { personality: 'use-imported' } }))
+      .rejects.toMatchObject({ code: 'MIND_BUNDLE_UNKNOWN_GROUP', status: 409 });
+    noWrites();
+  });
+});
+
+describe('persistentMindBundle apply', () => {
+  it('writes nothing when every group keeps this install\'s value', async () => {
+    const result = await applyPersistentMindBundle({
+      text: await sealOther(),
+      passphrase: PASSPHRASE,
+      choices: { identity: 'keep-mine', personality: 'keep-mine', playbook: 'keep-mine', modelPolicy: 'keep-mine', avatar: 'keep-mine', memories: 'keep-mine' },
+    });
+    expect(result.applied).toEqual([]);
+    noWrites();
+  });
+
+  it('treats an unanswered group as keep-mine — silence never overwrites a personality', async () => {
+    const result = await applyPersistentMindBundle({ text: await sealOther(), passphrase: PASSPHRASE, choices: {} });
+    expect(result.applied).toEqual([]);
+    noWrites();
+  });
+
+  it('replaces exactly the chosen group and no other', async () => {
+    const result = await applyPersistentMindBundle({
+      text: await sealOther(),
+      passphrase: PASSPHRASE,
+      choices: { personality: 'use-imported', identity: 'keep-mine', avatar: 'keep-mine' },
+    });
+
+    expect(result.applied).toEqual(['personality']);
+    expect(updateConfig).toHaveBeenCalledTimes(1);
+    // Only the personality key: taking one group must not carry the playbook,
+    // the model policy, or the avatar along with it.
+    expect(Object.keys(updateConfig.mock.calls[0][0])).toEqual(['persistentMindPrompt']);
+    expect(updateConfig.mock.calls[0][0].persistentMindPrompt).toEqual(OTHER_MIND.soul);
+    expect(choosePersistentMindName).not.toHaveBeenCalled();
+    expect(createPersistentMindMemory).not.toHaveBeenCalled();
+  });
+
+  it('never carries `enabled` in with a model policy — importing a Mind must not start one', async () => {
+    await applyPersistentMindBundle({
+      text: await sealOther({ profile: { ...OTHER_MIND, modelPolicy: { ...OTHER_MIND.modelPolicy, enabled: true } }, scopes: ['profile'] }),
+      passphrase: PASSPHRASE,
+      choices: { modelPolicy: 'use-imported' },
+    });
+    const patch = updateConfig.mock.calls[0][0].persistentMindProfile;
+    expect(patch).toEqual({ providerId: 'other-provider', model: 'other-model', effort: 'low', thinkingInterface: 'text', wakeIntervalMinutes: 90 });
+    expect(patch).not.toHaveProperty('enabled');
+  });
+
+  it('writes the chosen name through the name writer, not as a raw config key', async () => {
+    await applyPersistentMindBundle({ text: await sealOther({ scopes: ['profile'] }), passphrase: PASSPHRASE, choices: { identity: 'use-imported' } });
+    expect(choosePersistentMindName).toHaveBeenCalledWith({ name: 'Other Example Mind' }, 'cos-persistent-mind');
+  });
+
+  it('appends memories with their protection preserved, deleting and rewriting nothing', async () => {
+    const result = await applyPersistentMindBundle({
+      text: await sealOther({ scopes: ['memories'] }),
+      passphrase: PASSPHRASE,
+      choices: { memories: 'use-imported' },
+    });
+
+    expect(result.memories).toEqual({ imported: 2, skipped: 0 });
+    expect(createPersistentMindMemory).toHaveBeenCalledTimes(2);
+    expect(createPersistentMindMemory.mock.calls.map(([input]) => [input.content, input.protection])).toEqual([
+      ['The other example user ships on Tuesdays.', 'core-identity'],
+      ['The other example user dislikes long meetings.', 'important'],
+    ]);
+    // Additive only: no update/delete path exists for this group.
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('skips a content-identical memory rather than duplicating it', async () => {
+    const shared = { type: 'fact', content: 'The example user reviews plans on Friday afternoons.', protection: 'core-identity' };
+    const result = await applyPersistentMindBundle({
+      text: await sealOther({ memories: [shared, ...OTHER_MEMORIES], scopes: ['memories'] }),
+      passphrase: PASSPHRASE,
+      choices: { memories: 'use-imported' },
+    });
+
+    expect(result.memories).toEqual({ imported: 2, skipped: 1 });
+    expect(createPersistentMindMemory.mock.calls.map(([input]) => input.content)).not.toContain(shared.content);
+  });
+
+  it('does not plant the chosen name a second time as an ordinary memory', async () => {
+    // The export ships every protected record, and the chosen name IS one, so
+    // a round trip carries it in both `identity` and `memories`.
+    const nameRecord = { type: 'fact', content: OTHER_MIND.chosenName, protection: 'core-identity' };
+    await applyPersistentMindBundle({
+      text: await sealOther({ memories: [nameRecord, ...OTHER_MEMORIES] }),
+      passphrase: PASSPHRASE,
+      choices: { identity: 'use-imported', memories: 'use-imported' },
+    });
+    expect(createPersistentMindMemory.mock.calls.map(([input]) => input.content)).not.toContain(OTHER_MIND.chosenName);
   });
 });

@@ -38,7 +38,7 @@ import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PER
 import { resolvePersistentMindPlaybookPhase } from '../services/persistentMindPlaybookSignals.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
-import { mindBundleExportSchema, validateRequest } from '../lib/validation.js';
+import { mindBundleApplySchema, mindBundleExportSchema, mindBundlePreviewSchema, validateRequest } from '../lib/validation.js';
 import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agentRunEventLog.js';
 import { loadState } from '../services/cosState.js';
 import {
@@ -58,7 +58,11 @@ import {
 import { getProviderById } from '../services/providers.js';
 import { persistentMindHarnessInfo } from '../services/persistentMindAdapter.js';
 import { cleanupPersistentMind } from '../services/persistentMindMaintenance.js';
-import { exportPersistentMindBundle } from '../services/persistentMindBundle.js';
+import {
+  applyPersistentMindBundle,
+  exportPersistentMindBundle,
+  previewPersistentMindBundle,
+} from '../services/persistentMindBundle.js';
 import { resolvePersistentMindImageCapability } from '../services/persistentMindImageCapability.js';
 import { readPersistentMindTaskCatalog } from '../services/persistentMindTaskCapability.js';
 import { inspectPersistentMindRuntime } from '../services/persistentMindRuntime.js';
@@ -410,6 +414,31 @@ router.post('/mind/bundle/export', asyncHandler(async (req, res) => {
   // browser, even though the bytes are encrypted.
   res.setHeader('Cache-Control', 'no-store');
   res.send(bundle);
+}));
+
+/**
+ * Open a bundle and report what it carries beside what this install holds
+ * (#7622). **This route writes nothing** — it is the read that makes the apply
+ * below a decision rather than a leap, so it stays free of every side effect.
+ * The response is a diff, not a transcript: it is the user's own Mind, shown
+ * back to them on their own machine, and it is never logged or offered to a peer.
+ */
+router.post('/mind/bundle/preview', asyncHandler(async (req, res) => {
+  const { bundle, passphrase } = validateRequest(mindBundlePreviewSchema, req.body);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await previewPersistentMindBundle({ text: bundle, passphrase }));
+}));
+
+/**
+ * Apply a bundle under one whole-group choice per group (#7622). The single
+ * write path. The bundle is re-opened here rather than carried over from the
+ * preview, so what is applied is what the file says — not a preview payload
+ * that made a round trip through the client.
+ */
+router.post('/mind/bundle/apply', asyncHandler(async (req, res) => {
+  const { bundle, passphrase, choices } = validateRequest(mindBundleApplySchema, req.body);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await applyPersistentMindBundle({ text: bundle, passphrase, choices }));
 }));
 
 router.post('/mind/attachments', asyncHandler(async (req, res) => {

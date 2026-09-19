@@ -1,13 +1,15 @@
 import { useId, useState } from 'react';
 import { Brain, Database, Download, Lock, ShieldCheck, Sparkles } from 'lucide-react';
 import { downloadBlob } from '../../lib/downloadBlob.js';
+import { MIND_BUNDLE_FILE_EXTENSION, MIND_BUNDLE_PASSPHRASE_MIN_CHARS } from '../../lib/mindBundle.js';
 import * as api from '../../services/api';
 import Banner from '../ui/Banner';
+import PersistentMindImportPanel from './PersistentMindImportPanel.jsx';
 
-// Mirrors `MIND_BUNDLE_PASSPHRASE_MIN_CHARS` in server/lib/mindBundleCrypto.js.
-// Checked here so the user is told before a round trip; the server is still the
-// authority and refuses a short passphrase on its own.
-export const MIND_BUNDLE_PASSPHRASE_MIN_CHARS = 12;
+// Re-exported for this component's own test. The definition is the shared
+// format leaf — checked here so the user is told before a round trip, while the
+// server stays the authority and refuses a short passphrase on its own.
+export { MIND_BUNDLE_PASSPHRASE_MIN_CHARS };
 
 // Protected memories quote private conversation, so that scope is opt-in —
 // the decision is the epic's (#7620), not this panel's to soften.
@@ -44,7 +46,7 @@ const defaultScopes = () => new Set(EXPORT_SCOPES.filter(({ defaultOn }) => defa
  * sides can compute from the clock.
  */
 export const mindBundleFilename = (now = new Date()) =>
-  `portos-mind-${now.toISOString().replace(/[:.]/g, '-').replace(/-\d{3}Z$/, 'Z')}.portos-mind`;
+  `portos-mind-${now.toISOString().replace(/[:.]/g, '-').replace(/-\d{3}Z$/, 'Z')}${MIND_BUNDLE_FILE_EXTENSION}`;
 
 /**
  * Export the Persistent Mind as one passphrase-sealed file (#7621).
@@ -194,6 +196,8 @@ export default function PersistentMindPortabilityPanel() {
           Saved {exported.filename} with {exported.scopes.join(', ')}. Store it alongside your other secrets — the passphrase is the only way back in.
         </Banner>
       )}
+
+      <PersistentMindImportPanel />
     </div>
   );
 }

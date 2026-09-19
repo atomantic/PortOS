@@ -137,6 +137,17 @@ export const exportPersistentMindBundle = (body, options = {}) => request('/cos/
   method: 'POST', body: JSON.stringify(body), responseType: 'text', silent: true, ...options,
 });
 
+// Open a bundle and see what it carries (#7622). Read-only on the server: this
+// never writes, so the panel can call it as soon as a file and passphrase exist.
+// `silent` because the refusal reason IS the result the user needs to read.
+export const previewPersistentMindBundle = (body, options = {}) => request('/cos/mind/bundle/preview', {
+  method: 'POST', body: JSON.stringify(body), silent: true, ...options,
+});
+// Apply a bundle under the user's per-group choices (#7622) — the single write.
+export const applyPersistentMindBundle = (body, options = {}) => request('/cos/mind/bundle/apply', {
+  method: 'POST', body: JSON.stringify(body), silent: true, ...options,
+});
+
 // Chief of Staff
 export const getCosStatus = () => request('/cos');
 export const startCos = (options = {}) => request('/cos/start', { method: 'POST', ...options });
