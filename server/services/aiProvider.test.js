@@ -412,6 +412,17 @@ describe('callProviderAISimple — malformed / non-2xx responses', () => {
 
     expect(result.error).toMatch(/Provider returned 500: boom/);
   });
+
+  it('surfaces the cause chain when fetch rejects with undici\'s generic "fetch failed" wrapper', async () => {
+    const cause = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' });
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('fetch failed', { cause });
+    }));
+
+    const result = await callProviderAISimple(provider, 'model-1', 'prompt');
+
+    expect(result.error).toBe('Provider request failed: fetch failed (cause: UND_ERR_SOCKET other side closed)');
+  });
 });
 
 describe('callProviderAISimple — endpoint guard (SSRF / key-exfiltration)', () => {
