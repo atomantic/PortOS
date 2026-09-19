@@ -315,6 +315,22 @@ export const eidoverseFoundationRecordSchema = z.object({
 
 export const eidoverseFoundationIdParamSchema = z.object({ id: foundationIdSchema }).strict();
 
+/**
+ * Addressing ANY record in the ledger, local or inherited (#7632).
+ *
+ * A bare id reaches only locally-authored work, because a local vernacular
+ * foundation and an inherited copy can legitimately share the same
+ * human-readable id — which is exactly why the inherited one lives under
+ * `inheritedFoundationStorageKey()`'s disjoint namespace. Naming the origin
+ * disambiguates them. The caller supplies `{ id, originInstanceId }` rather
+ * than the raw `peer:<origin>:<id>` key so the storage grammar stays inside
+ * the ledger module, where the one function that mints it lives.
+ */
+export const eidoverseFoundationTargetSchema = z.object({
+  id: foundationIdSchema,
+  originInstanceId: instanceIdSchema.nullable().optional().default(null),
+}).strict();
+
 /** What a caller (route, mind tool, test) may author. Layer is NOT accepted:
  * a new local artifact is `vernacular` by construction, and moving to
  * `baseline` is what the promote path is for. */

@@ -14,7 +14,11 @@ import {
   eidoverseWorldSaySchema,
   validateRequest,
 } from '../lib/validation.js';
-import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema } from '../lib/eidoverseFoundations.js';
+import {
+  eidoverseFoundationIdParamSchema,
+  eidoverseFoundationInputSchema,
+  eidoverseFoundationTargetSchema,
+} from '../lib/eidoverseFoundations.js';
 import {
   eidoverseControllerArmSchema,
   eidoverseControllerConfigUpdateSchema,
@@ -22,11 +26,13 @@ import {
   eidoverseControllerInstallSchema,
 } from '../lib/eidoverseControllers.js';
 import {
+  deleteEidoverseFoundation,
   getEidoverseFoundation,
   listEidoverseFoundations,
   packageEidoverseFoundationCandidate,
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
+  withdrawEidoverseFoundation,
 } from '../services/eidoverseFoundationLedger.js';
 import { listRegisteredContributionIds } from '../services/eidoverseResilienceContributions.js';
 import { describeControllerDefinitions } from '../services/eidoverseControllerRegistry.js';
@@ -149,6 +155,36 @@ router.post('/foundations/:id/promote', asyncHandler(async (req, res) => {
   const result = await promoteEidoverseFoundation(id);
   if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
   res.json(result);
+}));
+
+// POST /api/eidoverse/world/foundations/:id/withdraw — retract a promoted
+// foundation from the shared population (#7632). The record drops back to
+// `vernacular` and its published fingerprint is tombstoned, so peers that
+// already inherited it DROP their copy on the next sweep rather than merely
+// ceasing to re-pull it. The body is kept; deleting the local work is the
+// separate DELETE below. Like the promote gate, a refusal ("this is an
+// inherited copy", "it was never promoted") is a 200 carrying its reasons.
+router.post('/foundations/:id/withdraw', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(eidoverseFoundationIdParamSchema, req.params || {});
+  const result = await withdrawEidoverseFoundation(id);
+  if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
+  res.json(result);
+}));
+
+// DELETE /api/eidoverse/world/foundations/:id — delete a record from this
+// install's ledger. `?originInstanceId=` addresses an INHERITED copy, which a
+// bare id cannot reach (it shares its id space with local work, on purpose);
+// without it the id means this install's own foundation. Deleting a promoted
+// local record WITHDRAWS it first, so the most natural gesture an author makes
+// ("remove this") can never orphan a peer's copy beyond recall.
+router.delete('/foundations/:id', asyncHandler(async (req, res) => {
+  const { id, originInstanceId } = validateRequest(eidoverseFoundationTargetSchema, {
+    id: req.params.id,
+    ...(req.query?.originInstanceId === undefined ? {} : { originInstanceId: req.query.originInstanceId }),
+  });
+  const result = await deleteEidoverseFoundation(id, { originInstanceId });
+  if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
+  res.json({ success: true, ...result });
 }));
 
 // GET /api/eidoverse/world/foundations/:id — one foundation record, looked

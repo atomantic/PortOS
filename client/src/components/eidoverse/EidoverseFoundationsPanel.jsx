@@ -7,6 +7,7 @@ import {
   packageEidoverseFoundationCandidate,
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
+  withdrawEidoverseFoundation,
 } from '../../services/api';
 import { formatDateShort, timeAgo } from '../../utils/formatters';
 
@@ -149,6 +150,8 @@ function LayerBadge({ layer }) {
 const VERDICT_HEADLINES = Object.freeze({
   promoted: 'Promoted to the shared baseline.',
   packaged: 'Every gate passed — promote candidate packaged.',
+  withdrawn: 'Withdrawn — peers that inherited this drop their copy on the next sync.',
+  'not-promoted': 'Nothing to retract — this was never promoted.',
 });
 
 function Verdict({ verdict }) {
@@ -406,6 +409,21 @@ export default function EidoverseFoundationsPanel() {
                         >
                           Promote
                         </button>
+                        {/* Withdrawal (#7632) — the direction promotion never
+                            had. Only a promoted record can be retracted, so the
+                            button appears with the `baseline` layer rather than
+                            sitting disabled beside every local draft. */}
+                        {foundation.layer === 'baseline' && (
+                          <button
+                            type="button"
+                            className={secondaryButton}
+                            disabled={busyId === foundation.id}
+                            title="Retract this from the shared baseline — peers that inherited it drop their copy on the next sweep"
+                            onClick={() => runGate(foundation.id, withdrawEidoverseFoundation)}
+                          >
+                            Withdraw
+                          </button>
+                        )}
                       </>
                     )}
                     <button type="button" className={secondaryButton} onClick={() => openFoundation(expanded ? '' : foundation.id)}>

@@ -15,6 +15,7 @@ vi.mock('../../services/api', () => ({
   recordEidoverseFoundation: vi.fn(),
   packageEidoverseFoundationCandidate: vi.fn(),
   promoteEidoverseFoundation: vi.fn(),
+  withdrawEidoverseFoundation: vi.fn(),
 }));
 
 import {
@@ -22,6 +23,7 @@ import {
   listEidoverseFoundations,
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
+  withdrawEidoverseFoundation,
 } from '../../services/api';
 import EidoverseFoundationsPanel from './EidoverseFoundationsPanel';
 
@@ -105,6 +107,34 @@ describe('the Eidoverse foundations promote panel', () => {
 
     await waitFor(() => expect(screen.getByTitle(/Your style layer stayed local/)).toHaveTextContent('Shared baseline'));
     expect(screen.getByRole('button', { name: 'Promote' })).toBeDisabled();
+  });
+
+  // #7632 — the panel is where an author actually retracts, so a Withdraw
+  // reachable only by curl would leave the feature unusable.
+  it('offers Withdraw only once a foundation is promoted, and reports the retraction as a pass', async () => {
+    const promoted = foundation({ layer: 'baseline', promotedAt: '2026-03-04T06:00:00.000Z' });
+    listEidoverseFoundations
+      .mockResolvedValueOnce(listing([promoted], { vernacular: 0, baseline: 1, candidates: 1 }))
+      .mockResolvedValue(listing([foundation()]));
+    getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
+    withdrawEidoverseFoundation.mockResolvedValue({ outcome: 'withdrawn', foundation: foundation(), reasons: [] });
+    await renderPanel();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Withdraw' })); });
+
+    // A withdrawal answers 200 like every other gate, so without its own
+    // headline a success would render as "Refused — nothing moved."
+    expect(screen.getByRole('status')).toHaveTextContent(/Withdrawn/);
+    expect(withdrawEidoverseFoundation).toHaveBeenCalledWith('tide-beacon', expect.anything());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Withdraw' })).toBeNull());
+  });
+
+  it('never offers Withdraw for an inherited copy — this install never published it', async () => {
+    listEidoverseFoundations.mockResolvedValue(listing([inheritedFoundation()], { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }));
+    getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
+    await renderPanel();
+
+    expect(screen.queryByRole('button', { name: 'Withdraw' })).toBeNull();
   });
 
   it('refuses to submit an unparseable body instead of sending it to the promote gate', async () => {

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   listContributions: vi.fn(),
   recordFoundation: vi.fn(),
   getFoundation: vi.fn(),
+  withdrawFoundation: vi.fn(),
+  deleteFoundation: vi.fn(),
   ensurePresence: vi.fn(),
   getProjectionStatus: vi.fn(),
   getStatus: vi.fn(),
@@ -42,6 +44,8 @@ vi.mock('../services/eidoverseFoundationLedger.js', () => ({
   packageEidoverseFoundationCandidate: mocks.packageCandidate,
   promoteEidoverseFoundation: mocks.promoteFoundation,
   recordEidoverseFoundation: mocks.recordFoundation,
+  withdrawEidoverseFoundation: mocks.withdrawFoundation,
+  deleteEidoverseFoundation: mocks.deleteFoundation,
 }));
 
 vi.mock('../services/eidoverseResilienceContributions.js', () => ({
@@ -253,6 +257,46 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
     // The route delegates the decision whole — it must not read the id and
     // flip a layer of its own, which would bypass every gate in the service.
     expect(mocks.promoteFoundation).toHaveBeenCalledWith('tide-beacon');
+  });
+
+  // #7632 — withdrawal and deletion, the directions promotion never had.
+  it('reports a withdrawal as a verdict and delegates the decision whole', async () => {
+    mocks.withdrawFoundation.mockResolvedValue({
+      outcome: 'withdrawn', foundation: { id: 'tide-beacon', layer: 'vernacular', promotedAt: null }, reasons: [],
+    });
+
+    const response = await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/withdraw');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ outcome: 'withdrawn', foundation: { layer: 'vernacular' } });
+    expect(mocks.withdrawFoundation).toHaveBeenCalledWith('tide-beacon');
+  });
+
+  it('reports a refused withdrawal as a 200 verdict, and an unknown id as a 404', async () => {
+    mocks.withdrawFoundation.mockResolvedValueOnce({ outcome: 'refused', foundation: null, reasons: ['inherited copy'] });
+    expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/withdraw')).status).toBe(200);
+
+    mocks.withdrawFoundation.mockResolvedValueOnce({ outcome: 'unknown-foundation', foundation: null, reasons: ['no foundation'] });
+    expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/withdraw')).status).toBe(404);
+  });
+
+  it('deletes a local record by bare id and an inherited copy by its origin', async () => {
+    mocks.deleteFoundation.mockResolvedValue({ outcome: 'deleted', foundation: { id: 'tide-beacon' }, withdrawn: true });
+
+    expect((await request(makeApp()).delete('/api/eidoverse/world/foundations/tide-beacon')).status).toBe(200);
+    // A bare id means LOCAL work; the inherited copy needs its origin named,
+    // because the two id spaces legitimately overlap.
+    expect(mocks.deleteFoundation).toHaveBeenLastCalledWith('tide-beacon', { originInstanceId: null });
+
+    await request(makeApp()).delete('/api/eidoverse/world/foundations/tide-beacon?originInstanceId=instance-aaaa');
+    expect(mocks.deleteFoundation).toHaveBeenLastCalledWith('tide-beacon', { originInstanceId: 'instance-aaaa' });
+  });
+
+  it('rejects a malformed origin before it can be assembled into a storage key', async () => {
+    const res = await request(makeApp()).delete('/api/eidoverse/world/foundations/tide-beacon?originInstanceId=not%20an%20id');
+
+    expect(res.status).toBe(400);
+    expect(mocks.deleteFoundation).not.toHaveBeenCalled();
   });
 
   it('serves the registered assay contributions on their own path, where no foundation id can shadow them', async () => {

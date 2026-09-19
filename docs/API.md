@@ -365,6 +365,8 @@ federate world records.
 | GET | `/eidoverse/world/foundations/:id` | One foundation record, with its derived provenance lineage |
 | POST | `/eidoverse/world/foundations/:id/candidate` | Run the agent-free resilience assay and package a promote candidate; a refusal returns 200 with its reasons |
 | POST | `/eidoverse/world/foundations/:id/promote` | Re-package and publish a foundation into this install's shared baseline population; a refusal returns 200 with its reasons and moves nothing |
+| POST | `/eidoverse/world/foundations/:id/withdraw` | Retract a promoted foundation: de-promotes it and tombstones the published fingerprint so peers that inherited it drop their copy on the next sweep; a refusal returns 200 with its reasons |
+| DELETE | `/eidoverse/world/foundations/:id` | Delete a record — `?originInstanceId=` addresses an inherited copy, a bare id this install's own work. A promoted local record is withdrawn first, so no peer's copy is orphaned |
 | GET | `/eidoverse/world/contributions` | The resilience-assay contribution ids a foundation may bind itself to |
 
 ### Legacy OpenWorld / CyberCity
