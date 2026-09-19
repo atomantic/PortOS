@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Circle, Download, ExternalLink, RefreshCw, Scale } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
-import { formatBytes } from '../../utils/formatters';
+import { formatBytes, formatCount, formatPercent } from '../../utils/formatters';
 import {
   cancelJevInstall,
+  getJevDecisionStats,
   getJevStatus,
   installJev,
   scoreJev,
@@ -39,6 +40,7 @@ export default function JevPanel() {
   const [hypothesesText, setHypothesesText] = useState('');
   const [scoring, setScoring] = useState(false);
   const [decision, setDecision] = useState(null);
+  const [decisionStats, setDecisionStats] = useState(null);
   const progressTimer = useRef(null);
 
   const loadStatus = useCallback(() => (
@@ -50,7 +52,12 @@ export default function JevPanel() {
       .catch(() => { setStatusError(true); return null; })
   ), []);
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  // Counters only, so this is safe to load beside status on every mount.
+  const loadDecisionStats = useCallback(() => (
+    getJevDecisionStats({ silent: true }).then(setDecisionStats).catch(() => setDecisionStats(null))
+  ), []);
+
+  useEffect(() => { loadStatus(); loadDecisionStats(); }, [loadStatus, loadDecisionStats]);
 
   useEffect(() => {
     const handleProgress = (data) => {
@@ -251,6 +258,49 @@ export default function JevPanel() {
           Install downloads Python packages and the pinned 4B weights only — the repository&rsquo;s larger variants are never fetched.
           The scorer loads on the first question and unloads itself after ten idle minutes.
         </p>
+      </div>
+
+      <div className="space-y-3 border-t border-port-border pt-4">
+        <h3 className="text-sm font-semibold text-white">Agreement with the chat model</h3>
+        <p className="text-xs text-gray-400 max-w-2xl">
+          While a source is set to <strong>Off</strong>, PortOS still asks the scorer each closed-set question and compares
+          its answer to the one the chat model gave — without changing anything. Use these rates to decide whether a source
+          is ready for <strong>Prefer</strong>. Counts only: no message, comment, or diff text is recorded.
+        </p>
+        {!decisionStats?.decisions?.length ? (
+          <p className="text-xs text-gray-500">No decisions measured yet on this machine.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs" data-testid="jev-decision-stats">
+              <thead>
+                <tr className="text-gray-400 text-left">
+                  <th scope="col" className="py-1 pr-3 font-medium">Decision</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Observed</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Abstained</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Agreed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {decisionStats.decisions.map((row) => (
+                  <tr key={row.decisionId} className="border-t border-port-border/60 text-gray-300">
+                    <th scope="row" className="py-1.5 pr-3 font-normal text-white">{row.label}</th>
+                    <td className="py-1.5 pr-3">{formatCount(row.observed, { fallback: '0' })}</td>
+                    <td className="py-1.5 pr-3">
+                      {/* A rate with no observations reads as "—", never as 0% —
+                          an unmeasured decision must not argue against itself. */}
+                      {formatPercent(row.abstentionRate === null ? null : row.abstentionRate * 100)}
+                    </td>
+                    <td className="py-1.5 pr-3">
+                      {formatPercent(row.agreementRate === null ? null : row.agreementRate * 100)}
+                      <span className="text-gray-500"> of {formatCount(row.compared, { fallback: '0' })}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <a href="/models/llms/abuse" className="text-xs text-port-accent hover:underline">Set a source to Prefer in Content safety policies</a>
       </div>
 
       <div className="space-y-3 border-t border-port-border pt-4">

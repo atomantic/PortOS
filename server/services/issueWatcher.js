@@ -1092,6 +1092,9 @@ export async function gatherIssueWatcherInput({ app } = {}) {
   return {
     prompt: ISSUE_ANALYSIS_PROMPT,
     analysisContent: JSON.stringify({ issueComments: safeIssueComments }),
+    // Returned so the jev reply gate can score one comment at a time. Every
+    // entry here has already cleared phase 1 in `screenModelAbuseInputs` above.
+    safeIssueComments,
     hookMetadata: {
       issueWatcher: {
         cursor: startedAt,
@@ -1121,10 +1124,51 @@ export async function buildTaskInput(options = {}) {
   return runScheduledIssueIntake(options).finally(() => activeIntakeApps.delete(appId));
 }
 
+const issueCommentKey = (item) => `${item.issueNumber}:${item.commentId}`;
+
+/**
+ * Comments the local scorer confidently answered `none` for, as finished
+ * decisions the chat model never has to see.
+ *
+ * Only `none` is settled here. A jev `reply` still goes to the chat model,
+ * because the reply BODY is generative work an entailment head cannot do — the
+ * gate decides *whether* to wake it, never what it writes.
+ */
+async function jevIssueReplyGate(input) {
+  const items = input.safeIssueComments.map((item) => ({
+    key: issueCommentKey(item),
+    // The same bytes this comment contributes to the batch the chat model
+    // reads, so a shadow-mode disagreement is about the verdict, not the
+    // evidence.
+    premise: JSON.stringify(item),
+    decisionIds: ['issue-comment-reply'],
+  }));
+  const { jevBatchGate } = await import('./untrustedContent.js');
+  const gate = await jevBatchGate({ content: input.analysisContent, source: 'github-issue', items });
+  const settled = new Set(input.safeIssueComments
+    .filter((item) => gate.decided.get(issueCommentKey(item))?.['issue-comment-reply'] === 'none')
+    .map(issueCommentKey));
+  const unsettled = input.safeIssueComments.filter((item) => !settled.has(issueCommentKey(item)));
+  return {
+    items,
+    outcomes: gate.outcomes,
+    // `only` is the operator's hard zero-quota posture: a comment the scorer
+    // could not settle is left untouched for a human rather than escalated to a
+    // provider. It is NOT recorded as `none` — that would turn "cannot tell"
+    // into "decided no reply was needed" and retire the comment for good.
+    pending: gate.mode === 'only' ? [] : unsettled,
+    skipped: gate.mode === 'only' ? unsettled : [],
+    decisions: input.safeIssueComments.filter((item) => settled.has(issueCommentKey(item))).map((item) => ({
+      issueNumber: item.issueNumber, commentId: item.commentId, action: 'none', body: '',
+    })),
+  };
+}
+
 async function runScheduledIssueIntake({ app, interval } = {}) {
   const input = await gatherIssueWatcherInput({ app });
   if (input.skip) return input;
-  const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
+  const { measureJevBatch, runUntrustedContentAnalysis } = await import('./untrustedContent.js');
+  const gate = await jevIssueReplyGate(input);
   const configured = app?.taskTypeOverrides?.['issue-watcher'] || {};
   const providerId = configured.providerId || interval?.providerId;
   const model = configured.providerId ? configured.model || undefined : configured.model || interval?.model;
@@ -1137,20 +1181,58 @@ async function runScheduledIssueIntake({ app, interval } = {}) {
       return { skip: { reason: 'untrusted-provider-unavailable' } };
     }
   }
-  const analysis = await runUntrustedContentAnalysis({
-    provider, model, content: input.analysisContent, prompt: input.prompt,
-    source: 'github-issue', responseSchema: issueAnalysisSchema,
-  });
+  // Every comment settled locally: the chat model is never woken, which is the
+  // whole point of the gate on the highest-volume decision PortOS makes.
+  const analysis = gate.pending.length === 0
+    ? { ok: true, value: { issueComments: [], pullRequests: [] } }
+    : await runUntrustedContentAnalysis({
+      provider, model, prompt: input.prompt,
+      content: JSON.stringify({ issueComments: gate.pending }),
+      source: 'github-issue', responseSchema: issueAnalysisSchema,
+    });
   if (!analysis.ok) {
     await persistState(app.id, { lastError: analysis.code, lastAnalysis: { ok: false, code: analysis.code } });
     return { skip: { reason: analysis.code } };
   }
+  // Measurement only, and only for what the chat model actually answered: the
+  // gate's own settled items have no chat verdict to be compared against.
+  await measureJevBatch({
+    source: 'github-issue',
+    items: gate.items,
+    outcomes: gate.outcomes,
+    actualByKey: Object.fromEntries(analysis.value.issueComments.map((decision) => (
+      [issueCommentKey(decision), { 'issue-comment-reply': decision.action }]
+    ))),
+  });
+  // Strict coverage is what proves no comment was quietly dropped between
+  // screening and action, so the settled rows are merged back in and the
+  // metadata is narrowed to exactly what this run decided — never left naming a
+  // comment `only` mode deliberately left alone.
+  const skippedKeys = new Set(gate.skipped.map(issueCommentKey));
   const result = await processTaskOutput({
-    appId: app.id, success: true, payload: analysis.value,
-    task: { metadata: input.hookMetadata },
+    appId: app.id, success: true, payload: {
+      issueComments: [...gate.decisions, ...analysis.value.issueComments],
+      pullRequests: analysis.value.pullRequests,
+    },
+    task: {
+      metadata: skippedKeys.size === 0 ? input.hookMetadata : {
+        ...input.hookMetadata,
+        issueWatcher: {
+          ...input.hookMetadata.issueWatcher,
+          issueComments: input.hookMetadata.issueWatcher.issueComments
+            .filter((item) => !skippedKeys.has(issueCommentKey(item))),
+        },
+      },
+    },
   });
   await persistState(app.id, {
-    lastAnalysis: { ok: result.action === 'processed' && result.commentsHandled, action: result.action, reason: result.reason || null, replies: result.replies || 0 },
+    lastAnalysis: {
+      ok: result.action === 'processed' && result.commentsHandled,
+      action: result.action,
+      reason: result.reason || null,
+      replies: result.replies || 0,
+      ...(skippedKeys.size ? { jevAbstained: skippedKeys.size } : {}),
+    },
   });
   return { skip: { reason: result.action === 'processed' && result.commentsHandled ? 'issue-activity-processed' : result.reason || 'issue-response-incomplete' } };
 }

@@ -35,8 +35,13 @@ vi.mock('./modelAbuseGuard.js', async (importOriginal) => ({
 }));
 
 const runUntrustedContentAnalysisMock = vi.fn();
+// The jev reply gate stubs to "feature off", which is the shipped default, so
+// every assertion below still describes the chat-completion path unchanged.
+const jevBatchGateMock = vi.fn(async () => ({ mode: 'disabled', decided: new Map(), outcomes: new Map() }));
 vi.mock('./untrustedContent.js', () => ({
   runUntrustedContentAnalysis: (...args) => runUntrustedContentAnalysisMock(...args),
+  jevBatchGate: (...args) => jevBatchGateMock(...args),
+  measureJevBatch: async () => null,
   screenUntrustedContent: async ({ content }) => {
     const screening = await runModelAbuseScanMock({ content });
     return { ok: screening.ok && screening.safe === true, screening };
@@ -171,6 +176,8 @@ beforeEach(() => {
   addNotificationMock.mockReset();
   addNotificationMock.mockResolvedValue({ id: 'notification-1' });
   runUntrustedContentAnalysisMock.mockReset();
+  jevBatchGateMock.mockReset();
+  jevBatchGateMock.mockImplementation(async () => ({ mode: 'disabled', decided: new Map(), outcomes: new Map() }));
   runModelAbuseScanMock.mockReset();
   runModelAbuseScanMock.mockResolvedValue({
     ok: true,
@@ -1429,6 +1436,47 @@ describe('scheduled issue intake trust boundary', () => {
     });
     expect(await runScheduledIssueIntake({ app: apps.get(APP.id) })).toEqual({ skip: { reason: 'issue-response-incomplete' } });
     expect(replies()).toHaveLength(0);
+  });
+
+  // The jev reply gate. The scorer itself is covered in
+  // `untrustedContent.jev.test.js`; here the gate is doubled so these assertions
+  // are about what the WATCHER does with each verdict.
+  const gateDecides = (value) => jevBatchGateMock.mockImplementationOnce(async ({ items }) => ({
+    mode: 'prefer',
+    decided: new Map(items.map((item) => [item.key, { 'issue-comment-reply': value }])),
+    outcomes: new Map(),
+  }));
+
+  it('answers a local none without waking the chat model at all', async () => {
+    installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
+    gateDecides('none');
+    expect(await runScheduledIssueIntake({ app: APP })).toEqual({ skip: { reason: 'issue-activity-processed' } });
+    // The point of the gate: the overwhelmingly common answer costs no quota.
+    expect(runUntrustedContentAnalysisMock).not.toHaveBeenCalled();
+    expect(replies()).toHaveLength(0);
+  });
+
+  it('still calls the chat model to write the body when the scorer says reply', async () => {
+    installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
+    gateDecides('reply');
+    runUntrustedContentAnalysisMock.mockResolvedValue({ ok: true, value: decision });
+    expect(await runScheduledIssueIntake({ app: APP })).toEqual({ skip: { reason: 'issue-activity-processed' } });
+    // An entailment head cannot write prose, so a `reply` verdict only decides
+    // that the model is worth waking — the batch still carries the comment.
+    expect(JSON.parse(runUntrustedContentAnalysisMock.mock.calls[0][0].content).issueComments)
+      .toEqual([expect.objectContaining({ issueNumber: 42, commentId: 0 })]);
+    expect(replies()).toHaveLength(1);
+  });
+
+  it('leaves an unresolvable comment alone under only, instead of recording it as none', async () => {
+    installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
+    jevBatchGateMock.mockImplementationOnce(async () => ({ mode: 'only', decided: new Map(), outcomes: new Map() }));
+    await runScheduledIssueIntake({ app: APP });
+    expect(runUntrustedContentAnalysisMock).not.toHaveBeenCalled();
+    expect(replies()).toHaveLength(0);
+    // Recorded as an abstention, not as a handled comment: a skip that read as
+    // `none` would retire the comment permanently on a zero-quota install.
+    expect(apps.get(APP.id).issueWatcherState.lastAnalysis).toMatchObject({ jevAbstained: 1 });
   });
 });
 

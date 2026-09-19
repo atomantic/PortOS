@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({
   getJevStatus: vi.fn(),
+  getJevDecisionStats: vi.fn(),
   installJev: vi.fn(),
   cancelJevInstall: vi.fn(),
   scoreJev: vi.fn(),
@@ -13,7 +14,7 @@ vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
 }));
 
-import { cancelJevInstall, getJevStatus, installJev, scoreJev, unloadJev } from '../../services/api';
+import { cancelJevInstall, getJevDecisionStats, getJevStatus, installJev, scoreJev, unloadJev } from '../../services/api';
 import socket from '../../services/socket';
 import JevPanel from './JevPanel';
 
@@ -40,6 +41,7 @@ const status = (overrides = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   getJevStatus.mockResolvedValue(status());
+  getJevDecisionStats.mockResolvedValue({ updatedAt: null, decisions: [] });
   installJev.mockResolvedValue({ ok: true, ready: true });
   cancelJevInstall.mockResolvedValue({ cancelled: true });
   unloadJev.mockResolvedValue({ unloaded: true });
@@ -163,5 +165,34 @@ describe('JevPanel try-it box', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh status' })); });
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Unload now' })); });
     expect(unloadJev).toHaveBeenCalled();
+  });
+});
+
+describe('JevPanel decision agreement', () => {
+  it('reads an unmeasured decision as no data rather than as zero agreement', async () => {
+    getJevDecisionStats.mockResolvedValue({ updatedAt: null, decisions: [
+      { decisionId: 'issue-comment-reply', label: 'Issue comment reply gate', observed: 0, decided: 0, abstained: 0, unavailable: 0, compared: 0, agreed: 0, agreementRate: null, abstentionRate: null },
+    ] });
+    await renderPanel();
+    const row = within(await screen.findByTestId('jev-decision-stats')).getByRole('row', { name: /Issue comment reply gate/ });
+    // "0% agreement" would argue against a feature nobody has measured yet.
+    expect(within(row).getAllByText('—')).toHaveLength(2);
+  });
+
+  it('shows the per-decision agreement and abstention rates once measured', async () => {
+    getJevDecisionStats.mockResolvedValue({ updatedAt: '2026-09-19T00:00:00.000Z', decisions: [
+      { decisionId: 'message-triage', label: 'Message triage action', observed: 1200, decided: 900, abstained: 300, unavailable: 0, compared: 900, agreed: 837, agreementRate: 0.93, abstentionRate: 0.25 },
+    ] });
+    await renderPanel();
+    const row = within(await screen.findByTestId('jev-decision-stats')).getByRole('row', { name: /Message triage action/ });
+    expect(row).toHaveTextContent('1,200');
+    expect(row).toHaveTextContent('25%');
+    expect(row).toHaveTextContent('93%');
+  });
+
+  it('keeps the panel usable when the counters cannot be read', async () => {
+    getJevDecisionStats.mockRejectedValue(new Error('unavailable'));
+    await renderPanel();
+    expect(await screen.findByText('No decisions measured yet on this machine.')).toBeInTheDocument();
   });
 });

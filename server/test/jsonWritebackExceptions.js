@@ -34,6 +34,10 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Authoritative rebuild: theme extraction replaces the cache from source evidence without retaining prior fields."
   },
   {
+    "key": "jevRouter.js :: shadowPath ( )",
+    "reason": "Authoritative rebuild of regenerable telemetry: the shadow store holds per-decision integer counters only, a version mismatch or unreadable file deliberately restarts them at zero rather than folding counts into a shape this build cannot read, and the next decision re-measures."
+  },
+  {
     "key": "meatspace.js :: GOALS_FILE",
     "reason": "No failed-read write-back: legacy birth-date migration skips unreadable input; birth-date mirror mutations preflight with a strict read."
   },

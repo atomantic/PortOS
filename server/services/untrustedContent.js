@@ -17,6 +17,57 @@ import { knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
 
 const failure = (code, message) => ({ ok: false, safe: false, code, message });
 
+/** One validation path for both the chat model's JSON and a jev-built value. */
+function validateAgainstContract(responseSchema, value) {
+  if (responseSchema.safeParse) {
+    const validated = responseSchema.safeParse(value);
+    return validated.success ? { ok: true, value: validated.data } : { ok: false };
+  }
+  return responseSchema(value) === true ? { ok: true, value } : { ok: false };
+}
+
+/**
+ * Score every decision in a jev plan and report one collective outcome.
+ *
+ * Collective on purpose: `evaluateMessages` asks for an action AND a priority
+ * over the same premise, and the chat model's priority was conditioned on its
+ * own action. Mixing a jev action with an LLM priority would produce a pair
+ * neither model proposed, so one abstention retires the whole item.
+ */
+async function runJevPlan(plan, config) {
+  const { runJevDecision, jevOutcomeKind } = await import('./jevRouter.js');
+  const results = [];
+  for (const decision of plan.decisions) {
+    const result = await runJevDecision({
+      decisionId: decision.id,
+      premise: decision.premise,
+      policyMinMargin: config.jevMinMargin,
+    });
+    results.push({ id: decision.id, result, kind: jevOutcomeKind(result) });
+    // Stop at the first non-answer: the remaining forward passes cannot rescue
+    // the item, and each one is a 4B model inference.
+    if (result.ok !== true || result.abstained) break;
+  }
+  const answered = results.length === plan.decisions.length && results.every(entry => entry.result.value !== undefined);
+  return {
+    results,
+    answered,
+    choices: answered ? Object.fromEntries(results.map(entry => [entry.id, entry.result.value])) : null,
+  };
+}
+
+/** Counter rows for a jev plan run, optionally compared against the LLM's answer. */
+function jevObservations(plan, outcome, llmValue) {
+  const comparable = llmValue === undefined ? null : plan.fromValue?.(llmValue) || null;
+  return outcome.results.map(entry => ({
+    decisionId: entry.id,
+    kind: entry.kind,
+    ...(comparable && entry.result.value !== undefined
+      ? { agreed: entry.result.value === comparable[entry.id] }
+      : {}),
+  }));
+}
+
 /** Complete input crosses the classifier before any conversational model sees it. */
 export async function screenUntrustedContent({ content, source, policy: override = {} } = {}) {
   const state = await readSettingsStrict();
@@ -37,15 +88,134 @@ export async function screenUntrustedContent({ content, source, policy: override
   return { ok: true, safe: true, policy, screening, fingerprint: modelAbuseContentFingerprint(source, {}, content) };
 }
 
+// A batch item's decisions already carry the enum values the caller compares
+// against, so both projections are the identity.
+const itemPlan = (item) => ({
+  decisions: item.decisionIds.map((id) => ({ id, premise: item.premise })),
+  fromValue: (actual) => actual,
+});
+
+const batchRows = (items) => (Array.isArray(items)
+  ? items.filter((item) => item?.key !== undefined && item.premise && item.decisionIds?.length)
+  : []);
+
+/** The resolved policy for a batch, plus whether jev may answer for it. */
+async function jevBatchContext(source, policy) {
+  const state = await readSettingsStrict();
+  const config = state.corrupt ? null : resolveUntrustedContentPolicy(state.settings.untrustedContent, source, policy || {});
+  if (!config) return { mode: 'disabled', config: null };
+  const { resolveJevMode } = await import('./jevRouter.js');
+  return { mode: await resolveJevMode(config), config };
+}
+
+const noDecisions = (mode) => ({ mode, decided: new Map(), outcomes: new Map() });
+
+/**
+ * Resolve as many items of a BATCH as the local scorer can, before any provider
+ * is selected.
+ *
+ * `evaluateMessages` and the issue watcher send N records in one completion;
+ * jev scores one premise at a time. That difference is the feature: an item the
+ * scorer settles never enters the batch, and a batch that empties completely
+ * makes zero provider calls. It also removes the failure mode where one
+ * malformed row invalidates every other row's verdict.
+ *
+ * Screening comes first here exactly as it does in the analysis path — the
+ * scorer never sees content phase 1 has not cleared. That costs the batch one
+ * extra guard scan when jev is enabled, which is the honest price of not
+ * carrying a "the caller promises it screened" flag across a trust boundary.
+ *
+ * Returns `{ mode, decided, outcomes }`. `decided` maps an item key to
+ * `{ [decisionId]: value }` for the items jev settled; everything absent from it
+ * is still the chat model's to answer. In `shadow` and `disabled` mode nothing
+ * is screened, scored, or decided — measurement happens after the fact in
+ * `measureJevBatch`.
+ */
+export async function jevBatchGate({ content, source, policy, items } = {}) {
+  const rows = batchRows(items);
+  if (!rows.length) return noDecisions('disabled');
+  const { mode, config } = await jevBatchContext(source, policy);
+  if (mode !== 'prefer' && mode !== 'only') return noDecisions(mode);
+  // A screening failure needs no special handling: the analysis call the caller
+  // makes next screens the same content and reports the same code, so bailing
+  // out to the chat path keeps error reporting in exactly one place.
+  const screened = await screenUntrustedContent({ content, source, policy });
+  if (!screened.ok) return noDecisions('disabled');
+  const decided = new Map();
+  const outcomes = new Map();
+  for (const item of rows) {
+    const outcome = await runJevPlan(itemPlan(item), config);
+    outcomes.set(item.key, outcome);
+    if (outcome.answered) decided.set(item.key, outcome.choices);
+  }
+  return { mode, decided, outcomes };
+}
+
+/**
+ * Record what the scorer would have said, against what the chat model did say.
+ *
+ * This is the whole measurement story for batched callers, and it runs AFTER
+ * the completion returns — so in `shadow` mode it changes nothing about the
+ * answer, and in `prefer` mode it scores the items that fell through. The
+ * content was screened by the analysis call that just succeeded, so no second
+ * guard run is needed.
+ *
+ * `actualByKey` maps an item key to `{ [decisionId]: value }` — the chat
+ * model's own answer, projected onto the same enums. An item the chat model did
+ * not answer is counted but not compared.
+ */
+export async function measureJevBatch({ source, policy, items, actualByKey, outcomes } = {}) {
+  const rows = batchRows(items);
+  if (!rows.length) return null;
+  const { mode, config } = await jevBatchContext(source, policy);
+  if (mode === 'disabled') return null;
+  const { recordJevObservations } = await import('./jevRouter.js');
+  const observations = [];
+  for (const item of rows) {
+    const plan = itemPlan(item);
+    const outcome = outcomes?.get(item.key) || await runJevPlan(plan, config);
+    observations.push(...jevObservations(plan, outcome, actualByKey?.[item.key]));
+  }
+  return recordJevObservations(observations).catch(() => null);
+}
+
 /**
  * Screen, reason without tools, then validate. The result is a proposal only:
  * each caller owns authorization, freshness and deterministic side effects.
  */
-export async function runUntrustedContentAnalysis({ provider, model, content, prompt, source, responseSchema, policy } = {}) {
+export async function runUntrustedContentAnalysis({ provider, model, content, prompt, source, responseSchema, policy, jev } = {}) {
   if (typeof prompt !== 'string' || !prompt.trim() || (!responseSchema?.safeParse && typeof responseSchema !== 'function')) return failure('untrusted-content-contract-required', 'A trusted task and response contract are required.');
   const screened = await screenUntrustedContent({ content, source, policy });
   if (!screened.ok) return screened;
   const config = screened.policy;
+  // Phase 1 has passed and nothing has reached a model yet, so this is the one
+  // point where the local scorer may answer instead. A caller that supplies no
+  // plan — or an install with the feature off — takes exactly the path it took
+  // before jev existed, down to the provider selection below.
+  const plan = Array.isArray(jev?.decisions) && jev.decisions.length ? jev : null;
+  const { resolveJevMode, recordJevObservations } = plan ? await import('./jevRouter.js') : {};
+  const jevMode = plan ? await resolveJevMode(config) : 'disabled';
+  let jevOutcome = null;
+  if (jevMode === 'prefer' || jevMode === 'only') {
+    jevOutcome = await runJevPlan(plan, config);
+    if (jevOutcome.answered) {
+      const candidate = validateAgainstContract(responseSchema, plan.toValue(jevOutcome.choices));
+      // A jev answer that does not satisfy the caller's own contract is a bug in
+      // the plan, not a verdict — fall through to the chat model rather than
+      // returning a shape the caller's validator just rejected.
+      if (candidate.ok) {
+        await recordJevObservations(jevObservations(plan, jevOutcome)).catch(() => null);
+        return { ok: true, value: candidate.value, via: 'jev', fingerprint: screened.fingerprint, screening: screened.screening };
+      }
+    }
+    if (jevMode === 'only') {
+      await recordJevObservations(jevObservations(plan, jevOutcome)).catch(() => null);
+      // Never coerced into the permissive enum member. `only` means the operator
+      // chose a hard zero-quota posture, and "the scorer could not tell" has to
+      // surface as a skip with a reason, not as a silent approval.
+      return failure('untrusted-content-jev-abstained', 'The local scorer could not separate the options and this source is configured to skip rather than call a provider.');
+    }
+  }
   const providers = provider ? [provider] : (await getAllProviders()).providers || [];
   const selected = provider || (config.providerId
     ? providers.find(item => item.id === config.providerId)
@@ -109,12 +279,18 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
   }).catch(() => null);
   if (!result) return failure('untrusted-content-reasoner-failed', 'The selected text provider failed or returned an incomplete response; no fallback or action was attempted.');
   if (typeof result.text !== 'string' || result.text.length > config.maxOutputChars) return failure('untrusted-content-output-too-large', 'The model response exceeded the configured limit.');
-  let value = safeJSONParse(result.text, null, { logError: false });
-  if (value === null) return failure('untrusted-content-response-invalid', 'The model did not return the required JSON contract.');
-  if (responseSchema.safeParse) {
-    const validated = responseSchema.safeParse(value);
-    if (!validated.success) return failure('untrusted-content-response-invalid', 'The model did not return the required JSON contract.');
-    value = validated.data;
-  } else if (responseSchema(value) !== true) return failure('untrusted-content-response-invalid', 'The model did not return the required JSON contract.');
+  const parsedValue = safeJSONParse(result.text, null, { logError: false });
+  if (parsedValue === null) return failure('untrusted-content-response-invalid', 'The model did not return the required JSON contract.');
+  const validated = validateAgainstContract(responseSchema, parsedValue);
+  if (!validated.ok) return failure('untrusted-content-response-invalid', 'The model did not return the required JSON contract.');
+  const value = validated.value;
+  // Measurement, never behavior. In `shadow` mode this is the only time jev
+  // runs at all; in `prefer` mode it is the plan that already abstained, now
+  // scored against the answer the chat model gave — either way the value
+  // returned below is the chat model's, byte for byte.
+  if (plan && (jevMode === 'shadow' || jevOutcome)) {
+    const measured = jevOutcome || await runJevPlan(plan, config);
+    await recordJevObservations(jevObservations(plan, measured, value)).catch(() => null);
+  }
   return { ok: true, value, model: effectiveModel, providerId: selected.id, fingerprint: screened.fingerprint, screening: screened.screening };
 }

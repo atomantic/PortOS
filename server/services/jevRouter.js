@@ -1,0 +1,159 @@
+/**
+ * The jev rung of the untrusted-content ladder.
+ *
+ *     screenUntrustedContent()      ← phase 1, Prompt Guard. UNCHANGED.
+ *       ↓ safe
+ *     runJevDecision()              ← HERE. Null-ish on abstain/unavailable/off.
+ *       ↓ no answer
+ *     runUntrustedContentAnalysis() ← phase 2's chat completion, unchanged.
+ *
+ * This module owns three things and nothing else: whether jev may be consulted
+ * for a given policy, what one consultation returns, and the counters the
+ * install needs to decide whether the answers are trustworthy. It never
+ * screens (the ladder above it does), never persists a premise, and never
+ * decides what a caller does with an abstention.
+ */
+
+import { join } from 'path';
+import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { getJevDecision, jevHypotheses, jevMinMarginFor, jevValueForHypothesis } from '../lib/jevDecisions.js';
+
+const SHADOW_SCHEMA_VERSION = 1;
+// Resolved lazily: `PATHS.data` is re-rooted by suites, so a module-level
+// `join()` would capture whatever it happened to be at first import.
+const shadowPath = () => join(PATHS.data, 'local-llm', 'jev-shadow.json');
+
+const emptyCounters = () => ({
+  observed: 0, decided: 0, abstained: 0, unavailable: 0, compared: 0, agreed: 0,
+});
+
+/**
+ * Whether jev may answer for this policy, and how an abstention is handled.
+ *
+ * Two independent gates, both of which must be open: the per-install feature
+ * toggle (an operator saying this machine runs the scorer at all) and the
+ * per-source `jevMode` (an operator saying this CHANNEL may be answered
+ * locally). `shadow` is not a mode an operator sets — it is what `off` means on
+ * a machine where the feature is on, and it changes no behavior at all.
+ */
+export async function resolveJevMode(policy) {
+  const configured = policy?.jevMode === 'prefer' || policy?.jevMode === 'only' ? policy.jevMode : 'off';
+  // The feature toggle is a settings read; the scorer behind `runJevDecision`
+  // spawns a process and can page in 9 GB of weights, so an install with the
+  // feature off never pays for one. Deferred import: `instanceFeatures.js`
+  // reaches the Eidoverse, settings and user-action graph, and this module is
+  // on the request path of four services (server/lib/importScoping.test.js).
+  const { isInstanceFeatureEnabled } = await import('./instanceFeatures.js');
+  if (!await isInstanceFeatureEnabled('jev').catch(() => false)) return 'disabled';
+  return configured === 'off' ? 'shadow' : configured;
+}
+
+/**
+ * Ask the scorer to resolve one closed-set decision.
+ *
+ * Returns exactly one of:
+ *   { ok: true,  value, margin, confidence }   — a choice that cleared its floor
+ *   { ok: true,  abstained: true, margin }     — too close to call
+ *   { ok: false, code }                        — scorer unavailable or failed
+ *
+ * A caller MUST NOT treat `abstained` or `ok: false` as permission to take the
+ * leading option. Both mean "ask the chat model, or do nothing".
+ */
+export async function runJevDecision({ decisionId, premise, policyMinMargin = null } = {}) {
+  const decision = getJevDecision(decisionId);
+  if (!decision) return { ok: false, code: 'jev-request-invalid' };
+  if (typeof premise !== 'string' || !premise.trim()) return { ok: false, code: 'jev-request-invalid' };
+  const hypotheses = jevHypotheses(decisionId);
+  // Deferred so an install that never opts in keeps the sidecar lifecycle, the
+  // `PORTS` table, and the model contract out of its static import closure.
+  const { decide } = await import('./jev.js');
+  const scored = await decide({
+    premise,
+    options: hypotheses,
+    // The base floor gates the forward pass; a per-option floor is applied
+    // below, once there is a winner to look up.
+    minMargin: jevMinMarginFor(decisionId, { policyMinMargin }),
+  });
+  if (!scored.ok) return { ok: false, code: scored.code };
+  if (scored.abstained) return { ok: true, abstained: true, margin: scored.margin };
+  const value = jevValueForHypothesis(decisionId, scored.choice);
+  // A winning hypothesis that is not one of ours means the reply described a
+  // different option list than the one we asked about. `normalizeJevScores`
+  // already rejects that, so reaching here is a contract break, not a verdict.
+  if (value === null) return { ok: false, code: 'jev-response-invalid' };
+  // The asymmetric floor: `delete` and `inspect-trusted-change` have to clear a
+  // far wider separation than the options they sit beside, because they are the
+  // ones that throw something away or release a task.
+  if (scored.margin < jevMinMarginFor(decisionId, { optionValue: value, policyMinMargin })) {
+    return { ok: true, abstained: true, margin: scored.margin };
+  }
+  return { ok: true, value, margin: scored.margin, confidence: scored.confidence };
+}
+
+/** Collapse a `runJevDecision` result into the counter bucket it belongs in. */
+export const jevOutcomeKind = (result) => (
+  result?.ok !== true ? 'unavailable' : result.abstained ? 'abstained' : 'decided'
+);
+
+/**
+ * Fold observations into the install's per-decision counters.
+ *
+ * COUNTS ONLY. A record carries the decision id, which bucket it landed in, and
+ * whether it matched the chat model — never the premise, a message body, a
+ * comment, a diff, or a margin tied to any of them. That is the whole reason
+ * shadow mode is safe to leave on: the file it writes could be published
+ * without disclosing anything about what was analyzed.
+ */
+export async function recordJevObservations(observations) {
+  const rows = (Array.isArray(observations) ? observations : [observations]).filter(Boolean);
+  if (!rows.length) return null;
+  const current = await readJSONFile(shadowPath(), null);
+  const decisions = current?.schemaVersion === SHADOW_SCHEMA_VERSION && current.decisions && typeof current.decisions === 'object'
+    ? { ...current.decisions }
+    : {};
+  for (const row of rows) {
+    const id = typeof row.decisionId === 'string' ? row.decisionId : null;
+    if (!id || !getJevDecision(id)) continue;
+    const counters = { ...emptyCounters(), ...decisions[id] };
+    counters.observed += 1;
+    const kind = typeof row.kind === 'string' ? row.kind : null;
+    if (kind === 'decided' || kind === 'abstained' || kind === 'unavailable') counters[kind] += 1;
+    // `agreed` is only meaningful when BOTH answered the same question. A
+    // `prefer`-mode run that jev resolved never woke the chat model, so it has
+    // a choice but nothing to compare it against.
+    if (typeof row.agreed === 'boolean') {
+      counters.compared += 1;
+      if (row.agreed) counters.agreed += 1;
+    }
+    decisions[id] = counters;
+  }
+  const next = { schemaVersion: SHADOW_SCHEMA_VERSION, decisions, updatedAt: new Date().toISOString() };
+  await atomicWrite(shadowPath(), next);
+  return next;
+}
+
+/**
+ * Per-decision agreement and abstention rates for the jev panel.
+ *
+ * `null` for a rate the install has no evidence for — an install that has never
+ * run a decision must read as "no data", not as "0% agreement", which would
+ * argue against a feature nobody has measured yet.
+ */
+export async function readJevDecisionStats() {
+  const stored = await readJSONFile(shadowPath(), null);
+  const decisions = stored?.schemaVersion === SHADOW_SCHEMA_VERSION ? stored.decisions || {} : {};
+  const rate = (numerator, denominator) => (denominator > 0 ? numerator / denominator : null);
+  return {
+    updatedAt: stored?.updatedAt || null,
+    decisions: Object.entries(decisions).filter(([id]) => getJevDecision(id)).map(([id, raw]) => {
+      const counters = { ...emptyCounters(), ...raw };
+      return {
+        decisionId: id,
+        label: getJevDecision(id).label,
+        ...counters,
+        agreementRate: rate(counters.agreed, counters.compared),
+        abstentionRate: rate(counters.abstained, counters.observed),
+      };
+    }),
+  };
+}

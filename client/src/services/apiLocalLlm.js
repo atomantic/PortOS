@@ -42,6 +42,10 @@ export const cancelModelAbuseGuardInstall = (options) =>
 // and from Prompt Guard's.
 export const getJevStatus = (options) => request('/local-llm/jev/status', options);
 
+// Per-decision agreement and abstention counters. Counts only, so this is safe
+// to poll from a settings panel.
+export const getJevDecisionStats = (options) => request('/local-llm/jev/decisions', options);
+
 export const installJev = (options) =>
   request('/local-llm/jev/install', { method: 'POST', body: '{}', ...options });
 
