@@ -5,8 +5,10 @@ import Layout from './components/Layout';
 import { getSettings, updateSettings, getSelfInstance, PORTOS_APP_ID } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
 import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
-import Dashboard from './pages/Dashboard';
 import { lazyWithReload } from './utils/lazyWithReload';
+
+// Direct links to other pages should not download the dashboard's grid/editor.
+const Dashboard = lazyWithReload(() => import('./pages/Dashboard'));
 
 // Neither /apps nor /ambient is the landing route, so keep them out of the eager
 // entry chunk — lazy-load them like every other non-index page.
