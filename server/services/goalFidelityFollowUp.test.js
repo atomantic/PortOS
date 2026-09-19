@@ -176,6 +176,19 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
     expect(execGh).toHaveBeenCalledTimes(1);
   });
 
+// A scan that came back at the ceiling proves we stopped looking, not that
+  // nothing is filed — so it fails closed like every other unreadable tracker.
+  it('refuses to file when the scan hit its ceiling without matching', async () => {
+    settings({ fileIssue: true });
+    execGh.mockResolvedValueOnce(ghRows(
+      Array.from({ length: 1000 }, (_, i) => ({ number: i + 1, title: 't', body: 'other', url: 'u' })),
+    ));
+    const result = await run();
+    expect(result.issue).toBeNull();
+    expect(result.issueError).toMatch(/duplicate cannot be ruled out/);
+    expect(execGh).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses to file when the forge is unreachable, before reading or creating anything', async () => {
     settings({ fileIssue: true });
     ensureForgeReachable.mockResolvedValue({ ok: false, status: 'offline' });
@@ -245,6 +258,30 @@ describe('runGoalFidelityFollowUp — GitLab', () => {
     const result = await run();
     expect(result.issue).toMatchObject({ number: 3, duplicate: true });
     expect(execGlab).not.toHaveBeenCalled();
+  });
+
+// Once more goal-fidelity issues exist than one page holds, an older
+  // fingerprint falls off the only page read and the schedule re-files it every
+  // cadence — the same silent-duplicate shape the unfiltered listing had.
+  it('walks every page, so an issue past the first page still dedupes', async () => {
+    settings({ fileIssue: true });
+    const filler = Array.from({ length: 100 }, (_, i) => ({ iid: i + 1, title: 't', description: 'other', web_url: 'u' }));
+    execGlabJson
+      .mockResolvedValueOnce({ rows: filler, reason: 'ok' })
+      .mockResolvedValueOnce({ rows: [{ iid: 200, title: 't', description: `x ${MARKER}`, web_url: 'u200' }], reason: 'ok' });
+    const result = await run();
+    expect(result.issue).toMatchObject({ number: 200, duplicate: true });
+    expect(execGlabJson).toHaveBeenCalledTimes(2);
+    expect(execGlabJson.mock.calls[1][0]).toContain('2'); // --page 2
+    expect(execGlab).not.toHaveBeenCalled();
+  });
+
+  it('stops paging as soon as a page comes back short', async () => {
+    settings({ fileIssue: true });
+    execGlabJson.mockResolvedValue({ rows: [{ iid: 1, title: 't', description: 'other', web_url: 'u' }], reason: 'ok' });
+    execGlab.mockResolvedValueOnce('').mockResolvedValueOnce('https://gitlab.com/acme/comics/-/issues/9');
+    await run();
+    expect(execGlabJson).toHaveBeenCalledTimes(1);
   });
 
   it('refuses to file when glab could not answer', async () => {
@@ -390,6 +427,25 @@ describe('runGoalFidelityFollowUp — the queued task', () => {
     const result = await run();
     expect(result.issueError).toBeTruthy();
     expect(result.task).toMatchObject({ id: 'cos-9' });
+  });
+
+// "could not be queued" is the least actionable thing to say about a
+  // deliberate suppression; the loop policy's own reason is the useful part.
+  it('names the loop policy reason when the queue was suppressed', async () => {
+    settings({ queueTask: true });
+    fileInvestigationTask.mockResolvedValue({ task: null, loopReason: 'failure-storm' });
+    const result = await run();
+    expect(result.task).toBeNull();
+    expect(result.taskError).toContain('failure-storm');
+  });
+
+  // The card reads this to decide what to call the task and whether to still
+  // offer the manual fallback, so a held task must not read as queued.
+  it('reports a folded duplicate distinctly from a fresh queue', async () => {
+    settings({ queueTask: true });
+    fileInvestigationTask.mockResolvedValue({ task: { id: 'cos-9', duplicate: true }, approvalRequired: false });
+    const result = await run();
+    expect(result.task).toMatchObject({ id: 'cos-9', duplicate: true, approvalRequired: false });
   });
 
   it('reports a suppressed queue rather than silently returning nothing', async () => {

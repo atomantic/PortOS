@@ -1214,7 +1214,14 @@ export async function finalizeAgent({
       fidelity.review.followUp = {
         ...(followUp.issue ? { issue: { number: followUp.issue.number, url: followUp.issue.url, duplicate: followUp.issue.duplicate === true } } : {}),
         ...(followUp.issueError ? { issueError: followUp.issueError } : {}),
-        ...(followUp.task?.id ? { taskId: followUp.task.id } : {}),
+        // The producer's verdict rides with the id: a task the loop policy HELD
+        // is not a queued one, and the card must not offer the manual fallback
+        // for a finding that already has a task waiting on the user.
+        ...(followUp.task?.id ? {
+          taskId: followUp.task.id,
+          ...(followUp.task.approvalRequired ? { taskApprovalRequired: true } : {}),
+          ...(followUp.task.duplicate ? { taskDuplicate: true } : {}),
+        } : {}),
         ...(followUp.taskError ? { taskError: followUp.taskError } : {}),
       };
     }

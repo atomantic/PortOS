@@ -67,8 +67,17 @@ import {
   resolveGoalFidelityFollowUp,
 } from '../lib/goalFidelityFollowUp.js';
 
-/** Page size for the label-filtered duplicate listing on every tracker. */
+/** Rows per request for the label-filtered duplicate listing. */
 const PAGE_LIMIT = 100;
+/**
+ * Hard ceiling on how many of our own filed issues the duplicate scan will read.
+ *
+ * `gh issue list --limit` paginates internally, so GitHub reaches this in one
+ * call; GitLab and JIRA page up to it. A tracker that has this many
+ * goal-fidelity issues on one repo is not a backlog, it is a runaway — and the
+ * scan says so (below) rather than reading a truncated page as "nothing filed".
+ */
+const SCAN_LIMIT = 1_000;
 
 /**
  * The last thing that happens to a title/body before a tracker sees it.
@@ -143,10 +152,11 @@ const resolveForgeContext = (app, tracker) => resolveForgeExecOptions(
  */
 async function listFiledIssues({ app, target, tracker, exec }) {
   if (tracker === 'github') {
+    // `gh issue list --limit N` pages internally up to N, so one call suffices.
     const raw = await execGh([
       'issue', 'list', '--repo', target.repoSpec,
       '--label', GOAL_FIDELITY_ISSUE_LABEL, '--state', 'all',
-      '--limit', String(PAGE_LIMIT), '--json', 'number,title,body,url',
+      '--limit', String(SCAN_LIMIT), '--json', 'number,title,body,url',
     ], undefined, { cwd: exec.cwd, env: exec.env }).catch((err) => {
       console.error(`❌ goal-fidelity follow-up: gh issue list failed for ${target.repoSpec}: ${err.message}`);
       return null;
@@ -156,18 +166,27 @@ async function listFiledIssues({ app, target, tracker, exec }) {
   }
 
   if (tracker === 'gitlab') {
-    // `--all` is every STATE, not every page — the page cap rides separately.
-    const { rows } = await execGlabJson(
-      ['issue', 'list', '--label', GOAL_FIDELITY_ISSUE_LABEL, '--all', '--per-page', String(PAGE_LIMIT)],
-      app.repoPath,
-    );
-    if (!Array.isArray(rows)) return null;
-    return rows.map((row) => ({
-      number: row?.iid ?? null,
-      title: row?.title || '',
-      body: row?.description || '',
-      url: row?.web_url || '',
-    }));
+    // `--all` is every STATE, not every page — glab caps a page at 100, so the
+    // pages are walked until one comes back short. Without the walk, the 101st
+    // goal-fidelity issue pushes an older fingerprint off the only page read and
+    // the scheduled task re-files it every cadence.
+    const all = [];
+    for (let page = 1; all.length < SCAN_LIMIT; page += 1) {
+      const { rows } = await execGlabJson(
+        ['issue', 'list', '--label', GOAL_FIDELITY_ISSUE_LABEL, '--all',
+          '--per-page', String(PAGE_LIMIT), '--page', String(page)],
+        app.repoPath,
+      );
+      if (!Array.isArray(rows)) return null;
+      all.push(...rows.map((row) => ({
+        number: row?.iid ?? null,
+        title: row?.title || '',
+        body: row?.description || '',
+        url: row?.web_url || '',
+      })));
+      if (rows.length < PAGE_LIMIT) break;
+    }
+    return all;
   }
 
   // JIRA. The project is scoped explicitly — a label match across every project
@@ -180,7 +199,7 @@ async function listFiledIssues({ app, target, tracker, exec }) {
   const jql = `project = "${escapeJql(app.jira.projectKey)}" AND labels = "${escapeJql(GOAL_FIDELITY_ISSUE_LABEL)}"`;
   const rows = await searchIssues(app.jira.instanceId, jql, {
     fields: 'summary,description,status',
-    maxResults: PAGE_LIMIT,
+    maxResults: SCAN_LIMIT,
   }).catch((err) => {
     console.error(`❌ goal-fidelity follow-up: JIRA issue search failed for ${app.jira.projectKey}: ${err.message}`);
     return null;
@@ -303,6 +322,13 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
   if (!existing) return { issue: null, error: `could not read the ${tracker} issue list to check for duplicates; nothing was filed` };
   const duplicate = existing.find((issue) => issueMatchesGoalFidelityMarker(issue, fingerprint));
   if (duplicate) return { issue: { ...duplicate, duplicate: true }, error: null };
+  // A scan that came back at the ceiling did not prove ABSENCE — it proved we
+  // stopped looking. Filing here is how the 1001st issue re-files the 1st, so
+  // this fails closed like every other unreadable-tracker path. Reaching this
+  // at all means something upstream is filing without bound; say so.
+  if (existing.length >= SCAN_LIMIT) {
+    return { issue: null, error: `this repository already carries ${SCAN_LIMIT}+ '${GOAL_FIDELITY_ISSUE_LABEL}' issues, so a duplicate cannot be ruled out; nothing was filed` };
+  }
 
   const { title, body } = buildGoalFidelityIssue({ task, review, fingerprint });
   // Scrubbed on the way to the tracker: a filed issue is world-readable the
@@ -343,7 +369,15 @@ async function queueFollowUpTask({ task, review, fingerprint, issue }) {
     context: `Auto-generated from a goal-fidelity ${review?.verdict} verdict`,
     ...(task?.metadata?.app ? { app: task.metadata.app } : {}),
   });
-  return filed?.task ? { ...filed.task, approvalRequired: filed.approvalRequired === true } : null;
+  if (!filed?.task) return { task: null, loopReason: filed?.loopReason || null };
+  return {
+    task: filed.task,
+    approvalRequired: filed.approvalRequired === true,
+    // A duplicate fold is addTask's signal that an open task already tracks
+    // this cause — a usable outcome, not a failure.
+    duplicate: filed.task.duplicate === true,
+    loopReason: filed.loopReason || null,
+  };
 }
 
 /**
@@ -383,8 +417,21 @@ export async function runGoalFidelityFollowUp({ agentId, task, review }) {
         console.error(`❌ goal-fidelity follow-up: could not queue a task for ${agentId}: ${err.message}`);
         return null;
       });
-    result.task = queued;
-    if (!queued) result.taskError = 'the follow-up task could not be queued';
+    result.task = queued?.task
+      ? {
+        id: queued.task.id,
+        approvalRequired: queued.approvalRequired === true,
+        duplicate: queued.duplicate === true,
+        ...(queued.loopReason ? { loopReason: queued.loopReason } : {}),
+      }
+      : null;
+    // Name the loop policy's own reason when it has one: "could not be queued"
+    // is the least actionable thing we could say about a deliberate suppression.
+    if (!result.task) {
+      result.taskError = queued?.loopReason
+        ? `the follow-up task was suppressed (${queued.loopReason})`
+        : 'the follow-up task could not be queued';
+    }
   }
 
   return result;

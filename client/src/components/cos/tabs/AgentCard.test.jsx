@@ -820,6 +820,35 @@ describe('AgentCard goal fidelity', () => {
     expect(screen.getByText(/could not be queued/)).toBeInTheDocument();
   });
 
+// "Queued" is wrong for a task the loop policy held for the user: nothing
+  // will pick it up until they approve it, and the card is where they find out.
+  it('names a held follow-up task as awaiting approval, not queued', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { taskId: 'cos-9', taskApprovalRequired: true },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('link', { name: 'Follow-up task awaiting your approval' })).toBeInTheDocument();
+    // Still no manual button: the answer is to approve the task that exists,
+    // not to queue an unheld duplicate beside it.
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+  });
+
+  it('names a folded duplicate task as folded, not freshly queued', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { taskId: 'cos-9', taskDuplicate: true },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('link', { name: 'Folded into the follow-up task already open' })).toBeInTheDocument();
+  });
+
   // Offering the manual button after the automation already queued a task would
   // put two agents on one finding.
   it('withdraws the manual button once the follow-up queued a task, and keeps it otherwise', () => {

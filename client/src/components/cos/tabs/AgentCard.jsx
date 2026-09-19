@@ -246,7 +246,15 @@ function GoalFidelityPanel({ review }) {
 // half-delivered. An arm that could not run says so, with its reason.
 function GoalFidelityFollowUp({ followUp }) {
   if (!followUp) return null;
-  const { issue, issueError, taskId, taskError } = followUp;
+  const { issue, issueError, taskId, taskApprovalRequired, taskDuplicate, taskError } = followUp;
+  // "Queued" is wrong for a task the loop policy held for the user and wrong
+  // for one that folded into an existing investigation — both exist, but only
+  // one of the three is going to run on its own.
+  const taskLabel = taskApprovalRequired
+    ? 'Follow-up task awaiting your approval'
+    : taskDuplicate
+      ? 'Folded into the follow-up task already open'
+      : 'View the queued follow-up task';
   return (
     <div className="mt-1.5 text-xs text-gray-400 flex flex-col gap-0.5">
       {issue?.url && (
@@ -259,7 +267,7 @@ function GoalFidelityFollowUp({ followUp }) {
       {issueError && <span role="status" className="text-port-warning">No issue filed: {issueError}</span>}
       {taskId && (
         <Link className="text-port-accent hover:underline w-fit" to={`/cos/tasks?task=${encodeURIComponent(taskId)}&source=internal`}>
-          View the queued follow-up task
+          {taskLabel}
         </Link>
       )}
       {taskError && <span role="status" className="text-port-warning">No follow-up queued: {taskError}</span>}
@@ -1019,9 +1027,11 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
         {agent.result?.goalFidelity && <GoalFidelityPanel review={agent.result.goalFidelity} />}
         {/* The manual button is the fallback for an install that has not armed
-            the automatic follow-up. Once that already queued a task for this
-            finding, offering it again would queue a second agent on the same
-            work — the panel above links the one that exists instead. */}
+            the automatic follow-up. Once that produced a task for this finding,
+            offering it again would put a second agent on the same work — the
+            panel above links the one that exists instead. That holds for a task
+            HELD for approval too: the answer there is to approve the task that
+            exists, not to queue an unheld duplicate beside it. */}
         {completed && !remote && !agent.result?.goalFidelity?.followUp?.taskId
           && ['fix-first', 'rethink'].includes(agent.result?.goalFidelity?.verdict) && (
           <InvestigateFindingsButton key={agent.id} agent={agent} />

@@ -392,6 +392,25 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       });
     });
 
+// The card reads these to decide what to call the task and whether to still
+    // offer the manual fallback, so the producer's verdict has to survive the
+    // completion write, not just the log line.
+    it("persists the producer's hold and duplicate verdict alongside the task id", async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({
+        ran: true, task: { id: 'cos-9', approvalRequired: true, duplicate: false },
+      });
+      await finalize();
+      expect(completion().goalFidelity.followUp).toEqual({ taskId: 'cos-9', taskApprovalRequired: true });
+    });
+
+    it('omits the hold flags for an ordinary queued task', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({
+        ran: true, task: { id: 'cos-9', approvalRequired: false, duplicate: false },
+      });
+      await finalize();
+      expect(completion().goalFidelity.followUp).toEqual({ taskId: 'cos-9' });
+    });
+
     it('records the reason when an arm could not run', async () => {
       runGoalFidelityFollowUpMock.mockResolvedValue({ ran: true, issueError: 'gh unreachable', task: null, taskError: 'circuit open' });
       await finalize();
