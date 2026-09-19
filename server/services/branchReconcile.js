@@ -117,6 +117,17 @@ export const STALE_CLAIM_IDLE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // teardown and still turns a week-long park into a single recheck.
 export const SHIPPED_CLAIM_IDLE_MS = 60 * 60 * 1000; // 1 hour
 
+/**
+ * A claim branch without an issue number is never a valid /claim deliverable.
+ * It can be left behind when a scheduled claim run creates its worktree before
+ * target selection completes; unlike a real claim, there is no issue session
+ * that could resume it. Keep this narrow so ordinary human claim branches
+ * retain their liveness grace period.
+ */
+export function isMalformedClaimBranch(branch) {
+  return branch === 'claim/issue-';
+}
+
 // Bound the gh query (single-user repos never realistically truncate at 200).
 const PR_LIST_LIMIT = 200;
 
@@ -931,7 +942,9 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
     // dirty gate is still ahead of the removal.
     const retired = await retireBranch(repoPath, b, {
       activeAgentIds,
-      staleClaimIdleMs: b.upstreamGone ? SHIPPED_CLAIM_IDLE_MS : STALE_CLAIM_IDLE_MS,
+      staleClaimIdleMs: isMalformedClaimBranch(b.branch)
+        ? 0
+        : b.upstreamGone ? SHIPPED_CLAIM_IDLE_MS : STALE_CLAIM_IDLE_MS,
       label: `🔀 branch-reconcile: remove worktree for ${b.branch}`,
     });
     if (!retired.ok) {
