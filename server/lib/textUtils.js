@@ -191,6 +191,18 @@ export function escapeRegExp(value) {
  * empty string rather than being coerced, so a caller distinguishes "nothing to
  * slug" from a real slug without a separate guard.
  */
+/**
+ * First non-empty line of a string, trimmed.
+ *
+ * The CoS task-description headline: `generateTasksMarkdown` flattens a stored
+ * description to one line, so every comparison against a multi-line input has to
+ * normalize on the first line. Lives in this dependency-free leaf because the
+ * goal-fidelity follow-up needs the same headline for its dedup key and cannot
+ * import the task store (see server/AGENTS.md "Import scoping");
+ * `services/cosTaskStore.js` re-exports it at the address its callers already use.
+ */
+export const firstLine = (text) => String(text ?? '').split('\n').map(line => line.trim()).find(Boolean) || '';
+
 export function kebabCase(text) {
   if (typeof text !== 'string') return '';
   return text

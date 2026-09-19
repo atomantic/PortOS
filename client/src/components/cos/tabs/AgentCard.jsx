@@ -254,13 +254,15 @@ function GoalFidelityFollowUp({ followUp }) {
           {issue.duplicate ? 'Already tracked as' : 'Filed as'} {issue.number ? `#${issue.number}` : 'an issue'}
         </a>
       )}
-      {issueError && <span className="text-port-warning">No issue filed: {issueError}</span>}
+      {/* `status`, not `alert`: these report a background follow-up the user
+          did not trigger, so they are passive news, not a response to an action. */}
+      {issueError && <span role="status" className="text-port-warning">No issue filed: {issueError}</span>}
       {taskId && (
         <Link className="text-port-accent hover:underline w-fit" to={`/cos/tasks?task=${encodeURIComponent(taskId)}&source=internal`}>
           View the queued follow-up task
         </Link>
       )}
-      {taskError && <span className="text-port-warning">No follow-up queued: {taskError}</span>}
+      {taskError && <span role="status" className="text-port-warning">No follow-up queued: {taskError}</span>}
     </div>
   );
 }

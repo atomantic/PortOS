@@ -36,10 +36,12 @@ import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
-// First non-empty line of a string. Used by addTask dedup: stored descriptions
-// are flattened to a single line by generateTasksMarkdown, so the comparison
-// must normalize on the first line to match multi-line inputs.
-export const firstLine = (s) => (s || '').split('\n').map(l => l.trim()).find(l => l) || '';
+// First non-empty line of a string — used by addTask's dedup, since stored
+// descriptions are flattened to a single line by generateTasksMarkdown. Declared
+// in the dependency-free text leaf and re-exported here at the address this
+// module's callers already import it from.
+import { firstLine } from '../lib/textUtils.js';
+export { firstLine };
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 

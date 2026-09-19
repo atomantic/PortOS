@@ -12,8 +12,8 @@
  * other; turning both on files the issue first so the queued task can name it.
  *
  * The dedup identity lives here rather than in the filer because THREE parties
- * have to agree on it — the forge search that decides "already filed", the
- * issue body that carries the marker that search reads back, and the CoS task
+ * have to agree on it — the issue body that carries the marker, the tracker
+ * listing that reads it back to decide "already filed", and the CoS task
  * fingerprint that stops a second follow-up run for the same finding. A
  * scheduled task regenerates with a fresh id every cadence, so keying on the
  * task id alone would re-file the same finding forever; the key is instead
@@ -23,15 +23,18 @@
  * Pure and I/O-free: the settings resolver, the filer, the queue producer, and
  * the tests share one definition of what a follow-up IS.
  *
- * DEPENDENCY-FREE by design. `cosValidation.js` imports this for the settings
- * enum, and it is reached by most of the server suite — so the obvious edge
- * here (`investigationTasks.js`, for its `investigationFingerprint` formatter)
- * put five modules on ~80 suites' closures and blew the import budget for one
- * three-segment template string. The format is inlined instead, and
- * `goalFidelityFollowUp.test.js` pins it against the real
- * `investigationFingerprint` so the two cannot drift: the test pays the import,
- * production does not. See server/AGENTS.md "Import scoping".
+ * CLOSURE-FREE by design. `cosValidation.js` imports this for the settings enum
+ * and is reached by most of the server suite, so every edge here is multiplied
+ * by ~80 suites. `textUtils.js` is free — a zero-import leaf already in all four
+ * consumers' closures — but `investigationTasks.js`, which declares the
+ * `investigationFingerprint` formatter, would have added five modules for one
+ * three-segment template string. So that ONE format is inlined, and
+ * `goalFidelityFollowUp.test.js` pins it against the real function so the two
+ * cannot drift: the test pays the import, production does not. See
+ * server/AGENTS.md "Import scoping".
  */
+
+import { firstLine, kebabCase, truncateOnBoundary } from './textUtils.js';
 
 /**
  * Which verdicts trigger a follow-up.
@@ -50,6 +53,17 @@ export const GOAL_FIDELITY_FOLLOW_UP_TRIGGERS = Object.freeze(['rethink', 'any-f
 
 /** The trigger an install gets when it has configured none. */
 export const DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER = 'rethink';
+
+/**
+ * One stored trigger, validated. Shared by `resolveGoalFidelityFollowUp` and by
+ * the settings projection the Code Reviewers tab reads back
+ * (`pickCodeReviewDefaults`) — they have to agree, and a silent divergence
+ * between "what the form shows" and "what runs" is invisible until a finding
+ * fires on the wrong verdict.
+ */
+export const normalizeGoalFidelityFollowUpTrigger = (value) => (
+  GOAL_FIDELITY_FOLLOW_UP_TRIGGERS.includes(value) ? value : DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER
+);
 
 /** The verdicts each trigger fires on. */
 const TRIGGER_VERDICTS = Object.freeze({
@@ -106,10 +120,7 @@ export function resolveGoalFidelityFollowUp(codeReview) {
   const fileIssue = raw.fileIssue === true;
   const queueTask = raw.queueTask === true;
   if (!fileIssue && !queueTask) return null;
-  const trigger = GOAL_FIDELITY_FOLLOW_UP_TRIGGERS.includes(raw.followUpOn)
-    ? raw.followUpOn
-    : DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER;
-  return { fileIssue, queueTask, trigger };
+  return { fileIssue, queueTask, trigger: normalizeGoalFidelityFollowUpTrigger(raw.followUpOn) };
 }
 
 /** Does this verdict fire the configured trigger? */
@@ -118,20 +129,8 @@ export function goalFidelityFollowUpApplies(review, trigger) {
   return verdicts.includes(review?.verdict);
 }
 
-/** Lowercase `a-z0-9-` slug of free text, bounded. */
-function subjectSlug(text) {
-  return String(text ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, SUBJECT_SLUG_MAX)
-    .replace(/-+$/, '');
-}
-
-/** First non-blank line of a task description, trimmed. */
-function firstLine(text) {
-  return String(text ?? '').split('\n').map(line => line.trim()).find(Boolean) || '';
-}
+/** Lowercase `a-z0-9-` slug of free text, bounded on a word boundary. */
+const subjectSlug = (text) => truncateOnBoundary(kebabCase(String(text ?? '')), SUBJECT_SLUG_MAX);
 
 /**
  * The durable dedup key for one goal-fidelity finding.
@@ -156,37 +155,36 @@ export function goalFidelityFingerprint(task) {
 }
 
 /**
- * The exact string a duplicate search looks for in an existing issue.
+ * The exact string the dedup looks for in an existing issue's body.
  *
- * A single hyphenated token with no colons, spaces, or quotes: every forge's
- * full-text search treats `:` as a qualifier separator, so the raw
- * `goal-fidelity:user:…` fingerprint would be parsed as a query rather than
- * matched as text — and on GitHub an unknown qualifier fails the whole search.
- * The `portosgf-` prefix keeps it from colliding with ordinary prose.
+ * The CANDIDATES come from a label filter, not a text search — every issue this
+ * feature files carries `GOAL_FIDELITY_ISSUE_LABEL`, so the filer lists that
+ * label across every state and reads the marker back from the rows. A
+ * full-text search would have been index-backed (minutes of lag on GitHub and
+ * JIRA), which is exactly the window in which a scheduled task re-runs; a label
+ * is a direct field filter with no such lag.
  *
- * The search is only a NARROWING step. Every forge tokenizes on hyphens too, so
- * a search hit is a candidate; `issueMatchesGoalFidelityMarker` decides, by
- * substring, on the text the forge actually returned.
+ * Still a single hyphenated token with no colons, spaces, or quotes: it rides
+ * inside a JIRA JQL string literal, and the raw `goal-fidelity:user:…`
+ * fingerprint would need escaping there for no gain. The `portosgf-` prefix
+ * keeps it from colliding with ordinary prose.
  */
 export function goalFidelityIssueMarker(fingerprint) {
-  const token = String(fingerprint ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return `portosgf-${token}`;
+  return `portosgf-${kebabCase(String(fingerprint ?? ''))}`;
 }
 
 /**
  * Does this issue carry our marker for `fingerprint`?
  *
- * Reads `body` or `description` because the three trackers spell the same field
- * two ways (`gh`/`glab` normalize to `body`; JIRA returns `description`), and a
- * dedup that silently looked at the wrong one would read every existing issue
- * as a non-match and re-file on every run.
+ * Takes the ONE normalized `{ title, body }` shape every candidate source in
+ * `services/goalFidelityFollowUp.js` maps to — the trackers disagree about the
+ * field names (`description` on glab and JIRA, `summary` for a JIRA title), and
+ * accepting every spelling here would let a mapper quietly stop normalizing
+ * without anything failing.
  */
 export function issueMatchesGoalFidelityMarker(issue, fingerprint) {
   const marker = goalFidelityIssueMarker(fingerprint);
-  return `${issue?.title || ''}\n${issue?.summary || ''}\n${issue?.body || ''}\n${issue?.description || ''}`.includes(marker);
+  return `${issue?.title || ''}\n${issue?.body || ''}`.includes(marker);
 }
 
 /** Bounded markdown bullet list, or a fallback sentence when the list is empty. */
@@ -198,6 +196,9 @@ function bulletList(items, empty) {
 }
 
 const truncate = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+const truncateTitle = (text, max) => (text.length > max
+  ? `${text.slice(0, text.lastIndexOf(' ', max - 1) > max / 2 ? text.lastIndexOf(' ', max - 1) : max - 1)}…`
+  : text);
 
 /**
  * Compose the issue this finding files.
@@ -214,7 +215,7 @@ const truncate = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}�
  */
 export function buildGoalFidelityIssue({ task, review, fingerprint }) {
   const subject = firstLine(task?.description) || 'a CoS agent task';
-  const title = truncate(`Goal-fidelity ${review?.verdict || 'finding'}: ${subject}`, GOAL_FIDELITY_ISSUE_LIMITS.titleChars);
+  const title = truncateTitle(`Goal-fidelity ${review?.verdict || 'finding'}: ${subject}`, GOAL_FIDELITY_ISSUE_LIMITS.titleChars);
   // The marker sits in the SECOND paragraph, not the last: a reader of this
   // issue gets it from a truncated body just as reliably as from a whole one,
   // and the open-issue fallback scan reads bodies the forge lister has already
@@ -264,7 +265,11 @@ export function formatGoalFidelityFollowUpSummary(result) {
     result?.issue && !result.issue.duplicate ? `filed ${result.issue.number ? `#${result.issue.number}` : 'an issue'}` : null,
     result?.issueError ? `issue not filed (${result.issueError})` : null,
     result?.task?.duplicate ? 'follow-up task already queued' : null,
-    result?.task && !result.task.duplicate ? `queued follow-up task ${result.task.id}` : null,
+    // A HELD task is not a queued one — the loop policy stops it for a human,
+    // and saying "queued" about it is the one wrong thing to report.
+    result?.task && !result.task.duplicate
+      ? `${result.task.approvalRequired ? 'follow-up task awaiting approval' : 'queued follow-up task'} ${result.task.id}`
+      : null,
     result?.taskError ? `follow-up task not queued (${result.taskError})` : null,
   ].filter(Boolean);
   return parts.length ? `Goal-fidelity follow-up: ${parts.join('; ')}` : 'Goal-fidelity follow-up: nothing to do';

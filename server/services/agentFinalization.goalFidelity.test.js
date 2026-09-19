@@ -412,12 +412,21 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(completion().goalFidelity.followUp).toBeUndefined();
     });
 
-    // A ship verdict is still a verdict: the gate ran and cleared the run, so
-    // the follow-up is asked and declines on the trigger, not skipped here.
-    it('is consulted on a clean verdict too, and stays silent', async () => {
+    // No trigger fires on `ship`, so the overwhelmingly common verdict must not
+    // even resolve the follow-up's module graph (the apps roster, both forge
+    // CLIs, the JIRA client) to be told there is nothing to act on.
+    it('is never consulted on a clean verdict', async () => {
       runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'ship' }));
       await finalize();
+      expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
+      expect(completion().success).toBe(true);
+    });
+
+    it('is consulted on the advisory fix-first verdict, which a wider trigger acts on', async () => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'fix-first' }));
+      await finalize();
       expect(runGoalFidelityFollowUpMock).toHaveBeenCalled();
+      // fix-first is advisory — it records a finding without holding the run.
       expect(completion().success).toBe(true);
     });
   });

@@ -166,11 +166,13 @@ describe('CodeReviewersTab', () => {
 
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
     const [payload] = api.updateSettings.mock.calls[0];
-    // The scalars are dropped when unset (absent = inherit), but the follow-up
-    // booleans always ride: false there is the user's OFF, not 'inherit', and
-    // dropping it would make either switch un-clearable once it had been on.
+    // The scalars are dropped when unset (absent = inherit), and so is the
+    // trigger while neither action is armed — pinning it would freeze an
+    // install on today's default forever. The follow-up BOOLEANS always ride:
+    // false there is the user's OFF, not 'inherit', and dropping one would make
+    // that switch un-clearable once it had been on.
     expect(payload.codeReview.goalFidelity).toEqual({
-      enabled: true, backend: 'lmstudio', fileIssue: false, queueTask: false, followUpOn: 'rethink',
+      enabled: true, backend: 'lmstudio', fileIssue: false, queueTask: false,
     });
   });
 
@@ -192,7 +194,7 @@ describe('CodeReviewersTab', () => {
 
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
     expect(api.updateSettings.mock.calls[0][0].codeReview.goalFidelity).toEqual({
-      enabled: false, fileIssue: false, queueTask: false, followUpOn: 'rethink',
+      enabled: false, fileIssue: false, queueTask: false,
     });
   });
 

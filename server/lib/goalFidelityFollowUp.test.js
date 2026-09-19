@@ -153,11 +153,14 @@ describe('issueMatchesGoalFidelityMarker', () => {
   const fingerprint = 'goal-fidelity:user:comics/add-retry-caps';
   const marker = goalFidelityIssueMarker(fingerprint);
 
-  // `gh`/`glab` normalize to `body`; JIRA returns `description`. Reading only one
-  // would silently treat every existing ticket as a non-match on the other forge.
-  it('reads the body OR the description, because the trackers disagree on the field', () => {
+  // The filer normalizes every tracker's rows to `{ title, body }` before the
+  // matcher sees them, so this reads exactly that shape. Accepting JIRA's raw
+  // `description` here too would let a mapper quietly stop normalizing without
+  // anything failing.
+  it('reads the normalized title and body, and only those', () => {
     expect(issueMatchesGoalFidelityMarker({ body: `text ${marker}` }, fingerprint)).toBe(true);
-    expect(issueMatchesGoalFidelityMarker({ description: `text ${marker}` }, fingerprint)).toBe(true);
+    expect(issueMatchesGoalFidelityMarker({ title: `text ${marker}`, body: '' }, fingerprint)).toBe(true);
+    expect(issueMatchesGoalFidelityMarker({ description: `text ${marker}` }, fingerprint)).toBe(false);
   });
 
   it('does not match a different fingerprint or an unmarked issue', () => {

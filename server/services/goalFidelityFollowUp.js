@@ -44,12 +44,10 @@
 import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
-import { listAppIssues } from './appIssues.js';
-import { getAppById } from './apps.js';
-import { ROOT_DIR } from './cosState.js';
+import { PORTOS_APP_ID, getAppById } from './apps.js';
 import { getSettings } from './settings.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
-import { resolveAppForgeTarget } from '../lib/workTracker.js';
+import { forgeCliForTracker, resolveAppForgeTarget } from '../lib/workTracker.js';
 import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../lib/forgeIssueCli.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
@@ -67,9 +65,7 @@ import {
   resolveGoalFidelityFollowUp,
 } from '../lib/goalFidelityFollowUp.js';
 
-/** Candidates a marker search may return before we substring-confirm them. */
-const SEARCH_LIMIT = 30;
-/** Page size for the open-issue rescan on GitLab and the JIRA marker search. */
+/** Page size for the label-filtered duplicate listing on every tracker. */
 const PAGE_LIMIT = 100;
 
 /**
@@ -89,84 +85,102 @@ const PAGE_LIMIT = 100;
 const scrubForgeText = (value) => scrubSecretTokens(scrubHomePath(value));
 
 /**
- * The repository this task's work lives in, as an app-record shape the forge
- * resolvers accept.
+ * The managed-app record whose tracker this finding belongs on.
  *
- * A task with no `metadata.app` is PortOS's own work, which runs against the
- * install root — the same fallback `agentWorkspacePrep` uses to pick a
- * workspace, so the tracker this files to is the tracker the run touched.
+ * A task with no `metadata.app` is PortOS's own work — and that resolves to the
+ * REAL `PORTOS_APP_ID` record (always seeded by `loadApps`), not to a
+ * `{ repoPath: ROOT_DIR }` literal. The three fields a literal would drop are
+ * the three that decide where the issue lands: `workTracker` (an install that
+ * pinned PortOS to JIRA would otherwise get a GitHub issue nothing will ever
+ * claim), `forgeAccount` (the wrong credentials on a multi-account install),
+ * and `jira` (without it the JIRA arm is structurally unreachable for PortOS's
+ * own tasks).
  */
 async function resolveFollowUpRepo(task) {
-  const appId = task?.metadata?.app;
-  if (!appId) return { id: null, name: 'PortOS', repoPath: ROOT_DIR, workTracker: 'auto' };
-  const app = await getAppById(appId).catch(() => null);
-  if (!app?.repoPath) return null;
-  return app;
+  const app = await getAppById(task?.metadata?.app || PORTOS_APP_ID).catch(() => null);
+  return app?.repoPath ? app : null;
 }
 
 /**
- * GitHub: candidates carrying the marker, across OPEN and CLOSED.
+ * Everything a forge call for this app needs, resolved ONCE.
  *
- * `--search` is a narrowing step whose ranking we do not trust — the caller
- * substring-confirms every row. Returns `null` for "could not read", which the
- * caller treats as a refusal to file rather than an absence of duplicates.
- */
-async function searchGithubMarker({ target, repoPath, forgeAccount, marker }) {
-  const { cwd, env, customEnv } = await resolveForgeExecOptions(repoPath, { forgeAccount });
-  const forge = await ensureForgeReachable('goal-fidelity-followup', {
-    hostname: target.apiHost,
-    ...(customEnv ? { env: customEnv } : {}),
-  });
-  if (!forge.ok) return null;
-  const raw = await execGh([
-    'issue', 'list', '--repo', target.repoSpec, '--state', 'all',
-    '--search', marker, '--limit', String(SEARCH_LIMIT),
-    '--json', 'number,title,body,url,state',
-  ], undefined, { cwd, env }).catch((err) => {
-    console.error(`❌ goal-fidelity follow-up: gh marker search failed for ${target.repoSpec}: ${err.message}`);
-    return null;
-  });
-  const rows = safeJSONParse(raw, null);
-  return Array.isArray(rows) ? rows : null;
-}
-
-/**
- * GitLab: `glab issue list --all` is every STATE, not every page — the page cap
- * rides separately. glab has no reliable cross-version full-text issue search
- * flag, so this reads a bounded page and the caller substring-confirms; the
- * marker sits in the second paragraph of the body precisely so a capped read
- * still finds it.
- */
-async function searchGitlabMarker({ repoPath }) {
-  const { rows } = await execGlabJson(['issue', 'list', '--all', '--per-page', String(PAGE_LIMIT)], repoPath);
-  if (!Array.isArray(rows)) return null;
-  return rows.map((row) => ({
-    number: row?.iid ?? null,
-    title: row?.title || '',
-    body: row?.description || '',
-    url: row?.web_url || '',
-    state: row?.state || '',
-  }));
-}
-
-/**
- * JIRA: a `text ~` marker match inside the app's own project. The project is
- * scoped explicitly — a marker search across every project the token can see
- * would dedupe one app's finding against another's.
+ * `resolveForgeExecOptions` is neither cached nor cheap — it shells out for the
+ * origin remote, then `gh auth status` / `gh auth token`, plus `gh api user`
+ * when the app pins a forge account. Resolving it per call made the list and
+ * the create each pay for it; worse, the create ran with no options at all, so
+ * an app pinned to a non-ambient account filed (or 404'd) under the wrong
+ * login — the exact failure `resolveForgeExecOptions` exists to prevent.
  *
- * `jira.js` is imported lazily here and in the filer below: only a JIRA-tracked
- * app ever reaches it, and a static edge would put the whole JIRA client (and
- * its axios/client graph) on the closure of every suite that transitively
- * reaches agent finalization. See server/AGENTS.md "Import scoping".
+ * `glab` resolves its project from the working directory rather than a token
+ * overlay, so only GitHub passes a repo path here.
  */
-async function searchJiraMarker({ jira, marker }) {
+const resolveForgeContext = (app, tracker) => resolveForgeExecOptions(
+  tracker === 'github' ? app.repoPath : null,
+  { forgeAccount: app.forgeAccount },
+);
+
+/**
+ * Every issue this feature has ever filed on this tracker, in one normalized
+ * `{ number, title, body, url }` shape — or `null` when the tracker could not
+ * be read.
+ *
+ * Filtered by LABEL across every STATE, which is what makes the dedup sound:
+ *
+ * - a label is a direct field filter, so unlike a full-text search it has no
+ *   index lag — and the lag window (minutes, on both GitHub and JIRA) is
+ *   exactly when a scheduled task re-runs and would re-file;
+ * - every state, so an issue a human already CLOSED is still found and not
+ *   re-filed;
+ * - and it bounds the page by the thing we care about rather than by the
+ *   tracker's whole backlog, so a busy repo cannot push our own issues off the
+ *   end of the page and silently read as "nothing filed".
+ *
+ * The three trackers disagree about field names (`iid` / `key`, `description`
+ * for the body, `summary` for a JIRA title). They are reconciled here, so the
+ * matcher and the result have one shape to read.
+ */
+async function listFiledIssues({ app, target, tracker, exec }) {
+  if (tracker === 'github') {
+    const raw = await execGh([
+      'issue', 'list', '--repo', target.repoSpec,
+      '--label', GOAL_FIDELITY_ISSUE_LABEL, '--state', 'all',
+      '--limit', String(PAGE_LIMIT), '--json', 'number,title,body,url',
+    ], undefined, { cwd: exec.cwd, env: exec.env }).catch((err) => {
+      console.error(`❌ goal-fidelity follow-up: gh issue list failed for ${target.repoSpec}: ${err.message}`);
+      return null;
+    });
+    const rows = safeJSONParse(raw, null);
+    return Array.isArray(rows) ? rows : null;
+  }
+
+  if (tracker === 'gitlab') {
+    // `--all` is every STATE, not every page — the page cap rides separately.
+    const { rows } = await execGlabJson(
+      ['issue', 'list', '--label', GOAL_FIDELITY_ISSUE_LABEL, '--all', '--per-page', String(PAGE_LIMIT)],
+      app.repoPath,
+    );
+    if (!Array.isArray(rows)) return null;
+    return rows.map((row) => ({
+      number: row?.iid ?? null,
+      title: row?.title || '',
+      body: row?.description || '',
+      url: row?.web_url || '',
+    }));
+  }
+
+  // JIRA. The project is scoped explicitly — a label match across every project
+  // the token can see would dedupe one app's finding against another's.
+  // `jira.js` is imported lazily here and in the creator: only a JIRA-tracked
+  // app reaches it, and a static edge would put the whole JIRA client graph on
+  // the closure of every suite reaching agent finalization (server/AGENTS.md
+  // "Import scoping").
   const { searchIssues, escapeJql } = await import('./jira.js');
-  const jql = `project = "${escapeJql(jira.projectKey)}" AND text ~ "${escapeJql(marker)}"`;
-  const rows = await searchIssues(jira.instanceId, jql, {
+  const jql = `project = "${escapeJql(app.jira.projectKey)}" AND labels = "${escapeJql(GOAL_FIDELITY_ISSUE_LABEL)}"`;
+  const rows = await searchIssues(app.jira.instanceId, jql, {
     fields: 'summary,description,status',
-    maxResults: SEARCH_LIMIT,
+    maxResults: PAGE_LIMIT,
   }).catch((err) => {
-    console.error(`❌ goal-fidelity follow-up: JIRA marker search failed for ${jira.projectKey}: ${err.message}`);
+    console.error(`❌ goal-fidelity follow-up: JIRA issue search failed for ${app.jira.projectKey}: ${err.message}`);
     return null;
   });
   if (!Array.isArray(rows)) return null;
@@ -175,60 +189,30 @@ async function searchJiraMarker({ jira, marker }) {
     title: row?.summary || '',
     body: row?.description || '',
     url: row?.url || '',
-    state: row?.status || '',
   }));
 }
 
 /**
- * Every place a duplicate could already be, for one forge tracker: the marker
- * search (all states) and the open-issue list (index-lag backstop).
+ * Create the marker label, then the issue.
  *
- * Returns `{ issue }` on a confirmed duplicate, `{ issue: null }` when both
- * reads answered and neither matched, and `{ error }` when a read we needed
- * could not be made. The three are distinct on purpose — collapsing the last
- * into the middle is how a blip files a duplicate.
+ * The label create is idempotent and its failure is swallowed — both CLIs fail
+ * the whole `issue create` with a 422 on an undefined label, so a label we
+ * could not create resurfaces as the create's own error if it mattered.
  */
-async function findExistingForgeIssue({ app, target, tracker, fingerprint }) {
-  const marker = goalFidelityIssueMarker(fingerprint);
-  const candidates = tracker === 'github'
-    ? await searchGithubMarker({
-      target, repoPath: app.repoPath, forgeAccount: app.forgeAccount, marker,
-    })
-    : await searchGitlabMarker({ repoPath: app.repoPath });
-  if (!candidates) return { error: `could not read the ${tracker} issue list` };
-  const searchHit = candidates.find((issue) => issueMatchesGoalFidelityMarker(issue, fingerprint));
-  if (searchHit) return { issue: searchHit };
-
-  // Index-lag backstop. GitHub's search index trails a creation by minutes, and
-  // two runs of one schedule inside that window is ordinary traffic — without
-  // this the second run files a duplicate the search genuinely could not see.
-  // GitLab's page read above is already a direct listing, so it needs no rescan.
-  if (tracker !== 'github') return { issue: null };
-  const open = await listAppIssues(app);
-  if (open.transient) return { error: `could not read the open ${tracker} issues (${open.reason})` };
-  const openHit = open.issues.find((issue) => issueMatchesGoalFidelityMarker(issue, fingerprint));
-  return { issue: openHit || null };
-}
-
-/**
- * Create the marker label, then the issue. The label create is idempotent and
- * its failure is swallowed — both CLIs fail the whole `issue create` with a 422
- * on an undefined label, so a label we could not create resurfaces as the
- * create's own error if it actually mattered.
- */
-async function createForgeIssue({ app, target, tracker, title, body }) {
-  const cli = tracker === 'gitlab' ? 'glab' : 'gh';
+async function createForgeIssue({ app, target, tracker, exec, title, body }) {
+  const cli = forgeCliForTracker(tracker);
   const spec = { name: GOAL_FIDELITY_ISSUE_LABEL, ...GOAL_FIDELITY_ISSUE_LABEL_SPEC };
   await (cli === 'glab'
     ? execGlab(forgeLabelCreateArgs(cli, spec), app.repoPath)
-    : execGh(forgeLabelCreateArgs(cli, spec, { repo: target.repoSpec }))).catch(() => null);
+    : execGh(forgeLabelCreateArgs(cli, spec, { repo: target.repoSpec }), undefined, { cwd: exec.cwd, env: exec.env })
+  ).catch(() => null);
 
   const args = forgeIssueCreateArgs(cli, {
     title, body, labels: [GOAL_FIDELITY_ISSUE_LABEL], repo: cli === 'glab' ? null : target.repoSpec,
   });
   return (cli === 'glab'
     ? execGlab(args, app.repoPath, undefined, { rejectOnError: true })
-    : execGh(args)
+    : execGh(args, undefined, { cwd: exec.cwd, env: exec.env })
   ).then(
     (stdout) => ({ ok: true, ...parseCreatedForgeIssue(stdout) }),
     (error) => ({ ok: false, error: boundedErrorMessage(error, 'Issue creation failed') }),
@@ -236,7 +220,51 @@ async function createForgeIssue({ app, target, tracker, title, body }) {
 }
 
 /**
+ * Create the JIRA ticket for one finding, in the same `{ ok, number, url }`
+ * shape. It carries the same marker label as its forge siblings — that label is
+ * what the next run's duplicate check filters on, so a ticket filed without it
+ * would be invisible to the dedup and re-filed every cadence.
+ */
+async function createJiraIssue({ app, title, body }) {
+  const { createTicket } = await import('./jira.js');
+  const created = await createTicket(app.jira.instanceId, {
+    projectKey: app.jira.projectKey,
+    summary: title,
+    description: body,
+    issueType: app.jira.defaultIssueType || 'Task',
+    labels: [GOAL_FIDELITY_ISSUE_LABEL],
+  }).catch((err) => ({ success: false, error: boundedErrorMessage(err, 'JIRA ticket creation failed') }));
+  return created?.success
+    ? { ok: true, number: created.ticketId, url: created.url }
+    : { ok: false, error: created?.error || 'JIRA ticket creation failed' };
+}
+
+/**
+ * Is this app's tracker one we can file to, and does it have what it needs?
+ * Returns the refusal sentence, or `null` when the file may proceed.
+ */
+function trackerRefusal({ app, target, tracker }) {
+  if (tracker === 'jira') {
+    const jira = app?.jira;
+    return jira?.enabled && jira.instanceId && jira.projectKey
+      ? null
+      : 'this project tracks work in JIRA, but its JIRA instance and project are not configured';
+  }
+  if (tracker !== 'github' && tracker !== 'gitlab') {
+    return `this project's work tracker is ${tracker || 'unresolved'}, which has no issue to file`;
+  }
+  if (!target || target.forge !== tracker) {
+    return `the ${tracker} tracker does not match this repository's remote`;
+  }
+  return null;
+}
+
+/**
  * File one goal-fidelity finding on the app's tracker.
+ *
+ * One flow for all three trackers, because the sequence is the same everywhere
+ * and the fail-closed rule is this feature's load-bearing invariant — stating
+ * it once means a later guard cannot land on two of the three.
  *
  * @returns {Promise<{issue: object|null, error: string|null}>} `issue` carries
  *   `duplicate: true` when an existing item already tracks this fingerprint —
@@ -248,52 +276,40 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
   if (!app) return { issue: null, error: `app '${task?.metadata?.app}' has no configured repository` };
 
   const { tracker, target } = await resolveAppForgeTarget(app).catch(() => ({ tracker: null, target: null }));
+  const refusal = trackerRefusal({ app, target, tracker });
+  if (refusal) return { issue: null, error: refusal };
+
+  const exec = tracker === 'jira' ? null : await resolveForgeContext(app, tracker);
+  // The reachability probe runs before anything is read or created: on an
+  // unreachable forge this is one failing call instead of a list and a label
+  // create that each have to time out first.
+  if (tracker === 'github') {
+    const forge = await ensureForgeReachable('goal-fidelity-followup', {
+      hostname: target.apiHost,
+      ...(exec.customEnv ? { env: exec.customEnv } : {}),
+    });
+    if (!forge.ok) return { issue: null, error: `GitHub is not reachable (${forge.status}); nothing was filed` };
+  }
+
+  // Read before writing. A failed read must NOT read as "nothing is tracked" —
+  // that is exactly how a transient CLI blip files the same issue twice — so an
+  // unreadable tracker refuses the file rather than proceeding blind.
+  const existing = await listFiledIssues({ app, target, tracker, exec });
+  if (!existing) return { issue: null, error: `could not read the ${tracker} issue list to check for duplicates; nothing was filed` };
+  const duplicate = existing.find((issue) => issueMatchesGoalFidelityMarker(issue, fingerprint));
+  if (duplicate) return { issue: { ...duplicate, duplicate: true }, error: null };
+
   const { title, body } = buildGoalFidelityIssue({ task, review, fingerprint });
-  // Scrubbed BEFORE the duplicate check, not just before the create: the text
-  // that dedupes has to be the text that gets filed.
-  const safeTitle = scrubForgeText(title);
-  const safeBody = scrubForgeText(body);
-
-  if (tracker === 'jira') return fileJiraFollowUpIssue({ app, fingerprint, title: safeTitle, body: safeBody });
-  if (tracker !== 'github' && tracker !== 'gitlab') {
-    return { issue: null, error: `this project's work tracker is ${tracker || 'unresolved'}, which has no issue to file` };
-  }
-  if (!target || target.forge !== tracker) {
-    return { issue: null, error: `the ${tracker} tracker does not match this repository's remote` };
-  }
-
-  const existing = await findExistingForgeIssue({ app, target, tracker, fingerprint });
-  if (existing.error) return { issue: null, error: `${existing.error}; nothing was filed` };
-  if (existing.issue) {
-    return { issue: { ...existing.issue, duplicate: true }, error: null };
-  }
-
-  const created = await createForgeIssue({ app, target, tracker, title: safeTitle, body: safeBody });
+  // Scrubbed on the way to the tracker: a filed issue is world-readable the
+  // moment it lands, and this text is model-authored prose derived from an
+  // untrusted diff. The marker itself is a slug of the task's first line and
+  // carries no path or credential shape, so the scrub leaves it intact — which
+  // it must, or the issue it files could never dedupe against itself.
+  const created = tracker === 'jira'
+    ? await createJiraIssue({ app, title: scrubForgeText(title), body: scrubForgeText(body) })
+    : await createForgeIssue({ app, target, tracker, exec, title: scrubForgeText(title), body: scrubForgeText(body) });
   if (!created.ok) return { issue: null, error: created.error };
   return { issue: { number: created.number, url: created.url, duplicate: false }, error: null };
-}
-
-/** The JIRA arm of the same contract: same marker dedup, a ticket instead of an issue. */
-async function fileJiraFollowUpIssue({ app, fingerprint, title, body }) {
-  const jira = app?.jira;
-  if (!jira?.enabled || !jira.instanceId || !jira.projectKey) {
-    return { issue: null, error: 'this project tracks work in JIRA, but its JIRA instance and project are not configured' };
-  }
-  const marker = goalFidelityIssueMarker(fingerprint);
-  const candidates = await searchJiraMarker({ jira, marker });
-  if (!candidates) return { issue: null, error: 'could not read the JIRA project to check for duplicates; nothing was filed' };
-  const hit = candidates.find((issue) => issueMatchesGoalFidelityMarker(issue, fingerprint));
-  if (hit) return { issue: { ...hit, duplicate: true }, error: null };
-
-  const { createTicket } = await import('./jira.js');
-  const created = await createTicket(jira.instanceId, {
-    projectKey: jira.projectKey,
-    summary: title,
-    description: body,
-    issueType: jira.defaultIssueType || 'Task',
-  }).catch((err) => ({ success: false, error: boundedErrorMessage(err, 'JIRA ticket creation failed') }));
-  if (!created?.success) return { issue: null, error: created?.error || 'JIRA ticket creation failed' };
-  return { issue: { number: created.ticketId, url: created.url, duplicate: false }, error: null };
 }
 
 /**
@@ -306,6 +322,11 @@ async function fileJiraFollowUpIssue({ app, fingerprint, title, body }) {
  * storm cannot mint one agent per failure), the loop policy (a cause we already
  * queued a fix for and that came back is held for the human), and the
  * worktree + PR delivery posture.
+ *
+ * The producer's approval verdict rides back out with the task: the loop policy
+ * can HOLD a follow-up for a human (`repeat-fingerprint`, `failure-storm`), and
+ * that is the case the user most needs named — reporting "queued" for a task
+ * nothing will pick up is the one wrong thing to say about it.
  */
 async function queueFollowUpTask({ task, review, fingerprint, issue }) {
   const description = buildGoalFidelityFollowUpTask({ task, review, fingerprint, issue });
@@ -317,7 +338,7 @@ async function queueFollowUpTask({ task, review, fingerprint, issue }) {
     context: `Auto-generated from a goal-fidelity ${review?.verdict} verdict`,
     ...(task?.metadata?.app ? { app: task.metadata.app } : {}),
   });
-  return filed?.task || null;
+  return filed?.task ? { ...filed.task, approvalRequired: filed.approvalRequired === true } : null;
 }
 
 /**
@@ -364,4 +385,3 @@ export async function runGoalFidelityFollowUp({ agentId, task, review }) {
   return result;
 }
 
-export const __testing = { resolveFollowUpRepo, findExistingForgeIssue };

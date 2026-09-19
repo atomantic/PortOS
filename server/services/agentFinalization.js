@@ -49,7 +49,7 @@ import {
   goalFidelityHoldsRun,
   taskObjective,
 } from '../lib/goalFidelity.js';
-import { formatGoalFidelityFollowUpSummary } from '../lib/goalFidelityFollowUp.js';
+import { formatGoalFidelityFollowUpSummary, goalFidelityFollowUpApplies } from '../lib/goalFidelityFollowUp.js';
 import { getGoalFidelityConfig, runLocalGoalFidelityReview } from './codeReview.js';
 import { SKIP_LEARNING_VERDICT } from '../lib/learningVerdict.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
@@ -1197,8 +1197,10 @@ export async function finalizeAgent({
   // finding on the project's own tracker and/or queues the run that fixes it.
   // Lazily imported: the filer reaches the apps roster, both forge CLIs, and
   // (for a JIRA-tracked app) the JIRA client, and a static edge would put all
-  // of it on the closure of every suite that reaches finalization.
-  if (fidelity.review) {
+  // of it on the closure of every suite that reaches finalization. Gated on the
+  // WIDEST trigger so a clean `ship` — the overwhelmingly common verdict — does
+  // not evaluate that graph just to be told there is nothing to act on.
+  if (goalFidelityFollowUpApplies(fidelity.review, 'any-finding')) {
     const followUp = await import('./goalFidelityFollowUp.js')
       .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review }))
       .catch(err => {

@@ -1,17 +1,20 @@
 import { LOCAL_LLM_EFFORT_LEVELS, LOCAL_LLM_REVIEWERS, reviewerLabel } from '../cos/constants';
 import {
   DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER,
+  GOAL_FIDELITY_FOLLOW_UP_TRIGGERS,
   sanitizeReviewerModelInput,
 } from '../../lib/reviewerPins';
 
-// What each trigger means in the user's terms. The values mirror the server's
-// `GOAL_FIDELITY_FOLLOW_UP_TRIGGERS` enum; the prose is why one would pick the
-// wider one — `fix-first` never downgrades a run, so an issue is the only thing
-// that carries those findings past the run record.
-const FOLLOW_UP_TRIGGER_OPTIONS = [
-  { value: 'rethink', label: 'Only “rethink” — the run built the wrong thing' },
-  { value: 'any-finding', label: 'Any finding — also the advisory “fix-first”' },
-];
+// Prose for each trigger, keyed by the mirrored enum rather than re-listing its
+// values: the settings schema is a `z.enum` over the server's list, so an option
+// the picker offered but the enum omitted would 400 the whole save — and the
+// parity test guarding that mirror only covers the picker if the picker renders
+// from it. `fix-first` is the reason to widen: it never downgrades a run, so an
+// issue is the only thing that carries those findings past the run record.
+const FOLLOW_UP_TRIGGER_LABELS = {
+  rethink: 'Only “rethink” — the run built the wrong thing',
+  'any-finding': 'Any finding — also the advisory “fix-first”',
+};
 
 // The goal-fidelity gate's controls (#5994) — the SECOND review, which asks
 // whether a finished run's diff delivers the objective the task stated, rather
@@ -178,8 +181,8 @@ export default function GoalFidelityControls({ value, modelOptions, disabled = f
             onChange={(e) => patch({ followUpOn: e.target.value })}
             className="w-full sm:w-2/3 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50"
           >
-            {FOLLOW_UP_TRIGGER_OPTIONS.map(({ value: option, label }) => (
-              <option key={option} value={option}>{label}</option>
+            {GOAL_FIDELITY_FOLLOW_UP_TRIGGERS.map((option) => (
+              <option key={option} value={option}>{FOLLOW_UP_TRIGGER_LABELS[option]}</option>
             ))}
           </select>
         </div>

@@ -113,10 +113,13 @@ export default function CodeReviewersTab() {
         ...(goalFidelity.effort ? { effort: goalFidelity.effort } : {}),
         // Booleans always ride: unlike the scalars above, `false` here is the
         // user turning an action OFF, not "inherit", so dropping it would make
-        // the switch un-clearable once it had been on.
+        // the switch un-clearable once it had been on. The trigger is the other
+        // way round — it only means something once an action is armed, so an
+        // install that never armed one is left inheriting the shipped default
+        // rather than pinned to today's value forever.
         fileIssue: goalFidelity.fileIssue === true,
         queueTask: goalFidelity.queueTask === true,
-        followUpOn: goalFidelity.followUpOn || DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER,
+        ...(goalFidelity.fileIssue || goalFidelity.queueTask ? { followUpOn: goalFidelity.followUpOn } : {}),
       },
     };
     const ok = await api.updateSettings({ codeReview: payload }, { silent: true })

@@ -5,9 +5,10 @@
  *
  * The failure this suite exists to catch is a DUPLICATE. The producer is an
  * unattended loop, so an issue filed twice is filed forever — which is why
- * every tracker arm gets the same three cases: no existing issue (file), an
- * existing one carrying the marker (reuse, including a CLOSED one), and a
- * tracker we could not read (refuse, never file blind).
+ * every tracker arm gets the same three cases: nothing filed yet (file), an
+ * existing item carrying the marker (reuse, including a CLOSED one), and a
+ * tracker we could not read (refuse, never file blind). The listing is
+ * label-filtered across every state precisely so none of those can be missed.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -16,7 +17,6 @@ const execGh = vi.fn();
 const execGlab = vi.fn();
 const execGlabJson = vi.fn();
 const ensureForgeReachable = vi.fn();
-const listAppIssues = vi.fn();
 const getAppById = vi.fn();
 const getSettings = vi.fn();
 const fileInvestigationTask = vi.fn();
@@ -27,15 +27,16 @@ const createTicket = vi.fn();
 vi.mock('./github.js', () => ({ execGh, ensureForgeReachable }));
 vi.mock('./gitlab.js', () => ({ execGlab, execGlabJson }));
 vi.mock('./forgeExecOptions.js', () => ({
-  resolveForgeExecOptions: async () => ({ cwd: '/repo', env: {}, customEnv: null }),
+  resolveForgeExecOptions: async (repoPath) => ({ cwd: repoPath || undefined, env: { GH_TOKEN: 'synthetic' }, customEnv: null }),
 }));
-vi.mock('./appIssues.js', () => ({ listAppIssues }));
-vi.mock('./apps.js', () => ({ getAppById }));
-vi.mock('./cosState.js', () => ({ ROOT_DIR: '/portos' }));
+vi.mock('./apps.js', () => ({ getAppById, PORTOS_APP_ID: 'portos' }));
 vi.mock('./settings.js', () => ({ getSettings }));
 vi.mock('./investigationTaskProducer.js', () => ({ fileInvestigationTask }));
 vi.mock('./jira.js', () => ({ searchIssues, createTicket, escapeJql: (s) => String(s) }));
-vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget }));
+vi.mock('../lib/workTracker.js', () => ({
+  resolveAppForgeTarget,
+  forgeCliForTracker: (tracker) => (tracker === 'gitlab' ? 'glab' : 'gh'),
+}));
 
 const { runGoalFidelityFollowUp } = await import('./goalFidelityFollowUp.js');
 const { goalFidelityFingerprint, goalFidelityIssueMarker } = await import('../lib/goalFidelityFollowUp.js');
@@ -60,13 +61,17 @@ const run = () => runGoalFidelityFollowUp({ agentId: 'agent-1', task: TASK, revi
 
 /** A `gh issue list --json` reply. */
 const ghRows = (rows) => JSON.stringify(rows);
+/** The flag value `gh` was given for `name` on call `n`. */
+const ghFlag = (n, name) => {
+  const args = execGh.mock.calls[n][0];
+  return args[args.indexOf(name) + 1];
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
   ensureForgeReachable.mockResolvedValue({ ok: true });
   getAppById.mockResolvedValue(GITHUB_APP);
   resolveAppForgeTarget.mockResolvedValue({ tracker: 'github', target: GITHUB_TARGET });
-  listAppIssues.mockResolvedValue({ transient: false, issues: [], reason: 'no-open-issues' });
   execGh.mockResolvedValue(ghRows([]));
   fileInvestigationTask.mockResolvedValue({ task: { id: 'cos-9' }, approvalRequired: false });
 });
@@ -113,7 +118,7 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
   it('files the issue with the marker label and reports its number', async () => {
     settings({ fileIssue: true });
     execGh
-      .mockResolvedValueOnce(ghRows([]))              // marker search
+      .mockResolvedValueOnce(ghRows([]))              // duplicate listing
       .mockResolvedValueOnce('')                      // label create
       .mockResolvedValueOnce('https://github.com/acme/comics/issues/42');
     const result = await run();
@@ -122,43 +127,32 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
     expect(createArgs.slice(0, 2)).toEqual(['issue', 'create']);
     expect(createArgs).toContain('--label');
     expect(createArgs).toContain('goal-fidelity');
-    // The body carries the key the next run's search reads back.
+    // The body carries the key the next run's listing reads back.
     expect(createArgs[createArgs.indexOf('--body') + 1]).toContain(MARKER);
   });
 
-  // The whole feature's point of failure. A closed issue is still a filed
-  // issue — re-filing it is exactly the "same issue over and over" loop.
+  // The dedup lists by LABEL across every STATE rather than by full-text
+  // search: a label is a direct field filter with no index lag, and the lag
+  // window is exactly when a scheduled task re-runs.
+  it('lists by the marker label across every state', async () => {
+    settings({ fileIssue: true });
+    await run();
+    expect(execGh.mock.calls[0][0].slice(0, 2)).toEqual(['issue', 'list']);
+    expect(ghFlag(0, '--label')).toBe('goal-fidelity');
+    expect(ghFlag(0, '--state')).toBe('all');
+    expect(ghFlag(0, '--repo')).toBe('github.com/acme/comics');
+  });
+
+  // A closed issue is still a filed issue — re-filing it is exactly the "same
+  // issue over and over" loop this feature has to avoid.
   it('reuses an existing issue carrying the marker, even when it is CLOSED', async () => {
     settings({ fileIssue: true });
     execGh.mockResolvedValueOnce(ghRows([
-      { number: 5, title: 'Goal-fidelity rethink: Add retry caps', body: `stuff ${MARKER}`, url: 'u5', state: 'CLOSED' },
+      { number: 5, title: 'Goal-fidelity rethink: Add retry caps', body: `stuff ${MARKER}`, url: 'u5' },
     ]));
     const result = await run();
     expect(result.issue).toMatchObject({ number: 5, duplicate: true });
-    expect(execGh).toHaveBeenCalledTimes(1); // searched, never created
-  });
-
-  it('searches every state, not just the open ones', async () => {
-    settings({ fileIssue: true });
-    await run();
-    const searchArgs = execGh.mock.calls[0][0];
-    expect(searchArgs[searchArgs.indexOf('--state') + 1]).toBe('all');
-    expect(searchArgs[searchArgs.indexOf('--search') + 1]).toBe(MARKER);
-  });
-
-  // The forge search index trails a creation by minutes; two runs of one
-  // schedule inside that window are ordinary, and without the rescan the
-  // second files a duplicate the search genuinely could not see.
-  it('catches a just-filed issue the search index has not indexed yet', async () => {
-    settings({ fileIssue: true });
-    execGh.mockResolvedValueOnce(ghRows([])); // search: index lag, no hit
-    listAppIssues.mockResolvedValue({
-      transient: false,
-      issues: [{ number: 6, title: 't', body: `fresh ${MARKER}`, url: 'u6' }],
-    });
-    const result = await run();
-    expect(result.issue).toMatchObject({ number: 6, duplicate: true });
-    expect(execGh).toHaveBeenCalledTimes(1);
+    expect(execGh).toHaveBeenCalledTimes(1); // listed, never created
   });
 
   it("does not match another finding's marker", async () => {
@@ -173,7 +167,7 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
 
   // Fail-CLOSED, against the usual sentinel convention: a tracker we could not
   // read is not "nothing is filed". Filing blind is how a `gh` blip duplicates.
-  it('refuses to file when the marker search could not be read', async () => {
+  it('refuses to file when the listing could not be read', async () => {
     settings({ fileIssue: true });
     execGh.mockResolvedValueOnce('not json');
     const result = await run();
@@ -182,22 +176,13 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
     expect(execGh).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses to file when the open-issue rescan is transient', async () => {
-    settings({ fileIssue: true });
-    execGh.mockResolvedValueOnce(ghRows([]));
-    listAppIssues.mockResolvedValue({ transient: true, issues: [], reason: 'gh-offline' });
-    const result = await run();
-    expect(result.issue).toBeNull();
-    expect(result.issueError).toMatch(/gh-offline/);
-    expect(execGh).toHaveBeenCalledTimes(1);
-  });
-
-  it('refuses to file when the forge is unreachable', async () => {
+  it('refuses to file when the forge is unreachable, before reading or creating anything', async () => {
     settings({ fileIssue: true });
     ensureForgeReachable.mockResolvedValue({ ok: false, status: 'offline' });
     const result = await run();
     expect(result.issue).toBeNull();
-    expect(result.issueError).toMatch(/could not read/);
+    expect(result.issueError).toMatch(/not reachable/);
+    expect(execGh).not.toHaveBeenCalled();
   });
 
   it('reports a failed create rather than claiming an issue exists', async () => {
@@ -210,6 +195,17 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
     expect(result.issue).toBeNull();
     expect(result.issueError).toContain('422');
   });
+
+  // An app pinned to a non-ambient forge account files under the wrong login
+  // without this — the 404 pattern `resolveForgeExecOptions` exists to prevent.
+  it('runs the create under the same resolved forge credentials as the listing', async () => {
+    settings({ fileIssue: true });
+    execGh.mockResolvedValueOnce(ghRows([])).mockResolvedValueOnce('').mockResolvedValueOnce('u/1');
+    await run();
+    for (const call of execGh.mock.calls) {
+      expect(call[2]).toMatchObject({ cwd: '/repo', env: { GH_TOKEN: 'synthetic' } });
+    }
+  });
 });
 
 describe('runGoalFidelityFollowUp — GitLab', () => {
@@ -218,27 +214,36 @@ describe('runGoalFidelityFollowUp — GitLab', () => {
       tracker: 'gitlab',
       target: { forge: 'gitlab', repoSpec: null, fullName: 'acme/comics' },
     });
+    execGlabJson.mockResolvedValue({ rows: [], reason: 'ok' });
   });
 
   it('files through glab when no existing issue carries the marker', async () => {
     settings({ fileIssue: true });
-    execGlabJson.mockResolvedValue({ rows: [], reason: 'ok' });
     execGlab.mockResolvedValueOnce('').mockResolvedValueOnce('https://gitlab.com/acme/comics/-/issues/8');
     const result = await run();
     expect(result.issue).toMatchObject({ number: 8, duplicate: false });
   });
 
-  // `--all` on `glab issue list` is every STATE, which is what makes a closed
-  // duplicate visible at all.
-  it('reads every state, so a closed issue still dedupes', async () => {
+  // An unfiltered page is the silent-duplicate bug: on a repo with more issues
+  // than the page holds, our own issue falls off the end and the dedup reports
+  // "nothing filed" every cadence. `--all` is every STATE, so a closed one
+  // still counts.
+  it('lists by the marker label across every state', async () => {
+    settings({ fileIssue: true });
+    await run();
+    const args = execGlabJson.mock.calls[0][0];
+    expect(args[args.indexOf('--label') + 1]).toBe('goal-fidelity');
+    expect(args).toContain('--all');
+  });
+
+  it('reuses an existing labelled issue rather than filing a second', async () => {
     settings({ fileIssue: true });
     execGlabJson.mockResolvedValue({
-      rows: [{ iid: 3, title: 't', description: `x ${MARKER}`, web_url: 'u3', state: 'closed' }],
+      rows: [{ iid: 3, title: 't', description: `x ${MARKER}`, web_url: 'u3' }],
       reason: 'ok',
     });
     const result = await run();
     expect(result.issue).toMatchObject({ number: 3, duplicate: true });
-    expect(execGlabJson.mock.calls[0][0]).toContain('--all');
     expect(execGlab).not.toHaveBeenCalled();
   });
 
@@ -261,21 +266,31 @@ describe('runGoalFidelityFollowUp — JIRA', () => {
   beforeEach(() => {
     getAppById.mockResolvedValue(JIRA_APP);
     resolveAppForgeTarget.mockResolvedValue({ tracker: 'jira', target: null });
-  });
-
-  it("creates a ticket in the app's project", async () => {
-    settings({ fileIssue: true });
     searchIssues.mockResolvedValue([]);
     createTicket.mockResolvedValue({ success: true, ticketId: 'COM-12', url: 'https://jira/browse/COM-12' });
+  });
+
+  // The ticket must carry the marker LABEL as well as the body marker: the
+  // label is what the next run's duplicate listing filters on, so a ticket
+  // filed without it would be invisible to the dedup and re-filed every cadence.
+  it("creates a labelled ticket in the app's project", async () => {
+    settings({ fileIssue: true });
     const result = await run();
     expect(result.issue).toMatchObject({ number: 'COM-12', duplicate: false });
-    expect(createTicket.mock.calls[0][1].projectKey).toBe('COM');
+    expect(createTicket.mock.calls[0][1]).toMatchObject({ projectKey: 'COM', labels: ['goal-fidelity'] });
     expect(createTicket.mock.calls[0][1].description).toContain(MARKER);
   });
 
-  // JIRA returns the body as `description`, not `body` — a dedup that read only
-  // `body` would treat every existing ticket as a non-match and re-file forever.
-  it('dedupes on the description field JIRA actually returns', async () => {
+  it("scopes the label listing to the app's own project", async () => {
+    settings({ fileIssue: true });
+    await run();
+    expect(searchIssues.mock.calls[0][1]).toContain('project = "COM"');
+    expect(searchIssues.mock.calls[0][1]).toContain('labels = "goal-fidelity"');
+  });
+
+  // JIRA returns the body as `description`; the mapper normalizes it so the
+  // matcher has one shape to read.
+  it('dedupes on an existing ticket', async () => {
     settings({ fileIssue: true });
     searchIssues.mockResolvedValue([{ key: 'COM-4', summary: 't', description: `x ${MARKER}`, url: 'u' }]);
     const result = await run();
@@ -283,21 +298,12 @@ describe('runGoalFidelityFollowUp — JIRA', () => {
     expect(createTicket).not.toHaveBeenCalled();
   });
 
-  it("scopes the marker search to the app's own project", async () => {
-    settings({ fileIssue: true });
-    searchIssues.mockResolvedValue([]);
-    createTicket.mockResolvedValue({ success: true, ticketId: 'COM-13', url: 'u' });
-    await run();
-    expect(searchIssues.mock.calls[0][1]).toContain('project = "COM"');
-    expect(searchIssues.mock.calls[0][1]).toContain(MARKER);
-  });
-
-  it('refuses to file when the JIRA search failed', async () => {
+  it('refuses to file when the JIRA listing failed', async () => {
     settings({ fileIssue: true });
     searchIssues.mockRejectedValue(new Error('401'));
     const result = await run();
     expect(result.issue).toBeNull();
-    expect(result.issueError).toMatch(/could not read the JIRA project/);
+    expect(result.issueError).toMatch(/could not read/);
     expect(createTicket).not.toHaveBeenCalled();
   });
 
@@ -332,16 +338,16 @@ describe('runGoalFidelityFollowUp — unfilable trackers', () => {
     expect(result.issueError).toMatch(/no configured repository/);
   });
 
-  // A task with no `metadata.app` is PortOS's own work, which runs against the
-  // install root — the same fallback that picks its workspace.
-  it('falls back to the install root for a task with no app', async () => {
+  // PortOS's own tasks resolve to the REAL PortOS app record, not a fabricated
+  // one — the literal would drop `workTracker`, `forgeAccount` and `jira`, the
+  // three fields that decide which tracker the issue even lands on.
+  it("reads the real PortOS app record for a task with no app", async () => {
     settings({ fileIssue: true });
     execGh.mockResolvedValueOnce(ghRows([])).mockResolvedValueOnce('').mockResolvedValueOnce('u/1');
     await runGoalFidelityFollowUp({
       agentId: 'agent-1', task: { id: 't', taskType: 'user', description: 'Fix it' }, review: REVIEW,
     });
-    expect(getAppById).not.toHaveBeenCalled();
-    expect(resolveAppForgeTarget.mock.calls[0][0].repoPath).toBe('/portos');
+    expect(getAppById).toHaveBeenCalledWith('portos');
   });
 });
 
@@ -349,12 +355,21 @@ describe('runGoalFidelityFollowUp — the queued task', () => {
   it('queues through the shared investigation producer with the shared fingerprint', async () => {
     settings({ queueTask: true });
     const result = await run();
-    expect(result.task).toEqual({ id: 'cos-9' });
+    expect(result.task).toMatchObject({ id: 'cos-9', approvalRequired: false });
     const [args] = fileInvestigationTask.mock.calls[0];
     expect(args.fingerprint).toBe(FINGERPRINT);
     expect(args.affectedTasks).toEqual(['task-7']);
     expect(args.app).toBe('comics');
     expect(execGh).not.toHaveBeenCalled(); // no issue filing was asked for
+  });
+
+  // The loop policy can HOLD a follow-up for a human; reporting "queued" for a
+  // task nothing will pick up is the one wrong thing to say about it.
+  it('carries the producer approval verdict, so a held task is not reported as queued', async () => {
+    settings({ queueTask: true });
+    fileInvestigationTask.mockResolvedValue({ task: { id: 'cos-9' }, approvalRequired: true, loopReason: 'failure-storm' });
+    const result = await run();
+    expect(result.task.approvalRequired).toBe(true);
   });
 
   it('hands the filed issue to the queued task so it can claim it', async () => {
@@ -374,7 +389,7 @@ describe('runGoalFidelityFollowUp — the queued task', () => {
     execGh.mockResolvedValueOnce('not json');
     const result = await run();
     expect(result.issueError).toBeTruthy();
-    expect(result.task).toEqual({ id: 'cos-9' });
+    expect(result.task).toMatchObject({ id: 'cos-9' });
   });
 
   it('reports a suppressed queue rather than silently returning nothing', async () => {
