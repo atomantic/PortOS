@@ -8,6 +8,8 @@ vi.mock('../../services/api', () => ({
   getAuthStatus: vi.fn(),
   setAuthPassword: vi.fn(),
   clearAuthPassword: vi.fn(),
+  listAuthSessions: vi.fn(),
+  revokeAuthSession: vi.fn(),
 }));
 
 vi.mock('../ui/Toast', () => ({
@@ -30,6 +32,9 @@ const deferred = () => {
 describe('SecurityTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Most tests don't exercise the sessions panel — default to an empty list
+    // so the effect that fetches it doesn't reject unhandled in every test.
+    api.listAuthSessions.mockResolvedValue({ sessions: [] });
   });
 
   afterEach(() => {
@@ -96,6 +101,50 @@ describe('SecurityTab', () => {
     expect(screen.getByText('Change password')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     await waitFor(() => expect(api.getAuthStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows an agent session with a revoke button that does not touch the password form', async () => {
+    api.getAuthStatus.mockResolvedValue({ enabled: true });
+    api.listAuthSessions.mockResolvedValue({
+      sessions: [
+        { id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') },
+        { id: 'browser-1', label: null, expiresAt: Date.parse('2026-10-01T00:00:00Z') },
+      ],
+    });
+
+    render(<SecurityTab />);
+
+    expect(await screen.findByText('1 agent session')).toBeInTheDocument();
+    expect(screen.getByText(/Agent session, expires/)).toBeInTheDocument();
+    // Only the labeled agent session gets a row — not the caller's own browser session.
+    expect(screen.getAllByRole('button', { name: 'Revoke' })).toHaveLength(1);
+  });
+
+  it('revokes an agent session without signing the user out', async () => {
+    api.getAuthStatus.mockResolvedValue({ enabled: true });
+    api.listAuthSessions.mockResolvedValue({
+      sessions: [{ id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') }],
+    });
+    api.revokeAuthSession.mockResolvedValue({ ok: true });
+
+    render(<SecurityTab />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Revoke' }));
+
+    await waitFor(() => expect(api.revokeAuthSession).toHaveBeenCalledWith('agent-1'));
+    await waitFor(() => expect(screen.queryByText('1 agent session')).not.toBeInTheDocument());
+    // Revoking is scoped to that one session — the password form stays intact.
+    expect(screen.getByText('Login password enabled')).toBeInTheDocument();
+  });
+
+  it('hides the sessions panel when auth is disabled', async () => {
+    api.getAuthStatus.mockResolvedValue({ enabled: false });
+
+    render(<SecurityTab />);
+
+    expect(await screen.findByText('Login password disabled')).toBeInTheDocument();
+    expect(api.listAuthSessions).not.toHaveBeenCalled();
+    expect(screen.queryByText(/agent session/)).not.toBeInTheDocument();
   });
 
   it('ignores an obsolete failure when a newer StrictMode request succeeds', async () => {

@@ -21,3 +21,12 @@ export const clearAuthPassword = ({ currentPassword }) => request('/auth/passwor
   body: JSON.stringify({ currentPassword }),
   silent: true,
 });
+
+// Lists live sessions (label + expiresAt only) for Settings → Security.
+export const listAuthSessions = (options) => request('/auth/sessions', options);
+
+// Revokes one session by its opaque id — e.g. the agent's loopback
+// credential — without signing the caller's own browser session out.
+export const revokeAuthSession = (id) => request(`/auth/sessions/${encodeURIComponent(id)}`, {
+  method: 'DELETE',
+});
