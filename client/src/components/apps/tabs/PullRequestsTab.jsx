@@ -10,6 +10,7 @@ import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
 import useProviderModels from '../../../hooks/useProviderModels';
@@ -648,6 +649,13 @@ export default function PullRequestsTab({ appId, appName }) {
                       )}
                       {pullRequest.updatedAt && <span>updated {timeAgo(pullRequest.updatedAt)}</span>}
                     </div>
+
+                    {/* Advisory only — never gates the merge button beside it.
+                        Title alone: this listing carries no PR description,
+                        and branch names here are `claim/issue-N` /
+                        `cos/<task>/<agent>`, which would feed the code-side
+                        retrieval view pure noise rather than vocabulary. */}
+                    <ScopeAdherenceCheck appId={appId} kind="pr" title={pullRequest.title || ''} />
                   </div>
 
                   <div className="shrink-0 lg:pt-0.5 flex flex-wrap items-start gap-2">

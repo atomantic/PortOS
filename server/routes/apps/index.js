@@ -17,6 +17,7 @@
  *   documents  — planning-doc read/list/commit
  *   agents     — recent CoS agent history
  *   repositorySources — checkout origin/upstream status and fork synchronization
+ *   scopeAdherence — advisory PRD/GOALS alignment score for one issue or PR
  *
  * Route ordering is safe across sub-routers: every param route is either the
  * single-segment `/:id` or a deeper `/:id/...`, and the static routes
@@ -40,6 +41,7 @@ import documentRoutes from './documents.js';
 import agentRoutes from './agents.js';
 import spriteBindingRoutes from './spriteBindings.js';
 import repositorySourceRoutes from './repositorySources.js';
+import scopeAdherenceRoutes from './scopeAdherence.js';
 
 const router = Router();
 
@@ -56,5 +58,6 @@ router.use(documentRoutes);
 router.use(agentRoutes);
 router.use(spriteBindingRoutes);
 router.use(repositorySourceRoutes);
+router.use(scopeAdherenceRoutes);
 
 export default router;

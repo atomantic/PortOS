@@ -15,6 +15,7 @@ import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
 import useProviderModels from '../../../hooks/useProviderModels';
 import useClaimReviewers from '../../../hooks/useClaimReviewers';
 import ClaimReviewerSource from '../ClaimReviewerSource';
+import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
 import ReviewerPicker from '../../cos/ReviewerPicker';
 import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
 import { chipColors } from '../../../lib/chipContrast';
@@ -893,6 +894,15 @@ export default function IssuesTab({ appId, appName }) {
                     ) : (
                       <p className="text-xs text-gray-500 italic">No description.</p>
                     )}
+                    {/* Advisory only, and only under an expanded row: the
+                        reader has the description in front of them, so the
+                        clause the scorer cites is something they can check. */}
+                    <ScopeAdherenceCheck
+                      appId={appId}
+                      kind="issue"
+                      title={issue.title || ''}
+                      body={issue.body || ''}
+                    />
                   </div>
                 )}
               </div>

@@ -753,7 +753,19 @@ describe('deferred imports stay deferred (#6156)', () => {
 // module without already reaching `quotaWindows.js` through `quotaBurn.js`
 // pays one node for it. No subtree. Measured before 114,692, after 114,853;
 // restores the ~400 of headroom the recent entries carry.
-const MAX_STATIC_INSTANTIATIONS = 115300;
+// 115,300 → 115,900 (#7643 scope adherence): three new lib leaves
+// (`prdClauses.js`, `scopeAdherence.js`, `scopeAdherenceReasons.js`) and four
+// suites. The leaves are cheap and the barrel rows they add cost 3 in total —
+// `bm25.js`, `memoryQuery.js`, `textUtils.js`, `markdownText.js` and `jev.js`
+// are all already reachable from `lib/index.js`. The whole share is 196, and
+// 180 of it is `routes/apps/scopeAdherence.test.js` alone, which is what ANY
+// route test using `validateRequest` costs (express + the route + the
+// validation barrel): its siblings in that directory run 93 to 600, so it sits
+// mid-pack. `services/scopeAdherence.test.js` costs 1, because the service
+// reaches `jevRouter.js`, `untrustedContent.js` and `jev.js` only through
+// `await import()`. Measured before 115,283, after 115,479; restores the ~400
+// of headroom the recent entries carry — main had eroded to 17.
+const MAX_STATIC_INSTANTIATIONS = 115900;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

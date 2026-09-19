@@ -20,7 +20,13 @@ describe('shipped jev decisions', () => {
       const decision = JEV_DECISIONS[id];
       expect(isValidJevDecision(decision), id).toBe(true);
       expect(decision.options.length, id).toBeLessThanOrEqual(JEV_MAX_HYPOTHESES);
-      expect(UNTRUSTED_CONTENT_SOURCES, id).toContain(decision.source);
+      // `source` is the ingress CHANNEL, and `null` for a decision that has
+      // none (see the field's note in jevDecisions.js). A channel-free
+      // decision must say so with an explicit null rather than by omitting the
+      // key, or a typo'd channel would read as "not a channel" and skip this
+      // guard entirely.
+      expect(Object.hasOwn(decision, 'source'), id).toBe(true);
+      if (decision.source !== null) expect(UNTRUSTED_CONTENT_SOURCES, id).toContain(decision.source);
       expect(typeof decision.label, id).toBe('string');
     }
     expect(isValidJevDecision({ minMargin: 0.2, options: [{ value: 'a', hypothesis: 'a'.repeat(JEV_MAX_HYPOTHESIS_CHARS + 1) }, { value: 'b', hypothesis: 'b' }] })).toBe(false);
@@ -74,6 +80,7 @@ describe('shipped jev decisions', () => {
       'message-triage': z.enum(['reply', 'archive', 'delete', 'review']),
       'message-priority': z.enum(['high', 'medium', 'low']),
       'forge-maintenance-disposition': z.enum(['inspect-trusted-change', 'defer']),
+      'scope-adherence': z.enum(['aligned', 'unrelated', 'contradicts']),
     };
     expect(Object.keys(enums).sort()).toEqual([...JEV_DECISION_IDS].sort());
     for (const [id, contract] of Object.entries(enums)) {
