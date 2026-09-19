@@ -11,6 +11,8 @@ vi.mock('../../../services/api', () => ({
   getGitDiff: vi.fn(),
   cleanupMergedBranches: vi.fn(),
   resetToDefaultBranch: vi.fn(),
+  createSlashdoTask: vi.fn(),
+  forceCosEvaluate: vi.fn(),
 }));
 vi.mock('./RepositorySourcePanel', () => ({
   default: ({ appId, refreshKey }) => (
@@ -45,6 +47,8 @@ beforeEach(() => {
   api.getGitDiff.mockResolvedValue({ diff: '@@ -1 +1 @@\n-old\n+new' });
   api.cleanupMergedBranches.mockResolvedValue({ deleted: [], skipped: [] });
   api.resetToDefaultBranch.mockResolvedValue({ success: true, branch: 'main', previousBranch: 'main', previousHead: 'b'.repeat(40), head: 'a'.repeat(40), discardedFiles: 1, fetched: true });
+  api.createSlashdoTask.mockResolvedValue({ id: 'task-pr-1' });
+  api.forceCosEvaluate.mockResolvedValue({ success: true });
 });
 
 afterEach(() => {
@@ -53,6 +57,22 @@ afterEach(() => {
 });
 
 describe('GitTab managed repository sources', () => {
+  it('queues an agent to deliver current work through a reviewed pull request', async () => {
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open PR with agent' }));
+
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+      'push',
+      'app-example',
+      expect.objectContaining({
+        prCompletion: 'review-then-merge',
+        overrideContext: expect.stringContaining('uncommitted changes'),
+      }),
+      { silent: true },
+    ));
+  });
+
   it('shows repository topology for every managed app', async () => {
     const { rerender } = render(
       <GitTab
