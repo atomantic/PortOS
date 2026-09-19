@@ -12,7 +12,10 @@
 export const AGENT_API_TOKEN_ENV = 'PORTOS_API_TOKEN';
 
 /**
- * Attached to every agent-facing `curl` against this install's own API.
+ * Attached to every agent-facing `curl` against this install's own API. It is
+ * SHELL text, not a value: `${VAR:-}` is parameter expansion, so it is only
+ * meaningful inside a command a shell runs — never pass it to an HTTP client
+ * as a header string.
  *
  * Emitted unconditionally: a prompt is built without asking whether the
  * instance password is set, an install with auth OFF ignores the empty bearer
