@@ -375,6 +375,9 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     description: shape.description,
     app,
     prompt: shape.prompt,
+    // Preserve the assembled claim body in the explicit durable slot too.
+    // This keeps issue-page guidance attached if intake mapping changes.
+    ...(shape.prompt ? { metadata: { prompt: shape.prompt } } : {}),
     slashdoCommand: shape.slashdoCommand,
     ...shape.taskMetadata,
     provider, model, effort,
