@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   listUserActions: vi.fn(),
   fileIssue: vi.fn(),
   listIssues: vi.fn(),
+  adoptFoundation: vi.fn(),
+  getFoundationByRef: vi.fn(),
   listFoundations: vi.fn(),
   promoteFoundation: vi.fn(),
   recordFoundation: vi.fn(),
@@ -71,6 +73,8 @@ vi.mock('./eidoverseWorld.js', () => ({
   sayInEidoverseWorld: (...args) => mocks.worldSay(...args),
 }));
 vi.mock('./eidoverseFoundationLedger.js', () => ({
+  adoptEidoverseFoundation: (...args) => mocks.adoptFoundation(...args),
+  getEidoverseFoundationByRef: (...args) => mocks.getFoundationByRef(...args),
   listEidoverseFoundations: (...args) => mocks.listFoundations(...args),
   promoteEidoverseFoundation: (...args) => mocks.promoteFoundation(...args),
   recordEidoverseFoundation: (...args) => mocks.recordFoundation(...args),
@@ -189,6 +193,66 @@ describe('cosToolRegistry', () => {
     );
   });
 
+  // The gap #7626 closed: the list projection omits every body, and before the
+  // read-one tool existed there was no other way for a mind to obtain one — so
+  // a peer's contribution was legible to the human in the panel and
+  // structurally unobtainable by every Mind on the install that inherited it.
+  it('keeps bodies out of the foundation LIST and returns one on the read-one tool', async () => {
+    const authority = { scope: 'mind', capabilities: { manageEidoverse: true } };
+    const inherited = {
+      id: 'tide-beacon', layer: 'baseline', kind: 'controller', title: 'Tide Beacon', summary: 'Pulses between wakes.',
+      body: { controller: { definitionId: 'ambient-beacon', config: { label: 'harbor' } } },
+      disclosure: { requires: [], effects: ['speaks a pulse'], license: null, notes: null },
+      style: { motif: 'weathered brass' },
+      inheritance: { type: 'inherited-from', originInstanceId: 'instance-aaaa', foundationId: 'tide-beacon', fingerprint: 'a'.repeat(64), packagedAt: '2026-03-01T01:00:00.000Z', sourceInstanceId: 'instance-peer-one', inheritedAt: '2026-03-02T00:00:00.000Z' },
+    };
+
+    mocks.listFoundations.mockResolvedValue({ counts: { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }, foundations: [inherited] });
+    const listed = await executeCosToolCall({ call: { requestId: 'list-1', name: 'eidoverse.foundations', arguments: {} }, authority });
+    // Kilobytes of substance per entry, riding into every turn that asks what
+    // exists here, to answer a question about ids.
+    expect(listed.result.foundations[0].body).toBeUndefined();
+    expect(JSON.stringify(listed.result)).not.toContain('ambient-beacon');
+
+    mocks.getFoundationByRef.mockResolvedValue(inherited);
+    const read = await executeCosToolCall({
+      call: { requestId: 'read-1', name: 'eidoverse.foundation', arguments: { id: 'tide-beacon', originInstanceId: 'instance-aaaa' } },
+      authority,
+    });
+
+    expect(mocks.getFoundationByRef).toHaveBeenCalledWith({ id: 'tide-beacon', originInstanceId: 'instance-aaaa' });
+    expect(read.result.foundation).toMatchObject({
+      id: 'tide-beacon',
+      body: { controller: { definitionId: 'ambient-beacon', config: { label: 'harbor' } } },
+      disclosure: { effects: ['speaks a pulse'] },
+    });
+    // This install's cosmetics stay local in BOTH projections.
+    expect(JSON.stringify(read.result)).not.toContain('weathered brass');
+  });
+
+  it('gates adopting a peer\'s controller on the controller-install grant, not the world grant alone', async () => {
+    const call = { requestId: 'adopt-1', name: 'eidoverse.adopt', arguments: { id: 'tide-beacon', originInstanceId: 'instance-aaaa' } };
+    // Adopting stands a peer's contribution up as something that RUNS here, so
+    // it is at least as consequential as installing a shipped controller and
+    // carries the same grant on top of manageEidoverse.
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageEidoverse: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+
+    const granted = { scope: 'mind', capabilities: { manageEidoverse: true, installEidoverseControllers: true } };
+    mocks.adoptFoundation.mockResolvedValue({
+      outcome: 'adopted', reasons: [],
+      install: { id: 'tide-beacon', controllerId: 'ambient-beacon', armed: false, deliverEffects: false, state: { ticks: 0 }, derivedFrom: { type: 'derived-from', originInstanceId: 'instance-aaaa', foundationId: 'tide-beacon', fingerprint: 'a'.repeat(64), derivedAt: '2026-03-02T00:00:00.000Z' } },
+    });
+
+    const result = await executeCosToolCall({ call, authority: granted });
+
+    expect(mocks.adoptFoundation).toHaveBeenCalledWith({ id: 'tide-beacon', originInstanceId: 'instance-aaaa' }, { installedBy: 'mind' });
+    expect(result.result).toMatchObject({ outcome: 'adopted', install: { armed: false, deliverEffects: false } });
+    // The edge is what makes adoption the attribution-keeping re-use path, so
+    // it has to survive the prompt-shaped projection.
+    expect(result.result.install.derivedFrom).toMatchObject({ originInstanceId: 'instance-aaaa' });
+  });
+
   it('lists registered resilience-assay contributions and the creative catalog', async () => {
     mocks.listContributions.mockResolvedValue(['beacon-relay']);
     const contributions = await executeCosToolCall({
@@ -284,8 +348,10 @@ describe('cosToolRegistry', () => {
       'eidoverse.visit-chat',
       'eidoverse.leave',
       'eidoverse.foundations',
+      'eidoverse.foundation',
       'eidoverse.contributions',
       'eidoverse.record',
+      'eidoverse.adopt',
       'eidoverse.promote',
       'eidoverse.creative-catalog',
       'eidoverse.place-layout',

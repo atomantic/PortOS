@@ -38,7 +38,7 @@ import {
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
-import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
+import { detailFoundation, eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, eidoverseFoundationTargetSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
 import { eidoverseControllerArmSchema, eidoverseControllerIdParamSchema, eidoverseControllerInstallSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
 import {
   buildDistrictTemplateAugmentOperations,
@@ -433,8 +433,10 @@ const eidoverseTravelTools = [
 // foundations exist and why one is refused can only guess at ids.
 const eidoverseFoundationTools = [
   ['foundations', 'List the world foundations this install authored or inherited from a peer — ownership layer (`vernacular` = local, `baseline` = promoted or an inherited copy), the recorded agent-free assay outcome, whether a gated promote candidate currently exists, provenance (opaque instance id and author kind, never a display name), any `inheritance` edge back to the peer it was pulled from, and the derived `lineage` (authored/inherited → assayed → packaged → promoted). Local style is never included.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['foundation', 'Read ONE foundation in full — everything eidoverse.foundations lists for it plus the `body` (the substance itself) and the author\'s `disclosure`. This is how you obtain what a peer actually contributed: the list deliberately omits every body, so pick an id there and read the one you are considering here. Name an INHERITED copy with `originInstanceId` from its `inheritance` edge; omit it for a foundation this install authored. Local style is never included.', eidoverseFoundationTargetSchema, ['manageEidoverse'], 'read'],
   ['contributions', 'List the resilience-assay contributions registered on this install — the ids a foundation\'s `contributionId` may bind to before it is promotable.', z.object({}).strict(), ['manageEidoverse'], 'read'],
   ['record', 'Record (or re-author) a local vernacular foundation — a durable, promotable creative build (a `schema`, `affordance`, `controller`, or `district-template`). It always lands on this install\'s local `vernacular` layer; the layer is not accepted from you and nothing crosses to a peer until eidoverse.promote is called separately. Use eidoverse.creative-catalog for material/motif/layout ids and eidoverse.contributions for a valid `contributionId` first. `style` (palette, motif, aliases) stays local forever; a cosmetic key found inside `body` refuses the write instead of being silently dropped. To build on a foundation this install inherited from a peer, pass `derivedFrom: { originInstanceId, foundationId }` naming it: an identical body with no such edge is refused rather than recorded as this install\'s own work.', eidoverseFoundationInputSchema, ['manageEidoverse'], 'write'],
+  ['adopt', 'Stand an INHERITED foundation up so it actually runs on this install, keeping a `derived-from` edge back to the peer that authored it. Only a `controller` foundation is adoptable today: it installs the SHIPPED controller its body names, DISARMED and not delivering effects, so arming it is a separate act you or your human take afterwards. A `schema`, `affordance`, or `district-template` foundation is refused by name — nothing here interprets one yet. A refusal is a result, not an error: read `reasons` and never narrate a refused adopt as done. Adopting is also the only re-use path that KEEPS attribution; re-typing a peer\'s body through eidoverse.record is refused as republishing their work as your own.', eidoverseFoundationTargetSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
   ['promote', 'Offer one local foundation to the shared PortOS baseline population. The server re-runs the agent-free resilience assay and every promote gate itself, so this is a REQUEST, not an assertion: the result is `outcome: "promoted"` only when it published. Any other outcome means nothing moved — read `reasons` and fix those before asking again, and never narrate a refused promote as done.', eidoverseFoundationIdParamSchema, ['manageEidoverse', 'promoteEidoverseFoundations'], 'write'],
 ].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
   type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
@@ -998,6 +1000,18 @@ const executeAdapter = async (tool, args, context, authority) => {
     if (tool.adapter.operation === 'foundations') {
       const listed = await ledger.listEidoverseFoundations();
       return { counts: listed.counts, foundations: listed.foundations.map(summarizeFoundation) };
+    }
+    if (tool.adapter.operation === 'foundation') {
+      // `detailFoundation`, not the list projection: the body is exactly what
+      // a mind needs once it has chosen which foundation to look at, and
+      // exactly what must not ride into every turn that lists them.
+      const record = await ledger.getEidoverseFoundationByRef(args);
+      return { foundation: detailFoundation(record) };
+    }
+    if (tool.adapter.operation === 'adopt') {
+      const { summarizeControllerInstall } = await import('./eidoverseControllerRuntime.js');
+      const result = await ledger.adoptEidoverseFoundation(args, { installedBy: 'mind' });
+      return { ...result, install: result.install ? summarizeControllerInstall(result.install) : null };
     }
     if (tool.adapter.operation === 'contributions') {
       const { listRegisteredContributionIds } = await import('./eidoverseResilienceContributions.js');

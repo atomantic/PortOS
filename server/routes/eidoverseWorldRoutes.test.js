@@ -10,9 +10,10 @@ const mocks = vi.hoisted(() => ({
   promoteFoundation: vi.fn(),
   listContributions: vi.fn(),
   recordFoundation: vi.fn(),
-  getFoundation: vi.fn(),
   withdrawFoundation: vi.fn(),
   deleteFoundation: vi.fn(),
+  getFoundationByRef: vi.fn(),
+  adoptFoundation: vi.fn(),
   ensurePresence: vi.fn(),
   getProjectionStatus: vi.fn(),
   getStatus: vi.fn(),
@@ -39,7 +40,8 @@ vi.mock('../services/eidoverseWorld.js', () => ({
 }));
 
 vi.mock('../services/eidoverseFoundationLedger.js', () => ({
-  getEidoverseFoundation: mocks.getFoundation,
+  adoptEidoverseFoundation: mocks.adoptFoundation,
+  getEidoverseFoundationByRef: mocks.getFoundationByRef,
   listEidoverseFoundations: mocks.listFoundations,
   packageEidoverseFoundationCandidate: mocks.packageCandidate,
   promoteEidoverseFoundation: mocks.promoteFoundation,
@@ -236,7 +238,7 @@ describe('Eidoverse world routes', () => {
   it('404s a promote or read for a foundation this install never authored', async () => {
     mocks.packageCandidate.mockResolvedValue({ outcome: 'unknown-foundation', candidate: null, assay: null, reasons: ['no foundation'], findings: [] });
     mocks.promoteFoundation.mockResolvedValue({ outcome: 'unknown-foundation', promoted: false, foundation: null, candidate: null, assay: null, reasons: ['no foundation'], findings: [] });
-    mocks.getFoundation.mockResolvedValue(null);
+    mocks.getFoundationByRef.mockResolvedValue(null);
 
     expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/candidate')).status).toBe(404);
     expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/promote')).status).toBe(404);
@@ -299,15 +301,44 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
     expect(mocks.deleteFoundation).not.toHaveBeenCalled();
   });
 
+  // Before #7626 this route validated a bare slug, so a `peer:<origin>:<id>`
+  // ledger key was literally inexpressible and an inherited foundation was
+  // unreachable by every read-one caller — including every mind surface built
+  // on the service beneath it.
+  it('addresses an inherited copy by origin and a locally-authored one by a bare id', async () => {
+    mocks.getFoundationByRef.mockResolvedValue({ id: 'tide-beacon', layer: 'baseline' });
+
+    await request(makeApp()).get('/api/eidoverse/world/foundations/tide-beacon?originInstanceId=instance-aaaa');
+    expect(mocks.getFoundationByRef).toHaveBeenCalledWith({ id: 'tide-beacon', originInstanceId: 'instance-aaaa' });
+
+    await request(makeApp()).get('/api/eidoverse/world/foundations/tide-beacon');
+    // `null`, never "whichever one matches": a read that silently falls back
+    // to a peer's copy is how an adopt lands on the wrong record.
+    expect(mocks.getFoundationByRef).toHaveBeenLastCalledWith({ id: 'tide-beacon', originInstanceId: null });
+  });
+
+  it('returns an adopt refusal as a verdict and a missing foundation as a 404', async () => {
+    mocks.adoptFoundation.mockResolvedValue({ outcome: 'refused', install: null, reasons: ['district-template adoption needs the layout replay path'] });
+
+    const refusal = await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/adopt?originInstanceId=instance-aaaa');
+
+    expect(refusal.status).toBe(200);
+    expect(refusal.body).toMatchObject({ outcome: 'refused', install: null });
+    expect(mocks.adoptFoundation).toHaveBeenCalledWith({ id: 'tide-beacon', originInstanceId: 'instance-aaaa' }, { installedBy: 'user' });
+
+    mocks.adoptFoundation.mockResolvedValue({ outcome: 'unknown-foundation', install: null, reasons: ['no foundation'] });
+    expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/adopt')).status).toBe(404);
+  });
+
   it('serves the registered assay contributions on their own path, where no foundation id can shadow them', async () => {
     mocks.listContributions.mockResolvedValue(['beacon-relay-demo']);
-    mocks.getFoundation.mockResolvedValue(null);
+    mocks.getFoundationByRef.mockResolvedValue(null);
 
     const response = await request(makeApp()).get('/api/eidoverse/world/contributions');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ contributions: ['beacon-relay-demo'] });
-    expect(mocks.getFoundation).not.toHaveBeenCalled();
+    expect(mocks.getFoundationByRef).not.toHaveBeenCalled();
   });
 
   // --- Controllers: the install surface beside the mind tool (#7488) -------

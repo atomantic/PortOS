@@ -840,11 +840,14 @@ and the mind tools' `summarizeFoundation()` projection carries `provenance`,
 `inheritance`, and `lineage` too — the same identity fields a candidate
 envelope was already authorized to carry, now surfaced consistently
 everywhere a foundation is read. `GET /api/eidoverse/world/foundations/:id`
-only reaches a locally-authored (plain-id) record: an inherited copy lives
-under a separate ledger key precisely so it can share a human-readable id
-with a local vernacular foundation without colliding, which also means a
-single bare id cannot disambiguate the two — the list endpoint is the
-provenance query surface for an inherited entry.
+names a locally-authored record by its plain id and an inherited copy by
+`?originInstanceId=<origin>` (#7626): an inherited copy lives under a
+separate ledger key precisely so it can share a human-readable id with a
+local vernacular foundation without colliding, so the ORIGIN is what
+disambiguates the two. The `peer:<origin>:<id>` storage key itself stays
+internal and is never typed by a caller — `{ id, originInstanceId }` is the
+grammar (`eidoverseFoundationTargetSchema`), and `foundationLedgerKey()` is the
+one place it becomes a key.
 
 **`recordEidoverseFoundationInheritance()`** (`eidoverseFoundationLedger.js`)
 is the accept-side of a peer pull: given an already-verified candidate
@@ -866,6 +869,53 @@ both simply coexist in the listing. An inherited foundation can never be
 re-promoted from this install (`packageFoundationCandidate` refuses it by
 name): promotion publishes only what this install itself authored, never a
 relay of another install's work.
+
+### Reading and adopting an inherited foundation (#7626)
+
+Inheriting a peer's foundation used to store a row and nothing more: no
+runtime on either install read a foundation's `body`, so the only way to use
+what a peer contributed was a human reading raw JSON out of the Foundations
+panel and retyping it — the "go read the author's transcript" path this whole
+area exists to replace, and one that keeps no attribution. Two verbs close
+that.
+
+**Read one.** `eidoverse.foundation` (mind tool, `manageEidoverse`, read) and
+`GET /api/eidoverse/world/foundations/:id` return `detailFoundation()` — every
+field `summarizeFoundation()` carries, plus `body` and `disclosure`. The LIST
+projection still omits both, deliberately: a list of whole bodies is kilobytes
+of substance per entry riding into a prompt to answer a question about ids,
+and which body to read is a decision made after the list. `style` is omitted
+in both — it is this install's cosmetics and never leaves.
+
+**Adopt.** `eidoverse.adopt` (mind tool, `manageEidoverse` **and**
+`installEidoverseControllers`) and `POST
+/api/eidoverse/world/foundations/:id/adopt` stand an INHERITED foundation up
+as something that runs here. `planFoundationAdoption()` decides per kind:
+
+| kind | what adopting does |
+| --- | --- |
+| `controller` | Installs the SHIPPED controller `body.controller.definitionId` names, with the envelope's `config`, **disarmed** and with `deliverEffects: false`. |
+| `district-template` | **Refused** — nothing turns a template body into geometry yet (#7627). |
+| `schema`, `affordance` | **Refused by name** — a declaration with no interpreter here is not adoptable, and saying so is the honest answer. |
+
+A locally-authored foundation is refused too: its author already has every way
+to install it, and adoption is specifically the path for a peer's work.
+
+Adopting a controller can never execute a peer's bytes. The envelope names
+*which of this install's own shipped controllers* to run and with what
+settings; `installEidoverseController()` resolves that id against the fixed
+local registry, exactly as an ordinary install does. The result lands disarmed
+and silent, so arming it and letting it speak or build in the world stay
+separate, local decisions rather than consequences of one tool call.
+
+The resulting controller install carries a `derived-from` edge — origin
+instance, foundation id, envelope fingerprint — in the same shape a derived
+foundation uses. That edge SURVIVES a later re-install (it is preserved
+alongside `installedBy` / `installedAt`), which is what makes adoption the
+provenance-keeping way to re-use a peer's contribution as against retyping the
+body, which keeps nothing and is refused as republishing (#7631). An adopt
+whose install id is already taken by a controller derived from something else
+is refused rather than overwriting a controller already running here.
 
 ### The peer pull/inherit transport (#7455)
 

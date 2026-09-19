@@ -168,6 +168,7 @@ export async function installEidoverseController(input, {
   installedBy = 'user',
   now = new Date().toISOString(),
   resolveDefinition = findControllerDefinitionById,
+  derivedFrom = null,
 } = {}) {
   const parsed = eidoverseControllerInstallSchema.safeParse(input);
   if (!parsed.success) return refused(parsed.error.issues.map((issue) => `${issue.path.join('.') || 'input'}: ${issue.message}`));
@@ -214,6 +215,15 @@ export async function installEidoverseController(input, {
       // disarmed for, so the author is not left looking at a stopped controller
       // with no explanation. Re-arming answers the reason, so it clears it.
       disarmedReason: armed ? null : (existing?.disarmedReason ?? null),
+      // Attribution outlives a re-install, the same way `installedBy` and
+      // `installedAt` do (#7626). An adopted controller that somebody later
+      // re-installs by hand — to change its cadence, to re-arm it — is still
+      // the peer's contribution standing in this world, and an edge that
+      // vanished on the first ordinary edit would make erasing provenance the
+      // path of least effort all over again. A fresh `derivedFrom` (a
+      // re-adopt) wins over the stored one; an ordinary install passes none
+      // and inherits whatever the record already carried.
+      derivedFrom: derivedFrom ?? existing?.derivedFrom ?? null,
     };
     installs[authored.id] = record;
     await writeInstalls(installs, storeSchemaVersion);

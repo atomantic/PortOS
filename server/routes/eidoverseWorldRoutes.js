@@ -26,8 +26,9 @@ import {
   eidoverseControllerInstallSchema,
 } from '../lib/eidoverseControllers.js';
 import {
+  adoptEidoverseFoundation,
   deleteEidoverseFoundation,
-  getEidoverseFoundation,
+  getEidoverseFoundationByRef,
   listEidoverseFoundations,
   packageEidoverseFoundationCandidate,
   promoteEidoverseFoundation,
@@ -187,18 +188,33 @@ router.delete('/foundations/:id', asyncHandler(async (req, res) => {
   res.json({ success: true, ...result });
 }));
 
-// GET /api/eidoverse/world/foundations/:id — one foundation record, looked
-// up by its plain (locally-authored) id. An inherited local copy of a peer's
-// foundation lives under a separate `peer:<originInstanceId>:<foundationId>`
-// ledger key (#7461) and is reachable only through the LIST endpoint above —
-// deliberately: two records can legitimately share the same human-readable
-// `id` (a local vernacular one and an inherited one), and this route has no
-// way to disambiguate which one a bare id means.
+// GET /api/eidoverse/world/foundations/:id — one foundation record.
+//
+// A bare `:id` names what this install AUTHORED. An inherited local copy of a
+// peer's foundation lives under a separate `peer:<originInstanceId>:<id>`
+// ledger key (#7461), and `?originInstanceId=` is what addresses it (#7626) —
+// two records can legitimately share one human-readable id, so the origin is
+// the disambiguator rather than a widened id that would make the internal
+// `peer:` namespace user-typeable.
 router.get('/foundations/:id', asyncHandler(async (req, res) => {
-  const { id } = validateRequest(eidoverseFoundationIdParamSchema, req.params || {});
-  const foundation = await getEidoverseFoundation(id);
+  const ref = validateRequest(eidoverseFoundationTargetSchema, { id: req.params.id, ...(req.query.originInstanceId ? { originInstanceId: req.query.originInstanceId } : {}) });
+  const foundation = await getEidoverseFoundationByRef(ref);
   if (!foundation) throw new ServerError('Foundation not found', { status: 404 });
   res.json(foundation);
+}));
+
+// POST /api/eidoverse/world/foundations/:id/adopt — stand an INHERITED
+// foundation's body up as something that actually runs here (#7626), carrying
+// a `derived-from` edge back to its origin. Takes the same
+// `?originInstanceId=` ref as the read above, because only an inherited record
+// is adoptable at all. Like every other gate in this group a refusal is a 200
+// carrying its reasons — "this kind has no interpreter here" is the honest
+// answer, not a request error.
+router.post('/foundations/:id/adopt', asyncHandler(async (req, res) => {
+  const ref = validateRequest(eidoverseFoundationTargetSchema, { id: req.params.id, ...(req.query.originInstanceId ? { originInstanceId: req.query.originInstanceId } : {}) });
+  const result = await adoptEidoverseFoundation(ref, { installedBy: 'user' });
+  if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
+  res.json({ ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null });
 }));
 
 // --- Controllers: the executable world-controller install surface (#7456,

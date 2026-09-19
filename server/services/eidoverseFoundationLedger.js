@@ -62,9 +62,11 @@ import {
   assayEvidenceFromVerdict,
   eidoverseFoundationInputSchema,
   foundationFromInheritedCandidate,
+  foundationLedgerKey,
   foundationLineage,
   inheritedFoundationStorageKey,
   packageFoundationCandidate,
+  planFoundationAdoption,
   resolveFoundationDerivation,
   verifyFoundationCandidate,
 } from '../lib/eidoverseFoundations.js';
@@ -239,6 +241,88 @@ export async function listPromotedFoundationCandidates() {
 export async function getEidoverseFoundation(id) {
   const found = (await readFoundations())[id] || null;
   return found ? { ...found, lineage: foundationLineage(found) } : null;
+}
+
+/**
+ * One foundation by REFERENCE — `{ id, originInstanceId }` — which is the only
+ * way an inherited copy of a peer's foundation is addressable (#7626).
+ *
+ * `getEidoverseFoundation(id)` above reaches exactly the records this install
+ * AUTHORED, because a plain id is the ledger key for those and only those. A
+ * local copy of a peer's foundation lives under
+ * `inheritedFoundationStorageKey()`'s disjoint `peer:` namespace, so until
+ * this existed every read-one caller — the HTTP route, and therefore every
+ * mind surface built on it — could reach a local record and nothing else. The
+ * list endpoint returned whole records, so a HUMAN could read an inherited
+ * body in the panel while a Mind on the same install could not obtain it at
+ * all.
+ *
+ * Deliberately NOT a widening of the id: `originInstanceId` is its own field,
+ * and `null` means "the record authored here", never "whichever matches".
+ */
+export async function getEidoverseFoundationByRef(ref) {
+  return getEidoverseFoundation(foundationLedgerKey(ref));
+}
+
+/**
+ * ADOPT a foundation this install inherited from a peer — stand its `body` up
+ * as something that actually runs here, carrying a `derived-from` edge back to
+ * the origin (#7626).
+ *
+ * This is the verb epic #7453's success signal ("a mind uses what another mind
+ * left") always needed and never had. Inheriting stored a row: no runtime on
+ * either install read a foundation's `body`, so the only way to use a peer's
+ * contribution was a human reading raw JSON out of the Foundations panel and
+ * retyping it — which is precisely the "go read the author's transcript" path
+ * the epic set out to replace, and which keeps no attribution at all.
+ *
+ * What adoption does is decided per KIND by `planFoundationAdoption()`, and a
+ * kind with no interpreter here is REFUSED BY NAME rather than silently
+ * "adopted" into nothing. Only `controller` is adoptable today, and even then
+ * the peer names WHICH SHIPPED CONTROLLER to run, never code: `definitionId` is
+ * resolved against this install's own fixed registry by
+ * `installEidoverseController()`, so adopting can never execute a peer's
+ * bytes. The install lands DISARMED with `deliverEffects: false` — arming a
+ * peer's controller and letting it speak in the world stay separate, local
+ * decisions.
+ *
+ * A refusal is a RESULT with its reasons, the shape every other gate in this
+ * module uses.
+ *
+ * @returns {Promise<{ outcome: 'adopted'|'refused'|'unknown-foundation', install: object|null, reasons: string[] }>}
+ */
+export async function adoptEidoverseFoundation(ref, { installedBy = 'user' } = {}) {
+  const key = foundationLedgerKey(ref);
+  const record = await getEidoverseFoundation(key);
+  if (!record) return { outcome: 'unknown-foundation', install: null, reasons: [`no foundation is recorded under "${key}"`] };
+
+  const planned = planFoundationAdoption(record);
+  if (planned.outcome !== 'plan') return { outcome: 'refused', install: null, reasons: planned.reasons };
+
+  const { getEidoverseControllerInstall, installEidoverseController } = await import('./eidoverseControllerRuntime.js');
+
+  // The install id is the foundation's own id, so re-adopting the same
+  // foundation updates one install instead of accumulating copies. That makes
+  // it possible for the id to name a controller this install already stood up
+  // for some OTHER reason, and installing over it would silently retarget a
+  // running controller at a peer's config. Refuse that by name; only an
+  // install already derived from this same foundation is re-adoptable.
+  const occupant = await getEidoverseControllerInstall(planned.plan.install.id);
+  const sameSource = occupant?.derivedFrom
+    && occupant.derivedFrom.originInstanceId === planned.plan.derivedFrom.originInstanceId
+    && occupant.derivedFrom.foundationId === planned.plan.derivedFrom.foundationId;
+  if (occupant && !sameSource) {
+    return {
+      outcome: 'refused',
+      install: null,
+      reasons: [`a controller is already installed under "${planned.plan.install.id}" and was not adopted from this foundation — retire it first rather than letting an adopt overwrite a controller already running here`],
+    };
+  }
+
+  const result = await installEidoverseController(planned.plan.install, { installedBy, derivedFrom: planned.plan.derivedFrom });
+  if (result.outcome !== 'installed') return { outcome: 'refused', install: null, reasons: result.reasons };
+  console.log(`🧬 Eidoverse: adopted foundation "${record.id}" from origin ${planned.plan.derivedFrom.originInstanceId} as disarmed controller "${result.install.id}"`);
+  return { outcome: 'adopted', install: result.install, reasons: [] };
 }
 
 /**
