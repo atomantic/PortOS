@@ -35,6 +35,7 @@ import { startMemoRecording, arrayBufferToBase64 } from '../lib/audioRecorder';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
+import { threadRefLabel, threadRefUrl } from '../lib/threadRefKinds.js';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
@@ -52,29 +53,14 @@ import { timeAgo, formatDateTime } from '../utils/formatters';
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
 // where `kind` is 'text' (single line) or 'textarea' (multi-line).
 
-// Map a refKind onto a click-through route. Returns null for kinds we don't
-// know how to deep-link to, so callers can render the chip without a link.
-function refPath(refKind, refId) {
-  if (!refId) return null;
-  switch (refKind) {
-    case 'universe':       return `/universes/${encodeURIComponent(refId)}`;
-    case 'series':         return `/pipeline/series/${encodeURIComponent(refId)}`;
-    case 'issue':          return `/pipeline/issues/${encodeURIComponent(refId)}/concept`;
-    case 'creative-director': return `/creative-director/${encodeURIComponent(refId)}/overview`;
-    case 'writers-room':
-    case 'writersRoom':    return '/writers-room';
-    default:               return null;
-  }
-}
-
-function REFKIND_LABEL(kind) {
-  if (kind === 'universe')   return 'Universes';
-  if (kind === 'series')     return 'Series';
-  if (kind === 'issue')      return 'Issues';
-  if (kind === 'creative-director') return 'Creative Director';
-  if (kind === 'writers-room' || kind === 'writersRoom') return "Writers' Room";
-  return kind;
-}
+// Ref chips deep-link through the SHARED kind→route registry
+// (`client/src/lib/threadRefKinds.js`, a re-export of the server leaf), not a
+// switch local to this page — one table, so a kind added for a Brain thread and
+// a kind stored on a catalog ingredient can never disagree about where it goes
+// (#7664). Same contract this page always had: `threadRefUrl` returns null for a
+// kind we can't deep-link (the chip renders unlinked) and `threadRefLabel` falls
+// back to the raw kind, so a ref synced from a newer peer still renders. The
+// legacy `writersRoom` spelling is aliased inside the registry.
 
 // Build the image-generation prompt source from the (live, editable) payload:
 // the type's primary content field first, then a curated set of *visual*
@@ -1502,11 +1488,11 @@ function RefsPanel({ refsByKind }) {
           {kinds.map((kind) => (
             <div key={kind}>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">
-                {REFKIND_LABEL(kind)}
+                {threadRefLabel(kind)}
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {refsByKind[kind].map((r, i) => {
-                  const path = refPath(kind, r.refId);
+                  const path = threadRefUrl(kind, r.refId);
                   const label = r.refName || r.refId || '(unnamed)';
                   const role = r.role ? ` · ${r.role}` : '';
                   const chip = (

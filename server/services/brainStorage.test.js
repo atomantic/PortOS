@@ -370,6 +370,42 @@ describe('songs entity enrollment (SongBook)', () => {
   });
 });
 
+describe('threads entity enrollment (bullet journal open loops, #7664)', () => {
+  it('lists threads in BRAIN_ENTITY_TYPES so sync/GC/backfill all cover it', () => {
+    // Membership is the WHOLE wiring: the delta log, LWW peer apply, reconcile,
+    // parity audit, tombstone GC and the boot verifier all derive from this list.
+    expect(brainStorage.BRAIN_ENTITY_TYPES).toContain('threads');
+  });
+
+  it('round-trips create → update → tombstone through the generic entity API', async () => {
+    const created = await brainStorage.createThread({
+      title: 'Renew the domain',
+      status: 'open',
+      priority: 'high',
+      nextAction: 'Check the registrar',
+      refs: [{ kind: 'github.issue', id: 'https://example.com/issues/1', label: 'example#1' }],
+    });
+    expect(created.id).toBeDefined();
+    expect(created.originInstanceId).toBe('local-instance');
+
+    const all = await brainStorage.getThreads();
+    expect(all.find((t) => t.id === created.id)).toMatchObject({ title: 'Renew the domain' });
+
+    const updated = await brainStorage.updateThread(created.id, { status: 'waiting' });
+    expect(updated).toMatchObject({ status: 'waiting', priority: 'high' });
+    // The ref array survives a partial update — it is the thread's whole point.
+    expect(updated.refs).toHaveLength(1);
+    expect(await brainStorage.getThreadById(created.id)).toMatchObject({ status: 'waiting' });
+
+    expect(await brainStorage.deleteThread(created.id)).toBe(true);
+    expect(await brainStorage.getThreadById(created.id)).toBeNull();
+    // Tombstone retained in place (not hard-deleted) so the delete federates and
+    // a stale create echoed back from a peer can't resurrect it.
+    const raw = await rawRecord('threads', created.id);
+    expect(raw._deleted).toBe(true);
+  });
+});
+
 describe('listLiveIds (embedding-coverage id index, issue #3508)', () => {
   it('returns only live ids — archived and tombstoned records are excluded', async () => {
     const live = await brainStorage.create('ideas', { title: 'Live Idea' });
