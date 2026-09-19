@@ -20,8 +20,8 @@ import { JEV_DEFAULT_MIN_MARGIN, JEV_MAX_HYPOTHESIS_CHARS } from './jev.js';
  * `source` is the INGRESS CHANNEL a decision's premise arrives on, and it is
  * `null` for a decision that has none.
  *
- * The four untrusted-content rungs each answer a question about text that
- * arrived from somewhere (`github-issue`, `email`, …), and their channel is
+ * The untrusted-content rungs each answer a question about text that arrived
+ * from somewhere (`github-issue`, `email`, …), and their channel is
  * what `resolveUntrustedContentPolicy` keys the operator's per-source `jevMode`
  * on. `scope-adherence` asks about the operator's OWN product documents
  * instead, so there is no channel to name and no per-source policy to resolve —
@@ -105,6 +105,50 @@ export const JEV_DECISIONS = Object.freeze({
       Object.freeze({
         value: 'low',
         hypothesis: 'This message is unimportant to the recipient and can wait indefinitely.',
+      }),
+    ]),
+  }),
+
+  'stacker-news-classification': Object.freeze({
+    source: 'stacker-news',
+    label: 'Stacker News classification',
+    minMargin: 0.25,
+    options: Object.freeze([
+      Object.freeze({
+        // The Stacker News caller never releases an item on this verdict alone;
+        // it remains a shadow observation so the model-backed prose checks keep
+        // their full context.
+        value: 'allowed',
+        hypothesis: 'This Stacker News item is ordinary community content that can proceed without moderation escalation.',
+        minMargin: 1.0,
+      }),
+      Object.freeze({
+        value: 'review',
+        hypothesis: 'This Stacker News item may be legitimate but needs human review before any community action.',
+      }),
+      Object.freeze({
+        value: 'escalate',
+        hypothesis: 'This Stacker News item contains hostile, unsafe, or policy-sensitive content that should be escalated before any automated action.',
+      }),
+    ]),
+  }),
+
+  'stacker-news-risk': Object.freeze({
+    source: 'stacker-news',
+    label: 'Stacker News risk',
+    minMargin: 0.25,
+    options: Object.freeze([
+      Object.freeze({
+        value: 'low',
+        hypothesis: 'This Stacker News item presents low risk under the community rules.',
+      }),
+      Object.freeze({
+        value: 'medium',
+        hypothesis: 'This Stacker News item presents meaningful uncertainty or moderate risk under the community rules.',
+      }),
+      Object.freeze({
+        value: 'high',
+        hypothesis: 'This Stacker News item presents high risk under the community rules and should be escalated.',
       }),
     ]),
   }),
