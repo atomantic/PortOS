@@ -633,7 +633,7 @@ function NBackRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) 
           // would mask the ink cue on the one press that matters.
           <div
             className={`inline-block rounded-xl border-2 px-6 py-1 ${
-              pressed ? 'border-rose-400/70 bg-rose-500/10' : 'border-transparent'
+              pressed ? 'border-port-success/70 bg-port-success/10' : 'border-transparent'
             }`}
           >
             <span className={`text-7xl font-mono font-bold ${blank ? 'invisible' : inkRef.current[pos]}`}>
