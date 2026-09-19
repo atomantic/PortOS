@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import { extractTaskType } from './taskLearning/store.js';
 import {
@@ -2906,6 +2906,32 @@ describe('forge I/O (injected exec)', () => {
     expect(createCall[bodyIdx]).toContain(slugMarker('my-slug'));
     expect(createCall.filter((a) => a === '--label')).toHaveLength(3);
     expect(createCall).toContain(LI_LABEL);
+  });
+
+  // #7687 — the Layered Intelligence loop's own proposal text (LLM-authored,
+  // derived from an untrusted diff) never scrubbed before this filer moved
+  // onto the shared `fileForgeIssue` wrapper, which scrubs by construction.
+  it('strips a home-directory prefix and a credential-shaped token from the filed title and body', async () => {
+    const home = homedir();
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: 'https://github.com/o/r/issues/9\n' });
+    const res = await fileProposalToForge({
+      cli: 'gh', cwd: '/x',
+      title: `Sync fails under ${home}/work/demo`,
+      body: `Retried with ghp_${'A'.repeat(36)} and gave up.`,
+      slug: 's', model: 'light', effort: 'low', exec,
+    });
+    expect(res.success).toBe(true);
+    const createCall = exec.mock.calls.find((c) => c[1][0] === 'issue')[1];
+    const title = createCall[createCall.indexOf('--title') + 1];
+    const body = createCall[createCall.indexOf('--body') + 1];
+    expect(title).not.toContain(home);
+    expect(title).toContain('~/work/demo');
+    expect(body).not.toContain(home);
+    expect(body).not.toContain('ghp_');
+    expect(body).toContain('[REDACTED]');
+    // The slug marker survives the scrub — it carries no path or credential
+    // shape, and rewriting it would break the dedup it exists to serve.
+    expect(body).toContain(slugMarker('s'));
   });
 
   it('fileProposalToForge creates and applies independent dispatch + contributor labels', async () => {

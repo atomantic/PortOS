@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { homedir } from 'os';
 
 const execGh = vi.fn();
 const execGlab = vi.fn();
@@ -129,6 +130,34 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
     expect(createArgs).toContain('goal-fidelity');
     // The body carries the key the next run's listing reads back.
     expect(createArgs[createArgs.indexOf('--body') + 1]).toContain(MARKER);
+  });
+
+  // #7687 — the forge path no longer scrubs at the call site; it is enforced
+  // by `fileForgeIssue` itself, by construction, so this caller can't forget.
+  it('strips a home-directory prefix and a credential-shaped token from the filed title and body', async () => {
+    settings({ fileIssue: true });
+    const home = homedir();
+    execGh
+      .mockResolvedValueOnce(ghRows([]))
+      .mockResolvedValueOnce('')
+      .mockResolvedValueOnce('https://github.com/acme/comics/issues/50');
+    const result = await runGoalFidelityFollowUp({
+      agentId: 'agent-1',
+      task: { ...TASK, description: `Fix the sync poller under ${home}/work/demo` },
+      review: { ...REVIEW, evidence: `Retried with ghp_${'A'.repeat(36)} and gave up.` },
+    });
+    expect(result.issue).toMatchObject({ number: 50, duplicate: false });
+    const createArgs = execGh.mock.calls.at(-1)[0];
+    const title = createArgs[createArgs.indexOf('--title') + 1];
+    const body = createArgs[createArgs.indexOf('--body') + 1];
+    expect(title).not.toContain(home);
+    expect(title).toContain('~/work/demo');
+    expect(body).not.toContain(home);
+    expect(body).not.toContain('ghp_');
+    expect(body).toContain('[REDACTED]');
+    // The dedup marker survives — the scrub must not touch it, or the issue it
+    // files could never dedupe against itself.
+    expect(body).toContain(goalFidelityIssueMarker(goalFidelityFingerprint({ ...TASK, description: `Fix the sync poller under ${home}/work/demo` })));
   });
 
   // The dedup lists by LABEL across every STATE rather than by full-text

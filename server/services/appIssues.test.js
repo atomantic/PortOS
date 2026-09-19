@@ -22,7 +22,8 @@ vi.mock('../lib/fileUtils.js', () => ({
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
 }));
 
-import { listAppIssues, prepareAppIssueClaim } from './appIssues.js';
+import { homedir } from 'os';
+import { fileForgeIssue, listAppIssues, prepareAppIssueClaim, probeForgeReachability, scrubForgeIssueText } from './appIssues.js';
 import { execGh } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
@@ -462,5 +463,115 @@ describe('prepareAppIssueClaim', () => {
         env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }),
       }),
     );
+  });
+});
+
+// #7687 — the exec half every forge filer needs: probe, create labels, create
+// the issue, and scrub the title/body by construction so no caller can forget.
+describe('fileForgeIssue', () => {
+  const LABELS = [{ name: 'plan', color: '0E8A16', description: 'Claimable backlog item' }];
+
+  it('creates every label before the issue, then returns its parsed number/url', async () => {
+    execGh.mockResolvedValueOnce('').mockResolvedValueOnce('https://github.com/acme/widget/issues/9\n');
+    const result = await fileForgeIssue({ cli: 'gh', repo: 'github.com/acme/widget', title: 'T', body: 'B', labels: LABELS });
+
+    expect(result).toEqual({ ok: true, number: 9, url: 'https://github.com/acme/widget/issues/9' });
+    expect(execGh.mock.calls[0][0]).toEqual(['label', 'create', 'plan', '--repo', 'github.com/acme/widget', '--color', '0E8A16', '--description', 'Claimable backlog item']);
+    expect(execGh.mock.calls[1][0]).toEqual(['issue', 'create', '--repo', 'github.com/acme/widget', '--title', 'T', '--body', 'B', '--label', 'plan']);
+  });
+
+  it('tolerates a label that already exists', async () => {
+    execGh.mockRejectedValueOnce(new Error('label with this name already exists'))
+      .mockResolvedValueOnce('https://github.com/acme/widget/issues/9');
+    const result = await fileForgeIssue({ cli: 'gh', title: 'T', body: 'B', labels: LABELS });
+    expect(result.ok).toBe(true);
+  });
+
+  it('aborts on a real label-create failure without attempting the issue create', async () => {
+    execGh.mockRejectedValueOnce(new Error('HTTP 403: Resource not accessible'));
+    const result = await fileForgeIssue({ cli: 'gh', title: 'T', body: 'B', labels: LABELS });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('HTTP 403') });
+    expect(execGh).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a bounded error on a failed create rather than claiming success', async () => {
+    execGh.mockResolvedValueOnce('').mockRejectedValueOnce(new Error('GraphQL: Resource not accessible'));
+    const result = await fileForgeIssue({ cli: 'gh', title: 'T', body: 'B', labels: LABELS });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('Resource not accessible') });
+  });
+
+  it('probes reachability first when a hostname is given, before any label or issue call', async () => {
+    ensureForgeReachableMock.mockResolvedValue({ ok: false, status: 'unauthenticated', remedy: 'run `gh auth login`' });
+    const result = await fileForgeIssue({ cli: 'gh', hostname: 'github.com', title: 'T', body: 'B', labels: LABELS });
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('gh auth login') });
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('skips the probe with no hostname — a caller that already probed', async () => {
+    ensureForgeReachableMock.mockResolvedValue({ ok: false, status: 'unauthenticated' });
+    execGh.mockResolvedValueOnce('').mockResolvedValueOnce('https://github.com/acme/widget/issues/1');
+    const result = await fileForgeIssue({ cli: 'gh', title: 'T', body: 'B', labels: LABELS });
+    expect(result.ok).toBe(true);
+    expect(ensureForgeReachableMock).not.toHaveBeenCalled();
+  });
+
+  it('never probes a glab filer — ensureForgeReachable is gh-only', async () => {
+    execGlab.mockResolvedValueOnce('').mockResolvedValueOnce('https://gitlab.com/group/proj/-/issues/1');
+    const result = await fileForgeIssue({ cli: 'glab', hostname: 'gitlab.com', repoPath: '/repo', title: 'T', body: 'B', labels: LABELS });
+    expect(result.ok).toBe(true);
+    expect(ensureForgeReachableMock).not.toHaveBeenCalled();
+  });
+
+  it('creates through glab in the given repo checkout, joining labels with a comma', async () => {
+    execGlab.mockResolvedValueOnce('').mockResolvedValueOnce('https://gitlab.com/group/proj/-/issues/4');
+    await fileForgeIssue({ cli: 'glab', repoPath: '/repo', title: 'T', body: 'B', labels: LABELS });
+    expect(execGlab).toHaveBeenNthCalledWith(2, ['issue', 'create', '--title', 'T', '--description', 'B', '--label', 'plan'], '/repo', undefined, { env: undefined, rejectOnError: true });
+  });
+
+  // #7687 — a filer that never called its own scrub (the Layered Intelligence
+  // loop's `fileProposalToForge`) is protected the same as one that did, since
+  // the strip is enforced here rather than trusted to each caller's memory.
+  it('strips the home-directory prefix and credential-shaped tokens from the title and body', async () => {
+    const home = homedir();
+    execGh.mockResolvedValueOnce('').mockResolvedValueOnce('https://github.com/acme/widget/issues/1');
+    await fileForgeIssue({
+      cli: 'gh', labels: LABELS,
+      title: `Sync fails under ${home}/work/demo`,
+      body: `Retries with ghp_${'A'.repeat(36)} and dies.\nSee ${home}/logs/sync.log.`,
+    });
+    const createArgs = execGh.mock.calls[1][0];
+    const title = createArgs[createArgs.indexOf('--title') + 1];
+    const body = createArgs[createArgs.indexOf('--body') + 1];
+    expect(title).toBe('Sync fails under ~/work/demo');
+    expect(title).not.toContain(home);
+    expect(body).toContain('[REDACTED]');
+    expect(body).not.toContain('ghp_');
+    expect(body).not.toContain(home);
+  });
+});
+
+describe('probeForgeReachability', () => {
+  it('is a no-op for a non-github cli or a missing hostname', async () => {
+    expect(await probeForgeReachability({ cli: 'glab', hostname: 'gitlab.com', label: 'x' })).toEqual({ ok: true });
+    expect(await probeForgeReachability({ cli: 'gh', hostname: null, label: 'x' })).toEqual({ ok: true });
+    expect(ensureForgeReachableMock).not.toHaveBeenCalled();
+  });
+
+  it('formats an unreachable github as a refusal naming the status and remedy', async () => {
+    ensureForgeReachableMock.mockResolvedValue({ ok: false, status: 'offline', remedy: 'check the network' });
+    expect(await probeForgeReachability({ cli: 'gh', hostname: 'github.com', label: 'x' }))
+      .toEqual({ ok: false, error: 'GitHub is not reachable (offline); check the network' });
+  });
+});
+
+describe('scrubForgeIssueText', () => {
+  it('passes a non-string through untouched', () => {
+    expect(scrubForgeIssueText(undefined)).toBeUndefined();
+    expect(scrubForgeIssueText(null)).toBeNull();
+  });
+
+  it('leaves ordinary prose and repo-relative paths untouched', () => {
+    const body = 'server/services/sync.js drops job 4f2a on retry.';
+    expect(scrubForgeIssueText(body)).toBe(body);
   });
 });
