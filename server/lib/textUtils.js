@@ -181,6 +181,18 @@ export function escapeRegExp(value) {
 }
 
 /**
+ * First non-empty line of a string, trimmed.
+ *
+ * The CoS task-description headline: `generateTasksMarkdown` flattens a stored
+ * description to one line, so every comparison against a multi-line input has to
+ * normalize on the first line. Lives in this dependency-free leaf because the
+ * goal-fidelity follow-up needs the same headline for its dedup key and cannot
+ * import the task store (see server/AGENTS.md "Import scoping");
+ * `services/cosTaskStore.js` re-exports it at the address its callers already use.
+ */
+export const firstLine = (text) => String(text ?? '').split('\n').map(line => line.trim()).find(Boolean) || '';
+
+/**
  * Lowercase + kebab-case a string, ASCII-only, collapsing runs of anything else
  * to a single `-` and trimming leading/trailing hyphens.
  *

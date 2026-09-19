@@ -96,7 +96,9 @@ describe('codeReview helpers', () => {
     // inheriting whatever the chain runs". Deliberately its own block rather
     // than more `<reviewer>*` scalars: it is a different review with a different
     // question, and the user can run it on a different model.
-    const NO_GOAL_FIDELITY = { goalFidelity: { enabled: true, backend: null, model: null, effort: null } }
+    // The two follow-up actions default OFF — the mirror image of enabled — so an
+    // unset block reads as the gate on and nothing armed to act on its verdict.
+    const NO_GOAL_FIDELITY = { goalFidelity: { enabled: true, backend: null, model: null, effort: null, fileIssue: false, queueTask: false, followUpOn: 'rethink' } }
     it('returns no reviewers when settings has no codeReview slice', () => {
       expect(pickCodeReviewDefaults(null)).toEqual({
         reviewers: [],

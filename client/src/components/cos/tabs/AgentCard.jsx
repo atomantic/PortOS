@@ -234,6 +234,43 @@ function GoalFidelityPanel({ review }) {
         </div>
       )}
       {review.evidence && <p className="mt-1.5 text-xs text-gray-400">{review.evidence}</p>}
+      <GoalFidelityFollowUp followUp={review.followUp} />
+    </div>
+  );
+}
+
+// What the configured follow-up actually did with this finding (#7690) — the
+// issue it filed or reused, and the task it queued. Rendered here rather than
+// only logged, because the whole point of the follow-up is that the finding
+// outlives the run record: a filed issue nobody can reach from the card is
+// half-delivered. An arm that could not run says so, with its reason.
+function GoalFidelityFollowUp({ followUp }) {
+  if (!followUp) return null;
+  const { issue, issueError, taskId, taskApprovalRequired, taskDuplicate, taskError } = followUp;
+  // "Queued" is wrong for a task the loop policy held for the user and wrong
+  // for one that folded into an existing investigation — both exist, but only
+  // one of the three is going to run on its own.
+  const taskLabel = taskApprovalRequired
+    ? 'Follow-up task awaiting your approval'
+    : taskDuplicate
+      ? 'Folded into the follow-up task already open'
+      : 'View the queued follow-up task';
+  return (
+    <div className="mt-1.5 text-xs text-gray-400 flex flex-col gap-0.5">
+      {issue?.url && (
+        <a href={issue.url} target="_blank" rel="noreferrer" className="text-port-accent hover:underline w-fit">
+          {issue.duplicate ? 'Already tracked as' : 'Filed as'} {issue.number ? `#${issue.number}` : 'an issue'}
+        </a>
+      )}
+      {/* `status`, not `alert`: these report a background follow-up the user
+          did not trigger, so they are passive news, not a response to an action. */}
+      {issueError && <span role="status" className="text-port-warning">No issue filed: {issueError}</span>}
+      {taskId && (
+        <Link className="text-port-accent hover:underline w-fit" to={`/cos/tasks?task=${encodeURIComponent(taskId)}&source=internal`}>
+          {taskLabel}
+        </Link>
+      )}
+      {taskError && <span role="status" className="text-port-warning">No follow-up queued: {taskError}</span>}
     </div>
   );
 }
@@ -989,7 +1026,14 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         )}
 
         {agent.result?.goalFidelity && <GoalFidelityPanel review={agent.result.goalFidelity} />}
-        {completed && !remote && ['fix-first', 'rethink'].includes(agent.result?.goalFidelity?.verdict) && (
+        {/* The manual button is the fallback for an install that has not armed
+            the automatic follow-up. Once that produced a task for this finding,
+            offering it again would put a second agent on the same work — the
+            panel above links the one that exists instead. That holds for a task
+            HELD for approval too: the answer there is to approve the task that
+            exists, not to queue an unheld duplicate beside it. */}
+        {completed && !remote && !agent.result?.goalFidelity?.followUp?.taskId
+          && ['fix-first', 'rethink'].includes(agent.result?.goalFidelity?.verdict) && (
           <InvestigateFindingsButton key={agent.id} agent={agent} />
         )}
 

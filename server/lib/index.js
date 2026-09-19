@@ -374,6 +374,7 @@ export * from './repoUrl.js';
 export * from './glabArgs.js';
 export * from './goalFeatureMap.js';
 export * from './goalFidelity.js';
+export * from './goalFidelityFollowUp.js';
 export * from './interactiveShellResolver.js';
 export * from './killWithEscalation.js';
 export * from './npmGlobalBin.js';

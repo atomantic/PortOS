@@ -25,6 +25,7 @@ import { CLAIM_DRAIN_TASK_TYPES } from './qualitySchedulePlan.js';
 import { JOB_INTERVAL_VALUES } from './autonomousJobIntervals.js';
 import { jobFormFieldsSchema, jobFormValuesSchema } from './jobFormFields.js';
 import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
+import { GOAL_FIDELITY_FOLLOW_UP_TRIGGERS } from './goalFidelityFollowUp.js';
 import {
   EFFORT_SELECTABLE_REVIEWERS,
   KEYED_REVIEWER_PINS,
@@ -699,11 +700,21 @@ export const codeReviewSettingsSchema = z.object({
   // pin no request would carry. All four absent = inherit the quality chain's own
   // local reviewer (see `resolveGoalFidelityConfig`); `enabled: false` is the
   // explicit off switch.
+  //
+  // `fileIssue` / `queueTask` / `followUpOn` are the FOLLOW-UP half (see
+  // `lib/goalFidelityFollowUp.js`): what to do about a finding once the review
+  // has one. Both actions default OFF — filing on someone's tracker and
+  // spawning an unattended run are each a thing a user opts into — and
+  // `followUpOn` narrows which verdicts count, defaulting to the `rethink` that
+  // already holds a run.
   goalFidelity: z.object({
     enabled: z.boolean().optional(),
     backend: z.preprocess(emptyToUndefined, z.enum(LOCAL_LLM_REVIEWERS).optional()),
     model: z.string().max(MAX_REVIEWER_MODEL_LENGTH).optional(),
     effort: z.preprocess(emptyToUndefined, z.string().optional()),
+    fileIssue: z.boolean().optional(),
+    queueTask: z.boolean().optional(),
+    followUpOn: z.preprocess(emptyToUndefined, z.enum(GOAL_FIDELITY_FOLLOW_UP_TRIGGERS).optional()),
   }).strict().optional(),
 }).strict();
 

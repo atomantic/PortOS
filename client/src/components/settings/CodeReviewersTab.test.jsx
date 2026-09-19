@@ -166,7 +166,14 @@ describe('CodeReviewersTab', () => {
 
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
     const [payload] = api.updateSettings.mock.calls[0];
-    expect(payload.codeReview.goalFidelity).toEqual({ enabled: true, backend: 'lmstudio' });
+    // The scalars are dropped when unset (absent = inherit), and so is the
+    // trigger while neither action is armed — pinning it would freeze an
+    // install on today's default forever. The follow-up BOOLEANS always ride:
+    // false there is the user's OFF, not 'inherit', and dropping one would make
+    // that switch un-clearable once it had been on.
+    expect(payload.codeReview.goalFidelity).toEqual({
+      enabled: true, backend: 'lmstudio', fileIssue: false, queueTask: false,
+    });
   });
 
   it('sends an explicit off switch, and drops the unset pins rather than persisting empty ones', async () => {
@@ -186,6 +193,73 @@ describe('CodeReviewersTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
 
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
-    expect(api.updateSettings.mock.calls[0][0].codeReview.goalFidelity).toEqual({ enabled: false });
+    expect(api.updateSettings.mock.calls[0][0].codeReview.goalFidelity).toEqual({
+      enabled: false, fileIssue: false, queueTask: false,
+    });
+  });
+
+  // The follow-up half (#7690): what happens once the gate HAS a finding.
+  it('round-trips the follow-up actions and their trigger', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['ollama'],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      stopMode: 'all',
+      reviewerApplies: false,
+      goalFidelity: { enabled: true, fileIssue: true, queueTask: false, followUpOn: 'any-finding' },
+    });
+    api.updateSettings.mockResolvedValue({});
+
+    render(<CodeReviewersTab />);
+    expect(await screen.findByLabelText(/File an issue on the project/)).toBeChecked();
+    expect(screen.getByLabelText(/Queue an agent to reconcile it/)).not.toBeChecked();
+    expect(screen.getByLabelText('Act on which verdicts')).toHaveValue('any-finding');
+
+    fireEvent.click(screen.getByLabelText(/Queue an agent to reconcile it/));
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
+
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
+    expect(api.updateSettings.mock.calls[0][0].codeReview.goalFidelity).toMatchObject({
+      fileIssue: true, queueTask: true, followUpOn: 'any-finding',
+    });
+  });
+
+  // Filing on someone's tracker and spawning an unattended run are each opt-in,
+  // so an absent block must read as off — the mirror image of `enabled` above.
+  it('defaults both follow-up actions to off when the stored block omits them', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['ollama'],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      stopMode: 'all',
+      reviewerApplies: false,
+      goalFidelity: { enabled: true },
+    });
+
+    render(<CodeReviewersTab />);
+    expect(await screen.findByLabelText(/File an issue on the project/)).not.toBeChecked();
+    expect(screen.getByLabelText(/Queue an agent to reconcile it/)).not.toBeChecked();
+    // The trigger is meaningless until an action is armed.
+    expect(screen.getByLabelText('Act on which verdicts')).toBeDisabled();
+  });
+
+  // Turning the gate off leaves no verdict for a follow-up to act on, so the
+  // actions have to go inert with it rather than reading as still armed.
+  it('disables the follow-up actions when the gate itself is off', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['ollama'],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      stopMode: 'all',
+      reviewerApplies: false,
+      goalFidelity: { enabled: false, fileIssue: true },
+    });
+
+    render(<CodeReviewersTab />);
+    expect(await screen.findByLabelText(/File an issue on the project/)).toBeDisabled();
+    expect(screen.getByLabelText(/Queue an agent to reconcile it/)).toBeDisabled();
   });
 });

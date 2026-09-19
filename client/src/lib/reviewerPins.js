@@ -58,6 +58,13 @@ export const MAX_REVIEWER_MODEL_LENGTH = 200;
 // LOCAL_LLM_EFFORT_LEVELS.
 export const LOCAL_LLM_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 
+// Which goal-fidelity verdicts fire the follow-up actions (file an issue /
+// queue a fix). Mirror of GOAL_FIDELITY_FOLLOW_UP_TRIGGERS in
+// server/lib/goalFidelityFollowUp.js — the settings schema is a `z.enum` over
+// it, so a value offered here but absent there 400s the whole settings save.
+export const GOAL_FIDELITY_FOLLOW_UP_TRIGGERS = Object.freeze(['rethink', 'any-finding']);
+export const DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER = 'rethink';
+
 // The effort ladder each reviewer offers, or absent when it has no effort control
 // (`copilot` is a GitHub review, and an
 // `@username` reviewer is a person). A ladder means the level is PICKABLE, not
