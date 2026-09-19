@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useId, useRef } from 'react'
 import { Link } from 'react-router';
 import {
   AlertTriangle, Bot, ChevronDown, ChevronRight, CircleDot, ClipboardCheck,
-  ExternalLink, GitPullRequest, Loader2, MessageSquare, RefreshCw, Rocket, Search, Tag, User
+  ExternalLink, GitPullRequest, MessageSquare, RefreshCw, Rocket, Search, Tag, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
@@ -23,6 +23,7 @@ import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 import AddToThreadButton from '../../threads/AddToThreadButton';
+import RunActionButton from './RunActionButton';
 
 function ClaimReviewOverride({ defaults, overrides, onChange, modelOptions }) {
   return (
@@ -850,18 +851,17 @@ export default function IssuesTab({ appId, appName }) {
                         );
                       }
                       return (
-                        <button
+                        <RunActionButton
                           key={action}
                           onClick={() => handleRun(issue, action)}
-                          disabled={state === 'queuing' || (action === 'claim' && invalidReviewOverride)}
+                          busy={state === 'queuing'}
+                          disabled={action === 'claim' && invalidReviewOverride}
                           title={spec.title(issue.number, appName)}
-                          className={`min-h-[44px] sm:min-h-0 px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors`}
+                          icon={Icon}
+                          className={`min-h-[44px] sm:min-h-0 px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs`}
                         >
-                          {state === 'queuing'
-                            ? <Loader2 size={14} className="animate-spin" />
-                            : <Icon size={14} />}
-                          {state === 'queuing' ? 'Queuing…' : spec.label}
-                        </button>
+                          {spec.label}
+                        </RunActionButton>
                       );
                     })}
                     {(issue.url || issue.html_url) && (
