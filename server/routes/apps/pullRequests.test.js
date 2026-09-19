@@ -185,6 +185,53 @@ describe('app pull-request routes', () => {
     }));
   });
 
+  // The panel's reviewer override rides the same task-over-default resolver
+  // every other dispatch surface uses, so the run reviews with what the user
+  // picked instead of the install-wide Code Review Defaults.
+  it('layers a per-run reviewer override over the Code Review Defaults', async () => {
+    resolveReviewLoopOptions.mockResolvedValue({
+      reviewers: ['claude'], usernames: ['octocat'], optionalReviewers: ['claude'],
+      reviewerMaxRounds: { claude: 2 }, reviewStopMode: 'all', reviewerApplies: false,
+      reviewerModels: null, reviewerEfforts: null,
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve')
+      .send({ reviewers: ['claude'], usernames: ['octocat'], optionalReviewers: ['claude'], reviewerMaxRounds: { claude: 2 } });
+
+    expect(response.status).toBe(202);
+    expect(resolveReviewLoopOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewers: ['claude'], usernames: ['octocat'] }),
+      expect.anything(),
+    );
+    expect(spawnReviewLoopFollowUp).toHaveBeenCalledWith(expect.objectContaining({
+      reviewers: ['claude'],
+      usernames: ['octocat'],
+      optionalReviewers: ['claude'],
+      selfReview: false,
+    }));
+  });
+
+  // The route hands the mode over and leaves the roster alone — emptying it is
+  // `spawnReviewLoopFollowUp`'s contract, so a second caller adopting the mode
+  // gets the same behavior without re-deriving it.
+  it('passes the self-review mode to the follow-up without pre-emptying the roster', async () => {
+    resolveReviewLoopOptions.mockResolvedValue({
+      reviewers: ['codex', 'claude'], usernames: ['octocat'], optionalReviewers: ['claude'],
+      reviewerMaxRounds: {}, reviewStopMode: 'all', reviewerApplies: false,
+      reviewerModels: null, reviewerEfforts: null,
+    });
+
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve')
+      .send({ reviewMode: 'self' });
+
+    expect(response.status).toBe(202);
+    expect(spawnReviewLoopFollowUp).toHaveBeenCalledWith(expect.objectContaining({
+      selfReview: true,
+      reviewers: ['codex', 'claude'],
+      usernames: ['octocat'],
+    }));
+  });
+
   it('leaves the follow-up task unpinned when no provider override is sent', async () => {
     const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve');
 
@@ -544,6 +591,11 @@ describe('app pull-request routes', () => {
       provider: undefined,
       model: undefined,
       effort: undefined,
+      // An untouched run-settings panel: delegated review with no roster
+      // override, which is what leaves the prompt layer reading the install's
+      // Code Review Defaults at spawn time.
+      selfReview: false,
+      reviewerConfig: {},
     });
   });
 
@@ -555,6 +607,20 @@ describe('app pull-request routes', () => {
     expect(response.status).toBe(202);
     expect(spawnPrDoReviewTask).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'claude-code', model: 'claude-opus-5', effort: 'high',
+    }));
+  });
+
+  it('threads the review mode and reviewer override into the /do:review task', async () => {
+    const response = await request(app)
+      .post('/api/apps/app-001/pull-requests/17/do-review')
+      .send({ reviewMode: 'self', reviewers: ['codex'] });
+
+    expect(response.status).toBe(202);
+    // The roster still travels: the service is what decides self-review has no
+    // roster to apply, so the route must not pre-empt that decision here.
+    expect(spawnPrDoReviewTask).toHaveBeenCalledWith(expect.objectContaining({
+      selfReview: true,
+      reviewerConfig: expect.objectContaining({ reviewers: ['codex'] }),
     }));
   });
 
