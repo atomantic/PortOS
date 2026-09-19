@@ -22,15 +22,17 @@
  *
  * DUPLICATE SUPPRESSION is the load-bearing part, because the producer is a
  * scheduled unattended loop: a perpetual task that keeps drifting the same way
- * would otherwise file the same issue every cadence, forever. Three guards, all
+ * would otherwise file the same issue every cadence, forever. Two guards, both
  * keyed on the one fingerprint `lib/goalFidelityFollowUp.js` derives:
  *
- *  1. an all-states marker search on the tracker, so a CLOSED issue for the
- *     same finding is not re-filed;
- *  2. an open-issue rescan, because forge full-text indexes lag by minutes and
- *     two runs of the same schedule inside that window are ordinary;
- *  3. the shared investigation-task fingerprint dedup + circuit breaker on the
- *     queued task, via `fileInvestigationTask`.
+ *  1. the issue side lists this feature's own marker LABEL across every issue
+ *     STATE and reads the fingerprint back out of the rows. A label is a direct
+ *     field filter — no index lag (a full-text search has minutes of it on both
+ *     GitHub and JIRA, which is exactly when a schedule re-runs), every state
+ *     (so an issue a human CLOSED is not re-filed), and a page bounded by our
+ *     own issues rather than by the repo's whole backlog;
+ *  2. the queued task goes through `fileInvestigationTask`, inheriting the
+ *     shared fingerprint dedup, circuit breaker, and loop policy.
  *
  * FAIL-CLOSED on the issue side, on purpose and against the usual convention: a
  * tracker we could not read is NOT "nothing is filed". That is exactly how a
@@ -273,7 +275,10 @@ function trackerRefusal({ app, target, tracker }) {
  */
 async function fileFollowUpIssue({ task, review, fingerprint }) {
   const app = await resolveFollowUpRepo(task);
-  if (!app) return { issue: null, error: `app '${task?.metadata?.app}' has no configured repository` };
+  // Named, not interpolated blind: a task with no `metadata.app` is PortOS's
+  // own work, and `app 'undefined' has no configured repository` is not a
+  // sentence anyone can act on.
+  if (!app) return { issue: null, error: `app '${task?.metadata?.app || PORTOS_APP_ID}' has no configured repository` };
 
   const { tracker, target } = await resolveAppForgeTarget(app).catch(() => ({ tracker: null, target: null }));
   const refusal = trackerRefusal({ app, target, tracker });

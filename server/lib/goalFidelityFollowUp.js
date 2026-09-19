@@ -216,11 +216,11 @@ const truncateTitle = (text, max) => (text.length > max
 export function buildGoalFidelityIssue({ task, review, fingerprint }) {
   const subject = firstLine(task?.description) || 'a CoS agent task';
   const title = truncateTitle(`Goal-fidelity ${review?.verdict || 'finding'}: ${subject}`, GOAL_FIDELITY_ISSUE_LIMITS.titleChars);
-  // The marker sits in the SECOND paragraph, not the last: a reader of this
-  // issue gets it from a truncated body just as reliably as from a whole one,
-  // and the open-issue fallback scan reads bodies the forge lister has already
-  // capped at 8k. A marker parked at the bottom would drop out of exactly the
-  // long issues most likely to be re-filed.
+  // The marker sits in the SECOND paragraph, not the last. The dedup reads it
+  // back out of a tracker listing, and a listing is free to cap the body it
+  // returns; a marker parked at the bottom would drop out of exactly the long
+  // issues most likely to be re-filed. It is also the first thing a human
+  // opening the issue needs, since it is what explains why the issue exists.
   const body = truncate([
     `A goal-fidelity review of a finished agent run returned **${review?.verdict}** — the change that shipped does not match what the task asked for.`,
     `Filed automatically by the PortOS goal-fidelity review. Re-filing is suppressed while an issue carrying this key exists: \`${goalFidelityIssueMarker(fingerprint)}\``,
