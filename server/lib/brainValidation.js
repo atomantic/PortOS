@@ -872,6 +872,12 @@ export const threadQuerySchema = z.object({
   q: z.string().trim().max(200).optional()
 });
 
+// On-demand discovery of assigned GitHub issues for one saved managed app.
+export const threadSyncInputSchema = z.object({
+  appId: z.string().trim().min(1).max(128),
+  pinned: z.boolean().optional().default(false),
+}).strict();
+
 // POST /api/brain/threads/:id/refs — attach one ref to an existing thread.
 export const threadRefInputSchema = threadRefSchema;
 

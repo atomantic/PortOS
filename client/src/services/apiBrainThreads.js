@@ -47,3 +47,7 @@ export const removeThreadRef = (id, kind, refId, options) =>
 // POST /api/brain/threads/attach — `{ ref, threadId?, title? }` → `{ thread, created }` (200 / 201).
 export const attachToThread = (body = {}, options) =>
   request('/brain/threads/attach', { method: 'POST', body: JSON.stringify(body), ...options });
+
+// Explicit, on-demand GitHub discovery; no background polling is enabled.
+export const syncGithubThreads = (body, options) =>
+  request('/brain/threads/sync', { method: 'POST', body: JSON.stringify(body), ...options });
