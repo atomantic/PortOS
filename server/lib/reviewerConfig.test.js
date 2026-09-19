@@ -922,27 +922,60 @@ describe('hasRequiredReviewer / isOptionalReviewer', () => {
 });
 
 describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
-  // The rule reaches ~9 prompt sites. Spelled out at each one it drifts, and a
+  // The rule reaches ~10 prompt sites. Spelled out at each one it drifts, and a
   // site that drifts back into "post a comment" silently reinstates the PR
-  // noise this constant exists to remove — so assert that every prompt module
-  // that states the rule states it by reference.
+  // noise this constant exists to remove. A first version of this guard banned
+  // only one phrasing and missed the claim-flow bullet in completion.js, which
+  // still ordered the comment in words of its own — so it now asserts the
+  // SEMANTICS over whole prompt bullets: no bullet that leaves a PR open for a
+  // review that could not answer may also order a comment about it.
   const SITES = [
     'services/promptSections/completion.js',
     'services/promptSections/reviewLifecycle.js',
     'services/taskPromptDefaults/prompts.js',
   ];
+  // How a prompt bullet refers to a review that could not answer, including the
+  // consequence clause ("left open ... until the required review completes") —
+  // the claim-flow miss named only the consequence, never `review-blocked`.
+  const UNAVAILABLE_REVIEW = /review-blocked|(cannot|could not|can't) (return|produce) a verdict|review was (not completed|unavailable)|until the required review completes|intentionally left open/i;
+  // ...and the instruction it must never carry. Scoped to the PR/MR thread:
+  // commenting a real failure on the ISSUE or ticket is a different and
+  // legitimate instruction, so a comment clause naming one is not an offender.
+  const ORDERS_A_COMMENT = /gh pr comment|glab mr note|\bpost(ing|s)? (a|an|one|exactly this) (comment|note)\b(?![^.]{0,60}\b(issue|ticket)\b)/i;
 
-  it('is the only spelling of the rule in the prompt modules that carry it', async () => {
+  const readSite = async (site) => {
     const { readFile } = await import('node:fs/promises');
     const { fileURLToPath } = await import('node:url');
-    const serverRoot = fileURLToPath(new URL('../', import.meta.url));
+    const source = await readFile(fileURLToPath(new URL('../', import.meta.url)) + site, 'utf8');
+    // The shared constant is itself a "do NOT post ... comment" sentence; drop
+    // its interpolation so the scan sees only hand-written prose.
+    return source.split('${REVIEW_UNAVAILABLE_REPORTING_NOTE}').join(' ');
+  };
+
+  it('never orders a comment in the same prompt bullet as an unanswered review', async () => {
     for (const site of SITES) {
-      const source = await readFile(serverRoot + site, 'utf8');
-      expect(source, site).toContain('REVIEW_UNAVAILABLE_REPORTING_NOTE');
-      // No hand-written restatement beside the imported one.
+      const source = await readSite(site);
+      // One line is one prompt bullet / template literal in these builders.
+      const offenders = source
+        .split('\n')
+        .filter(line => UNAVAILABLE_REVIEW.test(line) && ORDERS_A_COMMENT.test(line))
+        .map(line => line.trim().slice(0, 120));
+      expect(offenders, `${site} tells the agent to comment about an unanswered review`).toEqual([]);
+    }
+  });
+
+  it('states the rule by reference, never hand-written, in every site that carries it', async () => {
+    for (const site of SITES) {
+      const source = await readSite(site);
       expect(source, site).not.toMatch(/do NOT post (a|an) (PR|MR|PR\/MR)[^`']*comment saying the review/);
-      // And no reinstated comment-posting command for an unavailable review.
       expect(source, site).not.toContain('REVIEW_BLOCKED_COMMENT');
+    }
+    // Stripped above, so assert the reference against the raw source.
+    const { readFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    for (const site of SITES) {
+      const raw = await readFile(fileURLToPath(new URL('../', import.meta.url)) + site, 'utf8');
+      expect(raw, site).toContain('REVIEW_UNAVAILABLE_REPORTING_NOTE');
     }
   });
 
