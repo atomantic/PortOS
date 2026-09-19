@@ -12,6 +12,12 @@ import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../../lib/localReviewBridge.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
 
+// A large model reviewing a large diff should not be cut off at the HTTP
+// route's 600000ms cap (`server/routes/codeReview.js`) — the bridge spreads
+// this straight into `runLocalCodeReview`'s own `timeoutMs`, so there is no
+// route-imposed ceiling to work around.
+const LOCAL_LLM_REVIEW_TIMEOUT_MS = 1_800_000;
+
 /**
  * True when a follow-up task is a **merge-only** run: it has a PR to land but no
  * reviewer to run (Review Loop off, or every configured reviewer was stripped —
@@ -300,35 +306,26 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
 
 /**
  * The `lmstudio`/`ollama` reviewer recipe. Those backends have no CLI the agent
- * can spawn — PortOS exposes `POST /api/code-review/local`, which runs the
- * configured local model against the diff and returns findings text. The agent
- * reaches it over plain HTTP at `localApiBaseUrl()` — the loopback HTTP mirror
- * port when this install booted with HTTPS (where the API port is TLS-only and
- * a plain-HTTP curl would fail at the transport layer), the API port otherwise.
+ * can spawn, so the agent pipes the diff into the auth-independent local-review
+ * bridge (`LOCAL_REVIEW_BRIDGE_SCRIPT` → `server/scripts/run-local-code-review.mjs`)
+ * — the same transport the CoS claim procedure already uses for every tool-free
+ * reviewer (`buildLocalReviewerInstructions` in `cosTaskPrompts.js`). The bridge
+ * calls `runLocalCodeReview` directly, so it needs no `/api/*` credential and is
+ * not bound by the HTTP route's `timeoutMs` cap (`server/routes/codeReview.js`).
  *
- * `/api/*` is gated when the install has an instance password set, which is the
- * recommended posture — so the request carries the loopback session token PortOS
- * injects into the agent's environment (`services/agentApiAuth.js`). Without it
- * every one of these reviews came back `401 AUTH_REQUIRED`, which reads as a
- * broken reviewer. A 401 nonetheless (a run spawned before the token existed, a
- * rotated password) is not a review verdict: the prose points the agent at the
- * auth-independent stdin bridge, the same service without the gate.
- *
- * A pinned local-LLM model can't ride the endpoint's server-side default: that
- * reads the GLOBAL settings scalar and has never seen this task. So when the
- * user pinned one on the reviewer's row, name it in the request body — `model`
- * in the POST body overrides the configured default (see routes/codeReview.js).
- * Absent pin ⇒ omit the key entirely rather than sending `""`, which would be a
- * model id the backend can't resolve. The pinned reasoning effort rides the same
- * body as `effort` — the endpoint forwards it as the backend's
- * OpenAI-compatible `reasoning_effort`, under the same absent-vs-empty contract.
+ * A pinned local-LLM model can't ride the bridge's own default: that reads the
+ * GLOBAL settings scalar and has never seen this task. So when the user pinned
+ * one on the reviewer's row, name it in the request object — `model` overrides
+ * the configured default (see `run-local-code-review.mjs`). Absent pin ⇒ omit
+ * the key entirely rather than sending `""`, which would be a model id the
+ * backend can't resolve. The pinned reasoning effort rides the same object as
+ * `effort`, under the same absent-vs-empty contract.
  *
  * The `backend` value is derived from the reviewers THIS run configured rather
- * than a fixed `<lmstudio|ollama>` placeholder: naming a backend that isn't in
- * the list is a 400 from the route's `z.enum`, and a single configured backend
+ * than a fixed `<lmstudio|ollama>` placeholder, so a single configured backend
  * needs no substitution step at all.
  */
-function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand, apiBase }) {
+function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand }) {
   const backendToken = localLlmBackends.length === 1
     ? localLlmBackends[0]
     : `<${localLlmBackends.join('|')}>`;
@@ -351,42 +348,29 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
   // hoisting one line above the other silently emptied the key list. The jq
   // example names only the keys THIS run pins: an effort-only run that was shown
   // a `model: "…"` placeholder would have the agent send the literal ellipsis,
-  // and the route's `body.model || configured` prefers that truthy junk over the
-  // install default — turning a pinned-effort review into a model-not-found error.
+  // and the bridge's `request.model || configured` prefers that truthy junk over
+  // the install default — turning a pinned-effort review into a model-not-found
+  // error.
   const pinJq = [
     `backend: "${backendToken}"`,
     ...(pins.some(p => p.model) ? ['model: "…"'] : []),
     ...(pins.some(p => p.effort) ? ['effort: "…"'] : []),
+    `timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}`,
     'diff: .'
   ].join(', ');
-  const invocation = `POST the diff to PortOS's local reviewer endpoint and extract its review text before evaluating it.${backendNote}
+  const invocation = `Pipe the diff into PortOS's local-review bridge and extract its review text before evaluating it.${backendNote}
 \`\`\`bash
 REVIEW_RESPONSE=$(mktemp)
-HTTP_STATUS=$(${diffCommand} | jq -Rs '{ backend: "${backendToken}", diff: . }' | curl -sS -X POST ${apiBase}/api/code-review/local -H 'Content-Type: application/json' ${AGENT_API_AUTH_CURL_ARG} -d @- -o "$REVIEW_RESPONSE" -w '%{http_code}') || {
-  echo "Local reviewer failed: request transport error" >&2
-  STATUS=cli-error
-  exit 1
-}
-if [ "$HTTP_STATUS" -ge 400 ] 2>/dev/null; then
-  echo "Local reviewer failed: HTTP $HTTP_STATUS $(jq -r '.error // "request failed"' "$REVIEW_RESPONSE" 2>/dev/null)" >&2
-  STATUS=cli-error
-  exit 1
-fi
-if jq -e '.error | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" >/dev/null 2>&1; then
-  echo "Local reviewer failed: $(jq -r '.error' "$REVIEW_RESPONSE")" >&2
-  STATUS=cli-error
-  exit 1
-fi
+${diffCommand} | jq -Rs '{ backend: "${backendToken}", timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}, diff: . }' | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"
 if ! jq -er '.findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
-  STATUS=no-verdict # Never treat an absent or malformed response as clean.
-  exit 1
+  exit 1 # Never treat an absent or malformed response as clean.
 else
   cat "\${REVIEW_RESPONSE}.findings"
 fi
 \`\`\`
-Only a successfully extracted \`.findings\` value is the review text; treat it like any other reviewer's findings. An \`HTTP 401\` is not a review result — it means this install has an instance password and the \`PORTOS_API_TOKEN\` in your environment is missing or stale. Re-run the SAME request body (with whatever keys this run pins) through the auth-independent bridge — the same service without the gate — before recording any status: \`${diffCommand} | jq -Rs '{ backend: "${backendToken}", diff: . }' | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"\`, then extract \`.findings\` from it exactly as above.${pinNote.length
-  ? ` This run pins settings for ${pinNote.join(', ')} — add those keys to the JSON body (\`jq -Rs '{ ${pinJq} }'\`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk.`
+Only a successfully extracted \`.findings\` value is the review text; treat it like any other reviewer's findings.${pinNote.length
+  ? ` This run pins settings for ${pinNote.join(', ')} — add those keys to the JSON object (\`jq -Rs '{ ${pinJq} }'\`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk.`
   : ''}`;
   return { backendToken, invocation };
 }
@@ -783,7 +767,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const apiBase = localApiBaseUrl();
   const diffCommand = phase.diffCommand(forge);
   const { backendToken: localLlmBackendToken, invocation: localLlmInvocation } = buildLocalLlmInvocation({
-    localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand, apiBase,
+    localLlmBackends, reviewerModelMap, reviewerEffortMap, diffCommand,
   });
   const githubUsersInvocation = phase.supportsUsernameReviewers
     ? forge.requestReviewersText(usernames)
