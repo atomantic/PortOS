@@ -448,4 +448,24 @@ describe('buildReviewLoopFollowUpSection — self-review follow-up', () => {
     expect(section).toContain('Review it yourself, then land it once CI is green.');
     expect(section).toContain('Do NOT delegate a second code review');
   });
+
+  // The third no-roster reason: a pre-PR LOCAL phase already reviewed, so only
+  // the PR-side roster is empty. It shares the section with the other two and
+  // had no coverage of its own, which is the gap a per-reason record is supposed
+  // to close — a mode whose sentences nothing pins can be given another mode's.
+  it('keeps the pre-PR local-review variant saying what that phase already did', () => {
+    const section = buildReviewLoopFollowUpSection(
+      fixture({ reviewLoopMergeOnly: true }),
+      { verbose: false, localPhaseReviewers: ['mtplx', 'ollama'], localPhaseReviewRequired: true },
+    );
+
+    expect(section).toContain('## Merge Follow-up (PRIMARY OBJECTIVE)');
+    expect(section).toContain('The pre-PR local review for `mtplx`, `ollama` has completed');
+    // The `review-blocked` clause is a backticked literal inside a nested
+    // template — exactly the thing a refactor of these strings can flatten.
+    expect(section).toContain('a `review-blocked` result leaves the PR/MR open until the required review completes');
+    expect(section).toContain('do NOT start a second PR-side code review');
+    expect(section).not.toContain('No code review was requested');
+    expect(section).not.toContain('Self-Review');
+  });
 });
