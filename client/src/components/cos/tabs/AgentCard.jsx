@@ -234,6 +234,33 @@ function GoalFidelityPanel({ review }) {
         </div>
       )}
       {review.evidence && <p className="mt-1.5 text-xs text-gray-400">{review.evidence}</p>}
+      <GoalFidelityFollowUp followUp={review.followUp} />
+    </div>
+  );
+}
+
+// What the configured follow-up actually did with this finding (#7690) — the
+// issue it filed or reused, and the task it queued. Rendered here rather than
+// only logged, because the whole point of the follow-up is that the finding
+// outlives the run record: a filed issue nobody can reach from the card is
+// half-delivered. An arm that could not run says so, with its reason.
+function GoalFidelityFollowUp({ followUp }) {
+  if (!followUp) return null;
+  const { issue, issueError, taskId, taskError } = followUp;
+  return (
+    <div className="mt-1.5 text-xs text-gray-400 flex flex-col gap-0.5">
+      {issue?.url && (
+        <a href={issue.url} target="_blank" rel="noreferrer" className="text-port-accent hover:underline w-fit">
+          {issue.duplicate ? 'Already tracked as' : 'Filed as'} {issue.number ? `#${issue.number}` : 'an issue'}
+        </a>
+      )}
+      {issueError && <span className="text-port-warning">No issue filed: {issueError}</span>}
+      {taskId && (
+        <Link className="text-port-accent hover:underline w-fit" to={`/cos/tasks?task=${encodeURIComponent(taskId)}&source=internal`}>
+          View the queued follow-up task
+        </Link>
+      )}
+      {taskError && <span className="text-port-warning">No follow-up queued: {taskError}</span>}
     </div>
   );
 }
@@ -989,7 +1016,12 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         )}
 
         {agent.result?.goalFidelity && <GoalFidelityPanel review={agent.result.goalFidelity} />}
-        {completed && !remote && ['fix-first', 'rethink'].includes(agent.result?.goalFidelity?.verdict) && (
+        {/* The manual button is the fallback for an install that has not armed
+            the automatic follow-up. Once that already queued a task for this
+            finding, offering it again would queue a second agent on the same
+            work — the panel above links the one that exists instead. */}
+        {completed && !remote && !agent.result?.goalFidelity?.followUp?.taskId
+          && ['fix-first', 'rethink'].includes(agent.result?.goalFidelity?.verdict) && (
           <InvestigateFindingsButton key={agent.id} agent={agent} />
         )}
 

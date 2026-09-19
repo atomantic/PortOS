@@ -776,6 +776,69 @@ describe('AgentCard goal fidelity', () => {
     expect(screen.getByText('no tests were run')).toBeInTheDocument();
   });
 
+  // #7690: the automatic follow-up — the finding's durable half. What it did
+  // belongs beside the verdict, or a filed issue is unreachable from the card
+  // that reported the problem.
+  it('links the issue the follow-up filed and the task it queued', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { issue: { number: 42, url: 'https://example.com/issues/42', duplicate: false }, taskId: 'cos-9' },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('link', { name: 'Filed as #42' })).toHaveAttribute('href', 'https://example.com/issues/42');
+    expect(screen.getByRole('link', { name: 'View the queued follow-up task' }))
+      .toHaveAttribute('href', '/cos/tasks?task=cos-9&source=internal');
+  });
+
+  it('says an existing issue already tracks the finding rather than implying it filed one', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { issue: { number: 5, url: 'https://example.com/issues/5', duplicate: true } },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('link', { name: 'Already tracked as #5' })).toBeInTheDocument();
+  });
+
+  // Silence here would read as the follow-up having found nothing to do, on a
+  // card whose whole point is that something does need doing.
+  it('names why an arm could not run', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { issueError: 'could not read the github issue list', taskError: 'the follow-up task could not be queued' },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByText(/could not read the github issue list/)).toBeInTheDocument();
+    expect(screen.getByText(/could not be queued/)).toBeInTheDocument();
+  });
+
+  // Offering the manual button after the automation already queued a task would
+  // put two agents on one finding.
+  it('withdraws the manual button once the follow-up queued a task, and keeps it otherwise', () => {
+    const { unmount } = render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({ verdict: 'rethink', followUp: { taskId: 'cos-9' } })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+    unmount();
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({ verdict: 'rethink', followUp: { issue: { number: 42, url: 'u' } } })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('button', { name: 'Investigate findings' })).toBeInTheDocument();
+  });
+
   it('shows a clean ship verdict, and renders nothing at all for a run the gate never judged', () => {
     const { unmount } = render(
       <MemoryRouter>
