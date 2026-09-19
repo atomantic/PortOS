@@ -46,6 +46,9 @@ import {
   MAX_REVIEW_USERNAMES,
   MAX_REVIEWER_MAX_ROUNDS,
   normalizeReviewUsernames,
+  hasRequiredReviewer,
+  isOptionalReviewer,
+  REVIEW_UNAVAILABLE_REPORTING_NOTE,
 } from './reviewerConfig.js';
 import { PROVIDER_VENDORS } from './providerVendors.js';
 // The Zod half of the old cosValidation.js — these cases assert that a reviewer
@@ -886,5 +889,65 @@ describe('hasReviewerOverride', () => {
     for (const value of [null, undefined, [], 'reviewers', 7]) {
       expect(hasReviewerOverride(value)).toBe(false);
     }
+  });
+});
+
+describe('hasRequiredReviewer / isOptionalReviewer', () => {
+  // These decide whether an unavailable verdict parks the PR or merges it, so
+  // they must answer the same question buildReviewWithArgs answers when it
+  // decides whether to append `~opt` — including through an alias.
+  it('matches the ~opt suffix buildReviewWithArgs emits, aliases included', () => {
+    expect(buildReviewWithArgs(['antigravity'], { optionalReviewers: ['gemini'] })).toContain('antigravity~opt');
+    expect(isOptionalReviewer('antigravity', ['gemini'])).toBe(true);
+    expect(hasRequiredReviewer(['antigravity'], ['gemini'])).toBe(false);
+  });
+
+  it('counts an @username reviewer, matching its case the way the emitted token does', () => {
+    expect(hasRequiredReviewer(['codex', '@Alice'], ['codex', '@alice'])).toBe(false);
+    // One un-marked reviewer is enough to keep the gate.
+    expect(hasRequiredReviewer(['codex', '@alice'], ['codex'])).toBe(true);
+  });
+
+  it('treats an unrecognizable reviewer token as required', () => {
+    // Fail closed: a token the optional list can never name must not silently
+    // relax the merge gate.
+    expect(hasRequiredReviewer(['not-a-reviewer'], ['not-a-reviewer'])).toBe(true);
+    expect(isOptionalReviewer('not-a-reviewer', ['not-a-reviewer'])).toBe(false);
+  });
+
+  it('reports no required reviewer for an empty list, leaving the emptiness test to callers', () => {
+    expect(hasRequiredReviewer([], [])).toBe(false);
+    expect(hasRequiredReviewer(undefined, undefined)).toBe(false);
+  });
+});
+
+describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
+  // The rule reaches ~9 prompt sites. Spelled out at each one it drifts, and a
+  // site that drifts back into "post a comment" silently reinstates the PR
+  // noise this constant exists to remove — so assert that every prompt module
+  // that states the rule states it by reference.
+  const SITES = [
+    'services/promptSections/completion.js',
+    'services/promptSections/reviewLifecycle.js',
+    'services/taskPromptDefaults/prompts.js',
+  ];
+
+  it('is the only spelling of the rule in the prompt modules that carry it', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    const serverRoot = fileURLToPath(new URL('../', import.meta.url));
+    for (const site of SITES) {
+      const source = await readFile(serverRoot + site, 'utf8');
+      expect(source, site).toContain('REVIEW_UNAVAILABLE_REPORTING_NOTE');
+      // No hand-written restatement beside the imported one.
+      expect(source, site).not.toMatch(/do NOT post (a|an) (PR|MR|PR\/MR)[^`']*comment saying the review/);
+      // And no reinstated comment-posting command for an unavailable review.
+      expect(source, site).not.toContain('REVIEW_BLOCKED_COMMENT');
+    }
+  });
+
+  it('tells the agent where the pending review goes instead', () => {
+    expect(REVIEW_UNAVAILABLE_REPORTING_NOTE).toContain('run summary');
+    expect(REVIEW_UNAVAILABLE_REPORTING_NOTE).toContain('do NOT post a PR/MR comment');
   });
 });

@@ -9,7 +9,7 @@ A previous agent finished implementing the work for source task **task-example**
 **Stop mode (all):** run every reviewer in the list, in order, before merging.
 **Reviewer applies (off):** read each CLI reviewer's findings and apply the fixes yourself (default).
 **Round caps (~max):** stop these reviewers after their budget even if findings remain, then advance: `codex` → 3 rounds. Spending a configured budget is a SUCCESS, not a failure — do not block the merge on it. Reviewers not listed keep the default cap below.
-**Missing reviewer CLI:** verify each configured binary is on PATH (`command -v codex`) before concluding it is unavailable. If a required reviewer binary is genuinely missing (`codex`), that reviewer is UNSATISFIED — do NOT substitute your own self-review and do NOT merge; post a PR comment naming the missing command and exit.
+**Missing reviewer CLI:** verify each configured binary is on PATH (`command -v codex`) before concluding it is unavailable. If a required reviewer binary is genuinely missing (`codex`), that reviewer is UNSATISFIED — do NOT substitute your own self-review and do NOT merge; name the missing command and exit. Report the pending review in your run summary — do NOT post a PR/MR comment saying the review was unavailable or inconclusive.
 **Optional reviewers (~opt):** `ollama` still run and their findings must still be fixed, but a timeout, skipped/incomplete pass, or missing/malformed/no-verdict result from one of them is non-blocking; provider/transport failure from one of them is also non-blocking. A substantive rejection, failed build/test, or push failure still blocks.
 
 **Run this loop UNTIL all configured reviewers are satisfied (or the stop mode triggers), capped at 10 iterations per reviewer:**

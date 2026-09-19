@@ -2,7 +2,7 @@
  * Completion workflow, worktree, and sentinel prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, hasRequiredReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
@@ -595,13 +595,15 @@ export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommand
  * The agent must drive the merge itself — `/do:pr` runs the review loop but
  * exits without merging, so without this step the PR sits open and the branch
  * leaks. Mirrors the merge contract in the review-loop follow-up section so
- * both agent flows converge on the same final state. `reviewers` only colors
- * the wording — the merge step itself is reviewer-agnostic.
+ * both agent flows converge on the same final state. `reviewers` /
+ * `optionalReviewers` only color the wording — the merge gate itself is
+ * reviewer-agnostic, because slashdo's loop has already applied `~opt` when it
+ * computed the aggregate this step reads.
  *
  * `prCompletion` selects the review gate or CI-only merge gate. Leave-open
  * callers do not invoke this helper.
  */
-function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
+function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
   // No review loop → CI is the whole gate, so emit the shared CI procedure that
   // the manual-TUI workflow and the merge follow-up agent also use. The PR URL
   // isn't known when this prompt is written, hence the placeholder.
@@ -628,8 +630,21 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
   const mergeStatuses = explicitStopMode
     ? '`clean`, `partial` (a stop-mode short-circuit you opted into), or `too-large`'
     : '`clean` (or `too-large`)';
+  // An EMPTY list is "no reviewer configured", not "every reviewer optional".
+  const allReviewersOptional = (reviewers.length + usernames.length) > 0
+    && !hasRequiredReviewer([...reviewers, ...usernames.map(u => `@${u}`)], optionalReviewers);
+  // `~opt` is honored by the LOOP, not by this gate: slashdo excludes an
+  // optional pass's missing verdict from the aggregate, so an all-optional run
+  // whose reviewers time out comes back `clean` and merges here already. Do NOT
+  // relax the skip list for it — the one thing `~opt` never excuses is
+  // `push-failed`, which is exactly what an `inconclusive` aggregate means when
+  // every reviewer is optional, and merging it would land a tree that is not
+  // the tree the reviewers read (slashdo `lib/multi-reviewer-loop.md`).
+  const optionalMergeNote = allReviewersOptional
+    ? ' Every configured reviewer is optional (`~opt`), so a reviewer that timed out or returned no verdict does NOT make the loop inconclusive and is never your reason to skip the merge — the loop already excluded it. An `inconclusive` that still appears despite that is a real blocker (fixes committed but not pushed), and stands.'
+    : '';
   const lines = [
-    `${startStep}. **Merge the PR immediately when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--merge --delete-branch\`, nothing else — a true merge commit keeps the branch tip in main's history so automated worktree cleanup can prove the branch is merged; any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, \`review-blocked\`, or \`guardrail\`; leave the PR open for human follow-up.`,
+    `${startStep}. **Merge the PR immediately when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--merge --delete-branch\`, nothing else — a true merge commit keeps the branch tip in main's history so automated worktree cleanup can prove the branch is merged; any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, \`review-blocked\`, or \`guardrail\`; leave the PR open for human follow-up. ${REVIEW_UNAVAILABLE_REPORTING_NOTE}${optionalMergeNote}`,
     '   ```bash',
     '   gh pr merge "<PR_URL>" --merge --delete-branch',
     '   ```',
@@ -695,7 +710,7 @@ function localReviewCompletionInstruction(localReviewRequired = true) {
   if (!localReviewRequired) {
     return 'Complete the **Local Review Before Opening the PR/MR** section below. All local reviewers are optional, so missing/inconclusive results (including skipped, timeout, malformed, or no-verdict) may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. Hard errors, failed build/test, rejection, or unpushed fixes block. Still run each reviewer and fix its findings.';
   }
-  return 'Complete the **Local Review Before Opening the PR/MR** section below. Commit its fixes. A missing/timed-out/quota/provider/transport-failed/malformed/inconclusive REQUIRED review blocks merging, not publication: record aggregate `LOCAL_OVERALL_STATUS=review-blocked`, do not self-review, continue to publish the PR/MR, and leave it open with the required pending-review comment. An OPTIONAL inconclusive result may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. A substantive rejection, failed build/test, unpushed fix, or state/publication failure blocks publication.';
+  return 'Complete the **Local Review Before Opening the PR/MR** section below. Commit its fixes. A missing/timed-out/quota/provider/transport-failed/malformed/inconclusive REQUIRED review blocks merging, not publication: record aggregate `LOCAL_OVERALL_STATUS=review-blocked`, do not self-review, continue to publish the PR/MR, and leave it open. ' + REVIEW_UNAVAILABLE_REPORTING_NOTE + ' An OPTIONAL inconclusive result may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. A substantive rejection, failed build/test, unpushed fix, or state/publication failure blocks publication.';
 }
 
 /**
@@ -733,7 +748,7 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0;
   const reviewerListLabel = [...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ');
   const requiredLocalReviewBlockedNote = willOpenPR && runsReviewLoop && localReviewRequired
-    ? ' If a required local reviewer cannot return a verdict because of a quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, treat the local phase as `review-blocked`: `/do:pr` must still open the PR, post the pending-review comment, and skip its merge.'
+    ? ` If a required local reviewer cannot return a verdict because of a quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, treat the local phase as \`review-blocked\`: \`/do:pr\` must still open the PR and skip its merge. ${REVIEW_UNAVAILABLE_REPORTING_NOTE}`
     : '';
   // Ordering matters to the agent: `/do:pr` partitions the list and runs every
   // local reviewer BEFORE it creates the PR, so the PR opens against an
@@ -757,7 +772,7 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   // alone when it doesn't (nothing else merges a no-review-loop PR). The one
   // exception is a PR a human lands (JIRA-tracked; see lib/prDisposition.js).
   const merge = (willOpenPR && !leavePrOpen && !policyLeavesOpen)
-    ? buildPostPRMergeSteps(3, { prCompletion, reviewers, usernames: reviewUsernames, reviewStopMode })
+    ? buildPostPRMergeSteps(3, { prCompletion, reviewers, usernames: reviewUsernames, optionalReviewers, reviewStopMode })
     : { lines: (leavePrOpen || policyLeavesOpen) && willOpenPR ? [LEAVE_PR_OPEN_STEP(3, leavePrOpen)] : [], nextStep: (leavePrOpen || policyLeavesOpen) && willOpenPR ? 4 : 3 };
   const sentinelStep = merge.nextStep;
 
@@ -807,12 +822,11 @@ function promptRef(ref, fallback) {
  * inline review-loop and merge-gate sections address the PR by those names —
  * they are rendered before the PR exists, so a literal URL is impossible.
  */
-function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh', localReviewStateRequired = false }) {
+function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh', localReviewStateRequired = false, localReviewRequired = false }) {
   const branch = promptRef(branchName, '<branch>');
   const hasBaseBranch = typeof baseBranch === 'string' && baseBranch && baseBranch !== '<base-branch>';
   const base = hasBaseBranch ? promptRef(baseBranch, '<base-branch>') : '"$BASE_BRANCH"';
   const gitlab = forgeCli === 'glab';
-  const reviewBlockedComment = 'Required code review was not completed before publication. This PR/MR is intentionally left open and will not be merged until the required review completes.';
   return [
     `${step}. Publish the branch and open the pull request yourself, capturing its URL and number:`,
     '',
@@ -877,14 +891,6 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
     gitlab
       ? '   PR_NUMBER=$(glab mr view "$PR_URL" --output json | jq -r .iid)'
       : '   PR_NUMBER=$(gh pr view "$PR_URL" --json number -q .number)',
-    ...(localReviewStateRequired ? [
-      '   if [ "$LOCAL_OVERALL_STATUS" = "review-blocked" ]; then',
-      `     REVIEW_BLOCKED_COMMENT="${reviewBlockedComment}"`,
-      gitlab
-        ? '     if ! glab mr note "$PR_NUMBER" --message "$REVIEW_BLOCKED_COMMENT"; then echo "Unable to post the required review-blocked MR note" >&2; exit 1; fi'
-        : '     if ! gh pr comment "$PR_URL" --body "$REVIEW_BLOCKED_COMMENT"; then echo "Unable to post the required review-blocked PR comment" >&2; exit 1; fi',
-      '   fi',
-    ] : []),
     '   ```',
     // `--fill` on a one-line commit produces an empty description; PortOS used
     // to generate the body server-side, so spell out what it must contain now
@@ -895,8 +901,8 @@ function buildManualPrCreateStep(step, { branchName, baseBranch, forgeCli = 'gh'
     gitlab
       ? '   The GitLab MR URL and IID are captured in `$PR_URL` and `$PR_NUMBER`; use those variables for every review, merge, and verification command below.'
       : `   On a GitLab remote use \`glab mr create --source-branch ${branch} --target-branch ${base} --title "…" --description "…"\` and read the MR URL/IID back with \`glab mr view\`.`,
-    ...(localReviewStateRequired ? [
-      '   If `LOCAL_OVERALL_STATUS=review-blocked`, the comment above is mandatory; the following Merge Gate must leave the PR/MR open and must not merge it.',
+    ...(localReviewStateRequired && localReviewRequired ? [
+      `   If \`LOCAL_OVERALL_STATUS=review-blocked\`, the following Merge Gate must leave the PR/MR open and must not merge it. ${REVIEW_UNAVAILABLE_REPORTING_NOTE}`,
     ] : []),
   ];
 }
@@ -954,7 +960,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
       lines.push(`${step++}. ${localReviewCompletionInstruction(localReviewRequired)}`);
       lines.push('', localReviewSection, '');
     }
-    lines.push(...buildManualPrCreateStep(step++, { branchName, baseBranch, forgeCli, localReviewStateRequired: Boolean(localReviewSection) }));
+    lines.push(...buildManualPrCreateStep(step++, { branchName, baseBranch, forgeCli, localReviewStateRequired: Boolean(localReviewSection), localReviewRequired }));
     lines.push(`${step++}. Work through the **${runsReviewLoop ? 'Review Loop' : 'Merge Gate'}** section below in full — it merges the PR when eligible, but a review-blocked required review leaves it open. Come back here when it is done.`);
   } else if (willOpenPR) {
     const handoff = policyLeavesOpen
@@ -1136,7 +1142,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
           : `and drives the review loop for ${[...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ')} in order until clean.`)
       : 'with external review disabled.';
     const requiredLocalReviewBlockedNote = willOpenPR && runsReviewLoop && localReviewRequired
-      ? ' A required local reviewer that cannot return a verdict is `review-blocked`: still open the PR, post the pending-review comment, and do not merge it.'
+      ? ` A required local reviewer that cannot return a verdict is \`review-blocked\`: still open the PR and do not merge it. ${REVIEW_UNAVAILABLE_REPORTING_NOTE}`
       : '';
     lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, and opens a pull request against the default branch ${completionNote}`);
     if (requiredLocalReviewBlockedNote) lines.push(`   ${requiredLocalReviewBlockedNote.trim()}`);
@@ -1148,7 +1154,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     if (leavePrOpen || policyLeavesOpen) {
       lines.push(LEAVE_PR_OPEN_STEP(step, leavePrOpen));
     } else {
-      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewers, usernames: reviewUsernames, reviewStopMode });
+      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewers, usernames: reviewUsernames, optionalReviewers, reviewStopMode });
       lines.push(...merge.lines);
     }
     return lines.join('\n');
@@ -1187,6 +1193,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
       baseBranch: worktreeInfo?.baseBranch || null,
       forgeCli,
       localReviewStateRequired: Boolean(localReviewSection),
+      localReviewRequired,
     }));
     lines.push(`${step}. Work through the **${runsReviewLoop ? 'Review Loop' : 'Merge Gate'}** section below in full — it merges the PR when eligible, but a review-blocked required review leaves it open.`);
     return lines.join('\n');
