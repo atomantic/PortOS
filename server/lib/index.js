@@ -465,6 +465,7 @@ export * from './jev.js';
 export * from './jevDecisions.js';
 export * from './prdClauses.js';
 export * from './scopeAdherence.js';
+export * from './scopeAdherenceReasons.js';
 export * from './modelAbuseGuard.js';
 export * from './pythonRuntimeDiagnosis.js';
 export * from './diffHiddenContentScan.js';

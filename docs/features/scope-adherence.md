@@ -92,4 +92,4 @@ Each reads as "no advisory" in the UI, never as a verdict.
 | The ladder (screen → retrieve → decide) | `server/services/scopeAdherence.js` |
 | HTTP surface | `server/routes/apps/scopeAdherence.js` |
 | UI | `client/src/components/apps/ScopeAdherenceCheck.jsx` |
-| Failure labels (client mirror) | `client/src/lib/scopeAdherenceReasons.js` |
+| Failure labels | `server/lib/scopeAdherenceReasons.js` (re-exported to the client) |

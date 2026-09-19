@@ -1,29 +1,25 @@
 /**
- * Cross-package coverage for the scope-adherence failure labels.
+ * Coverage for the scope-adherence failure labels.
  *
- * `server/services/scopeAdherence.js` owns the CODES; the labels live in
- * `client/src/lib/scopeAdherenceReasons.js` because nothing on the server
- * renders them. The mirror exists for the same reason `riggingReasons.js` does
- * — the client cannot import the server module — and this suite is what stops
- * a code added on one side from rendering as the generic fallback with a fully
- * green suite.
- *
- * It asserts COVERAGE, not label equality: there is no server-side label map
- * to compare against, and inventing one nothing renders would be the thing the
- * reuse rule warns about.
+ * `services/scopeAdherence.js` owns the CODES and the labels live beside them
+ * in `lib/scopeAdherenceReasons.js`, so there is nothing to keep in parity —
+ * the client re-exports this module rather than copying it. What still needs
+ * guarding is the vocabulary: a code the service can return with no label here
+ * renders as the generic fallback with a fully green suite.
  */
 
 import { describe, it, expect } from 'vitest';
-import { JEV_FAILURE_CODES } from '../lib/jev.js';
-import { SCOPE_ADHERENCE_FAILURE_CODES } from './scopeAdherence.js';
+import { JEV_FAILURE_CODES } from './jev.js';
+import { SCOPE_ADHERENCE_FAILURE_CODES } from '../services/scopeAdherence.js';
 import {
   SCOPE_ADHERENCE_REASONS,
   SCOPE_ADHERENCE_REASON_FALLBACK,
   scopeAdherenceReasonLabel,
-} from '../../client/src/lib/scopeAdherenceReasons.js';
+} from './scopeAdherenceReasons.js';
 
 describe('scope-adherence failure labels', () => {
   it('labels every code the service adds', () => {
+    expect(SCOPE_ADHERENCE_FAILURE_CODES.length).toBeGreaterThan(0);
     for (const code of SCOPE_ADHERENCE_FAILURE_CODES) {
       expect(Object.hasOwn(SCOPE_ADHERENCE_REASONS, code), `${code} has no operator-facing label`).toBe(true);
     }
@@ -31,7 +27,7 @@ describe('scope-adherence failure labels', () => {
 
   it('labels every failure the scorer itself can report', () => {
     // `scoreAdherence` forwards a `jev-*` code verbatim, so a new one in
-    // `lib/jev.js` silently degrades this surface to the generic fallback.
+    // `lib/jev.js` would silently degrade this surface to the generic fallback.
     for (const code of JEV_FAILURE_CODES) {
       expect(Object.hasOwn(SCOPE_ADHERENCE_REASONS, code), `${code} has no operator-facing label`).toBe(true);
     }
@@ -52,5 +48,14 @@ describe('scope-adherence failure labels', () => {
     for (const probe of ['not-a-real-code', '', null, undefined, '__proto__', 'constructor', 'toString']) {
       expect(scopeAdherenceReasonLabel(probe), `label for ${String(probe)}`).toBe(SCOPE_ADHERENCE_REASON_FALLBACK);
     }
+  });
+
+  it('stays importable from the browser bundle', async () => {
+    // The client re-exports this leaf. A single import added here (a settings
+    // read, a path helper) would drag `node:` built-ins into the bundle, and
+    // the failure would surface as a Vite build error, not a test.
+    const { readFile } = await import('fs/promises');
+    const source = await readFile(new URL('./scopeAdherenceReasons.js', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/^\s*import\s/m);
   });
 });
