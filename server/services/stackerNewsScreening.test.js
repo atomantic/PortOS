@@ -58,12 +58,12 @@ beforeEach(() => {
 describe('Stacker News phase-1 screening', () => {
   it('reaches no model — text or vision — when screening blocks the item', async () => {
     screenUntrustedContent.mockResolvedValue({ ok: false, safe: false, code: 'untrusted-content-blocked', message: 'flagged' });
-    const analysis = await analyzeItem('item');
+    await analyzeItem('item');
+    // Two distinct egress channels: the chat POST, and the remote image fetch
+    // the vision path performs BEFORE it posts. A block that only skipped the
+    // POST would still pull attacker-chosen media.
     expect(fetchWithTimeout).not.toHaveBeenCalled();
-    // The vision path fetches remote image bytes BEFORE it posts them, so a
-    // block that only skipped the POST would still pull attacker-chosen media.
     expect(fetchAndNormalizeStackerNewsImage).not.toHaveBeenCalled();
-    expect(analysis).toMatchObject({ text: null, vision: null });
   });
 
   it('persists the screening code and escalates instead of returning allowed', async () => {

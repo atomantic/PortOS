@@ -452,7 +452,7 @@ export async function analyzeItem(itemId) {
     injectionRisk: injectionMatches.length ? 'high' : 'low', injectionMatches, sourceTrusted: false, contentLength: content.length,
     // The local regexes stay a SECOND signal; `screeningCode` is what the
     // policy escalates on, so an absent key means phase 1 actually passed.
-    ...(screening.ok ? {} : { screeningCode: screening.code, screeningMessage: screening.message }),
+    ...(screening.ok ? {} : { screeningCode: screening.code }),
   };
   await persistAnalysis({ item, stage: 'ingress', provider: 'deterministic', rulesHash, result: deterministic });
 

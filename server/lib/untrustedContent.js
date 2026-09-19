@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from './modelAbuseGuard.js';
+import { PRIVATE_UNTRUSTED_CONTENT_SOURCES, UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';
 
-// Channel names identify ingress, never a trust decision made by a model.
-export const UNTRUSTED_CONTENT_SOURCES = Object.freeze(['github-issue', 'github-pr', 'stacker-news', 'messages', 'email', 'imessage', 'signal']);
-export const PRIVATE_UNTRUSTED_CONTENT_SOURCES = Object.freeze(['messages', 'email', 'imessage', 'signal']);
+// Re-exported so every existing importer keeps working; the lists live in
+// their own browser-importable leaf (see untrustedContentSources.js).
+export { PRIVATE_UNTRUSTED_CONTENT_SOURCES, UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';
 export const DEFAULT_UNTRUSTED_CONTENT_POLICY = Object.freeze({
   classifierMode: 'required', minBenignScore: 0.9,
   maxInputChars: MODEL_ABUSE_GUARD_MAX_INPUT_CHARS, maxOutputChars: 32_000,
