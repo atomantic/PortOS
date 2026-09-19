@@ -785,41 +785,22 @@ export default function IssuesTab({ appId, appName }) {
                     onClick={() => toggleExpanded(issue.number)}
                     aria-expanded={isOpen}
                     aria-label={`${isOpen ? 'Collapse' : 'Expand'} description for issue ${issue.number}`}
-                    className="hidden sm:flex text-gray-500 hover:text-white transition-colors mt-0.5 shrink-0"
+                    className="flex text-gray-500 hover:text-white transition-colors mt-0.5 shrink-0"
                   >
                     {isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                   </button>
 
                   <div className="flex-1 min-w-0">
-                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                      <CircleDot size={14} className="text-port-success shrink-0 self-center" />
-                      <span className="text-xs font-mono text-gray-500">#{issue.number}</span>
+                    <div className="flex items-start gap-2">
+                      <CircleDot size={14} className="text-port-success shrink-0 mt-0.5" />
+                      <span className="text-xs font-mono text-gray-500 shrink-0 mt-0.5">#{issue.number}</span>
                       <button
                         onClick={() => toggleExpanded(issue.number)}
                         aria-expanded={isOpen}
-                        className="text-sm text-white text-left hover:text-port-accent transition-colors break-words"
+                        className="text-sm font-medium text-white text-left hover:text-port-accent transition-colors break-words flex-1"
                       >
                         {issue.title || '(no title)'}
                       </button>
-                      {issue.url && (
-                        <a
-                          href={issue.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          role="button"
-                          aria-label={`Open issue ${issue.number} on ${forgeLabel}`}
-                          title={`Open issue ${issue.number} on ${forgeLabel}`}
-                          onKeyDown={(e) => {
-                            if (e.key === ' ' || e.key === 'Spacebar') {
-                              e.preventDefault();
-                              window.open(issue.url, '_blank', 'noreferrer');
-                            }
-                          }}
-                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-lg border border-port-border bg-port-bg text-gray-400 hover:text-port-accent hover:border-port-accent/40 hover:bg-port-border/40 transition-colors shrink-0 self-center"
-                        >
-                          <ExternalLink size={14} />
-                        </a>
-                      )}
                     </div>
 
                     {issue.labels.length > 0 && (
@@ -847,7 +828,7 @@ export default function IssuesTab({ appId, appName }) {
                     </div>
                   </div>
 
-                  <div className="shrink-0 flex items-center gap-2">
+                  <div className="shrink-0 flex flex-wrap items-center gap-2 sm:self-start">
                     {ACTION_ORDER.map(action => {
                       const spec = ISSUE_ACTIONS[action];
                       const run = runs[runKey(action, issue.number)];
@@ -862,7 +843,7 @@ export default function IssuesTab({ appId, appName }) {
                             key={action}
                             to="/cos/agents"
                             aria-label={`${spec.label} #${issue.number}: ${RUN_STATUS_LABEL[state] || 'Queued — view'}`}
-                            className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                            className="min-h-[44px] sm:min-h-0 px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
                           >
                             <Icon size={14} /> {spec.label} · {RUN_STATUS_LABEL[state] || 'Queued — view'}
                           </Link>
@@ -874,7 +855,7 @@ export default function IssuesTab({ appId, appName }) {
                           onClick={() => handleRun(issue, action)}
                           disabled={state === 'queuing' || (action === 'claim' && invalidReviewOverride)}
                           title={spec.title(issue.number, appName)}
-                          className={`px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors`}
+                          className={`min-h-[44px] sm:min-h-0 px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors`}
                         >
                           {state === 'queuing'
                             ? <Loader2 size={14} className="animate-spin" />
@@ -891,8 +872,28 @@ export default function IssuesTab({ appId, appName }) {
                           label: `#${issue.number} ${issue.title || ''}`.trim()
                         }}
                         buttonText="Thread"
-                        className="px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                        className="min-h-[44px] sm:min-h-0 px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
                       />
+                    )}
+                    {issue.url && (
+                      <a
+                        href={issue.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        role="button"
+                        aria-label={`Open issue ${issue.number} on ${forgeLabel}`}
+                        title={`Open issue ${issue.number} on ${forgeLabel}`}
+                        onKeyDown={(e) => {
+                          if (e.key === ' ' || e.key === 'Spacebar') {
+                            e.preventDefault();
+                            window.open(issue.url, '_blank', 'noreferrer');
+                          }
+                        }}
+                        className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 hover:bg-port-border/40 text-xs transition-colors shrink-0"
+                      >
+                        <ExternalLink size={14} />
+                        <span className="hidden sm:inline">{forgeLabel}</span>
+                      </a>
                     )}
                   </div>
                 </div>
