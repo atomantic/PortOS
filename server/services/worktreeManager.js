@@ -737,6 +737,30 @@ async function adoptWorktreeUnlocked(agentId, sourceWorkspace, existingWorktreeP
 }
 
 /**
+ * The ref a "has this branch landed?" question should be asked against.
+ *
+ * NOT the local default branch. A PR merged on the forge moves ORIGIN's default
+ * branch; this clone's `main` does not move until something fetches. So a branch
+ * whose PR merged minutes ago reads as unmerged against the local ref, and a
+ * caller that preserves on "unmerged" keeps an already-landed branch — which is
+ * how a merged review-loop task was re-queued against work that had shipped.
+ *
+ * Refreshing first is best-effort: a fetch that fails (offline, no remote) falls
+ * back to the local branch, which is strictly what the caller had before.
+ *
+ * @param {string} sourceWorkspace
+ * @param {string} defaultBranch
+ * @returns {Promise<string>} `origin/<default>` when resolvable, else `<default>`
+ */
+async function resolveMergeTarget(sourceWorkspace, defaultBranch) {
+  await execGit(['fetch', 'origin', '--prune'], sourceWorkspace, { ignoreExitCode: true }).catch(() => {});
+  const remote = await execGit(['rev-parse', '--verify', `origin/${defaultBranch}^{commit}`], sourceWorkspace, { ignoreExitCode: true })
+    .then(r => (r.exitCode === 0 ? `origin/${defaultBranch}` : null))
+    .catch(() => null);
+  return remote || defaultBranch;
+}
+
+/**
  * Remove a git worktree and its associated branch.
  *
  * Called during agent cleanup. Merges the worktree branch back
@@ -890,7 +914,8 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
   // PR points at) keeps cleaning up after itself.
   if (!hasUnmergedCommits && options.preserveBranchWithCommits && !merged) {
     const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
-    const target = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
+    const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
+    const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
     // `hasBranchMergeEvidence` — NOT a bare `rev-list --count target..branch`. A branch
     // whose PR was REBASE- or SQUASH-merged has new SHAs, so rev-list still reports
     // it ahead and we would preserve an already-landed branch and point a retry at
@@ -898,6 +923,8 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
     // the very incident this preservation exists for ("PR merged, then reaped").
     // hasBranchMergeEvidence covers patch-equivalence (`git cherry`) and fails closed,
     // which is the polarity we want here too: unknown ⇒ keep the work.
+    // Asked against `resolveMergeTarget`, not the local default branch — see there
+    // for why a branch merged on the forge otherwise reads as unmerged here.
     const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => false);
     if (!hasMergeEvidence) {
       hasUnmergedCommits = true;
@@ -1230,16 +1257,8 @@ export async function reapMergedWorktrees(sourceWorkspace, {
 } = {}) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
 
-  // Refresh remote refs so "merged into origin/main" reflects the canonical state
-  // after a `gh pr merge`. Best-effort — fall back to local refs on failure.
-  await execGit(['fetch', 'origin', '--prune'], sourceWorkspace, { ignoreExitCode: true }).catch(() => {});
-
   const defaultBranch = knownDefaultBranch || await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
-  // Prefer the remote-tracking ref (post-merge truth); fall back to the local branch.
-  const remoteTarget = await execGit(['rev-parse', '--verify', `origin/${defaultBranch}^{commit}`], sourceWorkspace, { ignoreExitCode: true })
-    .then(r => (r.exitCode === 0 ? `origin/${defaultBranch}` : null))
-    .catch(() => null);
-  const target = remoteTarget || defaultBranch;
+  const target = await resolveMergeTarget(sourceWorkspace, defaultBranch);
 
   const currentBranch = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace, { ignoreExitCode: true })
     .then(r => r.stdout.trim())
