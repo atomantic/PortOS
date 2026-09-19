@@ -283,9 +283,9 @@ describe('MiniMax H3 LoRA capability', () => {
     expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
   });
 
-  // What the model-list route awaits so its payload never ships the cold read
-  // above as if it were a probed verdict. The route's own suite doubles this
-  // function, so its fan-out over the runtime table is only checked here.
+  // What the model-list routes await so their payloads never ship the cold read
+  // above as if it were a probed verdict. Both route suites double this
+  // function, so that it reaches the gated runtime at all is only checked here.
   it('makes the sync accessor authoritative once it resolves', async () => {
     runtimeMocks.spawn.mockImplementationOnce(() => exitChild(0));
     await warmByovLoraCapabilities();
