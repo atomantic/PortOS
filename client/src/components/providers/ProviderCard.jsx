@@ -136,6 +136,7 @@ export default function ProviderCard({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const modes = (provider.executionModes || []).map(mode => providersById?.[mode.id]).filter(Boolean);
   const unified = modes.length > 1;
+  const isCardDefault = isDefault || (unified && modes.some(m => m.id === activeProviderId));
   const displayName = unified ? provider.name.replace(/\b(CLI|TUI)\b\s*/i, '').trim() : provider.name;
   const shellProvider = unified ? modes.find(isTuiProvider) : provider;
   const style = CARD_STATE_STYLES[cardState.state];
@@ -165,8 +166,14 @@ export default function ProviderCard({
   const subscriptionReady = codexModeReady(provider);
   return (
     <div
-      className={`@container bg-port-card border border-l-4 rounded-xl p-4 ${style.border} ${style.dim || ''} ${
-        isDefault ? 'ring-1 ring-port-accent/60' : ''
+      id={`provider-card-${provider.id}`}
+      data-provider-id={provider.id}
+      data-mode-ids={(provider.executionModes || []).map(m => m.id).join(' ')}
+      tabIndex={isCardDefault ? -1 : undefined}
+      className={`@container ${
+        isCardDefault ? 'bg-port-accent/10' : 'bg-port-card'
+      } border border-l-4 rounded-xl p-4 transition-colors duration-200 ${style.border} ${style.dim || ''} ${
+        isCardDefault ? 'ring-1 ring-port-accent/60' : ''
       }`}
     >
       {/* Identity and actions share the top row; everything else sits BELOW it
@@ -183,7 +190,7 @@ export default function ProviderCard({
           <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
             {unified ? 'CLI / TUI' : provider.type.toUpperCase()}
           </span>
-          {isDefault && (
+          {isCardDefault && (
             <span className="text-xs px-2 py-0.5 rounded bg-port-accent/20 text-port-accent">
               DEFAULT{unified ? ` · ${provider.type.toUpperCase()}` : ''}
             </span>
@@ -317,7 +324,7 @@ export default function ProviderCard({
             {provider.enabled ? 'Disable' : 'Enable'}
           </button>
 
-          {!unified && !isDefault && provider.enabled && (
+          {!unified && !isCardDefault && provider.enabled && (
             <button
               onClick={() => onSetActive(provider.id)}
               disabled={!subscriptionReady}
