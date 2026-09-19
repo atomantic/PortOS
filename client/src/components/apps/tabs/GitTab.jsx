@@ -339,7 +339,7 @@ export default function GitTab({ appId, appName, repoPath }) {
     setOpeningPullRequest(true);
     const result = await api.createSlashdoTask('push', appId, {
       prCompletion: 'review-then-merge',
-      overrideContext: 'Work on the managed app repository. Reconcile all current work before delivery: include uncommitted changes, local commits not merged into the default branch, and commits not yet pushed. Preserve the app\'s existing intent, create or update a pull request against the default branch, then run the configured review process and merge it when review and CI are green. Do not discard work or push directly to the protected default branch.',
+      overrideContext: `Work on the managed app repository at ${repoPath}. Reconcile all current work before delivery: include uncommitted changes, local commits not merged into the default branch, and commits not yet pushed. Preserve the app's existing intent, create or update a pull request against the default branch, then run the configured review process and merge it when review and CI are green. Do not discard work or push directly to the protected default branch.`,
     }, { silent: true }).catch((err) => {
       toast.error(`Could not queue pull request agent: ${err.message}`);
       return null;
