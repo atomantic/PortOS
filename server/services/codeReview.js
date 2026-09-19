@@ -138,8 +138,8 @@ export function pickCodeReviewDefaults(settings) {
   const activeFallbackGroup = pickAvailableReviewerGroups(raw, Date.now())
   return {
     reviewers: activeFallbackGroup || (reviewers.length ? reviewers : [...DEFAULT_REVIEWERS]),
-    reviewerFallbackGroups: fallbackGroups,
-    reviewerHealth: raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? raw.reviewerHealth : {},
+    ...(Array.isArray(raw?.reviewerFallbackGroups) ? { reviewerFallbackGroups: fallbackGroups } : {}),
+    ...(raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? { reviewerHealth: raw.reviewerHealth } : {}),
     // Arbitrary GitHub reviewer usernames appended to `--review-with` to gate the
     // merge. Normalized so a hand-edited settings.json can't smuggle in unsafe
     // tokens. Empty array = none configured.
