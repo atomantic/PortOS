@@ -10,8 +10,10 @@ import {
   getAuthStatus,
   isAuthEnabled,
   isLoginRateLimited,
+  listSessions,
   recordLoginFailure,
   revokeSession,
+  revokeSessionById,
   setPassword,
   verifyPassword,
   verifySession,
@@ -27,6 +29,7 @@ const setPasswordSchema = z.object({
   currentPassword: z.string().max(256).optional(),
 }).strict();
 const clearPasswordSchema = z.object({ currentPassword: z.string().min(1).max(256) }).strict();
+const sessionIdParamSchema = z.object({ id: z.string().min(1).max(64).regex(/^[a-f0-9]+$/) }).strict();
 
 // Whether the request reached us over HTTPS (so the cookie should carry the
 // Secure flag). `req.secure` reflects the actual socket; we don't trust
@@ -118,6 +121,28 @@ router.delete('/password', asyncHandler(async (req, res) => {
   await clearPassword({ currentPassword });
   res.setHeader('Set-Cookie', buildClearCookie({ secure: isSecure(req) }));
   res.json({ enabled: false });
+}));
+
+// GET /api/auth/sessions — list live sessions for Settings → Security. Gated
+// exactly like the rest of /api/auth/* (not in the always-public set), so
+// this only reveals anything to a caller who is already authenticated.
+// Never returns the token or its hash — just what identifies a session on
+// screen (label, expiry) and what addresses it for a scoped revoke (id).
+router.get('/sessions', asyncHandler(async (_req, res) => {
+  const sessions = await listSessions();
+  res.json({ sessions, count: sessions.length });
+}));
+
+// DELETE /api/auth/sessions/:id — revoke exactly one session (e.g. the
+// agent's loopback credential) without touching the caller's own browser
+// session, unlike DELETE /api/auth/password (which revokes every session).
+router.delete('/sessions/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(sessionIdParamSchema, req.params);
+  const revoked = await revokeSessionById(id);
+  if (!revoked) {
+    throw new ServerError('Session not found', { status: 404, code: 'AUTH_SESSION_NOT_FOUND' });
+  }
+  res.json({ ok: true });
 }));
 
 export default router;

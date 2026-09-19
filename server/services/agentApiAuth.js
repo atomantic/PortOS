@@ -69,7 +69,7 @@ export async function resolveAgentApiEnv({ safetyProfile = null } = {}) {
   if (isPublicReviewRestrictedProfile(safetyProfile)) return {};
   if (!await isAuthEnabled()) return {};
   if (await isUsable(cached)) return { [AGENT_API_TOKEN_ENV]: cached.token };
-  const minted = await minting.run(AGENT_API_TOKEN_ENV, () => createSession()
+  const minted = await minting.run(AGENT_API_TOKEN_ENV, () => createSession({ label: 'agent' })
     .then(({ token, expiresAt }) => {
       cached = { token, expiresAt };
       return cached;

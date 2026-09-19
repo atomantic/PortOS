@@ -45,13 +45,25 @@ const SESSIONS_FILE = join(PATHS.data, 'auth-sessions.json');
 // laggy when a sibling tab needs to log out.
 const KICK_DELAY_MS = 500;
 
-// In-memory session store. Keyed by `sha256(token)` → { expiresAt }. Persisted
-// to disk on every mutation so tokens survive server restarts (handy when PM2
-// reloads on update). A single-user install rarely has more than a handful of
-// live sessions; a Map keeps this simple. The plaintext token only ever lives
-// in the response cookie — not in memory and not at rest — so an exfiltrated
-// `auth-sessions.json` (e.g. from a backup or peer-sync mirror) doesn't yield
-// usable credentials.
+// Bytes for the opaque per-session `id` exposed to callers (Settings UI,
+// GET /api/auth/sessions). It addresses a session for display/scoped-revoke
+// without ever exposing `tokenHash` — a cheap unguessable label, not a
+// crypto primitive shared with sidecars, so it stays local to this module.
+const SESSION_ID_BYTES = 8;
+
+// In-memory session store. Keyed by `sha256(token)` → { expiresAt, label, id }.
+// Persisted to disk on every mutation so tokens survive server restarts
+// (handy when PM2 reloads on update). A single-user install rarely has more
+// than a handful of live sessions; a Map keeps this simple. The plaintext
+// token only ever lives in the response cookie — not in memory and not at
+// rest — so an exfiltrated `auth-sessions.json` (e.g. from a backup or
+// peer-sync mirror) doesn't yield usable credentials.
+//
+// `label` is a free-text marker (`null` for an ordinary browser session,
+// `'agent'` for a PortOS-spawned agent's loopback credential) — display and
+// scoped-revocation only, never an authorization dimension. `id` is an
+// opaque per-session handle so a caller can address one record without ever
+// seeing `tokenHash`.
 const sessions = new Map();
 // Single in-flight load promise — both callers await the SAME promise so a
 // burst of concurrent verifySession calls after a restart can't observe an
@@ -71,14 +83,21 @@ const readSessions = async () => {
     // a record missing `tokenHash` is corrupted, not legacy.
     if (typeof entry?.tokenHash !== 'string' || typeof entry.expiresAt !== 'number') continue;
     if (entry.expiresAt <= cutoff) continue;
-    sessions.set(entry.tokenHash, { expiresAt: entry.expiresAt });
+    // `label` and `id` were added after the initial ship — a record from an
+    // older install (or one an older install just wrote back) lacks them.
+    // Missing/unknown values must not invalidate the record: default the
+    // label to an ordinary (unlabeled) session and mint a fresh id so the
+    // session is still addressable this run.
+    const label = typeof entry.label === 'string' ? entry.label : null;
+    const id = typeof entry.id === 'string' ? entry.id : randomBytes(SESSION_ID_BYTES).toString('hex');
+    sessions.set(entry.tokenHash, { expiresAt: entry.expiresAt, label, id });
   }
 };
 
 const writeSessions = async () => {
   const tokens = [];
-  for (const [tokenHash, { expiresAt }] of sessions) {
-    tokens.push({ tokenHash, expiresAt });
+  for (const [tokenHash, { expiresAt, label, id }] of sessions) {
+    tokens.push({ tokenHash, expiresAt, label, id });
   }
   await atomicWrite(SESSIONS_FILE, JSON.stringify({ tokens }, null, 2) + '\n');
 };
@@ -214,13 +233,45 @@ export const verifyPassword = async (password) => {
   return constantEqual(candidate, auth.passwordHash);
 };
 
-export const createSession = async () => {
+// `label` is `null` for an ordinary browser session; the agent loopback
+// credential (server/services/agentApiAuth.js) passes `'agent'`.
+export const createSession = async ({ label = null } = {}) => {
   await ensureLoaded();
   const token = randomBytes(TOKEN_BYTES).toString('hex');
   const expiresAt = now() + SESSION_TTL_MS;
-  sessions.set(hashToken(token), { expiresAt });
+  const id = randomBytes(SESSION_ID_BYTES).toString('hex');
+  sessions.set(hashToken(token), { expiresAt, label, id });
   await writeSessions();
-  return { token, expiresAt, maxAgeMs: SESSION_TTL_MS };
+  return { token, expiresAt, maxAgeMs: SESSION_TTL_MS, id };
+};
+
+// Read-only listing for Settings → Security. Never returns `tokenHash` — an
+// `id` is the only handle a caller gets for a scoped revoke.
+export const listSessions = async () => {
+  await ensureLoaded();
+  const cutoff = now();
+  const list = [];
+  for (const { expiresAt, label, id } of sessions.values()) {
+    if (expiresAt <= cutoff) continue;
+    list.push({ id, label, expiresAt });
+  }
+  return list;
+};
+
+// Revoke exactly one session by its opaque id — e.g. the agent's loopback
+// credential — without touching any other live session (unlike
+// `revokeSession`/`revokeAllSessions`, this does not kick connected sockets:
+// the sessions this addresses are non-interactive API credentials, not
+// browser tabs). Returns whether a matching session was found.
+export const revokeSessionById = async (id) => {
+  await ensureLoaded();
+  for (const [tokenHash, entry] of sessions) {
+    if (entry.id !== id) continue;
+    sessions.delete(tokenHash);
+    await writeSessions();
+    return true;
+  }
+  return false;
 };
 
 export const verifySession = async (token) => {
