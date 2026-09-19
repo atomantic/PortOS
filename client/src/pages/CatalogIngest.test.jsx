@@ -35,7 +35,9 @@ it('prunes only on request, keeps the brainstorm, and saves edited selected sugg
 // outcome #7615 exists to stop. Hold the list in a ref so the mount-effect
 // closure sees it.
 it('defaults a brain-bridge ingest to the Reality universe even though it starts from the mount effect', async () => {
-  listUniverseNames.mockResolvedValue([{ id: 'uni-other', name: 'Example Universe' }, { id: 'uni-reality', name: 'Reality' }]);
+  // The shipped seed (#7616) is matched by id, so a renamed Reality still
+  // resolves — a name-only match would fall through to Unassigned here.
+  listUniverseNames.mockResolvedValue([{ id: 'uni-other', name: 'Example Universe' }, { id: 'universe-reality', name: 'Home' }]);
   // Resolves a macrotask later than the universe list — the real ordering,
   // where a tiny GET beats an LLM extraction by seconds.
   ingestCatalogBrain.mockImplementation(() => new Promise((resolve) => {
@@ -50,12 +52,12 @@ it('defaults a brain-bridge ingest to the Reality universe even though it starts
   );
 
   await screen.findByDisplayValue('Captured thought');
-  expect(screen.getByLabelText('Catalogue into')).toHaveValue('uni-reality');
+  expect(screen.getByLabelText('Catalogue into')).toHaveValue('universe-reality');
 
   fireEvent.click(screen.getByRole('button', { name: /Commit/ }));
   await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith(
     'brain-scrap',
     [expect.objectContaining({ name: 'Captured thought', type: 'idea' })],
-    expect.objectContaining({ universeRef: 'uni-reality' }),
+    expect.objectContaining({ universeRef: 'universe-reality' }),
   ));
 });

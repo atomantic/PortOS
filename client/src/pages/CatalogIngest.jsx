@@ -39,6 +39,11 @@ const UNASSIGNED_UNIVERSE = 'unassigned';
 // defaults to a universe named "Reality" instead, when one exists — captured
 // thought is factual by default.
 const LAST_UNIVERSE_STORAGE_KEY = 'catalog-ingest-last-universe';
+// #7616 seeds one shipped universe with this exact id ("Reality",
+// `factual: true`). Match the id first — it survives a rename, which the
+// display name does not — and keep the name match for an install whose
+// Reality predates the seed or was recreated by hand.
+const REALITY_UNIVERSE_ID = 'universe-reality';
 const REALITY_UNIVERSE_NAME = 'Reality';
 // Ingest source kinds that default to the Reality universe rather than the
 // last-used pick — mirrors SCRAP_SOURCE_KINDS' `factual: true` entries
@@ -157,7 +162,8 @@ export default function CatalogIngest() {
   // 'brain' | 'babble'.
   const defaultUniverseForSource = (sourceKind) => {
     const loaded = universesRef.current;
-    const reality = loaded.find((u) => u.name === REALITY_UNIVERSE_NAME);
+    const reality = loaded.find((u) => u.id === REALITY_UNIVERSE_ID)
+      || loaded.find((u) => u.name === REALITY_UNIVERSE_NAME);
     if (FACTUAL_INGEST_KINDS.has(sourceKind)) return reality?.id || UNASSIGNED_UNIVERSE;
     const lastUsed = safeReadStorage(LAST_UNIVERSE_STORAGE_KEY);
     if (lastUsed && (lastUsed === UNASSIGNED_UNIVERSE || loaded.some((u) => u.id === lastUsed))) return lastUsed;
