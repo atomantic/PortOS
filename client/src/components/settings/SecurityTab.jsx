@@ -54,10 +54,7 @@ export function SecurityTab() {
     loadAuthStatus();
   }, [loadAuthStatus]);
 
-  // Sessions only exist while auth is on (agentApiAuth only mints a token
-  // when isAuthEnabled(), and disabling clears every session) — skip the
-  // fetch otherwise, and drop any list left over from a prior enabled state.
-  useEffect(() => {
+  const loadSessions = useCallback(() => {
     if (!enabled) {
       setAgentSessions([]);
       return;
@@ -75,6 +72,13 @@ export function SecurityTab() {
         if (requestId === sessionsRequestRef.current) setAgentSessions([]);
       });
   }, [enabled]);
+
+  // Sessions only exist while auth is on (agentApiAuth only mints a token
+  // when isAuthEnabled(), and disabling clears every session) — skip the
+  // fetch otherwise, and drop any list left over from a prior enabled state.
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
 
   const handleRevokeSession = async (id) => {
     setRevokingId(id);
@@ -117,6 +121,7 @@ export function SecurityTab() {
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
+    loadSessions();
     toast.success(enabled ? 'Password updated' : 'Login password enabled');
   };
 

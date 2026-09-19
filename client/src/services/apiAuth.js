@@ -27,6 +27,8 @@ export const listAuthSessions = (options) => request('/auth/sessions', options);
 
 // Revokes one session by its opaque id — e.g. the agent's loopback
 // credential — without signing the caller's own browser session out.
-export const revokeAuthSession = (id) => request(`/auth/sessions/${encodeURIComponent(id)}`, {
+export const revokeAuthSession = (id, options) => request(`/auth/sessions/${encodeURIComponent(id)}`, {
   method: 'DELETE',
+  silent: true,
+  ...options,
 });

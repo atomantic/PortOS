@@ -137,6 +137,31 @@ describe('SecurityTab', () => {
     expect(screen.getByText('Login password enabled')).toBeInTheDocument();
   });
 
+  it('refreshes agent sessions when password is changed', async () => {
+    api.getAuthStatus.mockResolvedValue({ enabled: true });
+    api.listAuthSessions
+      .mockResolvedValueOnce({
+        sessions: [{ id: 'agent-1', label: 'agent', expiresAt: Date.parse('2026-10-01T00:00:00Z') }],
+      })
+      .mockResolvedValueOnce({
+        sessions: [],
+      });
+    api.setAuthPassword.mockResolvedValue({ enabled: true });
+
+    render(<SecurityTab />);
+
+    expect(await screen.findByText('1 agent session')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Current password'), { target: { value: 'old-password' } });
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new-password-123' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), { target: { value: 'new-password-123' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update password' }));
+
+    await waitFor(() => expect(api.setAuthPassword).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('1 agent session')).not.toBeInTheDocument());
+    expect(api.listAuthSessions).toHaveBeenCalledTimes(2);
+  });
+
   it('hides the sessions panel when auth is disabled', async () => {
     api.getAuthStatus.mockResolvedValue({ enabled: false });
 
