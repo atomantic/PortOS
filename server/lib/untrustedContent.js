@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from './modelAbuseGuard.js';
 
 // Channel names identify ingress, never a trust decision made by a model.
-export const UNTRUSTED_CONTENT_SOURCES = Object.freeze(['github-issue', 'github-pr', 'messages', 'email', 'imessage', 'signal']);
+export const UNTRUSTED_CONTENT_SOURCES = Object.freeze(['github-issue', 'github-pr', 'stacker-news', 'messages', 'email', 'imessage', 'signal']);
 export const PRIVATE_UNTRUSTED_CONTENT_SOURCES = Object.freeze(['messages', 'email', 'imessage', 'signal']);
 export const DEFAULT_UNTRUSTED_CONTENT_POLICY = Object.freeze({
   classifierMode: 'required', minBenignScore: 0.9,

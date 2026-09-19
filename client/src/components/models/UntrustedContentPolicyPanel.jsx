@@ -6,6 +6,7 @@ import toast from '../ui/Toast';
 
 const SOURCES = [
   ['defaults', 'Shared defaults'], ['github-issue', 'GitHub issues'], ['github-pr', 'GitHub pull requests'],
+  ['stacker-news', 'Stacker News'],
   ['messages', 'Messages'], ['email', 'Email'], ['imessage', 'iMessage'], ['signal', 'Signal'],
 ];
 const PRIVATE_SOURCES = ['messages', 'email', 'imessage', 'signal'];
