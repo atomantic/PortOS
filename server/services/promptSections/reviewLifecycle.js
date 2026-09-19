@@ -1085,6 +1085,12 @@ export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>',
 function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '', prRepo = '', sourceTaskId = 'unknown', verbose = false, inlineExitStep = null, mergeGateForge = 'github', inlineWorkflowStep = INLINE_REVIEW_LOOP_STEP, localReviewers = [], localReviewRequired = false, selfReview = false }) {
   const inline = inlineExitStep !== null;
   const hasLocalReview = Array.isArray(localReviewers) && localReviewers.length > 0;
+  // How the self-review step tells the agent to read the change. Forge-derived
+  // for the same reason every other command in this section is (#6846): the
+  // resolve action is offered on a GitLab MR too, and a hardcoded `gh pr diff`
+  // would hand a `glab` run a CLI it does not have. The `git diff` fallback is
+  // forge-agnostic and stays either way.
+  const prDiffCommand = mergeGateForge === 'gitlab' ? '`glab mr diff`' : '`gh pr diff`';
   // WHY this follow-up has no roster, decided once. Every sentence that differs
   // between the three reasons reads from the record below rather than re-testing
   // the discriminant, so a fourth reason is one entry instead of four scattered
@@ -1109,7 +1115,7 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
         ? 'Do NOT delegate a second code review to another agent or CLI — your own pass above is the whole review.'
         : 'do NOT delegate a second code review to another agent or CLI — your own pass above is the whole review; ',
       steps: [
-        '1. **Review the change yourself, before the CI gate.** Read the full diff this PR proposes (`gh pr diff` against its head, or `git diff <base>...HEAD` in the checkout) and review it as a reviewer would: correctness bugs first, then contract, compatibility and data-safety breaks, then reuse and simplification. Review this change and directly affected contracts only — report material issues with concrete wrong outcomes, and skip repository-wide audits, style preferences, speculation, and nits.',
+        `1. **Review the change yourself, before the CI gate.** Read the full diff this request proposes (${prDiffCommand} against its head, or \`git diff <base>...HEAD\` in the checkout) and review it as a reviewer would: correctness bugs first, then contract, compatibility and data-safety breaks, then reuse and simplification. Review this change and directly affected contracts only — report material issues with concrete wrong outcomes, and skip repository-wide audits, style preferences, speculation, and nits.`,
         '2. **Fix what you found, on this branch.** Commit the fixes (`fix:` prefix, no Co-Authored-By) and push before the gate below, so CI verifies the reviewed state rather than the state you reviewed. If a finding needs a product decision you cannot make, leave the PR open and say so in your completion summary instead of merging past it.',
       ],
     },

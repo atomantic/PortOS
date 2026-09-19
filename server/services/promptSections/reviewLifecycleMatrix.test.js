@@ -441,6 +441,23 @@ describe('buildReviewLoopFollowUpSection — self-review follow-up', () => {
     expect(section).not.toContain('Self-Review & Merge');
   });
 
+  // Resolve & merge is offered on a GitLab MR too, and every other command in
+  // this section is forge-derived (#6846) — a hardcoded `gh pr diff` in the
+  // self-review step would hand a `glab` run a CLI it does not have.
+  it('names the forge\'s own diff command in the self-review step', () => {
+    expect(selfReview()).toContain('(`gh pr diff` against its head');
+
+    const gitlab = buildReviewLoopFollowUpSection(
+      fixture({
+        reviewLoopMergeOnly: true, reviewLoopSelfReview: true,
+        reviewLoopPRHost: FORGES.glab.host,
+      }),
+      { verbose: false, forgeCli: FORGES.glab.forgeCli },
+    );
+    expect(gitlab).toContain('(`glab mr diff` against its head');
+    expect(gitlab).not.toContain('gh pr diff');
+  });
+
   it('renders the inline arm as a self-review gate', () => {
     const section = selfReview({}, { inlineExitStep: INLINE_EXIT_STEP });
 
