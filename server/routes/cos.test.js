@@ -1473,6 +1473,7 @@ describe('CoS Routes', () => {
       expect(taskData.model).toBe('claude-opus-5');
       expect(taskData.effort).toBe('high');
       expect(taskData.claimTarget).toBe('412');
+      expect(taskData.metadata).toEqual({ prompt: 'CLAIM ISSUE PROMPT' });
       expect(taskData.simplify).toBe(true);
       // The claim prompt owns its own review sequence — no CoS loop on top.
       expect(taskData.reviewLoop).toBe(false);
