@@ -34,16 +34,14 @@
  *  - Nothing here can fail a run or a request beyond its own result. The caller
  *    reports what happened and moves on.
  *
- * Still open: the overturn is not written back onto the run record, so the agent
- * card keeps rendering the disproved verdict and keeps offering to investigate
- * it. Tracked in #7694, which spans the client surface and a task→agent lookup
- * a report does not currently carry.
  */
 
 import { updateTask } from './cos.js';
+import { getAgents, updateAgent } from './cosAgentLifecycle.js';
 import { getSettings } from './settings.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
 import { SUPERVISED_INVESTIGATION_DELIVERY, investigationOutcome } from '../lib/investigationTasks.js';
+import { isPlainObject } from '../lib/objects.js';
 import {
   GOAL_FIDELITY_CONTEXT_GAPS,
   buildGoalFidelityCalibrationTask,
@@ -138,7 +136,44 @@ export async function reportGoalFidelityFalsePositive({ gap, detail, evidence, f
 
   const outcome = investigationOutcome(filed, { subject: 'the calibration task' });
   if (outcome.duplicate) await unionAffectedRun(filed.task, taskId);
+  if (outcome.queued) await stampOverturnedRuns(taskId, resolvedGap, outcome.taskId);
   return report({ gap: resolvedGap, fingerprint: calibrationFingerprint, ...outcome });
+}
+
+/**
+ * Mark every retained run for the reported task without rewriting the reviewer's
+ * verdict. A task can have more than one agent attempt, and each card needs to
+ * stop presenting the disproved finding as current.
+ *
+ * Best-effort like the calibration-task union below: the calibration already
+ * exists at this point, so a stale/missing run record must not turn a successful
+ * report into an HTTP failure.
+ */
+async function stampOverturnedRuns(taskId, gap, calibrationTaskId) {
+  if (!taskId || !calibrationTaskId) return;
+  const agents = await getAgents().catch((err) => {
+    console.error(`❌ goal-fidelity calibration: could not resolve runs for ${taskId}: ${err.message}`);
+    return [];
+  });
+  const matches = agents.filter(agent => (
+    agent.taskId === taskId || agent.metadata?.taskId === taskId
+  ) && ['fix-first', 'rethink'].includes(agent.result?.goalFidelity?.verdict));
+  const at = new Date().toISOString();
+  await Promise.all(matches.map((agent) => {
+    const result = isPlainObject(agent.result) ? agent.result : {};
+    const goalFidelity = isPlainObject(result.goalFidelity) ? result.goalFidelity : {};
+    return updateAgent(agent.id, {
+      result: {
+        ...result,
+        goalFidelity: {
+          ...goalFidelity,
+          overturned: { gap, calibrationTaskId, at },
+        },
+      },
+    }).catch((err) => {
+      console.error(`❌ goal-fidelity calibration: could not stamp run ${agent.id}: ${err.message}`);
+    });
+  }));
 }
 
 /**
