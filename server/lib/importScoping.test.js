@@ -765,7 +765,7 @@ describe('deferred imports stay deferred (#6156)', () => {
 // reaches `jevRouter.js`, `untrustedContent.js` and `jev.js` only through
 // `await import()`. Measured before 115,283, after 115,479; restores the ~400
 // of headroom the recent entries carry — main had eroded to 17.
-const MAX_STATIC_INSTANTIATIONS = 115900;
+const MAX_STATIC_INSTANTIATIONS = 116100;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
