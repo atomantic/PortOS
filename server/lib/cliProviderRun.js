@@ -103,11 +103,12 @@ export function pickCliProvider(providers, config = {}) {
  * @param {number} [args.timeoutMs] - SIGTERM after this many ms (default 300000)
  * @param {(chunk: string, stream: 'stdout'|'stderr') => void} [args.onData] - live output callback
  * @param {NodeJS.ProcessEnv} [args.baseEnv] - base env for the child (default process.env); the shared child-env composer filters inherited variables. Explicit provider.envVars still overlays it.
+ * @param {object|null} [args.bootstrapEnv] - Credential-command output for an opted-in tool-free review; filtered by buildCliChildEnv.
  * @param {string} [args.safetyProfile] - Optional maintained no-tool profile. Refuses unsupported providers and extra argv; both argv and environment use the same profile.
  * @returns {Promise<{ text: string, exitCode: number, stderr: string, partial: boolean, stderrTail: string } | { error: string, exitCode?: number, stderr?: string, stderrTail?: string }>}
  */
 export function runCliProviderPrompt(args = {}) {
-  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null } = args;
+  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null, bootstrapEnv = null } = args;
 
   if (!provider?.command) {
     return Promise.resolve({ error: 'Provider has no command configured' });
@@ -149,6 +150,7 @@ export function runCliProviderPrompt(args = {}) {
     const effectiveCwd = cwd || process.cwd();
     const childEnv = buildCliChildEnv({
       baseEnv,
+      bootstrapEnv,
       provider: effectiveProvider,
       cwd: effectiveCwd,
       safetyProfile,

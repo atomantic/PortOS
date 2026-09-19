@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access } from 'node:fs/promises';
 import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cosValidation.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
-import { buildLocalReviewerInstructions } from './cosTaskPrompts.js';
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
 vi.mock('./providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
@@ -52,6 +51,7 @@ describe('configured provider reviewers', () => {
     expect(task.reviewerModels).toEqual({ [backend]: 'pinned-coder', codex: 'example-cloud-model' });
     expect(task.optionalReviewers).toEqual([backend]);
     expect(task.reviewerMaxRounds).toEqual({ [backend]: 1 });
+    const { buildLocalReviewerInstructions } = await import('./cosTaskPrompts.js');
     const instructions = buildLocalReviewerInstructions(task.reviewers, task.reviewerModels);
     expect(instructions).toContain(backend);
     expect(instructions).toContain('pinned-coder');
@@ -99,6 +99,32 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
     runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: true });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
+  });
+
+  it('requires a credential command for bootstrap reviewers and passes minted env to a completed review', async () => {
+    const cli = { ...provider, type: 'cli', command: 'claude', credentialBootstrap: { command: 'never-run-wrapper' } };
+    getProviderById.mockResolvedValue(cli);
+    listProviders.mockResolvedValue([cli]);
+    expect(await getProviderReviewUnsupported()).toEqual({ [backend]: 'REVIEWER_BOOTSTRAP_UNSUPPORTED' });
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false, code: 'REVIEWER_BOOTSTRAP_UNSUPPORTED' });
+    expect(isReviewerConfigFault('REVIEWER_BOOTSTRAP_UNSUPPORTED')).toBe(true);
+    expect(runCliProviderPrompt).not.toHaveBeenCalled();
+
+    cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.log("ANTHROPIC_AUTH_TOKEN=example-minted-token")'];
+    expect(await getProviderReviewUnsupported()).toEqual({});
+    runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+    expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      bootstrapEnv: { ANTHROPIC_AUTH_TOKEN: 'example-minted-token' },
+      safetyProfile: 'public-review-gate',
+    }));
+
+    cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.error("example-secret"); process.exit(1)'];
+    runCliProviderPrompt.mockClear();
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({
+      ok: false, error: 'Reviewer credential setup or execution failed.',
+    });
+    expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
   it('refuses an unsupported effort before invoking the provider', async () => {

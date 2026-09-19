@@ -533,6 +533,11 @@ export async function resolveProviderReviewTransport(provider) {
       error: 'This provider has no enforced tool-free review transport. Select its API mode or a supported reviewer harness.',
     }
   }
+  const { hasCredentialBootstrap } = await import('../lib/credentialBootstrap.js')
+  if (hasCredentialBootstrap(provider) && !provider.credentialBootstrap.envCommand?.length) {
+    return { transport: null, code: 'REVIEWER_BOOTSTRAP_UNSUPPORTED',
+      error: 'Configure a bootstrap environment command to use this provider for tool-free reviews.' }
+  }
   return { transport: 'cli' }
 }
 
@@ -578,9 +583,13 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     // No repository context or project-level CLI settings are exposed. The
     // shared recipe and environment composer enforce the no-tool posture.
     const cwd = await mkdtemp(join(tmpdir(), 'portos-review-'))
-    result = await Promise.resolve().then(() => runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs,
-      safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
-    })).finally(() => rm(cwd, { recursive: true, force: true }))
+    result = await Promise.resolve().then(async () => {
+      const { resolveBootstrapEnv } = await import('../lib/credentialBootstrap.js')
+      const bootstrapEnv = await resolveBootstrapEnv(provider, { safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE })
+      return runCliProviderPrompt({ provider, model, prompt, cwd, timeoutMs, bootstrapEnv,
+        safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE })
+    }).catch(() => ({ error: 'Reviewer credential setup or execution failed.' }))
+      .finally(() => rm(cwd, { recursive: true, force: true }))
     if (result.partial) return { ok: false, error: 'Reviewer exited before completing its response.' }
     if (!result.error && result.streamFormat === 'stream-json') {
       const { safeJSONLParse } = await import('../lib/jsonIo.js')

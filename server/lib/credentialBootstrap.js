@@ -60,11 +60,64 @@
  * the AI toolkit or the data layer.
  */
 
-import { IS_WIN32, resolveWindowsExecutable, prepareWindowsSafeSpawn, killProcessTree } from './bufferedSpawn.js';
-import { isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
+import { IS_WIN32, resolveWindowsExecutable, prepareWindowsSafeSpawn, prepareCliSpawn, killProcessTree } from './bufferedSpawn.js';
+import { execFile } from './childProcess.js';
+import { tmpdir } from 'node:os';
+import { withSpawnCwdEnv } from './spawnCwd.js';
+import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
 import { composeBootstrapSpawn, hasCredentialBootstrap } from './aiToolkit/internal/credentialBootstrap.js';
 
 export { hasCredentialBootstrap };
+
+// Credentials are memory-only and expire after one minute. Key by the record
+// and its configuration so editing a command or account cannot reuse old auth.
+const bootstrapEnvCache = new Map();
+const BOOTSTRAP_ENV_TTL_MS = 60_000;
+
+/**
+ * Materialize credentials independently of a review. The command gets neither
+ * the prompt nor the enforced harness argv. Only no-tool callers may opt in;
+ * sandboxed actions must never acquire these credentials.
+ */
+export async function resolveBootstrapEnv(provider, { safetyProfile = null } = {}) {
+  const argv = provider?.credentialBootstrap?.envCommand;
+  if (!argv) return {};
+  if (!isPublicReviewNoToolProfile(safetyProfile)) {
+    throw new Error('Bootstrap credentials are available only for tool-free reviews.');
+  }
+  if (!Array.isArray(argv) || !argv.length || argv.some(value => typeof value !== 'string' || !value || value.includes('\0'))) {
+    throw new Error('Invalid bootstrap credential command.');
+  }
+  const key = JSON.stringify([provider.id, argv, provider.envVars]);
+  const now = Date.now();
+  for (const [cachedKey, entry] of bootstrapEnvCache) {
+    if (entry.expires <= now) bootstrapEnvCache.delete(cachedKey);
+  }
+  const cached = bootstrapEnvCache.get(key);
+  if (cached) return { ...cached.env };
+  const cwd = tmpdir();
+  const childEnv = withSpawnCwdEnv({ ...process.env, ...provider.envVars }, cwd);
+  const spawnConfig = prepareCliSpawn(argv[0], argv.slice(1), childEnv);
+  const env = await new Promise((resolve, reject) => {
+    // execFile never evaluates output or invokes a shell. Bound runtime and
+    // output, and never propagate stderr/stdout or the command in an error.
+    execFile(spawnConfig.command, spawnConfig.args, {
+      cwd, env: childEnv,
+      shell: false, timeout: 15_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+    }, (error, stdout) => {
+      if (error) return reject(new Error('Bootstrap credential command failed.'));
+      const entries = String(stdout).split(/\r?\n/).flatMap(line => {
+        const match = /^([A-Za-z_][A-Za-z0-9_]*)=([^\0\r\n]*)$/.exec(line);
+        return match ? [[match[1], match[2]]] : [];
+      });
+      resolve(Object.fromEntries(entries));
+    });
+  });
+  if (!Object.keys(env).length) throw new Error('Bootstrap credential command returned no environment assignments.');
+  if (bootstrapEnvCache.size >= 128) bootstrapEnvCache.delete(bootstrapEnvCache.keys().next().value);
+  bootstrapEnvCache.set(key, { env, expires: Date.now() + BOOTSTRAP_ENV_TTL_MS });
+  return { ...env };
+}
 
 /**
  * The command+args PortOS should actually spawn for this provider: the

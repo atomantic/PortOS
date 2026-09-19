@@ -273,7 +273,9 @@ export default function ReviewerPicker({
       if (providerReviewUnsupported?.[token]) {
         return {
           label: "can't review",
-          title: `${labelFor(token)} has no enforced tool-free review transport on this machine, so a review round would never complete. Switch the provider to its API mode, or pick a reviewer harness that supports one.`
+          title: providerReviewUnsupported[token] === 'REVIEWER_BOOTSTRAP_UNSUPPORTED'
+            ? 'Configure a review credential command in this provider’s credential bootstrap settings.'
+            : `${labelFor(token)} has no enforced tool-free review transport on this machine, so a review round would never complete. Switch the provider to its API mode, or pick a reviewer harness that supports one.`
         };
       }
       return null;

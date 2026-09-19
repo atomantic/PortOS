@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { hasCredentialBootstrap, applyCredentialBootstrap, resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup, signalDetachedGroups, resetDetachedGroupsForTests } from './credentialBootstrap.js';
+import * as childProcess from './childProcess.js';
+import { resolveBootstrapEnv, hasCredentialBootstrap, applyCredentialBootstrap, resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup, signalDetachedGroups, resetDetachedGroupsForTests } from './credentialBootstrap.js';
 import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE, PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
 
 vi.mock('./bufferedSpawn.js', async (importOriginal) => ({
@@ -294,5 +295,39 @@ describe('credentialBootstrap', () => {
       expect(logFailure.mock.calls[0][0]).toContain('Group SIGTERM for pid 707');
       killSpy.mockRestore();
     });
+  });
+});
+
+describe('resolveBootstrapEnv', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const profile = { safetyProfile: PUBLIC_REVIEW_GATE_EXECUTION_PROFILE };
+  const record = (id, script) => ({ id, credentialBootstrap: {
+    command: 'never-run-wrapper', envCommand: [process.execPath, '-e', script],
+  } });
+
+  it('parses assignments literally and keeps cached credentials isolated from callers and configuration changes', async () => {
+    const spawn = vi.spyOn(childProcess, 'execFile');
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    const output = ['ANTHROPIC_AUTH_TOKEN=example-token', 'INVALID LINE', 'export BAD=value', 'LITERAL=$(do-not-run)=value', 'EMPTY=', '1BAD=value', '{"KEY":"value"}'].join('\n');
+    const provider = record('cache-example', 'console.log(' + JSON.stringify(output) + ')');
+    const first = await resolveBootstrapEnv(provider, profile);
+    expect(first).toEqual({ ANTHROPIC_AUTH_TOKEN: 'example-token', LITERAL: '$(do-not-run)=value', EMPTY: '' });
+    first.ANTHROPIC_AUTH_TOKEN = 'mutated';
+    expect((await resolveBootstrapEnv(provider, profile)).ANTHROPIC_AUTH_TOKEN).toBe('example-token');
+    expect(spawn).toHaveBeenCalledTimes(1);
+    clock.mockReturnValue(62000);
+    await resolveBootstrapEnv(provider, profile);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    const changed = record(provider.id, 'console.log("ANTHROPIC_AUTH_TOKEN=changed")');
+    expect((await resolveBootstrapEnv(changed, profile)).ANTHROPIC_AUTH_TOKEN).toBe('changed');
+    expect(spawn).toHaveBeenCalledTimes(3);
+  });
+
+  it('rejects actions before executing and never exposes failed command output', async () => {
+    const provider = record('failure-example', 'console.error("example-private-value"); process.exit(1)');
+    await expect(resolveBootstrapEnv(provider, { safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE })).rejects.toThrow('only for tool-free');
+    await expect(resolveBootstrapEnv(provider, profile)).rejects.toThrow(/^Bootstrap credential command failed\.$/);
+    await expect(resolveBootstrapEnv(record('empty-example', 'console.log("not an assignment")'), profile)).rejects.toThrow('no environment assignments');
+    expect(await resolveBootstrapEnv({ credentialBootstrap: { command: 'never-run-wrapper' } }, profile)).toEqual({});
   });
 });

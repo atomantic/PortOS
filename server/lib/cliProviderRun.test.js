@@ -11,6 +11,7 @@ vi.mock('./bufferedSpawn.js', async (importOriginal) => {
 
 const { pickCliProvider, runCliProviderPrompt } = await import('./cliProviderRun.js');
 const { resolveWindowsExecutable } = await import('./bufferedSpawn.js');
+const { resolveBootstrapEnv } = await import('./credentialBootstrap.js');
 
 const cli = (id, extra = {}) => ({ id, type: 'cli', command: id, enabled: true, models: [], ...extra });
 
@@ -132,15 +133,18 @@ describe('runCliProviderPrompt', () => {
     const { join } = await import('node:path');
     const dir = await mkdtemp(join(tmpdir(), 'review-cli-bootstrap-'));
     const command = join(dir, 'claude');
-    await writeFile(command, '#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ args: process.argv.slice(2) })));', { mode: 0o755 });
+    await writeFile(command, '#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ args: process.argv.slice(2), auth: process.env.ANTHROPIC_AUTH_TOKEN })));', { mode: 0o755 });
     // The bootstrap binary does not exist: had the wrap applied, this spawn
     // would ENOENT instead of reaching the harness script above.
-    const provider = { ...cli('example-claude'), command, credentialBootstrap: { command: join(dir, 'token-cli-missing'), args: ['run'] } };
+    const provider = { ...cli('example-claude'), command, credentialBootstrap: { command: join(dir, 'token-cli-missing'), args: ['run'],
+      envCommand: [process.execPath, '-e', 'console.log("ANTHROPIC_AUTH_TOKEN=example-token")'] } };
+    const bootstrapEnv = await resolveBootstrapEnv(provider, { safetyProfile: 'public-review-gate' });
     const result = await runCliProviderPrompt({
-      provider, model: 'pinned-model', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate',
+      provider, bootstrapEnv, model: 'pinned-model', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate',
     }).finally(() => rm(dir, { recursive: true, force: true }));
     expect(result.error).toBeUndefined();
     expect(JSON.parse(result.text).args).toEqual(expect.arrayContaining(['--restricted', '--tools', '']));
+    expect(JSON.parse(result.text).auth).toBe('example-token');
   });
 
   it('rejects a missing command without spawning', async () => {
