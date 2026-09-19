@@ -1,7 +1,7 @@
-# ADR: Privacy Center Records Stay Machine-Local — Never Federated
+# ADR: Privacy Center Records Are Currently Machine-Local
 
 - **Date:** 2026-08-08
-- **Status:** Accepted
+- **Status:** Amended 2026-09-19 by [user-controlled federation](./2026-09-19-user-controlled-federation.md). The current storage implementation remains local-only; the blanket prohibition on personal-data federation is superseded.
 - **Related:** issue #2148 (closes the federation half; household subjects split
   out), epic #2138,
   [design record](../plans/2026-07-04-privacy-center-pii-vault-broker-optout.md),
@@ -40,7 +40,7 @@ as written:
    optional instance password is off (the default posture), that is every host
    on the tailnet.
 
-2. **Everything federated today is creative work.** `PEER_SUBSCRIBABLE_KINDS` is
+2. **The record-sharing registry examined for this decision covered creative work.** This is not an inventory of all federation channels: Brain also syncs personal records. At the time, `PEER_SUBSCRIBABLE_KINDS` was
    `universe, series, mediaCollection, author, artist, album, track,
    creativeDirectorProject, moodBoard, writersRoomWork, writersRoomFolder,
    writersRoomExercise, musicVideoProject, commissionFeedback,
@@ -67,10 +67,9 @@ radius the encryption layer exists to bound.
 
 ## Decision
 
-**No Privacy Center record federates. All eight tables are machine-local, and
-that is an intentional product guarantee — not a missing feature.**
-
-Concretely, and permanently unless this ADR is superseded:
+**Privacy Center records currently remain machine-local.** The following
+implementation boundaries remain in place; they do not prohibit a future
+user-requested sync design between machines the user owns/controls:
 
 - No privacy kind is added to `PEER_SUBSCRIBABLE_KINDS`.
 - No privacy category is added to `dataSync`'s `CATEGORIES`.
@@ -82,41 +81,35 @@ Concretely, and permanently unless this ADR is superseded:
 A guard test (`server/services/sharing/privacyNeverFederates.test.js`) enforces
 the first two so the boundary fails loudly rather than eroding.
 
-### Scope of the rule this ADR states
+### Scope after the 2026-09-19 clarification
 
-`AGENTS.md` summarizes this decision as the flat rule that **PII must not ride
-the federation layer at all**, and for Privacy Center records that is exact and
-unconditional. The rule governs *records* — what one instance replicates to
-another, and what a status or capability payload may disclose. It is not a rule
-that no user-authored text may ever be addressed to a peer: its one scoped
-carve-out, submitted image/video job bodies, is decided in ADR
-[federated visual prompts](./2026-08-20-federated-visual-prompts.md) (#4682).
+The [user-controlled federation ADR](./2026-09-19-user-controlled-federation.md)
+supersedes the interpretation that all personal or private data must remain on
+one machine. This decision documents the Privacy Center's current local-only
+implementation, not a universal restriction on the user's own network.
+Brain's established sync of personal records, including threads derived from
+private trackers, is permitted.
 
-### Covered paths beyond the Privacy Center tables
-
-The rule was written for the nine `privacy_*` tables, but it governs a *class* of
-record — private data about the operator, held on one machine — not a table
-prefix. Later work has added derived records of the same class, each with its own
-guard test modelled on `privacyNeverFederates.test.js`:
+Other stores also currently have explicit local-only implementations:
 
 | Path | What it holds | Guard |
 |---|---|---|
-| the nine `privacy_*` tables | the PII vault, orgs, holdings, broker cases | `privacyNeverFederates.test.js` |
+| `privacy_*` tables | the PII vault, orgs, holdings, broker cases | `privacyNeverFederates.test.js` |
 | `beeper_*` tables | mirrored conversation bodies and attachment metadata | `beeperNeverFederates.test.js` |
 | `ai_connections` / `ai_*_bindings` | this machine's endpoints and credential material | `providerGraphNeverFederates.test.js` |
-| **`data/jev/`** (#7689) | **trained project heads, their training corpora, and cached frozen-encoder outputs** | `jevNeverFederates.test.js` |
+| `data/jev/` (#7689) | trained project heads, training corpora, cached encoder outputs | `jevNeverFederates.test.js` |
 
-`data/jev/` earns its place for a reason worth stating: nothing in it *looks* like
-PII. A corpus is this install's merged pull requests, closed-unmerged ones and
-issues closed as not planned, rendered as premises; a trained head is a few
-thousand floats fit on exactly that. Both are **derived records of private
-repository history and the operator's own judgement calls about what was worth
-shipping** — a corpus quotes it directly, and a head encodes it. Pooling corpora
-across peers to train a better shared head is the obvious feature request and is
-refused for the same reason the vault is: it would move that history across the
-federation layer, and a model's weights are not an anonymization step.
+Those guards describe current support and remain unchanged. In particular,
+`data/jev/` can contain private repository history; model weights are not an
+anonymization step. That matters when choosing an audience, but it is not a
+reason to reject a future explicit sync design for the user's own machines.
+Credentials remain machine-local, and adding support to any of these stores
+requires a scoped implementation rather than simply deleting its guard.
 
-### Why not "federate, but gate it on HTTPS + the instance password"
+### Historical rationale: HTTPS + the instance password
+
+This section records the original tradeoff, not additional prerequisites on
+user-controlled federation after the 2026-09-19 clarification.
 
 This was seriously considered, and the machinery for it already exists: the
 optional instance password (`server/services/auth.js` + `server/services/authGate.js`)
@@ -155,14 +148,15 @@ benefits **every** federated kind. That is tracked separately (see Consequences)
 and is explicitly *not* a precondition for revisiting this decision — it is a
 fix for the creative-data federation that already exists.
 
-## Consequences
+## Consequences of the original implementation
 
 - The Privacy Center is single-machine. The UI and docs should state this as a
-  guarantee, so users understand the vault's contents have never traversed a
-  network from PortOS.
+  current sync limitation; this is not a claim that user-directed backups or
+  other explicit transfers can never carry those contents.
 - A user wanting the vault on a second machine restores from backup and copies
   `PRIVACY_VAULT_KEY` by hand. This is documented, not automated — a manual key
-  copy is a moment of deliberate consent, which continuous replication is not.
+  copy is deliberate. User-configured continuous replication can also express
+  consent; it is simply not implemented for this store.
 - Household subjects (the other half of #2148) is unaffected: it is a
   same-machine, multi-subject feature with no federation dependency, and is
   split into **#3658**.
@@ -177,9 +171,10 @@ fix for the creative-data federation that already exists.
 
 ## Revisiting
 
-Superseding this ADR requires more than "the transport got safer." It requires a
-concrete user need that a backup restore genuinely cannot serve, plus, at
-minimum: per-peer identity and category authorization on the pull path, an
-explicit per-category opt-in that defaults off, a hard refusal to transmit when
-the far end reports auth disabled, and a resolution for `masked_value` (it must
-not travel in plaintext). Absent all of those, the answer stays no.
+A future Privacy Center sync design should address its actual storage and
+workflow constraints: encryption-key ownership, masks and plaintext projections,
+record identity and deletion, compatibility, and avoiding duplicate broker
+submissions. The user's explicit selection of their own machines can authorize
+continuous replication. The [2026-09-19 decision](./2026-09-19-user-controlled-federation.md)
+removes the earlier blanket veto and its requirement to prove a backup could
+not serve the user's need; it does not change any runtime guard or transport.

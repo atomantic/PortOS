@@ -11,9 +11,10 @@
 
 ## Context
 
-`AGENTS.md` states flatly that **PII must not ride the federation layer at all**,
-pointing at the privacy-records ADR. Read literally against the federated media
-wire, that rule looks violated: a federated image or video job carries its
+At the time of this decision, `AGENTS.md` imposed a blanket personal-data
+federation ban. That wording is superseded by the
+[user-controlled federation ADR](./2026-09-19-user-controlled-federation.md).
+Read literally against the federated media wire, the old rule looked violated: a federated image or video job carries its
 `prompt` to the peer as submitted, and a Creative Director / Creative Commission
 prompt is generated from project records — it can embed universe canon, character
 names, and other personal app data.
@@ -33,8 +34,8 @@ readable together.
 
 **A submitted job body may carry the prompt the user (or their project) asked to
 render. A status or capability payload may never carry prompt or record content.
-Those are two different payload classes, and the "no PII on federation" rule
-governs the second.**
+Those are two different payload classes; this projection boundary does not
+prohibit personal records on their established sync channels.**
 
 Concretely:
 

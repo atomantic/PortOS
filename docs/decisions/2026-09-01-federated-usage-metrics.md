@@ -90,12 +90,12 @@ names the default-on set so the rest of the system can reason about it:
 - The switches that still stop everything: turning the **category** off for a
   peer, or disabling the **peer** (`enabled: false`).
 
-## Why this does not contradict the PII rule
+## The usage projection boundary
 
-`AGENTS.md` states that PII must not ride the federation layer, decided in the
-[privacy-records ADR](./2026-08-08-privacy-records-machine-local.md). That rule
-governs *records* — the user's identity, holdings, relationships, and personal
-history. A usage digest is none of those. It carries:
+The [user-controlled federation ADR](./2026-09-19-user-controlled-federation.md)
+permits personal records on their established sync channels. This usage channel
+keeps a narrower aggregate projection because its purpose is fleet accounting.
+It carries:
 
 - provider ids and model ids (`anthropic`, `claude-opus-5`)
 - session / message / token / cache counts and their day+month buckets
