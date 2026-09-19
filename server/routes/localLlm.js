@@ -19,7 +19,6 @@ import {
   localLlmUnloadSchema,
   localLlmMigrateSchema,
   localLlmInstallBackendSchema,
-  localLlmJevScoreSchema,
   localLlmOllamaServiceSchema,
   localLlmHuggingFaceSearchSchema,
   localLlmTestSchema,
@@ -61,7 +60,7 @@ import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDo
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/providerReadiness.js'
 import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
-import { JEV_MODEL } from '../lib/jev.js'
+import { JEV_MODEL, jevScoreRequestSchema } from '../lib/jev.js'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import {
@@ -298,7 +297,7 @@ router.post('/jev/install/cancel', asyncHandler(async (_req, res) => {
 // Policy: this is the only path that starts the sidecar, and it starts it
 // because someone asked for a score.
 router.post('/jev/score', asyncHandler(async (req, res) => {
-  const { premise, hypotheses, minMargin } = validateRequest(localLlmJevScoreSchema, req.body)
+  const { premise, hypotheses, minMargin } = validateRequest(jevScoreRequestSchema, req.body)
   res.json(await decide({ premise, options: hypotheses, minMargin }))
 }))
 

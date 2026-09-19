@@ -187,8 +187,12 @@ export const JEV_FAILURE_CODES = Object.freeze([
 // ── Wire contract ─────────────────────────────────────────────────────────
 
 /**
- * What a caller may ask the sidecar to score. Also the route-input schema,
- * re-exported as `localLlmJevScoreSchema` from `mediaValidation.js`.
+ * What a caller may ask the sidecar to score. Also the route-input schema:
+ * `routes/localLlm.js` validates against it from HERE rather than through
+ * `validation.js`. Re-exporting it there put this module into the static import
+ * closure of all ~227 suites that reach `mediaValidation.js`, for one schema one
+ * route uses — the "constant re-exported through a heavy barrel" shape the
+ * import budget in `lib/importScoping.test.js` exists to catch.
  *
  * `.strict()`: the sidecar is a fixed-shape endpoint, so an unexpected key is
  * a caller bug (or an attempt to reach a parameter that does not exist), not
