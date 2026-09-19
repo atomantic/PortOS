@@ -106,6 +106,7 @@ describe('ProviderForm', () => {
     fireEvent.change(screen.getByLabelText('Setup Command'), { target: { value: 'npm install -g @your-org/token-cli' } });
     fireEvent.change(screen.getByLabelText('Bootstrap Command'), { target: { value: 'token-cli' } });
     fireEvent.change(screen.getByLabelText('Bootstrap Args'), { target: { value: 'run' } });
+    fireEvent.change(screen.getByLabelText('Review credential command (optional)'), { target: { value: 'token-cli\nprint-env\naccount with spaces' } });
     fireEvent.change(screen.getByLabelText('Harness ID (optional)'), { target: { value: 'claude-code' } });
     fireEvent.change(screen.getByLabelText('Args Separator (optional)'), { target: { value: '--' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
@@ -115,6 +116,7 @@ describe('ProviderForm', () => {
         setupCommand: 'npm install -g @your-org/token-cli',
         command: 'token-cli',
         args: ['run'],
+        envCommand: ['token-cli', 'print-env', 'account with spaces'],
         harnessId: 'claude-code',
         argsSeparator: '--',
       },

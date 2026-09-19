@@ -501,6 +501,7 @@ export function materializeRouteOutcome({
       // binary PortOS spawns — `resolveCliSpawn` reads it unchanged.
       harnessId: bootstrap.harnessNames?.[harness.id] ?? recipe.command,
       ...(bootstrap.argsSeparator ? { argsSeparator: bootstrap.argsSeparator } : {}),
+      ...(bootstrap.envCommand ? { envCommand: [...bootstrap.envCommand] } : {}),
     };
   }
   return { record, error: null };

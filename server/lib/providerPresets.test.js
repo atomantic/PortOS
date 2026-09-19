@@ -86,11 +86,11 @@ describe('materializeDerivedPreset', () => {
   });
 
   it('writes the bootstrap app as the inline object the spawner reads, and drops a stale inline one', () => {
-    const app = { label: 'Corp', command: 'corp-auth', args: ['run'], argsSeparator: '--', harnessNames: { claude: 'claude-code' } };
+    const app = { label: 'Corp', command: 'corp-auth', args: ['run'], argsSeparator: '--', envCommand: ['corp-auth', 'env'], harnessNames: { claude: 'claude-code' } };
     const anthropic = resolveServiceInstance({ definitionId: 'anthropic', slug: 'anthropic', credentialVia: 'bootstrap' });
     const record = claudePreset({ serviceId: 'anthropic', credentialBootstrapId: 'corp-auth', credentialBootstrap: { setupCommand: 'brew install corp', command: 'old' } });
     const { record: derived } = materializeDerivedPreset({ record, harness: harnessById('claude'), instance: anthropic, bootstrap: bootstrapInputFor('corp-auth', app) });
-    expect(derived.credentialBootstrap).toEqual({ setupCommand: 'brew install corp', command: 'corp-auth', args: ['run'], harnessId: 'claude-code', argsSeparator: '--' });
+    expect(derived.credentialBootstrap).toEqual({ setupCommand: 'brew install corp', command: 'corp-auth', args: ['run'], harnessId: 'claude-code', argsSeparator: '--', envCommand: ['corp-auth', 'env'] });
     const without = materializeDerivedPreset({ record: { ...record, credentialBootstrapId: undefined }, harness: harnessById('claude'), instance: { ...anthropic, credentialVia: 'stored', credentials: { apiKey: 'k' } } }).record;
     expect(without).not.toHaveProperty('credentialBootstrap');
     expect(without).not.toHaveProperty('credentialBootstrapId');

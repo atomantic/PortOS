@@ -155,6 +155,7 @@ const bootstrapShape = (bootstrap, harness) => (bootstrap?.command ? {
   args: Array.isArray(bootstrap.args) ? [...bootstrap.args] : [],
   harnessId: bootstrap.harnessId ?? harness.recipe?.command ?? null,
   argsSeparator: bootstrap.argsSeparator ?? '',
+  envCommand: bootstrap.envCommand ?? null,
 } : null);
 
 /**
@@ -184,6 +185,7 @@ export const bootstrapInputFor = (slug, app) => ({
   command: app.command,
   ...(Array.isArray(app.args) ? { args: [...app.args] } : {}),
   ...(app.argsSeparator ? { argsSeparator: app.argsSeparator } : {}),
+  ...(app.envCommand ? { envCommand: [...app.envCommand] } : {}),
   ...(app.harnessNames ? { harnessNames: { ...app.harnessNames } } : {}),
 });
 

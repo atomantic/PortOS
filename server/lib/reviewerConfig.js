@@ -55,7 +55,7 @@ export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value)
  * service producing the codes read the SAME list, without the route pulling in
  * the review service's closure to do it.
  */
-export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze(['NO_MODEL', 'REVIEWER_UNAVAILABLE', 'REVIEWER_UNSUPPORTED']);
+export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze(['NO_MODEL', 'REVIEWER_UNAVAILABLE', 'REVIEWER_UNSUPPORTED', 'REVIEWER_BOOTSTRAP_UNSUPPORTED']);
 
 /**
  * What an agent does with a review that could not return a verdict: say so in

@@ -270,6 +270,16 @@ function allowlistEnv(env, keys) {
   };
 }
 
+// Only explicit bootstrap output may supply these credentials. Never overlay
+// arbitrary output: PATH, NODE_OPTIONS, config files and tool settings could
+// replace the enforced recipe even though its argv remained unchanged.
+const BOOTSTRAP_REVIEW_AUTH_KEYS = new Set([
+  'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+  'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_API_BASE',
+  'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_API_KEY',
+  'XAI_API_KEY', 'GROK_API_KEY', 'KIMI_API_KEY', 'MOONSHOT_API_KEY', 'CURSOR_API_KEY',
+]);
+
 export function buildPublicReviewCliEnv(env = {}) {
   return allowlistEnv(env, PUBLIC_REVIEW_ENV_KEYS);
 }
@@ -319,6 +329,7 @@ export function buildPublicReviewActionsCliEnv(env = {}) {
  *   Pass it whenever the spawn names a cwd — omitting it silently reopens #3193,
  *   which is why `spawnCwd.test.js` only counts a call carrying `cwd` as a pin.
  * @param {object|null} [options.extra] - see `composeProviderEnv`.
+ * @param {object|null} [options.bootstrapEnv] - Explicit credential-command output; only recognized auth keys pass, only in an opted-in no-tool review.
  * @param {boolean} [options.guard=false] - prepend the pm2 guard shim onto the
  *   final `PATH` so an unrestricted agent can't `pm2 kill` the shared daemon.
  *   Only the agent-spawning sites opt in; the Run Prompt / fire-and-collect
@@ -333,6 +344,7 @@ export function buildCliChildEnv({
   cwd,
   extra = null,
   guard = false,
+  bootstrapEnv = null,
   safetyProfile = null,
 } = {}) {
   const composed = withSpawnCwdEnv(
@@ -345,6 +357,11 @@ export function buildCliChildEnv({
     : isPublicReviewRestrictedProfile(safetyProfile)
       ? buildPublicReviewActionsCliEnv(composed)
       : composed;
+
+  if (isPublicReviewNoToolProfile(safetyProfile) && provider?.credentialBootstrap?.envCommand) {
+    Object.assign(env, Object.fromEntries(Object.entries(bootstrapEnv || {})
+      .filter(([key, value]) => BOOTSTRAP_REVIEW_AUTH_KEYS.has(key) && typeof value === 'string')));
+  }
 
   // CLAUDECODE is set when PortOS itself runs inside Claude Code; passing it
   // through would make a spawned Claude CLI think it's nested in that session.

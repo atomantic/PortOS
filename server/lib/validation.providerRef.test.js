@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { presetProviderIdSchema, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
 import {
   appUpdateSchema,
+  providerSchema as hostProviderSchema,
   credentialBootstrapsSettingsSchema,
   featureProviderConfigSchema,
   harnessSettingsSchema,
@@ -100,8 +101,18 @@ describe('the settings slices behind composition', () => {
     expect(harnessSettingsSchema.safeParse({ pi: { enabled: true, extra: 1 } }).success).toBe(false);
   });
 
+  it('preserves environment argv in both provider schemas and rejects malformed commands', () => {
+    const bootstrap = { command: 'token-cli', envCommand: ['token-cli', 'print-env', 'account with spaces'] };
+    for (const schema of [hostProviderSchema, providerSchema]) {
+      expect(schema.partial().parse({ credentialBootstrap: bootstrap }).credentialBootstrap).toEqual(bootstrap);
+      for (const envCommand of [[], '', [''], [5]]) {
+        expect(schema.partial().safeParse({ credentialBootstrap: { ...bootstrap, envCommand } }).success).toBe(false);
+      }
+    }
+  });
+
   it('credentialBootstraps: slug-keyed apps with the inline bootstrap limits and a harness-keyed name map', () => {
-    const app = { label: 'Corp auth', command: 'corp-auth', args: ['run'], argsSeparator: '--', harnessNames: { claude: 'claude-code' } };
+    const app = { label: 'Corp auth', command: 'corp-auth', envCommand: ['corp-auth', 'env'], args: ['run'], argsSeparator: '--', harnessNames: { claude: 'claude-code' } };
     expect(credentialBootstrapsSettingsSchema.safeParse({ 'corp-auth': app }).success).toBe(true);
     expect(credentialBootstrapsSettingsSchema.safeParse({ 'Corp Auth': app }).success).toBe(false);
     expect(credentialBootstrapsSettingsSchema.safeParse({ 'corp-auth': { ...app, command: '' } }).success).toBe(false);

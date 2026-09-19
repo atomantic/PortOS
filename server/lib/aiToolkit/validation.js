@@ -237,6 +237,7 @@ export const providerSchema = z.object({
     setupCommand: z.string().trim().max(500).optional(),
     command: z.string().trim().min(1).max(200),
     args: z.array(z.string().max(200)).max(20).optional(),
+    envCommand: z.array(z.string().min(1).max(500)).min(1).max(21).optional(),
     // What PortOS names the harness AS, when calling the bootstrap CLI — some
     // wrapper CLIs use their own identifier for a harness rather than its
     // binary name (e.g. `claude-code` where `command` is the binary `claude`).
