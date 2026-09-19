@@ -101,24 +101,36 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
   });
 
-  it('requires a credential command for bootstrap reviewers and passes minted env to a completed review', async () => {
-    const cli = { ...provider, type: 'cli', command: 'claude', credentialBootstrap: { command: 'never-run-wrapper' } };
+  // #7720: a bootstrap-credentialed harness has a maintained no-tool recipe and
+  // must be usable as a reviewer, not refused at selection time. The record
+  // reaches the CLI spawn with its `credentialBootstrap` intact — that is what
+  // `applyCredentialBootstrap` wraps under the gate's no-tool profile, so the
+  // bootstrap mints the credential into the harness it execs. A record that
+  // instead PRINTS assignments supplies them through `bootstrapEnv`, which the
+  // wrap does not replace.
+  it('runs a bootstrap reviewer on the wrap alone, and passes minted env when the record prints one', async () => {
+    const cli = { ...provider, type: 'cli', command: 'claude', credentialBootstrap: { command: 'example-wrapper', args: ['run'] } };
     getProviderById.mockResolvedValue(cli);
     listProviders.mockResolvedValue([cli]);
-    expect(await getProviderReviewUnsupported()).toEqual({ [backend]: 'REVIEWER_BOOTSTRAP_UNSUPPORTED' });
-    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false, code: 'REVIEWER_BOOTSTRAP_UNSUPPORTED' });
-    expect(isReviewerConfigFault('REVIEWER_BOOTSTRAP_UNSUPPORTED')).toBe(true);
-    expect(runCliProviderPrompt).not.toHaveBeenCalled();
+    runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
+    expect(await getProviderReviewUnsupported()).toEqual({});
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+    expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      provider: expect.objectContaining({ credentialBootstrap: cli.credentialBootstrap }),
+      bootstrapEnv: {},
+      safetyProfile: 'public-review-gate',
+    }));
 
     cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.log("ANTHROPIC_AUTH_TOKEN=example-minted-token")'];
     expect(await getProviderReviewUnsupported()).toEqual({});
-    runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
     expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
       bootstrapEnv: { ANTHROPIC_AUTH_TOKEN: 'example-minted-token' },
       safetyProfile: 'public-review-gate',
     }));
 
+    // A credential command that FAILS is still a failed review, not a silent
+    // spawn with no credential.
     cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.error("example-secret"); process.exit(1)'];
     runCliProviderPrompt.mockClear();
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({

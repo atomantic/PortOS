@@ -58,3 +58,13 @@ export function isPublicReviewNoToolProfile(profile) {
 export function isPublicReviewRestrictedProfile(profile) {
   return publicReviewPostureForProfile(profile) !== null;
 }
+
+/**
+ * True only for the posture that may EXECUTE contributor-supplied code — the
+ * actions stage. A caller whose rule differs between the two postures keys on
+ * this rather than on `isPublicReviewRestrictedProfile`; see
+ * `applyCredentialBootstrap`.
+ */
+export function isPublicReviewActionsProfile(profile) {
+  return publicReviewPostureForProfile(profile) === PUBLIC_REVIEW_ACTIONS_POSTURE;
+}

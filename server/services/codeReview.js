@@ -533,11 +533,12 @@ export async function resolveProviderReviewTransport(provider) {
       error: 'This provider has no enforced tool-free review transport. Select its API mode or a supported reviewer harness.',
     }
   }
-  const { hasCredentialBootstrap } = await import('../lib/credentialBootstrap.js')
-  if (hasCredentialBootstrap(provider) && !provider.credentialBootstrap.envCommand?.length) {
-    return { transport: null, code: 'REVIEWER_BOOTSTRAP_UNSUPPORTED',
-      error: 'Configure a bootstrap environment command to use this provider for tool-free reviews.' }
-  }
+  // A credential-bootstrap record needs no branch of its own. The spawn below
+  // runs under a `no-tool` profile, which `applyCredentialBootstrap` wraps like
+  // any other, so the bootstrap CLI mints the credential into the harness it
+  // execs and the reviewer starts authenticated (#7720). A record that instead
+  // PRINTS its credentials supplies them through `resolveBootstrapEnv`; neither
+  // form is a reason to refuse the reviewer at selection time.
   return { transport: 'cli' }
 }
 

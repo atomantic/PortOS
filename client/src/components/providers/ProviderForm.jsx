@@ -737,7 +737,9 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                     />
                   </FormField>
                   <p className="text-xs text-gray-500">
-                    Used for tool-free reviews only; the wrap form is never used there.
+                    Optional, and only for tool-free reviews. Leave it empty unless this app
+                    PRINTS credentials instead of running the harness itself — a review already
+                    runs through the wrap above, so an ordinary bootstrap app needs nothing here.
                     Enter the executable, then one argument per line (no shell quoting).
                     It must print KEY=value lines for provider authentication; JSON and other lines are ignored.
                     Only recognized provider credentials and API endpoints are passed to the reviewer.

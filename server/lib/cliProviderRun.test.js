@@ -15,6 +15,28 @@ const { resolveBootstrapEnv } = await import('./credentialBootstrap.js');
 
 const cli = (id, extra = {}) => ({ id, type: 'cli', command: id, enabled: true, models: [], ...extra });
 
+// A harness that reports what it actually received, and a stand-in for a real
+// minting wrapper: it execs \`<harness> <args...>\` with a credential in the
+// child's environment, exactly as \`<bootstrap> run <harness> -- <args>\` does at
+// a shell.
+async function writeBootstrapFixture(dir) {
+  const { writeFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const command = join(dir, 'claude');
+  await writeFile(command, '#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ args: process.argv.slice(2), auth: process.env.ANTHROPIC_AUTH_TOKEN || null, wrapperToken: process.env.EXAMPLE_WRAPPER_TOKEN || null })));', { mode: 0o755 });
+  const bootstrap = join(dir, 'token-cli');
+  await writeFile(bootstrap, [
+    '#!/usr/bin/env node',
+    'const { spawn } = require("child_process");',
+    'const [, , mode, harness, ...rest] = process.argv;',
+    'if (mode !== "run") { process.exit(64); }',
+    'const args = rest[0] === "--" ? rest.slice(1) : rest;',
+    'const child = spawn(harness, args, { stdio: "inherit", env: { ...process.env, EXAMPLE_WRAPPER_TOKEN: "example-wrapper-token" } });',
+    'child.on("exit", (code) => process.exit(code ?? 1));',
+  ].join('\n'), { mode: 0o755 });
+  return { command, bootstrap };
+}
+
 describe('pickCliProvider', () => {
   const providers = {
     'claude-code': cli('claude-code', { defaultModel: 'claude-opus-4-7', models: ['claude-opus-4-7', 'claude-haiku-4-5'] }),
@@ -127,24 +149,51 @@ describe('runCliProviderPrompt', () => {
     expect(child.forgeToken).toBeNull();
   });
 
-  it.skipIf(process.platform === 'win32')('runs the enforced no-tool recipe on the harness itself, never through a configured credential bootstrap', async () => {
-    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  // #7720: the tool-free reviewer spawn IS credential-bootstrap-wrapped, and
+  // both halves of that have to hold at once — the harness must receive the
+  // enforced recipe unchanged THROUGH the wrapper, and it must receive the
+  // credential the wrapper mints, which a bare spawn could never give it.
+  // Spawned bare, a bootstrap-only record answers "no matching provider is
+  // authenticated" and the review gate waits out a round that never completes.
+  it.skipIf(process.platform === 'win32')('runs the enforced no-tool recipe THROUGH the credential bootstrap, so the reviewer starts authenticated', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const dir = await mkdtemp(join(tmpdir(), 'review-cli-bootstrap-'));
-    const command = join(dir, 'claude');
-    await writeFile(command, '#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on("end", () => process.stdout.write(JSON.stringify({ args: process.argv.slice(2), auth: process.env.ANTHROPIC_AUTH_TOKEN })));', { mode: 0o755 });
-    // The bootstrap binary does not exist: had the wrap applied, this spawn
-    // would ENOENT instead of reaching the harness script above.
-    const provider = { ...cli('example-claude'), command, credentialBootstrap: { command: join(dir, 'token-cli-missing'), args: ['run'],
+    const { command, bootstrap } = await writeBootstrapFixture(dir);
+    const provider = { ...cli('example-claude'), command,
+      credentialBootstrap: { command: bootstrap, args: ['run'], argsSeparator: '--' } };
+    const result = await runCliProviderPrompt({
+      provider, model: 'pinned-model', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate',
+    }).finally(() => rm(dir, { recursive: true, force: true }));
+    expect(result.error).toBeUndefined();
+    const child = JSON.parse(result.text);
+    expect(child.args).toEqual(expect.arrayContaining(['--restricted', '--tools', '', '--model', 'pinned-model']));
+    // The wrapper is an intermediary, not a way around the recipe.
+    expect(child.args).not.toContain('--dangerously-skip-permissions');
+    expect(child.wrapperToken).toBe('example-wrapper-token');
+  });
+
+  // The other credential shape: a bootstrap that PRINTS assignments rather than
+  // exec'ing the harness. `resolveBootstrapEnv` materializes them separately —
+  // the command never sees the prompt or the enforced argv — and only recognized
+  // auth keys survive `buildCliChildEnv`.
+  it.skipIf(process.platform === 'win32')('also delivers credentials a bootstrap prints rather than execs', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'review-cli-bootstrap-env-'));
+    const { command, bootstrap } = await writeBootstrapFixture(dir);
+    const provider = { ...cli('example-claude'), command, credentialBootstrap: { command: bootstrap, args: ['run'], argsSeparator: '--',
       envCommand: [process.execPath, '-e', 'console.log("ANTHROPIC_AUTH_TOKEN=example-token")'] } };
     const bootstrapEnv = await resolveBootstrapEnv(provider, { safetyProfile: 'public-review-gate' });
     const result = await runCliProviderPrompt({
       provider, bootstrapEnv, model: 'pinned-model', prompt: 'untrusted diff', cwd: dir, safetyProfile: 'public-review-gate',
     }).finally(() => rm(dir, { recursive: true, force: true }));
     expect(result.error).toBeUndefined();
-    expect(JSON.parse(result.text).args).toEqual(expect.arrayContaining(['--restricted', '--tools', '']));
-    expect(JSON.parse(result.text).auth).toBe('example-token');
+    const child = JSON.parse(result.text);
+    expect(child.args).toEqual(expect.arrayContaining(['--restricted', '--tools', '']));
+    expect(child.auth).toBe('example-token');
   });
 
   it('rejects a missing command without spawning', async () => {
