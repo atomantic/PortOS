@@ -43,6 +43,7 @@ import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from '
 import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
+import { ensureTaskThread } from './brainTaskThreads.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -540,20 +541,17 @@ async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings })
     const currentAgent = await getAgentForResult(agentId).catch(() => null);
     await updateAgent(agentId, { result: { ...currentAgent?.result, warnings: cleanupWarnings } });
 
-    const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
     const appName = task?.metadata?.appName || task?.metadata?.app || 'PortOS';
-    await addNotification({
-      type: NOTIFICATION_TYPES.AGENT_WARNING,
-      title: `Agent cleanup issue: ${appName}`,
-      description: cleanupWarnings.join('\n'),
-      priority: PRIORITY_LEVELS.HIGH,
-      link: '/cos/agents',
-      metadata: { agentId, taskId: task?.id, warnings: cleanupWarnings }
+    void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).then(recoveryTask => {
+      const recoveryTaskId = recoveryTask?.id || recoveryTask;
+      return ensureTaskThread({
+        taskId: recoveryTaskId,
+        title: `Agent cleanup issue: ${appName}`,
+        nextAction: 'Let the recovery task resolve the cleanup warning, then verify the worktree.',
+        notes: cleanupWarnings.join('\n'),
+        priority: 'high',
+      });
     }).catch(err => {
-      emitLog('warn', `Failed to create cleanup warning notification: ${err.message}`, { agentId });
-    });
-
-    void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).catch(err => {
       emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
     });
   }

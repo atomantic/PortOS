@@ -45,11 +45,13 @@ vi.mock('./notifications.js', () => ({
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { HIGH: 'high' },
 }));
+vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
 import { verifyAgentRepoState, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { addTask, getAllTasks } from './cos.js';
+import { ensureTaskThread } from './brainTaskThreads.js';
 import { listWorktrees } from './worktreeManager.js';
 import { listRemoteHeads } from './branchReconcile.js';
 import { hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
@@ -162,7 +164,9 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(payload.context).toContain(`git worktree remove ${WORKTREE}`);
     expect(payload.context).toContain(`git branch -d ${BRANCH}`);
     expect(payload.context).toContain(`touch ONLY ${BRANCH}`);
-    expect(addNotification).toHaveBeenCalledTimes(1);
+    expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-recovery-1', priority: 'high',
+    }));
   });
 
   it('finds a worktree git still tracks even when the directory is gone', async () => {
@@ -198,14 +202,11 @@ describe('verifyAgentRepoState — divergent runs', () => {
     expect(result.recoveryTaskId).toBeNull();
   });
 
-  it('does not stack a second notification for a branch already flagged', async () => {
+  it('still ensures the existing recovery task has a Brain thread', async () => {
     existsSync.mockReturnValue(true);
-    notificationExists.mockResolvedValue(true);
-
     await run({ prExpected: false });
 
-    expect(notificationExists).toHaveBeenCalledWith('agent_warning', 'branchName', BRANCH);
-    expect(addNotification).not.toHaveBeenCalled();
+    expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-recovery-1' }));
   });
 });
 
