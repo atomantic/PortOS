@@ -223,7 +223,12 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
   } catch (err) {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
-    return { error: `Provider request failed: ${err.message}` };
+    // undici wraps the real network error in `fetch failed`; the actionable
+    // detail (ECONNRESET, model-specific transport quirk, etc.) lives in
+    // `err.cause` and is otherwise silently discarded (#7669).
+    const cause = err.cause;
+    const causeDetail = cause ? ` (cause: ${[cause.code, cause.message].filter(Boolean).join(' ')})` : '';
+    return { error: `Provider request failed: ${err.message}${causeDetail}` };
   }
   clearTimeout(timer);
   signal?.removeEventListener('abort', onAbort);
