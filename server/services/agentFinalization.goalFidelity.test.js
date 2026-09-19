@@ -101,7 +101,7 @@ import { finalizeAgent } from './agentFinalization.js';
 import { cosEvents } from './cosEvents.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
-import { getTaskOutputHook, isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
+import { declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
 import { GOAL_FIDELITY_CATEGORY, GOAL_FIDELITY_HOLD_EVENT } from '../lib/goalFidelity.js';
 
 const verdict = (overrides = {}) => ({
@@ -195,6 +195,7 @@ beforeEach(() => {
   execGh.mockResolvedValue(JSON.stringify({ number: 42, title: 'Retry the opening line', body: 'Retry transient synthesis failures and clear the pending opening after success.' }));
   getTaskOutputHook.mockResolvedValue(null);
   isProgrammaticIoTaskType.mockReturnValue(false);
+  declaresNoCommitCriterion.mockReturnValue(false);
   resolveTaskHookType.mockImplementation(task => task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null);
   resolveFailedTaskUpdate.mockImplementation(async (_task, analysis) => ({
     status: 'pending',
@@ -228,6 +229,27 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
     expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
     expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
+  });
+
+  it.each([
+    { analysisType: 'release-check' },
+    { prRemediationFollowUp: true },
+    { noCodeOutput: true },
+    { creativeDirector: { projectId: 'example-project' } },
+    { analysisType: 'reference-watch', worktreeChangesExpected: false },
+    { discardWorktree: true },
+  ])('leaves a declared no-commit task unjudged without reading the checkout diff: %j', async metadata => {
+    declaresNoCommitCriterion.mockReturnValue(true);
+    runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink' }));
+
+    await finalize({ task: { id: 'task-1', taskType: 'internal', description: 'Complete the external action', metadata } });
+
+    expect(declaresNoCommitCriterion).toHaveBeenCalledWith(expect.objectContaining({ metadata }));
+    expect(runWindowDiffMock).not.toHaveBeenCalled();
+    expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+    expect(completion()).toMatchObject({ success: true });
+    expect(completion().goalFidelity).toBeUndefined();
+    expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
   });
 
   it.each([0, 1, undefined])('still judges single-issue claims with swarmCount %s', async swarmCount => {
@@ -467,6 +489,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     });
 
     it('records a forge-established ship without reading a diff or calling a model', async () => {
+      declaresNoCommitCriterion.mockReturnValue(true);
       runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', unrequested: ['Resolve and merge PR #7653'] }));
       await finalize({ task: mergeFollowUp() });
 
@@ -495,6 +518,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     // A leave-open follow-up's objective is the review fixes, which ARE ordinary
     // diff — it must keep the model review a merge objective skips.
     it('does not divert a leave-open follow-up, whose deliverable is a diff', async () => {
+      declaresNoCommitCriterion.mockReturnValue(true);
       await finalize({ task: mergeFollowUp({ reviewLoopLeaveOpen: 'true' }) });
 
       expect(getPullRequestState).not.toHaveBeenCalled();
