@@ -32,6 +32,21 @@ export function isMergeOnlyFollowUp(metadata = {}) {
 }
 
 /**
+ * True when a no-roster follow-up still owes the change a review — the agent's
+ * OWN, because the user chose self-review over delegating to reviewer CLIs.
+ *
+ * A refinement of `isMergeOnlyFollowUp`, not an alternative to it: the section
+ * is the same CI-gate-and-merge procedure, with a review step in front and the
+ * "do NOT start a code review" instructions inverted. Same string tolerance as
+ * every other follow-up flag, for the same reason — task metadata round-trips
+ * through the markdown task file.
+ */
+export function isSelfReviewFollowUp(metadata = {}) {
+  return isMergeOnlyFollowUp(metadata)
+    && (metadata?.reviewLoopSelfReview === true || metadata?.reviewLoopSelfReview === 'true');
+}
+
+/**
  * Adapt slashdo's local-agent recipe for the pre-PR half of a manual workflow.
  * The normal recipe pushes after each reviewer pass so a later PR-side reviewer
  * sees the fixes. A local-only section must keep every fix on the branch until
@@ -717,6 +732,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     return buildMergeFollowUpSection({
       prUrl, prBranch, prNumber, prOwner, prRepo, sourceTaskId, verbose, inlineExitStep,
       mergeGateForge: forge.mergeGateForge, inlineWorkflowStep, localReviewers: localPhaseReviewerList, localReviewRequired: localPhaseReviewRequired,
+      selfReview: isSelfReviewFollowUp(metadata),
     });
   }
   const phase = resolveReviewPhase({
@@ -1055,21 +1071,75 @@ export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>',
  * Loop off, or copilot-only on a non-GitHub forge). Nothing else will touch the
  * PR, so the merge gate is CI alone (`buildCiMergeGateSteps`).
  *
+ * `selfReview` is the same procedure for the other reason a follow-up has no
+ * roster: the user chose self-review, so the agent reviews the change itself
+ * before the CI gate instead of delegating to reviewer CLIs. It is one flag
+ * rather than a fourth phase in `resolveReviewPhase` because every step below is
+ * unchanged — only who reads the diff differs. What that costs is that several
+ * sentences have to flip together, which is why they are a per-reason record
+ * (`REVIEW_MODES`) rather than a ternary apiece.
+ *
  * @param {Object} opts - PR coordinates + `verbose` (full/api path) vs compact.
  * @returns {string}
  */
-function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '', prRepo = '', sourceTaskId = 'unknown', verbose = false, inlineExitStep = null, mergeGateForge = 'github', inlineWorkflowStep = INLINE_REVIEW_LOOP_STEP, localReviewers = [], localReviewRequired = false }) {
+function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '', prRepo = '', sourceTaskId = 'unknown', verbose = false, inlineExitStep = null, mergeGateForge = 'github', inlineWorkflowStep = INLINE_REVIEW_LOOP_STEP, localReviewers = [], localReviewRequired = false, selfReview = false }) {
   const inline = inlineExitStep !== null;
   const hasLocalReview = Array.isArray(localReviewers) && localReviewers.length > 0;
-  const localReviewLabel = hasLocalReview
-    ? `The pre-PR local review for ${localReviewers.map(reviewer => `\`${reviewer}\``).join(', ')} has completed; no PR-side code reviewer is configured. The merge gate still re-runs that local review after any conflict rebase${localReviewRequired ? '; a `review-blocked` result leaves the PR/MR open until the required review completes' : ''}.`
-    : 'No code review was requested for this task, so nothing else will merge this PR';
+  // WHY this follow-up has no roster, decided once. Every sentence that differs
+  // between the three reasons reads from the record below rather than re-testing
+  // the discriminant, so a fourth reason is one entry instead of four scattered
+  // ternaries that can disagree about what the run is responsible for.
+  //
+  // `exitNote` is the only field with two spellings, and deliberately: the
+  // standalone exit sentence is a CLAUSE inside a longer sentence, and the
+  // no-review case truncates there rather than lowercasing its own `inline`
+  // form, so neither survives being derived from the other.
+  const REVIEW_MODES = {
+    // The user declined to DELEGATE, not to review. `steps` runs before the CI
+    // gate so its fixes are part of what CI then verifies; reviewing after a
+    // green run would either re-open the gate or land unreviewed code. Spelled
+    // out rather than delegated to a slashdo body because this agent has no
+    // reviewer to invoke — there is no invocation recipe to inline, only a
+    // standard to hold itself to.
+    self: {
+      headingPrefix: 'Self-Review & ',
+      label: () => 'No delegated reviewer is configured for this PR — you are its reviewer, and once you have reviewed it nothing else will',
+      objective: inline ? 'Review it yourself, then land it once CI is green.' : 'Your job is to review it yourself and then land it once CI is green.',
+      exitNote: inline
+        ? 'Do NOT delegate a second code review to another agent or CLI — your own pass above is the whole review.'
+        : 'do NOT delegate a second code review to another agent or CLI — your own pass above is the whole review; ',
+      steps: [
+        '1. **Review the change yourself, before the CI gate.** Read the full diff this PR proposes (`gh pr diff` against its head, or `git diff <base>...HEAD` in the checkout) and review it as a reviewer would: correctness bugs first, then contract, compatibility and data-safety breaks, then reuse and simplification. Review this change and directly affected contracts only — report material issues with concrete wrong outcomes, and skip repository-wide audits, style preferences, speculation, and nits.',
+        '2. **Fix what you found, on this branch.** Commit the fixes (`fix:` prefix, no Co-Authored-By) and push before the gate below, so CI verifies the reviewed state rather than the state you reviewed. If a finding needs a product decision you cannot make, leave the PR open and say so in your completion summary instead of merging past it.',
+      ],
+    },
+    // A pre-PR local phase already reviewed; only the PR-SIDE roster is empty.
+    local: {
+      headingPrefix: '',
+      label: () => `The pre-PR local review for ${localReviewers.map(reviewer => `\`${reviewer}\``).join(', ')} has completed; no PR-side code reviewer is configured. The merge gate still re-runs that local review after any conflict rebase${localReviewRequired ? '; a \`review-blocked\` result leaves the PR/MR open until the required review completes' : ''}.`,
+      objective: inline ? 'Land it yourself once CI is green.' : 'Your job is to land it once CI is green.',
+      exitNote: inline
+        ? 'Do NOT start a second PR-side code review — the pre-PR local review is the only configured review.'
+        : 'do NOT start a second PR-side code review — the pre-PR local review is the only configured review; ',
+      steps: [],
+    },
+    // Review Loop off, or every configured reviewer stripped: nothing reviews.
+    none: {
+      headingPrefix: '',
+      label: () => 'No code review was requested for this task, so nothing else will merge this PR',
+      objective: inline ? 'Land it yourself once CI is green.' : 'Your job is to land it once CI is green.',
+      exitNote: inline ? 'Do NOT start a code review — none is configured for this task.' : 'do NOT start a code review — ',
+      steps: [],
+    },
+  };
+  const mode = REVIEW_MODES[selfReview ? 'self' : hasLocalReview ? 'local' : 'none'];
+
   // PortOS opens GitLab MRs via `glab` too, so a GitLab host must not be handed
   // `gh` commands. The caller resolved that once — its override first, the
   // persisted PR host only as the fallback — and hands the answer down here.
   // This arm used to re-derive it from the host for a non-inline gate, which
   // told a self-managed GitLab run to land its MR with `gh pr merge` (#6846).
-  const gate = buildCiMergeGateSteps(1, {
+  const gate = buildCiMergeGateSteps(mode.steps.length + 1, {
     prRef: `"${prUrl}"`,
     mrRef: prNumber !== '' ? `${prNumber}` : '<MR_NUMBER>',
     forge: mergeGateForge,
@@ -1080,10 +1150,11 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
     alreadyMergedHint: inline ? '' : undefined,
   });
   const steps = [
+    ...mode.steps,
     ...gate.lines,
     inline
-      ? `${gate.nextStep}. ${inlineExitStep} ${hasLocalReview ? 'Do NOT start a second PR-side code review — the pre-PR local review is the only configured review.' : 'Do NOT start a code review — none is configured for this task.'}`
-      : `${gate.nextStep}. Exit. Do NOT run \`/do:push\`, do NOT open a new PR, and ${hasLocalReview ? 'do NOT start a second PR-side code review — the pre-PR local review is the only configured review; ' : 'do NOT start a code review — '}landing this PR is the whole job.`,
+      ? `${gate.nextStep}. ${inlineExitStep} ${mode.exitNote}`
+      : `${gate.nextStep}. Exit. Do NOT run \`/do:push\`, do NOT open a new PR, and ${mode.exitNote}landing this PR is the whole job.`,
   ];
   const prDetails = verbose ? [
     '',
@@ -1096,10 +1167,10 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
   ].filter(Boolean) : [];
 
   return [
-    inline ? '## Merge Gate' : '## Merge Follow-up (PRIMARY OBJECTIVE)',
+    `## ${mode.headingPrefix}Merge ${inline ? 'Gate' : 'Follow-up (PRIMARY OBJECTIVE)'}`,
     inline
-      ? `This runs as **step ${inlineWorkflowStep} of the Completion Workflow above**, against the PR you just opened on \`${prBranch}\` (\`${prUrl}\` / \`${prNumber}\` are the shell variables you captured there). **${localReviewLabel} Land it yourself once CI is green.**`
-      : `A previous agent finished the work for source task **${sourceTaskId}** and opened **PR ${prUrl}** on \`${prBranch}\`. **${localReviewLabel} Your job is to land it once CI is green.**`,
+      ? `This runs as **step ${inlineWorkflowStep} of the Completion Workflow above**, against the PR you just opened on \`${prBranch}\` (\`${prUrl}\` / \`${prNumber}\` are the shell variables you captured there). **${mode.label()} ${mode.objective}**`
+      : `A previous agent finished the work for source task **${sourceTaskId}** and opened **PR ${prUrl}** on \`${prBranch}\`. **${mode.label()} ${mode.objective}**`,
     '',
     ...steps,
     '',

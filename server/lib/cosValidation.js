@@ -13,7 +13,7 @@ import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchem
 import { isPlainObject } from './objects.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
-import { PR_COMPLETION_VALUES } from './prDisposition.js';
+import { PR_COMPLETION_VALUES, PR_REVIEW_MODE_VALUES } from './prDisposition.js';
 import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile.js';
@@ -1056,14 +1056,38 @@ export const slashdoTaskSchema = createCosTaskSchema
     issueAuthorFilter: z.enum(ISSUE_AUTHOR_FILTERS).optional(),
   });
 
-// POST /api/apps/:id/pull-requests/:number/resolve|review — the Pull Requests
-// tab's "Run with" picker (mirrors the Issues tab's same picker). PICKED
-// from createCosTaskSchema so the provider/model/effort vocabulary and its
-// preprocessors stay identical to every other manual dispatch surface. Every
-// field is optional — an untouched picker resolves the install's active
-// provider, same as the bare button always did.
+// The Pull Requests tab's "Run with" picker (mirrors the Issues tab's same
+// picker). PICKED from createCosTaskSchema so the provider/model/effort
+// vocabulary and its preprocessors stay identical to every other manual dispatch
+// surface. Every field is optional — an untouched picker resolves the install's
+// active provider, same as the bare button always did.
+//
+// This is the WHOLE body of `POST …/pull-requests/:number/review`, and
+// deliberately so: that route queues a `pr-reviewer` run, whose reviewers come
+// from that scheduled task's own stages, so review settings sent there would be
+// a request the server accepts and nothing applies.
 export const pullRequestProviderOverrideSchema = createCosTaskSchema
   .pick({ model: true, provider: true, effort: true });
+
+// …and the body of `/resolve` and `/do-review`, the two actions PortOS composes
+// itself: the same provider pin plus this run's review settings.
+//
+// `reviewMode` is the one field with no counterpart on the task schema: it is a
+// property of how THIS action composes its review, not of the queued task's own
+// settings, and each route translates it into that route's own vocabulary (a
+// self-review marker on the follow-up for `/resolve`, `--review-with none` for
+// `/do-review`). The reviewer fields beside it are the ordinary per-run override,
+// resolved over the install's Code Review Defaults.
+export const pullRequestRunSettingsSchema = pullRequestProviderOverrideSchema
+  .extend(createCosTaskSchema
+    .pick({
+      reviewers: true, usernames: true, optionalReviewers: true,
+      reviewerMaxRounds: true, reviewerModels: true, reviewerEfforts: true,
+    })
+    .shape)
+  .extend({
+    reviewMode: z.enum(PR_REVIEW_MODE_VALUES).optional(),
+  });
 
 // POST /api/cos/agents/:id/resume — the resume dialog's edits for a paused
 // agent's next run. PICKED from createCosTaskSchema for the same reason

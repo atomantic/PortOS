@@ -1688,6 +1688,51 @@ describe('spawnReviewLoopFollowUp', () => {
     expect(addTask).toHaveBeenCalledTimes(1);
   });
 
+  // The invariant lives here, not at the callers: "the agent reviews it itself"
+  // and "these reviewers review it" are mutually exclusive, and the non-obvious
+  // half is the usernames — one inherited `@login` keeps the roster non-empty
+  // and quietly puts the run back on the delegated path.
+  it('empties the whole roster under self-review and marks the run self-reviewing', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1', originalTask: { id: 'task-1' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws',
+      reviewers: ['codex', 'claude'], usernames: ['octocat'], optionalReviewers: ['claude'],
+      selfReview: true,
+    });
+
+    expect(result.metadata.reviewLoopReviewers).toEqual([]);
+    expect(result.metadata.reviewLoopReviewerUsernames).toEqual([]);
+    expect(result.metadata.reviewLoopOptionalReviewers).toEqual([]);
+    expect(result.metadata.reviewLoopMergeOnly).toBe(true);
+    expect(result.metadata.reviewLoopSelfReview).toBe(true);
+  });
+
+  // An empty roster has always meant "nothing reviews this, land it on green
+  // CI". Only the flag distinguishes that from "I am the reviewer" — collapsing
+  // the two would land a self-review run's change unread.
+  it('leaves a plain no-roster follow-up unmarked', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1', originalTask: { id: 'task-1' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws',
+      reviewers: [], usernames: [],
+    });
+
+    expect(result.metadata.reviewLoopMergeOnly).toBe(true);
+    expect(result.metadata.reviewLoopSelfReview).toBe(false);
+  });
+
+  // `merge-on-green` is a request for NO review, not for an undelegated one.
+  it('ignores the self-review flag on a merge-on-green run', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1', originalTask: { id: 'task-1' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws',
+      prCompletion: 'merge-on-green', selfReview: true,
+    });
+
+    expect(result.metadata.reviewLoopMergeOnly).toBe(true);
+    expect(result.metadata.reviewLoopSelfReview).toBe(false);
+  });
+
   it('should default priority to MEDIUM when originalTask omits it', async () => {
     await spawnReviewLoopFollowUp({
       originalAgentId: 'agent-1',

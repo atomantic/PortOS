@@ -101,9 +101,13 @@ export const scoreAppScopeAdherence = (id, change, options = {}) =>
   });
 // Queue the shared review-loop follow-up for one freshly verified open PR/MR.
 // The server, not the browser, owns the forge URL/branch and duplicate guard.
-// `settings` is the same provider/model/effort pin `createSlashdoTask` takes —
-// the Pull Requests tab's "Run with" picker — left blank to resolve the
-// install's active provider.
+// `settings` is the Pull Requests tab's run-settings panel: the same
+// provider/model/effort pin `createSlashdoTask` takes, plus this run's review
+// settings — `reviewMode` (`delegated` spawns the reviewer roster, `self` leaves
+// the review to the agent itself) and, for a delegated run the user overrode, the
+// same reviewer fields (`reviewers`, `usernames`, `optionalReviewers`,
+// `reviewerMaxRounds`, `reviewerModels`, `reviewerEfforts`). Left blank it
+// resolves the install's active provider and Code Review Defaults.
 export const resolveAppPullRequest = (id, number, settings = {}, options = {}) =>
   request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/resolve`, {
     method: 'POST',
@@ -115,9 +119,11 @@ export const resolveAppPullRequest = (id, number, settings = {}, options = {}) =
 // letting it pick from the app's whole external open set. The server owns the
 // eligibility check (open, GitHub, opened by someone else) and the duplicate
 // guard, so a refusal comes back as an explained error rather than a run that
-// silently reviews nothing. `settings` is the same provider/model/effort pin as
-// `resolveAppPullRequest` — the server still gates the resolved provider to the
-// pr-reviewer posture's eligible set.
+// silently reviews nothing. `settings` is the provider/model/effort pin ALONE —
+// the server still gates the resolved provider to the pr-reviewer posture's
+// eligible set. Deliberately not the review settings the other two take: this
+// queues a `pr-reviewer` run, whose reviewers come from that scheduled task's
+// own stages, so a `reviewMode` sent here would be a setting nothing applies.
 export const reviewAppPullRequest = (id, number, settings = {}, options = {}) =>
   request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/review`, {
     method: 'POST',
@@ -125,11 +131,12 @@ export const reviewAppPullRequest = (id, number, settings = {}, options = {}) =>
     silent: true,
     ...options,
   });
-// Run the bundled `/do:review` workflow against ONE open GitHub PR with the
-// install's Code Review Defaults, review-only. Unlike `reviewAppPullRequest`
-// this is offered on every open GitHub request whoever opened it — `pr-reviewer`
-// covers untrusted contributors alone. `settings` is the same provider/model/
-// effort pin as `resolveAppPullRequest`.
+// Run the bundled `/do:review` workflow against ONE open GitHub PR, review-only.
+// Unlike `reviewAppPullRequest` this is offered on every open GitHub request
+// whoever opened it — `pr-reviewer` covers untrusted contributors alone.
+// `settings` is the same run-settings body `resolveAppPullRequest` takes, review
+// mode and reviewer override included; untouched, the run resolves the install's
+// Code Review Defaults when the prompt is built.
 export const doReviewAppPullRequest = (id, number, settings = {}, options = {}) =>
   request(`/apps/${id}/pull-requests/${encodeURIComponent(number)}/do-review`, {
     method: 'POST',
