@@ -1077,8 +1077,22 @@ export function createRunnerService(config = {}) {
 
           const { metadata, partialOutput } = await openTerminalMetadata();
 
-          const errorAnalysis = analyzeError(err.message);
-          metadata.error = errorAnalysis.message || err.message;
+          // `describeTransportError`, not `err.message` — the same reason the
+          // pre-header fetch uses it, applied to the half the run that reads
+          // the body. undici reports a connection dropped MID-STREAM as
+          // `TypeError: terminated` and hangs the actionable reason
+          // (`UND_ERR_SOCKET` / `other side closed`) off `.cause`, so
+          // classifying the bare message matched no pattern: an NVIDIA NIM
+          // nemotron run that streamed reasoning for 319s and then lost its
+          // socket persisted `errorCategory: null`, which the host's cascade
+          // reads as UNKNOWN and escalates to a tier-4 investigation task
+          //. The flattened chain classifies it as NETWORK_ERROR — a
+          // transient connectivity fault with a bounded retry. Non-transport
+          // rejections have no `.cause`, so the chain flattens to exactly the
+          // message this always passed.
+          const errorDescription = describeTransportError(err);
+          const errorAnalysis = analyzeError(errorDescription);
+          metadata.error = errorAnalysis.message || errorDescription;
           metadata.errorCategory = errorAnalysis.category;
           metadata.errorAnalysis = errorAnalysis;
 
