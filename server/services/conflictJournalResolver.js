@@ -30,7 +30,7 @@
 
 import { existsSync } from 'fs';
 import { isSafeRecordId } from '../lib/validation.js';
-import { conflictJournalStore, RESTORABLE_FIELDS } from '../lib/conflictJournal.js';
+import { ABSENT_MEANS_FALSE_FIELDS, conflictJournalStore, RESTORABLE_FIELDS } from '../lib/conflictJournal.js';
 import { updateUniverse, ERR_NOT_FOUND as UNIVERSE_NOT_FOUND } from './universeBuilder.js';
 import { updateSeries, ERR_NOT_FOUND as SERIES_NOT_FOUND } from './pipeline/series.js';
 import { updateCollection, getCollection, ERR_NOT_FOUND as COLLECTION_NOT_FOUND } from './mediaCollections.js';
@@ -55,9 +55,18 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 // per kind; id/createdAt/server-owned fields are never overlaid) is owned by
 // conflictJournal.js so diffSummary and this validator stay in lockstep.
 
-const pick = (obj, fields) => {
+// `kind` is needed for ABSENT_MEANS_FALSE_FIELDS: a snapshot field that is
+// only persisted when true (universe `factual`) is simply ABSENT when false,
+// so an `in` check alone would drop it and make the clear-direction restore a
+// silent no-op. Filling the explicit `false` restores it faithfully; the
+// record sanitizer drops that back to absent on write.
+const pick = (obj, fields, kind) => {
+  const falseWhenAbsent = ABSENT_MEANS_FALSE_FIELDS[kind] || [];
   const out = {};
-  for (const f of fields) if (obj && f in obj) out[f] = obj[f];
+  for (const f of fields) {
+    if (obj && f in obj) out[f] = obj[f];
+    else if (falseWhenAbsent.includes(f)) out[f] = false;
+  }
   return out;
 };
 
@@ -211,14 +220,14 @@ export async function resolveConflict(id, { action, fields = [] } = {}) {
 
   if (action === 'restore-all') {
     // Faithful restore: replace the keyed fields (universe categories) wholesale.
-    await applyToRecord(entry.recordKind, entry.recordId, pick(snapshot, allowed), { replace: true });
+    await applyToRecord(entry.recordKind, entry.recordId, pick(snapshot, allowed, entry.recordKind), { replace: true });
   } else if (action === 'merge-fields') {
     if (!Array.isArray(fields) || fields.length === 0) {
       throw makeErr('merge-fields requires a non-empty `fields` array', ERR_VALIDATION);
     }
     const invalid = fields.filter((f) => !allowed.includes(f));
     if (invalid.length) throw makeErr(`Not restorable: ${invalid.join(', ')}`, ERR_VALIDATION);
-    await applyToRecord(entry.recordKind, entry.recordId, pick(snapshot, fields));
+    await applyToRecord(entry.recordKind, entry.recordId, pick(snapshot, fields, entry.recordKind));
   } else if (action !== 'discard') {
     throw makeErr(`Unknown resolution action: ${action}`, ERR_VALIDATION);
   }
