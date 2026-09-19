@@ -32,19 +32,27 @@ export const INVESTIGATION_TASK_DELIVERY = Object.freeze({
   prCompletion: PR_COMPLETIONS.MERGE_ON_GREEN,
 });
 
-// Delivery for an investigation a USER queued from the UI (#6043) — the
-// installer-failure "Queue agent to investigate" button today. Same isolation as
-// the unattended posture above, but the PR waits for a review instead of merging
-// on green: `merge-on-green` exists because an auto-filed investigation has
-// nobody watching it, and that reason is gone the moment a human clicked the
-// button. They are here to look at the fix, so let them.
-export const CLIENT_INVESTIGATION_DELIVERY = Object.freeze({
+// The SUPERVISED posture: same isolation as the unattended one above, but the PR
+// waits for a review instead of merging on green. `merge-on-green` exists
+// because an auto-filed investigation has nobody watching it, so this is the
+// posture for every investigation where somebody WILL look — whoever they are,
+// and for whatever reason.
+//
+// One literal rather than one per caller. The reason a caller picks supervision
+// is call-site knowledge and belongs in a comment there; the VALUE is a policy,
+// and two copies of it drift the moment the posture gains a field.
+export const SUPERVISED_INVESTIGATION_DELIVERY = Object.freeze({
   // Verification may establish that the reported finding is already resolved.
   noChangeSuccess: true,
   useWorktree: true,
   openPR: true,
   prCompletion: PR_COMPLETIONS.REVIEW_THEN_MERGE,
 });
+
+// The supervised posture under the name its first caller knows it by (#6043) —
+// an investigation a USER queued from the UI, the installer-failure "Queue agent
+// to investigate" button today. They clicked it; they are here to look at the fix.
+export const CLIENT_INVESTIGATION_DELIVERY = SUPERVISED_INVESTIGATION_DELIVERY;
 
 // `kind` segment reserved for client-queued investigations. Auto-filed keys take
 // their kind from an analysis/self-improvement/task type, so this value keeps the
@@ -128,6 +136,43 @@ export function buildInvestigationFingerprint(originalTask, analysis) {
  */
 export function investigationFingerprint({ category, kind, scope } = {}) {
   return `${category || 'unknown'}:${kind || 'task'}:${scope || 'none'}`;
+}
+
+/**
+ * One reading of what `fileInvestigationTask` just did, in the shape a caller
+ * reports to a user.
+ *
+ * Every caller makes the same three judgements about that return, and two of
+ * them are easy to get subtly wrong in a way nothing fails on: a task the loop
+ * policy HELD is not a queued one, and a duplicate FOLD is a usable outcome
+ * rather than a failure. Re-deriving them per caller is how one copy keeps a
+ * `=== true` coercion the next one loses, and how a deliberate suppression gets
+ * reported as "could not be queued" — the least actionable thing that can be
+ * said about it.
+ *
+ * Pure, and HERE rather than beside the producer, so a suite that doubles the
+ * filing side still reads the real interpretation of what its double returned.
+ *
+ * `subject` names the thing in the refusal sentence ("the calibration task was
+ * suppressed (…)"), which is the only genuinely per-caller part.
+ */
+export function investigationOutcome(filed, { subject = 'the investigation task' } = {}) {
+  if (!filed?.task) {
+    return {
+      queued: false,
+      loopReason: filed?.loopReason || null,
+      reason: filed?.loopReason
+        ? `${subject} was suppressed (${filed.loopReason})`
+        : `${subject} could not be queued`,
+    };
+  }
+  return {
+    queued: true,
+    taskId: filed.task.id,
+    approvalRequired: filed.approvalRequired === true,
+    duplicate: filed.task.duplicate === true,
+    loopReason: filed.loopReason || null,
+  };
 }
 
 // ===== Approval policy (#3714) =====

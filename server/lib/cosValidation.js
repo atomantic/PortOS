@@ -393,6 +393,32 @@ export const resolveChallengeSchema = z.object({
   { message: 'Provide exactly one of `outcome` or `recheck`.', path: ['outcome'] },
 );
 
+// A follow-up investigator reporting that a goal-fidelity finding was WRONG —
+// the objective was delivered and the reviewer misjudged it
+// (`lib/goalFidelityCalibration.js`).
+//
+// Every field is a BOUNDED STRING, including `gap`, which is the one field that
+// changes behaviour (the queued calibration dedupes on it). Deliberately not the
+// `GOAL_FIDELITY_CONTEXT_GAPS` enum: `normalizeGoalFidelityContextGap` is the
+// single gate, and it folds an unrecognized gap onto `other` rather than
+// dropping the report. Rejecting here instead would throw away the prose
+// diagnosis — the expensive part, produced by an agent that investigated a
+// finished run — over a near-miss enum value, and would put that module in the
+// closure of the 283 suites this file is reached from to re-check what the
+// normalizer already checks.
+//
+// `fingerprint` / `taskId` / `verdict` are provenance the server never trusts as
+// identity: the dedup key is derived from the gap, and the verdict is restated
+// in the task body as text with nothing branching on it.
+export const goalFidelityFalsePositiveSchema = z.object({
+  gap: z.string().trim().min(1).max(60),
+  detail: z.string().trim().max(5000).optional(),
+  evidence: z.string().trim().max(20_000).optional(),
+  fingerprint: z.string().trim().max(500).optional(),
+  taskId: z.string().trim().max(200).optional(),
+  verdict: z.string().trim().max(40).optional(),
+});
+
 // =============================================================================
 // LOOP SCHEMAS
 // =============================================================================

@@ -242,20 +242,31 @@ export function buildGoalFidelityIssue({ task, review, fingerprint }) {
  * already live. Without one, it works the finding directly from this body —
  * which is why the finding is restated here in full rather than pointing at an
  * issue that may not exist.
+ *
+ * `falsePositiveBlock` is the THIRD job, and it comes first in the body because
+ * it has to happen first: the finding may be wrong. A verdict is one local
+ * model's reading of a diff it saw without the repository, and an agent told
+ * only to "reconcile" will reconcile — inventing a change to satisfy a finding
+ * that had nothing behind it. The block (built by
+ * `lib/goalFidelityCalibration.js`, rendered by the service that knows this
+ * install's API base) tells the investigator to check first and, when the
+ * objective WAS delivered, to report the blind spot instead of shipping.
+ * Optional so a caller with no API base to offer still produces a valid task.
  */
-export function buildGoalFidelityFollowUpTask({ task, review, fingerprint, issue = null }) {
+export function buildGoalFidelityFollowUpTask({ task, review, fingerprint, issue = null, falsePositiveBlock = null }) {
   const subject = firstLine(task?.description) || 'a CoS agent task';
   const header = `[Auto] Reconcile goal-fidelity ${review?.verdict} [${fingerprint}]: ${subject}`;
   const claim = issue?.url
-    ? `## What to do\nClaim ${issue.number ? `#${issue.number}` : 'the filed issue'} (${issue.url}) and ship the reconciliation through the project's normal claim flow.`
-    : `## What to do\nRe-read the task above against what actually shipped, then reconcile the two. Ship the change through the project's normal PR flow.`;
+    ? `## If the finding is right\nClaim ${issue.number ? `#${issue.number}` : 'the filed issue'} (${issue.url}) and ship the reconciliation through the project's normal claim flow.`
+    : `## If the finding is right\nRe-read the task above against what actually shipped, then reconcile the two. Ship the change through the project's normal PR flow.`;
   return [
     header,
     `## What happened\nA goal-fidelity review of the finished run for task \`${task?.id || 'unknown'}\` returned **${review?.verdict}**: the diff does not deliver the stated objective.`,
     `## Named as missing\n${bulletList(review?.missing, '_Nothing specific._')}`,
     `## Named as unrequested\n${bulletList(review?.unrequested, '_Nothing specific._')}`,
+    falsePositiveBlock,
     claim,
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 }
 
 /** One-line human summary of what the follow-up actually did, for a log line. */

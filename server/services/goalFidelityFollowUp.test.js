@@ -429,6 +429,19 @@ describe('runGoalFidelityFollowUp — the queued task', () => {
     expect(execGh).not.toHaveBeenCalled(); // no issue filing was asked for
   });
 
+  // The investigator can only report an overturned finding if the task it is
+  // handed tells it how, with THIS install's loopback base and the bearer
+  // argument — neither of which the pure body builder can resolve. Without them
+  // a false positive ends where it always did: an agent spent, nothing learned.
+  it('tells the investigator to check the finding and how to report it if it was wrong', async () => {
+    settings({ queueTask: true });
+    await run();
+    const { description } = fileInvestigationTask.mock.calls[0][0];
+    expect(description).toMatch(/is the finding actually right/i);
+    expect(description).toMatch(/http:\/\/127\.0\.0\.1:\d+\/api\/cos\/goal-fidelity\/false-positive/);
+    expect(description).toContain('Authorization: Bearer ${PORTOS_API_TOKEN:-}');
+  });
+
   // The loop policy can HOLD a follow-up for a human; reporting "queued" for a
   // task nothing will pick up is the one wrong thing to say about it.
   it('carries the producer approval verdict, so a held task is not reported as queued', async () => {

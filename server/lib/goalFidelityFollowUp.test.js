@@ -263,6 +263,26 @@ describe('buildGoalFidelityFollowUpTask', () => {
     const body = buildGoalFidelityFollowUpTask({ task, review: review(), fingerprint });
     expect(body.split('\n')[0]).toContain(fingerprint);
   });
+
+  // The finding may be wrong — it is one local model's reading of a diff it saw
+  // without the repository. An agent told only to reconcile will reconcile,
+  // inventing a change to satisfy a finding with nothing behind it, so the
+  // check-first instructions have to reach it BEFORE the reconcile instructions.
+  it('puts the check-the-finding block ahead of the reconcile instructions', () => {
+    const body = buildGoalFidelityFollowUpTask({
+      task, review: review(), fingerprint, falsePositiveBlock: '## First: is the finding actually right?\nCheck it.',
+    });
+    expect(body.indexOf('## First: is the finding actually right?'))
+      .toBeLessThan(body.indexOf('## If the finding is right'));
+  });
+
+  it('still produces a valid task when no report block was supplied', () => {
+    // The block needs an API base the pure builder cannot resolve; a caller
+    // without one must still get a task, not a body with a hole in it.
+    const body = buildGoalFidelityFollowUpTask({ task, review: review(), fingerprint });
+    expect(body).toContain('## If the finding is right');
+    expect(body).not.toContain('\n\n\n');
+  });
 });
 
 describe('formatGoalFidelityFollowUpSummary', () => {

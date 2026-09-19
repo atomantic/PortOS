@@ -19,6 +19,7 @@ import { NON_PM2_TYPES } from '../services/streamingDetect.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { recordUserAction } from '../services/userActions.js';
 import { fileInvestigationTask } from '../services/investigationTaskProducer.js';
+import { reportGoalFidelityFalsePositive } from '../services/goalFidelityCalibration.js';
 import { CLIENT_INVESTIGATION_DELIVERY, clientInvestigationFingerprint } from '../lib/investigationTasks.js';
 import {
   createCosTaskSchema,
@@ -26,6 +27,7 @@ import {
   updateCosTaskSchema,
   challengeTaskSchema,
   resolveChallengeSchema,
+  goalFidelityFalsePositiveSchema,
   validateRequest,
   isPaginationRequested,
   parsePagination,
@@ -601,6 +603,19 @@ router.post('/tasks/:id/challenge/resolve', asyncHandler(async (req, res) => {
       : result.code === 'RECHECK_FAILED' ? 502 : 400;
     throw new ServerError(result.error, { status, code: result.code || 'RESOLVE_FAILED' });
   }
+  res.json(result);
+}));
+
+// POST /api/cos/goal-fidelity/false-positive - A follow-up investigator reports that
+// a goal-fidelity finding was WRONG: the objective was delivered and the reviewer
+// misjudged it. Queues a calibration task against PortOS's own repo to close the
+// context gap that produced the misjudgement, deduped on the gap so many reports
+// of one blind spot fold into one fix. Never 4xx on a report it cannot act on —
+// the refusal reason rides in the body, because the reporting agent's job is to
+// say what it found, not to retry a queue decision it does not own.
+router.post('/goal-fidelity/false-positive', asyncHandler(async (req, res) => {
+  const report = validateRequest(goalFidelityFalsePositiveSchema, req.body);
+  const result = await reportGoalFidelityFalsePositive(report);
   res.json(result);
 }));
 
