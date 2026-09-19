@@ -22,6 +22,7 @@ import { chipColors } from '../../../lib/chipContrast';
 import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
+import AddToThreadButton from '../../threads/AddToThreadButton';
 
 function ClaimReviewOverride({ defaults, overrides, onChange, modelOptions }) {
   return (
@@ -882,6 +883,17 @@ export default function IssuesTab({ appId, appName }) {
                         </button>
                       );
                     })}
+                    {(issue.url || issue.html_url) && (
+                      <AddToThreadButton
+                        refItem={{
+                          kind: data?.forge === 'gitlab' ? 'gitlab.issue' : 'github.issue',
+                          id: issue.url || issue.html_url,
+                          label: `#${issue.number} ${issue.title || ''}`.trim()
+                        }}
+                        buttonText="Thread"
+                        className="px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                      />
+                    )}
                   </div>
                 </div>
 

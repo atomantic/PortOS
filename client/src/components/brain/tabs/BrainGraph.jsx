@@ -23,7 +23,7 @@ const EDGE_COLORS = {
   linked: '#ffffff'
 };
 
-const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs', 'goals', 'journals'];
+const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'songs', 'goals', 'journals', 'threads'];
 
 // Scene-appearance callbacks handed to the shared graph3d/GraphScene.
 // brainEdgeColor/brainEdgeIntensity are exported so the extraction's
@@ -59,7 +59,8 @@ const TYPE_GETTERS = {
   memories: api.getBrainMemory,
   goals: api.getBrainGoal,
   journals: api.getBrainJournalEntry,
-  songs: api.getSong
+  songs: api.getSong,
+  threads: api.getThread
 };
 
 // Prose body for the detail panel, in the order the panel prefers it. Every

@@ -43,3 +43,7 @@ export const addThreadRef = (id, ref, options) =>
 
 export const removeThreadRef = (id, kind, refId, options) =>
   request(`/brain/threads/${enc(id)}/refs/${enc(kind)}/${enc(refId)}`, { method: 'DELETE', ...options });
+
+// POST /api/brain/threads/attach — `{ ref, threadId?, title? }` → `{ thread, created }` (200 / 201).
+export const attachToThread = (body = {}, options) =>
+  request('/brain/threads/attach', { method: 'POST', body: JSON.stringify(body), ...options });

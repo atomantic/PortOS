@@ -86,6 +86,11 @@ export const DESTINATIONS = {
     icon: Music,
     color: 'bg-rose-500/20 text-rose-400 border-rose-500/30'
   },
+  threads: {
+    label: 'Threads',
+    icon: ListTodo,
+    color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+  },
   unknown: {
     label: 'Unknown',
     icon: MessageSquare,
@@ -164,5 +169,6 @@ export const BRAIN_TYPE_HEX = {
   memories: '#ec4899',
   goals: '#f97316',
   journals: '#14b8a6',
-  songs: '#f43f5e'
+  songs: '#f43f5e',
+  threads: '#10b981'
 };
