@@ -40,7 +40,9 @@ from pathlib import Path
 # the path the way a normal `python <path>` spawn does.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from jev_head_kit import HEAD_SCHEMA_VERSION, LABELS, MAX_HIDDEN, POOLING, pool_pair  # noqa: E402 - needs the sys.path line above.
+from jev_head_kit import (  # noqa: E402 - needs the sys.path line above.
+    HEAD_SCHEMA_VERSION, LABELS, MAX_HIDDEN, POOLING, load_encoder, pool_pair,
+)
 
 ENTAILMENT = LABELS.index("entailment")
 NEUTRAL = LABELS.index("neutral")
@@ -72,6 +74,21 @@ def read_corpus(path: Path):
     return rows
 
 
+def example_key(row) -> str:
+    """One example's identity, mirroring `corpusExampleKey` in jevCorpus.js.
+
+    Context and options, NUL-joined, first 32 hex of the SHA-256 — the same
+    bytes the Node side hashes, so the two agree on what "the same question"
+    means and the disjointness re-check below is checking the same thing the
+    split enforced.
+    """
+    digest = hashlib.sha256()
+    digest.update(row["context"].encode("utf-8"))
+    digest.update(b"\x00")
+    digest.update("\u0000".join(row["options"]).encode("utf-8"))
+    return digest.hexdigest()[:32]
+
+
 def pair_key(revision: str, context: str, hypothesis: str) -> str:
     """Cache key for one encoded pair.
 
@@ -86,13 +103,40 @@ def pair_key(revision: str, context: str, hypothesis: str) -> str:
     return digest.hexdigest()
 
 
+def prune_cache(cache_dir: Path, live_keys):
+    """Delete cached vectors this run did not use.
+
+    Every corpus build produces new contexts as pull requests merge and issues
+    close, so each run's keys are almost entirely fresh — without a prune the
+    directory grows by the whole corpus every time and never shrinks, at tens
+    of kilobytes per pair. The cache is per DECISION (see `jevPaths.js`), which
+    is what makes "not used by this run" a safe thing to delete rather than
+    another decision's working set.
+
+    Runs after a successful encode only, and never fails the run: a cache is
+    regenerable, so a file that will not unlink is a wasted byte, not an error.
+    """
+    removed = 0
+    for path in cache_dir.glob("*.json"):
+        if path.stem in live_keys:
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def encode_corpus(state, rows, cache_dir: Path, revision: str, on_progress):
     """Embed every (context, option) pair once, reading and filling the cache.
 
-    Returns a list parallel to `rows`, each entry holding one pooled vector and
-    one stock-classifier logit vector per option.
+    Returns `(encoded, keys)` — a list parallel to `rows`, each entry holding
+    one pooled vector and one stock-classifier logit vector per option, plus
+    the set of cache keys this run touched.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
+    keys = set()
     encoded = []
     total = sum(len(row["options"]) for row in rows)
     done = 0
@@ -100,7 +144,9 @@ def encode_corpus(state, rows, cache_dir: Path, revision: str, on_progress):
         pooled_options = []
         stock_options = []
         for hypothesis in row["options"]:
-            path = cache_dir / f"{pair_key(revision, row['context'], hypothesis)}.json"
+            key = pair_key(revision, row["context"], hypothesis)
+            keys.add(key)
+            path = cache_dir / f"{key}.json"
             cached = None
             if path.is_file():
                 try:
@@ -116,7 +162,7 @@ def encode_corpus(state, rows, cache_dir: Path, revision: str, on_progress):
             done += 1
             on_progress(done, total)
         encoded.append({"pooled": pooled_options, "stock": stock_options, "label": row["label"]})
-    return encoded
+    return encoded, keys
 
 
 def choose(scores_per_option):
@@ -267,46 +313,31 @@ def main() -> int:
     # (`assertSplitDisjoint`), and AGAIN here on the files actually handed over:
     # a contaminated gold set reports a score that is partly memorization, and
     # that score is the only evidence the adoption gate reads.
-    gold_keys = {pair_key(args.revision, row["context"], "\u0000".join(row["options"])) for row in gold_rows}
-    train_keys = {pair_key(args.revision, row["context"], "\u0000".join(row["options"])) for row in train_rows}
+    #
+    # `example_key` mirrors `corpusExampleKey` in server/lib/jevCorpus.js, not
+    # `pair_key` above — the cache key deliberately folds in the revision and
+    # the pooling, which is right for a cache and wrong for an identity.
+    gold_keys = {example_key(row) for row in gold_rows}
+    train_keys = {example_key(row) for row in train_rows}
     if gold_keys & train_keys:
         emit({"ok": False, "code": "jev-corpus-split-overlap"})
         return 1
 
-    # Imported HERE, not at module scope: argument validation and the corpus
-    # read above must fail in milliseconds, not after a multi-second torch
-    # import that a malformed request never needed.
-    import torch
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-    torch.set_num_threads(1)
-    model_dir = Path(args.model_dir)
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), local_files_only=True, trust_remote_code=False)
-    encoder = AutoModelForSequenceClassification.from_pretrained(
-        str(model_dir), local_files_only=True, trust_remote_code=False, use_safetensors=True,
-    )
-    device = "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"
-    encoder.to(device)
-    encoder.eval()
+    # THE SAME LOADER THE SIDECAR USES. Device, prompt template, window and
+    # pooling all come from `jev_head_kit.load_encoder`, because a trainer that
+    # resolved any of them differently would fit a head on a vector space the
+    # sidecar never produces — and nothing downstream could tell.
+    #
+    # Called HERE, not at module scope: it imports torch, and the argument
+    # validation and corpus read above must fail in milliseconds rather than
+    # after a multi-second import a malformed request never needed.
+    state = load_encoder(Path(args.model_dir))
+    torch = state["torch"]
+    encoder = state["model"]
+    device = state["device"]
     # FROZEN. The whole design rests on this: only the head below is fit.
     for parameter in encoder.parameters():
         parameter.requires_grad_(False)
-
-    config = encoder.config
-    template = getattr(config, "nli_template", None)
-    if not isinstance(template, str) or "{premise}" not in template or "{hypothesis}" not in template:
-        template = "Premise: {premise}\nHypothesis: {hypothesis}"
-    window = min(
-        value for value in (
-            getattr(tokenizer, "model_max_length", None),
-            getattr(getattr(config, "text_config", None), "max_position_embeddings", None),
-            getattr(config, "max_position_embeddings", None),
-        ) if isinstance(value, int) and 0 < value < 10_000_000
-    )
-    state = {
-        "torch": torch, "tokenizer": tokenizer, "model": encoder,
-        "device": device, "template": template, "window": window,
-    }
 
     cache_dir = Path(args.cache_dir)
     # Progress on stderr, never stdout: stdout carries exactly one line, the
@@ -315,8 +346,9 @@ def main() -> int:
         if done == total or done % 25 == 0:
             print(f"encoded {done}/{total}", file=sys.stderr, flush=True)
 
-    train_encoded = encode_corpus(state, train_rows, cache_dir, args.revision, progress)
-    gold_encoded = encode_corpus(state, gold_rows, cache_dir, args.revision, progress)
+    train_encoded, train_keys = encode_corpus(state, train_rows, cache_dir, args.revision, progress)
+    gold_encoded, gold_keys = encode_corpus(state, gold_rows, cache_dir, args.revision, progress)
+    pruned = prune_cache(cache_dir, train_keys | gold_keys)
 
     head_model, hidden_size, final_loss = fit_head(
         train_encoded, torch,
@@ -349,7 +381,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(head, separators=(",", ":")), encoding="utf-8")
 
-    emit({"ok": True, "metrics": metrics, "finalLoss": final_loss, "device": device})
+    emit({"ok": True, "metrics": metrics, "finalLoss": final_loss, "device": device, "cachePruned": pruned})
     return 0
 
 

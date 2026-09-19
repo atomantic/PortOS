@@ -310,7 +310,7 @@ describe('JevPanel project head', () => {
     const button = await screen.findByRole('button', { name: /Train a project head/ });
     await waitFor(() => expect(button).toBeEnabled());
     await act(async () => { fireEvent.click(button); });
-    expect(trainJevHead).toHaveBeenCalledWith({}, { silent: true });
+    expect(trainJevHead).toHaveBeenCalledWith({ architecture: 'linear' }, { silent: true });
     // Training NEVER promotes: the run's only follow-up is re-reading state.
     expect(adoptJevHead).not.toHaveBeenCalled();
   });
@@ -323,5 +323,19 @@ describe('JevPanel project head', () => {
     await waitFor(() => expect(button).toBeEnabled());
     await act(async () => { fireEvent.click(button); });
     expect(await screen.findByRole('alert')).toHaveTextContent('jev-corpus-too-small');
+  });
+});
+
+describe('JevPanel head architecture', () => {
+  // `mlp1` is in the artifact contract and the trainer; a knob only a
+  // hand-written request could reach is a knob nobody tunes.
+  it('trains the architecture the operator picked', async () => {
+    getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true) }));
+    await renderPanel();
+    const button = await screen.findByRole('button', { name: /Train a project head/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Head'), { target: { value: 'mlp1' } });
+    await act(async () => { fireEvent.click(button); });
+    expect(trainJevHead).toHaveBeenCalledWith({ architecture: 'mlp1' }, { silent: true });
   });
 });

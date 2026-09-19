@@ -38,6 +38,13 @@ model.config = SimpleNamespace(
 )
 model.to = lambda *_args: None
 model.eval = lambda: None
+# The base encoder the kit hooks to capture ONLY the final hidden state. The
+# real one is a PreTrainedModel; all the kit needs of it is a place to hang a
+# forward hook, so the double records the handler and lets each test fire it.
+hooks = []
+model.base_model = SimpleNamespace(
+    register_forward_hook=lambda fn: hooks.append(fn) or SimpleNamespace(remove=lambda: None)
+)
 
 def load(value):
     def from_pretrained(_path, **kwargs):
@@ -190,9 +197,14 @@ class Hidden:
         assert key == (0, -1, slice(None)), key
         return Row([0.0, 3.0, 0.0])
 
+# The kit hooks the BASE model and reads what the hook captured, so the double
+# fires the registered hook rather than returning hidden states inline — and
+# asserts the caller no longer pays for every layer's activations.
 def model_with_hidden(**inputs):
-    assert inputs["output_hidden_states"] is True
-    return SimpleNamespace(logits=[Row([0.0, 0.0, 0.0])], hidden_states=[Hidden()])
+    assert "output_hidden_states" not in inputs, inputs
+    for hook in hooks:
+        hook(None, None, (Hidden(),))
+    return SimpleNamespace(logits=[Row([0.0, 0.0, 0.0])])
 model_with_hidden.config = model.config
 state["model"] = model_with_hidden
 

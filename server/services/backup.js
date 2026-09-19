@@ -215,20 +215,11 @@ export const DEFAULT_EXCLUDES = [
   // Anchored with a leading `/`, like every entry here — an unanchored
   // `corpora/` would match at any depth and silently drop unrelated user data.
   //
-  // Two of the three jev directories are excluded and the third is deliberately
-  // NOT, because they fail differently:
-  //
-  //   corpora/     a snapshot of forge history, rebuildable by `gh` reads.
-  //                Overridable: the forge moves on, so someone archiving a
-  //                measured adoption decision may well want the exact corpus
-  //                the numbers came from.
-  //   embeddings/  frozen-encoder outputs, keyed by (pair, model revision).
-  //                Pure cache — byte-identical on re-encode, and gigabytes.
-  //   heads/       NOT excluded. A trained head is a few thousand floats and
-  //                is NOT regenerable once its corpus is gone: the queries that
-  //                produced one a month ago return different rows today. It is
-  //                also the only artifact here an operator made a decision
-  //                about, on the strength of three measured numbers.
+  // Two of the three `data/jev/` directories are excluded; `heads/` deliberately
+  // is NOT, because a trained head is the one artifact there that does not
+  // re-derive. The full three-way tier argument lives in docs/BACKUP.md
+  // ("jev project heads — excluded bulk, retained artifact"), which is where a
+  // tier change belongs.
   { path: '/jev/corpora/', reason: 'jev training corpora — rebuildable from the forge by scripts/jev-corpus.js. Trained heads in data/jev/heads/ are NOT excluded: a head is not regenerable once its corpus is stale.', overridable: true },
   { path: '/jev/embeddings/', reason: 'Cached frozen-encoder outputs for jev head training — keyed by (pair, model revision) and byte-identical on re-encode', overridable: false }
   // NOTE: legacy file→Postgres migration artifacts (`.imported` / `.bak-NNN`)

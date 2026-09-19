@@ -35,12 +35,110 @@ LABELS = ("contradiction", "entailment", "neutral")
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
+# Used only when the checkpoint's config omits its own `nli_template`.
+FALLBACK_TEMPLATE = "Premise: {premise}\nHypothesis: {hypothesis}"
+
+
 class HeadError(Exception):
     """A head failure the Node service can map to a code without reading text."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+def resolve_template(config) -> str:
+    """The checkpoint's own NLI template, or the fallback.
+
+    Shared by the sidecar and the trainer: a head fit under one template and
+    applied under another is fit on a different vector space than it is scored
+    in, which is the exact drift this module exists to prevent.
+    """
+    template = getattr(config, "nli_template", None)
+    if not isinstance(template, str) or "{premise}" not in template or "{hypothesis}" not in template:
+        return FALLBACK_TEMPLATE
+    return template
+
+
+def resolve_window(tokenizer, config) -> int:
+    """The largest token count one pair may occupy.
+
+    Transformers uses a sentinel-sized `model_max_length` for tokenizers that
+    declare none, which would read as "everything fits" — so an implausible
+    value falls through to the text config's position count.
+    """
+    candidates = []
+    for value in (getattr(tokenizer, "model_max_length", None),
+                  getattr(getattr(config, "text_config", None), "max_position_embeddings", None),
+                  getattr(config, "max_position_embeddings", None)):
+        if isinstance(value, int) and 0 < value < 10_000_000:
+            candidates.append(value)
+    if not candidates:
+        raise HeadError("jev-response-invalid")
+    return min(candidates)
+
+
+def load_encoder(model_dir):
+    """Load the pinned snapshot and build the state `pool_pair` reads.
+
+    ONE loader for both processes. The sidecar layers its `id2label` mapping on
+    top (it needs the checkpoint's own classifier); the trainer freezes the
+    parameters. Everything that decides how a pair becomes a vector — the
+    device, the template, the window, the final-hidden-state hook — is decided
+    here, once, or the trainer and the sidecar pool differently.
+    """
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    torch.set_num_threads(1)
+    tokenizer = AutoTokenizer.from_pretrained(
+        str(model_dir), local_files_only=True, trust_remote_code=False
+    )
+    model = AutoModelForSequenceClassification.from_pretrained(
+        str(model_dir),
+        local_files_only=True,
+        trust_remote_code=False,
+        use_safetensors=True,
+    )
+    # MPS where the host has it, CPU otherwise. Reported on /health so an
+    # operator can tell a slow CPU fallback from a healthy accelerated load.
+    device = "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"
+    model.to(device)
+    model.eval()
+
+    captured, _handle = capture_final_hidden_state(model)
+    return {
+        "torch": torch,
+        "tokenizer": tokenizer,
+        "model": model,
+        "device": device,
+        "template": resolve_template(model.config),
+        "window": resolve_window(tokenizer, model.config),
+        "hiddenCapture": captured,
+    }
+
+
+def capture_final_hidden_state(model):
+    """Register a forward hook that keeps ONLY the final hidden state.
+
+    Returns `(captured, handle)`, where `captured["value"]` holds the last
+    encoder output after each forward pass.
+
+    `output_hidden_states=True` would be one line shorter and is what this
+    started as. It is also the expensive way: it retains one activation tensor
+    per decoder layer for the whole pass, and this checkpoint has dozens — a
+    few hundred megabytes of extra peak allocation per pair, on a machine that
+    may already be holding the 9 GB sidecar copy resident, to use exactly one
+    of them. A hook on the base model keeps the one.
+    """
+    captured = {}
+
+    def keep(_module, _inputs, output):
+        # A base `PreTrainedModel` returns either a tuple whose first element is
+        # the last hidden state, or a ModelOutput carrying it by name.
+        captured["value"] = output[0] if isinstance(output, tuple) else output.last_hidden_state
+
+    return captured, model.base_model.register_forward_hook(keep)
 
 
 def pool_pair(state, premise: str, hypothesis: str):
@@ -70,9 +168,16 @@ def pool_pair(state, premise: str, hypothesis: str):
         "input_ids": torch.tensor([token_ids]).to(device),
         "attention_mask": torch.tensor([[1] * len(token_ids)]).to(device),
     }
+    # The hook is installed once per loaded model and lives in `state`;
+    # re-registering it per pair would stack a new one on every call.
+    captured = state["hiddenCapture"]
+    captured.pop("value", None)
     with torch.inference_mode():
-        output = model(**model_inputs, output_hidden_states=True)
-    pooled = output.hidden_states[-1][0, -1, :].to("cpu").float().tolist()
+        output = model(**model_inputs)
+    hidden = captured.get("value")
+    if hidden is None:
+        raise HeadError("jev-head-invalid")
+    pooled = hidden[0, -1, :].to("cpu").float().tolist()
     logits = output.logits[0].to("cpu").float().tolist()
     return pooled, logits
 
@@ -102,6 +207,12 @@ def validate_head(raw, *, revision: str):
     layers = raw.get("layers")
     hidden_size = raw.get("hiddenSize")
     if not isinstance(layers, list) or not 1 <= len(layers) <= 2:
+        raise HeadError("jev-head-invalid")
+    # The architecture's own layer count. Mirrors `parseJevHead`: a `linear`
+    # head declaring two layers, or an `mlp1` declaring one, is an artifact
+    # whose stated shape disagrees with its weights — and the two validators
+    # disagreeing about that is precisely the drift this mirror must not have.
+    if len(layers) != (2 if raw["architecture"] == "mlp1" else 1):
         raise HeadError("jev-head-invalid")
     if not isinstance(hidden_size, int) or hidden_size < 1:
         raise HeadError("jev-head-invalid")
@@ -136,18 +247,41 @@ def validate_head(raw, *, revision: str):
     return raw
 
 
-def load_head(heads_dir, slug: str, *, revision: str):
-    """Read and validate `<heads_dir>/<slug>.json`.
+def head_path(heads_dir, slug: str):
+    """Resolve `<heads_dir>/<slug>.json`, refusing a slug that is a path.
 
-    `slug` is matched against a fixed charset BEFORE it touches the filesystem,
-    and the resolved path is required to stay inside `heads_dir` — the sidecar
-    accepts a head name from a local caller, and a name is not a path.
+    The charset is matched BEFORE the name touches the filesystem, and the
+    resolved path is required to stay inside `heads_dir` — the sidecar accepts a
+    head name from a local caller, and a name is not a path.
     """
     if not isinstance(slug, str) or not SLUG.match(slug):
         raise HeadError("jev-head-invalid")
     root = Path(heads_dir).resolve()
     path = (root / f"{slug}.json").resolve()
-    if path.parent != root or not path.is_file():
+    if path.parent != root:
+        raise HeadError("jev-head-invalid")
+    return path
+
+
+def head_file_identity(heads_dir, slug: str):
+    """A cheap `(mtime_ns, size)` fingerprint, or None when there is no file.
+
+    What makes the sidecar's head cache invalidatable from the side that can
+    observe an adoption: Node rewrites the file, the fingerprint moves, the
+    next request re-reads it.
+    """
+    path = head_path(heads_dir, slug)
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return (info.st_mtime_ns, info.st_size)
+
+
+def load_head(heads_dir, slug: str, *, revision: str):
+    """Read and validate `<heads_dir>/<slug>.json`."""
+    path = head_path(heads_dir, slug)
+    if not path.is_file():
         raise HeadError("jev-head-not-found")
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

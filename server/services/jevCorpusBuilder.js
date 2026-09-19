@@ -59,11 +59,12 @@ import { getJevDecision, jevHypotheses } from '../lib/jevDecisions.js';
 import {
   composeAdherencePremise,
   formatChangeEvidence,
+  prepareClauseCorpus,
   SCOPE_ADHERENCE_DECISION_ID,
   SCOPE_ADHERENCE_TOP_K,
   selectCandidateClauses,
 } from '../lib/scopeAdherence.js';
-import { jevCorporaDir } from './jevHeads.js';
+import { jevCorporaDir } from '../lib/jevPaths.js';
 
 const execFileAsync = promisify(execFile);
 const FORGE_TIMEOUT_MS = 60_000;
@@ -108,7 +109,9 @@ async function fetchForgeRows({ cwd, env }) {
       '--json', 'number,title,body,mergedAt'], { cwd, env }),
     ghJson(['issue', 'list', '--state', 'closed', '--search', 'reason:"not planned"',
       '--limit', String(FORGE_PAGE_LIMIT), '--json', 'number,title,body'], { cwd, env }),
-    ghJson(['issue', 'list', '--state', 'open', '--label', 'future',
+    // `--search 'label:a,b'` is OR on the server; repeated `--label` flags
+    // would be AND, and would find only the issues carrying both.
+    ghJson(['issue', 'list', '--state', 'open', '--search', 'label:future,needs-input',
       '--limit', String(FORGE_PAGE_LIMIT), '--json', 'number,title,body'], { cwd, env }),
   ]);
   // Every query failing means the forge is unreachable. One failing on a
@@ -140,6 +143,10 @@ async function fetchForgeRows({ cwd, env }) {
  */
 function toExamples({ rows, clauses, index, options, verdicts, topK }) {
   const examples = [];
+  // Built ONCE for the whole batch. `selectCandidateClauses` would otherwise
+  // re-filter the corpus and rebuild its id map per forge row — O(rows ×
+  // clauses) where O(clauses) does.
+  const prepared = prepareClauseCorpus(clauses);
   for (const row of rows) {
     const change = {
       kind: row.kind,
@@ -149,7 +156,7 @@ function toExamples({ rows, clauses, index, options, verdicts, topK }) {
     };
     if (!change.title && !change.body) continue;
     const evidence = formatChangeEvidence(change);
-    for (const clause of selectCandidateClauses(clauses, change, { k: topK, index })) {
+    for (const clause of selectCandidateClauses(clauses, change, { k: topK, index, prepared })) {
       const context = composeAdherencePremise({ clause, evidence });
       if (!context) continue;
       const example = buildCorpusExample({
@@ -232,7 +239,7 @@ export async function buildScopeAdherenceCorpus({ repoPath, env = null, topK = S
       'gh pr list --state merged',
       'gh pr list --state closed (unmerged only)',
       'gh issue list --state closed --search reason:"not planned"',
-      'gh issue list --state open --label future',
+      'gh issue list --state open --search label:future,needs-input',
     ],
     // Counts only, and only for context: the shadow counters carry no premise,
     // so they inform whether this decision has been measured at all — never a

@@ -78,8 +78,6 @@ import {
 import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall } from '../services/modelAbuseGuard.js'
 import { cancelJevInstall, decide, getJevStatus, installJev, stopJevSidecar } from '../services/jev.js'
 import { readJevDecisionStats } from '../services/jevRouter.js'
-import { adoptJevHead, describeJevHeads, discardJevHead } from '../services/jevHeads.js'
-import { isJevTrainingRunning, trainScopeAdherenceHead } from '../services/jevTraining.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js'
 import { getAssessmentReport, runAssessment, deleteAssessment } from '../services/localModelAssessments.js'
@@ -105,6 +103,15 @@ import {
   getLastLoadedModelsError as getLmStudioResidencyError,
   getLoadedModels as getLoadedLmStudioModels,
 } from '../services/lmStudioManager.js'
+
+// The head store and the trainer are DEFERRED into their handlers, not
+// imported at module scope: `jevTraining.js` reaches the sidecar lifecycle, the
+// pinned model contract and the corpus builder's forge stack, and this route
+// module sits in the static closure of a great many suites
+// (`server/lib/importScoping.test.js`). Four endpoints nobody calls by default
+// must not make every one of them pay for that subtree.
+const jevHeadStore = () => import('../services/jevHeads.js')
+const jevTrainer = () => import('../services/jevTraining.js')
 
 const router = Router()
 
@@ -321,6 +328,7 @@ router.post('/jev/unload', asyncHandler(async (_req, res) => {
 // repository history. These routes report metrics and adoption state; none of
 // them returns a corpus row, a premise, or a path.
 router.get('/jev/heads', asyncHandler(async (_req, res) => {
+  const [{ describeJevHeads }, { isJevTrainingRunning }] = await Promise.all([jevHeadStore(), jevTrainer()])
   res.json({ ...await describeJevHeads(), training: isJevTrainingRunning() })
 }))
 
@@ -331,6 +339,7 @@ router.get('/jev/heads', asyncHandler(async (_req, res) => {
 // anything else.
 router.post('/jev/heads/train', asyncHandler(async (req, res) => {
   const { architecture } = validateRequest(jevHeadTrainRequestSchema, req.body || {})
+  const { trainScopeAdherenceHead } = await jevTrainer()
   const result = await trainScopeAdherenceHead({ architecture })
   if (!result?.ok) throw new ServerError('Training a project head failed.', { status: 502, code: result?.code || 'jev-head-training-failed' })
   res.json(result)
@@ -341,6 +350,7 @@ router.post('/jev/heads/train', asyncHandler(async (req, res) => {
 // through any surface, and hiding a button is a suggestion, not a gate.
 router.post('/jev/heads/adopt', asyncHandler(async (req, res) => {
   const { decisionId } = validateRequest(jevHeadActionRequestSchema, req.body || {})
+  const { adoptJevHead } = await jevHeadStore()
   const result = await adoptJevHead(decisionId)
   if (!result?.ok) throw new ServerError('This head cannot be adopted.', { status: 400, code: result?.code || 'jev-head-invalid' })
   res.json({ adopted: true, decisionId, metrics: result.head.metrics })
@@ -351,6 +361,7 @@ router.post('/jev/heads/adopt', asyncHandler(async (req, res) => {
 // training run.
 router.post('/jev/heads/discard', asyncHandler(async (req, res) => {
   const { decisionId, adopted } = validateRequest(jevHeadActionRequestSchema, req.body || {})
+  const { discardJevHead } = await jevHeadStore()
   res.json(await discardJevHead(decisionId, { candidate: adopted !== true }))
 }))
 

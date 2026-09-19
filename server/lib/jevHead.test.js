@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { JEV_LABELS } from './jev.js';
+import { JEV_LABELS, JEV_SIDECAR_FAILURE_CODES } from './jev.js';
 import { JEV_DECISION_IDS } from './jevDecisions.js';
+import { SCOPE_ADHERENCE_REASONS } from './scopeAdherenceReasons.js';
+import {
+  JEV_HEAD_BLOCKER_FALLBACK,
+  JEV_HEAD_BLOCKER_REASONS,
+  jevHeadBlockerLabel,
+} from './jevHeadReasons.js';
 import {
   countHeadParams,
   headAdoptionBlocker,
   headBeatsBaselines,
   isHeadCompatible,
+  JEV_HEAD_FAILURE_CODES,
   JEV_HEAD_MAX_HIDDEN,
   JEV_HEAD_POOLING,
   JEV_HEAD_SCHEMA_VERSION,
-  JEV_HEAD_SLUG,
   jevHeadActionRequestSchema,
+  jevHeadFileName,
+  jevHeadSlug,
   jevHeadTrainRequestSchema,
   parseJevHead,
 } from './jevHead.js';
@@ -168,13 +176,48 @@ describe('head slugs', () => {
   // path; this is what makes that a test failure rather than a runtime one.
   it('every shipped decision id is a usable slug', () => {
     expect(JEV_DECISION_IDS.length).toBeGreaterThan(1);
-    for (const id of JEV_DECISION_IDS) expect(`${id}:${JEV_HEAD_SLUG.test(id)}`).toBe(`${id}:true`);
+    for (const id of JEV_DECISION_IDS) expect(`${id}:${jevHeadSlug(id)}`).toBe(`${id}:${id}`);
   });
 
-  it('rejects a slug that would escape the heads directory', () => {
-    for (const bad of ['../escape', 'a/b', 'UPPER', '.hidden', '']) {
-      expect(`${bad}:${JEV_HEAD_SLUG.test(bad)}`).toBe(`${bad}:false`);
+  it('refuses a decision id that would escape the heads directory', () => {
+    for (const bad of ['../escape', 'a/b', 'UPPER', '.hidden', '', 'a:b']) {
+      expect(`${bad}:${jevHeadSlug(bad)}`).toBe(`${bad}:null`);
     }
+  });
+
+  it('names the adopted and candidate files apart', () => {
+    expect(jevHeadFileName('scope-adherence')).toBe('scope-adherence.json');
+    expect(jevHeadFileName('scope-adherence', { candidate: true })).toBe('scope-adherence.candidate.json');
+    expect(jevHeadFileName('../escape')).toBeNull();
+  });
+});
+
+describe('the head failure vocabulary', () => {
+  // The head codes exist in three places — this list, the sidecar's forwardable
+  // subset, and the operator-facing labels. Nothing tied them together, so the
+  // copies could drift silently; these two assertions are that tie.
+  it('declares every head code the sidecar is allowed to forward', () => {
+    const forwardable = JEV_SIDECAR_FAILURE_CODES.filter((code) => code.startsWith('jev-head-'));
+    expect(forwardable.length).toBeGreaterThan(3);
+    expect(forwardable.filter((code) => !JEV_HEAD_FAILURE_CODES.includes(code))).toEqual([]);
+  });
+
+  it('gives every forwardable head code an operator-facing label', () => {
+    for (const code of JEV_SIDECAR_FAILURE_CODES.filter((c) => c.startsWith('jev-head-'))) {
+      expect(`${code}:${Object.hasOwn(SCOPE_ADHERENCE_REASONS, code)}`).toBe(`${code}:true`);
+    }
+  });
+
+  // The other half of the vocabulary: every verdict `headAdoptionBlocker` can
+  // return has to render as prose, or a fourth blocker shows an operator a raw
+  // slug with a green suite behind it.
+  it('gives every adoption blocker a label', () => {
+    const blockers = JEV_HEAD_FAILURE_CODES.filter((code) => Object.hasOwn(JEV_HEAD_BLOCKER_REASONS, code));
+    expect(blockers.sort()).toEqual(Object.keys(JEV_HEAD_BLOCKER_REASONS).sort());
+    for (const code of blockers) expect(jevHeadBlockerLabel(code)).not.toBe(JEV_HEAD_BLOCKER_FALLBACK);
+    // An unknown code degrades to the fallback rather than rendering undefined,
+    // and a prototype key cannot return a function React would throw on.
+    expect(jevHeadBlockerLabel('toString')).toBe(JEV_HEAD_BLOCKER_FALLBACK);
   });
 });
 

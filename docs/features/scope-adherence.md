@@ -92,7 +92,7 @@ Nothing about the advisory contract changes. A head emits the checkpoint's own t
 | merged PRs on the default branch | `aligned` | the maintainer wanted it |
 | closed-unmerged PRs | `unrelated` | they did not |
 | issues closed `not planned` | `unrelated` | they did not |
-| issues labelled `future` | `unrelated` | parked rather than refused |
+| issues labelled `future` or `needs-input` | `unrelated` | parked rather than refused |
 
 Each row is paired with the clauses the SAME retriever picks at inference time, and the premise is composed by the SAME helpers — so a corpus row asks exactly the question the scorer is asked in production. The output is open-jev **Route A** JSONL (`{"context", "options", "label"}`), which keeps `openjev eval` usable as an independent cross-check on a corpus PortOS built.
 

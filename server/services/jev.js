@@ -49,10 +49,11 @@ import { diagnosePythonRuntimeText } from '../lib/pythonRuntimeDiagnosis.js';
 import { createVenv, detectVenvBasePythonSync, installPackages } from '../lib/pythonSetup.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { downloadHfRepo } from './hfDownload.js';
-// One path helper, from the module that owns the directory. Re-deriving
+// One path helper, from the leaf that owns the directory. Re-deriving
 // `data/jev/heads` here is how the sidecar's `--heads-dir` and the store's
-// writes end up pointing at two different directories.
-import { jevHeadsDir } from './jevHeads.js';
+// writes end up pointing at two different directories — and taking it from the
+// STORE instead would drag the head schema into this module's static closure.
+import { jevHeadsDir } from '../lib/jevPaths.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -138,15 +139,31 @@ function availableJevPython() {
 }
 
 /**
- * The dedicated jev interpreter, or null.
+ * How to run Python inside the dedicated jev venv, or null when it is absent.
  *
- * Exported for ONE caller: `services/jevTraining.js`, which has to run the head
- * trainer under exactly the interpreter and environment the scorer runs under,
- * or the "offline, no provider call, no second download" guarantee describes a
- * process that is not the one executing. Nothing else may spawn against this
- * venv — the sidecar lifecycle above owns it.
+ * Returns `{ pythonPath, options }` — the interpreter AND the hardened spawn
+ * options together, because that pairing IS the guarantee: no API keys, no
+ * forge token, no MCP or provider variables, no arbitrary PYTHONPATH, and
+ * `HF_HUB_OFFLINE=1` so a missing file fails rather than downloading.
+ *
+ * One function rather than exporting `jevPythonPath` and `buildJevEnv` for a
+ * caller to recompose: `startSidecar` below and `services/jevTraining.js` both
+ * use it, so a future change to the hardening cannot land in one and leave the
+ * other describing a process that is not the one running.
  */
-export const jevPythonPath = () => availableJevPython();
+export function jevVenvSpawnTarget(overrides = {}) {
+  const pythonPath = availableJevPython();
+  if (!pythonPath) return null;
+  const cwd = dirname(pythonPath);
+  return {
+    pythonPath,
+    options: safeChildProcessOptions({
+      cwd,
+      env: withSpawnCwdEnv(buildJevEnv(), cwd),
+      ...overrides,
+    }),
+  };
+}
 
 async function isBasePythonSupported(pythonPath) {
   if (!pythonPath) return false;
@@ -373,8 +390,8 @@ const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms).unref?.
  * them bound to nothing and the other reaped by a caller that never saw it.
  */
 async function startSidecar() {
-  const pythonPath = availableJevPython();
-  if (!pythonPath) return failure('jev-not-installed');
+  const target = jevVenvSpawnTarget({ stdio: ['ignore', 'pipe', 'pipe'] });
+  if (!target) return failure('jev-not-installed');
   const files = await findCachedRepoFiles(JEV_MODEL.repository, JEV_REQUIRED_FILES, { revision: JEV_MODEL.revision });
   if (!files?.[0]) return failure('jev-not-installed');
   // Every required file sits in the pinned subfolder, so its parent IS the
@@ -387,7 +404,7 @@ async function startSidecar() {
   const headsDir = jevHeadsDir();
 
   const proc = spawn(
-    pythonPath,
+    target.pythonPath,
     [
       HELPER_SCRIPT,
       '--model-dir', modelDir,
@@ -397,11 +414,7 @@ async function startSidecar() {
       '--revision', JEV_MODEL.revision,
       '--heads-dir', headsDir,
     ],
-    safeChildProcessOptions({
-      cwd: dirname(pythonPath),
-      env: withSpawnCwdEnv(buildJevEnv(), dirname(pythonPath)),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }),
+    target.options,
   );
   startingProc = proc;
   let exited = false;

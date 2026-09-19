@@ -6,16 +6,18 @@
  * from two overlapping runs, and a run that promotes its own output.
  */
 
-import { mkdtemp } from 'fs/promises';
-import { tmpdir } from 'os';
 import { join } from 'path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const dataRoot = await mkdtemp(join(tmpdir(), 'portos-jev-training-'));
-vi.mock('../lib/paths.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: dataRoot } };
-});
+// The shared helper re-roots every `PATHS` member under `data/`, not just
+// `PATHS.data` — a bare spread leaves the rest pointing at the live install.
+const PREFIX = 'portos-jev-training-';
+vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), {
+  dataRoot: () => lazyTempDataRoot(PREFIX),
+}));
+
+afterAll(() => cleanupTempDataRoots());
 
 const execFile = vi.fn();
 vi.mock('../lib/childProcess.js', () => ({
@@ -24,19 +26,8 @@ vi.mock('../lib/childProcess.js', () => ({
 }));
 
 const getJevStatus = vi.fn();
-const jevPythonPath = vi.fn();
-vi.mock('./jev.js', () => ({
-  getJevStatus,
-  jevPythonPath,
-  // The real one, re-declared rather than imported: importing the module under
-  // mock would defeat the mock. Its contract is what the assertion below reads.
-  buildJevEnv: (source = process.env) => ({
-    PATH: source.PATH,
-    HOME: source.HOME,
-    HF_HUB_OFFLINE: '1',
-    TRANSFORMERS_OFFLINE: '1',
-  }),
-}));
+const jevVenvSpawnTarget = vi.fn();
+vi.mock('./jev.js', () => ({ getJevStatus, jevVenvSpawnTarget }));
 
 const findCachedRepoFiles = vi.fn();
 vi.mock('../lib/hfCache.js', () => ({ findCachedRepoFiles, getHfCacheRoot: () => '/tmp/hf-cache-double' }));
@@ -45,13 +36,10 @@ const buildScopeAdherenceCorpus = vi.fn();
 vi.mock('./jevCorpusBuilder.js', () => ({ buildScopeAdherenceCorpus }));
 
 const saveCandidateJevHead = vi.fn();
-const adoptJevHead = vi.fn();
-vi.mock('./jevHeads.js', () => ({
-  saveCandidateJevHead,
-  adoptJevHead,
-  jevEmbeddingsDir: () => join(dataRoot, 'jev', 'embeddings'),
-  jevHeadsDir: () => join(dataRoot, 'jev', 'heads'),
-}));
+// No `adoptJevHead` double: this module does not import it, so a spy on one
+// could never fire and would assert nothing. "Training never promotes" is
+// enforced where promotion actually lives — `jevHeads.test.js`.
+vi.mock('./jevHeads.js', () => ({ saveCandidateJevHead }));
 
 const resolveForgeForRepo = vi.fn();
 vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo }));
@@ -68,12 +56,21 @@ const HEAD = { decisionId: 'scope-adherence', architecture: 'linear', metrics: M
 function happyPath() {
   getJevStatus.mockResolvedValue({ ready: true });
   findCachedRepoFiles.mockResolvedValue(['/hf/snapshots/abc/qwen3.5-4b-nli/config.json']);
-  jevPythonPath.mockReturnValue('/venv/bin/python3');
+  // The one value the service is given: interpreter AND hardened options
+  // together, exactly as `services/jev.js` composes them for the sidecar.
+  jevVenvSpawnTarget.mockReturnValue({
+    pythonPath: '/venv/bin/python3',
+    options: {
+      cwd: '/venv/bin',
+      env: { PATH: '/usr/bin', HOME: '/home/test', HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1' },
+    },
+  });
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: { ...process.env, GH_TOKEN: 'synthetic-token' } });
   buildScopeAdherenceCorpus.mockResolvedValue({
     ok: true,
     corpusHash: 'deadbeefcafe0001',
-    corpusDir: join(dataRoot, 'jev', 'corpora', 'scope-adherence-deadbeefcafe0001'),
+    majorityClass: 0.52,
+    corpusDir: join(lazyTempDataRoot(PREFIX), 'jev', 'corpora', 'scope-adherence-deadbeefcafe0001'),
     trainSize: 120,
     goldSize: 40,
     sources: { 'merged-pr': 90, 'closed-unmerged-pr': 0, 'closed-not-planned-issue': 70, 'parked-issue': 0 },
@@ -93,11 +90,10 @@ beforeEach(() => {
 });
 
 describe('trainScopeAdherenceHead', () => {
-  it('writes a candidate and never promotes it', async () => {
+  it('writes a candidate and reports its scores without a corpus row', async () => {
     const result = await trainScopeAdherenceHead();
     expect(result).toMatchObject({ ok: true, decisionId: 'scope-adherence', metrics: METRICS });
     expect(saveCandidateJevHead).toHaveBeenCalledWith('scope-adherence', HEAD);
-    expect(adoptJevHead).not.toHaveBeenCalled();
     // The three baselines and the corpus balance come back; no example does.
     expect(result.corpus.sources['merged-pr']).toBe(90);
     expect(JSON.stringify(result)).not.toContain('synthetic-token');
@@ -111,13 +107,37 @@ describe('trainScopeAdherenceHead', () => {
     const [command, args, options] = execFile.mock.calls[0];
     expect(command).toBe('/venv/bin/python3');
     expect(args[0]).toMatch(/train_jev_head\.py$/);
+    // The options come from `jevVenvSpawnTarget` — the SAME value the sidecar
+    // is spawned with — rather than being recomposed here, so the environment
+    // cannot drift from the one the guarantee describes.
     expect(options.env.GH_TOKEN).toBeUndefined();
     expect(options.env.GITHUB_TOKEN).toBeUndefined();
     expect(options.env.HF_HUB_OFFLINE).toBe('1');
+    expect(jevVenvSpawnTarget).toHaveBeenCalledWith(expect.objectContaining({ timeout: expect.any(Number) }));
     // Which encoder it is fit on is passed explicitly, so the head can record
     // the revision its loader will later refuse a mismatch against.
     expect(args).toContain('--revision');
     expect(args).toContain('--corpus-hash');
+    // Per-decision embedding cache, so a run can prune its own stale keys.
+    expect(args[args.indexOf('--cache-dir') + 1]).toMatch(/embeddings[/\\]scope-adherence$/);
+  });
+
+  // Both languages compute the majority-class baseline; the gate reads the
+  // Python one. A disagreement means they are not looking at the same gold set,
+  // which would make the adoption evidence meaningless.
+  it('refuses a head whose majority-class baseline disagrees with the corpus', async () => {
+    buildScopeAdherenceCorpus.mockResolvedValue({
+      ok: true,
+      corpusHash: 'deadbeefcafe0001',
+      majorityClass: 0.61,
+      corpusDir: join(lazyTempDataRoot(PREFIX), 'jev', 'corpora', 'scope-adherence-deadbeefcafe0001'),
+      trainSize: 120,
+      goldSize: 40,
+      sources: { 'merged-pr': 90, 'closed-unmerged-pr': 0, 'closed-not-planned-issue': 70, 'parked-issue': 0 },
+      shadow: { observed: 12, compared: 4, agreementRate: 0.75 },
+    });
+    expect(await trainScopeAdherenceHead()).toEqual({ ok: false, code: 'jev-head-training-failed' });
+    expect(saveCandidateJevHead).not.toHaveBeenCalled();
   });
 
   // Two overlapping runs would load a second 4B encoder on a machine that may

@@ -226,6 +226,7 @@ export * from './wrSceneCursor.js';
 export * from './writingGuide.js';
 export * from './qrCode.js';
 export * from './riggingReasons.js';
+export * from './jevHeadReasons.js';
 export * from './scopeAdherenceReasons.js';
 export * from './usagePeriods.js';
 export * from './usdzExport.js';

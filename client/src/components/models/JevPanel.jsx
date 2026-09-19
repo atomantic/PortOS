@@ -16,6 +16,7 @@ import {
   unloadJev,
 } from '../../services/api';
 import socket from '../../services/socket';
+import { jevHeadBlockerLabel } from '../../lib/jevHeadReasons';
 
 // Shown before the first status response lands, and if status is unavailable,
 // so the checklist never renders as an empty box. Mirrors JEV_STAGES in
@@ -42,14 +43,6 @@ const formatRate = (rate) => formatPercent(rate === null ? null : rate * 100);
 // evidence, so there is deliberately nothing to pick between yet.
 const TRAINABLE_DECISION_ID = 'scope-adherence';
 
-// Why a measured head cannot be adopted, in the operator's words. Naming the
-// losing baseline matters: "did not beat the stock scorer" and "did not beat
-// always guessing the most common answer" send them to different places.
-const BLOCKER_LABELS = {
-  'jev-head-below-zero-shot': 'Did not beat the stock zero-shot scorer, which needs no corpus at all.',
-  'jev-head-below-majority-class': 'Did not beat always predicting the most common answer, so it learned the label balance rather than the product.',
-  'jev-head-metrics-invalid': 'This head carries no readable scores.',
-};
 
 export default function JevPanel() {
   const [status, setStatus] = useState(null);
@@ -66,6 +59,11 @@ export default function JevPanel() {
   const [headState, setHeadState] = useState(null);
   const [training, setTraining] = useState(false);
   const [headError, setHeadError] = useState('');
+  // `linear` is the honest default: a 3-way logistic regression over a frozen
+  // 4B encoder. `mlp1` buys one hidden layer for a corpus large enough to
+  // support it — exposed rather than server-only, because a knob only a
+  // hand-written request can reach is a knob nobody tunes.
+  const [architecture, setArchitecture] = useState('linear');
   const progressTimer = useRef(null);
 
   const loadStatus = useCallback(() => (
@@ -92,11 +90,9 @@ export default function JevPanel() {
     getJevDecisionStats({ silent: true })
       .then((res) => { if (active) setDecisionStats(res); })
       .catch(() => { if (active) setDecisionStats(null); });
-    getJevHeads({ silent: true })
-      .then((res) => { if (active) setHeadState(res); })
-      .catch(() => { if (active) setHeadState(null); });
+    loadHeads();
     return () => { active = false; };
-  }, [loadStatus]);
+  }, [loadStatus, loadHeads]);
 
   useEffect(() => {
     const handleProgress = (data) => {
@@ -158,31 +154,40 @@ export default function JevPanel() {
       .finally(() => { setScoring(false); loadStatus(); });
   };
 
-  const runTraining = () => {
+  /**
+   * Run one head action and re-read the state either way.
+   *
+   * A failure is shown in the section beside the scores rather than as a toast:
+   * the operator is reading the three numbers right here, and the reason a run
+   * produced none belongs with them. Re-loading on the failure path too is what
+   * keeps the table honest when the server refused for a reason the panel had
+   * stale state about.
+   */
+  const runHeadAction = (action, fallbackMessage) => {
     setHeadError('');
+    return action
+      .then((result) => loadHeads().then(() => result))
+      .catch((error) => { setHeadError(error.message || fallbackMessage); return loadHeads(); });
+  };
+
+  const runTraining = () => {
     setTraining(true);
-    return trainJevHead({}, { silent: true })
-      .then(() => loadHeads())
-      // Shown in the section beside the button, not as a toast: the operator is
-      // reading the three scores right here, and the reason a run produced none
-      // belongs with them.
-      .catch((error) => { setHeadError(error.message || 'Training failed.'); return loadHeads(); })
+    return runHeadAction(trainJevHead({ architecture }, { silent: true }), 'Training failed.')
       .finally(() => setTraining(false));
   };
 
-  const adoptHead = (decisionId) => {
-    setHeadError('');
-    return adoptJevHead(decisionId, { silent: true })
-      .then(() => { toast.success('Project head adopted'); return loadHeads(); })
-      .catch((error) => { setHeadError(error.message || 'This head cannot be adopted.'); return loadHeads(); });
-  };
+  const adoptHead = (decisionId) => runHeadAction(
+    adoptJevHead(decisionId, { silent: true }).then((result) => {
+      toast.success('Project head adopted');
+      return result;
+    }),
+    'This head cannot be adopted.',
+  );
 
-  const discardHead = (decisionId, adopted) => {
-    setHeadError('');
-    return discardJevHead(decisionId, { adopted }, { silent: true })
-      .then(() => loadHeads())
-      .catch((error) => { setHeadError(error.message || 'Discard failed.'); return loadHeads(); });
-  };
+  const discardHead = (decisionId, adopted) => runHeadAction(
+    discardJevHead(decisionId, { adopted }, { silent: true }),
+    'Discard failed.',
+  );
 
   const stages = stagesFromStatus(status);
   const currentStageId = installingStage || (installing ? stages.find((stage) => !stage.ready)?.id : null);
@@ -432,7 +437,7 @@ export default function JevPanel() {
                         </button>
                       </div>
                       {row.ok && row.blocker && (
-                        <p className="text-[11px] text-port-warning mt-1 max-w-xs">{BLOCKER_LABELS[row.blocker] || row.blocker}</p>
+                        <p className="text-[11px] text-port-warning mt-1 max-w-xs">{jevHeadBlockerLabel(row.blocker)}</p>
                       )}
                       {row.ok && (
                         <p className="text-[11px] text-gray-500 mt-1">
@@ -457,6 +462,17 @@ export default function JevPanel() {
           >
             <GraduationCap size={12} /> {training ? 'Training…' : 'Train a project head'}
           </button>
+          <label htmlFor="jev-head-architecture" className="text-xs text-gray-400">Head</label>
+          <select
+            id="jev-head-architecture"
+            value={architecture}
+            onChange={(event) => setArchitecture(event.target.value)}
+            disabled={training}
+            className="text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 disabled:opacity-50"
+          >
+            <option value="linear">Linear</option>
+            <option value="mlp1">One hidden layer</option>
+          </select>
           {!ready && <span className="text-xs text-gray-500">Install jev first.</span>}
           {training && (
             <span className="flex items-center gap-1.5 text-xs text-gray-300">

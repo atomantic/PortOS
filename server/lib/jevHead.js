@@ -84,7 +84,26 @@ export const JEV_HEAD_POOLING = 'last-token';
  * decision id satisfies it, so a future decision named with a colon or a slash
  * fails at test time rather than at the first adoption.
  */
-export const JEV_HEAD_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const JEV_HEAD_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * The slug a decision's head is addressed by, or null if the id cannot be one.
+ *
+ * The mapping is identity TODAY, and this function is where that is decided —
+ * not re-derived at the four sites that need it (the store's filenames, the
+ * router's `head` argument, the sidecar's resolve, the panel's row key). A
+ * decision id that is not slug-safe fails here rather than by producing a
+ * filename nobody meant to write.
+ */
+export const jevHeadSlug = (decisionId) => (
+  typeof decisionId === 'string' && JEV_HEAD_SLUG.test(decisionId) ? decisionId : null
+);
+
+/** The on-disk filename for a decision's adopted or candidate head. */
+export function jevHeadFileName(decisionId, { candidate = false } = {}) {
+  const slug = jevHeadSlug(decisionId);
+  return slug === null ? null : `${slug}${candidate ? '.candidate' : ''}.json`;
+}
 
 const finite = () => z.number().finite();
 const vector = () => z.array(finite()).min(1);
@@ -151,27 +170,33 @@ export function countHeadParams(head) {
  * artifact for a different encoder. They point at opposite remedies, so they
  * report different codes.
  */
+// Every structural rejection in `parseJevHead` reports the same thing: a
+// trainer bug the operator cannot fix. One frozen value rather than nine
+// identical literals, so the branch CONDITIONS — which are the content — are
+// not buried in boilerplate.
+const INVALID = Object.freeze({ ok: false, code: 'jev-head-invalid' });
+
 export function parseJevHead(raw) {
   const result = jevHeadSchema.safeParse(raw);
-  if (!result.success) return { ok: false, code: 'jev-head-invalid' };
+  if (!result.success) return INVALID;
   const head = result.data;
-  if (head.labels.join('\u0000') !== JEV_LABELS.join('\u0000')) return { ok: false, code: 'jev-head-invalid' };
+  if (head.labels.join('\u0000') !== JEV_LABELS.join('\u0000')) return INVALID;
 
   const first = head.layers[0];
-  if (first.weight.some((row) => row.length !== head.hiddenSize)) return { ok: false, code: 'jev-head-invalid' };
+  if (first.weight.some((row) => row.length !== head.hiddenSize)) return INVALID;
   // Every layer's bias must be one entry per output row, and each layer's
   // output width must be the next layer's input width.
   for (const [position, layer] of head.layers.entries()) {
-    if (layer.bias.length !== layer.weight.length) return { ok: false, code: 'jev-head-invalid' };
+    if (layer.bias.length !== layer.weight.length) return INVALID;
     const next = head.layers[position + 1];
-    if (next && next.weight.some((row) => row.length !== layer.weight.length)) return { ok: false, code: 'jev-head-invalid' };
+    if (next && next.weight.some((row) => row.length !== layer.weight.length)) return INVALID;
   }
   const last = head.layers.at(-1);
-  if (last.weight.length !== JEV_LABELS.length) return { ok: false, code: 'jev-head-invalid' };
-  if (head.architecture === 'linear' && head.layers.length !== 1) return { ok: false, code: 'jev-head-invalid' };
+  if (last.weight.length !== JEV_LABELS.length) return INVALID;
+  if (head.architecture === 'linear' && head.layers.length !== 1) return INVALID;
   if (head.architecture === 'mlp1') {
-    if (head.layers.length !== 2) return { ok: false, code: 'jev-head-invalid' };
-    if (head.layers[0].weight.length > JEV_HEAD_MAX_HIDDEN) return { ok: false, code: 'jev-head-invalid' };
+    if (head.layers.length !== 2) return INVALID;
+    if (head.layers[0].weight.length > JEV_HEAD_MAX_HIDDEN) return INVALID;
   }
   if (countHeadParams(head) > JEV_HEAD_MAX_PARAMS) return { ok: false, code: 'jev-head-too-large' };
   return { ok: true, head };

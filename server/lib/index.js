@@ -465,6 +465,8 @@ export * from './jev.js';
 export * from './jevCorpus.js';
 export * from './jevDecisions.js';
 export * from './jevHead.js';
+export * from './jevHeadReasons.js';
+export * from './jevPaths.js';
 export * from './prdClauses.js';
 export * from './scopeAdherence.js';
 export * from './scopeAdherenceReasons.js';

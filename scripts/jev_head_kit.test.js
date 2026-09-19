@@ -128,9 +128,37 @@ print(json.dumps({"top": max(scores, key=scores.get)}))
     expect(loadCode(dir, 'message-triage')).toBe('jev-head-unreadable');
   });
 
+  // The sidecar outlives adopt and discard, and Node's `resetJevHeadCache`
+  // cannot reach it — so the file's identity is what makes its cache
+  // invalidatable from the side that can observe an adoption.
+  it('moves a head file\'s identity when its contents are replaced', () => {
+    const { dir } = headsDir();
+    const first = identity(dir, 'scope-adherence');
+    expect(first).not.toBeNull();
+    // A different LENGTH as well as different bytes: a same-size rewrite in the
+    // same clock tick would leave the fingerprint unchanged on a filesystem
+    // with coarse mtime resolution, and this test is not the place to find out.
+    writeFileSync(join(dir, 'scope-adherence.json'), JSON.stringify(head({
+      corpusHash: 'cafe000000000002',
+      corpusSources: ['merged-pr', 'closed-unmerged-pr', 'parked-issue'],
+    })));
+    expect(identity(dir, 'scope-adherence')).not.toEqual(first);
+    // No file is an absence, not a fingerprint that could collide with one.
+    expect(identity(dir, 'message-triage')).toBeNull();
+  });
+
   it('rejects the shapes the Node-side parser rejects', () => {
     const cases = {
       relabelled: head({ labels: ['entailment', 'contradiction', 'neutral'] }),
+      // The two rules the Node parser enforces that this mirror once did not:
+      // a `linear` head declaring two layers, and an `mlp1` declaring one.
+      linearWithTwoLayers: head({
+        layers: [
+          { weight: [[1, 0, 0], [0, 1, 0]], bias: [0, 0] },
+          { weight: [[1, 0], [0, 1], [1, 1]], bias: [0, 0, 0] },
+        ],
+      }),
+      mlpWithOneLayer: head({ architecture: 'mlp1' }),
       wrongHiddenSize: head({ hiddenSize: 8 }),
       wrongOutputWidth: head({ layers: [{ weight: [[1, 0, 0], [0, 1, 0]], bias: [0, 0] }] }),
       biasMismatch: head({ layers: [{ weight: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], bias: [0, 0] }] }),
@@ -151,6 +179,8 @@ print(json.dumps(out))
 `));
     expect(raw).toEqual({
       relabelled: 'jev-head-invalid',
+      linearWithTwoLayers: 'jev-head-invalid',
+      mlpWithOneLayer: 'jev-head-invalid',
       wrongHiddenSize: 'jev-head-invalid',
       wrongOutputWidth: 'jev-head-invalid',
       biasMismatch: 'jev-head-invalid',
@@ -160,6 +190,14 @@ print(json.dumps(out))
     });
   });
 });
+
+/** `head_file_identity` for one slug, as a comparable value. */
+function identity(dir, slug) {
+  return JSON.parse(run(`
+value = kit["head_file_identity"](${JSON.stringify(dir)}, ${JSON.stringify(slug)})
+print(json.dumps({"identity": list(value) if value else None}))
+`)).identity;
+}
 
 /** `load_head`'s failure code for one slug, or null when it loaded. */
 function loadCode(dir, slug) {

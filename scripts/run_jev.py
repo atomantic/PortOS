@@ -34,7 +34,9 @@ from threading import Lock
 # synthetic model doubles) does not.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from jev_head_kit import HeadError, apply_head, load_head, pool_pair  # noqa: E402 - needs the sys.path line above.
+from jev_head_kit import (  # noqa: E402 - needs the sys.path line above.
+    HeadError, apply_head, head_file_identity, load_encoder, load_head, pool_pair,
+)
 
 # Mirrors of the bounds in server/lib/jev.js. Repeated rather than imported so
 # this boundary still holds if the script is ever invoked directly.
@@ -44,10 +46,10 @@ MAX_HYPOTHESIS_CHARS = 512
 MAX_BODY_BYTES = 256_000
 LOOPBACK_HOSTS = ("127.0.0.1", "::1")
 
-# The model's own label order, from the pinned config's `id2label`.
+# The model's own label order, from the pinned config's `id2label`. The prompt
+# template, the window resolution and the pooling live in `jev_head_kit.py`,
+# because the trainer has to agree with this process about all three.
 LABELS = ("contradiction", "entailment", "neutral")
-# Used only when the checkpoint's config omits its own `nli_template`.
-FALLBACK_TEMPLATE = "Premise: {premise}\nHypothesis: {hypothesis}"
 
 
 class JevError(Exception):
@@ -83,35 +85,22 @@ def validate_request(payload):
 
 
 def load_state(model_dir: Path):
-    """Load the pinned snapshot once. Imports happen only after path checks."""
-    import torch
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    """Load the pinned snapshot once, then add the checkpoint's own label map.
 
-    torch.set_num_threads(1)
-    tokenizer = AutoTokenizer.from_pretrained(
-        str(model_dir), local_files_only=True, trust_remote_code=False
-    )
-    model = AutoModelForSequenceClassification.from_pretrained(
-        str(model_dir),
-        local_files_only=True,
-        trust_remote_code=False,
-        use_safetensors=True,
-    )
-    # MPS where the host has it, CPU otherwise. Reported on /health so an
-    # operator can tell a slow CPU fallback from a healthy accelerated load.
-    device = "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"
-    model.to(device)
-    model.eval()
+    Everything that decides HOW a pair becomes a vector — device, template,
+    window, final-hidden-state hook — comes from `jev_head_kit.load_encoder`,
+    the one loader the trainer uses too. A trainer that pooled differently
+    would fit a head on a vector space this process never produces.
 
-    config = model.config
-    template = getattr(config, "nli_template", None)
-    if not isinstance(template, str) or "{premise}" not in template or "{hypothesis}" not in template:
-        template = FALLBACK_TEMPLATE
+    Imports happen inside the kit, after the path checks in `main`.
+    """
+    state = load_encoder(model_dir)
 
     # The label mapping is read from the checkpoint rather than assumed: a
     # re-trained head with a permuted id2label would otherwise silently turn
-    # every entailment score into a contradiction score.
-    id_to_label = getattr(config, "id2label", None) or {}
+    # every entailment score into a contradiction score. Only the SIDECAR needs
+    # it — the trainer never reads the checkpoint's own classifier by name.
+    id_to_label = getattr(state["model"].config, "id2label", None) or {}
     label_index = {}
     for class_id, label in id_to_label.items():
         name = str(label).strip().lower()
@@ -119,34 +108,8 @@ def load_state(model_dir: Path):
             label_index[name] = int(class_id)
     if len(label_index) != len(LABELS):
         raise JevError("jev-response-invalid", status=500)
-
-    return {
-        "torch": torch,
-        "tokenizer": tokenizer,
-        "model": model,
-        "device": device,
-        "template": template,
-        "labelIndex": label_index,
-        "window": resolve_window(tokenizer, config),
-    }
-
-
-def resolve_window(tokenizer, config) -> int:
-    """The largest token count one pair may occupy.
-
-    Transformers uses a sentinel-sized `model_max_length` for tokenizers that
-    declare none, which would read as "everything fits" — so an implausible
-    value falls through to the text config's position count.
-    """
-    candidates = []
-    for value in (getattr(tokenizer, "model_max_length", None),
-                  getattr(getattr(config, "text_config", None), "max_position_embeddings", None),
-                  getattr(config, "max_position_embeddings", None)):
-        if isinstance(value, int) and 0 < value < 10_000_000:
-            candidates.append(value)
-    if not candidates:
-        raise JevError("jev-response-invalid", status=500)
-    return min(candidates)
+    state["labelIndex"] = label_index
+    return state
 
 
 def score_with_head(state, head, premise: str, hypotheses):
@@ -192,9 +155,13 @@ def score_pairs(state, premise: str, hypotheses):
 
 def make_handler(state, model_id: str, revision: str, heads_dir):
     lock = Lock()
-    # Validated heads, keyed by slug. A head is a few thousand floats, the
-    # revision gate has already run, and the alternative is re-reading and
-    # re-validating the same file on every forward pass.
+    # Validated heads, keyed by slug AND the file's identity. Keying on the slug
+    # alone would be a cache with no invalidation channel: this process outlives
+    # adopt and discard, and Node's own `resetJevHeadCache` cannot reach it — so
+    # a second train-then-adopt for the same decision would keep HITTING, and
+    # the sidecar would answer with the superseded weights while the panel
+    # reported the new head's scores. That is exactly the "measurement describes
+    # something other than what ran" failure the head path exists to avoid.
     head_cache = {}
 
     def resolve_head(slug):
@@ -202,9 +169,11 @@ def make_handler(state, model_id: str, revision: str, heads_dir):
             return None
         if heads_dir is None:
             raise HeadError("jev-head-not-found")
-        if slug not in head_cache:
-            head_cache[slug] = load_head(heads_dir, slug, revision=revision)
-        return head_cache[slug]
+        identity = head_file_identity(heads_dir, slug)
+        cached = head_cache.get(slug)
+        if cached is None or cached[0] != identity:
+            head_cache[slug] = (identity, load_head(heads_dir, slug, revision=revision))
+        return head_cache[slug][1]
 
     class JevHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"

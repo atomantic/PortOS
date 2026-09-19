@@ -10,15 +10,17 @@
 import { mkdtemp, mkdir, writeFile, readdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const dataRoot = await mkdtemp(join(tmpdir(), 'portos-jev-corpus-'));
 const repoPath = await mkdtemp(join(tmpdir(), 'portos-jev-repo-'));
 
-vi.mock('../lib/paths.js', async (importOriginal) => {
-  const actual = await importOriginal();
-  return { ...actual, PATHS: { ...actual.PATHS, data: dataRoot } };
-});
+// The shared helper re-roots every `PATHS` member under `data/`, not just
+// `PATHS.data` — a bare spread leaves the rest pointing at the live install.
+const PREFIX = 'portos-jev-corpus-';
+vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), {
+  dataRoot: () => lazyTempDataRoot(PREFIX),
+}));
 
 // promisify(execFile) needs the callback form, so a bare vi.fn() would hang
 // every query rather than failing one.
@@ -28,6 +30,8 @@ vi.mock('../lib/childProcess.js', () => ({
 }));
 
 const { buildScopeAdherenceCorpus } = await import('./jevCorpusBuilder.js');
+
+afterAll(() => cleanupTempDataRoots());
 
 // Enough distinct goals that the retriever has something to rank, and enough
 // prose per clause to clear the parser's minimum.
@@ -42,7 +46,9 @@ function mockForge({ merged = [], closed = [], notPlanned = [], parked = [], fai
     if (failAll) return callback(new Error('gh: not authenticated'));
     const rows = args[0] === 'pr'
       ? (args.includes('merged') ? merged : closed)
-      : (args.includes('future') ? parked : notPlanned);
+      // Matched on a substring: the parked query passes both labels inside one
+      // `--search` value rather than as their own argv tokens.
+      : (args.some((arg) => String(arg).includes('future')) ? parked : notPlanned);
     return callback(null, { stdout: JSON.stringify(rows), stderr: '' });
   });
 }
@@ -116,7 +122,7 @@ describe('buildScopeAdherenceCorpus', () => {
   // The gold set is too small to separate three numbers, so no corpus is
   // written at all — a refusal before the write, not a warning beside one.
   it('writes nothing when the corpus cannot support a comparison', async () => {
-    const corpora = join(dataRoot, 'jev', 'corpora');
+    const corpora = join(lazyTempDataRoot(PREFIX), 'jev', 'corpora');
     await mkdir(corpora, { recursive: true });
     // Compared against a snapshot, not against empty: earlier cases in this
     // file legitimately wrote corpora into the same data root.

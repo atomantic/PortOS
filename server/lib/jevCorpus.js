@@ -138,12 +138,23 @@ export function buildCorpusExample({ context, options, chosen, source } = {}) {
  * it, because there is no principled way to pick between two weak labels.
  */
 export function dedupeCorpus(examples) {
+  return [...keyedCorpus(examples).values()];
+}
+
+/**
+ * Deduplicated examples by key, so a caller that needs both does not hash twice.
+ *
+ * A context can be up to 32 KB and a corpus a thousand rows, so the SHA-256 is
+ * not free: `dedupeCorpus` followed by a bucketing loop that re-derived the
+ * same key digested the whole corpus twice to learn nothing new.
+ */
+function keyedCorpus(examples) {
   const seen = new Map();
   for (const example of Array.isArray(examples) ? examples : []) {
     const key = corpusExampleKey(example);
     if (!seen.has(key)) seen.set(key, example);
   }
-  return [...seen.values()];
+  return seen;
 }
 
 /**
@@ -155,16 +166,15 @@ export function dedupeCorpus(examples) {
  * the person reading it.
  */
 export function splitCorpus(examples, { goldFraction = JEV_CORPUS_GOLD_FRACTION } = {}) {
-  const rows = dedupeCorpus(examples);
   const train = [];
   const gold = [];
   // 16 bits of the key, compared against the same fraction of 65536. Enough
   // resolution that a corpus of a few hundred lands within a point of the
   // requested fraction, and cheap to recompute anywhere.
   const cutoff = Math.round(goldFraction * 0x10000);
-  for (const example of rows) {
-    const bucket = parseInt(corpusExampleKey(example).slice(0, 4), 16);
-    (bucket < cutoff ? gold : train).push(example);
+  // Dedupe and bucket in one pass over the keys the dedupe already computed.
+  for (const [key, example] of keyedCorpus(examples)) {
+    (parseInt(key.slice(0, 4), 16) < cutoff ? gold : train).push(example);
   }
   return { train, gold };
 }
@@ -236,13 +246,3 @@ export function validateCorpusRow(parsed) {
   const result = jevCorpusExampleSchema.safeParse(parsed);
   return result.success ? result.data : null;
 }
-
-export const JEV_CORPUS_FAILURE_CODES = Object.freeze([
-  'jev-corpus-split-overlap',
-  'jev-corpus-split-invalid',
-  'jev-corpus-gold-too-small',
-  'jev-corpus-too-small',
-  'jev-corpus-forge-unavailable',
-  'jev-corpus-no-clauses',
-  'jev-corpus-unreadable',
-]);

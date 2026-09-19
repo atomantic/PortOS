@@ -38,28 +38,29 @@
 
 import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
-import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { JEV_MODEL } from '../lib/jev.js';
 import { JEV_DECISION_IDS } from '../lib/jevDecisions.js';
-import { headAdoptionBlocker, headBeatsBaselines, isHeadCompatible, parseJevHead } from '../lib/jevHead.js';
-
-/** The one directory every jev artifact lives under. Machine-local, always. */
-export const jevDataDir = () => join(PATHS.data, 'jev');
-export const jevHeadsDir = () => join(jevDataDir(), 'heads');
-export const jevCorporaDir = () => join(jevDataDir(), 'corpora');
-export const jevEmbeddingsDir = () => join(jevDataDir(), 'embeddings');
+import { headAdoptionBlocker, isHeadCompatible, jevHeadFileName, jevHeadSlug, parseJevHead } from '../lib/jevHead.js';
+import { jevHeadsDir } from '../lib/jevPaths.js';
 
 const failure = (code) => ({ ok: false, code });
 
-const headPath = (decisionId, { candidate = false } = {}) => join(
-  jevHeadsDir(),
-  `${decisionId}${candidate ? '.candidate' : ''}.json`,
-);
+// Filenames come from `jevHeadFileName`, the one owner of the decision-id ↔
+// slug mapping. Spelling `${decisionId}.json` here would be a fourth
+// independent derivation of it.
+const headPath = (decisionId, options) => join(jevHeadsDir(), jevHeadFileName(decisionId, options));
 
 /**
- * Adopted heads by decision id, so a per-clause scoring loop does not re-read
- * and re-validate the same file on every forward pass. Invalidated by every
- * write path in this module, and by the test seam below.
+ * Which decisions have an applicable adopted head, by id.
+ *
+ * The VERDICT, not the head: the sole caller (`runJevDecision`) turns it into a
+ * slug-or-null and the weights are read by the sidecar from disk, so caching
+ * the parsed artifact would pin megabytes of float arrays in module scope for
+ * the process lifetime to answer a boolean. A `false` entry is cached too — a
+ * no-head install is the common case and must not re-stat per clause.
+ *
+ * Invalidated by every write path in this module, and by the test seam below.
  */
 let adoptedCache = null;
 
@@ -75,7 +76,12 @@ async function readHeadFile(path) {
 }
 
 /**
- * The head `decisionId` is currently scored with, or null.
+ * The head slug `decisionId` is currently scored with, or null.
+ *
+ * The slug IS the decision id — `jevHeadSlug` owns that mapping — and the
+ * sidecar resolves it inside the heads directory. Returning it rather than the
+ * artifact is what lets a caller pass it straight through without ever holding
+ * the weights.
  *
  * Returns null — never a failure — for every reason a head might not apply:
  * none adopted, an unreadable file, a head fit on a different encoder
@@ -84,14 +90,14 @@ async function readHeadFile(path) {
  * is always correct. An operator who wants to know WHY sees it in the panel,
  * which calls `describeJevHeads` instead.
  */
-export async function getAdoptedJevHead(decisionId) {
+export async function getAdoptedJevHeadSlug(decisionId) {
   if (!JEV_DECISION_IDS.includes(decisionId)) return null;
   if (adoptedCache?.has(decisionId)) return adoptedCache.get(decisionId);
   const result = await readHeadFile(headPath(decisionId));
-  const head = result.ok && isHeadCompatible(result.head, JEV_MODEL) ? result.head : null;
+  const slug = result.ok && isHeadCompatible(result.head, JEV_MODEL) ? jevHeadSlug(decisionId) : null;
   adoptedCache ??= new Map();
-  adoptedCache.set(decisionId, head);
-  return head;
+  adoptedCache.set(decisionId, slug);
+  return slug;
 }
 
 /**
@@ -108,14 +114,18 @@ export async function describeJevHeads() {
   const rows = [];
   for (const decisionId of JEV_DECISION_IDS) {
     for (const candidate of [false, true]) {
-      const name = `${decisionId}${candidate ? '.candidate' : ''}.json`;
-      if (!entries.includes(name)) continue;
+      const name = jevHeadFileName(decisionId, { candidate });
+      if (name === null || !entries.includes(name)) continue;
       const result = await readHeadFile(join(dir, name));
       if (!result.ok) {
         rows.push({ decisionId, adopted: !candidate, ok: false, code: result.code });
         continue;
       }
       const { head } = result;
+      // The blocker is computed ONCE and `beatsBaselines` derived from it:
+      // `headBeatsBaselines` re-validates the same metrics object, so asking
+      // both would parse it twice to answer one question two ways.
+      const blocker = headAdoptionBlocker(head.metrics);
       rows.push({
         decisionId,
         adopted: !candidate,
@@ -127,8 +137,8 @@ export async function describeJevHeads() {
         trainedAt: head.trainedAt,
         baseRevision: head.baseModel.revision,
         compatible: isHeadCompatible(head, JEV_MODEL),
-        beatsBaselines: headBeatsBaselines(head.metrics),
-        blocker: headAdoptionBlocker(head.metrics),
+        beatsBaselines: blocker === null,
+        blocker,
       });
     }
   }

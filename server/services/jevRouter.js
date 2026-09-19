@@ -100,17 +100,16 @@ export async function runJevDecision({ decisionId, premise, policyMinMargin = nu
   // Deferred so an install that never opts in keeps the sidecar lifecycle, the
   // `PORTS` table, and the model contract out of its static import closure.
   const { decide } = await import('./jev.js');
-  // An adopted project-specific head, or null on every install that has not
-  // trained one — which is every install by default. Null means the stock
-  // zero-shot classifier answers, exactly as it did before heads existed.
-  const { getAdoptedJevHead } = await import('./jevHeads.js');
-  const head = await getAdoptedJevHead(decisionId);
+  // An adopted project-specific head's slug, or null on every install that has
+  // not trained one — which is every install by default. Null means the stock
+  // zero-shot classifier answers, exactly as it did before heads existed. The
+  // slug is resolved inside the heads directory by the sidecar, never treated
+  // as a path.
+  const { getAdoptedJevHeadSlug } = await import('./jevHeads.js');
   const scored = await decide({
     premise,
     options: jevHypotheses(decisionId),
-    // The decision id IS the head's slug. Resolved inside the heads directory
-    // by the sidecar, never treated as a path.
-    head: head ? decisionId : null,
+    head: await getAdoptedJevHeadSlug(decisionId),
     // The base floor gates the forward pass; a per-option floor is applied
     // below, once there is a winner to look up.
     minMargin: jevMinMarginFor(decisionId, { policyMinMargin }),

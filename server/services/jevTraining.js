@@ -29,16 +29,16 @@ import { execFile } from '../lib/childProcess.js';
 import { PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { findCachedRepoFiles } from '../lib/hfCache.js';
 import { JEV_MODEL, JEV_REQUIRED_FILES } from '../lib/jev.js';
+import { jevDecisionEmbeddingsDir } from '../lib/jevPaths.js';
 import { SCOPE_ADHERENCE_DECISION_ID } from '../lib/scopeAdherence.js';
-import { safeChildProcessOptions } from '../lib/processEnv.js';
-import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
-// The trainer runs the SAME interpreter and the SAME hardened environment the
-// sidecar runs, resolved from the one module that owns both. Re-deriving either
-// here is how the "offline, no provider call" guarantee drifts apart from the
-// process it is supposed to describe.
-import { buildJevEnv, getJevStatus, jevPythonPath } from './jev.js';
+// The trainer runs under the SAME interpreter AND the SAME hardened spawn
+// options the sidecar runs under, resolved as ONE value from the module that
+// owns both. Recomposing the interpreter and the environment here is how the
+// "offline, no provider call" guarantee drifts apart from the process it is
+// supposed to describe.
+import { getJevStatus, jevVenvSpawnTarget } from './jev.js';
 import { buildScopeAdherenceCorpus } from './jevCorpusBuilder.js';
-import { jevEmbeddingsDir, saveCandidateJevHead } from './jevHeads.js';
+import { saveCandidateJevHead } from './jevHeads.js';
 
 const execFileAsync = promisify(execFile);
 const TRAINER_SCRIPT = join(PATHS.root, 'scripts', 'train_jev_head.py');
@@ -87,8 +87,8 @@ async function runTraining({ repoPath, architecture }) {
   const files = await findCachedRepoFiles(JEV_MODEL.repository, JEV_REQUIRED_FILES, { revision: JEV_MODEL.revision });
   if (!files?.[0]) return failure('jev-head-runtime-unavailable');
   const modelDir = dirname(files[0]);
-  const pythonPath = jevPythonPath();
-  if (!pythonPath) return failure('jev-head-runtime-unavailable');
+  const target = jevVenvSpawnTarget({ timeout: TRAIN_TIMEOUT_MS, maxBuffer: MAX_TRAINER_OUTPUT });
+  if (!target) return failure('jev-head-runtime-unavailable');
 
   // The forge token overlay for the corpus reads, and ONLY for those: the
   // trainer below gets `buildJevEnv`, which carries no credential at all.
@@ -106,7 +106,10 @@ async function runTraining({ repoPath, architecture }) {
     '--corpus', join(corpus.corpusDir, 'train.jsonl'),
     '--gold', join(corpus.corpusDir, 'gold.jsonl'),
     '--out', outPath,
-    '--cache-dir', jevEmbeddingsDir(),
+    // Per-decision, so the trainer can prune the keys this run did not use
+    // without deleting a cache another decision depends on. A flat shared pool
+    // would make that prune unsafe, and the cache therefore unbounded.
+    '--cache-dir', jevDecisionEmbeddingsDir(SCOPE_ADHERENCE_DECISION_ID),
     '--decision-id', SCOPE_ADHERENCE_DECISION_ID,
     '--model-id', JEV_MODEL.id,
     '--repository', JEV_MODEL.repository,
@@ -116,17 +119,13 @@ async function runTraining({ repoPath, architecture }) {
     '--architecture', architecture,
   ];
 
-  // The SAME hardened environment the sidecar gets: no API keys, no forge
-  // token, no MCP or provider variables, no arbitrary PYTHONPATH, and
-  // `HF_HUB_OFFLINE=1` so a missing file fails rather than downloading. The
-  // forge token that built the corpus is deliberately not in scope here.
-  const env = withSpawnCwdEnv(buildJevEnv(), dirname(pythonPath));
-  const result = await execFileAsync(pythonPath, args, safeChildProcessOptions({
-    cwd: dirname(pythonPath),
-    env,
-    timeout: TRAIN_TIMEOUT_MS,
-    maxBuffer: MAX_TRAINER_OUTPUT,
-  })).catch((error) => ({ failed: true, stdout: error?.stdout || '' }));
+  // `target.options` carries the hardened environment the sidecar runs under:
+  // no API keys, no forge token, no MCP or provider variables, no arbitrary
+  // PYTHONPATH, and `HF_HUB_OFFLINE=1` so a missing file fails rather than
+  // downloading. The forge token that built the corpus is deliberately not in
+  // scope here.
+  const result = await execFileAsync(target.pythonPath, args, target.options)
+    .catch((error) => ({ failed: true, stdout: error?.stdout || '' }));
 
   // The trainer writes exactly one JSON line to stdout, so the report is the
   // last line whether or not the process exited cleanly — a failing run still
@@ -137,6 +136,16 @@ async function runTraining({ repoPath, architecture }) {
   const written = await tryReadFile(outPath);
   const head = written === null ? null : safeJSONParse(written, null, { allowArray: false, logError: false });
   if (!head) return failure('jev-head-training-failed');
+
+  // Both sides compute the majority-class baseline — Node over the gold rows it
+  // wrote (`majorityClassAccuracy`), Python over the gold rows it read — and
+  // the gate reads the Python one. A disagreement means the two are not looking
+  // at the same gold set, which would make the adoption evidence meaningless,
+  // so it fails the run rather than shipping a head scored against an unknown.
+  if (!Number.isFinite(head.metrics?.majorityClass)
+    || Math.abs(head.metrics.majorityClass - corpus.majorityClass) > 1e-9) {
+    return failure('jev-head-training-failed');
+  }
 
   const saved = await saveCandidateJevHead(SCOPE_ADHERENCE_DECISION_ID, head);
   if (!saved.ok) return saved;
