@@ -105,8 +105,8 @@ describe('lane visibility', () => {
 
     expect(screen.queryByText(/Add clips, stills, overlays and audio/)).not.toBeInTheDocument();
     expect(screen.getByText('Add a clip or a still from the library')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove logo.png from timeline' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove bed.mp3 from timeline' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Remove logo.png from timeline' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Remove bed.mp3 from timeline' })).toBeInTheDocument();
   });
 
   it('summarises every lane in the header, not just the video lane', async () => {
