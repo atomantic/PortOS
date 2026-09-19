@@ -719,6 +719,16 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   // `mergeOutcomeObjective` for the run this gate wrongly held.
   const mergeObjective = mergeOutcomeObjective(task);
   if (mergeObjective) return verifyMergeOutcome(workspacePath, mergeObjective);
+  // Every remaining task that declares no commit criterion delivers an action
+  // outside this checkout, so its run-window diff is not evidence of fidelity.
+  // Leave-open review follow-ups are the deliberate exception: their deliverable
+  // IS the review-fix commits, while merge-shaped follow-ups were settled from
+  // forge state immediately above.
+  const reviewLoopFollowUp = task.metadata?.reviewLoopFollowUp === true
+    || task.metadata?.reviewLoopFollowUp === 'true';
+  const reviewLoopLeaveOpen = reviewLoopFollowUp
+    && (task.metadata?.reviewLoopLeaveOpen === true || task.metadata?.reviewLoopLeaveOpen === 'true');
+  if (declaresNoCommitCriterion(task) && !reviewLoopLeaveOpen) return noFidelityVerdict();
   const claimFlow = task.metadata?.claimFlow === true || task.metadata?.claimFlow === 'true'
     || CLAIM_FLOW_TASK_TYPES.has(resolveTaskHookType(task));
   const objective = claimFlow
