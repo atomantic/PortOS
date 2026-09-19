@@ -438,11 +438,12 @@ export function isOptionalReviewer(reviewer, optionalReviewers) {
  * True when at least one of `reviewers` is NOT marked optional — i.e. some
  * reviewer's verdict genuinely gates the merge.
  *
- * The inverse ("every configured reviewer is `~opt`") is the case the merge
- * gates care about: the user already declared that an unavailable or
- * inconclusive verdict from these reviewers must not strand the PR, so the
- * agent merges on the review loop's inconclusive-family outcomes instead of
- * leaving it open for a human nobody asked.
+ * The inverse ("every configured reviewer is `~opt`") is what the gates read:
+ * a phase with no binding reviewer can never record `review-blocked`, and the
+ * completion workflow tells such a run not to invent a blocker from a reviewer
+ * that returned nothing. It does NOT license merging an `inconclusive`
+ * aggregate — slashdo already excluded the optional misses from that, so one
+ * that survives means `push-failed` (see `buildPostPRMergeSteps`).
  *
  * Shared so the local pre-PR phase, the PR-side phase, and the completion
  * workflow's merge step can't disagree about which reviewers are binding.
