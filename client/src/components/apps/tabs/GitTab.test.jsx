@@ -58,7 +58,7 @@ afterEach(() => {
 
 describe('GitTab managed repository sources', () => {
   it('queues an agent to deliver current work through a reviewed pull request', async () => {
-    render(<GitTab appId="app-example" appName="Example App" repoPath="/repo" />);
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open PR with agent' }));
 
@@ -67,7 +67,9 @@ describe('GitTab managed repository sources', () => {
       'app-example',
       expect.objectContaining({
         prCompletion: 'review-then-merge',
-        overrideContext: expect.stringContaining('uncommitted changes'),
+        // The agent resolves the wrong checkout when the prompt does not name
+        // the repository, so the path is part of the contract, not prose.
+        overrideContext: expect.stringContaining('repository at /srv/example-app'),
       }),
       { silent: true },
     ));
