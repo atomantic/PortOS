@@ -1,13 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 vi.mock('./execGit.js', () => ({ execGit: vi.fn() }));
+vi.mock('./primaryCheckoutGuard.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  resolveRemoteDefaultRef: vi.fn(),
+}));
 
 import { execGit } from './execGit.js';
+import { resolveRemoteDefaultRef } from './primaryCheckoutGuard.js';
 import { commitsSince, committedDuringRun, runWindowDiff, toEpochMs } from './gitCommitProbe.js';
+import { makeGitSandbox, destroyGitSandbox, SKIP_HEAVY_INTEGRATION } from './gitTestRepo.js';
 
 const SINCE = Date.parse('2026-08-08T18:23:30.000Z');
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(resolveRemoteDefaultRef).mockResolvedValue(null);
+});
 
 describe('commitsSince (#3637)', () => {
   it('counts commits inside the run window, scoped by committer date', async () => {
@@ -120,8 +131,8 @@ describe('runWindowDiff (#5994)', () => {
       truncated: false,
       reason: null,
     });
-    // The window is resolved on committer date, exactly as `commitsSince` filters
-    // on it — the two probes must never disagree about which commits are the run's.
+    // Older persisted records still work with only a timestamp, and a checkout
+    // without a remote default retains the original time-window fallback.
     expect(execGit).toHaveBeenNthCalledWith(1,
       ['rev-list', '-n', '1', '--before=2026-08-08T18:23:30.000Z', 'HEAD'],
       '/tmp/ws',
@@ -162,5 +173,96 @@ describe('runWindowDiff (#5994)', () => {
     expect(result.truncated).toBe(true);
     expect(result.diff).toContain('[diff truncated]');
     expect(result.diff.length).toBeLessThan(200);
+  });
+
+  it('declines an unavailable upstream comparison instead of grading an unfiltered diff', async () => {
+    vi.mocked(resolveRemoteDefaultRef).mockResolvedValue({ ref: 'origin/main', sha: 'c'.repeat(40) });
+    vi.mocked(execGit).mockResolvedValueOnce(baseOk).mockRejectedValueOnce(new Error('timed out'));
+    expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({
+      diff: null, reason: 'could not resolve the absorbed upstream base',
+    });
+    expect(execGit.mock.calls.some(([args]) => args[0] === 'diff')).toBe(false);
+  });
+
+  it('declines incomparable pre-window agent and absorbed upstream bases', async () => {
+    vi.mocked(resolveRemoteDefaultRef).mockResolvedValue({ ref: 'origin/main', sha: 'c'.repeat(40) });
+    vi.mocked(execGit)
+      .mockResolvedValueOnce(baseOk)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: 'c'.repeat(40), stderr: '' })
+      .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' })
+      .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: '' });
+    expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({
+      diff: null, reason: 'run window and upstream bases could not be ordered',
+    });
+    expect(execGit.mock.calls.some(([args]) => args[0] === 'diff')).toBe(false);
+  });
+});
+
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('runWindowDiff real git history (#7690)', () => {
+  it.each(['rebase', 'merge'])('excludes upstream absorbed by %s while retaining all run commits', async (operation) => {
+    const { execGit: realExecGit } = await vi.importActual('./execGit.js');
+    const { resolveRemoteDefaultRef: realResolveRemoteDefaultRef } = await vi.importActual('./primaryCheckoutGuard.js');
+    vi.mocked(execGit).mockImplementation(realExecGit);
+    vi.mocked(resolveRemoteDefaultRef).mockImplementation(realResolveRemoteDefaultRef);
+    const sandbox = await makeGitSandbox();
+    const git = (args) => realExecGit(args, sandbox.repo);
+    const commit = async (file, text, date) => {
+      vi.stubEnv('GIT_COMMITTER_DATE', date);
+      await writeFile(join(sandbox.repo, file), text);
+      await git(['add', file]);
+      await git(['commit', '--date', date, '-m', 'fixture change']);
+    };
+    try {
+      const before = '2026-08-08T18:00:00Z';
+      vi.stubEnv('GIT_COMMITTER_DATE', before);
+      await git(['commit', '--amend', '--no-edit', '--date', before]);
+      const initial = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      // A nonstandard default verifies origin/HEAD resolution, including on a
+      // detached agent HEAD. Ref updates are local: no network or live remote.
+      await git(['branch', '-m', 'trunk']);
+      await git(['update-ref', 'refs/remotes/origin/trunk', initial]);
+      await git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk']);
+      await git(['checkout', '-b', 'agent']);
+      await commit('agent.txt', 'first change\n', '2026-08-08T18:24:00Z');
+      await git(['checkout', 'trunk']);
+      await commit('upstream.txt', 'other work\n', '2026-08-08T18:25:00Z');
+      const absorbed = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await git(['update-ref', 'refs/remotes/origin/trunk', absorbed]);
+      await git(['checkout', 'agent']);
+      vi.stubEnv('GIT_COMMITTER_DATE', '2026-08-08T18:26:00Z');
+      await git(operation === 'rebase' ? ['rebase', 'trunk'] : ['merge', '--no-edit', 'trunk']);
+      await commit('agent.txt', 'first change\nsecond change\n', '2026-08-08T18:27:00Z');
+      await git(['checkout', '--detach']);
+      // A later upstream commit has NOT been absorbed; diffing against the
+      // remote tip would manufacture a deletion of this file.
+      const runHead = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await git(['checkout', 'trunk']);
+      await commit('future-upstream.txt', 'not absorbed\n', '2026-08-08T18:28:00Z');
+      await git(['update-ref', 'refs/remotes/origin/trunk', 'HEAD']);
+      await git(['checkout', '--detach', runHead]);
+      // Characterize the old probe: its date-only diff contains unrelated work.
+      const oldBase = (await git(['rev-list', '-n', '1', '--before=2026-08-08T18:23:30Z', 'HEAD'])).stdout.trim();
+      expect((await git(['diff', `${oldBase}..HEAD`])).stdout).toContain('upstream.txt');
+      const result = await runWindowDiff(sandbox.repo, SINCE);
+      expect(result).toMatchObject({ base: absorbed, reason: null, truncated: false });
+      expect(result.diff).toContain('+first change');
+      expect(result.diff).toContain('+second change');
+      expect(result.diff).not.toContain('upstream.txt');
+      // A legacy record whose run started later must not re-include earlier
+      // agent work just because the remote-default merge base is older.
+      const later = await runWindowDiff(sandbox.repo, Date.parse('2026-08-08T18:26:30Z'));
+      expect(later.reason).toBeNull();
+      expect(later.diff).toContain('+second change');
+      expect(later.diff).not.toContain('+first change');
+      expect(later.diff).not.toContain('upstream.txt');
+      await git(['symbolic-ref', '--delete', 'refs/remotes/origin/HEAD']);
+      await git(['update-ref', '-d', 'refs/remotes/origin/trunk']);
+      const legacyFallback = await runWindowDiff(sandbox.repo, SINCE);
+      expect(legacyFallback).toMatchObject({ base: oldBase, reason: null });
+      expect(legacyFallback.diff).toContain('upstream.txt');
+    } finally {
+      vi.unstubAllEnvs();
+      await destroyGitSandbox(sandbox.scratch);
+    }
   });
 });

@@ -527,7 +527,7 @@ describe('n-back stimulus onset is visible on a repeated letter', () => {
     act(() => { fireEvent.keyDown(document.body, { code: 'Space', key: ' ' }); });
 
     expect(glyph().className).toBe(before);
-    expect(glyph().parentElement.className).toContain('border-rose-400/70');
+    expect(glyph().parentElement.className).toContain('border-port-success/70');
   });
 
   // The gap is carved out of the stimulus window rather than added to it, so a
