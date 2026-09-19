@@ -58,6 +58,13 @@ export const MAX_REVIEWER_MODEL_LENGTH = 200;
 // LOCAL_LLM_EFFORT_LEVELS.
 export const LOCAL_LLM_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
 
+// Which goal-fidelity verdicts fire the follow-up actions (file an issue /
+// queue a fix). Mirror of GOAL_FIDELITY_FOLLOW_UP_TRIGGERS in
+// server/lib/goalFidelityFollowUp.js — the settings schema is a `z.enum` over
+// it, so a value offered here but absent there 400s the whole settings save.
+export const GOAL_FIDELITY_FOLLOW_UP_TRIGGERS = Object.freeze(['rethink', 'any-finding']);
+export const DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER = 'rethink';
+
 // The effort ladder each reviewer offers, or absent when it has no effort control
 // (`copilot` is a GitHub review, and an
 // `@username` reviewer is a person). A ladder means the level is PICKABLE, not
@@ -155,6 +162,15 @@ export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'gr
 // reviewer list keeps code review opt-in on a fresh install.
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = [];
+
+// Reviewers `--reviewer-applies` reaches. slashdo's loop forces every other
+// local CLI back to review-only and reverts what it wrote, and the flag is
+// meaningless for the cloud (`copilot`, `@login`) and non-agentic (`ollama`)
+// paths — so the picker offers the toggle only for these, rather than inviting a
+// user to grant agy/grok/cursor write access that gets reverted.
+// Mirror of `APPLY_CAPABLE_REVIEWERS` in server/lib/reviewerConfig.js.
+export const APPLY_CAPABLE_REVIEWERS = Object.freeze(['codex']);
+export const isApplyCapableReviewer = (slug) => APPLY_CAPABLE_REVIEWERS.includes(normalizeReviewerSlug(slug));
 
 // Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
 // reviewers to gate merging, appended to slashdo's `--review-with` after the

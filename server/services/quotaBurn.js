@@ -23,6 +23,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { familyHasRunnableJobs, familyIsConfigured, isUnlimitedDispatchCap, normalizeQuotaBurnFamily } from '../lib/quotaBurnConfig.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hoursUntilReset, normalizeResetAt } from '../lib/quotaReset.js';
+import { cardHasReading } from '../lib/fleetQuotas.js';
 import { classifyWindows, windowLabelOf } from '../lib/quotaWindows.js';
 import { isBlockActive } from './quotaBurnDenials.js';
 
@@ -209,7 +210,13 @@ export function evaluateFamily(family, card, { now = Date.now(), dispatches = {}
   // empty allowance — it is "ask again in a moment". A candidate here would burn
   // against a card with no numbers on it, so it fails closed like every other
   // unknown, and holds even under force.
-  if (card.pending) return { skipReason: 'reading provider quota…' };
+  //
+  // `pending` says THIS machine's scrape is in flight, not that the card is
+  // empty: on a federated install a peer's reading fills the meters meanwhile
+  // (`lib/fleetQuotas.js`). Those are real numbers for the same account, so gate
+  // on having none — otherwise every cold cache reported "reading provider
+  // quota…" for a family whose allowance was on screen one page over.
+  if (card.pending && !cardHasReading(card)) return { skipReason: 'reading provider quota…' };
   // `error` covers both a failed read and a successful one with nothing to
   // meter (see the card contract in providerUsage.js) — either way there are no
   // numbers to burn against, so the reason quotes the card rather than

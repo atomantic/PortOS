@@ -68,6 +68,7 @@ const runtimeProbes = vi.hoisted(() => ({
   isByovRuntimeCurrent: vi.fn(async () => false),
   invalidateByovReadyCache: vi.fn(),
   invalidateByovLoraCapabilityCache: vi.fn(),
+  warmByovLoraCapabilities: vi.fn(async () => {}),
   invalidateRuntimeFingerprintCache: vi.fn(),
 }));
 vi.mock('../services/videoGen/runtimes.js', async (importOriginal) => ({
@@ -646,6 +647,29 @@ describe('videoGen routes', () => {
       expect(r.body.fflfLtx2PixelBudget).toBeGreaterThan(0);
       // The point of the route: no interpreter subprocess in the request path.
       expect(checkPackages).not.toHaveBeenCalled();
+    });
+
+    // The payload's `runtimeLoraCapable` is only as good as the probe having
+    // ANSWERED first — the reason is on warmByovLoraCapabilities in
+    // services/videoGen/runtimes.js. Calling the warm is not enough: the list
+    // must be built after it SETTLES, so the warm here resolves on a later tick
+    // and a route that fired it without awaiting reads `probed` as false.
+    it('builds the model list only after the LoRA warm has settled', async () => {
+      let probed = false;
+      runtimeProbes.warmByovLoraCapabilities.mockImplementationOnce(async () => {
+        await new Promise((resolve) => { setImmediate(resolve); });
+        probed = true;
+      });
+      // Stands in for decorateVideoModel, which stamps the sync read at the
+      // moment the list is built.
+      videoGenService.listVideoModels.mockImplementationOnce(() => [{
+        id: 'minimax_h3_8bit', name: 'MiniMax H3 MLX 8-bit', runtime: 'minimax_h3',
+        supportedModes: ['text'], runtimeLoraCapable: probed,
+      }]);
+
+      const r = await request(app).get('/api/video-gen/model-context');
+      expect(r.status).toBe(200);
+      expect(r.body.models[0].runtimeLoraCapable).toBe(true);
     });
 
     it('agrees with /status on every field the two share', async () => {

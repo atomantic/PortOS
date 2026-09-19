@@ -1,7 +1,14 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 const mock = vi.hoisted(() => ({ capabilities: {}, agentContext: {}, recipes: [], dispatch: vi.fn(), runPrompt: vi.fn(), mutations: [] }));
-vi.mock('./cosState.js', () => ({ loadState: async () => ({ config: { persistentMindCapabilities: mock.capabilities } }) }));
+vi.mock('./cosState.js', () => ({
+  loadState: async () => ({
+    config: { persistentMindCapabilities: mock.capabilities },
+    persistentMind: { toolActivation: { leases: {}, lastAgedTurnId: null } },
+  }),
+  saveState: async () => {},
+  withStateLock: async (fn) => fn(),
+}));
 vi.mock('./settings.js', () => ({ getSettings: async () => ({ agentContext: mock.agentContext }) }));
 vi.mock('./voice/tools.js', () => ({
   getToolSpecs: () => [{ function: { name: 'brain_search', description: 'Search records.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } }],

@@ -64,7 +64,7 @@ import {
 } from './providerUsage.js';
 import { getAllProviders } from './providers.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
-import { systemTimeZone } from './claudeCodeUsage.js';
+import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { getSettings } from './settings.js';
 import { getImageGenQuota } from './imageGenQuota.js';
 
@@ -440,6 +440,73 @@ describe('getProviderQuotas', () => {
   it('returns nothing for a family that is no longer enabled', async () => {
     getAllProviders.mockResolvedValueOnce({ activeProvider: null, providers: [] });
     expect(await getProviderQuotas({ family: 'grok' })).toEqual([]);
+  });
+
+  // A reading outlives the window it describes — every adapter serves from a
+  // cache (60s claude, 5min TUI) and the federated store keeps the last card
+  // until a newer one is read. A meter whose reset has passed is a percentage of
+  // an allowance that has since come back, so it must not reach the page, the
+  // burn gate, or a peer — on EVERY install, not only a federated one.
+  it('drops a window whose reset has already passed, and says why when that empties the card', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{ id: 'claude', enabled: true, type: 'cli', command: 'claude' }]
+    });
+    // What the claude cache serves a minute after the session window turned
+    // over: a real reading, stamped honestly, of an allowance that is now back.
+    getClaudeCodeUsage.mockResolvedValueOnce({
+      plan: 'subscription',
+      limits: [
+        { key: 'session', label: 'Current session', percentUsed: 97, percentRemaining: 3, resetsAt: '2020-01-01T00:00:00.000Z' },
+        { key: 'week', label: 'Current week', percentUsed: 40, percentRemaining: 60, resetsAt: '2099-01-01T00:00:00.000Z' },
+      ],
+      activity: [], approximate: true, fetchedAt: '2020-01-01T00:00:00.000Z',
+    });
+    const [card] = await getProviderQuotas({ family: 'claude' });
+    // The spent session window is gone; the open weekly one stays.
+    expect(card.limits.map((l) => l.key)).toEqual(['week']);
+    expect(card.error).toBeUndefined();
+  });
+
+  it('says why a card is empty when expiry took its last window', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{ id: 'claude', enabled: true, type: 'cli', command: 'claude' }]
+    });
+    getClaudeCodeUsage.mockResolvedValueOnce({
+      plan: 'subscription',
+      limits: [{ key: 'session', label: 'Current session', percentUsed: 97, percentRemaining: 3, resetsAt: '2020-01-01T00:00:00.000Z' }],
+      activity: [], approximate: true, fetchedAt: '2020-01-01T00:00:00.000Z',
+    });
+    const [card] = await getProviderQuotas({ family: 'claude' });
+    expect(card.limits).toEqual([]);
+    // Not "No rate-limit data reported" — that is a verdict about the provider.
+    expect(card.error).toMatch(/has since reset/i);
+  });
+
+  // #7662. Staleness is judged against the window's OWN period, server-side,
+  // for every card — not just a federated merge's winners — so a purely local
+  // install ages its cached reading by the same rule a peer's would be.
+  it('stamps every limit with readAt and a period-relative stale verdict', async () => {
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: null,
+      providers: [{ id: 'claude', enabled: true, type: 'cli', command: 'claude' }]
+    });
+    // 55 minutes old: past 10% of a 5h session window (30min), well inside
+    // 10% of a weekly one (~16.8h).
+    const fetchedAt = new Date(Date.now() - 55 * 60 * 1000).toISOString();
+    getClaudeCodeUsage.mockResolvedValueOnce({
+      plan: 'subscription',
+      limits: [
+        { key: 'session', label: 'Current session', percentUsed: 40, percentRemaining: 60, resetsAt: '2099-01-01T00:00:00.000Z' },
+        { key: 'week', label: 'Current week', percentUsed: 40, percentRemaining: 60, resetsAt: '2099-01-01T00:00:00.000Z' },
+      ],
+      activity: [], approximate: true, fetchedAt,
+    });
+    const [card] = await getProviderQuotas({ family: 'claude' });
+    const [session, week] = card.limits;
+    expect(session).toMatchObject({ key: 'session', readAt: fetchedAt, stale: true });
+    expect(week).toMatchObject({ key: 'week', readAt: fetchedAt, stale: false });
   });
 
   // #7496. The scrape kills its PTY on every exit path, and with a credential

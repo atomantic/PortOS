@@ -720,7 +720,52 @@ describe('deferred imports stay deferred (#6156)', () => {
 // private Set inside the extractor, parallel to the source-kind list at the
 // Zod boundary, where a new ingest source silently reads a memoir through the
 // fiction lens. Restores the ~390 of headroom the recent entries carry.
-const MAX_STATIC_INSTANTIATIONS = 114200;
+// 114,200 → 114,650 (agent loopback API token): two dependency-free-by-design
+// leaves and one small service. `lib/agentApiToken.js` (the env-var name plus the
+// `curl` argument that spends it) adds one node to the 22 closures that reach a
+// prompt builder; `lib/localReviewBridge.js` (the review-bridge script path,
+// over `fileUtils`, which those closures already carry) adds one to 75, most of
+// them via `services/cosTaskPrompts.js` — it replaces the same `join(PATHS.root,
+// …)` that builder open-coded. `services/agentApiAuth.js` reaches the auth/session
+// subtree, so the widely-reached direct-CLI spawner takes it through an
+// `await import()` instead; the TUI and runner spawn sites keep the static edge,
+// which 12 closures pay. No existing widely-reached module gained an eager edge
+// into a subtree. Measured before 114,119, after 114,253; its whole share is 134.
+// Restores the ~400 of headroom the recent entries carry — main had eroded to 81,
+// which is why an unrelated parallel merge kept tripping this.
+// 114,650 → 115,100 (#7664 Brain threads): a new record type with a route, a
+// ref registry and four suites. `lib/threadRefKinds.js` is a dependency-free
+// leaf (the (kind, id) vocabulary plus its URL builder) and adds one node to
+// the 35 closures reaching `lib/brainValidation.js`, plus the lib barrel.
+// `services/threadRefs.js` keeps its single-kind lookups behind
+// `await import()`, so the only static edges it adds are `lib/db.js` and
+// `services/brainStorage.js` — both already carried by `routes/brain.js`, the
+// one closure that reaches the new route. The rest is the suites themselves:
+// `routes/brainThreads.test.js` is 162 of the 206, which is what ANY route test
+// costs (express + the route under test), and the drift guard reaches the
+// resolver through `await import()` so it costs 2 instead of 27. Measured
+// before 114,486, after 114,692; its whole share is 206. Restores the ~400 of
+// headroom the recent entries carry — main had eroded to 164 again.
+// 115,100 → 115,300 (#7662 quota staleness): `lib/fleetQuotas.js` and
+// `services/providerUsage.js` gain a new edge into `lib/quotaWindows.js`, a
+// dependency-free leaf (staleness now needs the same window-period classifier
+// the quota-burn gate already used) — so every closure that reaches either
+// module without already reaching `quotaWindows.js` through `quotaBurn.js`
+// pays one node for it. No subtree. Measured before 114,692, after 114,853;
+// restores the ~400 of headroom the recent entries carry.
+// 115,300 → 115,900 (#7643 scope adherence): three new lib leaves
+// (`prdClauses.js`, `scopeAdherence.js`, `scopeAdherenceReasons.js`) and four
+// suites. The leaves are cheap and the barrel rows they add cost 3 in total —
+// `bm25.js`, `memoryQuery.js`, `textUtils.js`, `markdownText.js` and `jev.js`
+// are all already reachable from `lib/index.js`. The whole share is 196, and
+// 180 of it is `routes/apps/scopeAdherence.test.js` alone, which is what ANY
+// route test using `validateRequest` costs (express + the route + the
+// validation barrel): its siblings in that directory run 93 to 600, so it sits
+// mid-pack. `services/scopeAdherence.test.js` costs 1, because the service
+// reaches `jevRouter.js`, `untrustedContent.js` and `jev.js` only through
+// `await import()`. Measured before 115,283, after 115,479; restores the ~400
+// of headroom the recent entries carry — main had eroded to 17.
+const MAX_STATIC_INSTANTIATIONS = 115900;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

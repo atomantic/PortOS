@@ -1,4 +1,4 @@
-import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText, Music, Video } from 'lucide-react';
+import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText, Music, Video, ListTodo } from 'lucide-react';
 import { getPageNavTabs } from '../../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
@@ -10,6 +10,7 @@ import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 // drift between the manifest and this map.
 const TAB_PRESENTATION = {
   inbox: { icon: MessageSquare },
+  threads: { icon: ListTodo, fullBleed: true },
   ideas: { icon: Lightbulb },
   'daily-log': { icon: NotebookPen, fullBleed: true },
   links: { icon: Link2 },
@@ -84,6 +85,11 @@ export const DESTINATIONS = {
     label: 'SongBook',
     icon: Music,
     color: 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+  },
+  threads: {
+    label: 'Threads',
+    icon: ListTodo,
+    color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
   },
   unknown: {
     label: 'Unknown',
@@ -163,5 +169,6 @@ export const BRAIN_TYPE_HEX = {
   memories: '#ec4899',
   goals: '#f97316',
   journals: '#14b8a6',
-  songs: '#f43f5e'
+  songs: '#f43f5e',
+  threads: '#10b981'
 };

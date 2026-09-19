@@ -3,7 +3,8 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { findEnabledByLabelText, findEnabledByRole } from '../test/enabledBarrier.js';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import QuotaBurn, { PENDING_POLL_MS, SAVE_DEBOUNCE_MS } from './QuotaBurn';
+import QuotaBurn, { SAVE_DEBOUNCE_MS } from './QuotaBurn';
+import { PENDING_POLL_MS } from '../hooks/useQuotaPendingPoll';
 
 vi.mock('../services/api', () => ({
   getQuotaBurn: vi.fn(),

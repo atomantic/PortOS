@@ -29,8 +29,10 @@ vi.mock('../instanceFeatures.js', () => ({ isInstanceFeatureEnabled: vi.fn().moc
 vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn() }));
 vi.mock('../eidoverseFoundationLedger.js', () => ({
   listPromotedFoundationCandidates: vi.fn().mockResolvedValue([]),
+  listWithdrawnFoundationTombstones: vi.fn().mockResolvedValue([]),
   listEidoverseFoundations: vi.fn().mockResolvedValue({ foundations: [] }),
   recordEidoverseFoundationInheritance: vi.fn().mockResolvedValue({ outcome: 'inherited', foundation: {}, reasons: [], findings: [] }),
+  applyEidoverseFoundationTombstones: vi.fn().mockResolvedValue({ removed: 0 }),
 }));
 
 import {
@@ -46,8 +48,10 @@ import { getInstanceId } from '../instanceIdentity.js';
 import { isInstanceFeatureEnabled } from '../instanceFeatures.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import {
+  applyEidoverseFoundationTombstones,
   listEidoverseFoundations,
   listPromotedFoundationCandidates,
+  listWithdrawnFoundationTombstones,
   recordEidoverseFoundationInheritance,
 } from '../eidoverseFoundationLedger.js';
 
@@ -59,7 +63,7 @@ const fingerprint = (seed) => seed.repeat(64).slice(0, 64);
 // matter here — the envelope's own contract is the accept gate's to enforce,
 // and mocking the ledger is precisely what keeps this suite from re-testing it.
 const candidate = (id, seed = 'a') => ({
-  candidateVersion: 1,
+  candidateVersion: 2,
   foundationId: id,
   kind: 'controller',
   title: id,
@@ -98,9 +102,11 @@ beforeEach(() => {
   vi.mocked(getInstanceId).mockResolvedValue('instance-local');
   vi.mocked(isInstanceFeatureEnabled).mockResolvedValue(true);
   vi.mocked(listPromotedFoundationCandidates).mockReset().mockResolvedValue([]);
+  vi.mocked(listWithdrawnFoundationTombstones).mockReset().mockResolvedValue([]);
   vi.mocked(listEidoverseFoundations).mockReset().mockResolvedValue({ foundations: [] });
   vi.mocked(recordEidoverseFoundationInheritance).mockReset()
     .mockResolvedValue({ outcome: 'inherited', foundation: {}, reasons: [], findings: [] });
+  vi.mocked(applyEidoverseFoundationTombstones).mockReset().mockResolvedValue({ removed: 0 });
 });
 
 describe('the offering this install advertises', () => {
@@ -120,6 +126,37 @@ describe('the offering this install advertises', () => {
     expect(again.listHash).toBe(payload.listHash);
     vi.mocked(listPromotedFoundationCandidates).mockResolvedValue([candidate('tide-beacon', 'a')]);
     expect((await buildEidoverseFoundationOffering()).listHash).not.toBe(payload.listHash);
+  });
+
+  // #7632. The retraction has to be VISIBLE to a receiver that is otherwise
+  // short-circuiting, and it has to survive a full candidate list.
+  it('breaks the listHash on a withdrawal even when the candidate list is unchanged', async () => {
+    vi.mocked(listPromotedFoundationCandidates).mockResolvedValue([candidate('tide-beacon', 'a')]);
+    const before = await buildEidoverseFoundationOffering();
+    expect(before.tombstones).toEqual([]);
+
+    vi.mocked(listWithdrawnFoundationTombstones)
+      .mockResolvedValue([{ fingerprint: fingerprint('c'), deletedAt: '2026-03-04T00:00:00.000Z' }]);
+    const after = await buildEidoverseFoundationOffering();
+
+    // Without the tombstones in the hash a receiver would skip this tick and
+    // keep the withdrawn copy until the next FORCE_REVALIDATE_EVERY pass.
+    expect(after.listHash).not.toBe(before.listHash);
+    expect(after.tombstones).toEqual([{ fingerprint: fingerprint('c'), deletedAt: '2026-03-04T00:00:00.000Z' }]);
+  });
+
+  it('never drops a tombstone to make room for a candidate at the entry cap', async () => {
+    vi.mocked(listPromotedFoundationCandidates)
+      .mockResolvedValue(Array.from({ length: 600 }, (_unused, i) => candidate(`f-${i}`, String(i % 10))));
+    vi.mocked(listWithdrawnFoundationTombstones)
+      .mockResolvedValue([{ fingerprint: fingerprint('c'), deletedAt: '2026-03-04T00:00:00.000Z' }]);
+
+    const payload = await buildEidoverseFoundationOffering();
+
+    // The candidates truncate; the retraction does not. Sharing one cap would
+    // let a large promoted population silently swallow a recall.
+    expect(payload.candidates).toHaveLength(500);
+    expect(payload.tombstones).toHaveLength(1);
   });
 
   it('advertises nothing while the Eidoverse feature is off, without reading the ledger', async () => {
@@ -196,6 +233,43 @@ describe('pulling a peer offering', () => {
     expect(recordEidoverseFoundationInheritance).toHaveBeenCalledWith(
       expect.objectContaining({ foundationId: 'lamp-post' }), expect.anything(),
     );
+  });
+
+  // #7632 — the direction the sweep never had.
+  it('hands the peer\'s retractions to the ledger scoped to that peer, before inheriting', async () => {
+    const tombstone = { fingerprint: fingerprint('c'), deletedAt: '2026-03-04T00:00:00.000Z' };
+    vi.mocked(applyEidoverseFoundationTombstones).mockResolvedValue({ removed: 1 });
+    vi.mocked(peerFetch).mockResolvedValue(offering([candidate('tide-beacon')], { tombstones: [tombstone] }));
+
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 1, removed: 1 });
+    // `sourceInstanceId` is the authorization scope: without it any peer could
+    // retract a third install's foundation by naming its (public) fingerprint.
+    expect(applyEidoverseFoundationTombstones).toHaveBeenCalledWith([tombstone], { sourceInstanceId: 'instance-peer' });
+    // Reaping runs BEFORE the held-set read, so a candidate the same offering
+    // re-publishes is re-verified on its way back in rather than surviving in
+    // place. Invocation order is the only observable form of that guarantee.
+    expect(vi.mocked(applyEidoverseFoundationTombstones).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(listEidoverseFoundations).mock.invocationCallOrder[0]);
+  });
+
+  it('still applies a pre-withdrawal peer\'s offering, which carries no tombstones key at all', async () => {
+    const { tombstones: _absent, ...v2 } = await offering([candidate('tide-beacon')]).json();
+    vi.mocked(peerFetch).mockResolvedValue({ ok: true, headers: { get: () => null }, json: async () => v2 });
+
+    // A missing key must read as "nothing to retract", never fail the wrapper —
+    // that would strand the sender's candidates too, on every install that
+    // upgraded ahead of it.
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 1, removed: 0 });
+    expect(applyEidoverseFoundationTombstones).toHaveBeenCalledWith([], expect.anything());
+  });
+
+  it('counts a failed retraction as zero removed and still inherits, so the next sweep retries', async () => {
+    vi.mocked(applyEidoverseFoundationTombstones).mockRejectedValue(new Error('ledger busy'));
+    vi.mocked(peerFetch).mockResolvedValue(offering([candidate('tide-beacon')], {
+      tombstones: [{ fingerprint: fingerprint('c'), deletedAt: '2026-03-04T00:00:00.000Z' }],
+    }));
+
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toMatchObject({ inherited: 1, removed: 0 });
   });
 
   it('rejects a malformed wrapper before any candidate reaches the gate', async () => {

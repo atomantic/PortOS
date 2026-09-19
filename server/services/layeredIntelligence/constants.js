@@ -18,6 +18,12 @@ import { extractTaskType } from '../taskLearning/store.js';
 export const LI_LABEL = 'layered-intelligence';
 export const LI_BLOCKING_LABEL = 'layered-intelligence:blocking';
 
+// `{ name, color, description }` for the two LI marker labels, so every caller
+// that needs to CREATE one (`ensureForgeLabels`, `fileProposalToForge`) shares
+// the same literal instead of two copies that can silently drift apart.
+export const LI_LABEL_SPEC = Object.freeze({ name: LI_LABEL, color: '1d76db', description: 'Filed by the Layered Intelligence loop' });
+export const LI_BLOCKING_LABEL_SPEC = Object.freeze({ name: LI_BLOCKING_LABEL, color: 'b60205', description: 'Layered Intelligence loop is paused on this issue' });
+
 // The tracker label marking an issue as work the user has COMMITTED to — the
 // `plannedWork` source's filter (#2698). PortOS's own roadmap "lives entirely in
 // the GitHub issue tracker" as `plan`-labeled issues, and that convention is the

@@ -1,4 +1,4 @@
-import { API_BASE, request } from './apiCore.js';
+import { API_BASE, request, queryString } from './apiCore.js';
 
 // Beeper Desktop bridge — status card (#30). Read-only connection status
 // (token-configured flag, never the token; tri-state reachability; the
@@ -23,16 +23,6 @@ export const syncBeeperNow = (options = {}) => request('/beeper/sync', { method:
 // list stays correct with Beeper Desktop closed and a socket invalidation frame
 // costs one local query rather than an upstream fan-out.
 // ---------------------------------------------------------------------------
-
-const queryString = (params) => {
-  const qs = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === null || value === '') continue;
-    qs.set(key, String(value));
-  }
-  const encoded = qs.toString();
-  return encoded ? `?${encoded}` : '';
-};
 
 // `unreadOnly` / `archived` / `lowPriority` are omitted when undefined and sent
 // as the literal "true"/"false" otherwise: the server reads an absent filter as

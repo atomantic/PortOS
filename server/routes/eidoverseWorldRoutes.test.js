@@ -8,9 +8,11 @@ const mocks = vi.hoisted(() => ({
   listFoundations: vi.fn(),
   packageCandidate: vi.fn(),
   promoteFoundation: vi.fn(),
-  listContributions: vi.fn(),
   recordFoundation: vi.fn(),
-  getFoundation: vi.fn(),
+  withdrawFoundation: vi.fn(),
+  deleteFoundation: vi.fn(),
+  getFoundationByRef: vi.fn(),
+  adoptFoundation: vi.fn(),
   ensurePresence: vi.fn(),
   getProjectionStatus: vi.fn(),
   getStatus: vi.fn(),
@@ -19,9 +21,11 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
   describeControllerDefinitions: vi.fn(),
   listControllers: vi.fn(),
+  getControllerInstall: vi.fn(),
   installController: vi.fn(),
   retireController: vi.fn(),
   armController: vi.fn(),
+  updateControllerConfig: vi.fn(),
 }));
 
 vi.mock('../services/eidoverseWorld.js', () => ({
@@ -35,15 +39,14 @@ vi.mock('../services/eidoverseWorld.js', () => ({
 }));
 
 vi.mock('../services/eidoverseFoundationLedger.js', () => ({
-  getEidoverseFoundation: mocks.getFoundation,
+  adoptEidoverseFoundation: mocks.adoptFoundation,
+  getEidoverseFoundationByRef: mocks.getFoundationByRef,
   listEidoverseFoundations: mocks.listFoundations,
   packageEidoverseFoundationCandidate: mocks.packageCandidate,
   promoteEidoverseFoundation: mocks.promoteFoundation,
   recordEidoverseFoundation: mocks.recordFoundation,
-}));
-
-vi.mock('../services/eidoverseResilienceContributions.js', () => ({
-  listRegisteredContributionIds: mocks.listContributions,
+  withdrawEidoverseFoundation: mocks.withdrawFoundation,
+  deleteEidoverseFoundation: mocks.deleteFoundation,
 }));
 
 vi.mock('../services/instanceIdentity.js', () => ({ ensureInstanceId: () => Promise.resolve('instance-aaaa') }));
@@ -61,9 +64,11 @@ vi.mock('../services/eidoverseControllerRuntime.js', async (importOriginal) => {
   return {
     ...actual,
     listEidoverseControllers: mocks.listControllers,
+    getEidoverseControllerInstall: mocks.getControllerInstall,
     installEidoverseController: mocks.installController,
     retireEidoverseController: mocks.retireController,
     setEidoverseControllerArmed: mocks.armController,
+    updateEidoverseControllerConfig: mocks.updateControllerConfig,
   };
 });
 
@@ -201,8 +206,7 @@ describe('Eidoverse world routes', () => {
       kind: 'controller',
       title: 'Tide Beacon',
       summary: 'A beacon that keeps pulsing between mind wakes.',
-      contributionId: 'beacon-relay-demo',
-      body: { affordance: { inspect: 'reads the pulse count' } },
+      body: { controller: { definitionId: 'ambient-beacon', config: {} } },
     };
     mocks.recordFoundation.mockResolvedValue({ ...authored, layer: 'vernacular' });
 
@@ -228,7 +232,7 @@ describe('Eidoverse world routes', () => {
   it('404s a promote or read for a foundation this install never authored', async () => {
     mocks.packageCandidate.mockResolvedValue({ outcome: 'unknown-foundation', candidate: null, assay: null, reasons: ['no foundation'], findings: [] });
     mocks.promoteFoundation.mockResolvedValue({ outcome: 'unknown-foundation', promoted: false, foundation: null, candidate: null, assay: null, reasons: ['no foundation'], findings: [] });
-    mocks.getFoundation.mockResolvedValue(null);
+    mocks.getFoundationByRef.mockResolvedValue(null);
 
     expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/candidate')).status).toBe(404);
     expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/promote')).status).toBe(404);
@@ -251,15 +255,81 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
     expect(mocks.promoteFoundation).toHaveBeenCalledWith('tide-beacon');
   });
 
-  it('serves the registered assay contributions on their own path, where no foundation id can shadow them', async () => {
-    mocks.listContributions.mockResolvedValue(['beacon-relay-demo']);
-    mocks.getFoundation.mockResolvedValue(null);
+  // #7632 — withdrawal and deletion, the directions promotion never had.
+  it('reports a withdrawal as a verdict and delegates the decision whole', async () => {
+    mocks.withdrawFoundation.mockResolvedValue({
+      outcome: 'withdrawn', foundation: { id: 'tide-beacon', layer: 'vernacular', promotedAt: null }, reasons: [],
+    });
 
-    const response = await request(makeApp()).get('/api/eidoverse/world/contributions');
+    const response = await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/withdraw');
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ contributions: ['beacon-relay-demo'] });
-    expect(mocks.getFoundation).not.toHaveBeenCalled();
+    expect(response.body).toMatchObject({ outcome: 'withdrawn', foundation: { layer: 'vernacular' } });
+    expect(mocks.withdrawFoundation).toHaveBeenCalledWith('tide-beacon');
+  });
+
+  it('reports a refused withdrawal as a 200 verdict, and an unknown id as a 404', async () => {
+    mocks.withdrawFoundation.mockResolvedValueOnce({ outcome: 'refused', foundation: null, reasons: ['inherited copy'] });
+    expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/withdraw')).status).toBe(200);
+
+    mocks.withdrawFoundation.mockResolvedValueOnce({ outcome: 'unknown-foundation', foundation: null, reasons: ['no foundation'] });
+    expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/withdraw')).status).toBe(404);
+  });
+
+  it('deletes a local record by bare id and an inherited copy by its origin', async () => {
+    mocks.deleteFoundation.mockResolvedValue({ outcome: 'deleted', foundation: { id: 'tide-beacon' }, withdrawn: true });
+
+    expect((await request(makeApp()).delete('/api/eidoverse/world/foundations/tide-beacon')).status).toBe(200);
+    // A bare id means LOCAL work; the inherited copy needs its origin named,
+    // because the two id spaces legitimately overlap.
+    expect(mocks.deleteFoundation).toHaveBeenLastCalledWith('tide-beacon', { originInstanceId: null });
+
+    await request(makeApp()).delete('/api/eidoverse/world/foundations/tide-beacon?originInstanceId=instance-aaaa');
+    expect(mocks.deleteFoundation).toHaveBeenLastCalledWith('tide-beacon', { originInstanceId: 'instance-aaaa' });
+  });
+
+  it('rejects a malformed origin before it can be assembled into a storage key', async () => {
+    const res = await request(makeApp()).delete('/api/eidoverse/world/foundations/tide-beacon?originInstanceId=not%20an%20id');
+
+    expect(res.status).toBe(400);
+    expect(mocks.deleteFoundation).not.toHaveBeenCalled();
+  });
+
+  // Before #7626 this route validated a bare slug, so a `peer:<origin>:<id>`
+  // ledger key was literally inexpressible and an inherited foundation was
+  // unreachable by every read-one caller — including every mind surface built
+  // on the service beneath it.
+  it('addresses an inherited copy by origin and a locally-authored one by a bare id', async () => {
+    mocks.getFoundationByRef.mockResolvedValue({ id: 'tide-beacon', layer: 'baseline' });
+
+    await request(makeApp()).get('/api/eidoverse/world/foundations/tide-beacon?originInstanceId=instance-aaaa');
+    expect(mocks.getFoundationByRef).toHaveBeenCalledWith({ id: 'tide-beacon', originInstanceId: 'instance-aaaa' });
+
+    await request(makeApp()).get('/api/eidoverse/world/foundations/tide-beacon');
+    // `null`, never "whichever one matches": a read that silently falls back
+    // to a peer's copy is how an adopt lands on the wrong record.
+    expect(mocks.getFoundationByRef).toHaveBeenLastCalledWith({ id: 'tide-beacon', originInstanceId: null });
+  });
+
+  it('returns an adopt refusal as a verdict and a missing foundation as a 404', async () => {
+    mocks.adoptFoundation.mockResolvedValue({ outcome: 'refused', install: null, reasons: ['district-template adoption needs the layout replay path'] });
+
+    const refusal = await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/adopt?originInstanceId=instance-aaaa');
+
+    expect(refusal.status).toBe(200);
+    expect(refusal.body).toMatchObject({ outcome: 'refused', install: null });
+    expect(mocks.adoptFoundation).toHaveBeenCalledWith({ id: 'tide-beacon', originInstanceId: 'instance-aaaa' }, { installedBy: 'user' });
+
+    mocks.adoptFoundation.mockResolvedValue({ outcome: 'unknown-foundation', install: null, reasons: ['no foundation'] });
+    expect((await request(makeApp()).post('/api/eidoverse/world/foundations/tide-beacon/adopt')).status).toBe(404);
+  });
+
+  it('no longer serves an assay-contribution list to bind a foundation to (#7625)', async () => {
+    // The route existed so an author could pick an id that would satisfy the
+    // promote gate. Naming one WAS satisfying it, which is the hole #7625
+    // closed by deriving the sandbox from the body; there is nothing to bind to
+    // now, and a lingering endpoint would keep advertising that there is.
+    expect((await request(makeApp()).get('/api/eidoverse/world/contributions')).status).toBe(404);
   });
 
   // --- Controllers: the install surface beside the mind tool (#7488) -------
@@ -331,6 +401,41 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
       expect(response.body.outcome).toBe('installed');
       expect(response.body.install).toMatchObject({ id: 'tide-beacon', controllerId: 'resource-tick' });
       expect(response.body.install.state).toEqual({ count: 0 });
+    });
+
+    // #7629: the panel's Config block always rendered `{}` because the list
+    // projection never carries `config`/`state` — this is the INSPECT that
+    // does, on its own route.
+    it('inspects one install with config and state, and 404s an unknown install id', async () => {
+      mocks.getControllerInstall.mockResolvedValueOnce(install({ config: { label: 'tide' }, state: { count: 4 } }));
+      mocks.getControllerInstall.mockResolvedValueOnce(null);
+
+      const found = await request(makeApp()).get('/api/eidoverse/world/controllers/tide-beacon');
+      const unknown = await request(makeApp()).get('/api/eidoverse/world/controllers/ghost-install');
+
+      expect(found.status).toBe(200);
+      expect(found.body).toMatchObject({ id: 'tide-beacon', config: { label: 'tide' }, state: { count: 4 } });
+      expect(unknown.status).toBe(404);
+    });
+
+    it('changes config through the config-only route while state stays whatever the service returned, and 404s an unknown install id', async () => {
+      mocks.updateControllerConfig.mockResolvedValueOnce({ outcome: 'updated', install: install({ config: { label: 'quay' }, state: { count: 4 } }), reasons: [] });
+      mocks.updateControllerConfig.mockResolvedValueOnce({ outcome: 'unknown-install', install: null, reasons: ['no controller is installed under "ghost-install"'] });
+
+      const updated = await request(makeApp()).patch('/api/eidoverse/world/controllers/tide-beacon/config').send({ config: { label: 'quay' } });
+      const unknown = await request(makeApp()).patch('/api/eidoverse/world/controllers/ghost-install/config').send({ config: {} });
+
+      expect(updated.status).toBe(200);
+      expect(updated.body.install).toMatchObject({ config: { label: 'quay' }, state: { count: 4 } });
+      expect(mocks.updateControllerConfig).toHaveBeenCalledWith('tide-beacon', { label: 'quay' });
+      expect(unknown.status).toBe(404);
+    });
+
+    it('refuses a config update whose body is not a JSON object before the service is asked to resolve a definition', async () => {
+      const response = await request(makeApp()).patch('/api/eidoverse/world/controllers/tide-beacon/config').send({ config: 'not-an-object' });
+
+      expect(response.status).toBe(400);
+      expect(mocks.updateControllerConfig).not.toHaveBeenCalled();
     });
 
     it('arms and disarms an install by id, and 404s an unknown install id', async () => {

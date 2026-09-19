@@ -85,6 +85,20 @@ export const getAppIssues = (id, options) =>
 // default to silent.
 export const getAppPullRequests = (id, options) =>
   request(`/apps/${id}/pull-requests`, { silent: true, ...options });
+// ADVISORY ONLY: score one issue or PR against the app checkout's own PRD.md /
+// GOALS.md with the local entailment scorer, and get back a verdict plus the
+// clause it was scored against. Nothing branches on the answer — it is rendered
+// beside the row and never gates a claim, a merge, or a label. POST because a
+// body does not fit a query string, and because waking the scorer has to be an
+// explicit operator action in the same request. The caller owns its own error
+// UI (an uninstalled scorer is an ordinary answer here), so default to silent.
+export const scoreAppScopeAdherence = (id, change, options = {}) =>
+  request(`/apps/${id}/scope-adherence`, {
+    method: 'POST',
+    body: JSON.stringify(change),
+    silent: true,
+    ...options,
+  });
 // Queue the shared review-loop follow-up for one freshly verified open PR/MR.
 // The server, not the browser, owns the forge URL/branch and duplicate guard.
 // `settings` is the same provider/model/effort pin `createSlashdoTask` takes —

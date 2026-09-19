@@ -278,6 +278,31 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
     expect(r.status).toBe(404);
   });
 
+  it('joins the source scrap title and lists sibling extractions, without a stub for a solo extraction (#7617)', async () => {
+    const scrap = await catalogDB.createScrap({ title: `Route Scrap ${NONCE}`, rawText: 'Two characters, one page.', sourceKind: 'paste' });
+    createdScrapIds.add(scrap.id);
+    const a = await catalogDB.createIngredient({ type: 'character', name: `Details Sibling A ${NONCE}` });
+    const b = await catalogDB.createIngredient({ type: 'character', name: `Details Sibling B ${NONCE}` });
+    const solo = await catalogDB.createIngredient({ type: 'idea', name: `Details Solo ${NONCE}` });
+    [a, b, solo].forEach((i) => createdIngredientIds.add(i.id));
+    await catalogDB.linkIngredientToSource(a.id, scrap.id);
+    await catalogDB.linkIngredientToSource(b.id, scrap.id);
+
+    const rA = await request(makeApp()).get(`/api/catalog/ingredients/${a.id}/details`);
+    expect(rA.status).toBe(200);
+    expect(rA.body.sources).toHaveLength(1);
+    expect(rA.body.sources[0].scrapTitle).toBe(`Route Scrap ${NONCE}`);
+    expect(rA.body.sources[0].siblings).toEqual([{ id: b.id, name: `Details Sibling B ${NONCE}`, type: 'character' }]);
+
+    // An ingredient with no other extraction from its scrap gets an EMPTY
+    // siblings array, not an absent field — the client renders no stub for it.
+    const soloScrap = await catalogDB.createScrap({ title: `Route Solo Scrap ${NONCE}`, rawText: 'Just one.', sourceKind: 'paste' });
+    createdScrapIds.add(soloScrap.id);
+    await catalogDB.linkIngredientToSource(solo.id, soloScrap.id);
+    const rSolo = await request(makeApp()).get(`/api/catalog/ingredients/${solo.id}/details`);
+    expect(rSolo.body.sources[0].siblings).toEqual([]);
+  });
+
   it('omits dangling "Appears in" refs whose target was soft-deleted (#1812)', async () => {
     const liveUni = `details-live-uni-${NONCE}`;
     const deadUni = `details-dead-uni-${NONCE}`;
@@ -297,6 +322,113 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/details — batched hy
 
     await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = ANY($1)', [[liveUni, deadUni]]).catch(() => {});
     await query('DELETE FROM universes WHERE id = ANY($1)', [[liveUni, deadUni]]).catch(() => {});
+  });
+});
+
+describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe binding + relations (#7615)', () => {
+  const UNI = `commit-uni-${NONCE}`;
+  afterAll(async () => {
+    await query('DELETE FROM catalog_ingredient_refs WHERE ref_id = $1', [UNI]).catch(() => {});
+    await query('DELETE FROM universes WHERE id = $1', [UNI]).catch(() => {});
+  });
+
+  it('links every committed ingredient to the universe with the type-derived role, and clusters the batch with related-to edges', async () => {
+    await query('INSERT INTO universes (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [UNI, `Commit Universe ${NONCE}`]);
+    const scrap = await catalogDB.createScrap({ rawText: `Commit binding source ${NONCE}` });
+    createdScrapIds.add(scrap.id);
+
+    const r = await request(makeApp())
+      .post(`/api/catalog/scraps/${scrap.id}/commit`)
+      .send({
+        accepted: [
+          { type: 'character', name: `Commit Hero ${NONCE}` },
+          { type: 'idea', name: `Commit Idea ${NONCE}` },
+        ],
+        universeRef: UNI,
+      });
+
+    expect(r.status).toBe(201);
+    expect(r.body.ingredients).toHaveLength(2);
+    const [hero, idea] = r.body.ingredients;
+    createdIngredientIds.add(hero.id);
+    createdIngredientIds.add(idea.id);
+
+    const heroRefs = await catalogDB.listRefsForIngredient(hero.id);
+    expect(heroRefs).toEqual([expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'canon-character' })]);
+    const ideaRefs = await catalogDB.listRefsForIngredient(idea.id);
+    expect(ideaRefs).toEqual([expect.objectContaining({ refKind: 'universe', refId: UNI, role: 'reference' })]);
+
+    // HAS_ANY_HOMING_REF is true for both — neither buckets as unlinked (#7615 core symptom).
+    const facets = await request(makeApp()).get('/api/catalog/facets');
+    const uniBucket = facets.body.universes.find((u) => u.refId === UNI);
+    expect(uniBucket?.count).toBeGreaterThanOrEqual(2);
+
+    // A single scrap's extractions form a connected cluster: one related-to
+    // edge for the pair, direction = lexicographically smaller id first.
+    const heroRelations = await catalogDB.listRelationsForIngredient(hero.id);
+    const [smallerId, largerId] = [hero.id, idea.id].sort();
+    const edge = [...heroRelations.outbound, ...heroRelations.inbound].find((e) => e.kind === 'related-to');
+    expect(edge).toBeTruthy();
+    expect(edge.fromId).toBe(smallerId);
+    expect(edge.toId).toBe(largerId);
+  });
+
+  it('omitting universeRef reproduces prior behavior exactly — source link only, no homing ref', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: `Commit no-universe source ${NONCE}` });
+    createdScrapIds.add(scrap.id);
+
+    const r = await request(makeApp())
+      .post(`/api/catalog/scraps/${scrap.id}/commit`)
+      .send({ accepted: [{ type: 'idea', name: `Commit Unbound Idea ${NONCE}` }] });
+
+    expect(r.status).toBe(201);
+    const ing = r.body.ingredients[0];
+    createdIngredientIds.add(ing.id);
+
+    const refs = await catalogDB.listRefsForIngredient(ing.id);
+    expect(refs).toHaveLength(0);
+    const sources = await catalogDB.listSourcesForIngredient(ing.id);
+    expect(sources).toHaveLength(1);
+  });
+
+  it('mints no relation edges for a single-item batch or a batch over the 25-row bound', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: `Commit bound source ${NONCE}` });
+    createdScrapIds.add(scrap.id);
+    const accepted = Array.from({ length: 26 }, (_, i) => ({ type: 'idea', name: `Commit Bound Idea ${i} ${NONCE}` }));
+
+    const r = await request(makeApp())
+      .post(`/api/catalog/scraps/${scrap.id}/commit`)
+      .send({ accepted });
+
+    expect(r.status).toBe(201);
+    expect(r.body.ingredients).toHaveLength(26);
+    for (const ing of r.body.ingredients) createdIngredientIds.add(ing.id);
+
+    for (const ing of r.body.ingredients) {
+      const rel = await catalogDB.listRelationsForIngredient(ing.id);
+      expect(rel.outbound).toHaveLength(0);
+      expect(rel.inbound).toHaveLength(0);
+    }
+  });
+
+  it('rolls back every ingredient, ref, and relation edge on a mid-batch failure', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: `Commit rollback source ${NONCE}` });
+    createdScrapIds.add(scrap.id);
+    // A null `name` clears the route/Zod boundary (commitScrap itself does no
+    // input validation — that's the route layer's job) but violates the
+    // `catalog_ingredients.name TEXT NOT NULL` DB constraint on the second
+    // insert, forcing a real mid-transaction failure.
+    await expect(catalogDB.commitScrap({
+      scrapId: scrap.id,
+      accepted: [
+        { type: 'idea', name: `Commit Rollback First ${NONCE}` },
+        { type: 'idea', name: null },
+      ],
+      universeRef: UNI,
+    })).rejects.toThrow();
+
+    const { items } = await catalogDB.listIngredients({ query: `Commit Rollback First ${NONCE}` });
+    expect(items).toHaveLength(0); // the first insert did not survive the rollback
   });
 });
 
@@ -340,5 +472,23 @@ describe.skipIf(!runDb)('GET /api/catalog/facets + ingredient filters (#1762)', 
     expect(noRefId.status).toBe(400);
     const combined = await request(makeApp()).get('/api/catalog/ingredients?unlinked=true&orphaned=true');
     expect(combined.status).toBe(400);
+  });
+});
+
+describe.skipIf(!runDb)('GET /api/catalog/ingredients?scrapId= (#7617)', () => {
+  it('filters to ingredients extracted from the given source scrap', async () => {
+    const scrap = await catalogDB.createScrap({ title: `Filter Scrap ${NONCE}`, rawText: 'Filter probe text.', sourceKind: 'paste' });
+    createdScrapIds.add(scrap.id);
+    const inScrap = await catalogDB.createIngredient({ type: 'character', name: `Scrap Filter In ${NONCE}` });
+    const outOfScrap = await catalogDB.createIngredient({ type: 'character', name: `Scrap Filter Out ${NONCE}` });
+    createdIngredientIds.add(inScrap.id);
+    createdIngredientIds.add(outOfScrap.id);
+    await catalogDB.linkIngredientToSource(inScrap.id, scrap.id);
+
+    const r = await request(makeApp()).get(`/api/catalog/ingredients?scrapId=${scrap.id}`);
+    expect(r.status).toBe(200);
+    const ids = r.body.items.map((i) => i.id);
+    expect(ids).toContain(inScrap.id);
+    expect(ids).not.toContain(outOfScrap.id);
   });
 });

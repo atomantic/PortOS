@@ -26,6 +26,8 @@ import {
   forgeDispatchLabels,
   jiraDispatchLabels,
   dispatchHintFromLabels,
+  forgeLabelName,
+  labelSeparator,
   forgeContributorLabels,
   jiraContributorLabels,
   forgeIssueLabels,
@@ -116,6 +118,37 @@ describe('forge vs Jira label formatting', () => {
     expect(forgeDispatchLabels({ model: 'epic', effort: 'yes' })).toEqual([]);
     expect(jiraDispatchLabels({ model: 'light', effort: 'max' })).toEqual(['model-light', 'effort-max']);
   });
+
+  // GitLab renders `key::value` as a native scoped label — two-tone, and only one
+  // value per key at a time, which is exactly what these axes want. Filing
+  // `model:heavy` there produces an ordinary label instead, so an issue can end up
+  // carrying two conflicting tiers and `/do:next --model` stops matching it.
+  // `forgeIssueLabels` is the one place the forge's separator is applied, so the
+  // axis builders above it keep the canonical form their lookup tables are keyed
+  // by and nothing between them has to carry a `cli`.
+  it('spells every axis with GitLab\'s scoped separator on glab, and Jira stays colon-free', () => {
+    expect(forgeIssueLabels({ model: 'light', planner: 'claude-opus-5', helpWanted: true, cli: 'glab' }))
+      .toEqual(['model::light', HELP_WANTED_LABEL, 'planner::opus-5']);
+    expect(forgeIssueLabels({ model: 'heavy', effort: 'low', cli: 'glab' }))
+      .toEqual(['model::heavy', 'effort::low']);
+    // A contributor label has no `key:value` shape, so it is passed through
+    // untouched rather than being mangled into a scoped label.
+    expect(forgeIssueLabels({ goodFirstIssue: true, cli: 'glab' })).toEqual([GOOD_FIRST_ISSUE_LABEL]);
+    // An explicit gh, and the default, both keep the single colon.
+    expect(forgeIssueLabels({ model: 'heavy', effort: 'low', cli: 'gh' }))
+      .toEqual(['model:heavy', 'effort:low']);
+    expect(forgeIssueLabels({ model: 'heavy', effort: 'low' })).toEqual(['model:heavy', 'effort:low']);
+    expect(forgeDispatchLabel('model', 'light')).toBe('model:light');
+    expect(jiraDispatchLabel('model', 'heavy')).toBe('model-heavy');
+  });
+
+  it('leaves separator-free labels alone when re-spelling for a forge', () => {
+    expect(forgeLabelName(GOOD_FIRST_ISSUE_LABEL, { cli: 'glab' })).toBe(GOOD_FIRST_ISSUE_LABEL);
+    expect(forgeLabelName('in-progress', { cli: 'glab' })).toBe('in-progress');
+    expect(labelSeparator('glab')).toBe('::');
+    expect(labelSeparator('gh')).toBe(':');
+    expect(labelSeparator()).toBe(':');
+  });
 });
 
 describe('dispatchHintFromLabels', () => {
@@ -133,6 +166,15 @@ describe('dispatchHintFromLabels', () => {
 
   it('treats an unrecognized axis value as absent, not as a misread', () => {
     expect(dispatchHintFromLabels(['model:huge', 'effort:max'])).toEqual({ model: null, effort: 'max' });
+  });
+
+  // The read side has to accept what a GitLab tracker hands back. Reading only
+  // the GitHub spelling reports a fully-routed GitLab issue as unlabeled, and
+  // branch-reconcile then re-dispatches it at the run's own default.
+  it('reads GitLab scoped labels as the same hints', () => {
+    expect(dispatchHintFromLabels(['model::heavy', 'effort::max', 'area::cos-agents']))
+      .toEqual({ model: 'heavy', effort: 'max' });
+    expect(dispatchHintFromLabels(['model::huge'])).toEqual({ model: null, effort: null });
   });
 });
 
@@ -169,8 +211,15 @@ describe('label specs and CLI formatting', () => {
     expect(formatLabelCreateCommand('model:light')).toBe(
       "gh label create model:light --color D4C5F9 --description 'Dispatch capability: cheapest capable coding model' 2>/dev/null || true",
     );
+    // The glab form re-separates the label: GitLab's `effort::max` is a scoped
+    // label (one value per key), and creating `effort:max` there would leave the
+    // issue carrying an ordinary label the tracker cannot make exclusive.
     expect(formatLabelCreateCommand('effort:max', { cli: 'glab' })).toBe(
-      "glab label create --name effort:max --color '#05403D' --description 'Dispatch reasoning effort: maximum' 2>/dev/null || true",
+      "glab label create --name effort::max --color '#05403D' --description 'Dispatch reasoning effort: maximum' 2>/dev/null || true",
+    );
+    // Already-scoped input is accepted and not re-separated a third time.
+    expect(formatLabelCreateCommand('effort::max', { cli: 'glab' })).toBe(
+      "glab label create --name effort::max --color '#05403D' --description 'Dispatch reasoning effort: maximum' 2>/dev/null || true",
     );
     expect(formatLabelCreateCommand('plan')).toBe(null);
     expect(formatLabelCreateCommand(GOOD_FIRST_ISSUE_LABEL)).toBe(
@@ -434,8 +483,9 @@ describe('planner attribution labels', () => {
     const guidance = formatPlannerLabelGuidance('claude-opus-5');
     expect(guidance).toContain('--label planner:opus-5');
     expect(guidance).toContain('gh label create planner:opus-5');
-    expect(formatPlannerLabelGuidance('claude-opus-5', { cli: 'glab' }))
-      .toContain('glab label create --name planner:opus-5');
+    const glab = formatPlannerLabelGuidance('claude-opus-5', { cli: 'glab' });
+    expect(glab).toContain('--label planner::opus-5');
+    expect(glab).toContain('glab label create --name planner::opus-5');
   });
 
   // A model cannot reliably name itself, so the standing guidance must send it
@@ -477,5 +527,18 @@ describe('optional issue-label flag slots', () => {
   it('tolerates a missing or non-string contract', () => {
     expect(formatOptionalIssueLabelFlags(null)).toBe(formatOptionalIssueLabelFlags());
     expect(formatOptionalIssueLabelFlags(undefined)).toBe(formatOptionalIssueLabelFlags());
+  });
+
+  // A caller states its required flags once, in GitHub spelling; the glab copy of
+  // the same example has to come out scoped or the agent pastes a command that
+  // files `model:<tier>` on a GitLab tracker.
+  it('re-separates the rendered line for glab, required flags included', () => {
+    expect(formatOptionalIssueLabelFlags('', { cli: 'glab' })).toBe(
+      '[--label model::<tier>] [--label effort::<level>] [--label planner::<model>] [--label "good first issue"] [--label "help wanted"]',
+    );
+    const rendered = formatOptionalIssueLabelFlags(REPO_STUDY_LABEL_CONTRACT.forgeFlags, { cli: 'glab' });
+    expect(rendered).toContain('--label area::<area> --label model::<tier> --label effort::<level>');
+    expect(rendered).toContain('[--label planner::<model>]');
+    expect(rendered).not.toMatch(/--label "?[a-z]+:(?!:)/);
   });
 });

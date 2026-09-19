@@ -881,6 +881,14 @@ async function runClaimedPersistentMindTurn(turn, mind) {
     });
     // Context/memory orchestration is only needed once admission succeeds.
     const { preparePersistentMindContext } = await import('./persistentMindContext.js');
+    const sealRoute = () => ({
+      provider: prepared.provider,
+      model: prepared.model || null,
+      effort: prepared.effort || null,
+      signal: controller.signal,
+      heartbeat: () => heartbeat(turn.id, generation),
+      callBoundary: callBoundary.call,
+    });
     const context = await preparePersistentMindContext({
       mindId: mind.mindId,
       identity: prepared.identity ?? turnAdapter.identity ?? 'One supervised persistent Chief of Staff mind.',
@@ -889,15 +897,12 @@ async function runClaimedPersistentMindTurn(turn, mind) {
       providerId: prepared.provider.id,
       model: prepared.model || null,
       summarize: typeof turnAdapter.summarize === 'function'
-        ? (input) => turnAdapter.summarize({
-            ...input,
-            provider: prepared.provider,
-            model: prepared.model || null,
-            effort: prepared.effort || null,
-            signal: controller.signal,
-            heartbeat: () => heartbeat(turn.id, generation),
-            callBoundary: callBoundary.call,
-          })
+        ? (input) => turnAdapter.summarize({ ...input, ...sealRoute() })
+        : null,
+      // Same provider, same pinned route, same per-call boundary as the summary
+      // it feeds — the journal introduces no second provider path.
+      extractJournal: typeof turnAdapter.extractJournal === 'function'
+        ? (input) => turnAdapter.extractJournal({ ...input, ...sealRoute() })
         : null,
     });
     if (!await turnCanContinue(turn.id, generation, controller.signal)) return;

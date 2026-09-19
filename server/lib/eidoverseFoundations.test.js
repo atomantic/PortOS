@@ -23,7 +23,22 @@ import { federationSafetyFindings } from './federationSafety.js';
 const DISTURBANCES = ['reconnect', 'restart-world-host', 'missing-optional-deps'];
 const NOW = '2026-03-04T05:06:07.000Z';
 
-const passingAssay = (contributionId = 'beacon-relay-demo') => ({
+/**
+ * A body that DESCRIBES ITSELF: the promote gate derives the sandbox it replays
+ * from these declarations (#7625), so the fixture has to be something the
+ * derivation can actually interpret. The previous fixture named a shipped demo
+ * contribution and carried an unrelated body — which was the bug, sitting in
+ * the repo's own canonical example.
+ */
+const SELF_DESCRIBING_BODY = Object.freeze({
+  schema: { pulses: 'integer' },
+  affordance: { pulse: { summary: 'advance the pulse count', reads: ['pulses'], writes: ['pulses'] } },
+});
+
+/** The label the fixture's own kind/body derives. Never authored. */
+const DERIVED_CONTRIBUTION_ID = 'affordance:tide-beacon';
+
+const passingAssay = (contributionId = DERIVED_CONTRIBUTION_ID) => ({
   harness: 'eidoverse-resilience-assay',
   contributionId,
   pass: true,
@@ -35,11 +50,11 @@ const passingAssay = (contributionId = 'beacon-relay-demo') => ({
 const makeRecord = (overrides = {}) => ({
   id: 'tide-beacon',
   layer: DEFAULT_EIDOVERSE_FOUNDATION_LAYER,
-  kind: 'controller',
+  kind: 'affordance',
   title: 'Tide Beacon',
   summary: 'A beacon that keeps pulsing between mind wakes.',
-  contributionId: 'beacon-relay-demo',
-  body: { schema: { pulses: 'integer' }, affordance: { inspect: 'reads the pulse count' } },
+  contributionId: DERIVED_CONTRIBUTION_ID,
+  body: { ...SELF_DESCRIBING_BODY },
   style: { palette: ['#102030'], motif: 'weathered brass', districtId: 'commons' },
   provenance: { originInstanceId: 'instance-aaaa-bbbb', authorKind: 'mind', createdAt: NOW },
   disclosure: { requires: [], effects: ['emits a pulse each tick'], license: null, notes: null },
@@ -72,7 +87,7 @@ describe('packaging a promote candidate', () => {
 
     expect(result.outcome).toBe('packaged');
     expect(result.candidate.candidateVersion).toBe(EIDOVERSE_FOUNDATION_CANDIDATE_VERSION);
-    expect(result.candidate.body).toEqual({ schema: { pulses: 'integer' }, affordance: { inspect: 'reads the pulse count' } });
+    expect(result.candidate.body).toEqual(SELF_DESCRIBING_BODY);
     // The whole point of the split: nothing a peer inherits can overwrite the
     // peer's own cosmetics, because the cosmetics never left this install.
     expect(JSON.stringify(result.candidate)).not.toContain('weathered brass');
@@ -155,6 +170,34 @@ describe('verifying a candidate a peer was handed', () => {
     expect(verifyFoundationCandidate(sent, { requiredDisturbances: DISTURBANCES }).valid).toBe(true);
   });
 
+  it('refuses a v1 envelope with a reason that says WHY, not "invalid literal" (#7625)', () => {
+    // v1 evidence was recorded against a contribution its author NAMED, with no
+    // required relationship to the body beside it. There is no way to upgrade
+    // that, so an older peer's envelope is refused rather than inherited — and
+    // the person reading the sync log has to be able to tell that apart from a
+    // corrupt payload.
+    const { candidate } = packageRecord();
+    const verdict = verifyFoundationCandidate({ ...candidate, candidateVersion: 1 }, { requiredDisturbances: DISTURBANCES });
+
+    expect(verdict.valid).toBe(false);
+    expect(verdict.reasons).toHaveLength(1);
+    expect(verdict.reasons[0]).toContain('candidate v1');
+    expect(verdict.reasons[0]).toContain('re-package');
+  });
+
+  it('refuses an envelope whose binding label its own body does not derive (#7625)', () => {
+    // The borrowed-credential shape, moved from the authoring surface to the
+    // wire: internally consistent evidence about some other contribution. A
+    // receiver re-derives the label from the kind/body it was handed instead of
+    // taking the sender's word for it.
+    const { candidate } = packageRecord();
+    const forged = { ...candidate, contributionId: 'beacon-relay-demo', assay: passingAssay('beacon-relay-demo') };
+    const verdict = verifyFoundationCandidate({ ...forged, fingerprint: foundationCandidateFingerprint(forged) }, { requiredDisturbances: DISTURBANCES });
+
+    expect(verdict.valid).toBe(false);
+    expect(verdict.reasons.join(' ')).toContain('the evidence is not about the payload');
+  });
+
   it('does not read its own sha256 fingerprint as a leaked credential', () => {
     const { candidate } = packageRecord();
     expect(candidate.fingerprint).toMatch(/^[a-f0-9]{64}$/);
@@ -166,7 +209,7 @@ describe('verifying a candidate a peer was handed', () => {
 describe('assay evidence', () => {
   it('folds a harness verdict into the evidence block without inventing a pass', () => {
     const evidence = assayEvidenceFromVerdict({
-      contributionId: 'beacon-relay-demo',
+      contributionId: DERIVED_CONTRIBUTION_ID,
       pass: false,
       scenarios: [{ disturbance: 'reconnect', pass: false }, { disturbance: 'restart-world-host', pass: true }],
       reasons: ['[reconnect] tick 0: controller threw'],
@@ -263,7 +306,7 @@ describe('inheriting a foundation from a peer (#7461)', () => {
       kind: 'controller',
       title: 'Tide Beacon',
       summary: 'A beacon that keeps pulsing between mind wakes.',
-      contributionId: 'beacon-relay-demo',
+      contributionId: DERIVED_CONTRIBUTION_ID,
       body: { affordance: { inspect: 'reads the pulse count' }, notes: 'built against 192.0.2.10 by alice@example.com' },
       disclosure: { requires: [], effects: [], license: null, notes: null },
       provenance: { originInstanceId: 'instance-aaaa-bbbb', authorKind: 'mind', createdAt: NOW, packagedAt: NOW, portosVersion: '9.9.9' },
@@ -321,5 +364,66 @@ describe('foundation lineage (#7461)', () => {
   it('returns an empty lineage for a missing record rather than throwing', () => {
     expect(foundationLineage(null)).toEqual([]);
     expect(foundationLineage(undefined)).toEqual([]);
+  });
+});
+
+/**
+ * #7631: the derivation edge is the one field on the envelope that carries
+ * another install's sha256. Two things about it can only be pinned here — the
+ * digest must stay INSIDE the content-addressed fingerprint yet OUTSIDE the
+ * credential scan (`scrubSecretTokens` treats 64 unbroken hex characters as a
+ * leaked secret, so a naive scan refuses every derived foundation ever
+ * promoted), and a v1 envelope must keep verifying byte-for-byte.
+ */
+describe('the derived-from edge on a promote envelope (#7631)', () => {
+  const derivedFrom = {
+    type: 'derived-from',
+    originInstanceId: 'instance-origin-peer',
+    foundationId: 'tide-beacon',
+    fingerprint: 'b'.repeat(64),
+    derivedAt: NOW,
+  };
+
+  it('packages and re-verifies a derived foundation instead of refusing its edge as a credential', () => {
+    // The scan reads the edge's digest as credential-shaped on its own; the
+    // packaging path has to exclude that ONE field from the scan without
+    // excluding it from the hash.
+    expect(federationSafetyFindings({ derivedFrom })).toHaveLength(1);
+
+    const result = packageRecord({ derivedFrom });
+
+    expect(result.outcome).toBe('packaged');
+    expect(result.candidate.candidateVersion).toBe(EIDOVERSE_FOUNDATION_CANDIDATE_VERSION);
+    expect(result.candidate.derivedFrom).toEqual(derivedFrom);
+    expect(verifyFoundationCandidate(result.candidate, { requiredDisturbances: DISTURBANCES }).valid).toBe(true);
+  });
+
+  it('refuses a back-dated envelope carrying an edge its version never hashed, on the version alone', () => {
+    // A v1 payload bearing the v2 `derived-from` edge is hand-assembled, not an
+    // older peer. Since #7625 it never reaches the edge check: a pre-v3
+    // envelope's evidence is unusable whatever it carries, so the version
+    // refusal answers first — and re-fingerprinting the forgery does not help.
+    const packaged = packageRecord({ derivedFrom }).candidate;
+    const backdated = { ...packaged, candidateVersion: 1 };
+    backdated.fingerprint = foundationCandidateFingerprint({ ...backdated, fingerprint: undefined });
+
+    const verified = verifyFoundationCandidate(backdated, { requiredDisturbances: DISTURBANCES });
+
+    expect(verified.valid).toBe(false);
+    expect(verified.reasons.join(' ')).toContain('candidate v1');
+    expect(verified.reasons.join(' ')).toContain(`requires v${EIDOVERSE_FOUNDATION_CANDIDATE_VERSION}`);
+  });
+
+  it('carries an origin\'s own derivation edge onto the inheriting install, so the chain does not truncate to the last hop', () => {
+    const candidate = packageRecord({ derivedFrom }).candidate;
+
+    const inherited = foundationFromInheritedCandidate({
+      candidate, requiredDisturbances: DISTURBANCES, sourceInstanceId: 'instance-peer-relay',
+      localInstanceId: 'instance-this-install', now: '2026-03-05T00:00:00.000Z',
+    });
+
+    expect(inherited.outcome).toBe('inherited');
+    expect(inherited.foundation.derivedFrom).toEqual(derivedFrom);
+    expect(foundationLineage(inherited.foundation).map((event) => event.type)).toContain('derived');
   });
 });

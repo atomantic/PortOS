@@ -120,7 +120,6 @@ export const projectEidoverseWorld = (options = {}) => request('/eidoverse/world
 // refusal verdict when a gate says no, so callers read `outcome` rather than
 // treating a rejection as the failure signal.
 export const listEidoverseFoundations = (options) => request('/eidoverse/world/foundations', options);
-export const getEidoverseContributions = (options) => request('/eidoverse/world/contributions', options);
 export const recordEidoverseFoundation = (payload, options = {}) => request('/eidoverse/world/foundations', {
   method: 'POST',
   body: JSON.stringify(payload),
@@ -134,6 +133,13 @@ export const promoteEidoverseFoundation = (id, options = {}) => request(`/eidove
   method: 'POST',
   ...options,
 });
+// Withdrawal (#7632) — retract a promoted foundation so peers that inherited it
+// DROP their copy. Like promote, a refusal ("this is an inherited copy", "it was
+// never promoted") is a 200 carrying `outcome` + `reasons`.
+export const withdrawEidoverseFoundation = (id, options = {}) => request(`/eidoverse/world/foundations/${encodeURIComponent(id)}/withdraw`, {
+  method: 'POST',
+  ...options,
+});
 
 // Eidoverse world controllers — the install/arm/retire surface beside the
 // `eidoverse.controllers` mind-tool group (#7456, #7488). An install/arm
@@ -141,6 +147,9 @@ export const promoteEidoverseFoundation = (id, options = {}) => request(`/eidove
 // 200 carrying its `outcome`/`reasons`, the same shape as the foundations
 // promote gate: callers read `outcome`, not the HTTP status, for a refusal.
 export const listEidoverseControllers = (options) => request('/eidoverse/world/controllers', options);
+// The INSPECT the list route deliberately omits (#7629) — config and state
+// only ever come back from this call, never from a list row.
+export const getEidoverseControllerInstall = (id, options) => request(`/eidoverse/world/controllers/${encodeURIComponent(id)}`, options);
 export const installEidoverseController = (payload, options = {}) => request('/eidoverse/world/controllers', {
   method: 'POST',
   body: JSON.stringify(payload),
@@ -149,6 +158,11 @@ export const installEidoverseController = (payload, options = {}) => request('/e
 export const setEidoverseControllerArmed = (id, armed, options = {}) => request(`/eidoverse/world/controllers/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify({ armed }),
+  ...options,
+});
+export const updateEidoverseControllerConfig = (id, config, options = {}) => request(`/eidoverse/world/controllers/${encodeURIComponent(id)}/config`, {
+  method: 'PATCH',
+  body: JSON.stringify({ config }),
   ...options,
 });
 export const retireEidoverseController = (id, options = {}) => request(`/eidoverse/world/controllers/${encodeURIComponent(id)}`, {

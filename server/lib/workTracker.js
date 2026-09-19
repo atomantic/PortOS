@@ -295,9 +295,13 @@ export function formatTrackerInstructions(tracker, options = {}) {
   const jiraDispatchLabelWording = issueLabelContract
     ? `plus the required equivalent dispatch-hint labels ${issueLabelContract.jiraFlags}:`
     : 'plus equivalent dispatch-hint labels when justified:';
-  // Rendered from the shared slot list rather than a literal, so a new label
-  // axis reaches this copy-pasteable example without re-patching it here.
-  const forgeLabelFlags = formatOptionalIssueLabelFlags(issueLabelContract?.forgeFlags || '--label model:<tier> --label effort:<level>');
+  // Rendered from the shared slot list rather than a literal, so a new label axis
+  // reaches this copy-pasteable example without re-patching it here — and rendered
+  // twice from the one contract, because GitLab spells every prefixed label with
+  // its scoped `::` separator and so cannot reuse the gh line.
+  const requiredForgeFlags = issueLabelContract?.forgeFlags || '--label model:<tier> --label effort:<level>';
+  const forgeLabelFlags = formatOptionalIssueLabelFlags(requiredForgeFlags);
+  const forgeLabelFlagsGlab = formatOptionalIssueLabelFlags(requiredForgeFlags, { cli: 'glab' });
   const dispatchGuidance = issueLabelContract?.dispatchGuidance || DISPATCH_HINT_GUIDANCE;
   const jiraDispatchGuidance = issueLabelContract?.jiraDispatchGuidance || JIRA_DISPATCH_HINT_GUIDANCE;
   const jiraLabelContract = issueLabelContract
@@ -360,7 +364,7 @@ ${forgeLabelContract}
 ${forgeLabelContract}
   ${forgeFileStep} File with repeated \`--label\` flags so the category/scope labels stay intact:
   \`\`\`bash
-  glab issue create --title "[<slug>] <Short title>" ${forgeCategoryFlags} ${forgeLabelFlags} --description "<body>"
+  glab issue create --title "[<slug>] <Short title>" ${forgeCategoryFlags} ${forgeLabelFlagsGlab} --description "<body>"
   \`\`\`
   (Run \`glab issue create --help\` if a flag is rejected — glab's flags evolve.) The body must contain ${bodyRequirements}. For **Maybe — needs human call** items, also add \`--label needs-decision\` and end the body with \`**Decision needed:** <one sentence>.\`.
 - **Finalize:** No source-code edits, no PLAN.md, no branches, no MRs — the issues ARE the deliverable. \`/claim --issues\` (the \`claim-issue-gitlab\` flow) picks them up later.`,
@@ -587,6 +591,7 @@ export async function resolveRepoForgeTarget(repoPath, { preferredForge = null }
       fullName: origin.fullName,
       repoSpec: githubSpec,
       apiHost: githubApiHost(origin.host),
+      webHost: githubApiHost(origin.host),
     };
   }
   // Reuse the URL `getOriginInfo` already read rather than spawning a second
@@ -601,6 +606,7 @@ export async function resolveRepoForgeTarget(repoPath, { preferredForge = null }
       fullName: origin?.fullName || gitlabProjectPath(originUrl) || host,
       repoSpec: null,
       apiHost: null,
+      webHost: host,
     };
   }
   if (preferredForge === 'github' && origin?.fullName && host) {
@@ -609,9 +615,36 @@ export async function resolveRepoForgeTarget(repoPath, { preferredForge = null }
       fullName: origin.fullName,
       repoSpec: `${host}/${origin.fullName}`,
       apiHost: githubApiHost(host),
+      webHost: githubApiHost(host),
     };
   }
   return null;
+}
+
+/**
+ * The browsable issue-tracker base URL for a resolved forge target — append
+ * `/<number>` for one issue. GitLab nests its tracker under `/-/`; the
+ * GitHub family serves it directly off the project path (and redirects a pull
+ * request's number there, so one base covers both kinds of reference).
+ *
+ * This is where the forge-shape knowledge STOPS: a caller stamps the finished
+ * base onto its record, so nothing downstream — least of all the browser — has
+ * to classify a hostname or know that GitLab spells the path differently. That
+ * matters because hostname classification is not authoritative: a self-hosted
+ * forge on a neutral domain is resolved only by the user's own `workTracker`
+ * pin, which `resolveAppForgeTarget` has already applied by the time a target
+ * reaches here.
+ *
+ * Null when the target can't name a project: `resolveRepoForgeTarget` falls
+ * `fullName` back to the bare host for an unparseable GitLab remote, which
+ * would otherwise compose `https://host/host/-/issues`.
+ *
+ * @param {{forge:string, fullName:string|null, webHost:string|null}|null} target
+ * @returns {string|null}
+ */
+export function repoIssueUrlBase(target) {
+  if (!target?.webHost || !target.fullName || target.fullName === target.webHost) return null;
+  return `https://${target.webHost}/${target.fullName}/${target.forge === 'gitlab' ? '-/issues' : 'issues'}`;
 }
 
 /**

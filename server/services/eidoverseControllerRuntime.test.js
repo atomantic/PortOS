@@ -18,10 +18,28 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { z } from 'zod';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+import { summarizeControllerInstall } from '../lib/eidoverseControllers.js';
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-eidoverse-controllers-'),
+}));
+
+const { atomicWrite, readJSONFile } = await import('../lib/fileUtils.js');
+
+// `deliverControllerEffects()` (the default `deliver` the runtime uses when a
+// test does not inject its own) lazily imports this module, so mocking it is
+// what lets a test drive a REAL world refusal through the REAL delivery path
+// instead of only through an injected `deliver` stand-in (#7628).
+const { augmentEidoverseWorldMock, sayInEidoverseWorldMock } = vi.hoisted(() => ({
+  augmentEidoverseWorldMock: vi.fn(),
+  sayInEidoverseWorldMock: vi.fn(),
+}));
+vi.mock('./eidoverseWorld.js', () => ({
+  augmentEidoverseWorld: augmentEidoverseWorldMock,
+  sayInEidoverseWorld: sayInEidoverseWorldMock,
 }));
 
 const {
@@ -33,7 +51,14 @@ const {
   retireEidoverseController,
   setEidoverseControllerArmed,
   tickEidoverseControllers,
+  updateEidoverseControllerConfig,
 } = await import('./eidoverseControllerRuntime.js');
+
+/** The raw store file this module owns, for tests that need to inspect or
+ * hand-edit what actually landed on disk (a `schemaVersion` newer than this
+ * build's own constant, for instance — nothing this module's own API can
+ * produce). */
+const storeFile = () => join(lazyTempDataRoot('portos-eidoverse-controllers-'), 'eidoverse', 'controllers.json');
 
 const MINUTE = 60_000;
 const START = Date.parse('2026-03-04T00:00:00.000Z');
@@ -62,6 +87,8 @@ async function runSupervisorPasses(passes, { fromMs = 0, everyMs = MINUTE, ...op
 beforeEach(() => {
   rmSync(lazyTempDataRoot('portos-eidoverse-controllers-'), { recursive: true, force: true });
   __resetEidoverseControllerRuntimeForTests();
+  augmentEidoverseWorldMock.mockReset();
+  sayInEidoverseWorldMock.mockReset();
 });
 
 afterEach(() => __resetEidoverseControllerRuntimeForTests());
@@ -197,6 +224,63 @@ describe('the supervised tick path', () => {
     expect(record.state.pulses).toBe(1);
     expect(record.lastOutcome).toMatchObject({ ok: true, delivered: 0, deliveryError: 'world host is down' });
   });
+
+  // #7628: `augmentEidoverseWorld()` never throws on a world refusal — the
+  // verdict is its return value. This drives that refusal through the REAL
+  // `deliverControllerEffects()` (no `deliver` override), the seam the old
+  // fixture skipped by mocking a throw instead, and follows it all the way to
+  // the projection a mind or the panel actually reads.
+  it('reads a world refusal instead of counting it as delivered, and disarms after enough of them', async () => {
+    augmentEidoverseWorldMock.mockResolvedValue({
+      success: false,
+      applied: 0,
+      operations: [{ verb: 'light', id: 'missing-lantern', outcome: 'refused', proposed: null, committed: null, reason: 'unknown entity id' }],
+    });
+    await install({
+      id: 'lamp-keeper', controllerId: 'lantern-keeper', deliverEffects: true, tickIntervalMs: MINUTE,
+      config: { relightEveryTicks: 1, lanterns: [{ id: 'missing-lantern', pos: [0, 2, 0] }] },
+    });
+
+    await runSupervisorPasses(3);
+
+    expect(augmentEidoverseWorldMock).toHaveBeenCalledTimes(3);
+    const record = await getEidoverseControllerInstall('lamp-keeper');
+    // The step succeeded every tick — #7628's whole point is that this alone
+    // used to be reported as "ok" with no trace of the refusal anywhere.
+    expect(record.lastOutcome.ok).toBe(true);
+    expect(record.lastOutcome).toMatchObject({ delivered: 0, deliveryError: 'unknown entity id' });
+    expect(record.consecutiveDeliveryFailures).toBe(3);
+    // A run of refused deliveries disarms exactly like a run of failed steps.
+    expect(record.armed).toBe(false);
+    expect(record.disarmedReason).toMatch(/3 consecutive delivery failures: unknown entity id/);
+    expect(isEidoverseControllerSupervisorRegistered()).toBe(false);
+
+    // The projection every reader (route, mind tool, panel) actually consumes
+    // carries the refusal as its own verdict, separate from the tick.
+    const summary = summarizeControllerInstall(record);
+    expect(summary.lastTickOk).toBe(true);
+    expect(summary.lastDelivery).toEqual({ ok: false, delivered: 0, reason: 'unknown entity id' });
+  });
+
+  it('does not disarm on a rewritten delivery — the world landed different args, not nothing', async () => {
+    augmentEidoverseWorldMock.mockResolvedValue({
+      success: true,
+      applied: 1,
+      operations: [{ verb: 'light', id: 'plaza-lantern', outcome: 'rewritten', proposed: { id: 'plaza-lantern' }, committed: { id: 'plaza-lantern', pos: [0, 1, 0] } }],
+    });
+    await install({
+      id: 'lamp-keeper', controllerId: 'lantern-keeper', deliverEffects: true, tickIntervalMs: MINUTE,
+      config: { relightEveryTicks: 1, lanterns: [{ id: 'plaza-lantern', pos: [0, 2, 0] }] },
+    });
+
+    await runSupervisorPasses(3);
+
+    const record = await getEidoverseControllerInstall('lamp-keeper');
+    expect(record.lastOutcome).toMatchObject({ ok: true, delivered: 1, deliveryError: null });
+    expect(record.consecutiveDeliveryFailures).toBe(0);
+    expect(record.armed).toBe(true);
+    expect(summarizeControllerInstall(record).lastDelivery).toEqual({ ok: true, delivered: 1, reason: null });
+  });
 });
 
 describe('a controller that goes wrong', () => {
@@ -291,5 +375,148 @@ describe('the install store', () => {
     expect((await retireEidoverseController('plaza-beacon')).outcome).toBe('retired');
     expect(await getEidoverseControllerInstall('plaza-beacon')).toBeNull();
     expect((await retireEidoverseController('plaza-beacon')).outcome).toBe('unknown-install');
+  });
+});
+
+// #7629: nothing read an install's config back, and a stored install was
+// never revalidated against the definition it runs — the store's version
+// stamp went unread, a config that stopped parsing kept stepping, and a mind
+// had no way to change an inherited controller's config without destroying
+// its accumulated state.
+describe('revalidating a stored install against its definition (#7629)', () => {
+  it('disarms rather than steps when the stored config no longer parses against its definition', async () => {
+    // The install-time schema accepts `label`; a later "shipped schema
+    // tightened" is simulated by resolving to a STRICTER schema at tick time
+    // that the already-stored config fails.
+    const loose = {
+      id: 'drifted', configSchema: z.object({ label: z.string() }).strict(),
+      createState: () => ({}), step: (state) => ({ state }),
+    };
+    const strict = {
+      ...loose,
+      configSchema: z.object({ label: z.string().max(3) }).strict(),
+    };
+    const resolveLoose = async (id) => (id === 'drifted' ? loose : null);
+    const resolveStrict = async (id) => (id === 'drifted' ? strict : null);
+
+    await install({ controllerId: 'drifted', tickIntervalMs: MINUTE, config: { label: 'too-long-now' } }, { resolveDefinition: resolveLoose });
+    await runSupervisorPasses(1, { resolveDefinition: resolveStrict });
+
+    const record = await getEidoverseControllerInstall('plaza-beacon');
+    expect(record.armed).toBe(false);
+    expect(record.tick).toBe(0);
+    expect(record.disarmedReason).toMatch(/stored config no longer parses/);
+    expect(record.config).toEqual({ label: 'too-long-now' });
+  });
+
+  it('applies and persists a newly-added configSchema default exactly once on an existing install\'s next tick', async () => {
+    const v1 = {
+      id: 'evolving', configSchema: z.object({ label: z.string() }).strict(),
+      createState: () => ({ ticks: 0 }), step: (state) => ({ state: { ticks: state.ticks + 1 } }),
+    };
+    // v2 adds `boost` with a default — the shape a shipped-controller upgrade
+    // takes per root AGENTS.md: installs upgrade on their own schedule.
+    const v2 = {
+      ...v1,
+      configSchema: z.object({ label: z.string(), boost: z.number().int().default(3) }).strict(),
+    };
+    const resolveV1 = async (id) => (id === 'evolving' ? v1 : null);
+    const resolveV2 = async (id) => (id === 'evolving' ? v2 : null);
+
+    await install({ controllerId: 'evolving', tickIntervalMs: MINUTE, config: { label: 'plaza' } }, { resolveDefinition: resolveV1 });
+    expect((await getEidoverseControllerInstall('plaza-beacon')).config).toEqual({ label: 'plaza' });
+
+    await runSupervisorPasses(1, { resolveDefinition: resolveV2 });
+    const record = await getEidoverseControllerInstall('plaza-beacon');
+    expect(record.config).toEqual({ label: 'plaza', boost: 3 });
+    expect(record.lastOutcome).toMatchObject({ ok: true });
+  });
+
+  it('fails the step and counts toward maxConsecutiveFailures when live state violates the definition\'s invariants', async () => {
+    const guarded = {
+      id: 'guarded', configSchema: z.object({}).strict(),
+      createState: () => ({ count: 0 }),
+      step: (state) => ({ state: { count: state.count + 1 } }),
+      // Violates on every tick from the first one, so three passes accumulate
+      // three consecutive failures rather than succeeding a while first.
+      invariants: [function countNeverExceedsZero(state) { return state.count <= 0; }],
+    };
+    const resolveGuarded = async (id) => (id === 'guarded' ? guarded : null);
+
+    await install({ controllerId: 'guarded', tickIntervalMs: MINUTE, config: {} }, { resolveDefinition: resolveGuarded });
+    await runSupervisorPasses(3, { resolveDefinition: resolveGuarded });
+
+    const record = await getEidoverseControllerInstall('plaza-beacon');
+    expect(record.consecutiveFailures).toBe(3);
+    expect(record.armed).toBe(false);
+    expect(record.lastOutcome).toMatchObject({ ok: false });
+    expect(record.lastOutcome.reason).toMatch(/invariant/);
+    expect(record.disarmedReason).toMatch(/consecutive failed ticks/);
+  });
+
+  it('disarms rather than steps a store stamped with a schemaVersion newer than this build, and reports the file\'s own stamp', async () => {
+    await install({ tickIntervalMs: MINUTE });
+
+    const raw = await readJSONFile(storeFile(), null, { allowArray: false, strict: true });
+    await atomicWrite(storeFile(), { ...raw, schemaVersion: raw.schemaVersion + 1 });
+
+    expect((await listEidoverseControllers()).schemaVersion).toBe(raw.schemaVersion + 1);
+
+    await runSupervisorPasses(1);
+    const record = await getEidoverseControllerInstall('plaza-beacon');
+    expect(record.armed).toBe(false);
+    expect(record.tick).toBe(0);
+    expect(record.disarmedReason).toMatch(/newer than this build/);
+  });
+
+  it("never downgrades a newer stamp when it writes, so the guard survives the disarm that fires it", async () => {
+    await install({ tickIntervalMs: MINUTE });
+    const raw = await readJSONFile(storeFile(), null, { allowArray: false, strict: true });
+    const newer = raw.schemaVersion + 1;
+    await atomicWrite(storeFile(), { ...raw, schemaVersion: newer });
+
+    // The disarming pass persists the record, and that write must not re-stamp
+    // the file with THIS build’s older constant — doing so would erase the only
+    // signal the guard reads, leaving it a one-shot.
+    await runSupervisorPasses(1);
+    expect((await readJSONFile(storeFile(), null, { allowArray: false, strict: true })).schemaVersion).toBe(newer);
+
+    // So a re-arm (another write path) still lands on a newer-stamped store,
+    // and the next pass refuses again instead of stepping under this build’s rules.
+    await setEidoverseControllerArmed("plaza-beacon", true, { now: at(MINUTE) });
+    expect((await readJSONFile(storeFile(), null, { allowArray: false, strict: true })).schemaVersion).toBe(newer);
+
+    await runSupervisorPasses(1, { fromMs: 2 * MINUTE });
+    const record = await getEidoverseControllerInstall("plaza-beacon");
+    expect(record.armed).toBe(false);
+    expect(record.tick).toBe(0);
+    expect(record.disarmedReason).toMatch(/newer than this build/);
+  });
+});
+
+describe('updateEidoverseControllerConfig (#7629)', () => {
+  it('changes config while the accumulated state survives — the "inherit and modify" verb, not a rebuild', async () => {
+    await install();
+    await runSupervisorPasses(10);
+    const before = await getEidoverseControllerInstall('plaza-beacon');
+    expect(before.state.ticks).toBe(2);
+
+    const result = await updateEidoverseControllerConfig('plaza-beacon', { label: 'quay', pulseEveryTicks: 4 });
+    expect(result.outcome).toBe('updated');
+    expect(result.install.config).toEqual({ label: 'quay', pulseEveryTicks: 4, announce: false });
+    // Unlike a re-install, state is untouched.
+    expect(result.install.state).toEqual(before.state);
+  });
+
+  it('refuses a config the definition\'s schema rejects, leaving the install unchanged', async () => {
+    await install();
+    const result = await updateEidoverseControllerConfig('plaza-beacon', { label: 'plaza', pulseEveryTicks: 0 });
+    expect(result.outcome).toBe('refused');
+    expect(result.reasons[0]).toMatch(/^config\.pulseEveryTicks/);
+    expect((await getEidoverseControllerInstall('plaza-beacon')).config).toMatchObject({ pulseEveryTicks: 2 });
+  });
+
+  it('reports unknown-install for an id nothing has installed', async () => {
+    expect((await updateEidoverseControllerConfig('nope', {})).outcome).toBe('unknown-install');
   });
 });

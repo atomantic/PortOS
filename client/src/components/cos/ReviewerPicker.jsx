@@ -17,7 +17,7 @@ import {
 } from './constants';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { selectableModelsForProvider, effortLevelsForProvider, effectiveModelFor } from '../../utils/providers';
-import { isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
+import { isApplyCapableReviewer, isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 // The SAME map the readiness cards link by (`LOCAL_RUNTIMES[*].manageUrl` reads
 // from it), taken from the server leaf rather than mirrored — the mirror is what
@@ -136,6 +136,15 @@ const HEADER_CLASS = `hidden @xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.5
  * `false` counts as missing; `undefined` (not a CLI reviewer, or the caller
  * didn't fetch it) says nothing.
  *
+ * `providerReviewUnsupported` is the same endpoint's provider-backed counterpart
+ * (#7660) — `{ 'provider:<id>': 'REVIEWER_UNSUPPORTED' }`, present ONLY for a
+ * provider that would refuse a tool-free review outright (a hosted gateway
+ * fronting a CLI whose no-tool posture can only be enforced locally). A capable
+ * provider is absent rather than `false`, so a caller that never fetched it and
+ * a machine where nothing is wrong both read `undefined`. Warn-only like the
+ * rest: without it, such a reviewer is only discovered as a review gate that
+ * never clears.
+ *
  * Together with `modelOptions.providerDisabled`, that decides which reviewers
  * the **Add** row offers up front: one whose CLI is missing here, or whose
  * provider records are all switched off, is folded behind a `+N unavailable`
@@ -153,6 +162,7 @@ export default function ReviewerPicker({
   reviewerEfforts = {},
   modelOptions = null,
   installed = null,
+  providerReviewUnsupported = null,
   stopMode = DEFAULT_REVIEW_STOP_MODE,
   reviewerApplies = false,
   defaults = null,
@@ -193,7 +203,10 @@ export default function ReviewerPicker({
   // provider.
   const selected = Array.isArray(reviewers) ? [...new Set(reviewers.map(normalizeReviewerValue))] : [];
   const addable = REVIEWER_OPTIONS.filter(o => !selected.includes(o.value));
-  const hasNonCopilot = selected.some(r => r !== 'copilot');
+  // Only codex is offered the editing pass: slashdo forces every other local
+  // reviewer back to review-only and reverts what it wrote, so showing the toggle
+  // for agy/grok/cursor would ask the user to grant write access for nothing.
+  const hasApplyCapableReviewer = selected.some(isApplyCapableReviewer);
   const selectedUsernames = normalizeReviewUsernames(usernames);
   const atMaxUsernames = selectedUsernames.length >= MAX_REVIEW_USERNAMES;
   // Optional (non-blocking) reviewers — emitted with slashdo's `~opt` suffix.
@@ -254,6 +267,15 @@ export default function ReviewerPicker({
       const provider = providerRecords.find(record => `provider:${record.id}` === token);
       if (modelOptions?.loaded && !provider) return { label: 'missing', title: 'This reviewer provider is no longer configured on this machine.' };
       if (provider?.enabled === false) return { label: 'disabled', title: 'Enable this provider in AI Providers before running its review.' };
+      // Last, so a missing or switched-off provider keeps its more specific
+      // word: this one is about a provider that IS configured and enabled and
+      // still could never answer a review.
+      if (providerReviewUnsupported?.[token]) {
+        return {
+          label: "can't review",
+          title: `${labelFor(token)} has no enforced tool-free review transport on this machine, so a review round would never complete. Switch the provider to its API mode, or pick a reviewer harness that supports one.`
+        };
+      }
       return null;
     }
     if (installed?.[token] === false) {
@@ -930,7 +952,7 @@ export default function ReviewerPicker({
         </div>
       )}
 
-      {showRunFlags && hasNonCopilot && (
+      {showRunFlags && hasApplyCapableReviewer && (
         <label htmlFor={`${id}-applies`} className="flex items-center gap-2 cursor-pointer select-none text-xs text-gray-500">
           <input
             id={`${id}-applies`}
@@ -940,7 +962,7 @@ export default function ReviewerPicker({
             onChange={e => emit({ reviewerApplies: e.target.checked })}
             className="w-3.5 h-3.5 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent focus:ring-offset-0"
           />
-          Reviewer applies fixes (CLI edits the working tree; no effect on Copilot)
+          Reviewer applies fixes (Codex edits the working tree; every other reviewer stays review-only)
         </label>
       )}
     </div>

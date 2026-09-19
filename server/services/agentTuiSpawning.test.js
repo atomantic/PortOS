@@ -108,6 +108,13 @@ vi.mock('./agentState.js', async (importOriginal) => ({
   unregisterSpawnedAgent: vi.fn(),
 }));
 
+// The loopback API token the agent's own PortOS `curl`s spend. The real one
+// reads settings.json to decide whether an instance password is set; this suite
+// only cares that whatever it returns reaches the PTY env.
+vi.mock('./agentApiAuth.js', () => ({
+  resolveAgentApiEnv: vi.fn().mockResolvedValue({}),
+}));
+
 vi.mock('./git.js', () => ({
   getDiff: vi.fn().mockResolvedValue('diff content here'),
   // No owner-matched gh account by default → empty overlay (ambient auth kept).
@@ -856,6 +863,29 @@ describe('spawnTuiAgent runtime', () => {
     );
 
     // Drive the shell-exit path so the completion chain settles and no timer leaks.
+    await capturedOnExit({ exitCode: 0, killed: false });
+    await completeDone;
+  });
+
+  // Same reason as GH_TOKEN above, different credential: `buildSafeEnv`
+  // allowlists the inherited env, so the loopback PortOS session token only
+  // reaches the agent by riding this explicit delta. Without it every canned
+  // `curl` in the agent's own prompt is a 401 on a password-protected install.
+  it('passes the loopback PortOS API token into the TUI session env', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    vi.mocked(resolveAgentApiEnv).mockResolvedValueOnce({ PORTOS_API_TOKEN: 'portos-session-token' });
+
+    runSpawn({ workspacePath: '/tmp/ws' });
+    await flushMicrotasks();
+
+    expect(shellService.createShellSession).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ env: expect.objectContaining({ PORTOS_API_TOKEN: 'portos-session-token' }) }),
+    );
+
     await capturedOnExit({ exitCode: 0, killed: false });
     await completeDone;
   });

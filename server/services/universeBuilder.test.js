@@ -183,6 +183,7 @@ describe("universeBuilder service", () => {
     expect(summaries).toEqual(full.map((u) => ({
       id: u.id, name: u.name, logline: u.logline, starterPrompt: u.starterPrompt.slice(0, svc.LOGLINE_MAX).trim(),
       origin: u.origin, createdAt: u.createdAt, updatedAt: u.updatedAt,
+      factual: u.factual === true,
       canonCount: u.characters.length + u.places.length + u.objects.length,
       styleImageRef: u.styleImageRefs.at(-1) || null,
     })));
@@ -2518,6 +2519,34 @@ describe("universeBuilder service", () => {
         categories: { factions: { kind: "characters", variations: [{ label: "Iron Reach", prompt: "x" }] } },
       });
       expect(patched.categories.factions.kind).toBe("characters");
+    });
+  });
+
+  describe("factual flag (#7616)", () => {
+    it("persists `factual` only when true, leaving a fiction universe byte-identical", async () => {
+      const base = {
+        id: "w-factual", name: "Example Universe",
+        schemaVersion: svc.CURRENT_SCHEMA_VERSION, createdAt: "2024-01-01T00:00:00Z",
+      };
+      // The regression this catches: persisting `factual: false` would add a key
+      // to EVERY existing universe's record, changing the wire checksum that
+      // peer sync and the conflict journal both hash — so every untouched world
+      // would look edited on the next sync.
+      const fiction = svc.sanitizeTemplate(base);
+      expect("factual" in fiction).toBe(false);
+      expect(JSON.stringify(svc.sanitizeTemplate({ ...base, factual: false })))
+        .toBe(JSON.stringify(fiction));
+      expect(svc.sanitizeTemplate({ ...base, factual: true }).factual).toBe(true);
+    });
+
+    it("round-trips the flag through create and PATCH, and `false` clears it", async () => {
+      const u = await svc.createUniverse({ name: "Reality", factual: true });
+      expect(u.factual).toBe(true);
+      expect((await svc.getUniverse(u.id)).factual).toBe(true);
+
+      const cleared = await svc.updateUniverse(u.id, { factual: false });
+      expect("factual" in cleared).toBe(false);
+      expect(await svc.updateUniverse(u.id, { factual: true })).toMatchObject({ factual: true });
     });
   });
 

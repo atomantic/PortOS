@@ -16,7 +16,7 @@ describe('Brain navigation', () => {
 describe('Brain TABS ↔ nav manifest', () => {
   it('renders the brain tabGroup in page order with a presentation entry each', () => {
     expectPageNavTabs(TABS, [
-      'inbox:Inbox', 'ideas:Ideas', 'daily-log:Daily Log', 'links:Links',
+      'inbox:Inbox', 'threads:Threads', 'ideas:Ideas', 'daily-log:Daily Log', 'links:Links',
       'memory:Memory', 'notes:Notes', 'graph:Graph', 'digest:Digest',
       'feeds:Feeds', 'trust:Trust', 'import:Import', 'spotify:Spotify',
       'youtube:YouTube', 'config:Config',
@@ -24,6 +24,6 @@ describe('Brain TABS ↔ nav manifest', () => {
   });
 
   it('keeps the full-bleed set derived from the presentation map', () => {
-    expect([...FULL_BLEED_TAB_IDS].sort()).toEqual(['daily-log', 'graph', 'notes']);
+    expect([...FULL_BLEED_TAB_IDS].sort()).toEqual(['daily-log', 'graph', 'notes', 'threads']);
   });
 });

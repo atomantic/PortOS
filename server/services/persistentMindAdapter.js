@@ -19,6 +19,10 @@ import {
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
+import {
+  persistentMindJournalDigest,
+  renderPersistentMindEventLines,
+} from '../lib/persistentMindJournal.js';
 import { COS_TOOL_CALL_LIMITS, persistentMindToolCallSchema } from '../lib/cosToolContracts.js';
 import { parseLLMJSON } from '../lib/llmText.js';
 import { canonicalStringify } from '../lib/objects.js';
@@ -275,13 +279,20 @@ Do not open with a recap. The human already sees the trajectory, the memories, a
 On a self-directed wake, never claim the user asked for something. Prefer toolCalls that advance the standing playbook (usually eidoverse.*) over conversational filler. Keep callRequest null unless placing a phone call is ON and something truly cannot wait.`;
 }
 
-const summaryEventLines = (events) => (Array.isArray(events) ? events : []).map((event) => {
-  const text = event?.data?.displayText || event?.data?.summaryText || event?.kind;
-  return `[${event?.sequence ?? '?'}] ${event?.kind}: ${text}`;
-}).join('\n');
-
-export function buildPersistentMindSummaryPrompt({ events, previousSummary }) {
-  return `Summarize this older portion of one persistent mind's life in first person. Preserve concrete decisions, unresolved questions, user preferences, and causal links. Do not invent facts. Return plain text only, no heading.\n\n${previousSummary ? `Prior cumulative summary:\n${previousSummary}\n\n` : ''}New trajectory events:\n${summaryEventLines(events)}`;
+/**
+ * The sealed summary compacts from the JOURNAL first and the raw range second.
+ * The journal is typed and individually addressable, so "still outstanding" and
+ * "settled" survive compaction as facts rather than as wording the summarizer
+ * happened to keep — and superseded statements are absent from the digest by
+ * construction, which is what stops a reversed decision being quoted as current
+ * for the rest of the mind's life.
+ */
+export function buildPersistentMindSummaryPrompt({ events, previousSummary, journal = [], mindId = PERSISTENT_MIND_ID }) {
+  const digest = persistentMindJournalDigest(Array.isArray(journal) ? journal : [], mindId);
+  const journalSection = digest.text
+    ? `Decision journal for this mind (authoritative — entries listed here are current; anything retired has already been removed):\n${digest.text}\n\nPreserve every active commitment, open question, risk and goal above verbatim in meaning. Keep only the settled history needed to explain the current state. Never restate a decision that is not listed.\n\n`
+    : '';
+  return `Summarize this older portion of one persistent mind's life in first person. Preserve concrete decisions, unresolved questions, user preferences, and causal links. Do not invent facts. Return plain text only, no heading.\n\n${journalSection}${previousSummary ? `Prior cumulative summary:\n${previousSummary}\n\n` : ''}New trajectory events:\n${renderPersistentMindEventLines(events)}`;
 }
 
 /**
@@ -369,7 +380,7 @@ export function createPersistentMindTurnAdapter() {
       };
     },
 
-    async summarize({ events, previousSummary, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
+    async summarize({ events, previousSummary, journal, mindId, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
       const result = await callBoundary({ purpose: 'summary' }, ({ reportRunId }) => runPinnedPrompt({
         provider,
         model,
@@ -377,7 +388,17 @@ export function createPersistentMindTurnAdapter() {
         signal,
         heartbeat,
         reportRunId,
-        prompt: buildPersistentMindSummaryPrompt({ events, previousSummary }),
+        prompt: buildPersistentMindSummaryPrompt({ events, previousSummary, journal, mindId }),
+      }));
+      return result.text.trim();
+    },
+
+    // A dumb transport on purpose: the journal service owns the prompt, the
+    // closed-schema validation and the single repair retry, so the adapter
+    // cannot accidentally accept a batch the contract would have refused.
+    async extractJournal({ prompt, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
+      const result = await callBoundary({ purpose: 'journal' }, ({ reportRunId }) => runPinnedPrompt({
+        provider, model, effort, signal, heartbeat, reportRunId, prompt,
       }));
       return result.text.trim();
     },
@@ -414,7 +435,12 @@ export function createPersistentMindTurnAdapter() {
       // already redacted, no grant required. Deeper lookbacks use the
       // readPortos-gated user-actions.query tool.
       const userActionsPrompt = await readPersistentMindUserActionsPrompt();
-      const toolCapabilityPrompt = buildPersistentMindToolPrompt(taskAccess, await readPersistentMindRecipeCatalog(taskAccess));
+      // Only the very first build of the turn ages the lease and traces —
+      // every later rebuild (after a tool round) reuses the same turnId with
+      // isUserTurn omitted so a multi-round turn can't age its own tools out
+      // from under itself.
+      const isUserTurn = wake?.kind === 'message';
+      const toolCapabilityPrompt = await buildPersistentMindToolPrompt(taskAccess, await readPersistentMindRecipeCatalog(taskAccess), { turnId, isUserTurn, trace: true });
       const callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: taskAccess.callUser });
       const screenshots = (Array.isArray(wake?.message?.images) ? wake.message.images : []).map((image) => {
         const path = resolveScreenshot(image?.filename);
@@ -567,8 +593,12 @@ export function createPersistentMindTurnAdapter() {
         });
         completedToolResults.push(...toolResults);
         const liveCapabilities = normalizePersistentMindCapabilities((await loadState()).config?.persistentMindCapabilities);
+        // Same turnId, isUserTurn/trace both omitted (default false): a tool
+        // call may have just activated or renewed a family, so re-read the
+        // live lease state, but this in-turn rebuild must never age it again
+        // or log a second trace line for the same turn.
         basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
-          toolCapabilityPrompt: buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities)),
+          toolCapabilityPrompt: await buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities), { turnId }),
         });
         const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;
         providerPrompt = `${basePrompt}\n\n# Completed tool results\n${JSON.stringify(completedToolResults)}\n\n${parsed.taskRequests.length > 0 ? 'Task requests from this intermediate round were not queued. Include only the final desired taskRequests in a terminal response with toolCalls: [].\n' : ''}${budgetExhausted ? 'The tool-call budget is exhausted. Return a final response with toolCalls: [] and do not repeat completed actions.' : 'Use these results to continue. Do not repeat a completed requestId.'}`;

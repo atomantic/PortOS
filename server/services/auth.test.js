@@ -127,6 +127,58 @@ describe('auth service', () => {
     expect(await auth.verifySession(token)).toBe(false);
   });
 
+  it('lists sessions with their label and expiry but never the token or its hash', async () => {
+    const auth = await import('./auth.js');
+    const { token: setupToken } = await auth.setPassword({ newPassword: 'correct-horse' });
+    const { token: agentToken, id } = await auth.createSession({ label: 'agent' });
+
+    const sessions = await auth.listSessions();
+    expect(sessions).toHaveLength(2);
+    const agentEntry = sessions.find((s) => s.id === id);
+    expect(agentEntry).toEqual({ id, label: 'agent', expiresAt: expect.any(Number) });
+    expect(JSON.stringify(sessions)).not.toContain(agentToken);
+    expect(JSON.stringify(sessions)).not.toContain(setupToken);
+    // The un-labeled browser session from setPassword() is listed too.
+    expect(sessions.some((s) => s.label === null)).toBe(true);
+  });
+
+  it('revokes a session by its opaque id without touching any other session', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { token: browserToken } = await auth.createSession();
+    const { token: agentToken, id: agentId } = await auth.createSession({ label: 'agent' });
+
+    expect(await auth.revokeSessionById(agentId)).toBe(true);
+    expect(await auth.verifySession(agentToken)).toBe(false);
+    expect(await auth.verifySession(browserToken)).toBe(true);
+  });
+
+  it('returns false revoking an id that does not match any live session', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    expect(await auth.revokeSessionById('not-a-real-id')).toBe(false);
+  });
+
+  it('carries a missing label/id on an older record forward without invalidating it', async () => {
+    const { readFileSync } = await import('fs');
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { token } = await auth.createSession();
+
+    // Simulate a record written before `label`/`id` existed by stripping them
+    // straight out of the persisted file, then reloading the module fresh.
+    const sessionsPath = join(tempRoot, 'auth-sessions.json');
+    const raw = JSON.parse(readFileSync(sessionsPath, 'utf8'));
+    raw.tokens = raw.tokens.map(({ tokenHash, expiresAt }) => ({ tokenHash, expiresAt }));
+    writeFileSync(sessionsPath, JSON.stringify(raw));
+
+    vi.resetModules();
+    const fresh = await import('./auth.js');
+    expect(await fresh.verifySession(token)).toBe(true);
+    const sessions = await fresh.listSessions();
+    expect(sessions.find((s) => s.expiresAt === raw.tokens[0].expiresAt)).toMatchObject({ label: null });
+  });
+
   it('extracts the token from a cookie header and Authorization: Bearer', async () => {
     const auth = await import('./auth.js');
     expect(auth.parseCookieToken('portos_auth=abc123; other=x')).toBe('abc123');

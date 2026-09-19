@@ -48,6 +48,7 @@
 
 import { z } from 'zod';
 import { eidoverseWorldAugmentSchema } from './eidoverseValidation.js';
+import { foundationDerivationEdgeSchema } from './eidoverseFoundations.js';
 
 export const EIDOVERSE_CONTROLLER_LIMITS = Object.freeze({
   idMax: 64,
@@ -148,6 +149,18 @@ export const eidoverseControllerInstallSchema = z.object({
 
 export const eidoverseControllerIdParamSchema = z.object({ id: controllerInstallIdSchema }).strict();
 
+/**
+ * A config-only update: change what an installed controller is configured
+ * with while its accumulated `state` survives untouched (#7629). This is the
+ * "inherit and modify" verb the epic names — distinct from re-installing the
+ * same id, which rebuilds state from the new config and throws the old state
+ * away.
+ */
+export const eidoverseControllerConfigUpdateSchema = z.object({
+  id: controllerInstallIdSchema,
+  config: boundedJsonObject(EIDOVERSE_CONTROLLER_LIMITS.configBytes),
+}).strict();
+
 export const eidoverseControllerArmSchema = z.object({ id: controllerInstallIdSchema, armed: z.boolean() }).strict();
 
 /** Who installed this, at the coarsest grain that is still useful — the same
@@ -186,10 +199,32 @@ export const eidoverseControllerRecordSchema = eidoverseControllerInstallSchema.
     summary: z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMITS.effectTextMax),
   }).strict()).max(EIDOVERSE_CONTROLLER_LIMITS.recentEffects).default([]),
   consecutiveFailures: z.number().int().min(0).default(0),
+  // A run of ticks whose STEP succeeded but whose delivery into the world was
+  // refused (#7628) — tracked separately from `consecutiveFailures`, which
+  // only counts a throwing/refusing `step()`. A controller can step cleanly
+  // forever while every write it proposes is rejected; this is what lets that
+  // pattern disarm too, instead of reporting "ok" indefinitely.
+  consecutiveDeliveryFailures: z.number().int().min(0).default(0),
   // Set when the supervisor disarms a controller itself (repeated failures, a
   // controller id that no longer resolves). Distinct from `armed: false`
   // chosen by a human, which carries no reason.
   disarmedReason: z.string().trim().min(1).max(EIDOVERSE_CONTROLLER_LIMITS.reasonMax).nullable().default(null),
+  // `null` on every controller a human or a mind installed from the shipped
+  // registry — the overwhelming majority. Set only when this install was stood
+  // up by ADOPTING a foundation inherited from a peer (#7626), naming the
+  // origin install, the foundation id, and the envelope fingerprint it was
+  // adopted from.
+  //
+  // This is what makes adoption the provenance-KEEPING way to re-use a peer's
+  // contribution, as against reading the body out of the panel and retyping
+  // it, which keeps nothing. It is deliberately the same edge shape a derived
+  // foundation carries: one definition of "this grew out of that", pointing at
+  // the same content-addressed fingerprint, whatever kind of record holds it.
+  //
+  // Additive and nullable on a machine-local store nothing federates, so no
+  // migration is owed — a record written before this field existed reads back
+  // as `null` through this same default.
+  derivedFrom: foundationDerivationEdgeSchema.nullable().default(null),
 }).strict();
 
 // ---------------------------------------------------------------------------
@@ -201,6 +236,35 @@ const ASYNC_STEP_REASON = 'step() returned a Promise — a controller tick is sy
 const isThenable = (value) => Boolean(value) && typeof value === 'object' && typeof value.then === 'function';
 
 const stepFailure = (reason) => ({ ok: false, state: null, effects: [], reason });
+
+/**
+ * Run a definition's `invariants` against the state a step just produced, the
+ * same `(state, tick) => true | false | { ok, reason }` shape
+ * `eidoverseResilienceAssay.js`'s `runInvariants` evaluates them under. The
+ * live tick path holds a controller to the same contract the promote gate
+ * does, rather than the gate being the stricter of the two (#7629).
+ */
+function invariantFailures(state, tick, invariants) {
+  const failures = [];
+  for (const invariant of invariants) {
+    const label = invariant.name || 'invariant';
+    let result;
+    try {
+      result = invariant(state, tick);
+    } catch (error) {
+      failures.push(`"${label}" threw: ${error.message}`);
+      continue;
+    }
+    if (isThenable(result)) {
+      failures.push(`"${label}" returned a Promise — invariants must be synchronous`);
+    } else if (result === false) {
+      failures.push(`"${label}" failed`);
+    } else if (result && typeof result === 'object' && result.ok === false) {
+      failures.push(`"${label}" failed${result.reason ? `: ${result.reason}` : ''}`);
+    }
+  }
+  return failures;
+}
 
 /**
  * A JSON round-trip copy, or `null` when the value cannot make the trip.
@@ -283,6 +347,13 @@ export function runControllerStep({ definition, state, config, tick }) {
     return stepFailure(`step() proposed an effect outside the permitted vocabulary: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'unknown'}`.slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax));
   }
 
+  if (Array.isArray(definition.invariants) && definition.invariants.length > 0) {
+    const failed = invariantFailures(serialized.value, tick, definition.invariants);
+    if (failed.length > 0) {
+      return stepFailure(`live state violated an invariant: ${failed.join('; ')}`.slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax));
+    }
+  }
+
   return { ok: true, state: serialized.value, effects: effects.data, reason: null };
 }
 
@@ -355,9 +426,37 @@ export function summarizeControllerInstall(record, { includeState = false } = {}
     lastTickOk: record?.lastOutcome ? record.lastOutcome.ok === true : null,
     lastTickReason: record?.lastOutcome?.reason ?? null,
     consecutiveFailures: record?.consecutiveFailures ?? 0,
+    // Delivery is a SEPARATE verdict from the step (#7628): a step can read
+    // `ok: true` while every effect it produced was refused by the world.
+    // `null` covers both "delivery is off for this install" and "this tick
+    // produced nothing to deliver" — neither is a failure, so neither
+    // collapses into `false`.
+    lastDelivery: summarizeLastDelivery(record),
+    consecutiveDeliveryFailures: record?.consecutiveDeliveryFailures ?? 0,
     disarmedReason: record?.disarmedReason ?? null,
     note: record?.note ?? null,
+    // Surfaced in the SUMMARY rather than only behind `includeState`: "this
+    // controller came from a peer's foundation" is the first thing a reader of
+    // the list needs, and hiding it would put attribution behind a flag.
+    derivedFrom: record?.derivedFrom ?? null,
     recentEffects: (record?.recentEffects ?? []).slice(0, 5),
     ...(includeState ? { config: record?.config ?? {}, state: record?.state ?? {} } : {}),
   };
+}
+
+/**
+ * The last tick's delivery verdict, distinct from `lastTickOk` (the STEP).
+ * `deliverControllerEffects()` in `services/eidoverseControllerRuntime.js`
+ * reads the world's own ack/refusal for every effect it sends and folds the
+ * result onto `lastOutcome.delivered` / `lastOutcome.deliveryError` — this
+ * just reshapes that into the same `{ ok, reason }` verdict shape the rest of
+ * the controller surfaces already use.
+ */
+function summarizeLastDelivery(record) {
+  if (record?.deliverEffects !== true) return { ok: null, delivered: 0, reason: null };
+  const outcome = record?.lastOutcome;
+  // No tick yet, or the tick that ran produced nothing to send — delivery was
+  // never attempted, so there is no verdict to report yet.
+  if (!outcome || outcome.effects === 0) return { ok: null, delivered: outcome?.delivered ?? 0, reason: null };
+  return { ok: outcome.deliveryError === null, delivered: outcome.delivered, reason: outcome.deliveryError };
 }

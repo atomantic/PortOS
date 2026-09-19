@@ -15,10 +15,8 @@
  * a claim would read from.
  */
 
-import { execGh, ensureForgeReachable } from './github.js';
-import { execGlab } from './gitlab.js';
 import { loadState } from './cosState.js';
-import { listAppIssues } from './appIssues.js';
+import { fileForgeIssue, listAppIssues, probeForgeReachability, scrubForgeIssueText } from './appIssues.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
@@ -26,11 +24,8 @@ import {
   DISPATCH_EFFORT_LEVELS, DISPATCH_MODEL_TIERS,
   dispatchLabelSpec, forgeIssueLabels, resolvePlannerId,
 } from '../lib/dispatchLabels.js';
-import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../lib/forgeIssueCli.js';
+import { forgeCliForTracker } from '../lib/workTracker.js';
 import { boundedByJsonChars } from '../lib/objects.js';
-import { boundedErrorMessage } from '../lib/errorHandler.js';
-import { scrubHomePath } from '../lib/homePath.js';
-import { scrubSecretTokens } from '../lib/secretText.js';
 import {
   PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS,
   PERSISTENT_MIND_ISSUE_CATEGORY_LABELS,
@@ -41,29 +36,7 @@ import {
 
 const MAX_CATALOG_PROMPT_CHARS = 2_000;
 
-/**
- * The last thing that happens to a title/body before `gh`/`glab` sees it.
- *
- * The capability's Settings guardrail asserts that no repository paths or
- * credentials ride along, and a filed issue is world-readable the moment it
- * lands — so the assertion has to be ENFORCED here rather than trusted to the
- * prompt above. Both halves are mechanically decidable and already have one
- * definition in the tree: `scrubHomePath` collapses the running user's home
- * prefix (which is what embeds the OS username in `/Users/<name>/…`), and
- * `scrubSecretTokens` replaces credential-SHAPED substrings. Neither is a
- * content filter — "no private records" stays a prompt instruction, because no
- * regex can decide whether a sentence of the mind's own prose is one, and the
- * guardrail text now says exactly that rather than promising more.
- *
- * Applied to the TITLE as well as the body: the title is what a duplicate check
- * on any other machine reads back, and a leaked path there is just as public.
- *
- * Both helpers pass a non-string through untouched, so this adds no coercion of
- * its own — the tool schema already requires both fields to be strings.
- */
-const scrubForgeText = (value) => scrubSecretTokens(scrubHomePath(value));
-
-const labelSpec = (name) => dispatchLabelSpec(name)
+const labelSpec = (name, cli) => dispatchLabelSpec(name, { cli })
   || (PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS[name]
     ? { name, ...PERSISTENT_MIND_ISSUE_EXTRA_LABEL_SPECS[name] }
     : null);
@@ -166,49 +139,19 @@ export async function listPersistentMindIssues(args) {
   };
 }
 
-/**
- * Create the labels this issue needs before creating the issue. Both CLIs fail
- * the whole `issue create` with a 422 when a named label does not exist, and
- * creation is idempotent, so this always runs first. The calls are independent
- * and every failure is swallowed — a label we could not create resurfaces as
- * the create's own error if it actually mattered — so they run concurrently
- * rather than adding a serial spawn per label to every file.
- */
-const ensureLabels = async ({ app, names }) => {
-  await Promise.all(names.map((name) => {
-    const spec = labelSpec(name);
-    if (!spec) return null;
-    return (app.forge === 'gitlab'
-      ? execGlab(forgeLabelCreateArgs('glab', spec), app.repoPath)
-      : execGh(forgeLabelCreateArgs('gh', spec, { repo: app.repoSpec }))).catch(() => null);
-  }));
-};
-
-const createIssue = ({ app, title, body, labels }) => {
-  const args = forgeIssueCreateArgs(app.forge === 'gitlab' ? 'glab' : 'gh', {
-    title, body, labels, repo: app.forge === 'gitlab' ? null : app.repoSpec,
-  });
-  const run = app.forge === 'gitlab'
-    ? execGlab(args, app.repoPath, undefined, { rejectOnError: true })
-    : execGh(args);
-  return run.then(
-    (stdout) => ({ ok: true, ...parseCreatedForgeIssue(stdout) }),
-    (error) => ({ ok: false, error: boundedErrorMessage(error, 'Issue creation failed') }),
-  );
-};
-
 /** File one issue on the app's tracker. */
 export async function filePersistentMindIssue(args) {
   const { app, root, error } = await resolveTarget(args.appId);
   if (error) return { ok: false, error };
+  const cli = forgeCliForTracker(app.forge);
 
   // The reachability probe runs before anything is created: on an unreachable
   // forge this is one failing call instead of a whole label fan-out that each
-  // has to time out first.
-  if (app.forge === 'github') {
-    const forge = await ensureForgeReachable('mind-issue-file', { hostname: app.apiHost });
-    if (!forge.ok) return { ok: false, error: `GitHub is not reachable (${forge.status}); ${forge.remedy || 'check `gh auth status`'}` };
-  }
+  // has to time out first. Kept ahead of the duplicate read below rather than
+  // folded into `fileForgeIssue`'s own probe — an unreachable forge should
+  // short-circuit before that read runs at all, not after.
+  const probe = await probeForgeReachability({ cli, hostname: app.apiHost, label: 'mind-issue-file' });
+  if (!probe.ok) return { ok: false, error: probe.error };
 
   // Duplicate guard. A failed read must NOT read as "nothing is tracked" — that
   // is exactly how a transient `gh` blip files the same issue twice — so an
@@ -219,9 +162,12 @@ export async function filePersistentMindIssue(args) {
   }
   // Scrubbed BEFORE the duplicate check, not just before the create: the title
   // that dedupes has to be the title that gets filed, or an issue whose only
-  // leaked path was in its title would re-file itself on every wake.
-  const title = scrubForgeText(args.title);
-  const body = scrubForgeText(args.body);
+  // leaked path was in its title would re-file itself on every wake. Used only
+  // for the dedup key here — `fileForgeIssue` below gets the RAW args and
+  // scrubs its own copy, so the text is scrubbed exactly once rather than
+  // twice for the same request.
+  const title = scrubForgeIssueText(args.title);
+  const body = scrubForgeIssueText(args.body);
 
   // An all-punctuation title normalizes to the empty string, which would match
   // every other such title — only a title with real content can dedupe.
@@ -239,6 +185,7 @@ export async function filePersistentMindIssue(args) {
   const labels = [
     PERSISTENT_MIND_ISSUE_LABEL,
     ...forgeIssueLabels({
+      cli,
       model: args.model,
       effort: args.effort,
       // The planner axis records who WROTE the plan — this mind's own model —
@@ -247,9 +194,12 @@ export async function filePersistentMindIssue(args) {
     }),
     ...(args.labels || []),
   ].filter((name, index, all) => all.indexOf(name) === index);
-  await ensureLabels({ app, names: labels });
 
-  const created = await createIssue({ app, title, body, labels });
+  const created = await fileForgeIssue({
+    cli, title: args.title, body: args.body, repoPath: app.repoPath,
+    repo: cli === 'glab' ? null : app.repoSpec,
+    labels: labels.map((name) => labelSpec(name, cli)).filter(Boolean),
+  });
   if (!created.ok) return created;
   return {
     ok: true,

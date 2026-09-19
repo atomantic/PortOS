@@ -96,30 +96,49 @@ let passTail = Promise.resolve();
  * user's armed controllers with an empty set. `strict: true` throws on
  * unreadable bytes, while a genuinely ABSENT file still reads as the empty set
  * it is.
+ *
+ * Returns the file's OWN stamped `schemaVersion` alongside the installs, not
+ * the build's constant — a store written by a newer install must keep
+ * reporting what it actually is (#7629). An absent file, or one predating the
+ * stamp, reads as this build's version: there is nothing to disagree with yet.
  */
 async function readInstalls() {
   const raw = await readJSONFile(storeFile(), null, { allowArray: false, strict: true });
-  return raw && typeof raw === 'object' && raw.installs && typeof raw.installs === 'object' ? { ...raw.installs } : {};
+  const installs = raw && typeof raw === 'object' && raw.installs && typeof raw.installs === 'object' ? { ...raw.installs } : {};
+  const schemaVersion = raw && typeof raw === 'object' && Number.isInteger(raw.schemaVersion) ? raw.schemaVersion : STORE_SCHEMA_VERSION;
+  return { schemaVersion, installs };
 }
 
-async function writeInstalls(installs) {
-  await atomicWrite(storeFile(), { schemaVersion: STORE_SCHEMA_VERSION, installs });
+/**
+ * Writes never DOWNGRADE the file's stamp (#7629). A store a newer build wrote
+ * carries a higher `schemaVersion`, and this build still has to persist to it —
+ * a disarm, a delivery outcome. Re-stamping it with this build's own older
+ * constant would erase the very signal `stepInstall` refuses to step on, so the
+ * newer-store guard would fire exactly once and then never again, and the
+ * newer build would read its own file back as one this version wrote. Callers
+ * pass the stamp they read under the same lock.
+ */
+async function writeInstalls(installs, storeSchemaVersion = STORE_SCHEMA_VERSION) {
+  const schemaVersion = Math.max(STORE_SCHEMA_VERSION, storeSchemaVersion);
+  await atomicWrite(storeFile(), { schemaVersion, installs });
 }
 
 /** Every controller this install has, most recently installed first. */
 export async function listEidoverseControllers() {
-  const installs = Object.values(await readInstalls())
+  const { schemaVersion, installs: stored } = await readInstalls();
+  const installs = Object.values(stored)
     .sort((a, b) => String(b.installedAt || '').localeCompare(String(a.installedAt || '')));
   const counts = installs.reduce((totals, entry) => ({
     total: totals.total + 1,
     armed: totals.armed + (entry.armed === true ? 1 : 0),
     delivering: totals.delivering + (entry.armed === true && entry.deliverEffects === true ? 1 : 0),
   }), { total: 0, armed: 0, delivering: 0 });
-  return { schemaVersion: STORE_SCHEMA_VERSION, counts, installs };
+  return { schemaVersion, counts, installs };
 }
 
 export async function getEidoverseControllerInstall(id) {
-  return (await readInstalls())[id] || null;
+  const { installs } = await readInstalls();
+  return installs[id] || null;
 }
 
 const refused = (reasons) => ({ outcome: 'refused', install: null, reasons });
@@ -149,6 +168,7 @@ export async function installEidoverseController(input, {
   installedBy = 'user',
   now = new Date().toISOString(),
   resolveDefinition = findControllerDefinitionById,
+  derivedFrom = null,
 } = {}) {
   const parsed = eidoverseControllerInstallSchema.safeParse(input);
   if (!parsed.success) return refused(parsed.error.issues.map((issue) => `${issue.path.join('.') || 'input'}: ${issue.message}`));
@@ -169,7 +189,7 @@ export async function installEidoverseController(input, {
 
   const nowMs = Date.parse(now);
   return withStoreLock(async () => {
-    const installs = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     const existing = installs[authored.id] || null;
     if (!existing && Object.keys(installs).length >= EIDOVERSE_CONTROLLER_LIMITS.installs) {
       return refused([`this install already holds ${EIDOVERSE_CONTROLLER_LIMITS.installs} controllers — retire one before installing another`]);
@@ -190,13 +210,23 @@ export async function installEidoverseController(input, {
       lastOutcome: null,
       recentEffects: [],
       consecutiveFailures: 0,
+      consecutiveDeliveryFailures: 0,
       // A re-install that leaves a controller disarmed keeps the reason it was
       // disarmed for, so the author is not left looking at a stopped controller
       // with no explanation. Re-arming answers the reason, so it clears it.
       disarmedReason: armed ? null : (existing?.disarmedReason ?? null),
+      // Attribution outlives a re-install, the same way `installedBy` and
+      // `installedAt` do (#7626). An adopted controller that somebody later
+      // re-installs by hand — to change its cadence, to re-arm it — is still
+      // the peer's contribution standing in this world, and an edge that
+      // vanished on the first ordinary edit would make erasing provenance the
+      // path of least effort all over again. A fresh `derivedFrom` (a
+      // re-adopt) wins over the stored one; an ordinary install passes none
+      // and inherits whatever the record already carried.
+      derivedFrom: derivedFrom ?? existing?.derivedFrom ?? null,
     };
     installs[authored.id] = record;
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     console.log(`${LOG_PREFIX}: installed "${record.id}" (${record.controllerId}, every ${Math.round(record.tickIntervalMs / 1000)}s, ${record.armed ? 'armed' : 'disarmed'})`);
     return { outcome: 'installed', install: record, reasons: [] };
   }).then(afterGateMove('install'));
@@ -212,11 +242,11 @@ export async function installEidoverseController(input, {
  */
 export async function retireEidoverseController(id) {
   return withStoreLock(async () => {
-    const installs = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     const existing = installs[id];
     if (!existing) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${id}"`] };
     delete installs[id];
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     console.log(`${LOG_PREFIX}: retired "${id}" (${existing.controllerId}) after ${existing.tick} tick${existing.tick === 1 ? '' : 's'}`);
     return { outcome: 'retired', install: existing, reasons: [] };
   }).then(afterGateMove('retire'));
@@ -232,7 +262,7 @@ export async function retireEidoverseController(id) {
 export async function setEidoverseControllerArmed(id, armed, { now = new Date().toISOString() } = {}) {
   const nowMs = Date.parse(now);
   return withStoreLock(async () => {
-    const installs = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     const existing = installs[id];
     if (!existing) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${id}"`] };
     const record = {
@@ -241,12 +271,52 @@ export async function setEidoverseControllerArmed(id, armed, { now = new Date().
       updatedAt: now,
       // Re-arming restarts the cadence from now rather than firing immediately
       // on the next pass against a `nextTickAt` that went stale while paused.
-      ...(armed === true ? { nextTickAt: nextControllerTickAt(existing, nowMs), consecutiveFailures: 0, disarmedReason: null } : {}),
+      ...(armed === true ? {
+        nextTickAt: nextControllerTickAt(existing, nowMs),
+        consecutiveFailures: 0,
+        consecutiveDeliveryFailures: 0,
+        disarmedReason: null,
+      } : {}),
     };
     installs[id] = record;
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     return { outcome: 'updated', install: record, reasons: [] };
   }).then(afterGateMove('arm-toggle'));
+}
+
+/**
+ * Change an installed controller's `config` while its accumulated `state`
+ * survives untouched (#7629) — the "inherit and modify" verb the epic names.
+ * A re-install of the same id is the alternative, but it REBUILDS state from
+ * scratch (`installEidoverseController` above); a later mind that only wants
+ * to tune a value should not have to destroy what the controller has already
+ * accumulated to do it.
+ *
+ * Re-parsed through the definition's own `configSchema`, the same refusal
+ * shape every other install-touching call uses: a config the schema rejects
+ * changes nothing and reports why, rather than throwing.
+ */
+export async function updateEidoverseControllerConfig(id, config, {
+  now = new Date().toISOString(),
+  resolveDefinition = findControllerDefinitionById,
+} = {}) {
+  return withStoreLock(async () => {
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
+    const existing = installs[id];
+    if (!existing) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${id}"`] };
+
+    const definition = await resolveDefinition(existing.controllerId);
+    if (!definition) return refused([`no controller is registered under "${existing.controllerId}" any more — this install was authored by a version that shipped it`]);
+
+    const parsed = definition.configSchema.safeParse(config);
+    if (!parsed.success) return refused(parsed.error.issues.map((issue) => `config.${issue.path.join('.') || '<root>'}: ${issue.message}`));
+
+    const record = { ...existing, config: parsed.data, updatedAt: now };
+    installs[id] = record;
+    await writeInstalls(installs, storeSchemaVersion);
+    console.log(`${LOG_PREFIX}: updated config for "${id}" (${existing.controllerId}), state preserved`);
+    return { outcome: 'updated', install: record, reasons: [] };
+  });
 }
 
 /**
@@ -272,6 +342,16 @@ const afterGateMove = (reason) => async (result) => {
  * would put that whole subtree in the closure of everything that merely lists
  * controllers. Neither verb calls an AI provider.
  *
+ * `augmentEidoverseWorld()` never throws on a world refusal (#7454) — the
+ * verdict is its RETURN VALUE (`success`, `applied`, per-operation
+ * `outcome`), so it must be read, not assumed delivered because the await
+ * resolved. #7628 was exactly this: the return value was discarded, so a
+ * controller whose every write the world refused counted as delivered every
+ * tick, forever. `delivered` here is the world's own committed count
+ * (`applied`), never the loop's attempt count, and a `rewritten` operation
+ * counts as delivered — the world landed different args, not nothing — only
+ * `refused` does not.
+ *
  * @returns {Promise<{ delivered: number, error: string|null }>}
  */
 async function deliverControllerEffects(effects, { signal } = {}) {
@@ -279,17 +359,47 @@ async function deliverControllerEffects(effects, { signal } = {}) {
   if (outbound.length === 0) return { delivered: 0, error: null };
   const world = await import('./eidoverseWorld.js');
   let delivered = 0;
+  let error = null;
   for (const effect of outbound) {
-    if (effect.kind === 'say') await world.sayInEidoverseWorld(effect.text, { signal });
-    else await world.augmentEidoverseWorld(effect.operations, { signal });
-    delivered += 1;
+    if (effect.kind === 'say') {
+      // `sayInEidoverseWorld` has no rewrite/refusal dimension of its own —
+      // it either resolves (the world acked it) or throws, which the caller
+      // in `deliverPassEffects` already treats as a delivery failure.
+      await world.sayInEidoverseWorld(effect.text, { signal });
+      delivered += 1;
+      continue;
+    }
+    const result = await world.augmentEidoverseWorld(effect.operations, { signal });
+    delivered += result.applied;
+    if (result.success === false && error === null) {
+      const refusal = result.operations.find((operation) => operation.outcome === 'refused');
+      error = refusal?.reason ?? 'Eidoverse refused part of this augment batch.';
+    }
   }
-  return { delivered, error: null };
+  return { delivered, error };
 }
 
 function recordedEffects(existing, effects, { at, tick }) {
   const added = effects.map((effect) => ({ at, tick, kind: effect.kind, summary: summarizeControllerEffect(effect) }));
   return [...added, ...existing].slice(0, EIDOVERSE_CONTROLLER_LIMITS.recentEffects);
+}
+
+/**
+ * An immediate disarm that does NOT consume a tick — the shape a controller
+ * id that no longer resolves, a store from a build this one cannot read, or a
+ * config that no longer parses all share: none of these is a transient
+ * failure retrying could recover from, so none should count as an attempt or
+ * wait out `maxConsecutiveFailures` before saying so.
+ */
+function disarmedWithoutStepping(record, { reason, nextTickAt, at }) {
+  console.error(`❌ ${LOG_PREFIX}: disarming "${record.id}" — ${reason}`);
+  return {
+    record: {
+      ...record, armed: false, disarmedReason: reason, nextTickAt, lastTickAt: at,
+      lastOutcome: { at, tick: record.tick, ok: false, reason, effects: 0, delivered: 0, deliveryError: null },
+    },
+    effects: [],
+  };
 }
 
 /**
@@ -300,24 +410,42 @@ function recordedEffects(existing, effects, { at, tick }) {
  * reads, and one that stopped and says why is a thing the author can fix. A
  * controller id that no longer resolves disarms immediately — retrying a
  * missing definition cannot start succeeding.
+ *
+ * Two more disarm-immediately cases (#7629), both because retrying cannot
+ * help: `storeSchemaVersion` ahead of this build's own `STORE_SCHEMA_VERSION`
+ * means a newer install (or a not-yet-upgraded restore) wrote this file, so
+ * stepping it here would run this build's older rules against a shape it does
+ * not fully understand; and `record.config` re-parsed against the
+ * definition's OWN `configSchema` catches a config that stopped validating
+ * since install (a shipped schema tightened, a hand-edited file) before it
+ * ever reaches `step()`. A parse that succeeds but changes the value — a
+ * newly-added default landing for the first time — is persisted back onto the
+ * record here, so the default applies exactly once rather than being
+ * re-derived on every tick.
  */
-async function stepInstall(record, { nowMs, at, resolveDefinition }) {
-  const definition = await resolveDefinition(record.controllerId);
+async function stepInstall(record, { nowMs, at, resolveDefinition, storeSchemaVersion }) {
   const nextTickAt = nextControllerTickAt(record, nowMs);
-  if (!definition) {
-    const reason = `no controller is registered under "${record.controllerId}" any more — this install was authored by a version that shipped it`;
-    console.error(`❌ ${LOG_PREFIX}: disarming "${record.id}" — ${reason}`);
-    return {
-      record: {
-        ...record, armed: false, disarmedReason: reason, nextTickAt, lastTickAt: at,
-        lastOutcome: { at, tick: record.tick, ok: false, reason, effects: 0, delivered: 0, deliveryError: null },
-      },
-      effects: [],
-    };
+
+  if (storeSchemaVersion > STORE_SCHEMA_VERSION) {
+    const reason = `controllers.json is stamped schemaVersion ${storeSchemaVersion}, newer than this build's ${STORE_SCHEMA_VERSION} — refusing to step until this build is upgraded`;
+    return disarmedWithoutStepping(record, { reason, nextTickAt, at });
   }
 
+  const definition = await resolveDefinition(record.controllerId);
+  if (!definition) {
+    const reason = `no controller is registered under "${record.controllerId}" any more — this install was authored by a version that shipped it`;
+    return disarmedWithoutStepping(record, { reason, nextTickAt, at });
+  }
+
+  const reparsedConfig = definition.configSchema.safeParse(record.config);
+  if (!reparsedConfig.success) {
+    const reason = `stored config no longer parses against "${record.controllerId}"'s schema: ${reparsedConfig.error.issues.map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`).join('; ')}`.slice(0, EIDOVERSE_CONTROLLER_LIMITS.reasonMax);
+    return disarmedWithoutStepping(record, { reason, nextTickAt, at });
+  }
+  const config = reparsedConfig.data;
+
   const tick = record.tick + 1;
-  const outcome = runControllerStep({ definition, state: record.state, config: record.config, tick });
+  const outcome = runControllerStep({ definition, state: record.state, config, tick });
   if (!outcome.ok) {
     const consecutiveFailures = record.consecutiveFailures + 1;
     const exhausted = consecutiveFailures >= EIDOVERSE_CONTROLLER_LIMITS.maxConsecutiveFailures;
@@ -325,6 +453,7 @@ async function stepInstall(record, { nowMs, at, resolveDefinition }) {
     return {
       record: {
         ...record,
+        config,
         // The tick ordinal advances on a failure too: it counts attempts the
         // supervisor made, so a controller cannot look younger than it is by
         // failing, and a step that reads `tick` sees time moving either way.
@@ -342,6 +471,7 @@ async function stepInstall(record, { nowMs, at, resolveDefinition }) {
   return {
     record: {
       ...record,
+      config,
       state: outcome.state,
       tick,
       consecutiveFailures: 0,
@@ -395,19 +525,44 @@ async function deliverPassEffects(stepped, { deliver, signal }) {
  * matches the tick that produced those effects: an install or retire landing
  * between the two phases has replaced what the delivery was about, and
  * stamping a delivery count onto it would describe work that record never did.
+ *
+ * A run of REFUSED deliveries disarms the same way a run of throwing/refusing
+ * `step()`s already does (#7628): `consecutiveFailures` only counts the step,
+ * so a controller that steps cleanly every tick while the world refuses
+ * everything it proposes would otherwise never disarm and never report
+ * anything but "ok". `consecutiveDeliveryFailures` is that same clause, keyed
+ * on the delivery verdict instead.
+ *
+ * @returns {Promise<{ gateMoved: boolean }>}
  */
 async function recordDeliveries(deliveries) {
-  if (deliveries.length === 0) return;
-  await withStoreLock(async () => {
-    const installs = await readInstalls();
+  if (deliveries.length === 0) return { gateMoved: false };
+  return withStoreLock(async () => {
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     let changed = false;
+    let gateMoved = false;
     for (const { id, tick, delivered, error } of deliveries) {
       const current = installs[id];
       if (!current || current.lastOutcome?.tick !== tick) continue;
-      installs[id] = { ...current, lastOutcome: { ...current.lastOutcome, delivered, deliveryError: error } };
+      const consecutiveDeliveryFailures = error ? (current.consecutiveDeliveryFailures ?? 0) + 1 : 0;
+      const exhausted = error && consecutiveDeliveryFailures >= EIDOVERSE_CONTROLLER_LIMITS.maxConsecutiveFailures;
+      if (exhausted) {
+        console.error(`❌ ${LOG_PREFIX}: disarming "${id}" — ${consecutiveDeliveryFailures} consecutive delivery failures: ${error}`);
+      }
+      installs[id] = {
+        ...current,
+        lastOutcome: { ...current.lastOutcome, delivered, deliveryError: error },
+        consecutiveDeliveryFailures,
+        ...(exhausted ? {
+          armed: false,
+          disarmedReason: `disarmed after ${consecutiveDeliveryFailures} consecutive delivery failures: ${error}`,
+        } : {}),
+      };
       changed = true;
+      gateMoved = gateMoved || exhausted;
     }
-    if (changed) await writeInstalls(installs);
+    if (changed) await writeInstalls(installs, storeSchemaVersion);
+    return { gateMoved };
   });
 }
 
@@ -443,19 +598,19 @@ async function tickOnce({
 } = {}) {
   const nowMs = Date.parse(now);
   const pass = await withStoreLock(async () => {
-    const installs = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     const due = Object.values(installs).filter((record) => controllerTickDue(record, nowMs));
     if (due.length === 0) return { ticked: 0, due: 0, results: [], stepped: [], gateMoved: false };
 
     const stepped = [];
     let gateMoved = false;
     for (const record of due) {
-      const next = await stepInstall(record, { nowMs, at: now, resolveDefinition });
+      const next = await stepInstall(record, { nowMs, at: now, resolveDefinition, storeSchemaVersion });
       installs[next.record.id] = next.record;
       gateMoved = gateMoved || next.record.armed !== record.armed;
       stepped.push(next);
     }
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     return {
       ticked: stepped.length,
       due: due.length,
@@ -465,14 +620,15 @@ async function tickOnce({
     };
   });
 
-  await recordDeliveries(await deliverPassEffects(pass.stepped, { deliver, signal }));
+  const { gateMoved: deliveryGateMoved } = await recordDeliveries(await deliverPassEffects(pass.stepped, { deliver, signal }));
 
-  // A pass that disarmed a controller has moved the arming gate, so it
-  // reconciles for the same reason install and retire do. The reconcile is
-  // idempotent and re-reads the gate itself, so it correctly does nothing when
-  // other installs are still armed and stands the supervisor down when the
-  // disarmed one was the last.
-  if (pass.gateMoved) await reconcileEidoverseControllerTicks({ reason: 'supervisor-disarm' });
+  // A pass that disarmed a controller — whether stepping it failed or, per
+  // #7628, delivering its effects into the world did — has moved the arming
+  // gate, so it reconciles for the same reason install and retire do. The
+  // reconcile is idempotent and re-reads the gate itself, so it correctly
+  // does nothing when other installs are still armed and stands the
+  // supervisor down when the disarmed one was the last.
+  if (pass.gateMoved || deliveryGateMoved) await reconcileEidoverseControllerTicks({ reason: 'supervisor-disarm' });
 
   const { stepped: _stepped, gateMoved: _gateMoved, ...result } = pass;
   return result;
@@ -503,7 +659,8 @@ export function reconcileEidoverseControllerTicks({ reason = 'unspecified' } = {
 }
 
 async function reconcileOnce(reason) {
-  const armed = Object.values(await readInstalls()).some((record) => record.armed === true);
+  const { installs } = await readInstalls();
+  const armed = Object.values(installs).some((record) => record.armed === true);
   const registered = Boolean(getEvent(SCHEDULER_EVENT_ID));
 
   if (!armed) {

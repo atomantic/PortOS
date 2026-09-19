@@ -111,7 +111,7 @@ const DEFAULT_LAYOUTS = [
       'apps',
       'cos', 'goal-progress', 'upcoming-tasks',
       'proactive-alerts', 'review-hub', 'while-away', 'system-health', 'active-processing', 'network-exposure', 'backup', 'death-clock', 'quick-stats', 'decision-log',
-      'hourly-activity', 'tribe-care', 'feeds', 'today-agenda', 'on-this-day',
+      'hourly-activity', 'tribe-care', 'feeds', 'today-agenda', 'on-this-day', 'open-threads',
     ],
     // Above-the-fold capture row stretches to h=5 so the Quick Task card
     // can show its expanded options (worktree/PR/simplify/etc.) without
@@ -153,6 +153,9 @@ const DEFAULT_LAYOUTS = [
       { id: 'today-agenda',     x: 0, w: 4,  order: 21, h: 4 },
       // Gated on having past-year Brain captures for today's date.
       { id: 'on-this-day',      x: 4, w: 4,  order: 22, h: 4 },
+      // Open loops from the Brain bullet journal (#7664) — the same list the
+      // Threads tab shows, so the next action on each is one glance away.
+      { id: 'open-threads',     x: 8, w: 4,  order: 23, h: 4 },
     ],
   },
   {

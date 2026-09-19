@@ -211,7 +211,17 @@ export const DEFAULT_EXCLUDES = [
   // directory that turns a nightly snapshot into an hour.
   // Overridable, because an archive of a conversation is more useful with its
   // photos in it, and someone keeping one may well want to pay for them.
-  { path: '/beeper/attachments/', reason: 'Beeper attachment byte mirror — a lazy cache re-fetchable from Beeper Desktop; the message bodies and attachment metadata live in Postgres and ARE backed up', overridable: true }
+  { path: '/beeper/attachments/', reason: 'Beeper attachment byte mirror — a lazy cache re-fetchable from Beeper Desktop; the message bodies and attachment metadata live in Postgres and ARE backed up', overridable: true },
+  // Anchored with a leading `/`, like every entry here — an unanchored
+  // `corpora/` would match at any depth and silently drop unrelated user data.
+  //
+  // Two of the three `data/jev/` directories are excluded; `heads/` deliberately
+  // is NOT, because a trained head is the one artifact there that does not
+  // re-derive. The full three-way tier argument lives in docs/BACKUP.md
+  // ("jev project heads — excluded bulk, retained artifact"), which is where a
+  // tier change belongs.
+  { path: '/jev/corpora/', reason: 'jev training corpora — rebuildable from the forge by scripts/jev-corpus.js. Trained heads in data/jev/heads/ are NOT excluded: a head is not regenerable once its corpus is stale.', overridable: true },
+  { path: '/jev/embeddings/', reason: 'Cached frozen-encoder outputs for jev head training — keyed by (pair, model revision) and byte-identical on re-encode', overridable: false }
   // NOTE: legacy file→Postgres migration artifacts (`.imported` / `.bak-NNN`)
   // are intentionally NOT excluded here. They are deleted on disk by the
   // boot-time prune (pruneImportedLegacyFiles.js) the same boot the migration

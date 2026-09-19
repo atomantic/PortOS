@@ -12,7 +12,9 @@ import { comparePersistentMindMemories, persistentMindMemoryProtection } from '.
 import { PERSISTENT_MIND_PROMPT_LIMITS } from './persistentMindPrompt.js';
 
 export const PERSISTENT_MIND_ID = 'cos-persistent-mind';
-export const PERSISTENT_MIND_ROLLUP_PROMPT_VERSION = 1;
+// v2 seals from the decision journal rather than from the raw range, so a v1
+// rollup reads as stale and the next wake re-seals it from typed events.
+export const PERSISTENT_MIND_ROLLUP_PROMPT_VERSION = 2;
 
 export const PERSISTENT_MIND_EVENT_KINDS = Object.freeze([
   'mind.message.accepted',
@@ -57,14 +59,19 @@ export const PERSISTENT_MIND_TRAJECTORY_LIMITS = Object.freeze({
   maxIdentityChars: PERSISTENT_MIND_PROMPT_LIMITS.identityChars,
   maxInstructionsChars: PERSISTENT_MIND_PROMPT_LIMITS.instructionsChars,
   maxMemoriesChars: 8_000,
+  // The journal is what the mind still owes the user. It is short by design
+  // (one line per live commitment), so a small slice buys the answer to "what
+  // is still open?" that no amount of rollup prose could give.
+  maxJournalChars: 4_000,
   maxSummaryChars: 6_000,
   maxStoredRollups: 100,
   maxProjectedTurns: 100,
   maxProjectedInputs: 200,
-  // A turn is capped at one summary call plus MAX_TOOL_PROVIDER_ROUNDS provider
-  // rounds, so this holds every receipt a healthy turn can produce with room for
-  // the denied/failed attempts a contested one adds.
-  maxProjectedCallsPerTurn: 12,
+  // A turn is capped at one summary call, one journal extraction and
+  // MAX_TOOL_PROVIDER_ROUNDS provider rounds, so this holds every receipt a
+  // healthy turn can produce with room for the denied/failed attempts a
+  // contested one adds.
+  maxProjectedCallsPerTurn: 13,
 });
 
 export const persistentMindRollupSchema = z.object({
@@ -327,6 +334,7 @@ export function assemblePersistentMindContext({
   memories = [],
   events = [],
   rollups = [],
+  journalDigest = null,
   maxChars = PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars,
   recentEventLimit = PERSISTENT_MIND_TRAJECTORY_LIMITS.recentContextEvents,
   promptVersion = PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
@@ -402,10 +410,20 @@ export function assemblePersistentMindContext({
     memoryLines.join('\n'),
     PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars
   );
+  // Superseded wording never reaches the prompt: the digest carries only what
+  // is still true plus the settled history that explains it. The caller renders
+  // it — this module is reached by ~300 suites for its id/kind constants alone,
+  // so importing the journal renderer here would pull that leaf into every one
+  // of them (server suite import budget, #6156).
+  const journalSummary = journalDigest && typeof journalDigest === 'object'
+    ? journalDigest
+    : { text: '', activeCount: 0, resolvedCount: 0, supersededCount: 0 };
+  const journalText = bounded(journalSummary.text, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxJournalChars);
   const prefix = [
     `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`,
     `# Operating instructions\n${instructionsText || '(none)'}`,
     `# Curated memories\n${memoryText || '(none)'}`,
+    `# Decision journal\n${journalText || '(none)'}`,
   ].join('\n\n');
   const summaryLines = effectiveReadyRollups
     .map((rollup) => `[events ${rollup.source.fromSequence}-${rollup.source.toSequence}; ${rollup.provenance.providerId || 'unknown'}/${rollup.provenance.model || 'default'}; prompt v${rollup.provenance.promptVersion}]\n${rollup.summary}`);
@@ -462,6 +480,7 @@ export function assemblePersistentMindContext({
     } : null,
     recentEventCount: recentLines.length,
     memoryCount: memoryLines.length,
+    journalActiveCount: journalSummary.activeCount,
     identityChars: identityText.length,
     instructionsChars: instructionsText.length,
   };
@@ -488,7 +507,7 @@ export function assemblePersistentMindContext({
  * and a provider that genuinely used zero tokens are different facts, and
  * collapsing them would make the ledger claim a free call.
  */
-export const PERSISTENT_MIND_CALL_PURPOSES = Object.freeze(['summary', 'turn', 'tool-round']);
+export const PERSISTENT_MIND_CALL_PURPOSES = Object.freeze(['summary', 'journal', 'turn', 'tool-round']);
 
 export const PERSISTENT_MIND_CALL_OUTCOMES = Object.freeze(['completed', 'failed', 'denied', 'interrupted']);
 

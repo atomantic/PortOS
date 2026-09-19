@@ -250,6 +250,43 @@ describe('UsagePage federated quota readings', () => {
     await screen.findByText('Claude Code');
     expect(screen.queryByText(/^\d+ instances$/)).not.toBeInTheDocument();
   });
+
+  // A federated card can be filled by a peer while this machine's own scrape is
+  // still running. The meters are worth showing meanwhile, but the card must
+  // keep saying it is still reading — that flag is what keeps the page polling
+  // until the local reading lands, instead of settling on a stand-in.
+  it('shows a peer reading while this machine is still scraping, without hiding that it is still reading', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [{ ...fleetCard, pending: true }] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    // Both, not either: the meters are the best number available right now, and
+    // the spinner is what says a better one is coming (and what the page's
+    // pending poll keys on, so the local reading actually swaps in).
+    expect(await screen.findByText('65% used')).toBeInTheDocument();
+    expect(screen.getByText("Reading this machine's usage…")).toBeInTheDocument();
+  });
+
+  it("attributes a meter standing on another machine's older reading", async () => {
+    const hoursAgo = (h) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
+    // `stale` is now a server-computed verdict (period-relative, see
+    // server/lib/quotaWindows.js) — this fixture stands in for what the API
+    // would have stamped: the 50h-old weekly reading is well past its window's
+    // threshold, the moment-old session reading is not.
+    api.getProviderUsage.mockResolvedValue({ providers: [{
+      ...fleetCard,
+      limits: [
+        { key: 'week', label: 'Weekly', percentUsed: 12, percentRemaining: 88, readAt: hoursAgo(50), readBy: 'inst-peer', readByName: 'Example Box', stale: true },
+        { key: 'session', label: 'Session', percentUsed: 30, percentRemaining: 70, readAt: hoursAgo(0), readBy: null, readByName: null, stale: false },
+      ],
+    }] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    // The stand-in says whose reading it is and how old — a 12% weekly figure
+    // read two days ago must not read as this moment's.
+    expect(await screen.findByText(/read 2d ago on Example Box/)).toBeInTheDocument();
+    // This machine's own reading carries no such caption.
+    expect(screen.getByText('30% used')).toBeInTheDocument();
+  });
 });
 
 describe('UsagePage mobile provider-card layout', () => {

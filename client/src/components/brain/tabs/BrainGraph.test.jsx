@@ -36,6 +36,7 @@ vi.mock('../../../services/api', () => ({
   getBrainGoal: vi.fn(),
   getBrainJournalEntry: vi.fn(),
   getSong: vi.fn(),
+  getThread: vi.fn(),
 }));
 
 import * as api from '../../../services/api';

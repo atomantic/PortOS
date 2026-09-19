@@ -151,6 +151,28 @@ export function normalizeResetAt(limit, { now = Date.now(), timeZone } = {}) {
 }
 
 /**
+ * Has this window already rolled over as of `now`?
+ *
+ * A limit states the reset its allowance runs to, so once that moment has
+ * passed the percentage describes a SPENT window, not the current one. A window
+ * whose reset can't be resolved has not been shown to have passed, so it counts
+ * as live.
+ *
+ * One definition because three surfaces ask it: the retained Codex card prunes
+ * meter-by-meter at serve time (`unexpiredLimits` in services/providerUsage.js),
+ * the federated merge drops a peer's rolled-over contribution
+ * (`lib/fleetQuotas.js`), and the Codex log parser skips a spent telemetry
+ * window (`codexWindowExpired`). It goes through `normalizeResetAt` rather than
+ * a bare `Date.parse` so an older peer's zone-less wall-clock reset — the case
+ * that function exists for — is judged, not ignored.
+ */
+export function limitWindowExpired(limit, opts = {}) {
+  const now = opts.now ?? Date.now();
+  const { epochMs } = normalizeResetAt(limit, { ...opts, now });
+  return epochMs !== null && epochMs <= now;
+}
+
+/**
  * Compute fractional hours remaining until quota window reset.
  *
  * @param {{ resetsAt?: string, timezone?: string }} limit - Limit object containing resetsAt string

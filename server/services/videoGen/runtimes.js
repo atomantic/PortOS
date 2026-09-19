@@ -553,6 +553,32 @@ export function byovRuntimeLoraCapable(runtimeId) {
   return false;
 }
 
+// Resolve every probe-gated runtime's LoRA verdict up front, so a caller that
+// then reads the SYNC accessor above gets a probed answer instead of its
+// fail-closed default. Exists because that default is indistinguishable from a
+// real "no" once it is serialized into a payload: a model list built on a cold
+// cache tells the client the runtime cannot take LoRAs, and the background warm
+// that follows corrects the server without correcting the client, which fetched
+// that list once. The user then sees "this runtime did not pass the probe" for
+// the life of the page on an install where the probe passes.
+//
+// Cheap enough to await on a request path: the probe is a bare MLX import with
+// no model load (tens of ms), and an INSTALLED runtime's verdict caches either
+// way for the life of the process — so this is one spawn per server start, not
+// the per-request python probe that /model-context exists to avoid. Its worst
+// case is runVenvProbe's 30s SIGKILL ceiling, paid once by whichever request
+// warms a wedged interpreter. Runtimes that declare no `loraProbeArgs`, and
+// installed-but-absent venvs, are answered without a child at all — resolve
+// short-circuits on both before it reaches the probe.
+export async function warmByovLoraCapabilities() {
+  // No `loraProbeArgs` filter here: resolve owns that predicate and returns
+  // early on it, so re-encoding the gate would only give it a second home.
+  // `.catch` because this runs on a request path where a future throw must not
+  // take the whole model-list response down with it — the values are discarded.
+  await Promise.all(Object.keys(BYOV_RUNTIME_INFO)
+    .map((runtimeId) => resolveByovRuntimeLoraCapable(runtimeId).catch(() => {})));
+}
+
 // Single user-facing reason a video model can't take LoRAs. Lives here, beside
 // the capability data it reads, so the enqueue gate (prepareParams) and the
 // render gate (local.js buildArgs) can't drift into telling the user two

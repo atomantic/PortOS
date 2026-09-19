@@ -747,6 +747,86 @@ describe('AI Toolkit runner service', () => {
     expect(persisted).toMatchObject({ canceled: true, errorCategory: 'canceled' });
   });
 
+  // A reasoning model sends nearly its whole budget as `reasoning_content`
+  // before the first content token, so a Stop mid-generation had `output` empty
+  // and minutes of real generation sitting in `reasoning`. The cancel path
+  // persisted `output` alone and stamped `outputSize: 0`, discarding all of it
+  // and making a productive run read downstream as "the provider sent nothing".
+  // That is how 16 NVIDIA NIM nemotron runs killed by promptRunner's mis-armed
+  // backstop looked like dead-provider records instead of healthy streams
+  // (#7665). The success/timeout/mid-stream-throw paths already salvage it.
+  it('salvages reasoning as the output when a reasoning-only stream is stopped', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    const frame = (obj) => `data: ${JSON.stringify(obj)}\n\n`;
+    let sentReasoning = false;
+    const fetch = vi.fn(async (_url, opts) => {
+      const { signal } = opts;
+      return {
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: () => {
+              // One reasoning frame, then park until the Stop aborts us.
+              if (!sentReasoning) {
+                sentReasoning = true;
+                return Promise.resolve({
+                  done: false,
+                  value: new TextEncoder().encode(
+                    frame({ choices: [{ delta: { reasoning_content: 'deliberating at length' } }] })
+                  ),
+                });
+              }
+              return new Promise((_resolve, reject) => {
+                const fail = () => reject(signal.reason);
+                if (signal.aborted) return fail();
+                signal.addEventListener('abort', fail, { once: true });
+              });
+            },
+            cancel: async () => {}
+          })
+        }
+      };
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    const onRunFailed = vi.fn();
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    await runner.executeApiRun({
+      runId: 'run-stopped-reasoning',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      timeout: 600_000,
+      onData: undefined,
+      onComplete: (m) => done(m)
+    });
+
+    expect(await runner.stopRun('run-stopped-reasoning')).toBe(true);
+
+    const metadata = await completed;
+    expect(metadata).toMatchObject({
+      canceled: true,
+      errorCategory: 'canceled',
+      hadReasoning: true,
+      usedReasoningAsFallback: true,
+    });
+    expect(metadata.outputSize).toBeGreaterThan(0);
+    // A cancel is still not a provider failure, salvage or no salvage.
+    expect(onRunFailed).not.toHaveBeenCalled();
+    const persisted = await readFile(join(dataDir, 'runs', 'run-stopped-reasoning', 'output.txt'), 'utf-8');
+    expect(persisted).toBe('deliberating at length');
+  });
+
   it('finalizes a Stop that lands before the response headers as canceled', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

@@ -16,7 +16,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * must finish are returned as a discriminated result so the caller can fire
  * `cleanupOnError` + the matching `agent:deferred` / `agent:error` event:
  *
- *   { outcome: 'ready', workspacePath, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree }
+ *   { outcome: 'ready', workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree }
  *   { outcome: 'deferred', reason, deferReason, branch }   // git conflict — task re-queued
  *   { outcome: 'blocked', reason }                          // explicit worktree requested but creation failed
  *                                                           // (`worktree-busy` blocks are a TIMED pause and revive themselves)
@@ -272,7 +272,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
     const workspacePath = privateSecurityScratchCwd(agentId);
     await ensureDir(workspacePath);
-    return { outcome: 'ready', workspacePath, resolvedAppName: null, worktreeInfo: null,
+    return { outcome: 'ready', workspacePath, resolvedApp: null, resolvedAppName: null, worktreeInfo: null,
       jiraTicket: null, jiraBranchName: null, explicitWorktree: false };
   }
 
@@ -298,6 +298,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     return {
       outcome: 'ready',
       workspacePath,
+      resolvedApp: null,
       resolvedAppName: null,
       worktreeInfo: null,
       jiraTicket: null,
@@ -318,9 +319,14 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   let workspacePath = task.metadata?.app
     ? await getAppWorkspace(task.metadata.app)
     : ROOT_DIR;
-  const resolvedAppName = task.metadata?.app
-    ? (await getAppById(task.metadata.app).catch(() => null))?.name || null
+  // The record itself, not just its name: the spawn also needs its `workTracker`
+  // pin to resolve the forge behind the workspace's origin (a self-hosted forge
+  // on a neutral domain is classified by that pin alone), and reading it twice
+  // would be two `getAppById` calls for one record.
+  const resolvedApp = task.metadata?.app
+    ? await getAppById(task.metadata.app).catch(() => null)
     : null;
+  const resolvedAppName = resolvedApp?.name || null;
 
   // Refuse to run an agent whose app didn't resolve to a usable directory.
   // Previously both failures fell through to the PortOS root and the agent
@@ -562,6 +568,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   return {
     outcome: 'ready',
     workspacePath,
+    resolvedApp,
     resolvedAppName,
     worktreeInfo,
     jiraTicket,

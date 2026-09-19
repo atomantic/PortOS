@@ -151,3 +151,23 @@ describe('Universes page — row thumbnail', () => {
     expect(img.getAttribute('src')).toContain('fallback.png');
   });
 });
+
+describe('Universes page — factual badge (#7616)', () => {
+  beforeEach(() => {
+    api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
+    api.listMediaCollections.mockResolvedValue([]);
+  });
+
+  it('badges only the universes whose factual flag is set', async () => {
+    api.listUniverseSummaries.mockResolvedValue([
+      { id: 'universe-reality', name: 'Reality', factual: true, updatedAt: '2026-06-02T00:00:00Z', createdAt: '2026-06-02T00:00:00Z' },
+      { id: 'u-fiction', name: 'Example Universe', factual: false, updatedAt: '2026-06-01T00:00:00Z', createdAt: '2026-06-01T00:00:00Z' },
+    ]);
+    renderPage();
+    await waitFor(() => expect(screen.getAllByText('Example Universe').length).toBeGreaterThan(0));
+    // One badge per layout (desktop table + mobile cards), and none for the
+    // fiction world — the regression is a badge keyed on truthiness of a field
+    // the summary projection omits, which would mark every universe real.
+    expect(screen.getAllByText('Real')).toHaveLength(2);
+  });
+});

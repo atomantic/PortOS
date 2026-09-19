@@ -198,11 +198,21 @@ export async function spawnDirectly({
   // entirely when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its
   // explicit credential wins (gh prefers GH_TOKEN, so injecting one would shadow a
   // provider GITHUB_TOKEN).
-  const [claudeSettingsEnv, forgeTokenEnv] = isPublicReviewRestrictedProfile(safetyProfile)
-    ? [{}, {}]
+  // A third rides alongside: the loopback PortOS session token this agent's own
+  // `curl` snippets need when the install has an instance password set (see
+  // agentApiAuth.js). It is `{}` when auth is off, and never resolved for a
+  // public-content stage.
+  const [claudeSettingsEnv, forgeTokenEnv, agentApiEnv] = isPublicReviewRestrictedProfile(safetyProfile)
+    ? [{}, {}, {}]
     : await Promise.all([
       isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
       providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
+      // Deferred, not a static import: `agentApiAuth.js` pulls the auth/session
+      // subtree, and this module is reached by enough of the suite that the eager
+      // edge added ~190 static module instantiations — over the budget
+      // `lib/importScoping.test.js` holds. The sibling TUI and runner spawn sites
+      // import it normally; almost nothing reaches those, so they cost nothing.
+      import('./agentApiAuth.js').then(({ resolveAgentApiEnv }) => resolveAgentApiEnv({ safetyProfile })),
     ]);
 
   // Shared composition (provider.envVars + OpenCode models map + PWD pin +
@@ -212,7 +222,7 @@ export async function spawnDirectly({
   // final PATH so a `--dangerously-skip-permissions` agent can't `pm2 kill` the
   // shared daemon.
   const childEnv = buildCliChildEnv({
-    before: { ...forgeTokenEnv, ...claudeSettingsEnv },
+    before: { ...forgeTokenEnv, ...claudeSettingsEnv, ...agentApiEnv },
     provider,
     model,
     cwd,

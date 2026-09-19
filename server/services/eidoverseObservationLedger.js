@@ -94,6 +94,12 @@ async function resolveDesign() {
  * this is not idempotent, and the tool is declared a `write` rather than a
  * read. Pass `{ commit: false }` to look without stamping.
  *
+ * Pass a `source` when the caller has ALREADY collected the world-signal
+ * projection this turn (the playbook phase picker does, #7630):
+ * `collectEidoverseWorldSources()` fans out across ~20 service reads, and
+ * collecting it twice in one wake doubles that for a projection already in
+ * hand.
+ *
  * Travel destinations are deliberately NOT collected here:
  * `collectEidoverseWorldSources()` already resolves them and folds the result
  * into `source.peers[].travelAvailable`, and `listEidoverseDestinations()`
@@ -105,9 +111,9 @@ async function resolveDesign() {
  * still get to see its districts. `null` sections are reported as unavailable,
  * never as empty (`readSource` in the pure lib).
  */
-export async function observeEidoverseWorld({ signal, commit = true, now = () => new Date().toISOString() } = {}) {
+export async function observeEidoverseWorld({ signal, commit = true, source: collectedSource = null, now = () => new Date().toISOString() } = {}) {
   const [source, ledger, controllers, design] = await Promise.all([
-    import('./eidoverseWorldSources.js')
+    collectedSource ?? import('./eidoverseWorldSources.js')
       .then((module) => module.collectEidoverseWorldSources({ signal }))
       .catch(() => ({})),
     import('./eidoverseFoundationLedger.js')

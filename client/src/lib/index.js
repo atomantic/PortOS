@@ -1,4 +1,5 @@
 // Barrel for client/src/lib/ — discovery surface, not a forced import path.
+export * from './mindBundle.js';
 export * from './publicGuestRoutes.js';
 // See client/src/lib/README.md for the human-readable catalog and
 // AGENTS.md "Module organization" for the maintenance convention.
@@ -14,6 +15,7 @@ export * from './seasonStructure.js';
 export * from './sheetPointers.js';
 export * from './shotContinuity.js';
 export * from './shotGrammar.js';
+export * from './untrustedContentSources.js';
 export * from './universeBuilderCounts.js';
 export * from './universeBuilderShared.js';
 export * from './universeGraphLayout.js';
@@ -60,6 +62,7 @@ export * from './installFailureTask.js';
 export * from './letteringDensity.js';
 export * from './isSafeHref.js';
 export * from './issueLength.js';
+export * from './issueRefs.js';
 export * from './musicDuration.js';
 export * from './muscriptorModels.js';
 export * from './pipelineImageDefaults.js';
@@ -203,6 +206,8 @@ export * from './terminalFit.js';
 export * from './terminalScroll.js';
 export * from './terminalTheme.js';
 export * from './textUtils.js';
+export * from './threadRefKinds.js';
+export * from './brainThreads.js';
 export * from './threejsAnimation.js';
 export * from './threejsEnvironment.js';
 export * from './threejsExplode.js';
@@ -221,6 +226,8 @@ export * from './wrSceneCursor.js';
 export * from './writingGuide.js';
 export * from './qrCode.js';
 export * from './riggingReasons.js';
+export * from './jevHeadReasons.js';
+export * from './scopeAdherenceReasons.js';
 export * from './usagePeriods.js';
 export * from './usdzExport.js';
 export * from './eidoverseFrame.js';

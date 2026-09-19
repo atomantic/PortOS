@@ -79,7 +79,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // `sanitizeCharacter` would strip the profile and last-writer-wins the loss
   // back onto the newer peer. Per-category gate → only universe sync pauses
   // with old peers.
-  universes: 11,
+  // v12 = universe `factual` added (#7616) — the factual/fiction axis that
+  // tells the catalog extractor to read a world's material as lived record
+  // rather than invented story. Persisted only when true, but federated: a
+  // <=v11 peer would strip it in its `factual`-unaware `sanitizeTemplate`
+  // and last-writer-wins the loss back, silently reclassifying the user's
+  // Reality universe as fiction.
+  universes: 12,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -689,8 +695,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // evidence. Older peers may clip that evidence or substitute a smaller model.
   cosTasks: 9,
   // v1 = the Eidoverse foundation promote-candidate envelope (#7455, epic
-  // #7453) — the ONE Eidoverse artifact the machine-local privacy ADR
-  // authorizes to cross the federation layer. A sender advertises its promoted
+  // #7453) — authorized to cross the federation layer by the federated
+  // Eidoverse foundations ADR (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).
+  // A sender advertises its promoted
   // `baseline` foundations at GET /api/peer-sync/eidoverse-foundations; a
   // receiver pulls, re-runs the full accept-side gate per envelope
   // (`verifyFoundationCandidate`), and stores each acceptance under a
@@ -712,7 +719,24 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // TRANSPORT payload (its wrapper, its caps, and which foundations an install
   // offers). A change to either must bump its own number; a change to the
   // envelope shape bumps both, because the wrapper's contents changed too.
-  eidoverseFoundations: 1,
+  //
+  // v2 (#7631): the envelope gained the `derived-from` edge, so both numbers
+  // moved together exactly as the note above requires. A v2 RECEIVER still
+  // accepts a v1 offering unchanged (the edge is absent by construction there),
+  // and a v1 receiver gently skips a v2 one rather than storing an envelope
+  // whose attribution it would read as plain local authorship.
+  //
+  // v3 (#7632): the WRAPPER gained `tombstones` — withdrawal, so a promoted
+  // foundation can be recalled from the installs that pulled it. `candidateVersion`
+  // does NOT move with it: a tombstone names a candidate by the fingerprint it
+  // already had, and no envelope field changed. A v2 sender simply omits the
+  // key and a v3 receiver reads that as "nothing to retract"; a v2 RECEIVER
+  // gently skips a v3 offering and therefore keeps a copy it should have
+  // dropped — the degradation is deliberate and documented in
+  // `docs/features/eidoverse.md`, because the alternative (a receiver acting on
+  // a wrapper it cannot fully read) is worse, and a retraction that reaches
+  // nobody is still better than one that corrupts.
+  eidoverseFoundations: 3,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would

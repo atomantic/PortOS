@@ -353,6 +353,40 @@ describe.skipIf(!runDb)('catalogDB (Postgres CRUD round-trip)', () => {
     expect(hydrated[0].rawText).toContain('long coat');
   });
 
+  it('listSourcesForIngredient joins the scrap title, and listSiblingIngredientsBySource finds co-extractions (#7617)', async () => {
+    if (!requireDb('scrap title join + siblings')) return;
+    const scrap = await catalogDB.createScrap({ title: 'Shared Notebook Page', rawText: 'Two ideas on one page.', sourceKind: 'paste' });
+    createdScrapIds.add(scrap.id);
+    const a = await catalogDB.createIngredient({ type: 'character', name: 'Sibling A' });
+    const b = await catalogDB.createIngredient({ type: 'place', name: 'Sibling B' });
+    const solo = await catalogDB.createIngredient({ type: 'idea', name: 'Solo Extraction' });
+    [a, b, solo].forEach((i) => createdIngredientIds.add(i.id));
+    await catalogDB.linkIngredientToSource(a.id, scrap.id);
+    await catalogDB.linkIngredientToSource(b.id, scrap.id);
+
+    // The title rides along with the source link — no second fetch needed.
+    const sourcesA = await catalogDB.listSourcesForIngredient(a.id);
+    expect(sourcesA).toHaveLength(1);
+    expect(sourcesA[0].scrapTitle).toBe('Shared Notebook Page');
+
+    // A's siblings on this scrap are B (not itself).
+    const siblingsByScrap = await catalogDB.listSiblingIngredientsBySource(a.id, [scrap.id]);
+    const siblingsForScrap = siblingsByScrap.get(scrap.id);
+    expect(siblingsForScrap).toHaveLength(1);
+    expect(siblingsForScrap[0]).toMatchObject({ id: b.id, name: 'Sibling B', type: 'place' });
+
+    // A solo extraction (the only ingredient sourced from its scrap) has no
+    // siblings — the caller renders no "From the same source" stub for it.
+    const soloScrap = await catalogDB.createScrap({ title: 'Lone Page', rawText: 'Just one idea.', sourceKind: 'paste' });
+    createdScrapIds.add(soloScrap.id);
+    await catalogDB.linkIngredientToSource(solo.id, soloScrap.id);
+    const soloSiblings = await catalogDB.listSiblingIngredientsBySource(solo.id, [soloScrap.id]);
+    expect(soloSiblings.get(soloScrap.id)).toEqual([]);
+
+    // An ingredient with no source scrap at all gets an empty map, not a crash.
+    expect(await catalogDB.listSiblingIngredientsBySource(a.id, [])).toEqual(new Map());
+  });
+
   it('createChunkedScrap stores one parent for short input and no children', async () => {
     if (!requireDb('chunked scrap short')) return;
     const parent = await catalogDB.createChunkedScrap({

@@ -107,6 +107,28 @@ describe('IssuesTab', () => {
     expect(screen.getByText('acme/widget')).toBeInTheDocument();
   });
 
+  it('renders the issue link as a button with accessible name, external URL, and touch target', async () => {
+    await renderTab();
+
+    const linkButton = await screen.findByRole('button', { name: 'Open issue 42 on GitHub' });
+    expect(linkButton).toBeInTheDocument();
+    expect(linkButton).toHaveAttribute('href', 'https://github.com/acme/widget/issues/42');
+    expect(linkButton).toHaveAttribute('target', '_blank');
+    expect(linkButton).toHaveAttribute('rel', 'noreferrer');
+    expect(linkButton.className).toContain('min-h-[44px]');
+    expect(linkButton.className).toContain('min-w-[44px]');
+  });
+
+  it('activates the issue link button on Space keydown', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await renderTab();
+
+    const linkButton = await screen.findByRole('button', { name: 'Open issue 42 on GitHub' });
+    fireEvent.keyDown(linkButton, { key: ' ' });
+    expect(openSpy).toHaveBeenCalledWith('https://github.com/acme/widget/issues/42', '_blank', 'noreferrer');
+    openSpy.mockRestore();
+  });
+
   // The AA guarantee itself is `lib/chipContrast.test.js`'s job. What this suite
   // owns is the wiring: the chip is styled for the ACTIVE theme mode, not a
   // hardcoded one. #fef2c0 is GitHub's default pale yellow — the color that

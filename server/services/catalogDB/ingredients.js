@@ -311,7 +311,7 @@ const THUMBNAIL_KEY_SUBQUERY = `(
      LIMIT 1
   ) AS thumbnail_key`;
 
-export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
+export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, scrapId = null, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
   const conditions = ['deleted = false'];
   const params = [];
   let idx = 1;
@@ -367,6 +367,15 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
       conditions.push(HAS_ANY_HOMING_REF);
       conditions.push(`NOT ${HAS_LIVE_HOMING_REF}`);
     }
+  }
+  // Source-scrap filter (#7617): "everything extracted from this piece" — a
+  // provenance dimension independent of the ids/type/tag/q/ref branches above,
+  // so it composes with any of them (unlike unlinked/orphaned/refKind, which
+  // are mutually exclusive album views enforced at the schema level).
+  if (scrapId) {
+    conditions.push(`EXISTS (SELECT 1 FROM catalog_ingredient_sources cis
+      WHERE cis.ingredient_id = catalog_ingredients.id AND cis.scrap_id = $${idx++})`);
+    params.push(scrapId);
   }
   if (embeddingMissing) {
     conditions.push('embedding IS NULL');

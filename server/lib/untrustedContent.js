@@ -1,13 +1,18 @@
 import { z } from 'zod';
 import { MODEL_ABUSE_GUARD_MAX_INPUT_CHARS } from './modelAbuseGuard.js';
+import { PRIVATE_UNTRUSTED_CONTENT_SOURCES, UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';
 
-// Channel names identify ingress, never a trust decision made by a model.
-export const UNTRUSTED_CONTENT_SOURCES = Object.freeze(['github-issue', 'github-pr', 'messages', 'email', 'imessage', 'signal']);
-export const PRIVATE_UNTRUSTED_CONTENT_SOURCES = Object.freeze(['messages', 'email', 'imessage', 'signal']);
+// Re-exported so every existing importer keeps working; the lists live in
+// their own browser-importable leaf (see untrustedContentSources.js).
+export { PRIVATE_UNTRUSTED_CONTENT_SOURCES, UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';
 export const DEFAULT_UNTRUSTED_CONTENT_POLICY = Object.freeze({
   classifierMode: 'required', minBenignScore: 0.9,
   maxInputChars: MODEL_ABUSE_GUARD_MAX_INPUT_CHARS, maxOutputChars: 32_000,
   providerId: null, model: null,
+  // The local entailment scorer is OFF until an operator opts a source in.
+  // `jevMinMargin: null` means "use the per-decision floor in
+  // `lib/jevDecisions.js`"; a number can only raise that floor, never lower it.
+  jevMode: 'off', jevMinMargin: null,
 });
 
 export const untrustedContentPolicySchema = z.object({
@@ -17,6 +22,14 @@ export const untrustedContentPolicySchema = z.object({
   maxOutputChars: z.number().int().min(100).max(100_000).optional(),
   providerId: z.string().trim().min(1).max(128).nullable().optional(),
   model: z.string().trim().min(1).max(300).nullable().optional(),
+  // off    — today's behavior exactly, and the shipped default.
+  // prefer — jev first, chat-LLM fallback whenever it abstains or is unavailable.
+  // only   — jev first, and an abstention SKIPS the item with a recorded reason
+  //          rather than spending provider quota. Never coerced into the
+  //          permissive enum member (`none`/`defer`); that would turn a
+  //          "cannot tell" into a silent approval.
+  jevMode: z.enum(['off', 'prefer', 'only']).optional(),
+  jevMinMargin: z.number().min(0).max(1).nullable().optional(),
 }).strict();
 export const untrustedContentSettingsSchema = z.object({
   defaults: untrustedContentPolicySchema.optional(),

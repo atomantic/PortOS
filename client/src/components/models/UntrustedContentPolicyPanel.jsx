@@ -3,12 +3,17 @@ import { getSettings, updateSettings } from '../../services/api';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
+import {
+  PRIVATE_UNTRUSTED_CONTENT_SOURCES,
+  UNTRUSTED_CONTENT_SOURCES,
+  UNTRUSTED_CONTENT_SOURCE_LABELS,
+} from '../../lib/untrustedContentSources';
 
 const SOURCES = [
-  ['defaults', 'Shared defaults'], ['github-issue', 'GitHub issues'], ['github-pr', 'GitHub pull requests'],
-  ['messages', 'Messages'], ['email', 'Email'], ['imessage', 'iMessage'], ['signal', 'Signal'],
+  ['defaults', 'Shared defaults'],
+  ...UNTRUSTED_CONTENT_SOURCES.map(source => [source, UNTRUSTED_CONTENT_SOURCE_LABELS[source] || source]),
 ];
-const PRIVATE_SOURCES = ['messages', 'email', 'imessage', 'signal'];
+const PRIVATE_SOURCES = PRIVATE_UNTRUSTED_CONTENT_SOURCES;
 const apiProvider = provider => provider.type === 'api';
 const localApiProvider = provider => {
   if (!apiProvider(provider) || !URL.canParse(provider.endpoint)) return false;
@@ -50,6 +55,14 @@ export default function UntrustedContentPolicyPanel() {
   const changeNumber = (name, value) => {
     if (value !== '') patch({ [name]: Number(value) });
   };
+  // Removing the key is what re-inherits; writing a null/'' would pin the
+  // source to an explicit empty value the resolver would then layer on.
+  const clearField = name => {
+    const { [name]: _cleared, ...rest } = policy;
+    setConfig(current => source === 'defaults'
+      ? { ...current, defaults: rest }
+      : { ...current, sources: { ...current.sources, [source]: rest } });
+  };
   const save = () => {
     setSaving(true);
     updateSettings({ untrustedContent: config }).then(() => {
@@ -82,10 +95,7 @@ export default function UntrustedContentPolicyPanel() {
                 <select id="abuse-policy-classifier" value={policy.classifierMode || ''} onChange={event => {
                   const value = event.target.value;
                   if (value) patch({ classifierMode: value });
-                  else {
-                    const { classifierMode: _classifierMode, ...rest } = policy;
-                    setConfig(current => source === 'defaults' ? { ...current, defaults: rest } : { ...current, sources: { ...current.sources, [source]: rest } });
-                  }
+                  else clearField('classifierMode');
                 }} className={INPUT_CLASS}>
                   <option value="">{source === 'defaults' ? 'Required (shipped default)' : `Inherit ${inheritanceName} (${defaults.classifierMode || 'required'})`}</option>
                   <option value="required">Required</option>
@@ -94,6 +104,34 @@ export default function UntrustedContentPolicyPanel() {
               </div>
             </div>
             {(policy.classifierMode || defaults.classifierMode) === 'optional' && <p className="text-xs text-port-warning">Optional allows deterministic screening alone on machines without the classifier. Those checks miss attacks the classifier could catch. Failed or partial installations still block.</p>}
+            <div className="border-t border-port-border pt-4 space-y-3">
+              <h4 className="text-sm font-medium text-white">Local decision scorer</h4>
+              <p className="text-xs text-gray-400 max-w-2xl">Closed-set questions for this source (reply or not, triage action, priority) can be answered by the local jev entailment model instead of a chat provider. It abstains rather than guessing, and an abstention falls back to the provider above.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="abuse-policy-jev-mode" className="block text-xs text-gray-400 mb-1">Local scorer</label>
+                  <select id="abuse-policy-jev-mode" value={policy.jevMode || ''} onChange={event => {
+                    const value = event.target.value;
+                    if (value) patch({ jevMode: value });
+                    else clearField('jevMode');
+                  }} className={INPUT_CLASS}>
+                    <option value="">{source === 'defaults' ? 'Off (shipped default)' : `Inherit ${inheritanceName} (${defaults.jevMode || 'off'})`}</option>
+                    <option value="off">Off — always ask the provider</option>
+                    <option value="prefer">Prefer — local first, provider on abstain</option>
+                    <option value="only">Only — local first, skip the item on abstain</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="abuse-policy-jevMinMargin" className="block text-xs text-gray-400 mb-1">Minimum decision margin</label>
+                  <input id="abuse-policy-jevMinMargin" className={INPUT_CLASS} type="number" min={0} max={1} step={0.01}
+                    value={policy.jevMinMargin ?? defaults.jevMinMargin ?? ''}
+                    placeholder="Per-decision default"
+                    onChange={event => (event.target.value === '' ? clearField('jevMinMargin') : changeNumber('jevMinMargin', event.target.value))} />
+                </div>
+              </div>
+              {effectiveValue('jevMode') === 'only' && <p className="text-xs text-port-warning">Only skips an item the scorer cannot separate instead of calling a provider. Skipped items are reported, never treated as &ldquo;no action needed&rdquo;.</p>}
+              <p className="text-xs text-gray-500">The margin raises the bar for every decision on this source; it cannot lower a decision&rsquo;s own floor, so a destructive recommendation keeps deferring to the provider. <a href="/models/llms/jev" className="text-port-accent hover:underline">Install and measure jev</a></p>
+            </div>
             <div className="border-t border-port-border pt-4 space-y-3">
               <h4 className="text-sm font-medium text-white">Analysis provider</h4>
               <ProviderModelSelector

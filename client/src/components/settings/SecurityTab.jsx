@@ -4,7 +4,8 @@ import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
-import { getAuthStatus, setAuthPassword, clearAuthPassword } from '../../services/api';
+import { getAuthStatus, setAuthPassword, clearAuthPassword, listAuthSessions, revokeAuthSession } from '../../services/api';
+import { formatDateShort } from '../../utils/formatters';
 
 // PortOS is single-user and normally trusted because it's tailnet-only — auth
 // here is opt-in defense against an attacker on the same network (a sidecar
@@ -23,6 +24,9 @@ export function SecurityTab() {
   const [disablePassword, setDisablePassword] = useState('');
   const [disabling, setDisabling] = useState(false);
   const statusRequestRef = useRef(0);
+  const [agentSessions, setAgentSessions] = useState([]);
+  const [revokingId, setRevokingId] = useState(null);
+  const sessionsRequestRef = useRef(0);
 
   const loadAuthStatus = useCallback(() => {
     const requestId = ++statusRequestRef.current;
@@ -49,6 +53,44 @@ export function SecurityTab() {
   useEffect(() => {
     loadAuthStatus();
   }, [loadAuthStatus]);
+
+  const loadSessions = useCallback(() => {
+    if (!enabled) {
+      setAgentSessions([]);
+      return;
+    }
+    const requestId = ++sessionsRequestRef.current;
+    listAuthSessions({ silent: true })
+      .then((res) => {
+        if (requestId !== sessionsRequestRef.current) return;
+        const sessions = Array.isArray(res?.sessions) ? res.sessions : [];
+        setAgentSessions(sessions.filter((s) => s?.label === 'agent'));
+      })
+      // Listing is a nice-to-have here — a failed fetch just hides the panel
+      // rather than blocking the password form above it.
+      .catch(() => {
+        if (requestId === sessionsRequestRef.current) setAgentSessions([]);
+      });
+  }, [enabled]);
+
+  // Sessions only exist while auth is on (agentApiAuth only mints a token
+  // when isAuthEnabled(), and disabling clears every session) — skip the
+  // fetch otherwise, and drop any list left over from a prior enabled state.
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  const handleRevokeSession = async (id) => {
+    setRevokingId(id);
+    const result = await revokeAuthSession(id).catch((err) => err);
+    setRevokingId(null);
+    if (result instanceof Error) {
+      toast.error(result.message || 'Revoke failed');
+      return;
+    }
+    setAgentSessions((prev) => prev.filter((s) => s.id !== id));
+    toast.success('Session revoked');
+  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -79,6 +121,7 @@ export function SecurityTab() {
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
+    loadSessions();
     toast.success(enabled ? 'Password updated' : 'Login password enabled');
   };
 
@@ -246,6 +289,38 @@ export function SecurityTab() {
         </div>
       )}
       </div>
+
+      {enabled && agentSessions.length > 0 && (
+        <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+          <h3 className="text-md font-semibold text-white">
+            {agentSessions.length} agent session{agentSessions.length === 1 ? '' : 's'}
+          </h3>
+          <p className="text-sm text-gray-400">
+            Loopback API credentials PortOS minted for spawned agents. Revoking one does not
+            sign you out of the browser.
+          </p>
+          <ul className="space-y-2">
+            {agentSessions.map((session) => (
+              <li
+                key={session.id}
+                className="flex items-center justify-between gap-3 bg-port-bg border border-port-border rounded px-3 py-2"
+              >
+                <span className="text-sm text-gray-300">
+                  Agent session, expires {formatDateShort(session.expiresAt)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleRevokeSession(session.id)}
+                  disabled={revokingId === session.id}
+                  className="min-h-9 text-sm bg-port-bg border border-port-border text-port-error px-3 py-1.5 rounded hover:border-port-error disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {revokingId === session.id ? 'Revoking…' : 'Revoke'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

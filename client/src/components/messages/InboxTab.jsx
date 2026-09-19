@@ -7,6 +7,7 @@ import * as api from '../../services/api';
 import socket from '../../services/socket';
 import { timeAgo, formatDateNumeric } from '../../utils/formatters';
 import MessageDetail from './MessageDetail';
+import AddToThreadButton from '../threads/AddToThreadButton';
 
 const ACTION_CONFIG = {
   reply:   { icon: Reply,   color: 'text-port-accent',  bg: 'bg-port-accent/10',  hoverBg: 'hover:bg-port-accent/20',  label: 'Reply' },
@@ -661,6 +662,16 @@ export default function InboxTab({ accounts }) {
                     </button>
                   );
                 })}
+                {msg.accountId && msg.id && (
+                  <AddToThreadButton
+                    refItem={{
+                      kind: 'message',
+                      id: `${msg.accountId}:${msg.id}`,
+                      label: msg.subject || '(no subject)'
+                    }}
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-xs text-gray-500 hover:text-gray-300 hover:bg-port-border/50 transition-colors disabled:opacity-50"
+                  />
+                )}
                 <ChevronRight size={16} className="text-gray-600 ml-1" />
               </div>
             </div>

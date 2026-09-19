@@ -11,17 +11,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../services/api', () => ({
   listEidoverseFoundations: vi.fn(),
-  getEidoverseContributions: vi.fn(),
+  listEidoverseControllers: vi.fn(),
   recordEidoverseFoundation: vi.fn(),
   packageEidoverseFoundationCandidate: vi.fn(),
   promoteEidoverseFoundation: vi.fn(),
+  withdrawEidoverseFoundation: vi.fn(),
 }));
 
 import {
-  getEidoverseContributions,
+  listEidoverseControllers,
   listEidoverseFoundations,
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
+  withdrawEidoverseFoundation,
 } from '../../services/api';
 import EidoverseFoundationsPanel from './EidoverseFoundationsPanel';
 
@@ -31,14 +33,29 @@ const foundation = (overrides = {}) => ({
   kind: 'controller',
   title: 'Tide Beacon',
   summary: 'A beacon that keeps pulsing between mind wakes.',
-  contributionId: 'beacon-relay-demo',
-  body: { affordance: { inspect: 'reads the pulse count' } },
+  contributionId: 'controller:ambient-beacon',
+  body: { controller: { definitionId: 'ambient-beacon', config: {} } },
   style: { motif: 'weathered brass' },
   assay: null,
   candidate: null,
   promotedAt: null,
   updatedAt: '2026-03-04T05:06:07.000Z',
   ...overrides,
+});
+
+/** A local copy of a peer's promoted foundation, as the list endpoint serves it. */
+const inheritedFoundation = () => foundation({
+  layer: 'baseline',
+  provenance: { originInstanceId: 'instance-origin-peer', authorKind: 'mind', createdAt: '2026-03-01T00:00:00.000Z' },
+  inheritance: {
+    type: 'inherited-from', originInstanceId: 'instance-origin-peer', foundationId: 'tide-beacon',
+    fingerprint: 'a'.repeat(64), packagedAt: '2026-03-01T01:00:00.000Z',
+    sourceInstanceId: 'instance-relay-peer', inheritedAt: '2026-03-04T05:06:07.000Z',
+  },
+  lineage: [
+    { type: 'inherited', at: '2026-03-04T05:06:07.000Z', originInstanceId: 'instance-origin-peer', sourceInstanceId: 'instance-relay-peer' },
+    { type: 'assayed', at: '2026-03-01T00:30:00.000Z', pass: true },
+  ],
 });
 
 const listing = (foundations, counts) => ({
@@ -60,7 +77,7 @@ afterEach(() => { vi.clearAllMocks(); });
 describe('the Eidoverse foundations promote panel', () => {
   it('shows a refused promote as a refusal with its reasons, and leaves the layer where it was', async () => {
     listEidoverseFoundations.mockResolvedValue(listing([foundation()]));
-    getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
+    listEidoverseControllers.mockResolvedValue({ available: [{ id: 'ambient-beacon', title: 'Ambient beacon', summary: 'Pulses.', exampleConfig: { pulseEveryTicks: 6 } }] });
     // A 200 carrying a refusal — the shape the route deliberately returns so
     // the reasons reach the author instead of a generic failure.
     promoteEidoverseFoundation.mockResolvedValue({
@@ -82,7 +99,7 @@ describe('the Eidoverse foundations promote panel', () => {
     listEidoverseFoundations
       .mockResolvedValueOnce(listing([foundation()]))
       .mockResolvedValue(listing([foundation({ layer: 'baseline', promotedAt: '2026-03-04T06:00:00.000Z' })], { vernacular: 0, baseline: 1, candidates: 1 }));
-    getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
+    listEidoverseControllers.mockResolvedValue({ available: [{ id: 'ambient-beacon', title: 'Ambient beacon', summary: 'Pulses.', exampleConfig: { pulseEveryTicks: 6 } }] });
     promoteEidoverseFoundation.mockResolvedValue({ outcome: 'promoted', promoted: true, reasons: [], findings: [] });
     await renderPanel();
 
@@ -92,15 +109,40 @@ describe('the Eidoverse foundations promote panel', () => {
     expect(screen.getByRole('button', { name: 'Promote' })).toBeDisabled();
   });
 
+  // #7632 — the panel is where an author actually retracts, so a Withdraw
+  // reachable only by curl would leave the feature unusable.
+  it('offers Withdraw only once a foundation is promoted, and reports the retraction as a pass', async () => {
+    const promoted = foundation({ layer: 'baseline', promotedAt: '2026-03-04T06:00:00.000Z' });
+    listEidoverseFoundations
+      .mockResolvedValueOnce(listing([promoted], { vernacular: 0, baseline: 1, candidates: 1 }))
+      .mockResolvedValue(listing([foundation()]));
+    withdrawEidoverseFoundation.mockResolvedValue({ outcome: 'withdrawn', foundation: foundation(), reasons: [] });
+    await renderPanel();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Withdraw' })); });
+
+    // A withdrawal answers 200 like every other gate, so without its own
+    // headline a success would render as "Refused — nothing moved."
+    expect(screen.getByRole('status')).toHaveTextContent(/Withdrawn/);
+    expect(withdrawEidoverseFoundation).toHaveBeenCalledWith('tide-beacon', expect.anything());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Withdraw' })).toBeNull());
+  });
+
+  it('never offers Withdraw for an inherited copy — this install never published it', async () => {
+    listEidoverseFoundations.mockResolvedValue(listing([inheritedFoundation()], { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }));
+    await renderPanel();
+
+    expect(screen.queryByRole('button', { name: 'Withdraw' })).toBeNull();
+  });
+
   it('refuses to submit an unparseable body instead of sending it to the promote gate', async () => {
     listEidoverseFoundations.mockResolvedValue(listing([]));
-    getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
+    listEidoverseControllers.mockResolvedValue({ available: [{ id: 'ambient-beacon', title: 'Ambient beacon', summary: 'Pulses.', exampleConfig: { pulseEveryTicks: 6 } }] });
     await renderPanel();
 
     fireEvent.change(screen.getByLabelText('Id (lowercase slug)'), { target: { value: 'tide-beacon' } });
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Tide Beacon' } });
     fireEvent.change(screen.getByLabelText('Summary'), { target: { value: 'A beacon.' } });
-    fireEvent.change(screen.getByLabelText('Resilience-assay contribution'), { target: { value: 'beacon-relay-demo' } });
     fireEvent.change(screen.getByLabelText('Body — the promotable substance'), { target: { value: '{ not json' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Record locally' })); });
 
@@ -108,32 +150,39 @@ describe('the Eidoverse foundations promote panel', () => {
     expect(recordEidoverseFoundation).not.toHaveBeenCalled();
   });
 
-  it('says so when this install registers no replayable contribution, rather than offering an empty picker', async () => {
+  it('never offers a contribution to bind a foundation to, and seeds the body from a shipped controller instead (#7625)', async () => {
+    // The field that used to sit here let the author name what the promote gate
+    // would replay, and naming a shipped fixture was sufficient to pass. What
+    // an author needs now is the body itself, so the picker fills it in.
     listEidoverseFoundations.mockResolvedValue(listing([]));
-    // An empty ARRAY is "nothing is registered" — a different state from a
-    // failed fetch, and the one that makes the promote gate unreachable.
-    getEidoverseContributions.mockResolvedValue({ contributions: [] });
+    listEidoverseControllers.mockResolvedValue({ available: [{ id: 'ambient-beacon', title: 'Ambient beacon', summary: 'Pulses.', exampleConfig: { pulseEveryTicks: 6 } }] });
     await renderPanel();
 
-    expect(screen.getByText(/registers no replayable contribution/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Resilience-assay contribution')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'controller' } });
+    fireEvent.change(screen.getByLabelText('Controller definition'), { target: { value: 'ambient-beacon' } });
+
+    expect(screen.getByLabelText('Body — the promotable substance')).toHaveValue(
+      JSON.stringify({ controller: { definitionId: 'ambient-beacon', config: { pulseEveryTicks: 6 } } }, null, 2),
+    );
+  });
+
+  it('says so when this install ships no controller definition, rather than offering an empty picker', async () => {
+    listEidoverseFoundations.mockResolvedValue(listing([]));
+    // An empty ARRAY is "none is shipped" — a different state from a failed
+    // fetch, and the one that makes a `controller` foundation unreachable.
+    listEidoverseControllers.mockResolvedValue({ available: [] });
+    await renderPanel();
+
+    fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'controller' } });
+    expect(screen.getByText(/ships no controller definition/)).toBeInTheDocument();
   });
 
   it('marks a local copy of a peer foundation as Inherited and hides the promote/run-assay actions a re-share would need (#7461)', async () => {
-    const inherited = foundation({
-      layer: 'baseline',
-      provenance: { originInstanceId: 'instance-origin-peer', authorKind: 'mind', createdAt: '2026-03-01T00:00:00.000Z' },
-      inheritance: {
-        type: 'inherited-from', originInstanceId: 'instance-origin-peer', foundationId: 'tide-beacon',
-        fingerprint: 'a'.repeat(64), packagedAt: '2026-03-01T01:00:00.000Z',
-        sourceInstanceId: 'instance-relay-peer', inheritedAt: '2026-03-04T05:06:07.000Z',
-      },
-      lineage: [
-        { type: 'inherited', at: '2026-03-04T05:06:07.000Z', originInstanceId: 'instance-origin-peer', sourceInstanceId: 'instance-relay-peer' },
-        { type: 'assayed', at: '2026-03-01T00:30:00.000Z', pass: true },
-      ],
-    });
+    const inherited = inheritedFoundation();
     listEidoverseFoundations.mockResolvedValue(listing([inherited], { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }));
-    getEidoverseContributions.mockResolvedValue({ contributions: ['beacon-relay-demo'] });
+    listEidoverseControllers.mockResolvedValue({ available: [{ id: 'ambient-beacon', title: 'Ambient beacon', summary: 'Pulses.', exampleConfig: { pulseEveryTicks: 6 } }] });
     await renderPanel();
 
     expect(screen.getByText('Inherited')).toBeInTheDocument();
@@ -142,5 +191,37 @@ describe('the Eidoverse foundations promote panel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText(/Inherited from instance instance-origin-peer/)).toBeInTheDocument();
+  });
+
+  /**
+   * #7631: 'Load into the form below' sat OUTSIDE the guard that hides Promote
+   * and Run assay, and copied the inherited id verbatim. Saving the form then
+   * wrote a LOCAL record under that id with this install's own origin and no
+   * edge, which promoted and was served to peers as this install's own work.
+   */
+  it('turns re-use of an inherited foundation into a derivation instead of a copy under the peer\'s own id (#7631)', async () => {
+    listEidoverseFoundations.mockResolvedValue(listing([inheritedFoundation()], { vernacular: 0, baseline: 1, candidates: 0, inherited: 1 }));
+    recordEidoverseFoundation.mockResolvedValue({ success: true });
+    await renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build on this in the form below' }));
+
+    // The inherited id is NOT reused: that id is what made the copy look like
+    // a re-author of this install's own foundation.
+    const idField = screen.getByLabelText('Id (lowercase slug)');
+    expect(idField.value).not.toBe('tide-beacon');
+    expect(idField.value).toBe('tide-beacon-derived');
+    expect(screen.getByText(/Building on/)).toBeInTheDocument();
+
+    await act(async () => { fireEvent.submit(idField.closest('form')); });
+
+    expect(recordEidoverseFoundation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'tide-beacon-derived',
+        derivedFrom: { originInstanceId: 'instance-origin-peer', foundationId: 'tide-beacon' },
+      }),
+      expect.anything(),
+    );
   });
 });

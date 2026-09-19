@@ -682,10 +682,12 @@ skips it; only `eidoverseResilienceAssay.test.js` exercises it, proving the
 harness catches the "author-mind-only" failure mode).
 
 This harness is what the promote gate below runs:
-`services/eidoverseFoundationLedger.js` replays a foundation's declared
-contribution through `runResilienceAssay()` and refuses to package a promote
-candidate on a failing verdict ([#7455](https://github.com/atomantic/PortOS/issues/7455)).
-Both the CLI and that gate resolve contributions through the one registry in
+`services/eidoverseFoundationLedger.js` replays a foundation through
+`runResilienceAssay()` and refuses to package a promote candidate on a failing
+verdict ([#7455](https://github.com/atomantic/PortOS/issues/7455)). Since #7625
+the gate builds that contribution from the foundation's OWN body
+(`server/lib/eidoverseFoundationSandbox.js`) rather than resolving one by id;
+the CLI still sweeps the shipped fixtures through the registry in
 `server/services/eidoverseResilienceContributions.js`.
 
 ### Local vernacular vs shared baseline, and the promote gate (#7455)
@@ -722,32 +724,60 @@ is the install-local ledger — machine-local like `portos-world.json` beside it
 never federated, no seed file and no migration, since an absent file is the empty
 ledger every install starts from.
 
-**The promote gate runs the assay; it never accepts a verdict.**
-`POST /api/eidoverse/world/foundations/:id/candidate` resolves the foundation's
-declared `contributionId` through `server/services/eidoverseResilienceContributions.js`
-(by id against a fixed directory — never by a caller-supplied module path),
-replays it through the agent-free harness above, and packages against the verdict
-it just produced. A caller therefore cannot assert that its build survived its
+**The promote gate runs the assay against the foundation's OWN body; it never
+accepts a verdict and never replays something the author merely named.**
+`POST /api/eidoverse/world/foundations/:id/candidate` DERIVES the sandbox from
+`body` through `server/lib/eidoverseFoundationSandbox.js` (#7625), replays it
+through the agent-free harness above, and packages against the verdict it just
+produced.
+
+Until #7625 the binding was a single author-supplied string: `contributionId`
+was free text, it resolved against the shipped fixture directory, and naming a
+shipped fixture was *sufficient* to clear the gate. A local build could promote —
+and be offered to every federated peer — on evidence that described the demo
+fixture rather than the body inside the envelope. `contributionId` is now
+**derived** (`controller:<definitionId>`, or `<kind>:<id>`) and is not accepted
+on any authoring surface: not the route body, not `eidoverse.record`, not the
+panel. A receiving peer re-derives it from the envelope's own `kind`/`body` and
+refuses one whose evidence is about something else.
+
+One derivation per declared kind, each refusing a body it cannot interpret —
+which is the honest answer, because a declaration nobody but its author can
+replay is not promotable:
+
+| kind | what gets replayed |
+| --- | --- |
+| `controller` | the shipped definition named by `body.controller.definitionId`, run against **this install's** `body.controller.config` through the definition's own `configSchema`. Upstream's `exampleConfig` proves only that upstream's example survives. |
+| `district-template` | the declared `body.placement` must reproduce from its own `{ layoutId, anchor, propCount, seed, facing }` via `generateDistrictTemplatePlacement()`, and the body is the harness's projection source — a template's consequence is its projection plan. |
+| `schema` / `affordance` | the declarative interpreter: a clean world state is built from `body.schema`'s declared field types and every `body.affordance` verb is resolved against it each tick. An affordance recorded as prose (`{ inspect: 'reads the pulse count' }`) is refused; it has to declare `{ reads, writes }` over fields `body.schema` declares. |
+
+The executable part stays shipped code in every case, so this adds no
+arbitrary-code-execution surface — what varies is the declarative input the
+install actually authored. A caller therefore cannot assert that its build survived its
 author's absence; it can only ask for the check — the same proposal-versus-
 consequence separation the construction tools got in #7454, applied to promotion.
 A foundation that is re-authored loses both its candidate and its verdict, because
 both described the previous body; a refused package likewise clears any candidate
 packaged earlier, since the verdict that vouched for it no longer holds.
 
-Contributions are resolved **by id against a fixed directory**, which today holds
-only the two reference fixtures shipped with the assay harness. So on a stock
-install the endpoint can package a candidate for the demo contribution and
-nothing else — a real author gets "no resilience-assay contribution is
-registered" until executable world controllers (#7456) add their registry as a
-second source behind the same resolver.
+`server/services/eidoverseResilienceContributions.js` still resolves the shipped
+fixtures **by id against a fixed directory** for the CLI and the harness's own
+tests. It is no longer the promote path's resolver, and there is no longer an
+endpoint or mind tool advertising its ids — `GET /api/eidoverse/world/contributions`
+and `eidoverse.contributions` are gone, because a list of ids that were
+sufficient to pass the gate was a list of ways around it. An author choosing a
+`controller` behaviour reads `GET /api/eidoverse/world/controllers` /
+`eidoverse.controllers`, which already project the shipped registry.
 
 Four refusals stand between a local artifact and the shared baseline, and every
 one returns a readable reason naming what to fix:
 
 1. **Ownership** — only a `vernacular` foundation is promotable.
-2. **Agent-free resilience** — the verdict must pass, cover the full disturbance
-   suite, and be bound to the contribution this foundation names (a passing
-   verdict borrowed from another build is refused explicitly).
+2. **Agent-free resilience** — the body must have a derivable sandbox at all, and
+   the verdict must pass, cover the full disturbance suite, and be bound to the
+   label this foundation's own `kind`/`body` derives (a passing verdict borrowed
+   from another build is refused explicitly, on both the packaging and the
+   receiving side).
 3. **Style leak** — a vernacular style key inside `body`.
 4. **Federation safety** — `server/lib/federationSafety.js` refuses the package
    when the candidate carries machine identity, network info, PII,
@@ -772,14 +802,42 @@ Re-authoring a promoted foundation returns it to `vernacular` and clears
 keeping the stamp would also be a dead end, since the gate refuses to package a
 `baseline` foundation.
 
+**Withdrawing retracts a publication, and it reaches the peers that pulled it
+(#7632).** `POST /api/eidoverse/world/foundations/:id/withdraw` de-promotes the
+record — `vernacular`, `promotedAt` and `candidate` cleared, the body kept — and
+records a **tombstone** for the fingerprint it had published. That tombstone
+rides the peer offering, and a receiving install *deletes* its inherited copy
+rather than merely ceasing to re-pull it. Re-authoring a promoted foundation
+tombstones the replaced envelope for the same reason: it retracts a published
+body, and before this it did so silently. Promotion used to be one-way, so a
+foundation carrying something its author regretted — a personal detail the
+regex-shaped federation-safety scan cannot recognize, a wrong attribution, a
+body that turned out to be harmful — stayed on every install that had pulled it,
+for good.
+
+`DELETE /api/eidoverse/world/foundations/:id` removes a record outright, and
+**withdraws it first if it was promoted** — so the most natural gesture an
+author makes cannot orphan a peer's copy beyond recall. `?originInstanceId=`
+addresses an INHERITED copy; a bare id always means this install's own work,
+because the two id spaces legitimately overlap.
+
+**What withdrawal does not promise.** A peer running a PortOS older than the
+`tombstones` wrapper key (schema v3) gently skips the whole offering and keeps
+its copy, saying so in its log. That is unavoidable by construction — retraction
+is best-effort across versions, never a guarantee — and it is the right failure
+mode: the old peer degrades to the previous add-only behavior instead of acting
+on a wrapper it cannot fully read. Deleting a record whose tombstone has already
+aged out of the capped list is likewise final.
+
 **Where the user does this.** Eidoverse > World controls > **Foundations**
 (`client/src/components/eidoverse/EidoverseFoundationsPanel.jsx`) lists every
 foundation with its ownership-layer badge, records or re-authors one, runs the
 assay, promotes, and renders each refusal reason verbatim beside the foundation
 it refused. The expanded foundation is a `?foundation=<id>` search param, so a
-refusal is linkable. `GET /api/eidoverse/world/contributions` backs the
-contribution picker — an install that registers none says so rather than offering
-an empty list.
+refusal is linkable. The form has no contribution field: it seeds the `body` per
+kind and, for a `controller`, fills it from a shipped definition read off
+`GET /api/eidoverse/world/controllers` — an install that ships none says so
+rather than offering an empty picker.
 
 **The mind needs its own grant to promote.** `eidoverse.promote` (with the read
 beside it, `eidoverse.foundations`) is gated on `manageEidoverse` **and** the
@@ -796,8 +854,10 @@ same `recordEidoverseFoundation()` the HTTP route above uses, gated on
 `manageEidoverse` alone (no promote grant needed — authoring stays local by
 construction) and mind-scope only. `authorKind` is stamped `'mind'` server-side
 regardless of what the call arguments claim, the same reason `layer` is never
-caller-supplied. `eidoverse.contributions` (`manageEidoverse`, read) lists the
-`contributionId` values a new foundation may bind to before it is promotable.
+caller-supplied — and, since #7625, the same reason `contributionId` is not
+accepted either: a mind that could name what the gate replays could point it at a
+shipped demo. `eidoverse.controllers` (`manageEidoverse`, read) is what a mind
+reads first, for the `definitionId` values a `controller` body may name.
 
 ### Provenance graph and inheritance edges (#7461)
 
@@ -813,11 +873,14 @@ and the mind tools' `summarizeFoundation()` projection carries `provenance`,
 `inheritance`, and `lineage` too — the same identity fields a candidate
 envelope was already authorized to carry, now surfaced consistently
 everywhere a foundation is read. `GET /api/eidoverse/world/foundations/:id`
-only reaches a locally-authored (plain-id) record: an inherited copy lives
-under a separate ledger key precisely so it can share a human-readable id
-with a local vernacular foundation without colliding, which also means a
-single bare id cannot disambiguate the two — the list endpoint is the
-provenance query surface for an inherited entry.
+names a locally-authored record by its plain id and an inherited copy by
+`?originInstanceId=<origin>` (#7626): an inherited copy lives under a
+separate ledger key precisely so it can share a human-readable id with a
+local vernacular foundation without colliding, so the ORIGIN is what
+disambiguates the two. The `peer:<origin>:<id>` storage key itself stays
+internal and is never typed by a caller — `{ id, originInstanceId }` is the
+grammar (`eidoverseFoundationTargetSchema`), and `foundationLedgerKey()` is the
+one place it becomes a key.
 
 **`recordEidoverseFoundationInheritance()`** (`eidoverseFoundationLedger.js`)
 is the accept-side of a peer pull: given an already-verified candidate
@@ -840,8 +903,57 @@ re-promoted from this install (`packageFoundationCandidate` refuses it by
 name): promotion publishes only what this install itself authored, never a
 relay of another install's work.
 
+### Reading and adopting an inherited foundation (#7626)
+
+Inheriting a peer's foundation used to store a row and nothing more: no
+runtime on either install read a foundation's `body`, so the only way to use
+what a peer contributed was a human reading raw JSON out of the Foundations
+panel and retyping it — the "go read the author's transcript" path this whole
+area exists to replace, and one that keeps no attribution. Two verbs close
+that.
+
+**Read one.** `eidoverse.foundation` (mind tool, `manageEidoverse`, read) and
+`GET /api/eidoverse/world/foundations/:id` return `detailFoundation()` — every
+field `summarizeFoundation()` carries, plus `body` and `disclosure`. The LIST
+projection still omits both, deliberately: a list of whole bodies is kilobytes
+of substance per entry riding into a prompt to answer a question about ids,
+and which body to read is a decision made after the list. `style` is omitted
+in both — it is this install's cosmetics and never leaves.
+
+**Adopt.** `eidoverse.adopt` (mind tool, `manageEidoverse` **and**
+`installEidoverseControllers`) and `POST
+/api/eidoverse/world/foundations/:id/adopt` stand an INHERITED foundation up
+as something that runs here. `planFoundationAdoption()` decides per kind:
+
+| kind | what adopting does |
+| --- | --- |
+| `controller` | Installs the SHIPPED controller `body.controller.definitionId` names, with the envelope's `config`, **disarmed** and with `deliverEffects: false`. |
+| `district-template` | **Refused** — nothing turns a template body into geometry yet (#7627). |
+| `schema`, `affordance` | **Refused by name** — a declaration with no interpreter here is not adoptable, and saying so is the honest answer. |
+
+A locally-authored foundation is refused too: its author already has every way
+to install it, and adoption is specifically the path for a peer's work.
+
+Adopting a controller can never execute a peer's bytes. The envelope names
+*which of this install's own shipped controllers* to run and with what
+settings; `installEidoverseController()` resolves that id against the fixed
+local registry, exactly as an ordinary install does. The result lands disarmed
+and silent, so arming it and letting it speak or build in the world stay
+separate, local decisions rather than consequences of one tool call.
+
+The resulting controller install carries a `derived-from` edge — origin
+instance, foundation id, envelope fingerprint — in the same shape a derived
+foundation uses. That edge SURVIVES a later re-install (it is preserved
+alongside `installedBy` / `installedAt`), which is what makes adoption the
+provenance-keeping way to re-use a peer's contribution as against retyping the
+body, which keeps nothing and is refused as republishing (#7631). An adopt
+whose install id is already taken by a controller derived from something else
+is refused rather than overwriting a controller already running here.
+
 ### The peer pull/inherit transport (#7455)
 
+Authorized to cross the federation layer by the
+[federated Eidoverse foundations ADR](../decisions/2026-09-18-federated-eidoverse-foundations.md).
 `server/services/sharing/peerEidoverseFoundationSync.js` is the wire between
 the two gates above. It owns no policy of its own — which foundations an
 install offers is `listPromotedFoundationCandidates()` in the ledger, and
@@ -849,8 +961,8 @@ which it accepts is `recordEidoverseFoundationInheritance()`. It owns the
 payload wrapper, the version gate, the caps and the sweep.
 
 **Outbound.** `GET /api/peer-sync/eidoverse-foundations` advertises
-`{ schemaVersion, listHash, candidates: [...] }`. The offering is exactly the
-foundations this install PROMOTED and AUTHORED:
+`{ schemaVersion, listHash, candidates: [...], tombstones: [...] }`. The
+`candidates` are exactly the foundations this install PROMOTED and AUTHORED:
 
 - `layer === 'baseline'` — a merely *packaged* candidate is a dry run ("would
   this pass?"), not a publication, and is never served.
@@ -862,6 +974,18 @@ foundations this install PROMOTED and AUTHORED:
   `foundations.json` is a file a human can edit, and refuse-never-redact
   applies outbound as well as inbound, so a candidate that no longer passes is
   withheld from the offering and logged.
+- the fingerprint must not be tombstoned. Promoting clears a fingerprint's
+  tombstone, so the two lists cannot normally disagree; a hand-edited ledger can
+  make them, and an offering that both published and retracted one fingerprint
+  would resolve differently on every receiver. The retraction wins.
+
+`tombstones` is `[{ fingerprint, deletedAt }]` — a content-addressed name and an
+instant, never any of the body. It caps on its **own** budget, never against
+`OFFERING_ENTRY_CAP`: sharing one cap would let a large promoted population
+silently truncate the retractions, which is the one trade this must never make.
+Both lists feed the `listHash`, so a withdrawal with no other change still
+breaks a receiver's unchanged short-circuit instead of waiting for the next
+forced re-pull.
 
 Unlike the older peer-pull routes, this one does not ride the warn-first
 authorization ramp: it passes `alwaysEnforce`, so only a registered,
@@ -882,18 +1006,46 @@ fingerprint this install already holds is skipped, so the periodic forced
 re-pull (there so a local deletion self-heals) never rewrites `inheritedAt`
 on an unchanged copy.
 
+The sweep applies the peer's **retractions first**, before it reads what this
+install holds: a fingerprint the same offering re-publishes is then re-verified
+through the whole accept-side gate on its way back in, rather than surviving in
+place unchecked. A retraction authorizes dropping only a record this install
+pulled from *that same peer* (`inheritance.sourceInstanceId`) — a fingerprint is
+public inside the federation the moment it is offered, so it identifies a record
+but authorizes nothing, and without the scope any registered peer could retract
+a third install's work by naming it. A tombstone for a fingerprint this install
+does not hold is a silent no-op. Peer tombstones are not persisted: this install
+never re-offers an inherited record, and the sender keeps advertising the
+tombstone while its candidate stays absent, so storing them would only let a
+peer crowd out this install's own retractions.
+
 Both directions are gated on the `eidoverse` instance feature: an install with
 Eidoverse turned off neither offers nor accumulates.
 
-**Compatibility.** `PORTOS_SCHEMA_VERSIONS.eidoverseFoundations` (v1) is the
+**Compatibility.** The envelope's `candidateVersion` is **v3** as of #7625. The
+bump is semantic rather than structural: a pre-v3 envelope's assay evidence was
+recorded against a contribution its author named, with no required relationship
+to the body travelling beside it, so there is nothing to upgrade — the accept
+side refuses v1 and v2 outright with that reason rather than inheriting on
+them. Migration `scripts/migrations/397-eidoverse-foundation-derived-assay.js`
+does the local half: it re-derives every record's binding label, drops the
+verdicts the old replay produced, and returns an unreplayable `baseline`
+foundation to `vernacular` with `promotedAt: null` — exactly what the ledger
+already does when a body is re-authored, for exactly the same reason.
+
+`PORTOS_SCHEMA_VERSIONS.eidoverseFoundations` (v3) is the
 transport contract, registered in `NON_RECORD_SCHEMA_CATEGORIES` because this
 is a receiver-pull category with no push to gate — a foundation is not a
 peer-subscribable record kind. It is deliberately separate from the envelope's
 own `candidateVersion`, which pins one envelope's shape and is hashed into its
 fingerprint: a change to the envelope bumps both, a change to the wrapper or
-the caps bumps only the category.
+the caps bumps only the category. v3 (#7632) added `tombstones` to the wrapper
+and moved only the category, because a tombstone names a candidate by the
+fingerprint it already had and no envelope field changed. A v2 sender omits the
+key and a v3 receiver reads that as "nothing to retract"; a v2 **receiver**
+gently skips a v3 offering and therefore keeps a copy it should have dropped.
 
-### Creative toolkit for minds (#7459)
+### Creative toolkit for minds (#7459, wired end-to-end in #7627)
 
 Authoring a foundation from a blank `body`/`style` is a lot to invent from
 scratch every time. `server/lib/eidoverseCreativeToolkit.js` is a small,
@@ -902,24 +1054,42 @@ and **motifs** (cosmetics — install-local `style`, the same class of value
 `styleLeakFindings` refuses inside a `body`) and named **generative placement
 layouts** (`radial-ring`, `grid-plot`, `arc-row`, `grove-cluster` — structure,
 safe as `body`). `eidoverse.creative-catalog` (`manageEidoverse`, read) lists
-all three; nothing here calls an AI provider — every layout is deterministic
-and seeded (`generateDistrictTemplatePlacement`), so the same
-`{layoutId, anchor, seed}` reproduces the same geometry on replay or on a peer
-that later inherits the promoted foundation.
+all three, including each material's `colorHex` — a palette id whose value a
+mind cannot see is not a usable catalog entry. Nothing here calls an AI
+provider; every layout is deterministic and seeded
+(`generateDistrictTemplatePlacement`), so the same `{layoutId, anchor, seed}`
+reproduces the same geometry on replay or on a peer that later inherits the
+promoted foundation.
 
-Two ways to use a chosen layout:
+Two tools use a chosen layout, both read-only (they compute; they do not write
+to the world or the foundation ledger):
 
-- `buildDistrictTemplateAugmentOperations()` turns a placement into
-  ready-to-submit `eidoverse.augment` `spawn` operations for the *live* scene
-  (asset-path validity is still checked where `eidoverse.augment` lands them).
-- `buildDistrictTemplateFoundationDraft()` composes a placement plus a
-  material/motif choice into an `eidoverseFoundationInputSchema`-shaped
-  `district-template` input — the generative substance (layout id, anchor,
-  seed, resulting positions) in `body`, the material/motif cosmetics in
-  `style` — ready to pass straight to `eidoverse.record`. It always lands on
-  the local `vernacular` layer, matching every other authored foundation;
-  publishing it to the shared baseline remains the separate, explicit
+- **`eidoverse.place-layout`** (`manageEidoverse`) calls
+  `buildDistrictTemplateAugmentOperations()` and returns ready-to-submit
+  `eidoverse.augment` `spawn` operations for the *live* scene (asset-path
+  validity is still checked where `eidoverse.augment` lands them). The same
+  `{layoutId, anchor, seed}` yields byte-identical operations every call.
+- **`eidoverse.draft-foundation`** (`manageEidoverse`) calls
+  `buildDistrictTemplateFoundationDraft()` and returns an
+  `eidoverseFoundationInputSchema`-shaped `district-template` input — the
+  generative substance (layout id, anchor, seed, resulting positions) in
+  `body`, the material/motif cosmetics in `style` — ready to pass straight to
+  `eidoverse.record`. Drafting composes nothing itself; recording still lands
+  on the local `vernacular` layer, matching every other authored foundation,
+  and publishing to the shared baseline remains the separate, explicit
   `eidoverse.promote` act above.
+
+**`eidoverse.record` derives, never trusts, a `district-template`'s
+placement.** When a recorded `district-template`'s `body` carries
+`{layoutId, anchor}` (with an optional `seed`), `recordEidoverseFoundation()`
+(`services/eidoverseFoundationLedger.js`) replays
+`generateDistrictTemplatePlacement()` server-side and stores the result as
+`body.placement` — REPLACING any placement the caller supplied, not merging
+it. That is what makes the replay claim above hold for a hand-assembled
+`eidoverse.record` call too, not only for one built from
+`eidoverse.draft-foundation`'s output, and it is why the same `district-template`
+is comparable and replayable on an older or newer install that later inherits
+it (#7625).
 
 ## Observation-first discovery (#7457)
 
@@ -1061,10 +1231,10 @@ there is no await for a network, disk, or provider call to hide behind. Root
 property of the tick path rather than a convention — boot arms a timer and
 nothing else. The same synchronous rule is why every shipped controller is
 replayable by the agent-free assay with no extra authoring: the controller
-registry is the assay's **second contribution source**, behind the same
-`findContributionById` resolver, so a `controller` foundation can name its
-controller's id as its `contributionId` and be gated for promotion on evidence
-it still runs with its author gone.
+registry is both the assay CLI's second contribution source and what a
+`controller` foundation's promote gate resolves `body.controller.definitionId`
+against — replaying the definition against **this install's own config**, so the
+evidence is about the controller this install actually configured.
 
 **Effects are proposals, from a closed vocabulary.** A step returns effects, it
 does not perform them — the same proposal-versus-consequence separation the
@@ -1086,6 +1256,22 @@ backlog: a machine asleep for three days wakes to ONE tick, because a cadence is
 than retried forever, and an install whose `controllerId` this version no longer
 ships is disarmed immediately.
 
+**Every tick revalidates the stored install against its own definition
+(#7629).** `record.config` is re-parsed through `definition.configSchema`
+before each step rather than trusted from install time — a config that no
+longer parses (a shipped schema tightened, a hand-edited file) disarms the
+install immediately instead of stepping it, and a newly-added default lands on
+the record the first time it re-parses cleanly. `definition.invariants` — the
+same predicates the resilience assay replays — run against the state a step
+just produced; a violation fails that step and counts toward
+`maxConsecutiveFailures` like any other failure, so the live supervisor holds a
+controller to the same contract the promote gate does. The store's own
+`schemaVersion` stamp is read back (not assumed to be this build's constant):
+a store written by a newer build disarms rather than stepping under rules it
+does not fully understand — and the writes that disarm never re-stamp the file
+with this build’s older constant, so the signal survives the pass that reads it
+rather than being erased by it.
+
 **Storage** is `data/eidoverse/controllers.json` — `file-primary` and machine
 local, never federated (`docs/STORAGE.md`). A controller crosses to a peer only
 as the *body* of a promoted foundation, which carries no install.
@@ -1101,7 +1287,19 @@ what makes running it on a schedule safe.
 `eidoverse.retire-controller` are gated on `manageEidoverse` **and** the separate
 default-off `installEidoverseControllers` grant, and are mind-scope only:
 building in the world during a turn is a different act from leaving something
-running in it afterwards. The read beside them, `eidoverse.controllers`, needs
-only `manageEidoverse` — a mind that can build should be able to see what is
-already ticking, and seeing is what makes the writes usable rather than
-guesswork.
+running in it afterwards. The reads beside them, `eidoverse.controllers` and
+`eidoverse.inspect-controller`, need only `manageEidoverse` — a mind that can
+build should be able to see what is already ticking, and seeing is what makes
+the writes usable rather than guesswork. `eidoverse.controllers` never carries
+`config`/`state` (`summarizeControllerInstall`'s LIST projection); a caller that
+wants one install's config and accumulated state back reads
+`eidoverse.inspect-controller`, backed by the same `GET
+/api/eidoverse/world/controllers/:id` the panel's Details view uses (#7629).
+
+**Changing a config without losing state.** Re-installing an existing id
+rebuilds its state from the new config from scratch — the deliberate behavior
+for "I want this to start over." `updateEidoverseControllerConfig` (routed at
+`PATCH /api/eidoverse/world/controllers/:id/config`) is the other verb: it
+re-parses the new config through the definition's own schema and leaves
+`state` untouched, for a later mind that wants to tune a value on a controller
+it inherited without destroying what it has already accumulated.

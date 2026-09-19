@@ -205,14 +205,19 @@ function observePeers(source, byPeer) {
  *
  * `lastTickOk === null` means the controller has never stepped yet, which is
  * the normal state one interval after an install and deliberately NOT an
- * alarm.
+ * alarm. `lastDelivery` is the SEPARATE verdict #7628 added: a step can read
+ * `ok: true` while every effect it produced was refused by the world, so a
+ * clean step alone does not clear this filter — `lastDelivery.ok === false`
+ * is checked too. `lastDelivery.ok === null` (delivery off, or nothing to
+ * deliver this tick) is deliberately NOT an alarm either.
  */
 function observeControllers(installs) {
   if (!Array.isArray(installs)) return null;
   return installs
     .filter((install) => install?.disarmedReason
       || (install?.consecutiveFailures ?? 0) > 0
-      || install?.lastTickOk === false)
+      || install?.lastTickOk === false
+      || install?.lastDelivery?.ok === false)
     .slice(0, MAX_ATTENTION_CONTROLLERS)
     .map((install) => ({
       id: install.id,
@@ -221,6 +226,7 @@ function observeControllers(installs) {
       lastTickOk: install.lastTickOk ?? null,
       lastTickReason: install.lastTickReason ?? null,
       consecutiveFailures: install.consecutiveFailures ?? 0,
+      lastDelivery: install.lastDelivery ?? null,
       disarmedReason: install.disarmedReason ?? null,
     }));
 }
@@ -343,7 +349,23 @@ export function buildEidoverseObservation({
     attentionControllers !== null,
     marker?.attentionControllerIds,
   );
-  const placeStatus = Object.fromEntries(places.map(({ id, status }) => [id, status]));
+  // `signalCount === null` alone is not a failed read — a district whose
+  // sources are all disabled by the recipe also lands there, legitimately.
+  // Only a district that actually FAILED a source read (`unreadableSources`
+  // non-empty) gets the section()-equivalent carry-forward treatment: the
+  // report keeps `status: 'unknown'` (built into `places` above) so the mind
+  // still sees the read failed, but the committed marker — and therefore the
+  // diff below — keeps the PREVIOUS marker's status for that district
+  // instead of overwriting it with `unknown`. Same rule `section()` applies
+  // to the three id-list sections, applied per key because this section is a
+  // map rather than a list.
+  const previousPlaceStatus = marker?.placeStatus && typeof marker.placeStatus === 'object' ? marker.placeStatus : {};
+  const placeStatus = Object.fromEntries(places.map((place) => {
+    const unreadable = place.signalCount === null && place.unreadableSources.length > 0;
+    const carried = previousPlaceStatus[place.id];
+    const status = unreadable && carried !== undefined ? carried : place.status;
+    return [place.id, status];
+  }));
 
   return {
     report: {

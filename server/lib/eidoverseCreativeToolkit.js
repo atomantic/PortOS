@@ -30,7 +30,20 @@
  * generative placement is substance and lands in `body`; the material/motif
  * choice is cosmetics and lands in `style`. Pure: no I/O, no clock, no
  * provider calls.
+ *
+ * Every builder here has a real, non-test caller (#7627): `describeCreativeCatalog()`
+ * is `eidoverse.creative-catalog`; `buildDistrictTemplateAugmentOperations()`
+ * (via `generateDistrictTemplatePlacement()`) is `eidoverse.place-layout`;
+ * `buildDistrictTemplateFoundationDraft()` is `eidoverse.draft-foundation`
+ * (`services/cosToolRegistry.js`); and `generateDistrictTemplatePlacement()`
+ * is also what `services/eidoverseFoundationLedger.js`'s
+ * `recordEidoverseFoundation()` replays server-side to derive a
+ * `district-template`'s `body.placement` from its declared
+ * `{layoutId, anchor, seed}` rather than trusting a caller-supplied one.
  */
+
+import { z } from 'zod';
+import { eidoverseFoundationInputSchema } from './eidoverseFoundations.js';
 
 const clampInt = (value, min, max) => Math.min(max, Math.max(min, Math.round(value)));
 
@@ -127,11 +140,20 @@ function requireCatalogEntry(catalog, id, label) {
   return entry;
 }
 
-/** A mind- and prompt-safe projection of the toolkit: ids, labels, descriptions only. */
+/**
+ * A mind- and prompt-safe projection of the toolkit: ids, labels, descriptions
+ * — plus, for materials, `colorHex` (#7627). A palette id whose value a mind
+ * cannot see is not a usable catalog entry: the mind picks `sunbaked-clay` for
+ * a foundation's `style` and needs the actual hex to reason about how it reads
+ * next to whatever else it is building. `colorHex` is cosmetic display data,
+ * not a foundation `body` key, so exposing it here does not widen what a mind
+ * can put in a promotable body.
+ */
 export function describeCreativeCatalog() {
   const project = (catalog) => catalog.map(({ id, label, description }) => ({ id, label, description }));
+  const projectMaterials = (catalog) => catalog.map(({ id, label, description, colorHex }) => ({ id, label, description, colorHex }));
   return {
-    materials: project(EIDOVERSE_CREATIVE_MATERIALS),
+    materials: projectMaterials(EIDOVERSE_CREATIVE_MATERIALS),
     motifs: project(EIDOVERSE_CREATIVE_MOTIFS),
     layouts: project(EIDOVERSE_CREATIVE_LAYOUTS),
   };
@@ -219,9 +241,16 @@ export function buildDistrictTemplateAugmentOperations({ layoutId, anchor, propC
  * positions) is the promotable substance and goes in `body`; the material
  * and motif choice are cosmetics and go in `style`, exactly as
  * `styleLeakFindings` expects.
+ *
+ * The placement is emitted BESIDE the `{ layoutId, anchor, propCount, seed,
+ * facing }` it was generated from, which is what makes the draft promotable:
+ * the promote gate re-derives the placement from those declarations and refuses
+ * one that no longer reproduces (`lib/eidoverseFoundationSandbox.js`, #7625).
+ * There is no `contributionId` to pass — the gate replays this body, so the
+ * binding label is derived from it.
  */
 export function buildDistrictTemplateFoundationDraft({
-  id, title, summary, contributionId, layoutId, materialId, motifId, anchor, propCount = 6, seed, facing = 0, disclosure,
+  id, title, summary, layoutId, materialId, motifId, anchor, propCount = 6, seed, facing = 0, disclosure,
 }) {
   const material = requireCatalogEntry(EIDOVERSE_CREATIVE_MATERIALS, materialId, 'material');
   const motif = requireCatalogEntry(EIDOVERSE_CREATIVE_MOTIFS, motifId, 'motif');
@@ -232,7 +261,6 @@ export function buildDistrictTemplateFoundationDraft({
     kind: 'district-template',
     title,
     summary,
-    contributionId,
     body: {
       layoutId,
       anchor: anchor.map((value) => Number(value)),
@@ -245,3 +273,64 @@ export function buildDistrictTemplateFoundationDraft({
     disclosure: disclosure ?? {},
   };
 }
+
+// ---------------------------------------------------------------------------
+// Tool input schemas (#7627)
+// ---------------------------------------------------------------------------
+// `services/cosToolRegistry.js` wires the two generative builders above as
+// `eidoverse.place-layout` (live-scene augment operations) and
+// `eidoverse.draft-foundation` (an `eidoverse.record`-ready district-template
+// input) — the "two ways to use a chosen layout" the module header always
+// described, now with a caller on both. Declared here, beside the functions
+// they validate for, rather than in `services/cosToolRegistry.js`.
+
+const eidoverseCreativeLayoutIdSchema = z.enum(EIDOVERSE_CREATIVE_LAYOUTS.map((layout) => layout.id));
+const eidoverseCreativeMaterialIdSchema = z.enum(EIDOVERSE_CREATIVE_MATERIALS.map((material) => material.id));
+const eidoverseCreativeMotifIdSchema = z.enum(EIDOVERSE_CREATIVE_MOTIFS.map((motif) => motif.id));
+// `.length(3)`, not `z.tuple`, matching `eidoverseValidation.js`'s own vector
+// schema: a fixed-length array survives the `zodToOpenApiSchema` → JSON Schema
+// → `z.fromJSONSchema` round trip `validateArguments()` runs at dispatch.
+const eidoverseAnchorSchema = z.array(z.number().finite()).length(3);
+const eidoverseSeedSchema = z.string().trim().min(1).max(120).optional();
+const eidoverseFacingSchema = z.number().finite().optional();
+const eidoversePropCountSchema = z.number().int().min(1).max(16).optional();
+
+/**
+ * `eidoverse.place-layout`: compute a named layout's placement and return
+ * augment-ready `eidoverse.augment` `spawn` operations. Read-only — it
+ * computes, it never writes to the world; the operations still need a
+ * separate `eidoverse.augment` call to land.
+ */
+export const eidoversePlaceLayoutInputSchema = z.object({
+  layoutId: eidoverseCreativeLayoutIdSchema,
+  anchor: eidoverseAnchorSchema,
+  propCount: eidoversePropCountSchema,
+  seed: eidoverseSeedSchema,
+  facing: eidoverseFacingSchema,
+  assetPath: z.string().trim().min(1).max(512),
+  idPrefix: z.string().trim().min(1).max(64).optional(),
+}).strict();
+
+/**
+ * `eidoverse.draft-foundation`: compose a layout, material, and motif choice
+ * into an `eidoverseFoundationInputSchema`-ready `district-template` input,
+ * ready to pass straight to `eidoverse.record`. The `id`/`title`/`summary`/
+ * `disclosure` fields are lifted from `eidoverseFoundationInputSchema` itself
+ * rather than re-declared, so a limit change there cannot silently diverge
+ * from what this schema accepts. There is no `contributionId`: the promote
+ * gate derives the binding label from the drafted body (#7625), so a drafter
+ * has nothing to name.
+ */
+export const eidoverseDraftFoundationInputSchema = z.object({
+  id: eidoverseFoundationInputSchema.shape.id,
+  title: eidoverseFoundationInputSchema.shape.title,
+  summary: eidoverseFoundationInputSchema.shape.summary,
+  disclosure: eidoverseFoundationInputSchema.shape.disclosure,
+  layoutId: eidoverseCreativeLayoutIdSchema,
+  materialId: eidoverseCreativeMaterialIdSchema,
+  motifId: eidoverseCreativeMotifIdSchema,
+  anchor: eidoverseAnchorSchema,
+  propCount: eidoversePropCountSchema,
+  seed: eidoverseSeedSchema,
+  facing: eidoverseFacingSchema,
+}).strict();

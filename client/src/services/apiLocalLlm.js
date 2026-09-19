@@ -38,6 +38,46 @@ export const cancelModelAbuseGuardInstall = (options) =>
     ...options,
   });
 
+// The jev entailment scorer's own lifecycle, separate from the chat catalog
+// and from Prompt Guard's.
+export const getJevStatus = (options) => request('/local-llm/jev/status', options);
+
+// Per-decision agreement and abstention counters. Counts only, so this is safe
+// to poll from a settings panel.
+export const getJevDecisionStats = (options) => request('/local-llm/jev/decisions', options);
+
+export const installJev = (options) =>
+  request('/local-llm/jev/install', { method: 'POST', body: '{}', ...options });
+
+export const cancelJevInstall = (options) =>
+  request('/local-llm/jev/install/cancel', { method: 'POST', body: '{}', ...options });
+
+// Starts the sidecar on first use, so this is only ever called from an explicit
+// operator action.
+export const scoreJev = (body, options) =>
+  request('/local-llm/jev/score', { method: 'POST', body: JSON.stringify(body), ...options });
+
+export const unloadJev = (options) =>
+  request('/local-llm/jev/unload', { method: 'POST', body: '{}', ...options });
+
+// Project-specific trained heads. Metrics and adoption state only — never a
+// corpus row, a premise, or a path.
+export const getJevHeads = (options) => request('/local-llm/jev/heads', options);
+
+// Builds a corpus from this install's own forge history and fits a head on the
+// frozen encoder. Minutes on a cold embedding cache, so callers give it a long
+// leash and an explicit in-progress state.
+export const trainJevHead = (body = {}, options) =>
+  request('/local-llm/jev/heads/train', { method: 'POST', body: JSON.stringify(body), ...options });
+
+// Refused server-side unless the head beats BOTH the stock zero-shot and the
+// majority-class baseline — a disabled button is a suggestion, not the gate.
+export const adoptJevHead = (decisionId, options) =>
+  request('/local-llm/jev/heads/adopt', { method: 'POST', body: JSON.stringify({ decisionId }), ...options });
+
+export const discardJevHead = (decisionId, { adopted = false } = {}, options) =>
+  request('/local-llm/jev/heads/discard', { method: 'POST', body: JSON.stringify({ decisionId, adopted }), ...options });
+
 export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12) =>
   request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
 

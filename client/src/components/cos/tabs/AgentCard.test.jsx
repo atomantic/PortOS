@@ -728,6 +728,17 @@ describe('AgentCard missing shell explanation', () => {
 describe('AgentCard goal fidelity', () => {
   const withReview = (goalFidelity) => ({ ...agent, result: { ...agent.result, goalFidelity } });
 
+  // A merge-shaped objective is settled by forge state, not by a model reading a
+  // diff — so the card must not leave a reader assuming a local model said so.
+  it('names the forge as the source of a verdict no model produced', () => {
+    render(<MemoryRouter><AgentCard agent={withReview({
+      verdict: 'ship', source: 'forge-outcome', evidence: 'The forge reports #7653 MERGED', missing: [], unrequested: [],
+    })} completed /></MemoryRouter>);
+    expect(screen.getByText(/forge-verified/)).toBeInTheDocument();
+    expect(screen.getByText('Goal fidelity:', { exact: false })).toHaveTextContent('Delivers the objective');
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+  });
+
   it('queues an isolated investigation with the original prompt and app, then links to the task', async () => {
     api.getCosAgentPrompt.mockResolvedValue({ prompt: 'Resolve issue #123 acceptance criteria' });
     api.addCosTask.mockResolvedValue({ id: 'task-investigation', approvalRequired: false });
@@ -774,6 +785,98 @@ describe('AgentCard goal fidelity', () => {
     expect(screen.getByText('the retry backoff')).toBeInTheDocument();
     expect(screen.getByText('an unrelated logging refactor')).toBeInTheDocument();
     expect(screen.getByText('no tests were run')).toBeInTheDocument();
+  });
+
+  // #7690: the automatic follow-up — the finding's durable half. What it did
+  // belongs beside the verdict, or a filed issue is unreachable from the card
+  // that reported the problem.
+  it('links the issue the follow-up filed and the task it queued', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { issue: { number: 42, url: 'https://example.com/issues/42', duplicate: false }, taskId: 'cos-9' },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('link', { name: 'Filed as #42' })).toHaveAttribute('href', 'https://example.com/issues/42');
+    expect(screen.getByRole('link', { name: 'View the queued follow-up task' }))
+      .toHaveAttribute('href', '/cos/tasks?task=cos-9&source=internal');
+  });
+
+  it('says an existing issue already tracks the finding rather than implying it filed one', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { issue: { number: 5, url: 'https://example.com/issues/5', duplicate: true } },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('link', { name: 'Already tracked as #5' })).toBeInTheDocument();
+  });
+
+  // Silence here would read as the follow-up having found nothing to do, on a
+  // card whose whole point is that something does need doing.
+  it('names why an arm could not run', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { issueError: 'could not read the github issue list', taskError: 'the follow-up task could not be queued' },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByText(/could not read the github issue list/)).toBeInTheDocument();
+    expect(screen.getByText(/could not be queued/)).toBeInTheDocument();
+  });
+
+// "Queued" is wrong for a task the loop policy held for the user: nothing
+  // will pick it up until they approve it, and the card is where they find out.
+  it('names a held follow-up task as awaiting approval, not queued', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { taskId: 'cos-9', taskApprovalRequired: true },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('link', { name: 'Follow-up task awaiting your approval' })).toBeInTheDocument();
+    // Still no manual button: the answer is to approve the task that exists,
+    // not to queue an unheld duplicate beside it.
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+  });
+
+  it('names a folded duplicate task as folded, not freshly queued', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          followUp: { taskId: 'cos-9', taskDuplicate: true },
+        })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('link', { name: 'Folded into the follow-up task already open' })).toBeInTheDocument();
+  });
+
+  // Offering the manual button after the automation already queued a task would
+  // put two agents on one finding.
+  it('withdraws the manual button once the follow-up queued a task, and keeps it otherwise', () => {
+    const { unmount } = render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({ verdict: 'rethink', followUp: { taskId: 'cos-9' } })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+    unmount();
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({ verdict: 'rethink', followUp: { issue: { number: 42, url: 'u' } } })} completed />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('button', { name: 'Investigate findings' })).toBeInTheDocument();
   });
 
   it('shows a clean ship verdict, and renders nothing at all for a run the gate never judged', () => {
@@ -884,4 +987,25 @@ describe('AgentCard truncated task description', () => {
 
     expect(api.hydrateCosAgentDescription).not.toHaveBeenCalled();
   });
+});
+
+// End-to-end for #7676: the run record carries its tracker, so a bare `#N` the
+// agent wrote in its own sentinel summary is followable from the card. The
+// pattern lives in lib/issueRefs.test.js — this pins the WIRING, the half that
+// silently regresses when a prop is dropped in a refactor.
+it('links a task-summary issue reference at the tracker the run was stamped with', () => {
+  render(
+    <MemoryRouter>
+      <AgentCard
+        agent={{ ...agent, metadata: {
+          ...agent.metadata,
+          taskSummary: 'Closes #7640.',
+          repoIssueUrl: 'https://github.com/atomantic/PortOS/issues',
+        } }}
+        completed
+      />
+    </MemoryRouter>
+  );
+  expect(screen.getByRole('link', { name: '#7640' }))
+    .toHaveAttribute('href', 'https://github.com/atomantic/PortOS/issues/7640');
 });

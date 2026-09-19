@@ -101,6 +101,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings', aliases: ['fleet-llm', 'gpu-host', 'remote-ai-provider'], keywords: ['3090', 'tailscale', 'vllm', 'qwen', 'coding model', 'dedicated host'] },
 
   { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', tabGroup: 'brain', tabId: 'inbox', aliases: ['brain', 'brain-inbox', 'inbox'] },
+  { id: 'nav.brain.threads', path: '/brain/threads', label: 'Threads', section: 'Brain', tabGroup: 'brain', tabId: 'threads', aliases: ['threads', 'brain-threads', 'bullet-journal', 'open-loops'], keywords: ['todo', 'tracking', 'next action', 'open loops', 'bullet journal'] },
   { id: 'nav.brain.ideas', path: '/brain/ideas', label: 'Ideas', section: 'Brain', tabGroup: 'brain', tabId: 'ideas', aliases: ['brain-ideas', 'ideas'], keywords: ['brainstorm', 'creative', 'thought', 'concept'] },
   { id: 'nav.brain.daily-log', path: '/brain/daily-log', label: 'Daily Log', section: 'Brain', tabGroup: 'brain', tabId: 'daily-log', aliases: ['daily-log', 'journal'] },
   { id: 'nav.brain.links', path: '/brain/links', label: 'Links', section: 'Brain', tabGroup: 'brain', tabId: 'links', aliases: ['brain-links'] },
@@ -322,6 +323,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', previousPaths: ['/settings/embeddings'], aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
   { id: 'nav.settings.local-llm', path: '/models/llms', label: 'LLMs', section: 'Models', tabId: 'llms', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
   { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', aliases: ['abuse-guard', 'model-abuse', 'model-abuse-guard', 'prompt-guard', 'prompt guard'], keywords: ['classifier', 'prompt injection', 'security scan', 'llama prompt guard', 'install guard'] },
+  { id: 'nav.models.llms.jev', path: '/models/llms/jev', label: 'jev', section: 'Models', feature: 'jev', aliases: ['jev', 'openjev', 'entailment', 'nli', 'decision-scorer'], keywords: ['entailment', 'nli', 'closed set', 'abstain', 'margin', 'scorer', 'decision', 'install jev'] },
   // Split out of the LLMs page (#7414): managing the SERVERS that run models is
   // a different job from browsing the weights they serve, and it was the LLMs
   // default view, not a drill-down — so it gets a sibling tab rather than a

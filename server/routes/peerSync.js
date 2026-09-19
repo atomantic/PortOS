@@ -211,8 +211,9 @@ router.get('/cos-tasks', asyncHandler(async (req, res) => {
 // instance has PROMOTED (#7455) so a full-sync peer can pull and inherit them.
 //
 // Returns `{ schemaVersion, listHash, candidates: [<promote envelope>, …] }`.
-// The envelope is the one Eidoverse artifact the machine-local privacy ADR
-// authorizes to cross, and it has no `style` layer by construction, so an
+// The envelope is authorized to cross by the federated Eidoverse foundations
+// ADR (docs/decisions/2026-09-18-federated-eidoverse-foundations.md), and it
+// has no `style` layer by construction, so an
 // inheriting peer gets the substance and keeps its own cosmetics. The receiver
 // re-runs the whole accept-side gate on every envelope before it stores one.
 //

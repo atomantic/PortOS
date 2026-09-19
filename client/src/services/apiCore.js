@@ -107,6 +107,18 @@ export async function request(endpoint, options = {}) {
 }
 
 // Search
+// Query string from a filter object, dropping absent/empty values so a cleared
+// filter never reaches the server as `?q=`. Returns '' when nothing is set.
+export const queryString = (params = {}) => {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue;
+    qs.set(key, String(value));
+  }
+  const encoded = qs.toString();
+  return encoded ? `?${encoded}` : '';
+};
+
 export const search = (q) => request(`/search?q=${encodeURIComponent(q)}`);
 
 // Default export for simplified imports

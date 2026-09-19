@@ -27,6 +27,7 @@ const ImportTab = lazy(() => import('../components/brain/tabs/ImportTab'));
 const BrainGraph = lazy(() => import('../components/brain/tabs/BrainGraph'));
 const SpotifyTab = lazy(() => import('../components/brain/tabs/SpotifyTab'));
 const YoutubeTab = lazy(() => import('../components/brain/tabs/YoutubeTab'));
+const ThreadsTab = lazy(() => import('../components/brain/tabs/ThreadsTab'));
 
 export default function Brain() {
   const { tab } = useParams();
@@ -62,6 +63,8 @@ export default function Brain() {
     switch (activeTab) {
       case 'inbox':
         return <InboxTab onRefresh={refetch} settings={settings} />;
+      case 'threads':
+        return <ThreadsTab />;
       case 'links':
         return <LinksTab onRefresh={refetch} />;
       case 'memory':

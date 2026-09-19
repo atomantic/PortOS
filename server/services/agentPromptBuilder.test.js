@@ -1122,8 +1122,10 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('refusing to overwrite them');
       expect(prompt).toContain('LOCAL_OVERALL_STATUS=review-blocked');
       expect(prompt).toContain('case "$LOCAL_OVERALL_STATUS" in clean|partial|review-blocked)');
-      expect(prompt).toContain('gh pr comment "$PR_URL" --body "$REVIEW_BLOCKED_COMMENT"');
-      expect(prompt).toContain('Required code review was not completed before publication. This PR/MR is intentionally left open and will not be merged until the required review completes.');
+      // A review that could not return a verdict is run-summary material, not PR content.
+      expect(prompt).not.toContain('REVIEW_BLOCKED_COMMENT');
+      expect(prompt).not.toContain('will not be merged until the required review completes');
+      expect(prompt).toContain('do NOT post a PR/MR comment saying the review was unavailable or inconclusive');
       expect(prompt).toMatch(/PR_URL=\$\(gh pr create --base main --head "\$PR_HEAD"/);
       expect(prompt).toMatch(/## Review Loop/);
       expect(prompt).toMatch(/gh pr merge "\$PR_URL" --merge --delete-branch/);
@@ -1332,8 +1334,10 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/PR_URL=\$\(glab mr create --source-branch claim\/issue-4363 --target-branch main/);
       expect(prompt).toMatch(/PR_NUMBER=\$\(glab mr view "\$PR_URL" --output json \| jq -r \.iid\)/);
       expect(prompt).toContain('LOCAL_OVERALL_STATUS=review-blocked');
-      expect(prompt).toContain('glab mr note "$PR_NUMBER" --message "$REVIEW_BLOCKED_COMMENT"');
-      expect(prompt).toContain('Required code review was not completed before publication. This PR/MR is intentionally left open and will not be merged until the required review completes.');
+      // Same on GitLab: the unavailable review goes in the summary, not an MR note.
+      expect(prompt).not.toContain('REVIEW_BLOCKED_COMMENT');
+      expect(prompt).not.toContain('will not be merged until the required review completes');
+      expect(prompt).toContain('do NOT post a PR/MR comment saying the review was unavailable or inconclusive');
       expect(prompt).toMatch(/## Review Loop/);
       expect(prompt).toMatch(/request `@alice` as MR reviewer/);
       expect(prompt).toMatch(/glab mr merge "\$PR_NUMBER" --yes --remove-source-branch/);
@@ -2031,6 +2035,46 @@ describe('buildLightContextPrompt', () => {
         { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
       expect(prompt).toMatch(/--review-with ollama~opt,codex,@alice --review-stop-on-findings/);
       expect(prompt).not.toMatch(/--reviewer-applies/);
+      // `codex` and `@alice` are still blocking, so the skip list stays whole.
+      expect(prompt).toContain('Skip the merge if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
+      expect(prompt).not.toContain('Every configured reviewer is optional (`~opt`)');
+    });
+
+    it('tells an all-optional run not to invent a blocker from a missing verdict', () => {
+      // `~opt` is honored by slashdo's loop, which excludes an optional pass's
+      // missing verdict from the aggregate — so the run comes back `clean` and
+      // merges on the ordinary gate. The prompt says so rather than relaxing
+      // the skip list, because the ONE thing `~opt` never excuses is
+      // `push-failed`, and that is precisely what an `inconclusive` aggregate
+      // means when every reviewer is optional.
+      const codeReviewDefaults = {
+        reviewers: ['codex', 'ollama'],
+        usernames: ['alice'],
+        optionalReviewers: ['codex', 'ollama', '@alice'],
+      };
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
+      // The skip list is NOT relaxed — a surviving `inconclusive` still blocks.
+      expect(prompt).toContain('Skip the merge if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
+      expect(prompt).toContain('Every configured reviewer is optional (`~opt`), so a reviewer that timed out or returned no verdict does NOT make the loop inconclusive');
+      expect(prompt).toContain('An `inconclusive` that still appears despite that is a real blocker (fixes committed but not pushed), and stands.');
+    });
+
+    it('keeps the full skip list when NO reviewer is configured', () => {
+      // An empty list is "nobody reviews", not "every reviewer is optional" —
+      // there is no `~opt` decision to honor, so the default gate stands.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).toContain('Skip the merge if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
+      expect(prompt).not.toContain('Every configured reviewer is optional (`~opt`)');
     });
 
     it('threads per-reviewer ~max caps from the Code Review Defaults into the inline /do:pr', () => {
@@ -2324,7 +2368,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/--model gpt-5\.6-sol/);
     });
 
-    it('emits the local-LLM POST instruction when a local-LLM reviewer is configured', () => {
+    it('emits the local-LLM bridge instruction when a local-LLM reviewer is configured', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {
           reviewLoopFollowUp: true,
@@ -2337,12 +2381,14 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta);
-      // The agent gets a copy-pasteable curl pipeline pointing at PortOS's
-      // loopback API — without it the lmstudio/ollama reviewer kinds have no
-      // way to actually run a review.
-      expect(prompt).toMatch(/POST the diff to PortOS's local reviewer endpoint/);
-      expect(prompt).toMatch(/http:\/\/127\.0\.0\.1:5555\/api\/code-review\/local/);
+      // The agent gets a copy-pasteable stdin bridge pipeline — no HTTP route,
+      // no instance-password gate — without it the lmstudio/ollama reviewer
+      // kinds have no way to actually run a review.
+      expect(prompt).toMatch(/Pipe the diff into PortOS's local-review bridge/);
+      expect(prompt).not.toMatch(/\/api\/code-review\/local/);
       expect(prompt).toMatch(/gh pr diff 9 \| jq/);
+      expect(prompt).toMatch(/run-local-code-review\.mjs/);
+      expect(prompt).toMatch(/timeoutMs: 1800000/);
       expect(prompt).toMatch(/jq -er '\.findings \| select\(type == "string" and length > 0\)'/);
       expect(prompt).toMatch(/Never treat an absent or malformed response as clean/);
     });
@@ -3322,7 +3368,7 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
       { verbose: false, localAgentLoopBody: null }
     );
     expect(out).toMatch(/Local reviewer failed:/);
-    expect(out).toMatch(/STATUS=no-verdict[^]*exit 1/);
+    expect(out).toMatch(/exit 1 # Never treat an absent or malformed response as clean/);
   });
 
   it('keeps an inline merge gate closed when the pre-PR required review is unavailable', () => {
@@ -3909,6 +3955,7 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       // Pinning a non-blocking reviewer as blocking changes the merge gate.
       expect(prompt).toContain('--review-with codex~opt');
     });
+
 
     it('treats an explicitly-OPTIONAL lone copilot as configured and keeps its ~opt', async () => {
       // Nothing defaults to `~opt`, so marking copilot optional is a deliberate

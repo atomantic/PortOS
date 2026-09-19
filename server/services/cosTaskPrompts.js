@@ -5,10 +5,9 @@
  * and persistence remain in cosTaskGenerator.js.
  */
 
-import { join } from 'path';
 import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
-import { PATHS } from '../lib/fileUtils.js';
 import { shellQuote } from '../lib/shellQuote.js';
+import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../lib/localReviewBridge.js';
 
 export function normalizeWorkItemRef(ref) {
   const raw = String(ref ?? '').trim().replace(/^#/, '');
@@ -116,7 +115,7 @@ export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, r
     'git fetch origin "$DEFAULT_BRANCH" >/dev/null 2>&1',
     'git diff "origin/$DEFAULT_BRANCH...HEAD"',
   ].join('\n');
-  const reviewScript = shellQuote(join(PATHS.root, 'server/scripts/run-local-code-review.mjs'));
+  const reviewScript = shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT);
   const ingressReviewer = localReviewers[0];
   const ingressPinned = {
     kind: 'claim-comments',

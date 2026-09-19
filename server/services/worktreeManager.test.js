@@ -910,10 +910,14 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
   // subcommand, so a test only has to state what it cares about instead of
   // ordering every call. The preserve/delete decision itself comes from the
   // mocked `hasBranchMergeEvidence` (see the ./git.js mock at the top of this file).
-  function scriptGit({ porcelain = '' } = {}) {
+  function scriptGit({ porcelain = '', remoteTargetResolves = true } = {}) {
     execGitMock.mockReset();
     execGitMock.mockImplementation((args) => {
       const [sub] = args;
+      // Whether this clone has an `origin/<default>` to prefer over the local branch.
+      if (sub === 'rev-parse' && args[1] === '--verify' && String(args[2]).startsWith('origin/')) {
+        return Promise.resolve({ stdout: remoteTargetResolves ? 'deadbeef' : '', stderr: '', exitCode: remoteTargetResolves ? 0 : 1 });
+      }
       if (sub === 'rev-parse' && args[1] === '--show-toplevel') {
         // Empty stdout → `detectedToplevel` is falsy, so removeWorktree SKIPS its
         // broken-worktree check rather than taking that early-return branch (which
@@ -968,6 +972,30 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
 
     expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(false);
     expect(result.warnings.join(' ')).toMatch(/preserved/i);
+  });
+
+  // #7653: a PR merged on the forge moves ORIGIN's default branch — this clone's
+  // `main` does not move until something fetches. Asking the local ref preserved
+  // an already-landed branch and re-queued its task against shipped work.
+  it('refreshes and asks origin/<default>, not the stale local branch', async () => {
+    scriptGit({ remoteTargetResolves: true });
+
+    await removeWorktree('agent-x', '/repo', 'claim/issue-7625', {
+      merge: false, preserveBranchWithCommits: true,
+    });
+
+    expect(calledWith(['fetch', 'origin', '--prune'])).toBe(true);
+    expect(hasBranchMergeEvidenceMock).toHaveBeenCalledWith('/repo', 'claim/issue-7625', 'origin/main');
+  });
+
+  it('falls back to the local branch when origin has no copy of the default', async () => {
+    scriptGit({ remoteTargetResolves: false });
+
+    await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', {
+      merge: false, preserveBranchWithCommits: true,
+    });
+
+    expect(hasBranchMergeEvidenceMock).toHaveBeenCalledWith('/repo', 'cos/task-1/agent-x', 'main');
   });
 
   it('is opt-in: without the flag the no-merge path still deletes an unmerged branch', async () => {

@@ -57,6 +57,19 @@ export const cancelPersistentMindThinkingRequest = (options = {}) =>
   request('/cos/mind/thinking-request', { method: 'DELETE', ...options });
 export const getPersistentMindContext = (options = {}) => request('/cos/mind/context', options);
 export const getPersistentMindTools = (options = {}) => request('/cos/mind/tools', options);
+export const getPersistentMindJournal = ({ kind, status, ...options } = {}) => {
+  const params = new URLSearchParams();
+  if (kind) params.set('kind', kind);
+  if (status) params.set('status', status);
+  const query = params.toString();
+  return request(`/cos/mind/journal${query ? `?${query}` : ''}`, options);
+};
+// Retire or settle one entry. The server never deletes it: both verbs are
+// status transitions that keep the statement readable as history.
+export const correctPersistentMindJournalEvent = (journalEventId, body, options = {}) =>
+  request(`/cos/mind/journal/${encodeURIComponent(journalEventId)}/correct`, {
+    method: 'POST', body: JSON.stringify(body), ...options,
+  });
 export const getMindRecipes = (options = {}) => request('/cos/mind/recipes', options);
 export const getMindRecipe = (id, options = {}) => request(`/cos/mind/recipes/${encodeURIComponent(id)}`, options);
 export const createMindRecipe = (definition, options = {}) => request('/cos/mind/recipes', {
@@ -115,6 +128,24 @@ export const updatePersistentMindMemory = (memoryId, body, options = {}) => requ
 });
 export const cleanupPersistentMind = (body, options = {}) => request('/cos/mind/cleanup', {
   method: 'POST', body: JSON.stringify(body), ...options,
+});
+// Seal the Mind into a portable bundle (#7621). The response is the sealed file
+// itself, not JSON — `responseType: 'text'` hands the caller the bytes to save.
+// `silent` because the panel renders its own inline refusal: the server's
+// "could not read <scope>" reason is the whole point of the failure.
+export const exportPersistentMindBundle = (body, options = {}) => request('/cos/mind/bundle/export', {
+  method: 'POST', body: JSON.stringify(body), responseType: 'text', silent: true, ...options,
+});
+
+// Open a bundle and see what it carries (#7622). Read-only on the server: this
+// never writes, so the panel can call it as soon as a file and passphrase exist.
+// `silent` because the refusal reason IS the result the user needs to read.
+export const previewPersistentMindBundle = (body, options = {}) => request('/cos/mind/bundle/preview', {
+  method: 'POST', body: JSON.stringify(body), silent: true, ...options,
+});
+// Apply a bundle under the user's per-group choices (#7622) — the single write.
+export const applyPersistentMindBundle = (body, options = {}) => request('/cos/mind/bundle/apply', {
+  method: 'POST', body: JSON.stringify(body), silent: true, ...options,
 });
 
 // Chief of Staff

@@ -21,6 +21,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { join } from 'path';
+import { shellQuote } from '../../lib/shellQuote.js';
 
 // The section embeds two agent-facing `curl` commands aimed at this install's
 // own API. Pin the origin so the matrix is byte-stable regardless of the host's
@@ -28,6 +30,15 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../../lib/networkExposure.js', () => ({
   localApiBaseUrl: () => 'http://127.0.0.1:5555',
 }));
+
+// The 401 fallback names the auth-independent review bridge by absolute path,
+// which is whatever directory this install was cloned into. Pin the checkout
+// root for the same reason the origin above is pinned — and so no contributor's
+// home directory can ride a snapshot update into the repository.
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, root: '/portos' } };
+});
 
 import { buildReviewLoopFollowUpSection } from './reviewLifecycle.js';
 
@@ -117,7 +128,18 @@ const PHASES = {
   },
 };
 
-const render = ({ phase, forge, leaveOpen, verbose }) => buildReviewLoopFollowUpSection(
+// The 401 fallback names the review bridge through `join()` + `shellQuote()`, both
+// of which are platform-sensitive: a Windows checkout renders
+// `'\portos\server\…'` — backslashes, and quoted, because shellQuote quotes a
+// path containing them. Every file snapshot below would then differ from the
+// POSIX spelling committed here. Reproduce that exact fragment with the same two
+// functions and normalize it to one canonical form before snapshotting; the
+// prompt still hands a Windows agent the Windows path its shell needs.
+const BRIDGE_IN_SNAPSHOTS = '/portos/server/scripts/run-local-code-review.mjs';
+const RENDERED_BRIDGE = shellQuote(join('/portos', 'server/scripts/run-local-code-review.mjs'));
+const stable = (section) => section.split(RENDERED_BRIDGE).join(BRIDGE_IN_SNAPSHOTS);
+
+const render = ({ phase, forge, leaveOpen, verbose }) => stable(buildReviewLoopFollowUpSection(
   fixture({ reviewLoopPRHost: FORGES[forge].host, reviewLoopLeaveOpen: leaveOpen }),
   {
     verbose,
@@ -126,7 +148,7 @@ const render = ({ phase, forge, leaveOpen, verbose }) => buildReviewLoopFollowUp
     reviewerPositions: REVIEWER_POSITIONS,
     ...PHASES[phase].opts,
   },
-);
+));
 
 const CELL = (phase, forge, leaveOpen, verbose) => ({ phase, forge, leaveOpen, verbose });
 
@@ -171,7 +193,7 @@ describe('buildReviewLoopFollowUpSection — phase × forge × leaveOpen × verb
       fixture({ reviewLoopReviewers: ['copilot', 'codex'], reviewLoopOptionalReviewers: [] }),
       { verbose: false, localAgentLoopBody: CLI_REVIEW_RECIPE, reviewerPositions: REVIEWER_POSITIONS, baseBranch: 'main' },
     );
-    await expect(section).toMatchFileSnapshot(SNAP('followup-copilot-first'));
+    await expect(stable(section)).toMatchFileSnapshot(SNAP('followup-copilot-first'));
   });
 
   // The merge-only variant (Review Loop off) returns from `buildMergeFollowUpSection`
@@ -190,7 +212,7 @@ describe('buildReviewLoopFollowUpSection — phase × forge × leaveOpen × verb
             ...(phase === 'inline' ? { inlineExitStep: INLINE_EXIT_STEP } : {}),
           },
         );
-        await expect(section).toMatchFileSnapshot(SNAP(name));
+        await expect(stable(section)).toMatchFileSnapshot(SNAP(name));
       });
     }
   }
@@ -240,7 +262,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('## Review-Loop Follow-up (PRIMARY OBJECTIVE)');
     expect(section).toContain('Drive the review-and-fix loop to completion and merge.');
     expect(section).toContain('on GitHub `gh pr diff 42` also works');
-    expect(section).toContain('HTTP_STATUS=$(gh pr diff 42 | jq');
+    expect(section).toContain(`gh pr diff 42 | jq -Rs '{ backend:`);
     expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
     expect(section).toContain('(Equivalent: `gh pr merge 42 --repo example-org/example-repo --merge --delete-branch`.)');
     expect(section).toContain('`gh pr view "https://github.com/example-org/example-repo/pull/42" --json state -q .state` must return `MERGED`');
@@ -263,7 +285,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
   it('routes every forge command through the caller override on a self-managed GitLab', () => {
     const section = render(CELL('followUp', 'glab', false, false));
 
-    expect(section).toContain('HTTP_STATUS=$(glab mr diff 42 | jq');
+    expect(section).toContain(`glab mr diff 42 | jq -Rs '{ backend:`);
     expect(section).toContain('glab mr merge "42" --yes --remove-source-branch');
     expect(section).toContain('`glab mr view "42"` must show it merged');
     expect(section).toContain('request `@example-user` as MR reviewer using the GitLab project UI or API');
@@ -288,7 +310,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     for (const phase of ['inline', 'followUp']) {
       const section = render(CELL(phase, 'glab', true, false));
 
-      expect(section).toContain('HTTP_STATUS=$(glab mr diff 42 | jq');
+      expect(section).toContain(`glab mr diff 42 | jq -Rs '{ backend:`);
       expect(section).toContain('5. Post a short comment on the MR summarising');
       expect(section).toContain('`glab mr note 42 --message "<summary>"`');
       expect(section).not.toContain('gh pr comment');
@@ -329,7 +351,7 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     );
 
     const merging = hostGlab({}, {});
-    expect(merging).toContain('HTTP_STATUS=$(glab mr diff 42 | jq');
+    expect(merging).toContain(`glab mr diff 42 | jq -Rs '{ backend:`);
     expect(merging).toContain('glab mr merge "42" --yes --remove-source-branch');
     expect(merging).toContain('`glab mr view "42"` must show it merged');
     expect(merging).toContain('request `@example-user` as MR reviewer using the GitLab project UI or API');

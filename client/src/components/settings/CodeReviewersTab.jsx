@@ -7,6 +7,7 @@ import ReviewerPicker from '../cos/ReviewerPicker';
 import GoalFidelityControls from './GoalFidelityControls';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerModelsToDefaults, reviewerEffortsFromDefaults, reviewerEffortsToDefaults } from '../../lib/reviewerModels';
+import { DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER } from '../../lib/reviewerPins';
 import {
   DEFAULT_REVIEWERS,
   DEFAULT_REVIEW_STOP_MODE,
@@ -31,8 +32,12 @@ export default function CodeReviewersTab() {
   const [reviewerEfforts, setReviewerEfforts] = useState({});
   const [stopMode, setStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
-  const [goalFidelity, setGoalFidelity] = useState({ enabled: true, backend: null, model: null, effort: null });
+  const [goalFidelity, setGoalFidelity] = useState({
+    enabled: true, backend: null, model: null, effort: null,
+    fileIssue: false, queueTask: false, followUpOn: DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER,
+  });
   const [installed, setInstalled] = useState({});
+  const [providerReviewUnsupported, setProviderReviewUnsupported] = useState({});
   const modelOptions = useReviewerModelOptions();
 
   const loadDefaults = useCallback(() => {
@@ -60,8 +65,15 @@ export default function CodeReviewersTab() {
             backend: defaults.goalFidelity?.backend || null,
             model: defaults.goalFidelity?.model || null,
             effort: defaults.goalFidelity?.effort || null,
+            // Both follow-up actions default OFF — filing on a tracker and
+            // spawning an unattended run are each opt-in — so an absent block
+            // must read as off, the mirror image of `enabled` above.
+            fileIssue: defaults.goalFidelity?.fileIssue === true,
+            queueTask: defaults.goalFidelity?.queueTask === true,
+            followUpOn: defaults.goalFidelity?.followUpOn || DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER,
           });
           setInstalled(defaults.installed && typeof defaults.installed === 'object' && !Array.isArray(defaults.installed) ? defaults.installed : {});
+          setProviderReviewUnsupported(defaults.providerReviewUnsupported && typeof defaults.providerReviewUnsupported === 'object' && !Array.isArray(defaults.providerReviewUnsupported) ? defaults.providerReviewUnsupported : {});
         } else {
           setLoadError(true);
         }
@@ -99,6 +111,15 @@ export default function CodeReviewersTab() {
         ...(goalFidelity.backend ? { backend: goalFidelity.backend } : {}),
         ...(goalFidelity.model ? { model: goalFidelity.model } : {}),
         ...(goalFidelity.effort ? { effort: goalFidelity.effort } : {}),
+        // Booleans always ride: unlike the scalars above, `false` here is the
+        // user turning an action OFF, not "inherit", so dropping it would make
+        // the switch un-clearable once it had been on. The trigger is the other
+        // way round — it only means something once an action is armed, so an
+        // install that never armed one is left inheriting the shipped default
+        // rather than pinned to today's value forever.
+        fileIssue: goalFidelity.fileIssue === true,
+        queueTask: goalFidelity.queueTask === true,
+        ...(goalFidelity.fileIssue || goalFidelity.queueTask ? { followUpOn: goalFidelity.followUpOn } : {}),
       },
     };
     const ok = await api.updateSettings({ codeReview: payload }, { silent: true })
@@ -150,6 +171,7 @@ export default function CodeReviewersTab() {
             reviewerEfforts={reviewerEfforts}
             modelOptions={modelOptions}
             installed={installed}
+            providerReviewUnsupported={providerReviewUnsupported}
             stopMode={stopMode}
             reviewerApplies={reviewerApplies}
             disabled={saving || loadError}

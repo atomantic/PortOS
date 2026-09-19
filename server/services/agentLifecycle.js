@@ -54,6 +54,7 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
+import { repoIssueUrlBase, resolveAppForgeTarget, resolveRepoForgeTarget } from '../lib/workTracker.js';
 import { capturePrimaryCheckoutState } from '../lib/primaryCheckoutGuard.js';
 import { buildAgentPrompt, getAppWorkspace, isClaimFlowTask, promptOpensOwnPr } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
@@ -78,6 +79,7 @@ import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
+import { resolveAgentApiEnv } from './agentApiAuth.js';
 import { runnerAgents, pausedAgents, consumePausedAgentExit, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isUpdateInProgress } from './updateChecker.js';
@@ -506,7 +508,7 @@ async function runAgentSpawn(task) {
       cosEvents.emit('agent:error', { taskId: task.id, error: prep.reason });
       return null;
     }
-    const { workspacePath, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
+    const { workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
     if (worktreeInfo?.branchName && !worktreeInfo.existingBranch && !worktreeInfo.isPersistentWorktree) {
       spawnWorktree = { branchName: worktreeInfo.branchName };
     }
@@ -677,20 +679,35 @@ async function runAgentSpawn(task) {
     // `isTruthyMetaFn` argument — which is exactly the split that made a claim
     // run badge itself "main".
     const claimFlowTask = isClaimFlowTask(task, isTruthyMeta);
+    // Two independent reads of two different checkouts — run them together
+    // rather than letting the object literal below serialize them.
+    //
+    // The forge target is where a bare `#7640` in this run's own summary points.
+    // Resolved through the shared resolver (not a hostname guess) so the app's
+    // own `workTracker` pin decides for a self-hosted forge, and read from the
+    // WORKSPACE so a run on a managed app links to THAT app's tracker.
+    //
+    // `primaryCheckoutBaseline` is the branch-jack baseline (#3680): the primary
+    // checkout's branch + HEAD at the instant this worktree agent started.
+    // finalizeAgent re-reads it at the end of the run — every spawn mode funnels
+    // through that one chokepoint — and fails the run when the primary moved,
+    // instead of recording a silent "completed" for an agent that wrote
+    // unreviewed commits outside its worktree. Non-throwing: an unreadable
+    // checkout yields null, which the detector reads as "nothing to check".
+    const [forgeTarget, primaryCheckoutBaseline] = await Promise.all([
+      resolvedApp
+        ? resolveAppForgeTarget(resolvedApp, { repoPath: workspacePath }).then(r => r.target)
+        : resolveRepoForgeTarget(workspacePath),
+      sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
+    ]);
     await registerAgent(agentId, task.id, buildAgentRegistration({
       task,
       provider,
       instanceId,
       workspacePath,
       sourceWorkspace,
-      // Branch-jack baseline (#3680): the primary checkout's branch + HEAD at the
-      // instant this worktree agent started. finalizeAgent re-reads it at the end
-      // of the run — every spawn mode funnels through that one chokepoint — and
-      // fails the run when the primary moved, instead of recording a silent
-      // "completed" for an agent that wrote unreviewed commits outside its
-      // worktree. Non-throwing: an unreadable checkout yields null, which the
-      // detector reads as "nothing to check".
-      primaryCheckoutBaseline: sourceWorkspace ? await capturePrimaryCheckoutState(sourceWorkspace) : null,
+      repoIssueUrl: repoIssueUrlBase(forgeTarget),
+      primaryCheckoutBaseline,
       worktreeInfo,
       explicitWorktree,
       jiraBranchName,
@@ -968,9 +985,14 @@ export async function spawnViaRunner(agentId, task, opts) {
   // account — see resolveForgeTokenEnv; `{}` when there's no owner match). Skip
   // the token probe when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so
   // its explicit credential wins.
-  const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
+  // ...plus the loopback PortOS session token the agent's own `curl` snippets
+  // need on a password-protected install (agentApiAuth.js); `{}` when auth is
+  // off. The runner rebuilds its child env from ITS ambient environment, so like
+  // GH_TOKEN this has to ride the explicit delta below or the agent never sees it.
+  const [claudeSettingsEnv, forgeTokenEnv, agentApiEnv] = await Promise.all([
     isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
     providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(workspacePath),
+    resolveAgentApiEnv(),
   ]);
 
   // The runner can reject the spawn outright — a command missing from its
@@ -1006,7 +1028,7 @@ export async function spawnViaRunner(agentId, task, opts) {
       // injected `--model ollama/<id>` is accepted (#2243/#2190 — this path was
       // the site that sweep originally missed).
       envVars: composeProviderEnv({
-        before: { ...forgeTokenEnv, ...claudeSettingsEnv },
+        before: { ...forgeTokenEnv, ...claudeSettingsEnv, ...agentApiEnv },
         provider,
         model,
       }),

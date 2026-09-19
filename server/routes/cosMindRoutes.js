@@ -21,6 +21,12 @@ import {
   PERSISTENT_MIND_TRAJECTORY_LIMITS,
   parsePersistentMindCursor,
 } from '../lib/persistentMindTrajectory.js';
+import {
+  PERSISTENT_MIND_JOURNAL_KINDS,
+  PERSISTENT_MIND_JOURNAL_LIMITS,
+  PERSISTENT_MIND_JOURNAL_STATUSES,
+  publicPersistentMindJournalEvent,
+} from '../lib/persistentMindJournal.js';
 import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import {
   normalizePersistentMindThinkingPresets,
@@ -32,7 +38,7 @@ import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PER
 import { resolvePersistentMindPlaybookPhase } from '../services/persistentMindPlaybookSignals.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
-import { validateRequest } from '../lib/validation.js';
+import { mindBundleApplySchema, mindBundleExportSchema, mindBundlePreviewSchema, validateRequest } from '../lib/validation.js';
 import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agentRunEventLog.js';
 import { loadState } from '../services/cosState.js';
 import {
@@ -45,9 +51,18 @@ import {
   readPersistentMindRollups,
   updatePersistentMindMemory,
 } from '../services/persistentMindContext.js';
+import {
+  correctPersistentMindJournalEvent,
+  readPersistentMindJournal,
+} from '../services/persistentMindJournal.js';
 import { getProviderById } from '../services/providers.js';
 import { persistentMindHarnessInfo } from '../services/persistentMindAdapter.js';
 import { cleanupPersistentMind } from '../services/persistentMindMaintenance.js';
+import {
+  applyPersistentMindBundle,
+  exportPersistentMindBundle,
+  previewPersistentMindBundle,
+} from '../services/persistentMindBundle.js';
 import { resolvePersistentMindImageCapability } from '../services/persistentMindImageCapability.js';
 import { readPersistentMindTaskCatalog } from '../services/persistentMindTaskCapability.js';
 import { inspectPersistentMindRuntime } from '../services/persistentMindRuntime.js';
@@ -163,6 +178,20 @@ const memoryUpdateSchema = z.object(memoryFields).partial().strict().refine(
   'At least one memory field is required'
 );
 const memoryParamsSchema = z.object({ memoryId: z.string().trim().min(1).max(128) }).strict();
+const journalReadSchema = z.object({
+  kind: z.enum(PERSISTENT_MIND_JOURNAL_KINDS).optional(),
+  status: z.enum(PERSISTENT_MIND_JOURNAL_STATUSES).optional(),
+  limit: z.coerce.number().int().positive().max(PERSISTENT_MIND_JOURNAL_LIMITS.maxPageSize).optional(),
+  offset: z.coerce.number().int().nonnegative().optional(),
+}).strict();
+// Two verbs, not a free status write: the user may settle an entry or retire
+// one the mind got wrong. Neither deletes it, and neither can resurrect a
+// retired statement — that is the mind's own supersede operation.
+const journalCorrectionSchema = z.object({
+  action: z.enum(['resolve', 'retire']),
+  resolution: z.string().trim().max(PERSISTENT_MIND_JOURNAL_LIMITS.maxResolutionChars).optional(),
+}).strict();
+const journalParamsSchema = z.object({ journalEventId: z.string().trim().min(1).max(160) }).strict();
 const cleanupSchema = z.object({
   scopes: z.array(z.enum(PERSISTENT_MIND_CLEANUP_SCOPES))
     .min(1)
@@ -262,6 +291,29 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
   });
 }));
 
+router.get('/mind/journal', asyncHandler(async (req, res) => {
+  const { limit = PERSISTENT_MIND_JOURNAL_LIMITS.defaultPageSize, offset = 0, ...filters } = validateRequest(journalReadSchema, req.query);
+  const events = await readPersistentMindJournal(PERSISTENT_MIND_ID, filters);
+  res.json({
+    kinds: PERSISTENT_MIND_JOURNAL_KINDS,
+    statuses: PERSISTENT_MIND_JOURNAL_STATUSES,
+    total: events.length,
+    counts: Object.fromEntries(PERSISTENT_MIND_JOURNAL_STATUSES.map((status) => [
+      status, events.filter((event) => event.status === status).length,
+    ])),
+    events: events.slice(offset, offset + limit).map(publicPersistentMindJournalEvent),
+  });
+}));
+
+router.post('/mind/journal/:journalEventId/correct', asyncHandler(async (req, res) => {
+  const { journalEventId } = validateRequest(journalParamsSchema, req.params);
+  const input = validateRequest(journalCorrectionSchema, req.body);
+  const result = requireSuccess(await correctPersistentMindJournalEvent({
+    mindId: PERSISTENT_MIND_ID, eventId: journalEventId, ...input,
+  }));
+  res.json({ success: true, changed: result.changed, event: publicPersistentMindJournalEvent(result.event) });
+}));
+
 // Keep the persistent mind's authority inventory separate from the broader
 // onboard-tools registry. Those tools belong to other agent surfaces and are
 // not direct capabilities of the persistent mind.
@@ -343,6 +395,50 @@ router.post('/mind/cleanup', asyncHandler(async (req, res) => {
   const result = await cleanupPersistentMind({ ...input, requestedBy: 'user' });
   const state = await getPersistentMindState();
   res.json({ ...result, state: publicPersistentMindState(state) });
+}));
+
+/**
+ * Seal the Mind into a downloadable, passphrase-encrypted bundle (#7621).
+ *
+ * Machine-local and user-initiated: the bytes are streamed straight back to the
+ * caller and never written to disk, never logged, and never offered to a peer.
+ * The passphrase is used once, inside the sealer, and appears in no log line
+ * and no error body (`validateRequest` reports paths, not values).
+ */
+router.post('/mind/bundle/export', asyncHandler(async (req, res) => {
+  const { scopes, passphrase } = validateRequest(mindBundleExportSchema, req.body);
+  const { bundle, filename } = await exportPersistentMindBundle({ scopes, passphrase });
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  // A sealed identity must not sit in a shared/proxy cache on its way to the
+  // browser, even though the bytes are encrypted.
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(bundle);
+}));
+
+/**
+ * Open a bundle and report what it carries beside what this install holds
+ * (#7622). **This route writes nothing** — it is the read that makes the apply
+ * below a decision rather than a leap, so it stays free of every side effect.
+ * The response is a diff, not a transcript: it is the user's own Mind, shown
+ * back to them on their own machine, and it is never logged or offered to a peer.
+ */
+router.post('/mind/bundle/preview', asyncHandler(async (req, res) => {
+  const { bundle, passphrase } = validateRequest(mindBundlePreviewSchema, req.body);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await previewPersistentMindBundle({ text: bundle, passphrase }));
+}));
+
+/**
+ * Apply a bundle under one whole-group choice per group (#7622). The single
+ * write path. The bundle is re-opened here rather than carried over from the
+ * preview, so what is applied is what the file says — not a preview payload
+ * that made a round trip through the client.
+ */
+router.post('/mind/bundle/apply', asyncHandler(async (req, res) => {
+  const { bundle, passphrase, choices } = validateRequest(mindBundleApplySchema, req.body);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(await applyPersistentMindBundle({ text: bundle, passphrase, choices }));
 }));
 
 router.post('/mind/attachments', asyncHandler(async (req, res) => {

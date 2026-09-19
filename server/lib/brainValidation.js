@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { partialWithoutDefaults, optionalBooleanMap } from './zodCompat.js';
 import { REPO_INTAKE_KEYS } from './repoIntakeActions.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { canonicalThreadRefKind } from './threadRefKinds.js';
+import { THREAD_STATUSES, THREAD_PRIORITIES } from './brainThreads.js';
 import { MAX_QUALITY } from './spacedRepetition.js';
 
 // Destination enum. `links` is reachable only from the bare-URL capture
@@ -780,6 +782,107 @@ export const songAttachmentUploadSchema = z.object({
   data: z.string().min(1),
   label: z.string().max(300).optional().default('')
 });
+
+// =============================================================================
+// THREAD SCHEMAS (/api/brain/threads/*)
+// =============================================================================
+//
+// A Brain *thread* is one tracked topic or commitment — an open loop in the
+// bullet-journal sense, NOT a message thread (see server/lib/threadRefKinds.js).
+//
+// `source`, `externalState` and `closedAt` are SERVER-managed: they have no key
+// in the write schemas below, so Zod's unknown-key stripping drops a
+// client-supplied value. `source` records where an auto-discovered thread came
+// from, `externalState` what the tracker last said, and `closedAt` is stamped by
+// the route when the status enters a terminal state.
+
+// Vocabularies live in the pure leaf (`lib/brainThreads.js`) so the client
+// renders its pickers from the same arrays these enums validate against.
+export const threadStatusEnum = z.enum(THREAD_STATUSES);
+export const threadPriorityEnum = z.enum(THREAD_PRIORITIES);
+
+// A ref's `kind` is validated as a SHAPE, not against THREAD_REF_KIND_IDS. A
+// peer running newer code can sync a thread naming a kind this build has never
+// heard of, and a strict enum would reject the user's own record on the next
+// local edit; `resolveThreadRefs` degrades an unrecognized kind to
+// `{ resolved: false, reason: 'unknown-kind' }` instead. The pattern still
+// rejects a typo'd free-text kind and anything that could confuse a route param.
+// Canonicalized BEFORE the shape check so a legacy spelling a catalog ref row
+// still carries (`writersRoom`) is accepted and STORED canonically, rather than
+// 400ing on the slug pattern and stranding the attach.
+const threadRefKindValue = z.preprocess(
+  (value) => canonicalThreadRefKind(value),
+  z.string().trim().min(1).max(40)
+    .regex(/^[a-z0-9]+([-.][a-z0-9]+)*$/, 'kind must be a lowercase dot/dash slug'),
+);
+
+// An external ref's id IS its URL (up to 2000 chars), which is why this is not
+// bounded to an id-sized string.
+export const threadRefSchema = z.object({
+  kind: threadRefKindValue,
+  id: z.string().trim().min(1).max(2000),
+  // Cached display string so rendering a list of threads never fans out to N
+  // resolvers. Advisory only — `resolveThreadRefs` prefers what the live target
+  // says and falls back to this.
+  label: z.string().trim().max(300).optional().default('')
+}).strict();
+
+export const threadInputSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  status: threadStatusEnum.optional().default('open'),
+  priority: threadPriorityEnum.optional().default('normal'),
+  // The ONE concrete next step. Empty is meaningful ("nothing to do right now"),
+  // so it is a default rather than a required field.
+  nextAction: z.string().trim().max(500).optional().default(''),
+  notes: z.string().max(20000).optional().default(''),
+  waitingOn: z.string().trim().max(200).optional().default(''),
+  // Null is the explicit "no due date" value and must stay reachable on a PUT:
+  // threadUpdateSchema strips the default, so an OMITTED key preserves the
+  // stored date while an explicit `null` clears it (the absent-vs-empty rule).
+  dueAt: z.string().datetime().nullable().optional().default(null),
+  tags: z.array(z.string().trim().min(1).max(50)).max(50).optional().default([]),
+  pinned: z.boolean().optional().default(false),
+  // Bounded: a thread is a tracked topic, not a graph. 100 is the same ceiling
+  // the resolver's per-tuple probing is sized for.
+  refs: z.array(threadRefSchema).max(100).optional().default([])
+});
+
+// PUT /api/brain/threads/:id — defaults-free partial, so an omitted key
+// preserves the stored value instead of resetting it to its default.
+export const threadUpdateSchema = partialWithoutDefaults(threadInputSchema);
+
+// GET /api/brain/threads — list filters. `limit`/`offset` are absent on purpose:
+// `isPaginationRequested`/`paginateArray` read them straight off req.query, and
+// coercing them here would make every request look paginated.
+export const threadQuerySchema = z.object({
+  // One status, or a comma list (`?status=open,waiting,someday`) so the working
+  // set is one request rather than the whole archive filtered client-side.
+  // Always an array after parsing.
+  status: z.preprocess(
+    (value) => (typeof value === 'string' ? value.split(',').map((s) => s.trim()).filter(Boolean) : value),
+    z.array(threadStatusEnum).min(1).max(THREAD_STATUSES.length),
+  ).optional(),
+  priority: threadPriorityEnum.optional(),
+  tag: z.string().trim().min(1).max(50).optional(),
+  refKind: threadRefKindValue.optional(),
+  // Tri-state on purpose: absent = don't filter, 'true'/'false' = filter to that
+  // value. A bare `?pinned` (empty string) reads as true, matching how the UI
+  // would emit a flag-shaped param.
+  pinned: z.enum(['true', 'false', '']).optional(),
+  q: z.string().trim().max(200).optional()
+});
+
+// POST /api/brain/threads/:id/refs — attach one ref to an existing thread.
+export const threadRefInputSchema = threadRefSchema;
+
+// POST /api/brain/threads/attach — attach a ref to an existing thread, or mint
+// one and attach, in a single call. `threadId` picks the target; without it a
+// new thread is created titled `title` (falling back to the ref's label).
+export const threadAttachSchema = z.object({
+  ref: threadRefSchema,
+  threadId: z.string().trim().min(1).max(128).optional(),
+  title: z.string().trim().min(1).max(200).optional()
+}).strict();
 
 // =============================================================================
 // YOUTUBE INGEST SCHEMAS (POST /api/brain/youtube/*)

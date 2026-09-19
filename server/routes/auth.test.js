@@ -132,6 +132,48 @@ describe('auth routes', () => {
     expect(res.headers['set-cookie']).toMatch(/Max-Age=0/);
   });
 
+  it('GET /api/auth/sessions lists live sessions without leaking the token', async () => {
+    let app = await buildApp();
+    const setupRes = await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
+    const cookie = setupRes.headers['set-cookie'];
+
+    app = await buildApp();
+    const res = await request(app).get('/api/auth/sessions').set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(1);
+    expect(res.body.sessions[0]).toEqual({ id: expect.any(String), label: null, expiresAt: expect.any(Number) });
+    expect(JSON.stringify(res.body)).not.toMatch(/correct-horse/);
+  });
+
+  it('DELETE /api/auth/sessions/:id revokes only the targeted session', async () => {
+    const app = await buildApp();
+    const { createSession } = await import('../services/auth.js');
+    const setupRes = await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });
+    const cookie = setupRes.headers['set-cookie'];
+    const { id: agentId } = await createSession({ label: 'agent' });
+
+    const listed = await request(app).get('/api/auth/sessions').set('Cookie', cookie);
+    expect(listed.body.count).toBe(2);
+
+    const revoke = await request(app).delete(`/api/auth/sessions/${agentId}`).set('Cookie', cookie);
+    expect(revoke.status).toBe(200);
+    expect(revoke.body).toEqual({ ok: true });
+
+    // Revoking the agent session must not sign out the caller's own browser session.
+    const after = await request(app).get('/api/auth/whoami').set('Cookie', cookie);
+    expect(after.body.authenticated).toBe(true);
+
+    const remaining = await request(app).get('/api/auth/sessions').set('Cookie', cookie);
+    expect(remaining.body.count).toBe(1);
+  });
+
+  it('DELETE /api/auth/sessions/:id 404s on an id that matches no live session', async () => {
+    const app = await buildApp();
+    const res = await request(app).delete('/api/auth/sessions/deadbeefdeadbeef');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('AUTH_SESSION_NOT_FOUND');
+  });
+
   it('DELETE /api/auth/password requires the current password', async () => {
     let app = await buildApp();
     await request(app).post('/api/auth/password').send({ newPassword: 'correct-horse' });

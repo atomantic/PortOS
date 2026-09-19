@@ -21,6 +21,7 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn(),
   findPullRequestForBranch: vi.fn(async () => ({ status: 'found', number: 7, url: 'https://example.com/pr/7', body: 'Closes #42' })),
   ensureForgeReachable: vi.fn(async () => ({ ok: true, status: 'ok' })),
+  getPullRequestState: vi.fn(async () => ({ status: 'known', state: 'MERGED', detail: null })),
 }));
 vi.mock('./gitlab.js', () => ({ findMergeRequestForBranch: vi.fn(), execGlab: vi.fn() }));
 vi.mock('./git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
@@ -71,6 +72,14 @@ vi.mock('./taskTypeHooks.js', () => ({
   getTaskOutputHook: vi.fn(async () => null),
   getTaskOutputPayloadPredicate: vi.fn(async () => null),
 }));
+// The follow-up (file an issue / queue a fix) is dispatched through a LAZY
+// import, so it is doubled here rather than left to load the real filer's
+// apps + forge + JIRA graph into a suite that only cares about the wiring.
+const runGoalFidelityFollowUpMock = vi.fn(async () => ({ ran: false }));
+vi.mock('./goalFidelityFollowUp.js', () => ({
+  runGoalFidelityFollowUp: (...args) => runGoalFidelityFollowUpMock(...args),
+}));
+
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null) }));
 
@@ -83,7 +92,7 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
 }));
 
 import { execGit } from '../lib/execGit.js';
-import { execGh, findPullRequestForBranch } from './github.js';
+import { execGh, findPullRequestForBranch, getPullRequestState } from './github.js';
 import { execGlab } from './gitlab.js';
 import { resolveForgeForRepo } from './git.js';
 import { getAgentRecord } from './cosAgentLifecycle.js';
@@ -358,6 +367,140 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       expect(result.goalFidelity).toBeUndefined();
       expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
     }
+  });
+
+// The follow-up is what carries a finding past this run's record — but the
+  // filer reaches the network, so a failure there must never change the run's
+  // own verdict.
+  describe('follow-up dispatch', () => {
+    beforeEach(() => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', missing: ['the retry'] }));
+    });
+
+    it('hands the follow-up the review, and records what it did on the run', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({
+        ran: true,
+        issue: { number: 42, url: 'https://example.com/issues/42', duplicate: false },
+        task: { id: 'cos-9' },
+      });
+      await finalize();
+      expect(runGoalFidelityFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
+        agentId: 'agent-1', review: expect.objectContaining({ verdict: 'rethink' }),
+      }));
+      expect(completion().goalFidelity.followUp).toEqual({
+        issue: { number: 42, url: 'https://example.com/issues/42', duplicate: false },
+        taskId: 'cos-9',
+      });
+    });
+
+// The card reads these to decide what to call the task and whether to still
+    // offer the manual fallback, so the producer's verdict has to survive the
+    // completion write, not just the log line.
+    it("persists the producer's hold and duplicate verdict alongside the task id", async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({
+        ran: true, task: { id: 'cos-9', approvalRequired: true, duplicate: false },
+      });
+      await finalize();
+      expect(completion().goalFidelity.followUp).toEqual({ taskId: 'cos-9', taskApprovalRequired: true });
+    });
+
+    it('omits the hold flags for an ordinary queued task', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({
+        ran: true, task: { id: 'cos-9', approvalRequired: false, duplicate: false },
+      });
+      await finalize();
+      expect(completion().goalFidelity.followUp).toEqual({ taskId: 'cos-9' });
+    });
+
+    it('records the reason when an arm could not run', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({ ran: true, issueError: 'gh unreachable', task: null, taskError: 'circuit open' });
+      await finalize();
+      expect(completion().goalFidelity.followUp).toEqual({ issueError: 'gh unreachable', taskError: 'circuit open' });
+    });
+
+    it('leaves no followUp key when nothing was configured', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({ ran: false });
+      await finalize();
+      expect(completion().goalFidelity.followUp).toBeUndefined();
+    });
+
+    it('a throwing follow-up does not change the run verdict', async () => {
+      runGoalFidelityFollowUpMock.mockRejectedValue(new Error('forge exploded'));
+      await finalize();
+      // Still held by the rethink verdict — and held for THAT reason, not the throw.
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+      expect(completion().goalFidelity.followUp).toBeUndefined();
+    });
+
+    // No trigger fires on `ship`, so the overwhelmingly common verdict must not
+    // even resolve the follow-up's module graph (the apps roster, both forge
+    // CLIs, the JIRA client) to be told there is nothing to act on.
+    it('is never consulted on a clean verdict', async () => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'ship' }));
+      await finalize();
+      expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
+      expect(completion().success).toBe(true);
+    });
+
+    it('is consulted on the advisory fix-first verdict, which a wider trigger acts on', async () => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'fix-first' }));
+      await finalize();
+      expect(runGoalFidelityFollowUpMock).toHaveBeenCalled();
+      // fix-first is advisory — it records a finding without holding the run.
+      expect(completion().success).toBe(true);
+    });
+  });
+
+  // #7653 — see `mergeOutcomeObjective` (lib/goalFidelity.js) for the run this
+  // gate wrongly held.
+  describe('a merge-shaped objective is settled by the forge, not by a diff', () => {
+    const mergeFollowUp = (metadata = {}) => ({
+      id: 'task-1',
+      taskType: 'internal',
+      description: '[Review Loop] Resolve and merge PR #7653 for PortOS',
+      metadata: {
+        reviewLoopFollowUp: true,
+        reviewLoopPRNumber: 7653,
+        reviewLoopPRBranch: 'claim/issue-7625',
+        ...metadata,
+      },
+    });
+
+    it('records a forge-established ship without reading a diff or calling a model', async () => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', unrequested: ['Resolve and merge PR #7653'] }));
+      await finalize({ task: mergeFollowUp() });
+
+      expect(getPullRequestState).toHaveBeenCalledWith('7653', { cwd: '/example/worktree', env: { GH_TOKEN: 'synthetic-token' } });
+      expect(runWindowDiffMock).not.toHaveBeenCalled();
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toMatchObject({ verdict: 'ship', source: 'forge-outcome' });
+      expect(completion().goalFidelity.model).toBeUndefined();
+      expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
+    });
+
+    it.each([
+      ['an unmerged PR', { status: 'known', state: 'OPEN', detail: null }],
+      ['an unreadable forge', { status: 'unavailable', state: null, detail: 'gh failed' }],
+    ])('leaves the run untouched and the model uncalled for %s', async (_label, view) => {
+      getPullRequestState.mockResolvedValue(view);
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink' }));
+      await finalize({ task: mergeFollowUp() });
+
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toBeUndefined();
+    });
+
+    // A leave-open follow-up's objective is the review fixes, which ARE ordinary
+    // diff — it must keep the model review a merge objective skips.
+    it('does not divert a leave-open follow-up, whose deliverable is a diff', async () => {
+      await finalize({ task: mergeFollowUp({ reviewLoopLeaveOpen: 'true' }) });
+
+      expect(getPullRequestState).not.toHaveBeenCalled();
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledOnce();
+      expect(completion().goalFidelity).toMatchObject({ verdict: 'ship', model: 'example-model' });
+    });
   });
 
   it('never re-judges a run that already failed — the original diagnosis is the better one', async () => {

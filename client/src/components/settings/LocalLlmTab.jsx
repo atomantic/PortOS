@@ -1,12 +1,15 @@
 import { useNavigate } from 'react-router';
-import { Download, ShieldCheck } from 'lucide-react';
+import { Download, Scale, ShieldCheck } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
+import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
+import JevPanel from '../models/JevPanel.jsx';
 import ModelAbuseGuardPanel from '../models/ModelAbuseGuardPanel.jsx';
 import LocalLlmLibraryView from './LocalLlmLibraryView.jsx';
 
 export const LLM_VIEWS = [
   { id: 'library', label: 'Model Library', icon: Download },
   { id: 'abuse', label: 'Abuse Guard', icon: ShieldCheck },
+  { id: 'jev', label: 'jev', icon: Scale, feature: 'jev' },
 ];
 
 // Palettable LLM drill-downs. Model Library stays a focused view of
@@ -17,6 +20,7 @@ export const LLM_VIEWS = [
 // Scraped by server/lib/navManifest.test.js.
 export const LLM_NAV_SUBROUTES = [
   { id: 'abuse' },
+  { id: 'jev' },
 ];
 
 // Dispatcher only. The two working surfaces are entirely disjoint — different
@@ -26,13 +30,22 @@ export const LLM_NAV_SUBROUTES = [
 // subscribes to) exactly what it renders, leaving one subscriber per event.
 export function LocalLlmTab({ view }) {
   const navigate = useNavigate();
+  const { isFeatureEnabled } = useInstanceFeatures();
+  // Resolved against the FULL list, never the visible one: a disabled feature
+  // hides the pill but leaves the route live, so a bookmark, a shared link, or
+  // voice `ui_navigate` still lands on the panel (client/src/lib/navFeatures.js)
+  // — and the pill stays visible while that panel is the one on screen.
   const activeView = LLM_VIEWS.some(({ id }) => id === view) ? view : 'library';
+  // The same gate the sidebar and ⌘K apply to the manifest. Without it a
+  // default-off feature still advertises itself here — for jev, a ~9 GB
+  // download the install has not opted into.
+  const visibleViews = LLM_VIEWS.filter((tab) => tab.id === activeView || isFeatureEnabled(tab.feature));
 
   return (
     <div className="space-y-4">
       <div className="space-y-2">
         <TabPills
-          tabs={LLM_VIEWS}
+          tabs={visibleViews}
           activeTab={activeView}
           onChange={(nextView) => navigate(`/models/llms/${nextView}`)}
           variant="pills"
@@ -44,10 +57,13 @@ export function LocalLlmTab({ view }) {
         <p className="text-xs text-gray-500">
           {activeView === 'abuse'
             ? 'Install and verify each stage of the pinned Prompt Guard classifier used to screen external content.'
-            : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
+            : activeView === 'jev'
+              ? 'Install and try the pinned entailment scorer that answers closed-set questions locally — and abstains when the options are too close to call.'
+              : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
         </p>
       </div>
       {activeView === 'abuse' && <ModelAbuseGuardPanel />}
+      {activeView === 'jev' && <JevPanel />}
       {activeView === 'library' && <LocalLlmLibraryView />}
     </div>
   );

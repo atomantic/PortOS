@@ -238,6 +238,24 @@ describe('useUniverseDraft', () => {
     expect(result.current.isDraftDirty()).toBe(false);
   });
 
+  it('marks the draft dirty when the factual toggle flips and ships it with Save', async () => {
+    // The regression: omitting `factual` from universeDraftSnapshot leaves the
+    // draft looking clean after the toggle, so Save is a no-op and the world
+    // silently stays fiction.
+    const { result } = renderDraft();
+    await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+    expect(result.current.draft.factual).toBe(false);
+
+    act(() => result.current.updateDraft({ factual: true }));
+    expect(result.current.isDraftDirty()).toBe(true);
+    await act(async () => { await result.current.handleSave(); });
+    expect(apiMocks.updateUniverse.mock.calls.at(-1)[1].factual).toBe(true);
+
+    act(() => result.current.updateDraft({ factual: false }));
+    await act(async () => { await result.current.handleSave(); });
+    expect(apiMocks.updateUniverse.mock.calls.at(-1)[1].factual).toBe(false);
+  });
+
   // The render flow keys its per-row pending-job map on the id the SERVER
   // stamped onto `entryJobs`. A board or variation created in this session has
   // no id until a save mints one, so without adopting it the row can never match
@@ -1212,6 +1230,7 @@ describe('useUniverseDraft', () => {
         logline: '',
         premise: '',
         styleNotes: '',
+        factual: false,
         moodBoardId: null,
         categories: seededCategories(),
         compositeSheets: [],

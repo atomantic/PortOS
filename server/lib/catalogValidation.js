@@ -311,6 +311,11 @@ export const catalogIngredientQuerySchema = z.object({
   refId: z.string().trim().min(1).max(120).optional(),
   unlinked: booleanish.optional(),
   orphaned: booleanish.optional(),
+  // Source-scrap filter (#7617): "everything extracted from this piece" — a
+  // provenance dimension, orthogonal to the universe/series homing album
+  // filters above, so it composes with them instead of joining their
+  // mutual-exclusivity refinement below.
+  scrapId: z.string().trim().min(1).max(120).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 }).strict()
@@ -398,11 +403,17 @@ export const catalogMediaVoiceMemoSchema = z.object({
   role: z.string().trim().max(64).optional().nullable(),
 }).strict();
 
+// `universeRef` (+ optional `role`) mirrors catalogBulkImportSchema.defaults
+// below — same field name, same shape — so the two ingest paths (bulk-import,
+// scrap-commit) cannot drift (#7615). Omitting `universeRef` reproduces
+// today's behavior exactly: source link only, no homing ref.
 export const catalogScrapCommitSchema = z.object({
   accepted: z.array(catalogIngredientCreateSchema.extend({
     // Optional source-span hint (server forwards as-is to linkIngredientToSource).
     span: z.record(z.string(), z.unknown()).optional(),
   })).min(0).max(200),
+  universeRef: z.string().trim().min(1).max(120).optional(),
+  role: z.string().trim().min(1).max(64).optional(),
 }).strict();
 
 // /scraps/:id/extract — optional provider override (e.g., force a specific

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { AlertTriangle, ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, MessageCircle, PhoneCall, PhoneOff, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
+import { AlertTriangle, ArrowUp, Brain, Check, CirclePause, CirclePlay, Cpu, Database, Eraser, ImagePlus, ListChecks, MessageCircle, PhoneCall, PhoneOff, RefreshCw, Settings2, Square, StickyNote, Upload, Wrench, X } from 'lucide-react';
 import { Link } from 'react-router';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch.js';
 import useMounted from '../../../hooks/useMounted';
@@ -16,7 +16,9 @@ import Banner from '../../ui/Banner';
 import FilePickerButton from '../../ui/FilePickerButton';
 import TabPills from '../../ui/TabPills';
 import PersistentMindContextPanel from '../PersistentMindContextPanel';
+import PersistentMindJournalPanel from '../PersistentMindJournalPanel';
 import PersistentMindMaintenancePanel from '../PersistentMindMaintenancePanel';
+import PersistentMindPortabilityPanel from '../PersistentMindPortabilityPanel';
 import PersistentMindProfileControls from '../PersistentMindProfileControls';
 import PersistentMindRoutePanel from '../PersistentMindRoutePanel';
 import PersistentMindRuntimePanel, { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
@@ -39,9 +41,10 @@ const MAX_MESSAGE_IMAGE_BYTES = 10 * 1024 * 1024;
 // literal on every render would re-fire work that has nothing new to do.
 const NO_PRESETS = Object.freeze([]);
 const NO_TURN_EXECUTIONS = Object.freeze([]);
-const MIND_PANELS = new Set(['context', 'memories', 'maintenance', 'tools', 'models', 'settings']);
+const MIND_PANELS = new Set(['context', 'journal', 'memories', 'maintenance', 'tools', 'models', 'settings']);
 const MIND_PANEL_TABS = [
   { id: 'context', label: 'Context', icon: Brain },
+  { id: 'journal', label: 'Journal', icon: ListChecks },
   { id: 'memories', label: 'Memories', icon: Database },
   { id: 'maintenance', label: 'Cleanup', icon: Eraser },
   { id: 'tools', label: 'Tools', icon: Wrench },
@@ -1003,6 +1006,9 @@ export default function MindTab() {
           }} />
           <PersistentMindContextPanel view="context" refreshKey={contextRefreshKey} />
         </div>}
+        {(visitedPanels.has('journal') || activePanel === 'journal') && <div hidden={activePanel !== 'journal'}>
+          <PersistentMindJournalPanel refreshKey={contextRefreshKey} />
+        </div>}
         {(visitedPanels.has('memories') || activePanel === 'memories') && <div hidden={activePanel !== 'memories'}>
           <PersistentMindContextPanel view="memories" refreshKey={contextRefreshKey} onMemoriesChanged={() => setContextRefreshKey((current) => current + 1)} />
         </div>}
@@ -1049,6 +1055,11 @@ export default function MindTab() {
             onSaved={(profile) => setMind((current) => current ? { ...current, profile } : current)}
             onSavingChange={setProfileSaving}
           />
+          <div className="mt-6 border-t border-port-border pt-4">
+            <h3 className="text-sm font-semibold text-port-text">Portability</h3>
+            <p className="mt-1 mb-3 text-xs text-port-text-muted">Carry this Mind to another PortOS install as one encrypted file you download and keep.</p>
+            <PersistentMindPortabilityPanel />
+          </div>
           {!state?.started && (
             <div className="mt-4 flex flex-col gap-2 border-t border-port-border pt-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-port-text-muted">{setupSaving ? 'Saving persistent mind settings…' : profileReady ? 'The saved AI profile is ready.' : 'Enable the profile and select both an AI provider and model to start.'}</p>

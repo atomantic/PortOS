@@ -36,21 +36,24 @@
  *      the contribution itself: `assayEvidenceFromVerdict()` folds a
  *      `runResilienceAssay()` result into the evidence block, and packaging
  *      refuses evidence that is missing, failing, bound to a DIFFERENT
- *      contribution than the one this foundation names, or short of the full
+ *      contribution than the one this foundation's OWN body derives
+ *      (`lib/eidoverseFoundationSandbox.js`, #7625 — the binding label is
+ *      derived, never authored), or short of the full
  *      disturbance suite. Keeping execution in the harness that owns the
  *      sandbox leaves this module pure and synchronous, and leaves exactly one
  *      place in the tree that runs untrusted controller code. The ledger runs
  *      the assay fresh on every package attempt, so evidence is never older
  *      than the body it vouches for.
-  *   2. **Federation safety.** A promote payload is the one Eidoverse artifact
- *      authorized to cross the federation layer, so it fails closed:
- *      `lib/federationSafety.js` refuses the package outright when the
- *      candidate carries machine identity, PII, credential-shaped values or
- *      credential-NAMED fields, naming the offending JSON path. Nothing is
- *      redacted and shipped — a redacted promote would leave the author
- *      believing they published what they wrote. See the "PII must not ride
- *      the federation layer" rule in root `AGENTS.md` and the machine-local
- *      privacy ADR.
+  *   2. **Federation safety.** A promote payload is the one durable Eidoverse
+ *      artifact authorized to cross the federation layer, alongside live guest
+ *      conversation, so it fails closed: `lib/federationSafety.js` refuses the
+ *      package outright when the candidate carries machine identity, PII,
+ *      credential-shaped values or credential-NAMED fields, naming the
+ *      offending JSON path. Nothing is redacted and shipped — a redacted
+ *      promote would leave the author believing they published what they
+ *      wrote. See the "PII must not ride the federation layer" rule in root
+ *      `AGENTS.md` and the federated Eidoverse foundations ADR
+ *      (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).
  *
  * `fingerprint` is content-addressed (sha256 over the canonicalized envelope
  * minus the fingerprint itself), so a peer can verify a candidate it was handed
@@ -79,8 +82,23 @@ export const EIDOVERSE_FOUNDATION_KINDS = Object.freeze(['schema', 'affordance',
 /** Wire stamp on the promote envelope. The peer pull/inherit slice gates on
  * this; it is deliberately separate from `PORTOS_SCHEMA_VERSIONS`, which
  * versions STORAGE layouts for the record-sync transports this payload does
- * not ride. */
-export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSION = 1;
+ * not ride.
+ *
+ * v2 added the `derived-from` edge (#7631), so an install that builds on a
+ * peer's foundation publishes "derived from A's X" instead of a byte-identical
+ * body stamped as its own work.
+ *
+ * **v3 (#7625) is a SEMANTIC break, not a shape change.** A v1/v2 envelope's
+ * `assay` block was evidence about whatever contribution its author NAMED,
+ * which had no required relationship to the `body` travelling beside it. v3
+ * evidence is produced by replaying the body itself
+ * (`eidoverseFoundationSandbox.js`) and its `contributionId` is DERIVED from
+ * `kind`/`body`, so a receiver can re-derive the binding instead of taking
+ * the sender's word for it. Every older envelope is therefore refused outright
+ * rather than inherited — there is no way to upgrade evidence that never
+ * described the payload, which is why this install reads exactly one version
+ * rather than a widening accepted set. */
+export const EIDOVERSE_FOUNDATION_CANDIDATE_VERSION = 3;
 
 /**
  * Keys that are UNAMBIGUOUSLY cosmetic and so must never appear inside a
@@ -118,10 +136,59 @@ const FOUNDATION_LIMITS = Object.freeze({
 const foundationIdSchema = z.string().trim().min(1).max(FOUNDATION_LIMITS.idMax)
   .regex(/^[a-z0-9][a-z0-9-]*$/, 'must be a lowercase slug (letters, digits, hyphens)');
 
-/** The resilience-assay contribution this foundation is replayed as — the
- * binding between a recorded artifact and the sandbox that proves it survives
- * its author's absence. Resolved by `services/eidoverseResilienceContributions.js`. */
+/**
+ * The binding between a recorded artifact and the sandbox that proved it
+ * survives its author's absence.
+ *
+ * **Derived, never authored (#7625).** It is absent from
+ * `eidoverseFoundationInputSchema` below and computed by
+ * `derivedContributionId()` just beneath it from the foundation's own
+ * `kind`/`body`. When an author could supply it, naming a shipped demo fixture
+ * was sufficient to clear the promote gate, and the evidence a peer inherited
+ * on described that fixture rather than the body in the envelope.
+ */
 const contributionIdSchema = z.string().trim().min(1).max(120);
+
+/** A shipped-definition / foundation slug. Mirrors `foundationIdSchema`. */
+const CONTROLLER_DEFINITION_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * The shipped controller definition id a `controller` foundation names, or
+ * `null` when its body names none. Exported because `eidoverseFoundationSandbox.js`
+ * has to resolve the definition (an async registry read) BEFORE it can build
+ * the sandbox.
+ */
+export function controllerDefinitionIdFromBody(body) {
+  const declared = isPlainObject(body) && isPlainObject(body.controller) ? body.controller.definitionId : null;
+  return typeof declared === 'string' && CONTROLLER_DEFINITION_SLUG.test(declared.trim()) ? declared.trim() : null;
+}
+
+/**
+ * The label a foundation's assay evidence is bound to, derived from the record
+ * rather than supplied by its author.
+ *
+ * Lives HERE rather than beside the sandbox that replays the body, even though
+ * that is where it is conceptually rooted: both binding checks below call it,
+ * and the sandbox reaches the creative toolkit, which reaches this module's
+ * input schema — so importing it the other way closes an ESM cycle and leaves
+ * `eidoverseFoundationInputSchema` in its temporal dead zone at first load.
+ * The function is pure and reads only `kind`/`id`/`body`, so it belongs to the
+ * schema layer as easily as to the harness.
+ *
+ * Total on purpose: a body too malformed to derive a sandbox from still gets a
+ * stable label, because BOTH sides of the binding check compute it the same
+ * way — the label's job is to bind evidence to a body, and refusing the
+ * malformed body is `foundationSandbox()`'s job, not this one's.
+ */
+export function derivedContributionId({ kind, id, body }) {
+  if (kind === 'controller') {
+    const definitionId = controllerDefinitionIdFromBody(body);
+    if (definitionId) return `controller:${definitionId}`;
+  }
+  return `${kind}:${id}`;
+}
 
 // `.datetime()`, not a `Date.parse` refine: `Date.parse` accepts "March 4, 2026"
 // and "2026", and these timestamps are hashed into a payload a peer parses.
@@ -208,15 +275,57 @@ export const foundationInheritanceEdgeSchema = z.object({
 }).strict();
 
 /**
+ * The second provenance-graph edge (#7631): "this install AUTHORED this
+ * foundation, building on the copy it holds of `foundationId` from origin
+ * `originInstanceId`."
+ *
+ * Deliberately a separate field from `inheritance` rather than a variant of
+ * it, because the two make opposite claims about who did the work. An
+ * `inherited` record is a peer's foundation this install merely stores and may
+ * never re-share; a `derived` record IS this install's own work and promotes
+ * normally — it just carries, and publishes, the edge back to what it was
+ * built from. That is what makes "build on a peer's foundation" a one-click
+ * path that keeps attribution instead of a one-click path that erases it.
+ *
+ * `fingerprint` is the ORIGIN's candidate digest, copied off the inherited
+ * record this install actually holds rather than from the caller's claim (see
+ * `resolveFoundationDerivation`): the edge then attests what was inherited,
+ * not what someone asserted. `derivedAt` is stamped when the edge is first
+ * recorded and carried across later re-authorings of the same body, the same
+ * way `provenance.createdAt` is.
+ */
+export const foundationDerivationEdgeSchema = z.object({
+  type: z.literal('derived-from'),
+  originInstanceId: instanceIdSchema,
+  foundationId: foundationIdSchema,
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/, 'must be a sha256 hex digest'),
+  derivedAt: isoDateSchema,
+}).strict();
+
+/**
+ * What an AUTHOR may claim — which inherited foundation this new body builds
+ * on, and nothing more. The digest and the timestamp are deliberately absent:
+ * both are stamped from this install's own ledger, so no caller (a route body,
+ * a mind tool, a hand-edited file) can mint a derivation edge pointing at a
+ * fingerprint or a moment this install never saw.
+ */
+export const foundationDerivationClaimSchema = z.object({
+  originInstanceId: instanceIdSchema,
+  foundationId: foundationIdSchema,
+}).strict();
+
+/**
  * The fields a foundation carries in every one of its three shapes — the local
  * record, what a caller may author, and the promote envelope. Declared once so
  * a cap change cannot land on two of the three and silently diverge them.
+ *
+ * `contributionId` is deliberately NOT here: it is on the record and on the
+ * envelope but never on the input, because it is derived rather than authored.
  */
 const foundationCoreShape = {
   kind: z.enum(EIDOVERSE_FOUNDATION_KINDS),
   title: z.string().trim().min(1).max(FOUNDATION_LIMITS.titleMax),
   summary: z.string().trim().min(1).max(FOUNDATION_LIMITS.summaryMax),
-  contributionId: contributionIdSchema,
   body: foundationBodySchema,
   disclosure: foundationDisclosureSchema,
 };
@@ -224,6 +333,7 @@ const foundationCoreShape = {
 /** The local ledger record. `style` stays here and never leaves the install. */
 export const eidoverseFoundationRecordSchema = z.object({
   ...foundationCoreShape,
+  contributionId: contributionIdSchema,
   id: foundationIdSchema,
   // `runtime` is absent by construction: an install authors its own artifacts
   // and may promote them, but the shared framework layer is never a record here.
@@ -248,26 +358,67 @@ export const eidoverseFoundationRecordSchema = z.object({
   // default — an additive nullable field on the machine-local ledger, so no
   // migration is owed (`docs/STORAGE.md`'s entry for `foundations.json`).
   inheritance: foundationInheritanceEdgeSchema.nullable().default(null),
+  // `null` on everything authored from nothing. Set on a record this install
+  // authored by building on a peer's inherited foundation (#7631), and copied
+  // onto a local copy of a peer's record whose own envelope carried one, so a
+  // third install reads the whole chain rather than just the last hop. Additive
+  // and nullable on a machine-local ledger, so no migration is owed — same
+  // argument as `inheritance` above.
+  derivedFrom: foundationDerivationEdgeSchema.nullable().default(null),
   updatedAt: isoDateSchema,
 }).strict();
 
 export const eidoverseFoundationIdParamSchema = z.object({ id: foundationIdSchema }).strict();
 
+/**
+ * Addressing ANY record in the ledger, local or inherited (#7632).
+ *
+ * A bare id reaches only locally-authored work, because a local vernacular
+ * foundation and an inherited copy can legitimately share the same
+ * human-readable id — which is exactly why the inherited one lives under
+ * `inheritedFoundationStorageKey()`'s disjoint namespace. Naming the origin
+ * disambiguates them. The caller supplies `{ id, originInstanceId }` rather
+ * than the raw `peer:<origin>:<id>` key so the storage grammar stays inside
+ * the ledger module, where the one function that mints it lives.
+ */
+export const eidoverseFoundationTargetSchema = z.object({
+  id: foundationIdSchema,
+  originInstanceId: instanceIdSchema.nullable().optional().default(null),
+}).strict();
+
+/**
+ * The ledger key a `{ id, originInstanceId }` ref addresses — the plain id for
+ * a locally-authored record, the `peer:` namespace for an inherited copy.
+ *
+ * The single place either kind of reference becomes a storage key, so a caller
+ * never re-derives the namespace and the two can never drift.
+ */
+export function foundationLedgerKey({ id, originInstanceId = null }) {
+  return originInstanceId ? inheritedFoundationStorageKey(originInstanceId, id) : id;
+}
+
 /** What a caller (route, mind tool, test) may author. Layer is NOT accepted:
  * a new local artifact is `vernacular` by construction, and moving to
- * `baseline` is what the promote path is for. */
+ * `baseline` is what the promote path is for. Neither is `contributionId`
+ * (#7625): the sandbox the assay replays is derived from `body`, so the
+ * binding label is derived from it too — a caller that could name it could
+ * borrow another contribution's passing verdict. */
 export const eidoverseFoundationInputSchema = z.object({
   ...foundationCoreShape,
   id: foundationIdSchema,
   style: foundationStyleSchema.default({}),
   disclosure: foundationDisclosureSchema.default({}),
   authorKind: authorKindSchema.default('user'),
+  // A CLAIM, not the edge: see `foundationDerivationClaimSchema`.
+  derivedFrom: foundationDerivationClaimSchema.nullable().default(null),
 }).strict();
 
 /** The promote envelope — the only shape authorized to cross to a peer. */
 export const eidoverseFoundationCandidateSchema = z.object({
   ...foundationCoreShape,
+  contributionId: contributionIdSchema,
   candidateVersion: z.literal(EIDOVERSE_FOUNDATION_CANDIDATE_VERSION),
+  derivedFrom: foundationDerivationEdgeSchema.nullable().default(null),
   foundationId: foundationIdSchema,
   provenance: foundationProvenanceSchema.extend({
     packagedAt: isoDateSchema,
@@ -388,6 +539,95 @@ function withoutFingerprint(candidate) {
 }
 
 /**
+ * The scan input: the hash input, minus the derivation edge's digest as well.
+ * A `derived-from` edge carries the ORIGIN's candidate fingerprint, which is
+ * another 64 unbroken hex characters and so trips `scrubSecretTokens` exactly
+ * as the envelope's own digest would. It is excluded from the SCAN only — it
+ * stays in the hash input, because the edge is part of what the fingerprint
+ * has to cover for a receiver to detect a re-attributed envelope.
+ */
+function scannableCandidate(candidate) {
+  const rest = withoutFingerprint(candidate);
+  if (!rest.derivedFrom || typeof rest.derivedFrom !== 'object') return rest;
+  const { fingerprint: _edgeDigest, ...edge } = rest.derivedFrom;
+  return { ...rest, derivedFrom: edge };
+}
+
+/**
+ * A content address for a foundation `body` alone — the same canonicalization
+ * the candidate fingerprint uses, so key order and whitespace never decide
+ * whether two bodies are "the same work".
+ */
+export function foundationBodyDigest(body) {
+  return createHash('sha256').update(canonicalStringify(body ?? {})).digest('hex');
+}
+
+/**
+ * Resolve the `derived-from` edge an authored foundation carries — or the
+ * reason this install refuses to record the body as its own work (#7631).
+ *
+ * The guard this replaces tested `record.inheritance`, a field the authoring
+ * path clears unconditionally: loading a peer's foundation into the authoring
+ * form and saving it produced a local record stamped with THIS install's
+ * origin and no edge at all, which promoted and re-shared cleanly. So the
+ * check moved off the mutable flag and onto the bytes: a body that
+ * canonicalizes to one this install holds under an inherited key is refused
+ * unless the author says what it is derived from.
+ *
+ * A claim is resolved against the inherited records this install ACTUALLY
+ * holds, and the resulting edge is stamped from that record. A claim naming a
+ * foundation this install never inherited is refused rather than recorded,
+ * which is what keeps the edge an attestation of local ledger state instead of
+ * a free-text assertion that travels to peers.
+ *
+ * An existing edge survives a re-authoring the same way `provenance` does: a
+ * derivation that a later edit diverges from is still the thing this work grew
+ * out of, and dropping the edge on the first byte changed would make erasure
+ * the easy path all over again.
+ *
+ * Pure: the caller supplies the inherited records, the previous edge, and the
+ * clock.
+ *
+ * @param {object} options
+ * @param {{ originInstanceId: string, foundationId: string }|null} options.claim
+ * @param {object} options.body - the body being authored
+ * @param {Array<object>} options.inheritedRecords - ledger records carrying an `inheritance` edge
+ * @param {object|null} [options.existingEdge] - the edge the record being re-authored already carried
+ * @param {string} options.now
+ * @returns {{ edge: object|null, refusal: string|null }}
+ */
+export function resolveFoundationDerivation({ claim, body, inheritedRecords, existingEdge = null, now }) {
+  const held = (inheritedRecords || []).filter((entry) => entry?.inheritance && entry?.provenance);
+  let edge = existingEdge || null;
+
+  if (claim) {
+    const source = held.find((entry) => entry.provenance.originInstanceId === claim.originInstanceId && entry.id === claim.foundationId);
+    if (!source) {
+      return { edge: null, refusal: `no foundation inherited from install ${claim.originInstanceId} is recorded under "${claim.foundationId}" — a derivation edge names a foundation this install actually holds` };
+    }
+    const carried = edge && edge.originInstanceId === claim.originInstanceId && edge.foundationId === claim.foundationId;
+    edge = {
+      type: 'derived-from',
+      originInstanceId: claim.originInstanceId,
+      foundationId: claim.foundationId,
+      fingerprint: source.inheritance.fingerprint,
+      derivedAt: carried ? edge.derivedAt : now,
+    };
+  }
+
+  const digest = foundationBodyDigest(body);
+  const copied = held.find((entry) => foundationBodyDigest(entry.body) === digest);
+  if (copied && !(edge && edge.originInstanceId === copied.provenance.originInstanceId && edge.foundationId === copied.id)) {
+    return {
+      edge: null,
+      refusal: `this body is byte-for-byte the foundation "${copied.id}" inherited from install ${copied.provenance.originInstanceId} — record it as a derivation of that foundation rather than as this install's own work`,
+    };
+  }
+
+  return { edge, refusal: null };
+}
+
+/**
  * Package a local vernacular foundation into a promote candidate.
  *
  * @param {object} options
@@ -401,6 +641,7 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
   const parsed = eidoverseFoundationRecordSchema.safeParse(record);
   if (!parsed.success) return refused(issueReasons(parsed.error));
   const foundation = parsed.data;
+  const derivedLabel = derivedContributionId(foundation);
 
   // Two refusals the envelope gate below cannot phrase usefully: ownership
   // layer is not carried on the envelope at all, and a missing assay would
@@ -417,6 +658,14 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
     // Promotion publishes only what this install authored (#7461); it must
     // never become a relay that re-shares a peer's foundation as its own.
     foundation.inheritance ? `inherited from another install (${foundation.inheritance.originInstanceId}) — promotion re-shares only foundations this install authored` : null,
+    // A ledger file is a file a human (or a restored backup from before #7625)
+    // can hand us, so the derived binding is re-checked here rather than
+    // trusted because the ledger wrote it. `packageEidoverseFoundationCandidate`
+    // re-derives before calling in, so this only ever fires on a record that
+    // reached the gate some other way.
+    foundation.contributionId === derivedLabel
+      ? null
+      : `this record is labelled "${foundation.contributionId}" but its own kind and body derive "${derivedLabel}" — re-author the foundation so its assay evidence is bound to the body it describes`,
     assayEvidenceRefusal(foundation.assay, requiredDisturbances, foundation.contributionId),
   ].filter(Boolean);
   if (reasons.length > 0) return refused(reasons);
@@ -432,6 +681,11 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
     disclosure: foundation.disclosure,
     provenance: { ...foundation.provenance, packagedAt: now, portosVersion },
     assay: foundation.assay,
+    // Published, not just remembered: a receiver that cannot see the edge has
+    // no way to tell this install's own work from a body it built on a peer's.
+    // Omitted rather than sent as `null` when there is none, so an undecorated
+    // v2 envelope hashes over exactly the fields a v1 one did.
+    ...(foundation.derivedFrom ? { derivedFrom: foundation.derivedFrom } : {}),
   };
   const candidate = { ...draft, fingerprint: foundationCandidateFingerprint(draft) };
 
@@ -453,6 +707,22 @@ export function packageFoundationCandidate({ record, requiredDisturbances, porto
  * @returns {{ valid: boolean, reasons: string[], findings: Array }}
  */
 export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
+  // Phrased before the schema runs, because `z.literal(3)` reports an OLDER
+  // envelope as "invalid literal value" — true, and useless to the human
+  // reading a sync log. A pre-v3 envelope is not malformed; its evidence simply
+  // described something other than the body it travels with (#7625). This also
+  // subsumes every older-shape check: a v1 envelope carrying the v2
+  // `derived-from` edge (#7631) is refused here as an older envelope rather
+  // than for the edge, because its evidence is unusable either way.
+  const declaredVersion = candidate?.candidateVersion;
+  if (Number.isInteger(declaredVersion) && declaredVersion < EIDOVERSE_FOUNDATION_CANDIDATE_VERSION) {
+    return {
+      valid: false,
+      reasons: [`this promote envelope is candidate v${declaredVersion}; this install requires v${EIDOVERSE_FOUNDATION_CANDIDATE_VERSION}. A pre-v3 envelope's resilience evidence was recorded against a contribution its author NAMED rather than against the body it carries, so it cannot be inherited — ask the origin install to re-package the foundation.`],
+      findings: [],
+    };
+  }
+
   const parsed = eidoverseFoundationCandidateSchema.safeParse(candidate);
   if (!parsed.success) return { valid: false, reasons: issueReasons(parsed.error), findings: [] };
   const envelope = parsed.data;
@@ -466,10 +736,20 @@ export function verifyFoundationCandidate(candidate, { requiredDisturbances }) {
     reasons.push('fingerprint does not match the candidate body — the payload was altered after packaging');
   }
 
+  // The label has to be the one THIS envelope's own kind/body derives, not one
+  // the sender chose. Without this a v3 envelope could still carry internally
+  // consistent evidence about some other contribution — the same
+  // borrowed-credential shape #7625 removed from the authoring surface, moved
+  // to the wire. Re-derivation is pure and reads only the envelope.
+  const derivedLabel = derivedContributionId({ kind: envelope.kind, id: envelope.foundationId, body: envelope.body });
+  if (envelope.contributionId !== derivedLabel) {
+    reasons.push(`this envelope claims to have been replayed as "${envelope.contributionId}", but its own kind and body derive "${derivedLabel}" — the evidence is not about the payload`);
+  }
+
   const assayRefusal = assayEvidenceRefusal(envelope.assay, requiredDisturbances, envelope.contributionId);
   if (assayRefusal) reasons.push(assayRefusal);
 
-  const findings = [...styleLeakFindings(envelope.body), ...federationSafetyFindings(withoutFingerprint(envelope))];
+  const findings = [...styleLeakFindings(envelope.body), ...federationSafetyFindings(scannableCandidate(envelope))];
   for (const finding of findings) reasons.push(`${finding.path}: ${finding.detail} (${finding.code})`);
 
   return { valid: reasons.length === 0, reasons, findings };
@@ -567,6 +847,11 @@ export function foundationFromInheritedCandidate({ candidate, requiredDisturbanc
     assay: envelope.assay,
     candidate: envelope,
     promotedAt: null,
+    // Copied verbatim off the envelope (absent on a v1 one, which reads back
+    // as `null`): the origin told us its own work was derived from a third
+    // install's, and dropping that here would truncate the chain to the last
+    // hop on every install downstream of it.
+    derivedFrom: envelope.derivedFrom ?? null,
     inheritance: {
       type: 'inherited-from',
       originInstanceId: envelope.provenance.originInstanceId,
@@ -614,6 +899,19 @@ export function foundationLineage(record) {
       at: record.provenance.createdAt,
       authorKind: record.provenance.authorKind ?? null,
       originInstanceId: record.provenance.originInstanceId ?? null,
+    });
+  }
+
+  // Emitted alongside `authored` or `inherited` rather than instead of either:
+  // a derivation says what this work GREW OUT OF, which is a different fact
+  // from who authored the record and from which peer handed it over (#7631).
+  if (record.derivedFrom) {
+    events.push({
+      type: 'derived',
+      at: record.derivedFrom.derivedAt,
+      originInstanceId: record.derivedFrom.originInstanceId,
+      foundationId: record.derivedFrom.foundationId,
+      fingerprint: record.derivedFrom.fingerprint,
     });
   }
 
@@ -681,6 +979,136 @@ export function summarizeFoundation(record) {
       ? { originInstanceId: record.provenance.originInstanceId ?? null, authorKind: record.provenance.authorKind ?? null, createdAt: record.provenance.createdAt ?? null }
       : null,
     inheritance: record?.inheritance ?? null,
+    derivedFrom: record?.derivedFrom ?? null,
     lineage: foundationLineage(record),
   };
+}
+
+/**
+ * A ledger record projected for a mind that has chosen ONE foundation to look
+ * at (#7626) — everything `summarizeFoundation()` carries, plus the two fields
+ * it deliberately omits: the `body` (the promotable substance itself) and the
+ * author's `disclosure`.
+ *
+ * Why this is a second projection rather than a widened first one: the list is
+ * read every time a mind wonders what exists here, and a list of whole bodies
+ * is kilobytes of substance per entry riding into a prompt to answer a
+ * question about ids. The choice of WHICH body to read is a decision the mind
+ * makes after the list, so the body belongs on the read-one. `style` stays
+ * omitted in both — it is this install's cosmetics, and a mind that never sees
+ * them cannot narrate them into a promote body.
+ *
+ * Without this, a peer's foundation was legible to the HUMAN (the list route
+ * returns whole records, and the panel renders one) and structurally illegible
+ * to every Mind on the install that inherited it, which is the gap that made
+ * epic #7453's "a mind uses what another mind left" untrue in practice.
+ */
+export function detailFoundation(record) {
+  if (!record) return null;
+  return {
+    ...summarizeFoundation(record),
+    body: record.body ?? null,
+    disclosure: record.disclosure ?? null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Adoption (#7626)
+// ---------------------------------------------------------------------------
+
+/**
+ * What `body.controller` must look like for a `controller` foundation to be
+ * adoptable — the recipe an install replays to stand the thing up locally.
+ *
+ * `config` is validated only as bounded JSON here; the CONTROLLER's own
+ * `configSchema` is what actually gates it, and that lives in the shipped
+ * registry that `installEidoverseController()` resolves. Checking it twice
+ * against two definitions of "valid" is how the two drift.
+ *
+ * Nothing here can name a module, a path, or code: `definitionId` is a slug
+ * resolved against this install's OWN fixed registry, so adopting a peer's
+ * controller foundation can only ever arm a controller this install already
+ * ships. That is the property that makes adoption safe to expose at all — a
+ * peer describes WHICH shipped controller to run and with what settings, never
+ * what code to run.
+ */
+const foundationControllerBodySchema = z.object({
+  definitionId: z.string().trim().min(1).max(64)
+    .regex(/^[a-z0-9][a-z0-9-]*$/, 'must be a lowercase slug (letters, digits, hyphens)'),
+  config: boundedJsonObject(FOUNDATION_LIMITS.jsonBytes).default({}),
+  tickIntervalMs: z.number().int().positive().optional(),
+  placement: z.record(z.string().min(1).max(64), z.unknown()).optional(),
+}).strict();
+
+/**
+ * Decide what adopting a foundation MEANS for its kind, as a pure verdict.
+ *
+ * Adoption is the verb epic #7453's success signal needs and never had: until
+ * now, inheriting a peer's foundation stored a row and no runtime on either
+ * install read its `body`, so the only way to use a peer's contribution was a
+ * human reading raw JSON out of a panel and retyping it — which erases the
+ * provenance the whole graph exists to keep.
+ *
+ * Refusals are RESULTS with a named reason, never throws, and never silent
+ * successes. A `schema` or `affordance` foundation is a declaration with no
+ * interpreter on this install, and saying so is the honest answer: pretending
+ * to adopt one would be the same "described the payload and called it
+ * adoption" mistake this closes.
+ *
+ * Pure: the caller supplies the record and performs whatever the plan names.
+ *
+ * @param {object|null} record - a ledger record
+ * @returns {{ outcome: 'plan'|'refused', plan: object|null, reasons: string[] }}
+ */
+export function planFoundationAdoption(record) {
+  const refusedPlan = (reason) => ({ outcome: 'refused', plan: null, reasons: [reason] });
+  if (!record) return refusedPlan('no foundation is recorded under that reference');
+
+  // Adoption applies to a copy of a PEER's foundation. A local record needs no
+  // adopting — its author already has every way to install it — and letting
+  // this path touch one would make "adopt" a second, edgeless authoring route
+  // into the controller runtime.
+  if (!record.inheritance) {
+    return refusedPlan('this foundation was authored on this install — adoption applies to a local copy of a peer\'s foundation, which this install installs directly instead');
+  }
+
+  if (record.kind === 'controller') {
+    const parsed = foundationControllerBodySchema.safeParse(record.body?.controller);
+    if (!parsed.success) {
+      return refusedPlan(`this controller foundation's body.controller is not an installable recipe: ${issueReasons(parsed.error).join('; ')}`);
+    }
+    return {
+      outcome: 'plan',
+      plan: {
+        kind: 'controller',
+        install: {
+          id: record.id,
+          controllerId: parsed.data.definitionId,
+          config: parsed.data.config,
+          ...(parsed.data.tickIntervalMs ? { tickIntervalMs: parsed.data.tickIntervalMs } : {}),
+          ...(parsed.data.placement ? { placement: parsed.data.placement } : {}),
+          // Both false, and NOT negotiable by the envelope: adopting a peer's
+          // controller must never, in one tool call, produce a thing that is
+          // already ticking and already allowed to speak and build in the
+          // world. Arming it and letting it deliver are separate, local acts.
+          armed: false,
+          deliverEffects: false,
+        },
+        derivedFrom: {
+          type: 'derived-from',
+          originInstanceId: record.inheritance.originInstanceId,
+          foundationId: record.inheritance.foundationId,
+          fingerprint: record.inheritance.fingerprint,
+          derivedAt: record.inheritance.inheritedAt,
+        },
+      },
+      reasons: [],
+    };
+  }
+
+  if (record.kind === 'district-template') {
+    return refusedPlan('district-template adoption needs the layout replay path — nothing on this install turns a template body into geometry yet (#7627)');
+  }
+
+  return refusedPlan(`a "${record.kind}" foundation is a declaration with no interpreter on this install — there is nothing for adoption to stand up`);
 }

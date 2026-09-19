@@ -47,6 +47,7 @@ export * from './apiMemory.js';
 export * from './apiTribe.js';
 export * from './apiTimeline.js';
 export * from './apiBrain.js';
+export * from './apiBrainThreads.js';
 export * from './apiNotes.js';
 export * from './apiDigitalTwin.js';
 export * from './apiModelPersonality.js';

@@ -13,6 +13,7 @@ import {
   archivePersistentMindMemories,
   clearPersistentMindRollups,
 } from './persistentMindContext.js';
+import { clearPersistentMindJournal } from './persistentMindJournal.js';
 import { resetPersistentMindRuntimeResidue } from './persistentMindSupervisor.js';
 
 export async function cleanupPersistentMind({
@@ -33,6 +34,7 @@ export async function cleanupPersistentMind({
     historyEventsCleared: 0,
     historyEventsPreserved: 0,
     rollupsCleared: 0,
+    journalEventsCleared: 0,
     runtimeResidueCleared: clearHistory || selected.has('context'),
   };
 
@@ -46,6 +48,11 @@ export async function cleanupPersistentMind({
     results.rollupsCleared = rollupResult.cleared;
   }
   if (clearHistory) {
+    // The journal cites message sequences that are about to stop existing, so it
+    // goes with the history it was drawn from — but NOT with a context-only
+    // clear, which asks for fresh summaries, not for the mind's outstanding
+    // commitments to be discharged.
+    results.journalEventsCleared = (await clearPersistentMindJournal(mindId)).cleared;
     const historyResult = await clearPersistentMindHistory({
       mindId,
       preserveTurnId,

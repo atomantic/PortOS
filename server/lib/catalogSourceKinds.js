@@ -12,9 +12,11 @@
  * `factual: true` means the path produces the user's own lived capture (a
  * memoir, journal entry, or recorded thought about real people and places)
  * rather than invented story material. It drives the `{{#factual}}` sections
- * in the four catalog extraction prompts. Phase 2 of #7609 binds ingest to a
- * universe whose own `factual` flag becomes the primary signal, with the
- * source kind as the fallback for a scrap catalogued into no universe.
+ * in the four catalog extraction prompts. The universe record now carries its
+ * own `factual` flag too (#7616, shipped on the seeded `universe-reality`
+ * world); once ingest is bound to a universe (#7615) that flag becomes the
+ * primary signal, with the source kind as the fallback for a scrap catalogued
+ * into no universe.
  */
 
 export const SCRAP_SOURCE_KINDS = Object.freeze([

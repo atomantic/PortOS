@@ -15,9 +15,20 @@ import { canonicalStringify } from '../lib/objects.js';
 import { sha256Text } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
+  normalizePersistentMindCapabilities,
   persistentMindCleanupRequestSchema,
   persistentMindTaskRequestSchema,
 } from '../lib/persistentMindCapabilities.js';
+import {
+  TOOL_ACTIVATION_FAMILIES,
+  activatePersistentMindToolActivationFamilies,
+  agePersistentMindToolActivation,
+  deactivatePersistentMindToolActivationFamilies,
+  normalizePersistentMindToolActivation,
+  renewPersistentMindToolActivationFamily,
+  toolsActivateInputSchema,
+  toolsDeactivateInputSchema,
+} from '../lib/persistentMindToolActivation.js';
 import {
   persistentMindIssueFileSchema,
   persistentMindIssueListSchema,
@@ -27,9 +38,15 @@ import {
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
-import { eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
+import { detailFoundation, eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, eidoverseFoundationTargetSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
 import { eidoverseControllerArmSchema, eidoverseControllerIdParamSchema, eidoverseControllerInstallSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
-import { describeCreativeCatalog } from '../lib/eidoverseCreativeToolkit.js';
+import {
+  buildDistrictTemplateAugmentOperations,
+  buildDistrictTemplateFoundationDraft,
+  describeCreativeCatalog,
+  eidoverseDraftFoundationInputSchema,
+  eidoversePlaceLayoutInputSchema,
+} from '../lib/eidoverseCreativeToolkit.js';
 import { persistentMindChooseNameSchema } from '../lib/persistentMindChosenName.js';
 import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
@@ -235,6 +252,53 @@ const mindChooseNameTool = Object.freeze({
   adapter: { kind: 'persistent-mind-name' },
 });
 
+// Progressive tool exposure (#7624): a small always-on core (this pair, plus
+// user-actions.query below) is the only thing every mind turn sees at full
+// schema by default. Everything else is grouped into a family and shown only
+// as a one-line discoverable index until the mind calls tools.activate for
+// it — see buildPersistentMindToolPrompt. Neither tool requires a capability:
+// they only ever change what is SHOWN, never what a granted tool may do, so
+// gating them on a grant would make that invariant harder to see, not easier.
+const toolsActivateTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'tools.activate',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName('tools.activate'),
+  aliases: [providerToolName('tools.activate')],
+  description: `Expand full schemas for one or more tool families (${TOOL_ACTIVATION_FAMILIES.join(', ')}) for the rest of this turn, plus a short retention window afterward. This only changes which schemas you are shown here — it never grants a capability this mind does not already hold.`,
+  input_schema: zodToOpenApiSchema(toolsActivateInputSchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'],
+    requiredCapabilities: [],
+    sideEffect: 'write',
+    idempotent: true,
+    async: false,
+    confirmation: 'none',
+  },
+  adapter: { kind: 'tools-activate' },
+});
+
+const toolsDeactivateTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'tools.deactivate',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName('tools.deactivate'),
+  aliases: [providerToolName('tools.deactivate')],
+  description: 'Collapse one or more tool families back to their one-line discoverable index. Clears both this turn\'s selection and any retained lease. Omit families to clear all of them.',
+  input_schema: zodToOpenApiSchema(toolsDeactivateInputSchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'],
+    requiredCapabilities: [],
+    sideEffect: 'write',
+    idempotent: true,
+    async: false,
+    confirmation: 'none',
+  },
+  adapter: { kind: 'tools-deactivate' },
+});
+
 // One mind turn must not be able to dump the whole ledger into context — the
 // store's own list cap (500) is sized for the HTTP API, not a prompt.
 export const USER_ACTIONS_QUERY_MAX_RESULTS = 100;
@@ -369,8 +433,9 @@ const eidoverseTravelTools = [
 // foundations exist and why one is refused can only guess at ids.
 const eidoverseFoundationTools = [
   ['foundations', 'List the world foundations this install authored or inherited from a peer — ownership layer (`vernacular` = local, `baseline` = promoted or an inherited copy), the recorded agent-free assay outcome, whether a gated promote candidate currently exists, provenance (opaque instance id and author kind, never a display name), any `inheritance` edge back to the peer it was pulled from, and the derived `lineage` (authored/inherited → assayed → packaged → promoted). Local style is never included.', z.object({}).strict(), ['manageEidoverse'], 'read'],
-  ['contributions', 'List the resilience-assay contributions registered on this install — the ids a foundation\'s `contributionId` may bind to before it is promotable.', z.object({}).strict(), ['manageEidoverse'], 'read'],
-  ['record', 'Record (or re-author) a local vernacular foundation — a durable, promotable creative build (a `schema`, `affordance`, `controller`, or `district-template`). It always lands on this install\'s local `vernacular` layer; the layer is not accepted from you and nothing crosses to a peer until eidoverse.promote is called separately. Use eidoverse.creative-catalog for material/motif/layout ids and eidoverse.contributions for a valid `contributionId` first. `style` (palette, motif, aliases) stays local forever; a cosmetic key found inside `body` refuses the write instead of being silently dropped.', eidoverseFoundationInputSchema, ['manageEidoverse'], 'write'],
+  ['foundation', 'Read ONE foundation in full — everything eidoverse.foundations lists for it plus the `body` (the substance itself) and the author\'s `disclosure`. This is how you obtain what a peer actually contributed: the list deliberately omits every body, so pick an id there and read the one you are considering here. Name an INHERITED copy with `originInstanceId` from its `inheritance` edge; omit it for a foundation this install authored. Local style is never included.', eidoverseFoundationTargetSchema, ['manageEidoverse'], 'read'],
+  ['record', 'Record (or re-author) a local vernacular foundation — a durable, promotable creative build (a `schema`, `affordance`, `controller`, or `district-template`). It always lands on this install\'s local `vernacular` layer; the layer is not accepted from you and nothing crosses to a peer until eidoverse.promote is called separately. Use eidoverse.creative-catalog for material/motif/layout ids and eidoverse.controllers for a valid `body.controller.definitionId` first. You do not name what the promote gate replays: it derives the sandbox from this `body`, so a `controller` body must carry `controller: { definitionId, config }`, a `district-template` body must carry the layout/anchor/seed its `placement` re-derives from, and a `schema`/`affordance` body must declare `schema: { field: type }` (and, for an affordance, `affordance: { verb: { reads, writes } }` naming those fields). `style` (palette, motif, aliases) stays local forever; a cosmetic key found inside `body` refuses the write instead of being silently dropped. To build on a foundation this install inherited from a peer, pass `derivedFrom: { originInstanceId, foundationId }` naming it: an identical body with no such edge is refused rather than recorded as this install\'s own work.', eidoverseFoundationInputSchema, ['manageEidoverse'], 'write'],
+  ['adopt', 'Stand an INHERITED foundation up so it actually runs on this install, keeping a `derived-from` edge back to the peer that authored it. Only a `controller` foundation is adoptable today: it installs the SHIPPED controller its body names, DISARMED and not delivering effects, so arming it is a separate act you or your human take afterwards. A `schema`, `affordance`, or `district-template` foundation is refused by name — nothing here interprets one yet. A refusal is a result, not an error: read `reasons` and never narrate a refused adopt as done. Adopting is also the only re-use path that KEEPS attribution; re-typing a peer\'s body through eidoverse.record is refused as republishing their work as your own.', eidoverseFoundationTargetSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
   ['promote', 'Offer one local foundation to the shared PortOS baseline population. The server re-runs the agent-free resilience assay and every promote gate itself, so this is a REQUEST, not an assertion: the result is `outcome: "promoted"` only when it published. Any other outcome means nothing moved — read `reasons` and fix those before asking again, and never narrate a refused promote as done.', eidoverseFoundationIdParamSchema, ['manageEidoverse', 'promoteEidoverseFoundations'], 'write'],
 ].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
   type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
@@ -412,21 +477,23 @@ const eidoverseObserveTool = Object.freeze({
   },
   adapter: { kind: 'eidoverse-observe', operation: 'observe' },
 });
-// The documented creative toolkit (#7459): named materials, motifs, and
-// generative placement layouts a mind reaches for instead of inventing
-// coordinates and colors from scratch. Purely a catalog read — deterministic,
-// seeded, no AI provider call (`lib/eidoverseCreativeToolkit.js`). Feed a
-// chosen layout into eidoverse.record (a district-template) or
-// into eidoverse.augment (live spawn operations).
-const eidoverseCreativeCatalogTool = Object.freeze({
-  type: 'portos_tool',
-  name: 'eidoverse.creative-catalog',
-  version: COS_TOOL_SCHEMA_VERSION,
-  providerName: providerToolName('eidoverse.creative-catalog'),
-  aliases: [providerToolName('eidoverse.creative-catalog')],
-  description: 'List the documented creative toolkit for Eidoverse vernacular building: named materials and motifs (cosmetics for a foundation\'s `style`) and named generative district-template placement layouts (structure for a foundation\'s `body`). Deterministic and seeded — no AI provider call.',
-  input_schema: zodToOpenApiSchema(z.object({}).strict()),
-  output_schema: objectOutputSchema,
+// The documented creative toolkit (#7459, wired end-to-end in #7627): named
+// materials, motifs, and generative placement layouts a mind reaches for
+// instead of inventing coordinates and colors from scratch. Every operation
+// is deterministic, seeded, and provider-free (`lib/eidoverseCreativeToolkit.js`).
+// `place-layout` and `draft-foundation` are the two ways to use a chosen
+// layout the catalog's own description points at: into eidoverse.augment
+// (live spawn operations) or into eidoverse.record (a district-template).
+// Both stay read-only here — computing a placement or a draft is not writing
+// to the world or the foundation ledger.
+const eidoverseCreativeTools = [
+  ['creative-catalog', 'List the documented creative toolkit for Eidoverse vernacular building: named materials and motifs (cosmetics for a foundation\'s `style`) and named generative district-template placement layouts (structure for a foundation\'s `body`). Deterministic and seeded — no AI provider call.', z.object({}).strict()],
+  ['place-layout', 'Compute a named layout\'s placement (from eidoverse.creative-catalog) into ready-to-submit eidoverse.augment `spawn` operations. Deterministic and seeded: the same {layoutId, anchor, seed} always yields the same operations. This only computes — it never places anything; pass the returned `operations` to eidoverse.augment to actually build.', eidoversePlaceLayoutInputSchema],
+  ['draft-foundation', 'Compose a chosen layout plus a material and motif (from eidoverse.creative-catalog) into an eidoverse.record-ready `district-template` input — the generative placement in `body`, the material/motif cosmetics in `style`. This only drafts — it never records anything; pass the returned `foundation` to eidoverse.record to persist it.', eidoverseDraftFoundationInputSchema],
+].map(([operation, description, schema]) => ({
+  type: 'portos_tool', name: `eidoverse.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName(`eidoverse.${operation}`), aliases: [providerToolName(`eidoverse.${operation}`)],
+  description, input_schema: zodToOpenApiSchema(schema), output_schema: objectOutputSchema,
   policy: {
     scopes: ['mind'],
     requiredCapabilities: ['manageEidoverse'],
@@ -435,8 +502,8 @@ const eidoverseCreativeCatalogTool = Object.freeze({
     async: false,
     confirmation: 'capability-grant',
   },
-  adapter: { kind: 'eidoverse-creative', operation: 'catalog' },
-});
+  adapter: { kind: 'eidoverse-creative', operation },
+}));
 // Installing a controller leaves something RUNNING in the world after the turn
 // ends, which is a different act from building in it during a turn — so it
 // carries its own default-off grant on top of `manageEidoverse`, the same way
@@ -444,8 +511,9 @@ const eidoverseCreativeCatalogTool = Object.freeze({
 // that can build in the world should be able to see what is already ticking in
 // it, and seeing is what makes the writes usable rather than guesswork.
 const eidoverseControllerTools = [
-  ['controllers', 'List the executable world controllers PortOS ships and the ones installed here — each install\'s cadence, whether it is armed, whether its effects reach the world, its tick count, and why the supervisor disarmed it if it did. Read this before installing: `controllerId` must be one of the registry ids it returns.', z.object({}).strict(), ['manageEidoverse'], 'read'],
-  ['install-controller', 'Attach a bounded controller to the private world so it keeps ticking between your wakes. `controllerId` names one of the ids eidoverse.controllers returns — a controller is never a path or code you supply. Every tick is synchronous and provider-free, and `deliverEffects` (default false) decides whether its effects reach the world at all. This is a REQUEST: the result is `outcome: "installed"` only when it landed, and any other outcome means nothing is running — read `reasons`. The first tick is one interval away, never immediate.', eidoverseControllerInstallSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
+  ['controllers', 'List the executable world controllers PortOS ships and the ones installed here — each install\'s cadence, whether it is armed, whether its effects reach the world, its tick count, and why the supervisor disarmed it if it did. Read this before installing: `controllerId` must be one of the registry ids it returns. This list never carries `config`/`state` — use eidoverse.inspect-controller for one install\'s full record.', z.object({}).strict(), ['manageEidoverse'], 'read'],
+  ['inspect-controller', 'Read one installed controller\'s full record by its install id, including its `config` and its accumulated `state` — the detail eidoverse.controllers deliberately omits. Read this before deciding whether to arm-controller, retire-controller, or re-install over an id you did not author.', eidoverseControllerIdParamSchema, ['manageEidoverse'], 'read'],
+  ['install-controller', 'Attach a bounded controller to the private world so it keeps ticking between your wakes. `controllerId` names one of the ids eidoverse.controllers returns — a controller is never a path or code you supply. Every tick is synchronous and provider-free, and `deliverEffects` (default false) decides whether its effects reach the world at all. This is a REQUEST: the result is `outcome: "installed"` only when it landed, and any other outcome means nothing is running — read `reasons`. The first tick is one interval away, never immediate. Re-installing an existing id REBUILDS its state from the new config — inspect it first with eidoverse.inspect-controller if you want to keep what it has accumulated.', eidoverseControllerInstallSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
   ['arm-controller', 'Pause or resume one installed controller without losing the state it has accumulated. Use this to resume a controller the supervisor disarmed after repeated failures, once you have fixed what it was failing on — re-installing would work too but starts its state over.', eidoverseControllerArmSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
   ['retire-controller', 'Stop and remove one installed controller by its install id. Retiring deletes the install and its accumulated state; re-installing starts it fresh.', eidoverseControllerIdParamSchema, ['manageEidoverse', 'installEidoverseControllers'], 'write'],
 ].map(([operation, description, schema, requiredCapabilities, sideEffect]) => ({
@@ -456,7 +524,7 @@ const eidoverseControllerTools = [
     idempotent: sideEffect === 'read', async: false, confirmation: 'capability-grant' },
   adapter: { kind: 'eidoverse-controllers', operation },
 }));
-const eidoverseTools = [eidoverseObserveTool, ...eidoverseTravelTools, ...eidoverseFoundationTools, eidoverseCreativeCatalogTool, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
+const eidoverseTools = [eidoverseObserveTool, ...eidoverseTravelTools, ...eidoverseFoundationTools, ...eidoverseCreativeTools, ...eidoverseControllerTools, eidoverseStatusTool, eidoverseProjectTool, eidoverseAugmentTool, eidoverseSayTool];
 const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].map((name, index) => ({
   type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
   providerName: providerToolName(name), aliases: [],
@@ -493,9 +561,53 @@ const localContextTools = (() => {
     },
   ];
 })();
-const toolCatalog = (intent) => [...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+// Everything except the voice tools, which are sourced dynamically per intent
+// from voice/tools.js. Kept separate so the fail-fast family check below can
+// validate it without forcing voiceTools() (and the module it lazily depends
+// on) to evaluate at cosToolRegistry.js's own import time.
+const staticToolCatalog = [toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools];
+const toolCatalog = (intent) => [...staticToolCatalog, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
+
+// Family membership per tool (#7624), mirroring the TOOL_GROUPS/GROUP_INTENT
+// shape in voice/tools.js: a lookup table rather than a field on every tool
+// literal, so the mapping and the fail-fast guard below can't drift apart
+// silently. 'core' tools are always shown at full schema; everything else is
+// hidden behind its family until tools.activate names it.
+const CORE_TOOL_NAMES = Object.freeze(new Set(['tools.activate', 'tools.deactivate', 'user-actions.query']));
+const MIND_FAMILY_BY_TOOL_NAME = Object.freeze({
+  'cos.create-task': 'tasks',
+  'issues.list': 'issues',
+  'issues.file': 'issues',
+  'mind.cleanup': 'mind',
+  'mind.protect-memory': 'mind',
+  'mind.choose-name': 'mind',
+  'mind.thinking-presets': 'mind',
+  'mind.request-thinking-preset': 'mind',
+  'mind.local-context': 'mind',
+  'mind.adjust-local-context': 'mind',
+});
+
+const familyForTool = (tool) => {
+  if (!tool) return null;
+  if (CORE_TOOL_NAMES.has(tool.name)) return 'core';
+  if (tool.recipe || tool.adapter?.kind === 'recipe-management' || tool.adapter?.kind === 'recipe') return 'recipes';
+  if (tool.adapter?.kind === 'voice-tool') return 'voice';
+  if (tool.name.startsWith('eidoverse.')) return 'eidoverse';
+  return MIND_FAMILY_BY_TOOL_NAME[tool.name] || null;
+};
+
+// Fail-fast at import time: every mind-scope tool must resolve to a real
+// family or a forgotten mapping would silently make that tool
+// undiscoverable — never shown even by name — once progressive exposure
+// hides its schema. Saved recipes are exempt: they arrive at runtime from
+// outside toolCatalog() and are always classified 'recipes' via `tool.recipe`.
+for (const tool of staticToolCatalog) {
+  if (tool.policy.scopes.includes('mind') && !familyForTool(tool)) {
+    throw new Error(`cosToolRegistry: no tool-activation family mapped for mind-scope tool "${tool.name}"`);
+  }
+}
 
 const normalizeToolCapabilities = (raw) => ({
   ...normalizePortosSemanticToolGrants(raw),
@@ -528,6 +640,10 @@ const publicTool = (tool, { scope, capabilities }) => {
     input_schema: tool.input_schema,
     output_schema: tool.output_schema,
     policy: tool.policy,
+    // 'core' for the small always-on set, a family name for everything else
+    // gated behind tools.activate, or null for a tool outside mind/agent
+    // scope that progressive exposure never applies to. See #7624.
+    family: familyForTool(tool),
     availableInScope: scope === 'all' || tool.policy.scopes.includes(scope),
     granted: !['agent', 'mind'].includes(scope)
       ? null
@@ -591,24 +707,146 @@ export const readCosToolRecipeCatalog = async ({ scope = 'mind' } = {}) => {
   return readRecipeToolsForScope(scope, getCosToolCatalog({ scope }).tools);
 };
 
-export const buildPersistentMindToolPrompt = (capabilities, recipes = []) => {
+const TOOL_EXPOSURE_HEADER = 'You may request up to five calls from the exact catalog below. These are semantic actions, not raw HTTP routes. Never invent a name, route, or argument. Use a stable requestId when practical and never submit the same action in both toolCalls and taskRequests.';
+const TOOL_EXPOSURE_FOOTER = 'Calls without requestId are coalesced by canonical tool name and arguments within this turn. Supply distinct requestId values only when two intentionally identical actions must both run.';
+const TOOL_PURPOSE_MAX_CHARS = 160;
+
+const renderToolPrompt = (tools, discoverableLines = []) => {
+  const discoverableBlock = discoverableLines.length
+    ? `\n\nDiscoverable-only families (schemas hidden to save context; call tools.activate with a "families" array to expand one for this turn and a short retention window after):\n${discoverableLines.join('\n')}`
+    : '';
+  return `# PortOS semantic tools
+${TOOL_EXPOSURE_HEADER}
+
+${JSON.stringify(tools)}${discoverableBlock}
+
+${TOOL_EXPOSURE_FOOTER}`;
+};
+
+// First sentence, hard-capped: the whole point of the discoverable index is
+// spending far fewer tokens per hidden tool than its full schema would.
+const toolPurpose = (description) => {
+  const text = String(description || '').replace(/\s+/g, ' ').trim();
+  const firstSentence = (text.match(/^.*?[.!?](?:\s|$)/)?.[0] || text).trim();
+  return firstSentence.length > TOOL_PURPOSE_MAX_CHARS
+    ? `${firstSentence.slice(0, TOOL_PURPOSE_MAX_CHARS - 1)}…`
+    : firstSentence;
+};
+
+const fullSchemaShape = (tool) => ({
+  name: tool.name,
+  description: tool.description,
+  input_schema: tool.input_schema,
+  sideEffect: tool.policy.sideEffect,
+});
+
+// One aggregate, tool-name-free line per turn (never per intermediate tool
+// round — see the `trace` option below) so the exposure/retention behavior is
+// observable in logs without ever naming a tool, an argument, or user text.
+const logToolExposureTrace = (stats) => {
+  const excluded = Object.entries(stats.excludedByReason)
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(' ') || 'none';
+  console.log(`🧰 Mind tool exposure: registered=${stats.registered} eligible=${stats.eligible} core=${stats.core} activated=${stats.activated} retained=${stats.retained} excluded(${excluded})`);
+};
+
+/**
+ * Build the Persistent Mind's tool-catalog prompt section.
+ *
+ * Progressive exposure (#7624): a small always-on core plus family-scoped
+ * explicit activation with a short turn-scoped retention lease, so a small
+ * local model is never handed every granted tool's full JSON Schema on every
+ * turn. `turnId`/`isUserTurn` age the lease at most once per USER turn — pass
+ * `isUserTurn: false` (or omit it) for a self-directed wake and for every
+ * intermediate tool-round rebuild within one turn. `trace: true` on exactly
+ * one call per turn (the first) logs the one aggregate line for it.
+ *
+ * `capabilities.toolExposureAllSchemas` reproduces the pre-#7624 behavior
+ * (every granted tool's full schema, always) for debugging.
+ */
+export const buildPersistentMindToolPrompt = async (capabilities, recipes = [], { turnId = null, isUserTurn = false, trace = false } = {}) => {
+  const grants = normalizePersistentMindCapabilities(capabilities);
   const catalog = getCosToolCatalog({ scope: 'mind', capabilities, recipes });
-  const tools = catalog.tools.filter((tool) => tool.granted).map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: tool.input_schema,
-    sideEffect: tool.policy.sideEffect,
-  }));
-  if (tools.length === 0) {
+  const granted = catalog.tools.filter((tool) => tool.granted);
+  // tools.activate/tools.deactivate are withheld along with everything else
+  // when there is nothing else granted to activate — matching the pre-#7624
+  // "semantic tool access is OFF" contract exactly for a fully ungranted mind.
+  const meaningful = granted.filter((tool) => !['tools.activate', 'tools.deactivate'].includes(tool.name));
+  if (meaningful.length === 0) {
+    if (trace) {
+      logToolExposureTrace({
+        registered: catalog.tools.length, eligible: 0, core: 0, activated: 0, retained: 0,
+        excludedByReason: { ungranted: catalog.tools.length },
+      });
+    }
     return `# PortOS semantic tools
 Semantic tool access is OFF. Return an empty toolCalls array. Never invent a tool name or claim that a PortOS action ran.`;
   }
-  return `# PortOS semantic tools
-You may request up to five calls from the exact catalog below. These are semantic actions, not raw HTTP routes. Never invent a name, route, or argument. Use a stable requestId when practical and never submit the same action in both toolCalls and taskRequests.
 
-${JSON.stringify(tools)}
+  if (grants.toolExposureAllSchemas) {
+    if (trace) {
+      logToolExposureTrace({
+        registered: catalog.tools.length, eligible: granted.length, core: granted.length, activated: 0, retained: 0,
+        excludedByReason: { ungranted: catalog.tools.length - granted.length },
+      });
+    }
+    return renderToolPrompt(granted.map(fullSchemaShape));
+  }
 
-Calls without requestId are coalesced by canonical tool name and arguments within this turn. Supply distinct requestId values only when two intentionally identical actions must both run.`;
+  const { loadState, saveState, withStateLock } = await import('./cosState.js');
+  const readCurrentLeases = async () => normalizePersistentMindToolActivation((await loadState()).persistentMind?.toolActivation);
+  let activation = await readCurrentLeases();
+  if (isUserTurn && turnId && activation.lastAgedTurnId !== turnId) {
+    activation = await withStateLock(async () => {
+      const root = await loadState();
+      const latest = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
+      if (latest.lastAgedTurnId === turnId) return latest;
+      const { leases } = agePersistentMindToolActivation(latest.leases);
+      const next = { leases, lastAgedTurnId: turnId };
+      root.persistentMind = { ...root.persistentMind, toolActivation: next };
+      await saveState(root);
+      return next;
+    });
+  }
+
+  const exposedFamilies = new Set(Object.keys(activation.leases));
+  const controlTools = granted.filter((tool) => ['tools.activate', 'tools.deactivate'].includes(tool.name));
+  const exposedTools = [];
+  const discoverableByFamily = new Map();
+  for (const tool of meaningful) {
+    if (tool.family === 'core' || exposedFamilies.has(tool.family)) {
+      exposedTools.push(tool);
+    } else {
+      if (!discoverableByFamily.has(tool.family)) discoverableByFamily.set(tool.family, []);
+      discoverableByFamily.get(tool.family).push(tool);
+    }
+  }
+
+  if (trace) {
+    // A family sitting at its full retention value looks freshly
+    // (re)activated; one that has aged down is coasting on retention alone.
+    // This distinguishes the two counts without any extra persisted state.
+    const leaseValues = Object.values(activation.leases);
+    const activated = leaseValues.filter((turnsLeft) => turnsLeft === grants.toolExposureRetentionTurns).length;
+    logToolExposureTrace({
+      registered: catalog.tools.length,
+      eligible: granted.length,
+      core: controlTools.length + meaningful.filter((tool) => tool.family === 'core').length,
+      activated,
+      retained: leaseValues.length - activated,
+      excludedByReason: {
+        ungranted: catalog.tools.length - granted.length,
+        notActivated: [...discoverableByFamily.values()].reduce((sum, tools) => sum + tools.length, 0),
+      },
+    });
+  }
+
+  const discoverableLines = [...discoverableByFamily.entries()].map(([family, tools]) => (
+    `- ${family} (${tools.length}): ${tools.map((tool) => `${tool.name} — ${toolPurpose(tool.description)}`).join('; ')}`
+  ));
+
+  return renderToolPrompt([...controlTools, ...exposedTools].map(fullSchemaShape), discoverableLines);
 };
 
 export const readPersistentMindRecipeCatalog = (capabilities) => readMindRecipeTools(capabilities, getCosToolCatalog({ scope: 'mind' }).tools);
@@ -653,6 +891,22 @@ const validateArguments = (tool, args) => {
 const executeAdapter = async (tool, args, context, authority) => {
   if (tool.adapter.kind === 'recipe-management') return executeRecipeManagement(tool, args, context);
   if (tool.adapter.kind === 'recipe') return executeRecipe(tool, args, context, authority);
+  if (tool.adapter.kind === 'tools-activate' || tool.adapter.kind === 'tools-deactivate') {
+    const { loadState, saveState, withStateLock } = await import('./cosState.js');
+    const grants = normalizePersistentMindCapabilities(authority?.capabilities);
+    return withStateLock(async () => {
+      const root = await loadState();
+      const current = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
+      const leases = tool.adapter.kind === 'tools-activate'
+        ? activatePersistentMindToolActivationFamilies(current.leases, args.families, grants.toolExposureRetentionTurns)
+        : deactivatePersistentMindToolActivationFamilies(current.leases, args.families);
+      root.persistentMind = { ...root.persistentMind, toolActivation: { leases, lastAgedTurnId: current.lastAgedTurnId } };
+      await saveState(root);
+      return tool.adapter.kind === 'tools-activate'
+        ? { ok: true, activated: args.families, retentionTurns: grants.toolExposureRetentionTurns, families: Object.keys(leases) }
+        : { ok: true, deactivated: args.families || Object.keys(current.leases), families: Object.keys(leases) };
+    });
+  }
   if (tool.adapter.kind.startsWith('thinking-')) {
     const { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } = await import('./persistentMindThinkingRequests.js');
     return tool.adapter.kind === 'thinking-catalog'
@@ -746,9 +1000,17 @@ const executeAdapter = async (tool, args, context, authority) => {
       const listed = await ledger.listEidoverseFoundations();
       return { counts: listed.counts, foundations: listed.foundations.map(summarizeFoundation) };
     }
-    if (tool.adapter.operation === 'contributions') {
-      const { listRegisteredContributionIds } = await import('./eidoverseResilienceContributions.js');
-      return { contributions: await listRegisteredContributionIds() };
+    if (tool.adapter.operation === 'foundation') {
+      // `detailFoundation`, not the list projection: the body is exactly what
+      // a mind needs once it has chosen which foundation to look at, and
+      // exactly what must not ride into every turn that lists them.
+      const record = await ledger.getEidoverseFoundationByRef(args);
+      return { foundation: detailFoundation(record) };
+    }
+    if (tool.adapter.operation === 'adopt') {
+      const { summarizeControllerInstall } = await import('./eidoverseControllerRuntime.js');
+      const result = await ledger.adoptEidoverseFoundation(args, { installedBy: 'mind' });
+      return { ...result, install: result.install ? summarizeControllerInstall(result.install) : null };
     }
     if (tool.adapter.operation === 'record') {
       const { ensureInstanceId } = await import('./instanceIdentity.js');
@@ -771,6 +1033,8 @@ const executeAdapter = async (tool, args, context, authority) => {
     return observeEidoverseWorld({ signal: context.signal });
   }
   if (tool.adapter.kind === 'eidoverse-creative') {
+    if (tool.adapter.operation === 'place-layout') return { operations: buildDistrictTemplateAugmentOperations(args) };
+    if (tool.adapter.operation === 'draft-foundation') return { foundation: buildDistrictTemplateFoundationDraft(args) };
     return describeCreativeCatalog();
   }
   if (tool.adapter.kind === 'eidoverse-controllers') {
@@ -789,15 +1053,22 @@ const executeAdapter = async (tool, args, context, authority) => {
         installs: listed.installs.map((install) => summarizeControllerInstall(install)),
       };
     }
+    if (tool.adapter.operation === 'inspect-controller') {
+      // The INSPECT `summarizeControllerInstall`'s own header promises
+      // (#7629) — the `controllers` list above stays state-free by design.
+      const install = await runtime.getEidoverseControllerInstall(args.id);
+      if (!install) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${args.id}"`] };
+      return { outcome: 'found', install: summarizeControllerInstall(install, { includeState: true }), reasons: [] };
+    }
     if (tool.adapter.operation === 'arm-controller') {
       const armed = await runtime.setEidoverseControllerArmed(args.id, args.armed);
       return { ...armed, install: armed.install ? summarizeControllerInstall(armed.install) : null };
     }
     if (tool.adapter.operation === 'install-controller') {
       const result = await runtime.installEidoverseController(args, { installedBy: 'mind' });
-      // State included here and nowhere else: the mind just authored this
-      // config and the initial state is what tells it the controller
-      // understood it. The list projection stays state-free.
+      // State included here too, and on inspect-controller: the mind just
+      // authored this config and the initial state is what tells it the
+      // controller understood it. The list projection stays state-free.
       return { ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null };
     }
     const result = await runtime.retireEidoverseController(args.id);
@@ -861,6 +1132,28 @@ const normalizeAdapterResult = ({ parsedCall, tool, result }) => {
   };
 };
 
+// A successful mind-scope call from a leased/activatable family renews only
+// that family's window — an unrelated activated-but-unused family still ages
+// normally. Never runs for 'core'/unclassified tools (nothing to renew) or
+// under the all-schemas escape hatch (leases are inert there). Errors are
+// swallowed: a lease-bookkeeping failure must never turn a completed tool
+// call into a failed one.
+const renewToolActivationLeaseOnUse = async (tool, authority, succeeded) => {
+  if (!succeeded || authority?.scope !== 'mind') return;
+  const family = familyForTool(tool);
+  if (!family || family === 'core') return;
+  const grants = normalizePersistentMindCapabilities(authority.capabilities);
+  if (grants.toolExposureAllSchemas || !(grants.toolExposureRetentionTurns > 0)) return;
+  const { loadState, saveState, withStateLock } = await import('./cosState.js');
+  await withStateLock(async () => {
+    const root = await loadState();
+    const current = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);
+    const leases = renewPersistentMindToolActivationFamily(current.leases, family, grants.toolExposureRetentionTurns);
+    root.persistentMind = { ...root.persistentMind, toolActivation: { leases, lastAgedTurnId: current.lastAgedTurnId } };
+    await saveState(root);
+  });
+};
+
 export const executeCosToolCall = async ({ call, authority, context = {} }) => {
   const parsedCall = cosToolCallSchema.parse(call);
   let tool = resolveTool(parsedCall.name);
@@ -911,7 +1204,11 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
         duplicate: false,
         error: String(error?.message || error || 'Tool execution failed').slice(0, 500),
       }),
-    );
+    )
+    .then(async (normalized) => {
+      await renewToolActivationLeaseOnUse(tool, authority, normalized.state === 'completed').catch(() => {});
+      return normalized;
+    });
   toolCallFingerprints.set(parsedCall.requestId, {
     fingerprint,
     expiresAt: Date.now() + IDEMPOTENCY_RETENTION_MS,

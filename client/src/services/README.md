@@ -45,7 +45,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCommands.js` | CLI command dispatch. |
 | `apiDashboard.js` | Dashboard state. |
 | `apiDatabase.js` | Database introspection. |
-| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model install/delete, the managed Prompt Guard model-abuse classifier lifecycle, backend install (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run + persisted results + intent ranking + the server-side "measure everything" sweep). Also the PM2-managed runtime servers (llama.cpp, MTPLX, Slotstream) and their checkpoint catalogs — `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel` and `downloadSlotstreamModel` / `cancelSlotstreamModelDownload`, so weights are managed in-app rather than from a terminal. |
+| `apiLocalLlm.js` | Local LLM backends (Ollama / LM Studio): status (incl. installed models), catalog, model install/delete, the managed Prompt Guard model-abuse classifier lifecycle, the jev entailment scorer lifecycle (status / install / cancel / score / unload) plus its project-specific trained heads (list / train / adopt / discard, where adoption is gated server-side on beating both the stock zero-shot and the majority-class baseline), backend install (Homebrew/script), switch/migrate, playground test/compare, and measured per-model assessments (run + persisted results + intent ranking + the server-side "measure everything" sweep). Also the PM2-managed runtime servers (llama.cpp, MTPLX, Slotstream) and their checkpoint catalogs — `searchMtplxModels` / `pullMtplxModel` / `removeMtplxModel` and `downloadSlotstreamModel` / `cancelSlotstreamModelDownload`, so weights are managed in-app rather than from a terminal. |
 | `apiGit.js` | Git operations. |
 | `apiGithub.js` | GitHub repo metadata. |
 | `apiHistory.js` | Historical logs / runs. |
@@ -66,13 +66,14 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiQuotaBurn.js` | Quota Burn plan + live status, the job-type catalog its config form renders, and manual runs (`getQuotaBurn`/`getQuotaBurnCatalog`/`saveQuotaBurn`/`runQuotaBurn`), plus `rearmQuotaBurn` to put spent `run once` steps back into the rotation. |
 | `apiRapidReader.js` | Rapid Reader's optional author-hosted Accelerando loader and machine-local shelf API. |
 | `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getHourlyUsage` for dashboard hourly counters, `getUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison, `getSubscriptions` / `updateSubscriptions` / `setSubscriptionEnabled` for the Subscriptions page's plan rows (PortOS-side enablement and plan-tier tracking only, never vendor billing), `updateUsageFleetBilling` to exclude an API-billed federated instance from Across Instances totals). Also `saveCredential` (write-only integration key save/clear) and `getCredentialInventory` (`GET /settings/credentials`) — presence and source of each PortOS credential, never a value. Also the Eidoverse world controls and its foundation ledger (`listEidoverseFoundations`, `recordEidoverseFoundation`, `packageEidoverseFoundationCandidate`, `promoteEidoverseFoundation`, `getEidoverseContributions`) — the last three answer 200 with a refusal verdict when a promote gate says no, so callers read `outcome` rather than catching. |
-| `apiAuth.js` | Optional login password — status, login, set/clear password. |
+| `apiAuth.js` | Optional login password — status, login, set/clear password, list/revoke sessions. |
 | `apiLoops.js` | Scheduled loops. |
 
 ## Personal data / identity
 
 | File | Purpose |
 |---|---|
+| `apiBrainThreads.js` | Brain threads — the bullet journal's open loops (`/brain/threads`, Brain `threads` entity; a *thread* is a tracked topic, never a message thread): filtered list (`listThreads({ status, priority, tag, pinned, refKind, q })`), full record with `resolvedRefs` (`getThread`), create / defaults-free PUT / tombstone delete, per-ref attach/detach (`addThreadRef`, `removeThreadRef`), and attach (`attachToThread`). |
 | `apiBrain.js` | Brain (second-brain) search + ingest + edit, plus the federation parity audit (`getBrainParityReports`, `runBrainParityCheck`). |
 | `apiMemory.js` | Memory CRUD. |
 | `apiNotes.js` | Notes vault. |

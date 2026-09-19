@@ -2,11 +2,12 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { GitFork, Globe2, Home, ShieldCheck } from 'lucide-react';
 import {
-  getEidoverseContributions,
+  listEidoverseControllers,
   listEidoverseFoundations,
   packageEidoverseFoundationCandidate,
   promoteEidoverseFoundation,
   recordEidoverseFoundation,
+  withdrawEidoverseFoundation,
 } from '../../services/api';
 import { formatDateShort, timeAgo } from '../../utils/formatters';
 
@@ -47,11 +48,32 @@ const fieldClass = 'mt-1 min-h-[42px] w-full rounded-lg border border-port-borde
 const secondaryButton = 'inline-flex min-h-[40px] items-center justify-center rounded-lg border border-port-border px-3 py-2 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white disabled:cursor-wait disabled:opacity-50';
 const primaryButton = 'inline-flex min-h-[40px] items-center justify-center rounded-lg bg-port-accent px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:cursor-wait disabled:opacity-50';
 
-const EMPTY_DRAFT = Object.freeze({
-  id: '', kind: 'affordance', title: '', summary: '', contributionId: '',
-  body: '{\n  "affordance": {}\n}', style: '{}',
-  requires: '', effects: '', license: '', notes: '',
+/**
+ * A starting `body` per kind, because since #7625 the body IS what the promote
+ * gate replays: it derives the resilience-assay sandbox from these declarations
+ * rather than from an id the author names. An empty textarea would leave the
+ * author guessing at the one shape that can be replayed, and the refusal would
+ * be their first hint.
+ */
+const BODY_TEMPLATES = Object.freeze({
+  affordance: '{\n  "schema": {\n    "pulses": "integer"\n  },\n  "affordance": {\n    "pulse": { "summary": "advance the pulse count", "reads": ["pulses"], "writes": ["pulses"] }\n  }\n}',
+  controller: '{\n  "controller": {\n    "definitionId": "",\n    "config": {}\n  }\n}',
+  schema: '{\n  "schema": {\n    "pulses": "integer"\n  }\n}',
+  'district-template': '{\n  "layoutId": "radial-ring",\n  "anchor": [0, 0, 0],\n  "propCount": 6,\n  "seed": "",\n  "facing": 0,\n  "placement": []\n}',
 });
+
+const EMPTY_DRAFT = Object.freeze({
+  id: '', kind: 'affordance', title: '', summary: '',
+  body: BODY_TEMPLATES.affordance, style: '{}',
+  requires: '', effects: '', license: '', notes: '',
+  // `{ originInstanceId, foundationId }` once this draft builds on a peer's
+  // inherited foundation — see `draftFromFoundation` (#7631).
+  derivedFrom: null,
+});
+
+/** Slug cap in `foundationIdSchema`; a derived id is trimmed to fit. */
+const FOUNDATION_ID_MAX = 64;
+const DERIVED_ID_SUFFIX = '-derived';
 
 /** Comma-separated authoring input as the array the disclosure schema wants. */
 const splitList = (value) => value.split(',').map((entry) => entry.trim()).filter(Boolean);
@@ -74,12 +96,32 @@ function parseJsonObject(text, label) {
   return { value: parsed };
 }
 
+/**
+ * A new local id for a draft built on a peer's foundation. Keeping the
+ * inherited id would re-author (or create) a LOCAL record under the same name,
+ * which is how a peer's work used to end up promoted as this install's own.
+ */
+const derivedFoundationId = (id) => `${String(id).slice(0, FOUNDATION_ID_MAX - DERIVED_ID_SUFFIX.length)}${DERIVED_ID_SUFFIX}`;
+
+/**
+ * Load a foundation into the authoring form.
+ *
+ * For a LOCAL row this is a plain re-author: same id, same everything. For an
+ * INHERITED row it is a DERIVATION (#7631) — a new local id plus the
+ * `derivedFrom` edge naming what it was built on, which the server resolves
+ * against the copy this install actually holds and publishes on the promote
+ * envelope. Re-use stays one click; re-use that erases the origin does not
+ * exist. The inherited `id` is deliberately not carried over: the acceptance
+ * test for this change asserts exactly that.
+ */
 const draftFromFoundation = (foundation) => ({
-  id: foundation.id,
+  id: foundation.inheritance ? derivedFoundationId(foundation.id) : foundation.id,
+  derivedFrom: foundation.inheritance
+    ? { originInstanceId: foundation.inheritance.originInstanceId, foundationId: foundation.id }
+    : null,
   kind: foundation.kind,
   title: foundation.title,
   summary: foundation.summary,
-  contributionId: foundation.contributionId,
   body: JSON.stringify(foundation.body ?? {}, null, 2),
   style: JSON.stringify(foundation.style ?? {}, null, 2),
   requires: (foundation.disclosure?.requires || []).join(', '),
@@ -121,6 +163,8 @@ function LayerBadge({ layer }) {
 const VERDICT_HEADLINES = Object.freeze({
   promoted: 'Promoted to the shared baseline.',
   packaged: 'Every gate passed — promote candidate packaged.',
+  withdrawn: 'Withdrawn — peers that inherited this drop their copy on the next sync.',
+  'not-promoted': 'Nothing to retract — this was never promoted.',
 });
 
 function Verdict({ verdict }) {
@@ -154,9 +198,26 @@ function InheritedFromBadge({ inheritance }) {
   );
 }
 
+/** This install's own work, built on a peer's foundation — the opposite claim
+ * to `InheritedFromBadge`'s, and the one that keeps attribution when somebody
+ * re-uses what a peer promoted (#7631). */
+function DerivedFromBadge({ derivedFrom }) {
+  if (!derivedFrom) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-port-border bg-port-bg px-2 py-0.5 text-xs text-gray-400"
+      title={`Built on "${derivedFrom.foundationId}" from instance ${derivedFrom.originInstanceId}`}
+    >
+      <GitFork size={12} aria-hidden="true" />
+      Derived
+    </span>
+  );
+}
+
 const LINEAGE_COPY = Object.freeze({
   authored: (event) => `Authored (${event.authorKind || 'unknown'})`,
   inherited: (event) => `Inherited from instance ${event.originInstanceId}`,
+  derived: (event) => `Derived from "${event.foundationId}" on instance ${event.originInstanceId}`,
   assayed: (event) => (event.pass ? 'Agent-free assay passed' : 'Agent-free assay failed'),
   packaged: () => 'Promote candidate packaged',
   promoted: () => 'Promoted to the shared baseline',
@@ -183,7 +244,9 @@ export default function EidoverseFoundationsPanel() {
   const openId = searchParams.get('foundation');
   const [foundations, setFoundations] = useState([]);
   const [counts, setCounts] = useState({ vernacular: 0, baseline: 0, candidates: 0, inherited: 0 });
-  const [contributions, setContributions] = useState(null);
+  // `null` means "never fetched"; an empty ARRAY means this install genuinely
+  // ships no controller definition, which is a different thing to tell the author.
+  const [controllerDefinitions, setControllerDefinitions] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [busyId, setBusyId] = useState('');
@@ -200,14 +263,11 @@ export default function EidoverseFoundationsPanel() {
 
   useEffect(() => {
     let live = true;
-    Promise.all([listEidoverseFoundations(silent), getEidoverseContributions(silent)])
+    Promise.all([listEidoverseFoundations(silent), listEidoverseControllers(silent)])
       .then(([listing, registry]) => {
         if (!live) return;
         applyListing(listing);
-        // `null` means "never fetched" and renders as a plain text field; an
-        // empty ARRAY means this install genuinely registers no contribution,
-        // which is a different thing to tell the author.
-        setContributions(registry.contributions || []);
+        setControllerDefinitions(registry.available || []);
         setLoadError('');
       })
       .catch((reason) => { if (live) setLoadError(reason?.message || 'Could not load foundations.'); })
@@ -257,9 +317,11 @@ export default function EidoverseFoundationsPanel() {
       kind: draft.kind,
       title: draft.title.trim(),
       summary: draft.summary.trim(),
-      contributionId: draft.contributionId.trim(),
       body: body.value,
       style: style.value,
+      // Omitted rather than sent as `null` when absent: the field is optional
+      // on the input schema, and an explicit `null` is the same thing to it.
+      ...(draft.derivedFrom ? { derivedFrom: draft.derivedFrom } : {}),
       disclosure: {
         requires: splitList(draft.requires),
         effects: splitList(draft.effects),
@@ -278,6 +340,32 @@ export default function EidoverseFoundationsPanel() {
   }, [applyListing, draft, openFoundation]);
 
   const mutateDraft = (key) => (event) => setDraft((current) => ({ ...current, [key]: event.target.value }));
+
+  /**
+   * Switching kind re-seeds the body, but only while the body is still one of
+   * the untouched templates — an author who has started writing keeps what they
+   * wrote. Since #7625 the body is the thing the promote gate replays, so each
+   * kind has a genuinely different shape rather than a cosmetic label.
+   */
+  const changeKind = useCallback((event) => {
+    const kind = event.target.value;
+    setDraft((current) => ({
+      ...current,
+      kind,
+      body: Object.values(BODY_TEMPLATES).includes(current.body.trim()) ? BODY_TEMPLATES[kind] : current.body,
+    }));
+  }, []);
+
+  /** Seed the body with a shipped definition and its own example config, which
+   * the author then edits into the config this install actually runs. */
+  const seedControllerBody = useCallback((event) => {
+    const definition = (controllerDefinitions || []).find((entry) => entry.id === event.target.value);
+    if (!definition) return;
+    setDraft((current) => ({
+      ...current,
+      body: JSON.stringify({ controller: { definitionId: definition.id, config: definition.exampleConfig || {} } }, null, 2),
+    }));
+  }, [controllerDefinitions]);
 
   const openFoundationRecord = useMemo(
     () => foundations.find((entry) => entry.id === openId) || null,
@@ -324,11 +412,12 @@ export default function EidoverseFoundationsPanel() {
                       <h4 className="font-medium text-white">{foundation.title}</h4>
                       <LayerBadge layer={foundation.layer} />
                       <InheritedFromBadge inheritance={foundation.inheritance} />
+                      <DerivedFromBadge derivedFrom={foundation.derivedFrom} />
                       <span className="rounded-full border border-port-border px-2 py-0.5 text-xs text-gray-400">{foundation.kind}</span>
                     </div>
                     <p className="mt-1 text-sm text-gray-400">{foundation.summary}</p>
                     <p className="mt-1 text-xs text-gray-500">
-                      Replayed as <code className="text-gray-400">{foundation.contributionId}</code>
+                      Replayed as <code className="text-gray-400">{foundation.contributionId}</code> (derived from this body)
                       {foundation.candidate ? ' · candidate packaged' : ''}
                       {foundation.assay ? (foundation.assay.pass ? ' · assay passed' : ' · assay failed') : ' · assay not run'}
                     </p>
@@ -357,6 +446,21 @@ export default function EidoverseFoundationsPanel() {
                         >
                           Promote
                         </button>
+                        {/* Withdrawal (#7632) — the direction promotion never
+                            had. Only a promoted record can be retracted, so the
+                            button appears with the `baseline` layer rather than
+                            sitting disabled beside every local draft. */}
+                        {foundation.layer === 'baseline' && (
+                          <button
+                            type="button"
+                            className={secondaryButton}
+                            disabled={busyId === foundation.id}
+                            title="Retract this from the shared baseline — peers that inherited it drop their copy on the next sweep"
+                            onClick={() => runGate(foundation.id, withdrawEidoverseFoundation)}
+                          >
+                            Withdraw
+                          </button>
+                        )}
                       </>
                     )}
                     <button type="button" className={secondaryButton} onClick={() => openFoundation(expanded ? '' : foundation.id)}>
@@ -386,8 +490,15 @@ export default function EidoverseFoundationsPanel() {
                     </p>
                     <pre className="max-h-32 overflow-auto rounded-lg bg-port-bg p-3 text-xs text-gray-300">{JSON.stringify(foundation.style, null, 2)}</pre>
                     <button type="button" className={secondaryButton} onClick={() => setDraft(draftFromFoundation(foundation))}>
-                      Load into the form below
+                      {foundation.inheritance ? 'Build on this in the form below' : 'Load into the form below'}
                     </button>
+                    {foundation.inheritance && (
+                      <p className="text-xs text-gray-500">
+                        Loads a new local id and records a derivation edge back to instance{' '}
+                        {foundation.inheritance.originInstanceId}, which travels with the foundation if you
+                        promote it. Saving this body unchanged as your own work is refused.
+                      </p>
+                    )}
                   </div>
                 )}
               </li>
@@ -403,6 +514,13 @@ export default function EidoverseFoundationsPanel() {
           both described the previous body. A foundation already in the shared baseline returns to local when
           you edit it, so the new body can be promoted in its turn.
         </p>
+        {draft.derivedFrom && (
+          <p className="mt-3 rounded-lg border border-port-accent/40 bg-port-accent/5 p-3 text-sm text-gray-300" role="status">
+            Building on <code className="text-gray-200">{draft.derivedFrom.foundationId}</code> from instance{' '}
+            <code className="text-gray-200">{draft.derivedFrom.originInstanceId}</code>. Recording this keeps the
+            edge back to that install, and promoting it publishes the edge rather than your name alone.
+          </p>
+        )}
         <form className="mt-4 space-y-3" onSubmit={submitDraft}>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
@@ -411,7 +529,7 @@ export default function EidoverseFoundationsPanel() {
             </div>
             <div>
               <label htmlFor={`${fieldId}-kind`} className="text-sm text-gray-300">Kind</label>
-              <select id={`${fieldId}-kind`} className={fieldClass} value={draft.kind} onChange={mutateDraft('kind')}>
+              <select id={`${fieldId}-kind`} className={fieldClass} value={draft.kind} onChange={changeKind}>
                 {FOUNDATION_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
               </select>
             </div>
@@ -419,22 +537,20 @@ export default function EidoverseFoundationsPanel() {
               <label htmlFor={`${fieldId}-title`} className="text-sm text-gray-300">Title</label>
               <input id={`${fieldId}-title`} className={fieldClass} value={draft.title} onChange={mutateDraft('title')} required />
             </div>
-            <div>
-              <label htmlFor={`${fieldId}-contribution`} className="text-sm text-gray-300">Resilience-assay contribution</label>
-              {contributions?.length ? (
-                <select id={`${fieldId}-contribution`} className={fieldClass} value={draft.contributionId} onChange={mutateDraft('contributionId')} required>
-                  <option value="">Choose a registered contribution…</option>
-                  {contributions.map((id) => <option key={id} value={id}>{id}</option>)}
+            {draft.kind === 'controller' && (
+              <div>
+                <label htmlFor={`${fieldId}-definition`} className="text-sm text-gray-300">Controller definition</label>
+                <select id={`${fieldId}-definition`} className={fieldClass} value="" onChange={seedControllerBody}>
+                  <option value="">Fill the body from a shipped definition…</option>
+                  {(controllerDefinitions || []).map((definition) => <option key={definition.id} value={definition.id}>{definition.id}</option>)}
                 </select>
-              ) : (
-                <input id={`${fieldId}-contribution`} className={fieldClass} value={draft.contributionId} onChange={mutateDraft('contributionId')} required />
-              )}
-              {contributions?.length === 0 && (
-                <p className="mt-1 text-xs text-port-warning">
-                  This install registers no replayable contribution, so nothing can pass the promote gate yet.
-                </p>
-              )}
-            </div>
+                {controllerDefinitions?.length === 0 && (
+                  <p className="mt-1 text-xs text-port-warning">
+                    This install ships no controller definition, so a `controller` foundation has nothing to replay.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           <div>
             <label htmlFor={`${fieldId}-summary`} className="text-sm text-gray-300">Summary</label>

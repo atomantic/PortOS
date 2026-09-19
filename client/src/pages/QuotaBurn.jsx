@@ -23,7 +23,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import FamilyCard from '../components/quotaBurn/FamilyCard';
 import { NumberField } from '../components/quotaBurn/fields';
 import * as api from '../services/api';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useQuotaPendingPoll } from '../hooks/useQuotaPendingPoll';
 import { mergeQuotaBurnPatch } from '../lib/quotaBurnPatch';
 import { buildQuotaBurnTaskCatalog, flattenTaskCatalog } from '../lib/quotaBurnTasks';
 import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../lib/safeStorage';
@@ -35,9 +35,6 @@ import { timeAgo } from '../utils/formatters';
 // every universe bible — one full scan per character typed.
 export const SAVE_DEBOUNCE_MS = 500;
 
-// How often to re-ask while a family's quota scrape is still running. A scrape
-// is a 10-20s PTY spawn, so this is a handful of polls, not a busy loop.
-export const PENDING_POLL_MS = 4000;
 
 // What the burn's OWN catalog endpoint still supplies: the managed apps a step
 // can target and the providers a per-invocation pin may name. The work itself is
@@ -256,13 +253,9 @@ export default function QuotaBurn() {
 
   // A cold quota cache comes back as `pending` families rather than holding the
   // response open for a 20s-per-family PTY scrape, so the page renders its plan
-  // immediately and fills the numbers in when the scrape lands. Enabled ONLY
-  // while something is actually pending — this is not a background refresh loop
-  // — and `useAutoRefetch` (rather than a hand-rolled timer) so it pauses on a
-  // hidden tab: re-requesting a multi-second scrape behind a backgrounded tab is
-  // the one thing this poll must not do.
-  const anyPending = (status?.families || []).some((row) => row.pending);
-  useAutoRefetch(load, PENDING_POLL_MS, { enabled: anyPending, immediate: false, pollOnly: true });
+  // immediately and fills the numbers in when the scrape lands. The shared hook
+  // owns the cadence and the hidden-tab pause (hooks/useQuotaPendingPoll.js).
+  useQuotaPendingPoll(load, status?.families);
 
   // There is no Save button: an edit lands in local state immediately and is
   // persisted on a trailing edge. Successive edits fold into ONE patch body, so

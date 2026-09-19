@@ -35,8 +35,12 @@ vi.mock('./modelAbuseGuard.js', async (importOriginal) => ({
 }));
 
 const runUntrustedContentAnalysisMock = vi.fn();
+// The jev reply gate stubs to "feature off", which is the shipped default, so
+// every assertion below still describes the chat-completion path unchanged.
+const jevBatchGateMock = vi.fn();
 vi.mock('./untrustedContent.js', () => ({
   runUntrustedContentAnalysis: (...args) => runUntrustedContentAnalysisMock(...args),
+  jevBatchGate: (...args) => jevBatchGateMock(...args),
   screenUntrustedContent: async ({ content }) => {
     const screening = await runModelAbuseScanMock({ content });
     return { ok: screening.ok && screening.safe === true, screening };
@@ -171,6 +175,12 @@ beforeEach(() => {
   addNotificationMock.mockReset();
   addNotificationMock.mockResolvedValue({ id: 'notification-1' });
   runUntrustedContentAnalysisMock.mockReset();
+  jevBatchGateMock.mockReset();
+  // The shipped default: feature off, nothing decided, everything still the
+  // chat model's to answer.
+  jevBatchGateMock.mockImplementation(async ({ items }) => (
+    { decided: new Map(), pending: items, skipped: [], measure: async () => null }
+  ));
   runModelAbuseScanMock.mockReset();
   runModelAbuseScanMock.mockResolvedValue({
     ok: true,
@@ -1429,6 +1439,64 @@ describe('scheduled issue intake trust boundary', () => {
     });
     expect(await runScheduledIssueIntake({ app: apps.get(APP.id) })).toEqual({ skip: { reason: 'issue-response-incomplete' } });
     expect(replies()).toHaveLength(0);
+  });
+
+  // The jev reply gate. The scorer itself is covered in
+  // `untrustedContent.jev.test.js`; here the gate is doubled so these assertions
+  // are about what the WATCHER does with each verdict.
+  // Mirrors the real gate: a verdict the caller's `accept` refuses is unsettled,
+  // so a local `reply` still lands in `pending` for the chat model.
+  const gateDecides = (value) => jevBatchGateMock.mockImplementationOnce(async ({ items, accept }) => {
+    const choices = { 'issue-comment-reply': value };
+    const taken = accept(choices) ? items : [];
+    return {
+      decided: new Map(taken.map((item) => [item.key, choices])),
+      pending: items.filter((item) => !taken.includes(item)),
+      skipped: [],
+      measure: async () => null,
+    };
+  });
+
+  it('answers a local none without waking the chat model at all', async () => {
+    installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
+    gateDecides('none');
+    expect(await runScheduledIssueIntake({ app: APP })).toEqual({ skip: { reason: 'issue-activity-processed' } });
+    // The point of the gate: the overwhelmingly common answer costs no quota.
+    expect(runUntrustedContentAnalysisMock).not.toHaveBeenCalled();
+    expect(replies()).toHaveLength(0);
+  });
+
+  it('still calls the chat model to write the body when the scorer says reply', async () => {
+    installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
+    gateDecides('reply');
+    runUntrustedContentAnalysisMock.mockResolvedValue({ ok: true, value: decision });
+    expect(await runScheduledIssueIntake({ app: APP })).toEqual({ skip: { reason: 'issue-activity-processed' } });
+    // An entailment head cannot write prose, so a `reply` verdict only decides
+    // that the model is worth waking — the batch still carries the comment.
+    expect(JSON.parse(runUntrustedContentAnalysisMock.mock.calls[0][0].content).issueComments)
+      .toEqual([expect.objectContaining({ issueNumber: 42, commentId: 0 })]);
+    expect(replies()).toHaveLength(1);
+  });
+
+  it('leaves an unresolvable comment alone under only, instead of recording it as none', async () => {
+    installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
+    jevBatchGateMock.mockImplementationOnce(async ({ items }) => (
+      { decided: new Map(), pending: [], skipped: items, measure: async () => null }
+    ));
+    await runScheduledIssueIntake({ app: APP });
+    expect(runUntrustedContentAnalysisMock).not.toHaveBeenCalled();
+    expect(replies()).toHaveLength(0);
+    // Recorded as an abstention, not as a handled comment: a skip that read as
+    // `none` would retire the comment permanently on a zero-quota install.
+    const state = apps.get(APP.id).issueWatcherState;
+    expect(state.lastAnalysis).toMatchObject({ jevAbstained: 1 });
+    // And it stays queued, un-ticked, for the next tick to retry. Narrowing the
+    // hook metadata is what keeps it out of `expectedComments`, so the
+    // incomplete-reasoning tick counter never advances on a decision PortOS
+    // deliberately declined to make.
+    expect(state.pendingIssueComments).toEqual([
+      expect.objectContaining({ issueNumber: 42, commentId: 0, ticks: 0 }),
+    ]);
   });
 });
 

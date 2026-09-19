@@ -37,8 +37,11 @@ it('loads only visitor metadata and the remote renderer, without private PortOS 
   expect(api.updateSettings).not.toHaveBeenCalled();
   expect(CatalogTypesProvider).not.toHaveBeenCalled();
   expect(screen.queryByText('Owner layout')).not.toBeInTheDocument();
-  // Vernacular labeling (#7459): a guest visit shows the host's own private
-  // style, never the shared PortOS baseline population.
+  // Vernacular labeling (#7459, corrected by #7634): a guest visit shows two
+  // distinct classes — the shared PortOS design every install renders the
+  // same way, and the host's own private vernacular build — never a blanket
+  // claim that everything observed is the host's private invention.
+  expect(screen.getByText(/shared PortOS world design/)).toBeInTheDocument();
   expect(screen.getByText(/local vernacular/)).toBeInTheDocument();
 });
 it('keeps an expired invitation on the guest page instead of redirecting to owner login', async () => {

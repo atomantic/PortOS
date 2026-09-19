@@ -356,6 +356,29 @@ describe('Catalog page', () => {
     });
   });
 
+  it('filters to a source scrap via `?scrap=`, shows the filter banner, and clears it on demand (#7617)', async () => {
+    renderCatalog('/catalog?scrap=cat-scrap-1');
+    await waitFor(() => {
+      expect(listCatalogIngredients).toHaveBeenLastCalledWith(
+        expect.objectContaining({ scrapId: 'cat-scrap-1' }),
+      );
+    });
+    expect(screen.getByText(/Filtered by source/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(screen.getByTestId('catalog-location').textContent).toBe('/catalog'));
+    expect(screen.queryByText(/Filtered by source/)).toBeNull();
+  });
+
+  it('shows the source scrap title in the filter banner when it arrives via router state', async () => {
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/catalog', search: '?scrap=cat-scrap-1', state: { scrapTitle: 'Notebook Page Three' } }]}>
+        <Catalog />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByText('Notebook Page Three')).toBeTruthy());
+  });
+
   it('paginates with "Load more", appending the next page at the right offset', async () => {
     const firstPage = Array.from({ length: 60 }, (_, i) => ({
       id: `p-${i}`, name: `Item ${i}`, type: 'idea', payload: {}, tags: [],

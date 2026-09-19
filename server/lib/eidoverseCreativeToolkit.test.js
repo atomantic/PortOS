@@ -22,12 +22,18 @@ describe('describeCreativeCatalog', () => {
     ]) {
       expect(catalog[key]).toHaveLength(source.length);
       expect(new Set(catalog[key].map((entry) => entry.id)).size).toBe(source.length);
+      const expectedKeys = key === 'materials' ? ['colorHex', 'description', 'id', 'label'] : ['description', 'id', 'label'];
       for (const entry of catalog[key]) {
-        expect(Object.keys(entry).sort()).toEqual(['description', 'id', 'label']);
+        expect(Object.keys(entry).sort()).toEqual(expectedKeys);
       }
     }
-    // Cosmetics (colorHex) never ride into the prompt-facing projection.
-    expect(JSON.stringify(catalog.materials)).not.toContain('colorHex');
+  });
+
+  it('exposes each material\'s colorHex value (#7627: a palette id whose value a mind cannot see is not usable)', () => {
+    const catalog = describeCreativeCatalog();
+    for (const material of EIDOVERSE_CREATIVE_MATERIALS) {
+      expect(catalog.materials.find((entry) => entry.id === material.id).colorHex).toBe(material.colorHex);
+    }
   });
 });
 
@@ -90,7 +96,7 @@ describe('buildDistrictTemplateAugmentOperations', () => {
 describe('buildDistrictTemplateFoundationDraft', () => {
   const base = {
     id: 'garden-arcade', title: 'Garden Arcade', summary: 'A colonnade of lanterns around the arrival plaza.',
-    contributionId: 'beacon-relay', materialId: 'sunbaked-clay', motifId: 'lantern-row', anchor: ANCHOR,
+    materialId: 'sunbaked-clay', motifId: 'lantern-row', anchor: ANCHOR,
   };
 
   it('parses as a valid eidoverseFoundationInputSchema input, with no style leak in body', () => {

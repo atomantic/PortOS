@@ -33,6 +33,7 @@ import {
   listVideoModels,
   defaultVideoModelId,
   BYOV_RUNTIME_INFO,
+  warmByovLoraCapabilities,
   isByovRuntimeReady,
   resolveRuntimeFingerprint,
   loadHistory,
@@ -92,7 +93,13 @@ import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 const router = Router();
 
 const hardwareAwareVideoModels = async () => {
-  const capabilities = await detectSystemCapabilities();
+  // Warm BEFORE decorating: listVideoModels() stamps each entry's
+  // `runtimeLoraCapable` from a sync accessor that reads an unprobed runtime as
+  // "not capable", and shipping that default is a bug the client cannot recover
+  // from — see warmByovLoraCapabilities in services/videoGen/runtimes.js.
+  // Joined to the hardware probe this function already awaits for the same
+  // reason; both cache for the process, so only the first call pays.
+  const [capabilities] = await Promise.all([detectSystemCapabilities(), warmByovLoraCapabilities()]);
   return {
     capabilities,
     models: listVideoModels().map((model) => withHardwareCompatibility(
@@ -104,11 +111,13 @@ const hardwareAwareVideoModels = async () => {
 };
 
 // The model list plus the three numbers that decide which entry the picker
-// auto-selects. Deliberately free of any python probe: /status shells out to
-// the interpreter on every call (~1-2s) and the Model field used to wait on it,
-// so `/model-context` serves the same fields off the registry and the cached
-// hardware probe alone. /status keeps returning them for its other readers —
-// this is the single builder both routes share, so the two can't drift.
+// auto-selects. Deliberately free of any PER-CALL python probe: /status shells
+// out to the interpreter on every call (~1-2s) and the Model field used to wait
+// on it, so `/model-context` serves the same fields off the registry, the cached
+// hardware probe and the once-per-process LoRA-capability warm above (a bare
+// MLX import, no model load, cached both ways). /status keeps returning them
+// for its other readers — this is the single builder both routes share, so the
+// two can't drift.
 const videoModelContext = async () => {
   const { capabilities, models } = await hardwareAwareVideoModels();
   return {
@@ -630,10 +639,11 @@ router.get('/models', asyncHandler(async (_req, res) => {
   res.json(models);
 }));
 
-// Everything the Model picker needs to render AND auto-select, with no python
-// probe in the way. A sibling route rather than a wrapper around /models so the
-// bare-array shape that route has always returned stays intact for its existing
-// callers (and for an older client talking to a newer server).
+// Everything the Model picker needs to render AND auto-select, with no
+// per-request python probe in the way. A sibling route rather than a wrapper
+// around /models so the bare-array shape that route has always returned stays
+// intact for its existing callers (and for an older client talking to a newer
+// server).
 router.get('/model-context', asyncHandler(async (_req, res) => {
   res.json(await videoModelContext());
 }));

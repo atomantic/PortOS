@@ -4,6 +4,8 @@ import {
   MAX_OBJECTIVE_CHARS,
   formatGoalFidelitySummary,
   goalFidelityHoldsRun,
+  mergeOutcomeObjective,
+  mergeOutcomeReview,
   normalizeGoalFidelityVerdict,
   resolveGoalFidelityConfig,
   taskObjective,
@@ -107,5 +109,52 @@ describe('formatGoalFidelitySummary', () => {
       .toBe('Goal-fidelity verdict: rethink (2 missing, 1 unrequested)');
     expect(formatGoalFidelitySummary({ verdict: 'ship', missing: [], unrequested: [] }))
       .toBe('Goal-fidelity verdict: ship');
+  });
+});
+
+describe('mergeOutcomeObjective', () => {
+  const followUp = (metadata) => ({ description: 'Resolve and merge PR #7653', metadata });
+
+  it('recognizes a review-loop follow-up, tolerating Markdown-stored string booleans', () => {
+    expect(mergeOutcomeObjective(followUp({
+      reviewLoopFollowUp: true, reviewLoopPRNumber: 7653, reviewLoopPRBranch: 'claim/issue-7625',
+    }))).toEqual({ number: 7653, branch: 'claim/issue-7625' });
+    expect(mergeOutcomeObjective(followUp({
+      reviewLoopFollowUp: 'true', reviewLoopPRNumber: '7653', reviewLoopPRBranch: 'claim/issue-7625',
+    }))).toEqual({ number: 7653, branch: 'claim/issue-7625' });
+  });
+
+  it.each([
+    ['an ordinary task', {}],
+    ['a leave-open follow-up, whose deliverable IS a diff', { reviewLoopFollowUp: true, reviewLoopLeaveOpen: 'true', reviewLoopPRNumber: 7653, reviewLoopPRBranch: 'b' }],
+    ['a follow-up missing its number', { reviewLoopFollowUp: true, reviewLoopPRBranch: 'b' }],
+    ['a follow-up missing its branch', { reviewLoopFollowUp: true, reviewLoopPRNumber: 7653 }],
+  ])('declines %s, leaving it to the ordinary diff review', (_label, metadata) => {
+    expect(mergeOutcomeObjective(followUp(metadata))).toBeNull();
+  });
+
+  it('declines a task with no metadata at all', () => {
+    expect(mergeOutcomeObjective(null)).toBeNull();
+    expect(mergeOutcomeObjective({ description: 'Merge it' })).toBeNull();
+  });
+});
+
+describe('mergeOutcomeReview', () => {
+  it('establishes ship from a merge, naming the forge as the source', () => {
+    expect(mergeOutcomeReview({ number: 7653, prState: 'MERGED' })).toEqual({
+      verdict: 'ship',
+      missing: [],
+      unrequested: [],
+      evidence: expect.stringContaining('#7653 MERGED'),
+      source: 'forge-outcome',
+    });
+    expect(mergeOutcomeReview({ number: 7653, prState: 'merged' })?.verdict).toBe('ship');
+  });
+
+  // Only a merge is proof. An open PR is what a blocked review legitimately
+  // leaves behind, and a PR closed as superseded can be a correct resolution —
+  // turning either into a finding would hold runs that did nothing wrong.
+  it.each(['OPEN', 'CLOSED', null])('establishes nothing from state %s', prState => {
+    expect(mergeOutcomeReview({ number: 7653, prState })).toBeNull();
   });
 });

@@ -27,12 +27,19 @@ export async function linkIngredientToSource(ingredientId, scrapId, span = null,
   );
 }
 
+// Joins the scrap's `title` onto each source link (#7617) so the detail page
+// can render "extracted from <title>" instead of the bare `cat-scrap-<uuid>`.
+// `LEFT JOIN` (not `JOIN`) so a source row survives a hard-deleted scrap —
+// `scrapTitle` just comes back null, same posture as an orphaned ref.
 export async function listSourcesForIngredient(ingredientId) {
   const result = await query(
-    `SELECT * FROM catalog_ingredient_sources WHERE ingredient_id = $1`,
+    `SELECT s.*, sc.title AS scrap_title
+       FROM catalog_ingredient_sources s
+       LEFT JOIN catalog_scraps sc ON sc.id = s.scrap_id
+      WHERE s.ingredient_id = $1`,
     [ingredientId],
   );
-  return result.rows.map(rowToSource);
+  return result.rows.map((row) => ({ ...rowToSource(row), scrapTitle: row.scrap_title ?? null }));
 }
 
 export async function listSourcesForScrap(scrapId) {
@@ -43,12 +50,40 @@ export async function listSourcesForScrap(scrapId) {
   return result.rows.map(rowToSource);
 }
 
-export async function linkIngredientToRef(ingredientId, refKind, refId, role) {
+// Sibling ingredients extracted from the same source scrap(s) as `ingredientId`
+// (#7617) — "what else came out of this piece?" in the ONE `/details` round-trip
+// the detail page already makes, rather than a second fetch per scrap. Batches
+// across every scrap the ingredient sources from in one query (mirrors the
+// `listRefsForIngredients` batching shape). Returns `Map<scrapId, Array<{ id,
+// name, type }>>`; excludes the caller's own row and soft-deleted siblings.
+export async function listSiblingIngredientsBySource(ingredientId, scrapIds) {
+  const ids = [...new Set(scrapIds)].filter(Boolean);
+  if (ids.length === 0) return new Map();
+  const result = await query(
+    `SELECT s.scrap_id, i.id, i.name, i.type
+       FROM catalog_ingredient_sources s
+       JOIN catalog_ingredients i ON i.id = s.ingredient_id
+      WHERE s.scrap_id = ANY($1) AND s.ingredient_id != $2 AND i.deleted = false
+      ORDER BY i.name ASC`,
+    [ids, ingredientId],
+  );
+  const grouped = new Map(ids.map((id) => [id, []]));
+  for (const row of result.rows) {
+    grouped.get(row.scrap_id)?.push({ id: row.id, name: row.name, type: row.type });
+  }
+  return grouped;
+}
+
+// `{ client }` is optional — see linkIngredientToSource. Passing the same
+// client used to insert the ingredient row keeps the ref link in the same
+// transaction so a mid-batch failure rolls back both halves (#7615).
+export async function linkIngredientToRef(ingredientId, refKind, refId, role, { client } = {}) {
   // ON CONFLICT DO UPDATE revives a soft-deleted row instead of leaving it
   // tombstoned. The trigger only bumps sync_sequence when `deleted` or
   // `deleted_at` actually change, so a link-on-active-row stays a no-op for
   // peers (no spurious sync event).
-  await query(
+  const exec = client ? client.query.bind(client) : query;
+  await exec(
     `INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO UPDATE
@@ -93,6 +128,20 @@ const CD_REF_ROLE_BY_TYPE = Object.freeze({
   scene: 'scene',
 });
 export const cdRefRoleForType = (type) => CD_REF_ROLE_BY_TYPE[type] || 'reference';
+
+// Catalog ingredient `type` → universe ref role (#7615). The `canon-<kind>`
+// convention is what catalogCanonProjection.js and catalogUniverseTags.js
+// already expect for character/place/object; everything else (idea/scene/
+// concept and user-defined types) links as a generic 'reference'. Lives next
+// to seriesRefRoleForType/cdRefRoleForType so every remix target shares one
+// role-vocabulary home.
+const UNIVERSE_REF_ROLE_BY_TYPE = Object.freeze({
+  character: 'canon-character',
+  place: 'canon-place',
+  object: 'canon-object',
+});
+export const universeRefRoleForType = (type) => UNIVERSE_REF_ROLE_BY_TYPE[type] || 'reference';
+
 
 // Link a batch of already-resolved catalog ingredients to a Creative Director
 // project via catalog_ingredient_refs with ref_kind='creative-director' (#1808)
@@ -177,9 +226,13 @@ export async function listIngredientsForRef(refKind, refId) {
 // (the trg_catalog_relation_sync_seq trigger bumps sync_sequence only when
 // deleted/deleted_at actually change, so a link-on-active-row stays a no-op).
 
-export async function linkIngredientRelation(fromId, toId, kind) {
+// `{ client }` is optional — see linkIngredientToSource. Passing the same
+// client used to insert the ingredient rows keeps the relation edge in the
+// same transaction so a mid-batch failure rolls back both halves (#7615).
+export async function linkIngredientRelation(fromId, toId, kind, { client } = {}) {
   if (fromId === toId) throw new Error('cannot relate an ingredient to itself');
-  await query(
+  const exec = client ? client.query.bind(client) : query;
+  await exec(
     `INSERT INTO catalog_ingredient_relations (from_id, to_id, kind)
      VALUES ($1, $2, $3)
      ON CONFLICT (from_id, to_id, kind) DO UPDATE

@@ -29,8 +29,20 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 
 `DEFAULT_EXCLUDES` (in `backup.js`) skips ephemeral/cache data and large re-downloadable assets — all anchored with a leading `/` (rsync filter syntax). Two tiers:
 
-- **Non-overridable** (`overridable: false`): browser CDP profile, agent worktrees — caches with no irreplaceable user data; never backed up.
-- **Overridable** (`overridable: true`): LoRA weight files, cloned repos, reference repos, browser downloads — re-downloadable; the user can disable these built-in exclusion rules from the Backup settings UI via `disabledDefaultExcludes`.
+- **Non-overridable** (`overridable: false`): browser CDP profile, agent worktrees, cached jev training embeddings — caches with no irreplaceable user data; never backed up.
+- **Overridable** (`overridable: true`): LoRA weight files, cloned repos, reference repos, browser downloads, jev training corpora — re-downloadable or rebuildable; the user can disable these built-in exclusion rules from the Backup settings UI via `disabledDefaultExcludes`.
+
+#### jev project heads — excluded bulk, retained artifact
+
+`data/jev/` (#7689) holds three things that are deliberately NOT one tier:
+
+| Path | Tier | Why |
+|---|---|---|
+| `/jev/embeddings/` | excluded, non-overridable | Frozen-encoder outputs keyed by `(pair, model revision)`. Byte-identical on re-encode, and gigabytes. |
+| `/jev/corpora/` | excluded, **overridable** | Rebuildable by `node scripts/jev-corpus.js`. Overridable because the forge moves on, so someone archiving a measured adoption decision may want the exact rows the numbers came from. |
+| `data/jev/heads/` | **NOT excluded** | A trained head is a few thousand floats and is **not regenerable once its corpus is stale** — the queries that produced one a month ago return different rows today. It is also the only artifact here an operator made a decision about, on the strength of three measured gold-set scores. |
+
+Everything under `data/jev/` is machine-local (ADR [privacy records machine-local](decisions/2026-08-08-privacy-records-machine-local.md)), so a snapshot that carries a head is the only copy that survives a rebuild. Retaining it costs kilobytes; excluding it would silently discard the decision.
 
 The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `backup.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart. See [Scheduling & status](#scheduling--status) for how the cron registration itself tracks settings.
 

@@ -438,6 +438,16 @@ export const peerEidoverseFoundationsSchema = z.object({
   // byte cap the receiver enforces on the response. Far beyond any realistic
   // promoted population — the sender logs and truncates at the same number.
   candidates: z.array(z.record(z.string().min(1).max(64), z.unknown())).max(500),
+  // Withdrawals (#7632). Unlike `candidates` this IS declared in full, because
+  // there is no second gate downstream: a tombstone is two scalars the receiver
+  // acts on directly by DELETING a held record, so the shape has to be pinned
+  // where it arrives. `.default([])` keeps a pre-#7632 sender — which omits the
+  // key entirely — parsing as "nothing to retract" rather than failing the
+  // whole wrapper and stalling its candidates too.
+  tombstones: z.array(z.object({
+    fingerprint: hex64,
+    deletedAt: z.string().datetime(),
+  }).strict()).max(500).default([]),
 }).strict();
 
 export const peerPullMetadataSchema = z.object({

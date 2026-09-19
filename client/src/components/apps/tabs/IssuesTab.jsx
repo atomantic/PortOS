@@ -15,12 +15,14 @@ import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
 import useProviderModels from '../../../hooks/useProviderModels';
 import useClaimReviewers from '../../../hooks/useClaimReviewers';
 import ClaimReviewerSource from '../ClaimReviewerSource';
+import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
 import ReviewerPicker from '../../cos/ReviewerPicker';
 import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
 import { chipColors } from '../../../lib/chipContrast';
 import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
+import AddToThreadButton from '../../threads/AddToThreadButton';
 
 function ClaimReviewOverride({ defaults, overrides, onChange, modelOptions }) {
   return (
@@ -804,10 +806,18 @@ export default function IssuesTab({ appId, appName }) {
                           href={issue.url}
                           target="_blank"
                           rel="noreferrer"
+                          role="button"
                           aria-label={`Open issue ${issue.number} on ${forgeLabel}`}
-                          className="text-gray-500 hover:text-port-accent transition-colors self-center"
+                          title={`Open issue ${issue.number} on ${forgeLabel}`}
+                          onKeyDown={(e) => {
+                            if (e.key === ' ' || e.key === 'Spacebar') {
+                              e.preventDefault();
+                              window.open(issue.url, '_blank', 'noreferrer');
+                            }
+                          }}
+                          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-lg border border-port-border bg-port-bg text-gray-400 hover:text-port-accent hover:border-port-accent/40 hover:bg-port-border/40 transition-colors shrink-0 self-center"
                         >
-                          <ExternalLink size={12} />
+                          <ExternalLink size={14} />
                         </a>
                       )}
                     </div>
@@ -873,6 +883,17 @@ export default function IssuesTab({ appId, appName }) {
                         </button>
                       );
                     })}
+                    {(issue.url || issue.html_url) && (
+                      <AddToThreadButton
+                        refItem={{
+                          kind: data?.forge === 'gitlab' ? 'gitlab.issue' : 'github.issue',
+                          id: issue.url || issue.html_url,
+                          label: `#${issue.number} ${issue.title || ''}`.trim()
+                        }}
+                        buttonText="Thread"
+                        className="px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -885,6 +906,15 @@ export default function IssuesTab({ appId, appName }) {
                     ) : (
                       <p className="text-xs text-gray-500 italic">No description.</p>
                     )}
+                    {/* Advisory only, and only under an expanded row: the
+                        reader has the description in front of them, so the
+                        clause the scorer cites is something they can check. */}
+                    <ScopeAdherenceCheck
+                      appId={appId}
+                      kind="issue"
+                      title={issue.title || ''}
+                      body={issue.body || ''}
+                    />
                   </div>
                 )}
               </div>

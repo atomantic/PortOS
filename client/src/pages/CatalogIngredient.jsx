@@ -35,6 +35,9 @@ import { startMemoRecording, arrayBufferToBase64 } from '../lib/audioRecorder';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
+import { threadRefLabel, threadRefUrl } from '../lib/threadRefKinds.js';
+import ThreadRefChip from '../components/brain/ThreadRefChip';
+import AddToThreadButton from '../components/threads/AddToThreadButton';
 import { getUniverse } from '../services/apiUniverseBuilder';
 import useMounted from '../hooks/useMounted';
 import MediaJobThumb from '../components/pipeline/MediaJobThumb';
@@ -52,29 +55,14 @@ import { timeAgo, formatDateTime } from '../utils/formatters';
 // (`client/src/lib/catalogTypes.js`). Each editor entry is `[key, label, kind]`
 // where `kind` is 'text' (single line) or 'textarea' (multi-line).
 
-// Map a refKind onto a click-through route. Returns null for kinds we don't
-// know how to deep-link to, so callers can render the chip without a link.
-function refPath(refKind, refId) {
-  if (!refId) return null;
-  switch (refKind) {
-    case 'universe':       return `/universes/${encodeURIComponent(refId)}`;
-    case 'series':         return `/pipeline/series/${encodeURIComponent(refId)}`;
-    case 'issue':          return `/pipeline/issues/${encodeURIComponent(refId)}/concept`;
-    case 'creative-director': return `/creative-director/${encodeURIComponent(refId)}/overview`;
-    case 'writers-room':
-    case 'writersRoom':    return '/writers-room';
-    default:               return null;
-  }
-}
-
-function REFKIND_LABEL(kind) {
-  if (kind === 'universe')   return 'Universes';
-  if (kind === 'series')     return 'Series';
-  if (kind === 'issue')      return 'Issues';
-  if (kind === 'creative-director') return 'Creative Director';
-  if (kind === 'writers-room' || kind === 'writersRoom') return "Writers' Room";
-  return kind;
-}
+// Ref chips are the SHARED `ThreadRefChip`, deep-linking through the shared
+// kind→route registry (`client/src/lib/threadRefKinds.js`, a re-export of the
+// server leaf), not a switch local to this page — one table, so a kind added for a Brain thread and
+// a kind stored on a catalog ingredient can never disagree about where it goes
+// (#7664). Same contract this page always had: `threadRefUrl` returns null for a
+// kind we can't deep-link (the chip renders unlinked) and `threadRefLabel` falls
+// back to the raw kind, so a ref synced from a newer peer still renders. The
+// legacy `writersRoom` spelling is aliased inside the registry.
 
 // Build the image-generation prompt source from the (live, editable) payload:
 // the type's primary content field first, then a curated set of *visual*
@@ -503,6 +491,15 @@ export default function CatalogIngredient() {
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white text-sm font-medium">
               {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
             </button>
+            <AddToThreadButton
+              refItem={{
+                kind: 'catalog.ingredient',
+                id: record.id,
+                label: name || record.name || record.id
+              }}
+              buttonText="Thread"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white hover:border-port-accent/40 transition-colors"
+            />
             {isDirty && <span className="text-xs text-port-warning" role="status">Unsaved changes</span>}
             {armedDelete ? (
               <span className="inline-flex items-center gap-1 text-sm">
@@ -1431,6 +1428,13 @@ function GalleryPickerModal({ onClose, onPick }) {
   );
 }
 
+// Source scraps + "From the same source" siblings (#7617). Each source scrap's
+// TITLE is the click-through to `/catalog?scrap=<id>` — every other extraction
+// from that piece, one click, one shareable link (selection lives in the URL
+// per client/src/AGENTS.md). The scrap's id is a fallback label only for a
+// scrap whose title didn't come through (e.g. hard-deleted; `scrapTitle` is
+// null via the route's LEFT JOIN). A scrap with no OTHER live extractions
+// renders no "From the same source" stub — an empty list is not useful chrome.
 function SourcesPanel({ sources }) {
   const list = Array.isArray(sources) ? sources : [];
   return (
@@ -1439,13 +1443,44 @@ function SourcesPanel({ sources }) {
       {list.length === 0 ? (
         <p className="text-xs text-gray-500">Created manually — no source scrap.</p>
       ) : (
-        <ul className="space-y-1.5">
-          {list.map((s, i) => (
-            <li key={s.scrapId || i} className="text-xs text-gray-300 flex items-center justify-between gap-2">
-              <span className="font-mono truncate" title={s.scrapId}>{s.scrapId}</span>
-              {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{formatDateTime(s.extractedAt)}</span>}
-            </li>
-          ))}
+        <ul className="space-y-3">
+          {list.map((s, i) => {
+            const siblings = Array.isArray(s.siblings) ? s.siblings : [];
+            return (
+              <li key={s.scrapId || i} className="text-xs text-gray-300">
+                <div className="flex items-center justify-between gap-2">
+                  {s.scrapId ? (
+                    <Link to={`/catalog?scrap=${encodeURIComponent(s.scrapId)}`}
+                      state={{ scrapTitle: s.scrapTitle || undefined }}
+                      className="truncate hover:text-port-accent hover:underline"
+                      title={s.scrapTitle || s.scrapId}>
+                      {s.scrapTitle || s.scrapId}
+                    </Link>
+                  ) : (
+                    <span className="font-mono truncate">(unknown source)</span>
+                  )}
+                  {s.extractedAt && <span className="text-gray-500 whitespace-nowrap">{formatDateTime(s.extractedAt)}</span>}
+                </div>
+                {siblings.length > 0 && (
+                  <div className="mt-1.5 pl-2 border-l border-port-border">
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">From the same source</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {siblings.map((sib) => {
+                        const badge = CATALOG_BADGE_BY_ID[sib.type] || 'bg-gray-500/20 text-gray-300 border-gray-500/40';
+                        return (
+                          <Link key={sib.id} to={`/catalog/${encodeURIComponent(sib.type || 'idea')}/${encodeURIComponent(sib.id)}`}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200 hover:opacity-80">
+                            <span className="truncate max-w-[12rem]">{sib.name || sib.id}</span>
+                            <span className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${badge}`}>{sib.type}</span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
@@ -1464,28 +1499,19 @@ function RefsPanel({ refsByKind }) {
           {kinds.map((kind) => (
             <div key={kind}>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">
-                {REFKIND_LABEL(kind)}
+                {threadRefLabel(kind)}
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {refsByKind[kind].map((r, i) => {
-                  const path = refPath(kind, r.refId);
-                  const label = r.refName || r.refId || '(unnamed)';
-                  const role = r.role ? ` · ${r.role}` : '';
-                  const chip = (
-                    // biome-ignore lint/correctness/useJsxKeyInIterable: `chip` is a child of the keyed <Link>/<span> returned below, not the list element itself.
-                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200">
-                      {label}{role}
-                      {path && <ExternalLink size={10} aria-hidden="true" />}
-                    </span>
-                  );
-                  return path ? (
-                    <Link key={`${kind}-${r.refId}-${i}`} to={path} className="hover:opacity-80">
-                      {chip}
-                    </Link>
-                  ) : (
-                    <span key={`${kind}-${r.refId}-${i}`}>{chip}</span>
-                  );
-                })}
+                {refsByKind[kind].map((r, i) => (
+                  <ThreadRefChip
+                    key={`${kind}-${r.refId}-${i}`}
+                    kind={kind}
+                    id={r.refId}
+                    label={`${r.refName || r.refId || '(unnamed)'}${r.role ? ` · ${r.role}` : ''}`}
+                    url={threadRefUrl(kind, r.refId)}
+                    showKind={false}
+                  />
+                ))}
               </div>
             </div>
           ))}

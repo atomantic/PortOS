@@ -1,6 +1,6 @@
 import { Clock } from 'lucide-react';
 import ProgressBar from '../ui/ProgressBar';
-import { timeUntil } from '../../utils/formatters';
+import { timeAgo, timeUntil } from '../../utils/formatters';
 
 /**
  * One quota window's meter — the shared rendering for a `limits[]` entry from
@@ -41,9 +41,27 @@ export function meterTone(percentUsed) {
   return 'success';
 }
 
+// Staleness itself is decided server-side, against the window's own period
+// (a fraction of it, not a flat constant) — see `lib/quotaWindows.js`. This
+// component only formats the verdict it's handed on `limit.stale`. A
+// federated card's meter can be another instance's stand-in reading
+// (`readBy` set); a purely local reading ages the same way, just without the
+// "on <machine>" attribution.
+export function readingAttribution(limit) {
+  if (!limit?.stale) return null;
+  // `?? ''` because an undated reading carries `readAt: null`, and
+  // `new Date(null)` is the epoch — a date, and a very stale one.
+  const readMs = new Date(limit.readAt ?? '').getTime();
+  const dated = Number.isFinite(readMs);
+  if (!limit.readBy) return dated ? `read ${timeAgo(readMs)}` : null;
+  const who = limit.readByName || 'another instance';
+  return dated ? `read ${timeAgo(readMs)} on ${who}` : `read on ${who}`;
+}
+
 export default function UsageMeter({ limit }) {
   const used = limit.percentUsed ?? 0;
   const remaining = limit.percentRemaining;
+  const attribution = readingAttribution(limit);
   return (
     <div className="py-1 sm:py-2 border-b border-port-border last:border-0">
       <div className="flex items-baseline justify-between gap-2 mb-0.5 sm:mb-1">
@@ -59,6 +77,7 @@ export default function UsageMeter({ limit }) {
             fully spent must not render as untouched. */}
         <span className="text-[9px] sm:text-xs text-gray-500">
           {limit.percentUsed == null ? '—' : `${used}% used`}
+          {attribution && <span className="text-gray-600"> · {attribution}</span>}
         </span>
         {limit.resetsAt && (
           <span className="flex min-w-0 text-[9px] sm:text-xs text-gray-500 items-start sm:justify-end gap-1 sm:text-right leading-tight">

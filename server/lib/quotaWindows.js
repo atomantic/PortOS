@@ -84,6 +84,38 @@ export function windowPeriodHours(limit) {
 /** How a window is named wherever one is reported to a human or an agent. */
 export const windowLabelOf = (limit) => limit?.label || limit?.scope || 'window';
 
+// Tolerable age is a FRACTION of the window's own period, not a flat constant:
+// a weekly meter read 70 minutes ago is fine, a 5-hour session meter read 55
+// minutes ago is ~18% out of date. 10% keeps a weekly meter quiet for most of a
+// day while catching a session meter inside one cache generation. Floored so a
+// fast-moving window (a 30-minute period, if one ever ships) is not
+// permanently captioned.
+const STALE_FRACTION = 0.1;
+const STALE_FLOOR_MS = 5 * 60 * 1000;
+
+/**
+ * How old a reading of a window with this period may be before it counts as
+ * stale, in milliseconds — or null when the period isn't known (an unreadable
+ * period cannot be asserted stale or fresh).
+ */
+export function staleThresholdMs(periodHours) {
+  if (!Number.isFinite(periodHours) || periodHours <= 0) return null;
+  return Math.max(STALE_FLOOR_MS, periodHours * 60 * 60 * 1000 * STALE_FRACTION);
+}
+
+/**
+ * Is this limit's reading stale, given how old it is? Takes `ageMs` rather
+ * than a timestamp + `now` so this module stays free of date parsing (see the
+ * module doc) — callers already hold a parsed age from `lib/lwwTimestamp.js`.
+ * An unknown period or an unparseable age can't be judged, so both read as
+ * "not stale" rather than guessed at.
+ */
+export function isLimitStale(limit, ageMs) {
+  const threshold = staleThresholdMs(windowPeriodHours(limit));
+  if (threshold === null || !Number.isFinite(ageMs)) return false;
+  return ageMs > threshold;
+}
+
 /**
  * Split one card's windows into the two roles a burn reasons about, in a single
  * scoring pass:

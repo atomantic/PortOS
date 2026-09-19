@@ -26,10 +26,21 @@ accounts its user explicitly adds.
   its scratch tab, and re-normalizes the extracted payload server-side. Browser
   and API items are indistinguishable downstream: same bounding, same content
   hash, same untrusted-content screening, same columns.
-- Posts, comments, URLs, images, and browser content are untrusted. Text is
-  bounded and screened for instruction-shaped content before optional local
-  analysis. A prompt-injection match prevents text and images from reaching an
-  Ollama model. The complete bounded title and body are hashed even though the
+- Posts, comments, URLs, images, and browser content are untrusted. The
+  complete bounded title and body cross the shared phase-1 boundary
+  (`screenUntrustedContent`, source `stacker-news`) before any model runs, so
+  the deterministic hidden-content checks and Llama Prompt Guard 2 apply here
+  exactly as they do to every other ingress, and content over the configured
+  input limit is refused rather than truncated and scanned as a prefix. The
+  policy is configurable under **Models > LLMs > Abuse Guard**; the source is
+  public, so it is not restricted to a loopback classifier. A block persists a
+  `policy` row naming the screening code and escalates the item. Screening
+  fails closed: with the classifier not installed, and the shipped `required`
+  mode, analysis escalates every item for review rather than falling back to
+  an unscreened model call — install it, or set this source to `optional`. The local
+  instruction-shaped-text regexes still run as a second signal, and a match
+  prevents text and images from reaching an Ollama model. The complete bounded
+  title and body are hashed even though the
   model copy is shorter, and image URLs are included in the hash, so edits
   outside the model window or changed media still invalidate an analysis or
   approval.

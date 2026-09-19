@@ -104,6 +104,10 @@ export function combineStackerNewsModelResults(...results) {
 }
 
 export function evaluateStackerNewsPolicy({ deterministic, model, rules }) {
+  // The shared phase-1 boundary outranks the local heuristic: when it blocked
+  // the item no model ran at all, so there is no verdict to weigh and the
+  // screening code is the only honest reason to record.
+  if (deterministic.screeningCode) return { decision: 'escalate', reasons: [`untrusted_content_screening:${deterministic.screeningCode}`], allowedAction: 'none' };
   if (deterministic.injectionMatches?.length) return { decision: 'escalate', reasons: ['prompt_injection_pattern'], allowedAction: 'none' };
   if (model?.classification === 'escalate' || model?.risk === 'high') return { decision: 'escalate', reasons: ['model_high_risk'], allowedAction: 'none' };
   const content = `${model?.summary || ''} ${(model?.findings || []).join(' ')}`.toLowerCase();

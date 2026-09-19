@@ -181,6 +181,26 @@ describe('buildEidoverseObservation', () => {
     expect(third.changes.controllersNeedingAttention).toEqual(['newly-broken']);
   });
 
+  it('flags a controller whose step is clean but whose delivery the world refused (#7628)', () => {
+    // `lastTickOk: true` and `consecutiveFailures: 0` on their own describe a
+    // healthy controller — that used to be the whole story. A controller
+    // whose every world write is refused steps cleanly forever, so the
+    // filter has to read `lastDelivery` too or this never surfaces.
+    const installs = [
+      {
+        id: 'refused-lantern', controllerId: 'lanternKeeper', armed: true, lastTickOk: true, consecutiveFailures: 0,
+        lastDelivery: { ok: false, delivered: 0, reason: 'unknown entity id' },
+      },
+      {
+        id: 'delivering-fine', controllerId: 'ambientBeacon', armed: true, lastTickOk: true, consecutiveFailures: 0,
+        lastDelivery: { ok: true, delivered: 1, reason: null },
+      },
+    ];
+    const { report } = observe({ controllerInstalls: installs });
+    expect(report.controllers.needsAttention.map((entry) => entry.id)).toEqual(['refused-lantern']);
+    expect(report.controllers.needsAttention[0].lastDelivery).toEqual({ ok: false, delivered: 0, reason: 'unknown entity id' });
+  });
+
   it('bounds the inherited list and says when it truncated', () => {
     const many = Array.from({ length: 30 }, (_, index) => inheritedFoundation(`peer:alpha:${index}`, PEER_ALPHA));
     const { report } = observe({ source: { peers: [peerSignal(PEER_ALPHA)] }, foundations: many });
@@ -293,6 +313,53 @@ describe('a section that could not be read', () => {
     expect(recovered.report.changes.newPeers).toEqual([]);
     expect(recovered.report.changes.newFoundations).toEqual([]);
     expect(recovered.report.changes.controllersNeedingAttention).toEqual([]);
+  });
+
+  it('leaves the place trail intact and reports no fabricated district changes when a world read fails, twice (#7633)', () => {
+    // Regression for #7633: `placeStatus` was the one marker section built
+    // without `section()`'s carry-forward guard. A failed world read degraded
+    // every district's signal to `null`, which collapsed into status
+    // 'unknown' and flowed straight into the committed marker unguarded —
+    // fabricating every district as changed on the failure wake, then again
+    // on recovery when the real status flipped back from the erased 'unknown'.
+    // This drives the shipped builder through healthy -> outage -> identical
+    // healthy and asserts both wakes report zero fabricated changes while a
+    // district that genuinely changes status is still reported.
+    const districts = [
+      { id: 'apps', label: 'Apps', direction: 'North', landmark: 'pylon', sources: ['apps'] },
+      { id: 'agents', label: 'Agents', direction: 'South', landmark: 'foundry', sources: ['agents'] },
+    ];
+    const includes = { apps: true, agents: true };
+
+    const healthy = observe({
+      districts,
+      includes,
+      source: { apps: [{ id: 'a1', status: 'active' }], agents: [{ id: 'g1', status: 'active' }] },
+    });
+    expect(healthy.report.places.find((place) => place.id === 'apps').status).toBe('active');
+
+    // Total outage: both district sources fail to collect.
+    const outage = observe({ districts, includes, source: {}, marker: healthy.marker });
+    const outageApps = outage.report.places.find((place) => place.id === 'apps');
+    // The report still tells the mind the district could not be read...
+    expect(outageApps.status).toBe('unknown');
+    expect(outageApps.signalCount).toBeNull();
+    // ...but the failure must not fabricate a change or erase the trail.
+    expect(outage.report.changes.placesChanged).toEqual([]);
+    expect(outage.marker.placeStatus.apps).toBe('active');
+    expect(outage.marker.placeStatus.agents).toBe('active');
+
+    // Recovery: apps returns identical to before the outage; agents
+    // genuinely goes quiet while it was unreadable.
+    const recovered = observe({
+      districts,
+      includes,
+      source: { apps: [{ id: 'a1', status: 'active' }], agents: [] },
+      marker: outage.marker,
+    });
+    // No fabricated "recovery" change for the district that never moved...
+    expect(recovered.report.changes.placesChanged).toEqual([{ id: 'agents', was: 'active', now: 'quiet' }]);
+    expect(recovered.marker.placeStatus.apps).toBe('active');
   });
 
   it('separates an unavailable controller list from one that is genuinely empty', () => {

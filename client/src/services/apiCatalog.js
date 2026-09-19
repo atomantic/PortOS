@@ -28,8 +28,16 @@ export const extractFromCatalogScrap = (id, body = {}, options) =>
 export const pruneCatalogScrap = (id, body, options) =>
   request(`/catalog/scraps/${enc(id)}/prune`, { method: 'POST', body: JSON.stringify(body), ...options });
 
-export const commitCatalogScrapDraft = (id, accepted, options) =>
-  request(`/catalog/scraps/${enc(id)}/commit`, { method: 'POST', body: JSON.stringify({ accepted }), ...options });
+// `universeRef` (+ optional `role`) binds every committed ingredient to that
+// universe — the "Catalogue into" select on CatalogIngest (#7615). Omitted
+// when the caller passes 'unassigned' (the "no universe" choice), reproducing
+// prior behavior exactly (source link only, no homing ref).
+export const commitCatalogScrapDraft = (id, accepted, { universeRef, role, ...options } = {}) =>
+  request(`/catalog/scraps/${enc(id)}/commit`, {
+    method: 'POST',
+    body: JSON.stringify({ accepted, ...(universeRef ? { universeRef, ...(role ? { role } : {}) } : {}) }),
+    ...options,
+  });
 
 // --- Alternate ingest sources (url / file / voice / brain) --------------
 // Each returns { scrap, draft } — the same shape as extractFromCatalogScrap —
@@ -50,7 +58,7 @@ export const ingestCatalogBrain = (body = {}, options) =>
 
 // --- Ingredients --------------------------------------------------------
 
-export const listCatalogIngredients = ({ type, tag, q, refKind, refId, unlinked, orphaned, limit, offset, ...options } = {}) => {
+export const listCatalogIngredients = ({ type, tag, q, refKind, refId, unlinked, orphaned, scrapId, limit, offset, ...options } = {}) => {
   const params = new URLSearchParams();
   if (type) params.set('type', type);
   if (tag) params.set('tag', tag);
@@ -66,6 +74,9 @@ export const listCatalogIngredients = ({ type, tag, q, refKind, refId, unlinked,
   } else if (orphaned) {
     params.set('orphaned', 'true');
   }
+  // Source-scrap filter (#7617) — "everything extracted from this piece".
+  // Orthogonal to the album filters above, so it composes with them.
+  if (scrapId) params.set('scrapId', scrapId);
   if (limit) params.set('limit', String(limit));
   if (offset) params.set('offset', String(offset));
   return request(`/catalog/ingredients${params.toString() ? `?${params}` : ''}`, options);

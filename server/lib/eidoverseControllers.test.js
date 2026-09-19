@@ -151,6 +151,42 @@ describe('runControllerStep', () => {
     expect(outcome.ok).toBe(true);
     expect(outcome.effects[0].operations).toHaveLength(1);
   });
+
+  it('fails the step when the definition\'s own invariants reject the state a step just produced (#7629)', () => {
+    const definition = {
+      id: 'probe',
+      step: (state) => ({ state: { ...state, count: state.count + 1 } }),
+      invariants: [
+        function countNeverExceedsFive(state) {
+          return state.count <= 5;
+        },
+      ],
+    };
+
+    const ok = runControllerStep({ definition, state: { count: 4 }, config: {}, tick: 1 });
+    expect(ok.ok).toBe(true);
+
+    const violated = runControllerStep({ definition, state: { count: 5 }, config: {}, tick: 2 });
+    expect(violated.ok).toBe(false);
+    expect(violated.reason).toMatch(/invariant/);
+    expect(violated.reason).toMatch(/countNeverExceedsFive/);
+  });
+
+  it('reports the reason an invariant returned, and treats a throw as a violation rather than an uncaught error', () => {
+    const definition = {
+      id: 'probe',
+      step: (state) => ({ state }),
+      invariants: [
+        () => ({ ok: false, reason: 'never in a district-out-of-bounds state' }),
+        () => { throw new Error('invariant blew up'); },
+      ],
+    };
+
+    const outcome = runControllerStep({ definition, state: {}, config: {}, tick: 0 });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).toMatch(/never in a district-out-of-bounds state/);
+    expect(outcome.reason).toMatch(/threw: invariant blew up/);
+  });
 });
 
 describe('install schema', () => {

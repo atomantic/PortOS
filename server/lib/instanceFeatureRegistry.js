@@ -64,6 +64,15 @@ export const INSTANCE_FEATURES = Object.freeze([
     defaultEnabled: false,
   }),
   Object.freeze({
+    id: 'jev',
+    label: 'jev decision scorer',
+    description: 'A local entailment model that answers closed-set questions and abstains when it cannot separate the options. Needs a ~9 GB one-time model download.',
+    // Off until an operator installs it: the feature gates the nav entry, and
+    // advertising a page whose model is a multi-gigabyte download on a fresh
+    // install would be a capability claim the install cannot honour.
+    defaultEnabled: false,
+  }),
+  Object.freeze({
     id: 'gsd',
     label: 'GSD',
     description: 'Get Stuff Done project planning and progress tracking for managed apps.',
