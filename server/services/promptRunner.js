@@ -41,6 +41,7 @@ import { analyzeError, ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToo
 import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
+import { apiRunAbsoluteTimeoutMs } from '../lib/aiToolkit/internal/runTimeouts.js';
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
@@ -110,10 +111,11 @@ export async function withObservedContextWindowsLazy(provider) {
 const CONTEXT_LENGTH_CATEGORY = 'context-length';
 
 export const DEFAULT_TIMEOUT_MS = 300000;
-// Grace window past the runner's own API timeout before promptRunner's backstop
-// timer fires. Lets executeApiRun's internal timeout win (aborting + finalizing
-// as ERROR_CATEGORIES.TIMEOUT) so the normal path is classified correctly; the
-// backstop only intervenes if the runner never reports completion at all.
+// Grace window past the runner's own API deadline before promptRunner's
+// backstop timer fires. Lets executeApiRun's internal timers win (aborting +
+// finalizing as ERROR_CATEGORIES.TIMEOUT) so the normal path is classified
+// correctly; the backstop only intervenes if the runner never reports
+// completion at all.
 const API_TIMEOUT_BACKSTOP_GRACE_MS = 2000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
 
@@ -1657,10 +1659,24 @@ async function executeProviderRunOnce({
       // (meatspacePostLlm, pm2Standardizer, brain) never hang indefinitely.
       // The grace lets the runner's timeout win classification in the normal
       // path; safeReject/safeResolve clear this timer once onComplete lands.
+      //
+      // Armed against the runner's ABSOLUTE bound, not `effectiveTimeout`.
+      // Since #7560 `effectiveTimeout` is the runner's re-armable NO-PROGRESS
+      // bound — a run that keeps streaming legitimately outlives it, up to the
+      // 30-minute total-runtime cap. This timer still fired at
+      // `effectiveTimeout + 2s` and killed it anyway, which put back the exact
+      // ceiling #7560 removed and made the new cap unreachable. Worse, it kills
+      // via `stopRun`, so the runner finalized the run as a USER CANCEL:
+      // `onRunFailed` never fired (no provider bench, no investigation task)
+      // and `isRunCanceledError` callers skipped the fallback cascade — a
+      // healthy, productive run silently produced nothing. Sixteen NVIDIA NIM
+      // nemotron persistent-mind runs died this way at exactly 302s in the two
+      // days after #7560 merged, and none before it (#7665).
+      const backstopTimeout = apiRunAbsoluteTimeoutMs(effectiveTimeout);
       apiTimeoutHandle = setTimeout(() => {
         stopRun(runId).catch(() => { /* best-effort cancel */ });
-        safeReject(new Error(`API execution timed out after ${effectiveTimeout}ms`));
-      }, effectiveTimeout + API_TIMEOUT_BACKSTOP_GRACE_MS);
+        safeReject(new Error(`API execution timed out after ${backstopTimeout}ms`));
+      }, backstopTimeout + API_TIMEOUT_BACKSTOP_GRACE_MS);
       // Thread the caller's effectiveTimeout into the runner's internal timer so
       // a per-call override (e.g. the importer's long stage timeout) governs the
       // ceiling instead of the runner's provider/default fallback — same

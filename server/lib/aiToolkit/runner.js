@@ -8,6 +8,10 @@ import { randomUUID } from 'crypto';
 import { analyzeError, analyzeHttpError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions } from './internal/generationOptions.js';
 import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
+// The two streaming ceilings (no-progress bound, absolute runtime cap) live in
+// a leaf module so a host's own backstop timer can read the absolute bound
+// without dragging this file's fs/child_process closure with it.
+import { DEFAULT_API_RUN_TIMEOUT_MS, apiRunAbsoluteTimeoutMs } from './internal/runTimeouts.js';
 
 // npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
 // shims on Windows; Node's spawn() can't execute those without going through
@@ -22,32 +26,6 @@ const IS_WIN32 = process.platform === 'win32';
 // wrappers (for Git Bash/WSL), and that stub is not natively launchable here.
 const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
 
-// No-progress ceiling for an API run when neither the caller nor the provider
-// sets one. Mirrors aiProvider's DEFAULT_PROVIDER_TIMEOUT_MS / askService's
-// `provider.timeout || 300000` so a hung upstream can't hold `activeRuns`
-// (and thus the run slot) open forever.
-const DEFAULT_API_RUN_TIMEOUT_MS = 300000;
-
-// Absolute runtime cap for a STREAMING API run, used when the configured
-// no-progress bound is the shorter of the two.
-//
-// `executeApiRun` used to bound a run with ONE wall-clock timer, which could
-// not tell a provider that opened the stream and STALLED (the leak the ceiling
-// exists to prevent) from one that is actively streaming and simply needs
-// longer. Both died at the same 300s. A reasoning model spends nearly its whole
-// budget in the hidden channel before the first content token — NVIDIA NIM's
-// `nvidia/nemotron-3.5-lightning-30b-a3b` sends 126 of 128 frames as
-// `reasoning_content` on a TRIVIAL prompt — so a ~26K-token prompt was killed
-// mid-generation while healthy and producing (#7560).
-//
-// The two bounds are now separate, and `provider.timeout` keeps the job the
-// single timer was actually written for: catching a provider that went quiet.
-// Read as a NO-PROGRESS bound it kills a hung upstream at exactly the moment it
-// always did — zero regression in that protection — while a stream that keeps
-// yielding bytes is no longer cut off for being slow. This cap is what still
-// bounds total runtime, so a provider that trickles one byte per minute cannot
-// hold a run slot forever.
-const DEFAULT_API_RUN_MAX_RUNTIME_MS = 1800000;
 const DEFAULT_OUTPUT_RESERVE_TOKENS = 8000;
 const CHARS_PER_TOKEN = 4;
 
@@ -632,10 +610,45 @@ export function createRunnerService(config = {}) {
       // finalizing, leaking the run slot the timeout exists to reclaim.
       let reasoning = '';
 
-      // Asked on ALL THREE terminal paths, so it is stated once: a reasoning
-      // model that produced no content still produced an answer, and the run's
-      // text is its reasoning. Restating the test at each site is how they drift.
+      // The question every terminal path asks, stated once: a reasoning model
+      // that produced no content still produced an answer, and the run's text
+      // is its reasoning. Restating the test at each site is how they drift.
       const reasoningIsTheOutput = () => !output.trim() && reasoning.trim().length > 0;
+
+      /**
+       * Open the metadata record for a NON-SUCCESS terminal path (cancel,
+       * timeout, mid-stream throw), persisting whatever the run produced first.
+       *
+       * All three ended identically — salvage, write `output.txt`, re-read the
+       * record, stamp endTime/duration/success and the three salvage fields —
+       * and stating it three times is how they drifted: the cancel path never
+       * had the salvage at all, so stopping a reasoning model (which spends
+       * nearly its whole budget in the hidden channel before the first content
+       * token) discarded every token it had produced and stamped
+       * `outputSize: 0`, indistinguishable from a provider that answered
+       * nothing. That is why 16 NVIDIA NIM nemotron runs killed at 302s by
+       * promptRunner's mis-armed backstop read as dead-provider records rather
+       * than the healthy streams they were (#7665). Stated once, a fourth
+       * terminal path cannot quietly omit it.
+       *
+       * Returns the salvaged text alongside the record, because the failure
+       * hooks take it as the output tail they quote.
+       */
+      const openTerminalMetadata = async () => {
+        const usedReasoningAsFallback = reasoningIsTheOutput();
+        const partialOutput = usedReasoningAsFallback ? reasoning : output;
+        if (partialOutput) await atomicWrite(outputPath, partialOutput).catch(() => {});
+        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+        metadata.endTime = new Date().toISOString();
+        metadata.duration = Date.now() - startTime;
+        metadata.success = false;
+        metadata.outputSize = Buffer.byteLength(partialOutput);
+        // Distinguishes a terminal run that streamed from one that never got a
+        // byte, without reading the output file back.
+        metadata.hadReasoning = reasoning.length > 0;
+        metadata.usedReasoningAsFallback = usedReasoningAsFallback;
+        return { metadata, partialOutput };
+      };
 
       const headers = {
         'Content-Type': 'application/json'
@@ -677,7 +690,7 @@ export function createRunnerService(config = {}) {
       // never reaches the fetch is still bounded, and the failure is classified
       // as a timeout instead of the AbortError's UNKNOWN/HTTP-0).
       const stallTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
-      const absoluteTimeout = Math.max(DEFAULT_API_RUN_MAX_RUNTIME_MS, stallTimeout);
+      const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout);
       let settled = false;
       let stallTimeoutHandle = null;
       let absoluteTimeoutHandle = null;
@@ -703,16 +716,11 @@ export function createRunnerService(config = {}) {
       // caller even if a write fails, or a canceled run hangs its awaiter.
       const finalizeCanceled = async () => {
         activeRuns.delete(runId);
-        if (output) await atomicWrite(outputPath, output).catch(() => {});
-        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-        metadata.endTime = new Date().toISOString();
-        metadata.duration = Date.now() - startTime;
-        metadata.success = false;
+        const { metadata } = await openTerminalMetadata();
         metadata.canceled = true;
         metadata.completionReason = 'canceled';
         metadata.error = 'API run canceled';
         metadata.errorCategory = ERROR_CATEGORIES.CANCELED;
-        metadata.outputSize = Buffer.byteLength(output);
         await atomicWrite(metadataPath, metadata).catch((err) => {
           console.error(`❌ API run ${runId} cancel finalize error: ${err.message}`);
         });
@@ -737,20 +745,7 @@ export function createRunnerService(config = {}) {
           ? `API execution timed out after ${absoluteTimeout}ms: absolute runtime cap reached`
           : `API execution timed out after ${stallTimeout}ms with no stream progress`;
         try {
-          // A reasoning model spends its whole budget in the hidden channel
-          // before the first content token, so a run the ceiling cuts off
-          // routinely has an empty `output` and minutes of generation sitting
-          // in `reasoning`. The other two terminal paths already salvage it;
-          // this one wrote `output` alone and stamped `outputSize: 0`, which
-          // reads downstream as "the provider sent nothing" and escalates a
-          // healthy-but-slow model as a dead one.
-          const usedReasoningAsFallback = reasoningIsTheOutput();
-          const partialOutput = usedReasoningAsFallback ? reasoning : output;
-          if (partialOutput) await atomicWrite(outputPath, partialOutput).catch(() => {});
-          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-          metadata.endTime = new Date().toISOString();
-          metadata.duration = Date.now() - startTime;
-          metadata.success = false;
+          const { metadata, partialOutput } = await openTerminalMetadata();
           metadata.error = error;
           metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
           // Which ceiling ended the run: 'stall' (the provider went quiet) or
@@ -758,11 +753,6 @@ export function createRunnerService(config = {}) {
           // stalled provider is a candidate for benching; a productive one that
           // outran its budget is not.
           metadata.timeoutBound = bound;
-          // Same two diagnostic flags the mid-stream-throw path sets, so a
-          // timeout that streamed is distinguishable from one that never got a
-          // byte without reading the output file back.
-          metadata.hadReasoning = reasoning.length > 0;
-          metadata.usedReasoningAsFallback = usedReasoningAsFallback;
           // Hosts classify a failure from `errorAnalysis`, not `errorCategory`
           // (PortOS's onRunFailed hook reads only the former), so setting the
           // category alone left every API-run timeout looking like an
@@ -770,7 +760,6 @@ export function createRunnerService(config = {}) {
           // instead of recognized as the timeout it is. Build it from the same
           // pattern table the other failure paths use so the two can't drift.
           metadata.errorAnalysis = analyzeError(error);
-          metadata.outputSize = Buffer.byteLength(partialOutput);
           await atomicWrite(metadataPath, metadata);
           // The hook's third arg is the output tail the host quotes into an
           // investigation task, so it gets the salvaged text too.
@@ -1086,30 +1075,12 @@ export function createRunnerService(config = {}) {
 
           activeRuns.delete(runId);
 
-          // A reasoning model emits its hidden channel well before its first
-          // content token, so a mid-stream failure routinely finds `output`
-          // empty while the generation so far sits in `reasoning`. The success
-          // path already falls back to it; doing the same here is the
-          // difference between salvaging a long run and reporting
-          // `outputSize: 0` after minutes of streaming.
-          const usedReasoningAsFallback = reasoningIsTheOutput();
-          const partialOutput = usedReasoningAsFallback ? reasoning : output;
-          if (partialOutput) {
-            await atomicWrite(outputPath, partialOutput).catch(() => {});
-          }
-
-          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-          metadata.endTime = new Date().toISOString();
-          metadata.duration = Date.now() - startTime;
-          metadata.success = false;
+          const { metadata, partialOutput } = await openTerminalMetadata();
 
           const errorAnalysis = analyzeError(err.message);
           metadata.error = errorAnalysis.message || err.message;
           metadata.errorCategory = errorAnalysis.category;
           metadata.errorAnalysis = errorAnalysis;
-          metadata.outputSize = Buffer.byteLength(partialOutput);
-          metadata.hadReasoning = reasoning.length > 0;
-          metadata.usedReasoningAsFallback = usedReasoningAsFallback;
 
           if (errorAnalysis.hasError &&
               (errorAnalysis.category === ERROR_CATEGORIES.RATE_LIMIT ||

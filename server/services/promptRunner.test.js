@@ -82,6 +82,7 @@ const autoFixer = await import('./autoFixer.js');
 const toolkitState = await import('../lib/aiToolkitState.js');
 const observedWindows = await import('./observedContextWindows.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
+const { apiRunAbsoluteTimeoutMs } = await import('../lib/aiToolkit/internal/runTimeouts.js');
 const { CREATIVE_LATITUDE_HEADING, withCreativeLatitude } = await import('../lib/creativeLatitude.js');
 const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory, buildRequestCapabilities, assertVisionRunUsedImages } = await import('./promptRunner.js');
 
@@ -938,13 +939,15 @@ describe('promptRunner — gateway sibling-key preservation', () => {
 });
 
 // =============================================================================
-// API timeout enforcement — executeApiRun now owns the primary wall-clock
-// timeout (it aborts + finalizes as TIMEOUT and fires onComplete). promptRunner
-// keeps a SECONDARY backstop timer, delayed past the runner's deadline by
-// API_TIMEOUT_BACKSTOP_GRACE_MS, purely for the pathological case where the
-// runner (here a mock) neither throws nor ever calls onComplete. Verify that a
-// stuck API run still rejects with the timeout error AND invokes stopRun.
-// Regression guard for the round-2 review finding that API callers hung.
+// API timeout enforcement — executeApiRun owns BOTH real deadlines: a
+// re-armable no-progress bound (`timeout`) and a 30-minute absolute
+// total-runtime cap (#7560). promptRunner keeps a SECONDARY backstop timer,
+// armed against the ABSOLUTE bound plus API_TIMEOUT_BACKSTOP_GRACE_MS, purely
+// for the pathological case where the runner (here a mock) neither throws nor
+// ever calls onComplete. Verify that a stuck API run still rejects with the
+// timeout error AND invokes stopRun — and, crucially, that the backstop does
+// NOT fire at `timeout + grace`, which is where it used to kill healthy
+// streaming runs and persist them as user cancels (#7665).
 // =============================================================================
 
 describe('promptRunner — API timeout enforcement', () => {
@@ -962,15 +965,50 @@ describe('promptRunner — API timeout enforcement', () => {
       prompt: 'p', source: 't',
       timeout: 5000,
     });
-    const assertion = expect(promise).rejects.toThrow(/API execution timed out after 5000ms/);
+    const backstopMs = apiRunAbsoluteTimeoutMs(5000);
+    const assertion = expect(promise).rejects.toThrow(
+      new RegExp(`API execution timed out after ${backstopMs}ms`)
+    );
 
-    // Backstop fires at timeout + grace (5000 + 2000) — advance past it.
-    await vi.advanceTimersByTimeAsync(8000);
+    // Backstop fires at the ABSOLUTE bound + grace — advance past it.
+    await vi.advanceTimersByTimeAsync(backstopMs + 2000 + 1);
     await assertion;
 
     expect(runner.stopRun).toHaveBeenCalledWith('run-xyz');
-    // The runner's effective timeout is threaded through for its own internal timer.
+    // The runner's effective timeout is threaded through for its own internal
+    // no-progress timer, unchanged — only the backstop moved.
     expect(runner.executeApiRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 5000 }));
+    vi.useRealTimers();
+  });
+
+  // The regression itself. #7560 made `timeout` a bound the runner RE-ARMS on
+  // every byte, so a run that streams past it is healthy, not hung. This
+  // backstop kept firing at `timeout + 2s` regardless of progress and killed it
+  // via `stopRun`, which the runner records as a user CANCEL — suppressing
+  // `onRunFailed`, the provider bench and the fallback cascade. Sixteen NVIDIA
+  // NIM nemotron runs died at exactly 302s this way (#7665).
+  it('backstop does not fire at the runner\'s no-progress bound while a run is still streaming', async () => {
+    vi.useFakeTimers();
+    let finish;
+    runner.executeApiRun.mockImplementation(({ onComplete }) => {
+      finish = () => onComplete({ success: true });
+      return new Promise(() => {});
+    });
+
+    const promise = runPromptThroughProvider({
+      provider: apiProvider(),
+      prompt: 'p', source: 't',
+      timeout: 5000,
+    });
+
+    // Well past the old backstop deadline (5000 + 2000) and past the default
+    // 300s provider bound, but nowhere near the absolute cap.
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(runner.stopRun).not.toHaveBeenCalled();
+
+    finish();
+    await promise;
+    expect(runner.stopRun).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 
