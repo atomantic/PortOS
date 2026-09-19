@@ -343,7 +343,23 @@ export function buildEidoverseObservation({
     attentionControllers !== null,
     marker?.attentionControllerIds,
   );
-  const placeStatus = Object.fromEntries(places.map(({ id, status }) => [id, status]));
+  // `signalCount === null` alone is not a failed read — a district whose
+  // sources are all disabled by the recipe also lands there, legitimately.
+  // Only a district that actually FAILED a source read (`unreadableSources`
+  // non-empty) gets the section()-equivalent carry-forward treatment: the
+  // report keeps `status: 'unknown'` (built into `places` above) so the mind
+  // still sees the read failed, but the committed marker — and therefore the
+  // diff below — keeps the PREVIOUS marker's status for that district
+  // instead of overwriting it with `unknown`. Same rule `section()` applies
+  // to the three id-list sections, applied per key because this section is a
+  // map rather than a list.
+  const previousPlaceStatus = marker?.placeStatus && typeof marker.placeStatus === 'object' ? marker.placeStatus : {};
+  const placeStatus = Object.fromEntries(places.map((place) => {
+    const unreadable = place.signalCount === null && place.unreadableSources.length > 0;
+    const carried = previousPlaceStatus[place.id];
+    const status = unreadable && carried !== undefined ? carried : place.status;
+    return [place.id, status];
+  }));
 
   return {
     report: {
