@@ -2,7 +2,7 @@
  * Review-loop, CI-gate, and merge prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isToolFreeReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, hasRequiredReviewer, isOptionalReviewer, isToolFreeReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { oversizedBodyPointer } from '../../lib/slashdoInvocation.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
 import { shellQuote } from '../../lib/shellQuote.js';
@@ -107,7 +107,7 @@ function remoteReviewBaseRef(baseBranch) {
 }
 
 function localReviewBlockedMergeGuard(handoff = 'follow the enclosing completion handoff without claiming a merge') {
-  return `**Required local-review merge gate:** Before any CI-fix or merge action, load the worktree-private local review state with \`LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"\`, fail closed if it is missing, and source it. If \`LOCAL_OVERALL_STATUS=review-blocked\`, do NOT run this merge path; the PR/MR was already published and the required comment was posted, so leave it open, report that the required review is pending, and ${handoff}. Accept only \`clean\` or \`partial\`; any other or missing status, or a \`LOCAL_REVIEWED_HEAD_SHA\` that does not equal \`$(git rev-parse HEAD)\`, fails closed.`;
+  return `**Required local-review merge gate:** Before any CI-fix or merge action, load the worktree-private local review state with \`LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"\`, fail closed if it is missing, and source it. If \`LOCAL_OVERALL_STATUS=review-blocked\`, do NOT run this merge path; the PR/MR was already published, so leave it open and ${handoff}. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} Accept only \`clean\` or \`partial\`; any other or missing status, or a \`LOCAL_REVIEWED_HEAD_SHA\` that does not equal \`$(git rev-parse HEAD)\`, fails closed.`;
 }
 
 
@@ -269,14 +269,14 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
   const cliBinaryNote = cliBinaryAliases.length
     ? ` Reviewer slug → command: ${cliBinaryAliases.join('; ')}.`
     : '';
-  const isOptionalReviewer = reviewer => optionalReviewers.some(optional => optional.toLowerCase() === reviewer.toLowerCase());
+  const isOptional = reviewer => isOptionalReviewer(reviewer, optionalReviewers);
   // "multi" reflects the TOTAL number of review sources (keyed reviewers +
   // username reviewers) so the ordered per-reviewer loop wording kicks in as
   // soon as there's more than one thing to satisfy.
   const multi = (reviewers.length + usernames.length) > 1;
   const optionalConfiguredReviewers = [
-    ...reviewers.filter(isOptionalReviewer).map(reviewer => `\`${reviewer}\``),
-    ...usernames.filter(username => isOptionalReviewer(`@${username}`)).map(username => `\`@${username}\``),
+    ...reviewers.filter(isOptional).map(reviewer => `\`${reviewer}\``),
+    ...usernames.filter(username => isOptional(`@${username}`)).map(username => `\`@${username}\``),
   ];
   // `reviewerApplies: false`, always: a reviewer consuming public PR/MR content
   // never receives write authority, and the orchestrator applies independently
@@ -290,8 +290,8 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
     cliReviewers, cliBinaries, cliReviewerHeading, cliBinaryNote, reviewerPinNote, multi,
     configuredReviewerPositions, reviewerPositionLabel, optionalConfiguredReviewers,
     // Spawnable-CLI reviewers split by whether a missing binary blocks.
-    requiredCliBinaries: cliBinaries.filter(reviewer => !isOptionalReviewer(reviewer.slug)),
-    optionalCliBinaries: cliBinaries.filter(reviewer => isOptionalReviewer(reviewer.slug)),
+    requiredCliBinaries: cliBinaries.filter(reviewer => !isOptional(reviewer.slug)),
+    optionalCliBinaries: cliBinaries.filter(reviewer => isOptional(reviewer.slug)),
     localLlmBackends: reviewers.filter(isToolFreeReviewer),
     reviewerLabel: [
       ...reviewers.map(r => `\`${r}\``),
@@ -456,7 +456,9 @@ const prSidePhaseTexts = (prNumber) => ({
   diffCommand: forge => forge.diffCmd,
   prDiffHint: forge => forge.mergeGateForge === 'gitlab' ? '' : `; on GitHub \`gh pr diff ${prNumber || ''}\` also works`,
   applyNote: "**Reviewer applies (off):** read each CLI reviewer's findings and apply the fixes yourself (default).",
-  missingRequiredCliText: forge => `do NOT substitute your own self-review and do NOT merge; post a ${forge.noun} comment naming the missing command and exit.`,
+  // Reviewer unavailability is an operator problem, not PR content: name the
+  // missing command in the run summary rather than commenting on the PR/MR.
+  missingRequiredCliText: () => `do NOT substitute your own self-review and do NOT merge; name the missing command and exit. ${REVIEW_UNAVAILABLE_REPORTING_NOTE}`,
   missingOptionalCliBlocks: 'the merge',
   challengeBlockedText: forge => `post a ${forge.noun} comment and stop`,
   challengeContinueText: 'merge',
@@ -530,7 +532,7 @@ function buildLocalPhaseTexts({ baseBranch, prBranch, localPhaseReviewRequired }
         ? ` The configured reviewer positions are zero-based: ${reviewerPositionLabel}. When a qualifying verdict triggers the configured stop condition, set \`LOCAL_STOP_TRIGGERED=true\` and \`LOCAL_STOP_INDEX\` to that triggering local reviewer's position; when the list exhausts without a qualifying stop or a result is inconclusive, set \`LOCAL_STOP_TRIGGERED=false\` and \`LOCAL_STOP_INDEX=-1\`.`
         : ' Set `LOCAL_STOP_INDEX=-1` whenever no qualifying stop condition fired.';
       return [
-        `4. When the local reviewer list is exhausted (or the stop mode triggers), record \`LOCAL_OVERALL_STATUS\`: use \`review-blocked\` only when a required reviewer could not produce a verdict because of an availability, quota/provider, timeout, transport, malformed, empty, or no-verdict failure; never use it for substantive findings, failed tests/build, unpushed fixes, or state/publication failures, and do not self-review. Set \`LOCAL_STOP_TRIGGERED=true\` when the configured stop condition actually fired on a qualifying verdict, including when that verdict came from the final local reviewer; set it false for list exhaustion, an inconclusive result, or \`review-blocked\`.${localStopIndexNote} Compute \`LOCAL_PHASE_COMMITS=$(git rev-list "$LOCAL_PHASE_START_SHA..HEAD" --count)\`; if a qualifying stop fired, retain the triggering reviewer's \`LOCAL_REVIEWER_COMMITS\` as \`LOCAL_STOP_REVIEW_COMMITS\`, otherwise set \`LOCAL_STOP_REVIEW_COMMITS=-1\`. Record \`LOCAL_REVIEWED_HEAD_SHA=$(git rev-parse HEAD)\`. Persist all phase state for later shell calls in the worktree-private Git state file: \`LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"\`; then run \`printf 'LOCAL_PHASE_START_SHA=%s\\nLOCAL_OVERALL_STATUS=%s\\nLOCAL_STOP_TRIGGERED=%s\\nLOCAL_STOP_INDEX=%s\\nLOCAL_STOP_REVIEW_COMMITS=%s\\nLOCAL_PHASE_COMMITS=%s\\nLOCAL_REVIEWED_HEAD_SHA=%s\\n' "$LOCAL_PHASE_START_SHA" "$LOCAL_OVERALL_STATUS" "$LOCAL_STOP_TRIGGERED" "$LOCAL_STOP_INDEX" "$LOCAL_STOP_REVIEW_COMMITS" "$LOCAL_PHASE_COMMITS" "$LOCAL_REVIEWED_HEAD_SHA" > "$LOCAL_REVIEW_STATE_FILE"\`. A \`review-blocked\` state is a completed local phase that permits publication but blocks the merge gate; the publication step posts the required comment. If that write fails, do NOT push or open the PR/MR. For a final-reviewer stop, follow the same phase-level gate below: \`on-clean\` requires \`LOCAL_OVERALL_STATUS=clean\` with \`LOCAL_STOP_REVIEW_COMMITS=0\`, while \`on-findings\` requires \`LOCAL_OVERALL_STATUS=clean\` with \`LOCAL_STOP_REVIEW_COMMITS>0\`; a \`partial\` status is already a qualifying stop. Return to the Completion Workflow and continue with the push and PR/MR creation step when all executed required reviewers are clean and optional reviewers are clean or inconclusive, when \`LOCAL_OVERALL_STATUS=partial\` records a qualifying configured stop-mode short-circuit, or when \`LOCAL_OVERALL_STATUS=review-blocked\` records only reviewer unavailability. Do NOT push or open the PR/MR before this local phase is complete.`,
+        `4. When the local reviewer list is exhausted (or the stop mode triggers), record \`LOCAL_OVERALL_STATUS\`: use \`review-blocked\` only when a required reviewer could not produce a verdict because of an availability, quota/provider, timeout, transport, malformed, empty, or no-verdict failure; never use it for substantive findings, failed tests/build, unpushed fixes, or state/publication failures, and do not self-review. Set \`LOCAL_STOP_TRIGGERED=true\` when the configured stop condition actually fired on a qualifying verdict, including when that verdict came from the final local reviewer; set it false for list exhaustion, an inconclusive result, or \`review-blocked\`.${localStopIndexNote} Compute \`LOCAL_PHASE_COMMITS=$(git rev-list "$LOCAL_PHASE_START_SHA..HEAD" --count)\`; if a qualifying stop fired, retain the triggering reviewer's \`LOCAL_REVIEWER_COMMITS\` as \`LOCAL_STOP_REVIEW_COMMITS\`, otherwise set \`LOCAL_STOP_REVIEW_COMMITS=-1\`. Record \`LOCAL_REVIEWED_HEAD_SHA=$(git rev-parse HEAD)\`. Persist all phase state for later shell calls in the worktree-private Git state file: \`LOCAL_REVIEW_STATE_FILE="$(git rev-parse --git-path portos-local-review-state)"\`; then run \`printf 'LOCAL_PHASE_START_SHA=%s\\nLOCAL_OVERALL_STATUS=%s\\nLOCAL_STOP_TRIGGERED=%s\\nLOCAL_STOP_INDEX=%s\\nLOCAL_STOP_REVIEW_COMMITS=%s\\nLOCAL_PHASE_COMMITS=%s\\nLOCAL_REVIEWED_HEAD_SHA=%s\\n' "$LOCAL_PHASE_START_SHA" "$LOCAL_OVERALL_STATUS" "$LOCAL_STOP_TRIGGERED" "$LOCAL_STOP_INDEX" "$LOCAL_STOP_REVIEW_COMMITS" "$LOCAL_PHASE_COMMITS" "$LOCAL_REVIEWED_HEAD_SHA" > "$LOCAL_REVIEW_STATE_FILE"\`. A \`review-blocked\` state is a completed local phase that permits publication but blocks the merge gate; ${REVIEW_UNAVAILABLE_REPORTING_NOTE} If that write fails, do NOT push or open the PR/MR. For a final-reviewer stop, follow the same phase-level gate below: \`on-clean\` requires \`LOCAL_OVERALL_STATUS=clean\` with \`LOCAL_STOP_REVIEW_COMMITS=0\`, while \`on-findings\` requires \`LOCAL_OVERALL_STATUS=clean\` with \`LOCAL_STOP_REVIEW_COMMITS>0\`; a \`partial\` status is already a qualifying stop. Return to the Completion Workflow and continue with the push and PR/MR creation step when all executed required reviewers are clean and optional reviewers are clean or inconclusive, when \`LOCAL_OVERALL_STATUS=partial\` records a qualifying configured stop-mode short-circuit, or when \`LOCAL_OVERALL_STATUS=review-blocked\` records only reviewer unavailability. Do NOT push or open the PR/MR before this local phase is complete.`,
       ];
     },
   };
@@ -939,9 +941,7 @@ export function buildLocalReviewLoopSection({
 }) {
   const localReviewers = (reviewers || []).filter(reviewer => isCliReviewer(reviewer) || isToolFreeReviewer(reviewer));
   if (!localReviewers.length) return '';
-  const localReviewRequired = localReviewers.some(reviewer =>
-    !(Array.isArray(optionalReviewers) && optionalReviewers.some(optional => optional.toLowerCase() === reviewer.toLowerCase()))
-  );
+  const localReviewRequired = hasRequiredReviewer(localReviewers, optionalReviewers);
   return buildReviewLoopFollowUpSection({
     reviewLoopPRBranch: branchName || '<branch>',
     reviewLoopReviewers: localReviewers,

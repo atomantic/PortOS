@@ -46,6 +46,9 @@ import {
   MAX_REVIEW_USERNAMES,
   MAX_REVIEWER_MAX_ROUNDS,
   normalizeReviewUsernames,
+  hasRequiredReviewer,
+  isOptionalReviewer,
+  REVIEW_UNAVAILABLE_REPORTING_NOTE,
 } from './reviewerConfig.js';
 import { PROVIDER_VENDORS } from './providerVendors.js';
 // The Zod half of the old cosValidation.js — these cases assert that a reviewer
@@ -886,5 +889,98 @@ describe('hasReviewerOverride', () => {
     for (const value of [null, undefined, [], 'reviewers', 7]) {
       expect(hasReviewerOverride(value)).toBe(false);
     }
+  });
+});
+
+describe('hasRequiredReviewer / isOptionalReviewer', () => {
+  // These decide whether an unavailable verdict parks the PR or merges it, so
+  // they must answer the same question buildReviewWithArgs answers when it
+  // decides whether to append `~opt` — including through an alias.
+  it('matches the ~opt suffix buildReviewWithArgs emits, aliases included', () => {
+    expect(buildReviewWithArgs(['antigravity'], { optionalReviewers: ['gemini'] })).toContain('antigravity~opt');
+    expect(isOptionalReviewer('antigravity', ['gemini'])).toBe(true);
+    expect(hasRequiredReviewer(['antigravity'], ['gemini'])).toBe(false);
+  });
+
+  it('counts an @username reviewer, matching its case the way the emitted token does', () => {
+    expect(hasRequiredReviewer(['codex', '@Alice'], ['codex', '@alice'])).toBe(false);
+    // One un-marked reviewer is enough to keep the gate.
+    expect(hasRequiredReviewer(['codex', '@alice'], ['codex'])).toBe(true);
+  });
+
+  it('treats an unrecognizable reviewer token as required', () => {
+    // Fail closed: a token the optional list can never name must not silently
+    // relax the merge gate.
+    expect(hasRequiredReviewer(['not-a-reviewer'], ['not-a-reviewer'])).toBe(true);
+    expect(isOptionalReviewer('not-a-reviewer', ['not-a-reviewer'])).toBe(false);
+  });
+
+  it('reports no required reviewer for an empty list, leaving the emptiness test to callers', () => {
+    expect(hasRequiredReviewer([], [])).toBe(false);
+    expect(hasRequiredReviewer(undefined, undefined)).toBe(false);
+  });
+});
+
+describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {
+  // The rule reaches ~10 prompt sites. Spelled out at each one it drifts, and a
+  // site that drifts back into "post a comment" silently reinstates the PR
+  // noise this constant exists to remove. A first version of this guard banned
+  // only one phrasing and missed the claim-flow bullet in completion.js, which
+  // still ordered the comment in words of its own — so it now asserts the
+  // SEMANTICS over whole prompt bullets: no bullet that leaves a PR open for a
+  // review that could not answer may also order a comment about it.
+  const SITES = [
+    'services/promptSections/completion.js',
+    'services/promptSections/reviewLifecycle.js',
+    'services/taskPromptDefaults/prompts.js',
+  ];
+  // How a prompt bullet refers to a review that could not answer, including the
+  // consequence clause ("left open ... until the required review completes") —
+  // the claim-flow miss named only the consequence, never `review-blocked`.
+  const UNAVAILABLE_REVIEW = /review-blocked|(cannot|could not|can't) (return|produce) a verdict|review was (not completed|unavailable)|until the required review completes|intentionally left open/i;
+  // ...and the instruction it must never carry. Scoped to the PR/MR thread:
+  // commenting a real failure on the ISSUE or ticket is a different and
+  // legitimate instruction, so a comment clause naming one is not an offender.
+  const ORDERS_A_COMMENT = /gh pr comment|glab mr note|\bpost(ing|s)? (a|an|one|exactly this) (comment|note)\b(?![^.]{0,60}\b(issue|ticket)\b)/i;
+
+  const readSite = async (site) => {
+    const { readFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    const source = await readFile(fileURLToPath(new URL('../', import.meta.url)) + site, 'utf8');
+    // The shared constant is itself a "do NOT post ... comment" sentence; drop
+    // its interpolation so the scan sees only hand-written prose.
+    return source.split('${REVIEW_UNAVAILABLE_REPORTING_NOTE}').join(' ');
+  };
+
+  it('never orders a comment in the same prompt bullet as an unanswered review', async () => {
+    for (const site of SITES) {
+      const source = await readSite(site);
+      // One line is one prompt bullet / template literal in these builders.
+      const offenders = source
+        .split('\n')
+        .filter(line => UNAVAILABLE_REVIEW.test(line) && ORDERS_A_COMMENT.test(line))
+        .map(line => line.trim().slice(0, 120));
+      expect(offenders, `${site} tells the agent to comment about an unanswered review`).toEqual([]);
+    }
+  });
+
+  it('states the rule by reference, never hand-written, in every site that carries it', async () => {
+    for (const site of SITES) {
+      const source = await readSite(site);
+      expect(source, site).not.toMatch(/do NOT post (a|an) (PR|MR|PR\/MR)[^`']*comment saying the review/);
+      expect(source, site).not.toContain('REVIEW_BLOCKED_COMMENT');
+    }
+    // Stripped above, so assert the reference against the raw source.
+    const { readFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    for (const site of SITES) {
+      const raw = await readFile(fileURLToPath(new URL('../', import.meta.url)) + site, 'utf8');
+      expect(raw, site).toContain('REVIEW_UNAVAILABLE_REPORTING_NOTE');
+    }
+  });
+
+  it('tells the agent where the pending review goes instead', () => {
+    expect(REVIEW_UNAVAILABLE_REPORTING_NOTE).toContain('run summary');
+    expect(REVIEW_UNAVAILABLE_REPORTING_NOTE).toContain('do NOT post a PR/MR comment');
   });
 });

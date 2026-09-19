@@ -56,6 +56,22 @@ export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value)
  * the review service's closure to do it.
  */
 export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze(['NO_MODEL', 'REVIEWER_UNAVAILABLE', 'REVIEWER_UNSUPPORTED']);
+
+/**
+ * What an agent does with a review that could not return a verdict: say so in
+ * the run summary, and leave the PR/MR thread alone.
+ *
+ * A comment announcing "the review was unavailable, so this is left open" is
+ * noise on a PR a human still has to read — it restates the absence of a review
+ * they can already see, and every reopened thread costs them a notification.
+ * The run summary is where that belongs.
+ *
+ * One exported sentence because the rule reaches ~6 prompt sites across
+ * `promptSections/` and `taskPromptDefaults/prompts.js`; spelled out at each
+ * one, a future seventh gets written a seventh way and the rule quietly stops
+ * being one. `reviewerConfig.test.js` pins the no-drift claim.
+ */
+export const REVIEW_UNAVAILABLE_REPORTING_NOTE = 'Report the pending review in your run summary — do NOT post a PR/MR comment saying the review was unavailable or inconclusive.';
 export const isReviewerConfigFault = (code) => REVIEWER_CONFIG_FAULT_CODES.includes(code);
 
 /**
@@ -399,6 +415,45 @@ export function resolveOptionalReviewers(metadataOptional, defaultOptional) {
   return Array.isArray(metadataOptional)
     ? (normalizeOptionalReviewers(metadataOptional) || [])
     : (normalizeOptionalReviewers(defaultOptional) || []);
+}
+
+/**
+ * True when `reviewer` is one the user marked `~opt` (non-blocking).
+ *
+ * Both sides go through `normalizeReviewerToken` first, so this answers the
+ * same question `buildReviewWithArgs` answers when it decides whether to append
+ * `~opt` — an alias on one side (`gemini` vs `antigravity`) can't make the
+ * emitted flag and the merge gate disagree about the same configuration. An
+ * unrecognizable reviewer token is never optional: fail closed toward blocking.
+ *
+ * For a whole list, prefer `hasRequiredReviewer`, which builds the membership
+ * set once.
+ */
+export function isOptionalReviewer(reviewer, optionalReviewers) {
+  const token = normalizeReviewerToken(reviewer);
+  return token !== null && optionalReviewerSet(optionalReviewers).has(token.toLowerCase());
+}
+
+/**
+ * True when at least one of `reviewers` is NOT marked optional — i.e. some
+ * reviewer's verdict genuinely gates the merge.
+ *
+ * The inverse ("every configured reviewer is `~opt`") is what the gates read:
+ * a phase with no binding reviewer can never record `review-blocked`, and the
+ * completion workflow tells such a run not to invent a blocker from a reviewer
+ * that returned nothing. It does NOT license merging an `inconclusive`
+ * aggregate — slashdo already excluded the optional misses from that, so one
+ * that survives means `push-failed` (see `buildPostPRMergeSteps`).
+ *
+ * Shared so the local pre-PR phase, the PR-side phase, and the completion
+ * workflow's merge step can't disagree about which reviewers are binding.
+ */
+export function hasRequiredReviewer(reviewers, optionalReviewers) {
+  const optional = optionalReviewerSet(optionalReviewers);
+  return (Array.isArray(reviewers) ? reviewers : []).some(reviewer => {
+    const token = normalizeReviewerToken(reviewer);
+    return token === null || !optional.has(token.toLowerCase());
+  });
 }
 
 /**

@@ -14,7 +14,7 @@ import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isToolFreeReviewer, isCliReviewer, resolveReviewerConfig } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -1036,7 +1036,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // before it is public; Copilot and @login reviewers can only run after a PR.
   const isLocalReviewer = reviewer => isCliReviewer(reviewer) || isToolFreeReviewer(reviewer);
   const localReviewers = lightReviewers.filter(isLocalReviewer);
-  const localReviewRequired = localReviewers.some(reviewer => !lightOptionalReviewers.includes(reviewer));
+  const localReviewRequired = hasRequiredReviewer(localReviewers, lightOptionalReviewers);
   const reviewerPositions = [
     ...lightReviewers.map((reviewer, position) => ({ reviewer, position })),
     ...lightReviewerUsernames.map((username, index) => ({ reviewer: `@${username}`, position: lightReviewers.length + index })),
