@@ -890,10 +890,15 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
 // What is still worth pinning HERE is the wiring: that spawnViaRunner routes
 // through the shared composer and feeds it the right inputs.
 describe('agentLifecycle — runner OpenCode Ollama env (#2243 / #2190)', () => {
+  // Bounded by the NEXT top-level declaration rather than a character count: a
+  // fixed window silently shrinks as the function grows a comment, and the
+  // assertions below then fail on text that is still there (and would keep
+  // passing on a line that had drifted into the following function).
   const runnerBody = () => {
     const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnViaRunner');
     expect(fnStart, 'spawnViaRunner must exist').toBeGreaterThan(-1);
-    return AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 4000);
+    const nextExport = AGENT_LIFECYCLE_SRC.indexOf('\nexport ', fnStart + 1);
+    return AGENT_LIFECYCLE_SRC.slice(fnStart, nextExport > -1 ? nextExport : undefined);
   };
 
   it('source: composes the runner envVars through the shared composeProviderEnv', () => {

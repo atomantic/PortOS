@@ -79,6 +79,7 @@ import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
+import { resolveAgentApiEnv } from './agentApiAuth.js';
 import { runnerAgents, pausedAgents, consumePausedAgentExit, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isUpdateInProgress } from './updateChecker.js';
@@ -984,9 +985,14 @@ export async function spawnViaRunner(agentId, task, opts) {
   // account — see resolveForgeTokenEnv; `{}` when there's no owner match). Skip
   // the token probe when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so
   // its explicit credential wins.
-  const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
+  // ...plus the loopback PortOS session token the agent's own `curl` snippets
+  // need on a password-protected install (agentApiAuth.js); `{}` when auth is
+  // off. The runner rebuilds its child env from ITS ambient environment, so like
+  // GH_TOKEN this has to ride the explicit delta below or the agent never sees it.
+  const [claudeSettingsEnv, forgeTokenEnv, agentApiEnv] = await Promise.all([
     isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
     providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(workspacePath),
+    resolveAgentApiEnv(),
   ]);
 
   // The runner can reject the spawn outright — a command missing from its
@@ -1022,7 +1028,7 @@ export async function spawnViaRunner(agentId, task, opts) {
       // injected `--model ollama/<id>` is accepted (#2243/#2190 — this path was
       // the site that sweep originally missed).
       envVars: composeProviderEnv({
-        before: { ...forgeTokenEnv, ...claudeSettingsEnv },
+        before: { ...forgeTokenEnv, ...claudeSettingsEnv, ...agentApiEnv },
         provider,
         model,
       }),

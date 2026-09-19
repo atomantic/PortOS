@@ -29,6 +29,15 @@ vi.mock('../../lib/networkExposure.js', () => ({
   localApiBaseUrl: () => 'http://127.0.0.1:5555',
 }));
 
+// The 401 fallback names the auth-independent review bridge by absolute path,
+// which is whatever directory this install was cloned into. Pin the checkout
+// root for the same reason the origin above is pinned — and so no contributor's
+// home directory can ride a snapshot update into the repository.
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, root: '/portos' } };
+});
+
 import { buildReviewLoopFollowUpSection } from './reviewLifecycle.js';
 
 const SNAP = (name) => `./__snapshots__/reviewLoopMatrix/${name}.txt`;

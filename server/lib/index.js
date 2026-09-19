@@ -168,6 +168,8 @@ export * as childProcess from './childProcess.js';
 export * from './callerModePolicy.js';
 export * from './cliChildEnv.js';
 export * from './agentExecutionProfiles.js';
+export * from './agentApiToken.js';
+export * from './localReviewBridge.js';
 export * from './agentCompletionMode.js';
 export * from './localEndpoint.js';
 export * from './cliProviderArgs.js';

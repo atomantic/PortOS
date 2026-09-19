@@ -79,6 +79,30 @@ describe('reviewLifecycle reviewer invocation details', () => {
     expect(section).toContain('Substitute the active reviewer name');
   });
 
+  // Both commands hit `/api/*`, which the optional instance password gates. An
+  // agent holds no browser cookie, so without the injected session token every
+  // review came back `401 AUTH_REQUIRED` and read as a broken reviewer (#7660
+  // follow-on). The whole header is one quoted argument so a token can never be
+  // word-split, and the `:-` default keeps the command valid on an install with
+  // no password set.
+  it('spends the injected loopback session token on both agent curl commands', () => {
+    const section = buildReviewLoopFollowUpSection(metadata);
+    const authHeader = '-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"';
+
+    expect(section).toContain(`/api/code-review/local -H 'Content-Type: application/json' ${authHeader}`);
+    expect(section).toContain(`/api/cos/tasks/task-example/challenge -H 'Content-Type: application/json' ${authHeader}`);
+  });
+
+  // A 401 is an absent credential, not a reviewer verdict — recording it as one
+  // would block the merge on an outage that does not exist. The bridge runs the
+  // same service over stdin with no gate.
+  it('points a 401 at the auth-independent review bridge instead of a verdict', () => {
+    const section = buildReviewLoopFollowUpSection(metadata);
+
+    expect(section).toContain('An `HTTP 401` is not a review result');
+    expect(section).toContain('server/scripts/run-local-code-review.mjs');
+  });
+
   // `opencode run -m <provider/model>`: rendering `--model` here had agents
   // probing for a flag OpenCode does not document.
   it('renders each CLI reviewer\'s own model flag', () => {

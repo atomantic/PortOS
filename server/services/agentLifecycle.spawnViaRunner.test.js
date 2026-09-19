@@ -68,6 +68,9 @@ vi.mock('./cos.js', () => ({
 }));
 
 vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
+// The runner rebuilds its child env from ITS own process.env, so a credential
+// only reaches the agent through the explicit delta this spawn POSTs.
+vi.mock('./agentApiAuth.js', () => ({ resolveAgentApiEnv: vi.fn().mockResolvedValue({}) }));
 
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: vi.fn(),
@@ -409,5 +412,29 @@ it('records an AMBIGUOUS handoff as unaccepted-but-unknown, never as a refusal',
     const ids = handoffs().map((e) => e.eventId);
     expect(ids).toHaveLength(2);
     expect(new Set(ids).size).toBe(1);
+  });
+});
+
+describe('spawnViaRunner — credentials in the env delta', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runnerAgents.clear();
+  });
+
+  // The runner is a separate long-lived PM2 process that composes its child env
+  // from its own environment, so anything the agent needs but the server holds —
+  // the repo-owner GH_TOKEN, and now the loopback PortOS session token its own
+  // prompt's `curl`s spend — has to ride this POSTed delta or the agent never
+  // sees it (#7660 follow-on: every such call was a 401 on a gated install).
+  it('POSTs the loopback PortOS API token to the runner', async () => {
+    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    vi.mocked(resolveAgentApiEnv).mockResolvedValueOnce({ PORTOS_API_TOKEN: 'portos-session-token' });
+    vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
+
+    await spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts());
+
+    expect(spawnAgentViaRunner).toHaveBeenCalledWith(expect.objectContaining({
+      envVars: expect.objectContaining({ PORTOS_API_TOKEN: 'portos-session-token' }),
+    }));
   });
 });
