@@ -12,7 +12,8 @@ import { LI_LABEL, LI_BLOCKING_LABEL } from './constants.js';
 import { slugMarker, extractSlugFromBody } from './dedup.js';
 import { runCli } from './runCli.js';
 import { withGlabJson } from '../../lib/glabArgs.js';
-import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../../lib/forgeIssueCli.js';
+import { forgeLabelCreateArgs } from '../../lib/forgeIssueCli.js';
+import { fileForgeIssue } from '../appIssues.js';
 
 export { normalizeIssueState };
 
@@ -245,14 +246,14 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
 }
 
 /**
- * File ONE proposal issue on a forge (gh/glab). Ensures labels first, embeds the
- * slug marker in the body, and returns `{ success, number, url }`. The issue
- * number is parsed from the created URL's trailing digits. Required dispatch
- * hints are validated before filing; contributor labels remain optional — never
- * derived from `complexity`. `planner` is the identity of
- * the model that REASONED this proposal (PortOS knows it; the reasoner is never
- * asked to name itself), applied as `planner:<model>` (`planner::<model>` on GitLab) and lazily created by
- * `ensureForgeLabels` like every other extra.
+ * File ONE proposal issue on a forge (gh/glab) — through the exec half every
+ * forge filer shares (`fileForgeIssue`, #7687): create each label, embed the
+ * slug marker in the body, create the issue, and parse `{ success, number,
+ * url }` from the result. Required dispatch hints are validated before filing;
+ * contributor labels remain optional — never derived from `complexity`.
+ * `planner` is the identity of the model that REASONED this proposal (PortOS
+ * knows it; the reasoner is never asked to name itself), applied as
+ * `planner:<model>` (`planner::<model>` on GitLab).
  */
 export async function fileProposalToForge({
   cli, cwd, env, title, body, slug, model, effort, goodFirstIssue, helpWanted, planner, exec = runCli
@@ -260,13 +261,12 @@ export async function fileProposalToForge({
   if (!isDispatchModel(model) || !isDispatchEffort(effort)) {
     return { success: false, error: 'Issue filing requires valid model and effort dispatch labels; investigate and supply both before retrying' };
   }
-  const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli });
-  await ensureForgeLabels({ cli, cwd, env, extraLabels: extras, exec });
-  const fullBody = `${body}\n\n${slugMarker(slug)}`;
-  const args = forgeIssueCreateArgs(cli, { title, body: fullBody, labels: [LI_LABEL, ...extras] });
-  const { code, stdout, stderr } = await exec(cli, args, { cwd, env });
-  if (code !== 0) return { success: false, error: stderr || `${cli} exited with code ${code}` };
-  return { success: true, ...parseCreatedForgeIssue(stdout) };
+  const names = [LI_LABEL, ...forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner, cli })];
+  const labels = names.map((name) => dispatchLabelSpec(name, { cli }) || { name, color: '1d76db', description: 'Filed by the Layered Intelligence loop' });
+  const result = await fileForgeIssue({ cli, cwd, env, title, body: `${body}\n\n${slugMarker(slug)}`, labels, exec });
+  return result.ok
+    ? { success: true, number: result.number, url: result.url }
+    : { success: false, error: result.error };
 }
 
 /**
@@ -276,9 +276,10 @@ export async function fileProposalToForge({
  * `gh issue edit --add-label` and `glab issue update --label` fail the WHOLE
  * call with a 422 when the repo has never defined the named label, and this is
  * the only path that applies `LI_BLOCKING_LABEL` — so on any install where the
- * Layered Intelligence loop has not yet FILED an issue (the other caller of
- * `ensureForgeLabels`), the very first pause would fail. Existing labels are
- * accepted there, while other creation failures are surfaced.
+ * Layered Intelligence loop has not yet FILED an issue (`fileForgeIssue` covers
+ * the issue-filing labels via the shared exec-half wrapper), the very first
+ * pause would fail. Existing labels are accepted there, while other creation
+ * failures are surfaced.
  */
 export async function applyBlockingLabel({ cli, cwd, env, number, exec = runCli } = {}) {
   if (!Number.isInteger(number)) return { success: false, error: 'no issue number' };

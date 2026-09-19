@@ -43,18 +43,16 @@
  * is decided, records what happened, and proceeds either way.
  */
 
-import { execGh, ensureForgeReachable } from './github.js';
-import { execGlab, execGlabJson } from './gitlab.js';
+import { execGh } from './github.js';
+import { execGlabJson } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { PORTOS_APP_ID, getAppById } from './apps.js';
 import { getSettings } from './settings.js';
 import { fileInvestigationTask } from './investigationTaskProducer.js';
+import { fileForgeIssue, probeForgeReachability, scrubForgeIssueText } from './appIssues.js';
 import { forgeCliForTracker, resolveAppForgeTarget } from '../lib/workTracker.js';
-import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../lib/forgeIssueCli.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
-import { scrubHomePath } from '../lib/homePath.js';
-import { scrubSecretTokens } from '../lib/secretText.js';
 import {
   GOAL_FIDELITY_ISSUE_LABEL,
   GOAL_FIDELITY_ISSUE_LABEL_SPEC,
@@ -78,22 +76,6 @@ const PAGE_LIMIT = 100;
  * scan says so (below) rather than reading a truncated page as "nothing filed".
  */
 const SCAN_LIMIT = 1_000;
-
-/**
- * The last thing that happens to a title/body before a tracker sees it.
- *
- * Same enforcement as the persistent mind's filer, for the same reason: a filed
- * issue is world-readable the moment it lands, and the free text here is
- * model-authored prose derived from an untrusted diff. `scrubHomePath` collapses
- * the running user's home prefix (which embeds the OS username in
- * `/Users/<name>/…`); `scrubSecretTokens` replaces credential-shaped substrings.
- * Applied to the TITLE too — it is as public as the body.
- *
- * Deliberately NOT applied to the fingerprint marker's own text: it is derived
- * from a slug of the task's first line and carries no path or credential shape,
- * and a scrub that rewrote it would break the dedup it exists to serve.
- */
-const scrubForgeText = (value) => scrubSecretTokens(scrubHomePath(value));
 
 /**
  * The managed-app record whose tracker this finding belongs on.
@@ -213,31 +195,15 @@ async function listFiledIssues({ app, target, tracker, exec }) {
   }));
 }
 
-/**
- * Create the marker label, then the issue.
- *
- * The label create is idempotent and its failure is swallowed — both CLIs fail
- * the whole `issue create` with a 422 on an undefined label, so a label we
- * could not create resurfaces as the create's own error if it mattered.
- */
-async function createForgeIssue({ app, target, tracker, exec, title, body }) {
+/** Create the marker label, then the issue — the exec half shared by every forge filer (#7687). */
+function createForgeIssue({ app, target, tracker, exec, title, body }) {
   const cli = forgeCliForTracker(tracker);
-  const spec = { name: GOAL_FIDELITY_ISSUE_LABEL, ...GOAL_FIDELITY_ISSUE_LABEL_SPEC };
-  await (cli === 'glab'
-    ? execGlab(forgeLabelCreateArgs(cli, spec), app.repoPath)
-    : execGh(forgeLabelCreateArgs(cli, spec, { repo: target.repoSpec }), undefined, { cwd: exec.cwd, env: exec.env })
-  ).catch(() => null);
-
-  const args = forgeIssueCreateArgs(cli, {
-    title, body, labels: [GOAL_FIDELITY_ISSUE_LABEL], repo: cli === 'glab' ? null : target.repoSpec,
+  return fileForgeIssue({
+    cli, cwd: exec.cwd, env: exec.env, repoPath: app.repoPath,
+    repo: cli === 'glab' ? null : target.repoSpec,
+    title, body,
+    labels: [{ name: GOAL_FIDELITY_ISSUE_LABEL, ...GOAL_FIDELITY_ISSUE_LABEL_SPEC }],
   });
-  return (cli === 'glab'
-    ? execGlab(args, app.repoPath, undefined, { rejectOnError: true })
-    : execGh(args, undefined, { cwd: exec.cwd, env: exec.env })
-  ).then(
-    (stdout) => ({ ok: true, ...parseCreatedForgeIssue(stdout) }),
-    (error) => ({ ok: false, error: boundedErrorMessage(error, 'Issue creation failed') }),
-  );
 }
 
 /**
@@ -306,14 +272,14 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
   const exec = tracker === 'jira' ? null : await resolveForgeContext(app, tracker);
   // The reachability probe runs before anything is read or created: on an
   // unreachable forge this is one failing call instead of a list and a label
-  // create that each have to time out first.
-  if (tracker === 'github') {
-    const forge = await ensureForgeReachable('goal-fidelity-followup', {
-      hostname: target.apiHost,
-      ...(exec.customEnv ? { env: exec.customEnv } : {}),
-    });
-    if (!forge.ok) return { issue: null, error: `GitHub is not reachable (${forge.status}); nothing was filed` };
-  }
+  // create that each have to time out first. Kept ahead of the duplicate read
+  // below rather than folded into `fileForgeIssue`'s own probe, for the same
+  // reason `persistentMindIssueCapability.js` keeps its own early probe.
+  const probe = await probeForgeReachability({
+    cli: forgeCliForTracker(tracker), hostname: target?.apiHost, env: exec?.customEnv,
+    label: 'goal-fidelity-followup',
+  });
+  if (!probe.ok) return { issue: null, error: probe.error };
 
   // Read before writing. A failed read must NOT read as "nothing is tracked" —
   // that is exactly how a transient CLI blip files the same issue twice — so an
@@ -331,14 +297,16 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
   }
 
   const { title, body } = buildGoalFidelityIssue({ task, review, fingerprint });
-  // Scrubbed on the way to the tracker: a filed issue is world-readable the
-  // moment it lands, and this text is model-authored prose derived from an
-  // untrusted diff. The marker itself is a slug of the task's first line and
-  // carries no path or credential shape, so the scrub leaves it intact — which
-  // it must, or the issue it files could never dedupe against itself.
+  // The forge path is scrubbed by `fileForgeIssue` itself, by construction —
+  // JIRA doesn't go through it, so it scrubs explicitly here. A filed issue is
+  // world-readable the moment it lands, and this text is model-authored prose
+  // derived from an untrusted diff. The marker itself is a slug of the task's
+  // first line and carries no path or credential shape, so the scrub leaves it
+  // intact — which it must, or the issue it files could never dedupe against
+  // itself.
   const created = tracker === 'jira'
-    ? await createJiraIssue({ app, title: scrubForgeText(title), body: scrubForgeText(body) })
-    : await createForgeIssue({ app, target, tracker, exec, title: scrubForgeText(title), body: scrubForgeText(body) });
+    ? await createJiraIssue({ app, title: scrubForgeIssueText(title), body: scrubForgeIssueText(body) })
+    : await createForgeIssue({ app, target, tracker, exec, title, body });
   if (!created.ok) return { issue: null, error: created.error };
   return { issue: { number: created.number, url: created.url, duplicate: false }, error: null };
 }
