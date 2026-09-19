@@ -3,7 +3,7 @@
  *
  * Handles file-based persistence for the Brain feature.
  * - Per-record `collectionStore` dirs for entity stores (people, projects,
- *   ideas, admin, …, journals, inbox, songs) — `data/brain/<type>/<id>/index.json`
+ *   ideas, admin, …, journals, inbox, songs, threads) — `data/brain/<type>/<id>/index.json`
  * - JSON for the single `meta.json` settings doc
  * - JSONL for append-only generated logs (digests, reviews)
  *
@@ -58,7 +58,7 @@ const DATA_DIR = PATHS.brain;
 // originInstanceId backfill all cover them with no per-type branching.
 export const BRAIN_ENTITY_TYPES = Object.freeze([
   'people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets',
-  'journals', 'inbox', 'songs',
+  'journals', 'inbox', 'songs', 'threads',
 ]);
 
 // The type-level storage-layout version. Bumped by a migration that changes the
@@ -1149,6 +1149,19 @@ export const updateBucket = (id, data) => update('buckets', id, data);
 // together and append their federation entries with one sync-log write.
 export const reorderBuckets = (updates) => updateManyWithBatchLog('buckets', updates);
 export const deleteBucket = (id) => remove('buckets', id);
+
+// Threads (#7664)
+//
+// A thread is one tracked topic or commitment — an open loop in the bullet
+// journal sense, NOT a message thread (messageSync.js owns that word too). The
+// accessors are the generic store API under thread-shaped names, exactly like
+// the siblings above; the ref registry that gives a thread its links lives in
+// lib/threadRefKinds.js + services/threadRefs.js.
+export const getThreads = (filters) => filters ? query('threads', filters) : getAll('threads');
+export const getThreadById = (id) => getById('threads', id);
+export const createThread = (data) => create('threads', data);
+export const updateThread = (id, data) => update('threads', id, data);
+export const deleteThread = (id) => remove('threads', id);
 
 // =============================================================================
 // REMOTE SYNC OPERATIONS (no per-record events, no sync log — echo prevention)
