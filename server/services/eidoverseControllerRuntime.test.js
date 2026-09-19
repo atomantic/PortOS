@@ -395,6 +395,30 @@ describe('revalidating a stored install against its definition (#7629)', () => {
     expect(record.tick).toBe(0);
     expect(record.disarmedReason).toMatch(/newer than this build/);
   });
+
+  it("never downgrades a newer stamp when it writes, so the guard survives the disarm that fires it", async () => {
+    await install({ tickIntervalMs: MINUTE });
+    const raw = await readJSONFile(storeFile(), null, { allowArray: false, strict: true });
+    const newer = raw.schemaVersion + 1;
+    await atomicWrite(storeFile(), { ...raw, schemaVersion: newer });
+
+    // The disarming pass persists the record, and that write must not re-stamp
+    // the file with THIS build’s older constant — doing so would erase the only
+    // signal the guard reads, leaving it a one-shot.
+    await runSupervisorPasses(1);
+    expect((await readJSONFile(storeFile(), null, { allowArray: false, strict: true })).schemaVersion).toBe(newer);
+
+    // So a re-arm (another write path) still lands on a newer-stamped store,
+    // and the next pass refuses again instead of stepping under this build’s rules.
+    await setEidoverseControllerArmed("plaza-beacon", true, { now: at(MINUTE) });
+    expect((await readJSONFile(storeFile(), null, { allowArray: false, strict: true })).schemaVersion).toBe(newer);
+
+    await runSupervisorPasses(1, { fromMs: 2 * MINUTE });
+    const record = await getEidoverseControllerInstall("plaza-beacon");
+    expect(record.armed).toBe(false);
+    expect(record.tick).toBe(0);
+    expect(record.disarmedReason).toMatch(/newer than this build/);
+  });
 });
 
 describe('updateEidoverseControllerConfig (#7629)', () => {

@@ -1098,7 +1098,9 @@ just produced; a violation fails that step and counts toward
 controller to the same contract the promote gate does. The store's own
 `schemaVersion` stamp is read back (not assumed to be this build's constant):
 a store written by a newer build disarms rather than stepping under rules it
-does not fully understand.
+does not fully understand — and the writes that disarm never re-stamp the file
+with this build’s older constant, so the signal survives the pass that reads it
+rather than being erased by it.
 
 **Storage** is `data/eidoverse/controllers.json` — `file-primary` and machine
 local, never federated (`docs/STORAGE.md`). A controller crosses to a peer only

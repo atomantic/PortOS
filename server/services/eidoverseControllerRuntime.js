@@ -109,8 +109,18 @@ async function readInstalls() {
   return { schemaVersion, installs };
 }
 
-async function writeInstalls(installs) {
-  await atomicWrite(storeFile(), { schemaVersion: STORE_SCHEMA_VERSION, installs });
+/**
+ * Writes never DOWNGRADE the file's stamp (#7629). A store a newer build wrote
+ * carries a higher `schemaVersion`, and this build still has to persist to it —
+ * a disarm, a delivery outcome. Re-stamping it with this build's own older
+ * constant would erase the very signal `stepInstall` refuses to step on, so the
+ * newer-store guard would fire exactly once and then never again, and the
+ * newer build would read its own file back as one this version wrote. Callers
+ * pass the stamp they read under the same lock.
+ */
+async function writeInstalls(installs, storeSchemaVersion = STORE_SCHEMA_VERSION) {
+  const schemaVersion = Math.max(STORE_SCHEMA_VERSION, storeSchemaVersion);
+  await atomicWrite(storeFile(), { schemaVersion, installs });
 }
 
 /** Every controller this install has, most recently installed first. */
@@ -178,7 +188,7 @@ export async function installEidoverseController(input, {
 
   const nowMs = Date.parse(now);
   return withStoreLock(async () => {
-    const { installs } = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     const existing = installs[authored.id] || null;
     if (!existing && Object.keys(installs).length >= EIDOVERSE_CONTROLLER_LIMITS.installs) {
       return refused([`this install already holds ${EIDOVERSE_CONTROLLER_LIMITS.installs} controllers — retire one before installing another`]);
@@ -205,7 +215,7 @@ export async function installEidoverseController(input, {
       disarmedReason: armed ? null : (existing?.disarmedReason ?? null),
     };
     installs[authored.id] = record;
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     console.log(`${LOG_PREFIX}: installed "${record.id}" (${record.controllerId}, every ${Math.round(record.tickIntervalMs / 1000)}s, ${record.armed ? 'armed' : 'disarmed'})`);
     return { outcome: 'installed', install: record, reasons: [] };
   }).then(afterGateMove('install'));
@@ -221,11 +231,11 @@ export async function installEidoverseController(input, {
  */
 export async function retireEidoverseController(id) {
   return withStoreLock(async () => {
-    const { installs } = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     const existing = installs[id];
     if (!existing) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${id}"`] };
     delete installs[id];
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     console.log(`${LOG_PREFIX}: retired "${id}" (${existing.controllerId}) after ${existing.tick} tick${existing.tick === 1 ? '' : 's'}`);
     return { outcome: 'retired', install: existing, reasons: [] };
   }).then(afterGateMove('retire'));
@@ -241,7 +251,7 @@ export async function retireEidoverseController(id) {
 export async function setEidoverseControllerArmed(id, armed, { now = new Date().toISOString() } = {}) {
   const nowMs = Date.parse(now);
   return withStoreLock(async () => {
-    const { installs } = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     const existing = installs[id];
     if (!existing) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${id}"`] };
     const record = {
@@ -253,7 +263,7 @@ export async function setEidoverseControllerArmed(id, armed, { now = new Date().
       ...(armed === true ? { nextTickAt: nextControllerTickAt(existing, nowMs), consecutiveFailures: 0, disarmedReason: null } : {}),
     };
     installs[id] = record;
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     return { outcome: 'updated', install: record, reasons: [] };
   }).then(afterGateMove('arm-toggle'));
 }
@@ -275,7 +285,7 @@ export async function updateEidoverseControllerConfig(id, config, {
   resolveDefinition = findControllerDefinitionById,
 } = {}) {
   return withStoreLock(async () => {
-    const { installs } = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     const existing = installs[id];
     if (!existing) return { outcome: 'unknown-install', install: null, reasons: [`no controller is installed under "${id}"`] };
 
@@ -287,7 +297,7 @@ export async function updateEidoverseControllerConfig(id, config, {
 
     const record = { ...existing, config: parsed.data, updatedAt: now };
     installs[id] = record;
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     console.log(`${LOG_PREFIX}: updated config for "${id}" (${existing.controllerId}), state preserved`);
     return { outcome: 'updated', install: record, reasons: [] };
   });
@@ -481,7 +491,7 @@ async function deliverPassEffects(stepped, { deliver, signal }) {
 async function recordDeliveries(deliveries) {
   if (deliveries.length === 0) return;
   await withStoreLock(async () => {
-    const { installs } = await readInstalls();
+    const { schemaVersion: storeSchemaVersion, installs } = await readInstalls();
     let changed = false;
     for (const { id, tick, delivered, error } of deliveries) {
       const current = installs[id];
@@ -489,7 +499,7 @@ async function recordDeliveries(deliveries) {
       installs[id] = { ...current, lastOutcome: { ...current.lastOutcome, delivered, deliveryError: error } };
       changed = true;
     }
-    if (changed) await writeInstalls(installs);
+    if (changed) await writeInstalls(installs, storeSchemaVersion);
   });
 }
 
@@ -537,7 +547,7 @@ async function tickOnce({
       gateMoved = gateMoved || next.record.armed !== record.armed;
       stepped.push(next);
     }
-    await writeInstalls(installs);
+    await writeInstalls(installs, storeSchemaVersion);
     return {
       ticked: stepped.length,
       due: due.length,
