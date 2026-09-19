@@ -2113,3 +2113,67 @@ describe('page views', () => {
     expect(screen.queryByRole('button', { name: 'Add Service' })).not.toBeInTheDocument();
   });
 });
+
+describe('default provider helper and card highlight', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetProviderCatalogCache();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+  });
+
+  it('renders the helper at the top showing default provider, model, effort and highlights the card', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [
+        {
+          id: 'claude-tui',
+          name: 'Claude Code TUI',
+          type: 'tui',
+          command: 'claude',
+          defaultModel: 'claude-opus-4-7',
+          effort: 'high',
+          enabled: true,
+        },
+        {
+          id: 'opencode-tui',
+          name: 'OpenCode TUI',
+          type: 'tui',
+          command: 'opencode',
+          defaultModel: 'ox-alpha',
+          effort: 'medium',
+          enabled: true,
+        },
+      ],
+      activeProvider: 'claude-tui',
+    });
+
+    renderPage();
+
+    const helper = await screen.findByTestId('default-provider-helper');
+    expect(helper).toBeInTheDocument();
+    expect(within(helper).getByTestId('default-helper-provider-name')).toHaveTextContent('Claude Code TUI');
+    expect(within(helper).getByTestId('default-helper-provider-name')).toHaveTextContent('(Claude Code)');
+    expect(within(helper).getByTestId('default-helper-model')).toHaveTextContent('claude-opus-4-7');
+    expect(within(helper).getByTestId('default-helper-effort')).toHaveTextContent('high');
+
+    // Default card has color-coded background and ring
+    const defaultCard = document.getElementById('provider-card-claude-tui');
+    expect(defaultCard).toHaveClass('bg-port-accent/10');
+    expect(defaultCard).not.toHaveClass('bg-port-card');
+    expect(defaultCard).toHaveClass('ring-1');
+
+    // Non-default card has standard background
+    const otherCard = document.getElementById('provider-card-opencode-tui');
+    expect(otherCard).toHaveClass('bg-port-card');
+    expect(otherCard).not.toHaveClass('bg-port-accent/10');
+
+    // Clicking Jump to card calls scrollIntoView
+    const scrollSpy = vi.fn();
+    defaultCard.scrollIntoView = scrollSpy;
+    fireEvent.click(within(helper).getByRole('button', { name: /Jump to card/ }));
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+});
+
