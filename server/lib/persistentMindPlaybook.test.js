@@ -57,6 +57,20 @@ describe('persistentMindPlaybook', () => {
     expect(composed.startsWith('Be concise.')).toBe(true);
   });
 
+  // The regression #7630 names: the picker's peer signal was reachability,
+  // and this template — the text the model actually reads — claimed "peers
+  // waiting" with "activity worth your attention". A reachable peer with
+  // nothing unread made that fabricated claim the steady state for every
+  // mature install. The heading and opening sentence must claim only what
+  // `peerContributionsUnread` measured: what ARRIVED since the last look.
+  it('claims only the signal that selected it (#7630)', () => {
+    const coordinate = PERSISTENT_MIND_PLAYBOOK_PHASE_INSTRUCTIONS.coordinate;
+    const opening = coordinate.split('\n\n').slice(0, 2).join(' ');
+    expect(opening).not.toMatch(/peers waiting|worth your attention/i);
+    expect(opening).toMatch(/since (this mind|you) last (observed|looked)/i);
+    expect(opening).toMatch(/arrived|new peer/i);
+  });
+
   it('appends custom instructions after the phase template, not instead of it', () => {
     const block = playbookInstructionBlock({ mode: 'continuous-play', customInstructions: 'Prefer the northern district.' }, 'maintain');
     expect(block).toContain('PLAYBOOK PHASE — Maintain');
