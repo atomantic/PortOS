@@ -32,8 +32,8 @@ import {
   threadQuerySchema,
   threadRefInputSchema,
   threadAttachSchema,
-  THREAD_TERMINAL_STATUSES,
 } from '../lib/brainValidation.js';
+import { isTerminalThreadStatus as isTerminal, compareThreads } from '../lib/brainThreads.js';
 import { canonicalThreadRefKind } from '../lib/threadRefKinds.js';
 import * as brainStorage from '../services/brainStorage.js';
 import { resolveThreadRefs } from '../services/threadRefs.js';
@@ -46,8 +46,6 @@ function requireThread(thread) {
   }
   return thread;
 }
-
-const isTerminal = (status) => THREAD_TERMINAL_STATUSES.includes(status);
 
 /**
  * `closedAt` for a record whose status is MOVING to `nextStatus`.
@@ -105,30 +103,6 @@ function matchesQuery(thread, q) {
   return haystack.some((v) => typeof v === 'string' && v.toLowerCase().includes(needle));
 }
 
-// Sort key for the due date: a thread with no due date sorts AFTER every dated
-// one rather than poisoning the comparator with NaN.
-const dueSortKey = (thread) => {
-  const t = Date.parse(thread?.dueAt ?? '');
-  return Number.isNaN(t) ? Infinity : t;
-};
-
-// Pinned first, then soonest-due, then most recently touched, with the id as a
-// deterministic tiebreak — a stable order matters because the list paginates,
-// and an unstable one drops or duplicates rows at the slice boundary.
-function compareThreads(a, b) {
-  if (Boolean(b.pinned) !== Boolean(a.pinned)) return Boolean(b.pinned) - Boolean(a.pinned);
-  // Compared, not subtracted: two UNDATED threads are both Infinity, and
-  // `Infinity - Infinity` is NaN — a comparator returning NaN skips the
-  // remaining tiebreaks and leaves the order engine-defined, which the
-  // pagination slice below cannot tolerate.
-  const aDue = dueSortKey(a);
-  const bDue = dueSortKey(b);
-  if (aDue !== bDue) return aDue - bDue;
-  const touched = Date.parse(b?.updatedAt ?? '') - Date.parse(a?.updatedAt ?? '');
-  if (!Number.isNaN(touched) && touched !== 0) return touched;
-  return String(a.id).localeCompare(String(b.id));
-}
-
 // =============================================================================
 // ATTACH (before /:id routes so 'attach' is never treated as an id)
 // =============================================================================
@@ -171,7 +145,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const all = await brainStorage.getAll('threads');
 
   const matching = all.filter((thread) => {
-    if (filters.status && thread.status !== filters.status) return false;
+    if (filters.status && !filters.status.includes(thread.status)) return false;
     if (filters.priority && thread.priority !== filters.priority) return false;
     // A bare `?pinned` arrives as '' and reads as true; 'false' filters to the
     // unpinned set. Absent means "don't filter" (the tri-state in the schema).
@@ -194,11 +168,15 @@ router.get('/', asyncHandler(async (req, res) => {
   return res.json({ threads: rows, total: rows.length });
 }));
 
+// The detail shape: the record plus `resolvedRefs`, hydrated for display only —
+// the stored `refs` array is untouched, so a target this build can't resolve
+// still round-trips through a later write. The ref writes return this same
+// shape so a client can swap the open record in place instead of re-reading.
+const withResolvedRefs = async (thread) => ({ ...thread, resolvedRefs: await resolveThreadRefs(thread.refs) });
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const thread = requireThread(await brainStorage.getById('threads', req.params.id));
-  // Hydrated for display only — the stored `refs` array is untouched, so a
-  // target this build can't resolve still round-trips through a later write.
-  res.json({ ...thread, resolvedRefs: await resolveThreadRefs(thread.refs) });
+  res.json(await withResolvedRefs(thread));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -248,7 +226,7 @@ router.post('/:id/refs', asyncHandler(async (req, res) => {
   const ref = validateRequest(threadRefInputSchema, req.body);
   const thread = requireThread(await brainStorage.updateWith('threads', req.params.id,
     (fresh) => ({ refs: mergeRef(fresh.refs, ref) })));
-  res.status(201).json(thread);
+  res.status(201).json(await withResolvedRefs(thread));
 }));
 
 // DELETE /:id/refs/:kind/:refId — detach one ref. `:refId` is URL-encoded by the
@@ -258,7 +236,7 @@ router.delete('/:id/refs/:kind/:refId', asyncHandler(async (req, res) => {
   const thread = requireThread(await brainStorage.updateWith('threads', req.params.id, (fresh) => ({
     refs: (Array.isArray(fresh.refs) ? fresh.refs : []).filter((r) => refKey(r) !== target),
   })));
-  res.json(thread);
+  res.json(await withResolvedRefs(thread));
 }));
 
 export default router;

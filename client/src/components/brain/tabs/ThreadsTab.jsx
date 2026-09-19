@@ -9,9 +9,8 @@
 // drawer's section (`?threadTab=`), so the dashboard widget, unified search and
 // a shared link all land on the same drawer. Full-bleed: this tab owns its own
 // scroll region like the Daily Log.
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
-import { Check, ExternalLink, Info, Link2, ListTodo, Pin, Plus, Search, Trash2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Info, Link2, ListTodo, Pin, Plus, Search, Trash2, X } from 'lucide-react';
 import useUrlParams from '../../../hooks/useUrlParams';
 import useDrawerTab from '../../../hooks/useDrawerTab';
 import useAsyncAction from '../../../hooks/useAsyncAction';
@@ -22,29 +21,27 @@ import TabPills from '../../ui/TabPills';
 import { FormField } from '../../ui/FormField';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import toast from '../../ui/Toast';
+import ThreadRefChip from '../ThreadRefChip';
 import { THREAD_REF_KIND_IDS, threadRefLabel } from '../../../lib/threadRefKinds.js';
-import { formatCount, formatDateShort } from '../../../utils/formatters';
-
-const TERMINAL = new Set(['done', 'archived']);
-const isTerminal = (status) => TERMINAL.has(status);
-const isOverdue = (thread) =>
-  !isTerminal(thread.status) && typeof thread.dueAt === 'string' && Date.parse(thread.dueAt) < Date.now();
+import {
+  THREAD_STATUSES, THREAD_PRIORITIES, THREAD_ACTIVE_STATUSES,
+  isTerminalThreadStatus, isThreadOverdue, threadNextLine, compareThreads,
+} from '../../../lib/brainThreads.js';
+import { tagsToArray, tagsToInput } from '../../../lib/tribe.js';
+import { formatCount, formatDateShort, localDateKey } from '../../../utils/formatters';
 
 // `?status=` views. `all` is the working set — every non-terminal thread,
 // grouped — and the only view that groups; a single status is one flat list.
+const STATUS_LABELS = { open: 'Open', waiting: 'Waiting', someday: 'Someday', done: 'Done', archived: 'Archived' };
 const STATUS_VIEWS = [
   { id: 'all', label: 'Open loops' },
-  { id: 'open', label: 'Open' },
-  { id: 'waiting', label: 'Waiting' },
-  { id: 'someday', label: 'Someday' },
-  { id: 'done', label: 'Done' },
-  { id: 'archived', label: 'Archived' },
+  ...THREAD_STATUSES.map((id) => ({ id, label: STATUS_LABELS[id] })),
 ];
 const STATUS_IDS = STATUS_VIEWS.map((v) => v.id);
+const WORKING_SET = THREAD_ACTIVE_STATUSES.join(',');
 
 const PRIORITY_TONE = { urgent: 'error', high: 'warning', low: 'note' };
-const PRIORITIES = ['low', 'normal', 'high', 'urgent'];
-const STATUSES = ['open', 'waiting', 'someday', 'done', 'archived'];
+const SEARCH_DEBOUNCE_MS = 300;
 
 const DRAWER_TABS = [
   { id: 'details', label: 'Details', icon: Info },
@@ -58,27 +55,20 @@ const DRAWER_TAB_IDS = DRAWER_TABS.map((t) => t.id);
 // there?". A pinned overdue thread counts as pinned (it is already at the top).
 const GROUPS = [
   { id: 'pinned', label: 'Pinned', pick: (t) => t.pinned },
-  { id: 'overdue', label: 'Overdue', pick: (t) => isOverdue(t) },
-  { id: 'open', label: 'Open', pick: (t) => t.status === 'open' },
-  { id: 'waiting', label: 'Waiting', pick: (t) => t.status === 'waiting' },
-  { id: 'someday', label: 'Someday', pick: (t) => t.status === 'someday' },
+  { id: 'overdue', label: 'Overdue', pick: (t) => isThreadOverdue(t) },
+  ...THREAD_ACTIVE_STATUSES.map((status) => ({ id: status, label: STATUS_LABELS[status], pick: (t) => t.status === status })),
 ];
 
+// Each thread lands in the FIRST group whose predicate matches.
 function groupThreads(threads) {
-  const remaining = [...threads];
-  return GROUPS.map((group) => {
-    const items = remaining.filter(group.pick);
-    for (const item of items) remaining.splice(remaining.indexOf(item), 1);
-    return { ...group, items };
-  }).filter((group) => group.items.length > 0);
+  const items = Object.fromEntries(GROUPS.map((g) => [g.id, []]));
+  for (const thread of threads) items[GROUPS.find((g) => g.pick(thread))?.id]?.push(thread);
+  return GROUPS.map((g) => ({ ...g, items: items[g.id] })).filter((g) => g.items.length > 0);
 }
 
-// The list projection omits `notes`; keep a saved full record's row in step
-// with it without leaking the body into the list state.
-const toRow = ({ notes, resolvedRefs, ...rest }) => rest;
-
 // Form draft ⇄ record. `dueAt` is stored as an ISO timestamp and edited as a
-// local calendar date; tags are edited as one comma-separated line.
+// LOCAL calendar date (`localDateKey` ⇄ local midnight, so the form round-trips
+// east of UTC); tags are edited as one comma-separated line.
 const toDraft = (thread) => ({
   title: thread.title ?? '',
   status: thread.status ?? 'open',
@@ -86,8 +76,8 @@ const toDraft = (thread) => ({
   pinned: Boolean(thread.pinned),
   nextAction: thread.nextAction ?? '',
   waitingOn: thread.waitingOn ?? '',
-  dueAt: typeof thread.dueAt === 'string' ? thread.dueAt.slice(0, 10) : '',
-  tags: Array.isArray(thread.tags) ? thread.tags.join(', ') : '',
+  dueAt: typeof thread.dueAt === 'string' ? localDateKey(new Date(thread.dueAt)) : '',
+  tags: tagsToInput(thread.tags),
   notes: thread.notes ?? '',
 });
 
@@ -100,50 +90,20 @@ const draftToPatch = (draft) => ({
   waitingOn: draft.waitingOn,
   // Explicit null clears a stored date (absent would preserve it).
   dueAt: draft.dueAt ? new Date(`${draft.dueAt}T00:00:00`).toISOString() : null,
-  tags: draft.tags.split(',').map((t) => t.trim()).filter(Boolean),
+  tags: tagsToArray(draft.tags),
   notes: draft.notes,
 });
 
+const loadRecord = (id) => api.getThread(id, { silent: true });
+
 const inputClass = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
-function RefChip({ item, onRemove }) {
-  const label = item.label || item.id;
-  const body = (
-    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-port-border bg-port-bg text-gray-200">
-      <span className="text-gray-500">{threadRefLabel(item.kind)}</span>
-      <span className="max-w-[16rem] truncate" title={label}>{label}</span>
-      {item.url && <ExternalLink size={10} aria-hidden="true" />}
-    </span>
-  );
-  const external = typeof item.url === 'string' && /^https?:/.test(item.url);
-  return (
-    <span className="inline-flex items-center gap-1">
-      {!item.url && body}
-      {item.url && external && <a href={item.url} target="_blank" rel="noreferrer" className="hover:text-white">{body}</a>}
-      {item.url && !external && <Link to={item.url} className="hover:text-white">{body}</Link>}
-      {item.resolved === false && (
-        <Pill tone="warning" size="xs" title={item.reason}>{item.reason === 'unknown-kind' ? 'unknown kind' : 'missing'}</Pill>
-      )}
-      {onRemove && (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="p-0.5 text-gray-500 hover:text-port-error"
-          aria-label={`Remove ${label}`}
-        >
-          <X size={12} />
-        </button>
-      )}
-    </span>
-  );
-}
-
 function ThreadRow({ thread, onOpen, onDone, onTag }) {
-  const overdue = isOverdue(thread);
+  const nextLine = threadNextLine(thread);
   const refCount = Array.isArray(thread.refs) ? thread.refs.length : 0;
   return (
     <li className="flex items-start gap-2 px-3 py-2 rounded-lg border border-port-border bg-port-card hover:border-port-accent/50">
-      {!isTerminal(thread.status) && (
+      {!isTerminalThreadStatus(thread.status) && (
         <button
           type="button"
           onClick={() => onDone(thread)}
@@ -163,15 +123,11 @@ function ThreadRow({ thread, onOpen, onDone, onTag }) {
           )}
           {thread.externalState === 'closed' && <Pill tone="warning" size="xs">source closed</Pill>}
         </div>
-        {(thread.nextAction || thread.waitingOn) && (
-          <div className="text-xs text-gray-400 truncate">
-            {thread.status === 'waiting' && thread.waitingOn ? `Waiting on ${thread.waitingOn}` : `→ ${thread.nextAction || thread.waitingOn}`}
-          </div>
-        )}
+        {nextLine && <div className="text-xs text-gray-400 truncate">{nextLine}</div>}
       </button>
       <div className="shrink-0 flex flex-wrap items-center justify-end gap-1 max-w-[40%]">
         {thread.dueAt && (
-          <Pill tone={overdue ? 'error' : 'muted'} size="xs">{formatDateShort(thread.dueAt)}</Pill>
+          <Pill tone={isThreadOverdue(thread) ? 'error' : 'muted'} size="xs">{formatDateShort(thread.dueAt)}</Pill>
         )}
         {refCount > 0 && <Pill tone="muted" size="xs" icon={Link2}>{formatCount(refCount)}</Pill>}
         {(thread.tags || []).slice(0, 3).map((tag) => (
@@ -199,26 +155,29 @@ export default function ThreadsTab() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [newRef, setNewRef] = useState({ kind: 'url', id: '', label: '' });
 
-  // List — refetched when a URL filter moves. The `all` view asks for every
-  // thread and drops the terminal ones here, so a done thread disappears the
-  // moment it is checked off instead of after the next fetch.
+  // Two-stage search (the Catalog page's pattern): `searchInput` is what the
+  // user is typing; `q` (the URL) drives the fetch and only moves after a
+  // pause, so a keystroke never costs a directory walk on the server.
+  const [searchInput, setSearchInput] = useState(q);
+  useEffect(() => { setSearchInput(q); }, [q]);
+  useEffect(() => {
+    if (searchInput === q) return undefined;
+    const timer = setTimeout(() => updateParams({ q: searchInput }, { replace: true }), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [searchInput, q, updateParams]);
+
+  // The list — one request for exactly the statuses the view shows.
   useEffect(() => {
     let active = true;
     setLoading(true);
-    const filters = { q, tag, ...(statusView === 'all' ? {} : { status: statusView }) };
-    api.listThreads(filters)
-      .then((res) => {
-        if (!active) return;
-        const rows = Array.isArray(res?.threads) ? res.threads : [];
-        setThreads(statusView === 'all' ? rows.filter((t) => !isTerminal(t.status)) : rows);
-      })
+    api.listThreads({ q, tag, status: statusView === 'all' ? WORKING_SET : statusView })
+      .then((res) => { if (active) setThreads(Array.isArray(res?.threads) ? res.threads : []); })
       .catch(() => { if (active) setThreads([]); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [q, tag, statusView]);
 
   // Open record — keyed to the URL so a deep link and a row click share the path.
-  const loadRecord = useCallback((id) => api.getThread(id, { silent: true }), []);
   useEffect(() => {
     if (!selectedId) {
       setRecord(null);
@@ -239,10 +198,12 @@ export default function ThreadsTab() {
         updateParams({ thread: null, threadTab: null }, { replace: true });
       });
     return () => { active = false; };
-  }, [selectedId, loadRecord, updateParams]);
+  }, [selectedId, updateParams]);
 
   const groups = useMemo(
-    () => (statusView === 'all' ? groupThreads(threads) : [{ id: statusView, label: STATUS_VIEWS.find((v) => v.id === statusView).label, items: threads }]),
+    () => (statusView === 'all'
+      ? groupThreads(threads)
+      : [{ id: statusView, label: STATUS_LABELS[statusView], items: threads }]),
     [threads, statusView],
   );
 
@@ -250,14 +211,18 @@ export default function ThreadsTab() {
   const closeDrawer = () => updateParams({ thread: null, threadTab: null }, { replace: true });
   const setView = (id) => updateParams({ status: id === 'all' ? null : id }, { replace: true });
   const setTag = (next) => updateParams({ tag: next === tag ? null : next }, { replace: true });
-  const setQuery = (next) => updateParams({ q: next }, { replace: true });
 
+  // Swap an updated record into the list where the server's order would put
+  // it, or drop it when it no longer belongs to the current view.
   const replaceRow = (thread) => setThreads((prev) => {
-    const row = toRow(thread);
-    const visible = statusView === 'all' ? !isTerminal(row.status) : row.status === statusView;
-    const without = prev.filter((t) => t.id !== row.id);
-    return visible ? [row, ...without].sort(sortRows) : without;
+    const visible = statusView === 'all' ? !isTerminalThreadStatus(thread.status) : thread.status === statusView;
+    const without = prev.filter((t) => t.id !== thread.id);
+    return visible ? [thread, ...without].sort(compareThreads) : without;
   });
+  const adoptRecord = (full) => {
+    setRecord(full);
+    replaceRow(full);
+  };
 
   const [create, creating] = useAsyncAction(async () => {
     const title = newTitle.trim();
@@ -284,9 +249,10 @@ export default function ThreadsTab() {
       return null;
     }
     const updated = await api.updateThread(record.id, draftToPatch(draft), { silent: true });
-    setRecord((prev) => ({ ...prev, ...updated }));
-    setDraft(toDraft(updated));
-    replaceRow(updated);
+    // A PUT answers with the bare record; keep the hydrated refs we already hold.
+    const full = { ...record, ...updated };
+    adoptRecord(full);
+    setDraft(toDraft(full));
     toast.success('Thread saved');
     return updated;
   }, { errorMessage: 'Failed to save thread' });
@@ -299,29 +265,28 @@ export default function ThreadsTab() {
     return true;
   }, { errorMessage: 'Failed to delete thread' });
 
-  // Ref writes return the bare thread; re-read so `resolvedRefs` is hydrated.
+  // Both ref writes answer with the detail shape (hydrated `resolvedRefs`), so
+  // the open record is swapped in place — no second read.
   const [addRef, addingRef] = useAsyncAction(async () => {
     const id = newRef.id.trim();
     if (!id) return null;
     const ref = { kind: newRef.kind, id, ...(newRef.label.trim() ? { label: newRef.label.trim() } : {}) };
-    await api.addThreadRef(record.id, ref, { silent: true });
-    const full = await loadRecord(record.id);
-    setRecord(full);
-    replaceRow(full);
+    adoptRecord(await api.addThreadRef(record.id, ref, { silent: true }));
     setNewRef({ kind: newRef.kind, id: '', label: '' });
-    return full;
+    return true;
   }, { errorMessage: 'Failed to add link' });
 
   const [removeRef] = useAsyncAction(async (item) => {
-    await api.removeThreadRef(record.id, item.kind, item.id, { silent: true });
-    const full = await loadRecord(record.id);
-    setRecord(full);
-    replaceRow(full);
-    return full;
+    adoptRecord(await api.removeThreadRef(record.id, item.kind, item.id, { silent: true }));
+    return true;
   }, { errorMessage: 'Failed to remove link' });
 
   const patchDraft = (patch) => setDraft((prev) => ({ ...prev, ...patch }));
-  const dirty = record && draft && JSON.stringify(draft) !== JSON.stringify(toDraft(record));
+  const baseline = useMemo(() => (record ? toDraft(record) : null), [record]);
+  const dirty = useMemo(
+    () => Boolean(baseline && draft && Object.keys(baseline).some((k) => baseline[k] !== draft[k])),
+    [baseline, draft],
+  );
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -361,8 +326,8 @@ export default function ThreadsTab() {
             <label htmlFor="brain-threads-q" className="sr-only">Search threads</label>
             <input
               id="brain-threads-q"
-              value={q}
-              onChange={(e) => setQuery(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search"
               className={`${inputClass} pl-7 py-1.5`}
             />
@@ -431,12 +396,12 @@ export default function ThreadsTab() {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <FormField label="Status">
                     <select value={draft.status} onChange={(e) => patchDraft({ status: e.target.value })} className={inputClass}>
-                      {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      {THREAD_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                     </select>
                   </FormField>
                   <FormField label="Priority">
                     <select value={draft.priority} onChange={(e) => patchDraft({ priority: e.target.value })} className={inputClass}>
-                      {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                      {THREAD_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
                     </select>
                   </FormField>
                   <FormField label="Due">
@@ -485,7 +450,7 @@ export default function ThreadsTab() {
                 <div className="flex flex-wrap gap-2">
                   {(record.resolvedRefs || []).length === 0 && <p className="text-sm text-gray-500">No links yet.</p>}
                   {(record.resolvedRefs || []).map((item) => (
-                    <RefChip key={`${item.kind}:${item.id}`} item={item} onRemove={() => removeRef(item)} />
+                    <ThreadRefChip key={`${item.kind}:${item.id}`} {...item} onRemove={() => removeRef(item)} />
                   ))}
                 </div>
                 <form
@@ -525,17 +490,4 @@ export default function ThreadsTab() {
       </Drawer>
     </div>
   );
-}
-
-// Client mirror of the server's list order (pinned, soonest due, most
-// recently touched) so a row updated in place lands where a refetch would.
-const dueKey = (t) => { const v = Date.parse(t?.dueAt ?? ''); return Number.isNaN(v) ? Infinity : v; };
-function sortRows(a, b) {
-  if (Boolean(b.pinned) !== Boolean(a.pinned)) return Boolean(b.pinned) - Boolean(a.pinned);
-  const ad = dueKey(a);
-  const bd = dueKey(b);
-  if (ad !== bd) return ad - bd;
-  const touched = Date.parse(b?.updatedAt ?? '') - Date.parse(a?.updatedAt ?? '');
-  if (!Number.isNaN(touched) && touched !== 0) return touched;
-  return String(a.id).localeCompare(String(b.id));
 }

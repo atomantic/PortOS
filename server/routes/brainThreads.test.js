@@ -207,6 +207,9 @@ describe('Brain Threads routes', () => {
 
     const ids = async (qs) => (await request(app).get(`/api/brain/threads${qs}`)).body.threads.map((t) => t.id);
     expect(await ids('?status=open')).toEqual(['a', 'c']);
+    // The working set is one request — a comma list, not the archive filtered client-side.
+    expect(await ids('?status=open,waiting')).toEqual(['a', 'b', 'c']);
+    expect((await request(app).get('/api/brain/threads?status=open,bogus')).status).toBe(400);
     expect(await ids('?tag=ops')).toEqual(['a', 'b']);
     expect(await ids('?pinned=true')).toEqual(['a']);
     expect(await ids('?pinned=false')).toEqual(['b', 'c']);
@@ -279,6 +282,9 @@ describe('Brain Threads routes', () => {
       { kind: 'brain.idea', id: 'idea-1', label: '' },
       { kind: 'github.issue', id: 'https://github.com/o/r/issues/7', label: 'o/r#7' },
     ]);
+    // Same shape as GET /:id, so the client swaps the open record in place
+    // instead of paying a second read for the hydrated refs.
+    expect(Array.isArray(res.body.resolvedRefs)).toBe(true);
   });
 
   it('replaces a same-(kind,id) ref in place instead of duplicating it', async () => {

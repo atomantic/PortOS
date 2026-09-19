@@ -27,8 +27,10 @@ const ROWS = [
   { id: 'late', title: 'Overdue loop', status: 'open', dueAt: PAST, refs: [{ kind: 'url', id: 'https://example.com' }], tags: ['ops'] },
   { id: 'op', title: 'Plain loop', status: 'open', nextAction: 'Call back', dueAt: FAR_FUTURE, refs: [], tags: [] },
   { id: 'wait', title: 'Waiting loop', status: 'waiting', waitingOn: 'Acme Corp', refs: [], tags: [] },
-  { id: 'done', title: 'Finished loop', status: 'done', refs: [], tags: [] },
 ];
+const DONE_ROW = { id: 'done', title: 'Finished loop', status: 'done', refs: [], tags: [] };
+
+const RESOLVED = [{ kind: 'url', id: 'https://example.com', label: 'example', url: 'https://example.com', resolved: true }];
 
 function Location() {
   return <output data-testid="location">{useLocation().search}</output>;
@@ -41,25 +43,21 @@ describe('ThreadsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.listThreads.mockResolvedValue({ threads: ROWS, total: ROWS.length });
-    api.getThread.mockImplementation(async (id) => ({
-      ...ROWS.find((r) => r.id === id),
-      notes: 'body',
-      resolvedRefs: [{ kind: 'url', id: 'https://example.com', label: 'example', url: 'https://example.com', resolved: true }],
-    }));
+    api.getThread.mockImplementation(async (id) => ({ ...ROWS.find((r) => r.id === id), notes: 'body', resolvedRefs: RESOLVED }));
   });
 
-  it('groups the working set (pinned, overdue, open, waiting) and hides finished threads', async () => {
+  it('asks the server for the working set and groups it pinned / overdue / open / waiting', async () => {
     renderTab();
     await screen.findByText('Pinned loop');
     const groupTitles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent.trim());
     expect(groupTitles).toEqual(['Pinned 1', 'Overdue 1', 'Open 1', 'Waiting 1']);
     expect(screen.getByText('Waiting on Acme Corp')).toBeTruthy();
-    expect(screen.queryByText('Finished loop')).toBeNull();
-    expect(api.listThreads).toHaveBeenCalledWith({ q: '', tag: '' });
+    // One request for exactly the non-terminal statuses — never the archive filtered here.
+    expect(api.listThreads).toHaveBeenCalledWith({ q: '', tag: '', status: 'open,waiting,someday' });
   });
 
   it('reads the status, tag and search filters from the URL and sends them to the server', async () => {
-    api.listThreads.mockResolvedValue({ threads: [ROWS[4]], total: 1 });
+    api.listThreads.mockResolvedValue({ threads: [DONE_ROW], total: 1 });
     renderTab('/brain/threads?status=done&tag=ops&q=fin');
     await screen.findByText('Finished loop');
     expect(api.listThreads).toHaveBeenCalledWith({ q: 'fin', tag: 'ops', status: 'done' });
@@ -101,6 +99,35 @@ describe('ThreadsTab', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })); });
     expect(api.createThread).toHaveBeenCalledWith({ title: 'Chase invoice' }, { silent: true });
     expect(screen.getByTestId('location').textContent).toBe('?thread=new');
+  });
+
+  it('debounces the search box into the URL instead of fetching per keystroke', async () => {
+    vi.useFakeTimers();
+    try {
+      renderTab();
+      await act(async () => { await Promise.resolve(); });
+      fireEvent.change(screen.getByLabelText('Search threads'), { target: { value: 'r' } });
+      fireEvent.change(screen.getByLabelText('Search threads'), { target: { value: 're' } });
+      expect(api.listThreads).toHaveBeenCalledTimes(1);
+      await act(async () => { vi.advanceTimersByTime(300); });
+      expect(screen.getByTestId('location').textContent).toBe('?q=re');
+      expect(api.listThreads).toHaveBeenCalledTimes(2);
+      expect(api.listThreads).toHaveBeenLastCalledWith({ q: 're', tag: '', status: 'open,waiting,someday' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('swaps the hydrated record a ref write returns into the drawer without a second read', async () => {
+    api.addThreadRef.mockResolvedValue({ ...ROWS[2], notes: 'body', refs: [{ kind: 'url', id: 'https://example.com/x' }], resolvedRefs: [{ kind: 'url', id: 'https://example.com/x', label: 'added', url: 'https://example.com/x', resolved: true }] });
+    renderTab('/brain/threads?thread=op&threadTab=links');
+    await screen.findByRole('dialog');
+    await screen.findByText('example');
+    fireEvent.change(screen.getByLabelText('Id or URL'), { target: { value: 'https://example.com/x' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add link' })); });
+    expect(api.addThreadRef).toHaveBeenCalledWith('op', { kind: 'url', id: 'https://example.com/x' }, { silent: true });
+    expect(await screen.findByText('added')).toBeTruthy();
+    expect(api.getThread).toHaveBeenCalledTimes(1);
   });
 
   it('is the component the Brain page renders for its threads tab', () => {

@@ -10,6 +10,7 @@ vi.mock('../../../hooks/useAutoRefetch', () => ({
 }));
 vi.mock('../../../services/api', () => ({ listThreads: vi.fn() }));
 
+import * as api from '../../../services/api';
 import OpenThreadsWidget from './OpenThreadsWidget';
 
 const renderWidget = () => render(<MemoryRouter><OpenThreadsWidget /></MemoryRouter>);
@@ -21,15 +22,22 @@ describe('OpenThreadsWidget', () => {
     expect(container.innerHTML).toBe('');
   });
 
-  it('shows only the working set, with the next action, and deep-links each row to its drawer', () => {
+  it('asks the server for the first page of open + waiting threads only', () => {
+    mockUseAutoRefetch.mockReturnValue({ data: null, loading: true });
+    renderWidget();
+    const fetchFn = mockUseAutoRefetch.mock.calls.at(-1)[0];
+    fetchFn();
+    expect(api.listThreads).toHaveBeenCalledWith({ status: 'open,waiting', limit: 6, offset: 0 }, { silent: true });
+  });
+
+  it('shows the next action on each row and deep-links it to its drawer', () => {
     mockUseAutoRefetch.mockReturnValue({
       loading: false,
       data: {
+        total: 2,
         threads: [
           { id: 'a b', title: 'Renew domain', status: 'open', nextAction: 'Log in to registrar', dueAt: '2000-01-01T00:00:00.000Z' },
           { id: 't2', title: 'Vendor quote', status: 'waiting', waitingOn: 'Acme Corp' },
-          { id: 't3', title: 'Someday idea', status: 'someday', nextAction: 'x' },
-          { id: 't4', title: 'Finished', status: 'done' },
         ],
       },
     });
@@ -37,15 +45,13 @@ describe('OpenThreadsWidget', () => {
     expect(screen.getByText('Renew domain').closest('a')).toHaveAttribute('href', '/brain/threads?thread=a%20b');
     expect(screen.getByText('Log in to registrar')).toBeTruthy();
     expect(screen.getByText('Waiting on Acme Corp')).toBeTruthy();
-    expect(screen.queryByText('Someday idea')).toBeNull();
-    expect(screen.queryByText('Finished')).toBeNull();
     expect(screen.getByText('2 open')).toBeTruthy();
   });
 
-  it('caps the list and links the overflow to the tab', () => {
+  it('links the overflow the page did not ship to the tab', () => {
     mockUseAutoRefetch.mockReturnValue({
       loading: false,
-      data: { threads: Array.from({ length: 8 }, (_, i) => ({ id: `t${i}`, title: `Loop ${i}`, status: 'open' })) },
+      data: { total: 8, threads: Array.from({ length: 6 }, (_, i) => ({ id: `t${i}`, title: `Loop ${i}`, status: 'open' })) },
     });
     renderWidget();
     expect(screen.getAllByRole('listitem')).toHaveLength(6);
@@ -53,7 +59,7 @@ describe('OpenThreadsWidget', () => {
   });
 
   it('offers to track one when the list is empty', () => {
-    mockUseAutoRefetch.mockReturnValue({ loading: false, data: { threads: [] } });
+    mockUseAutoRefetch.mockReturnValue({ loading: false, data: { total: 0, threads: [] } });
     renderWidget();
     expect(screen.getByText('Track one').closest('a')).toHaveAttribute('href', '/brain/threads');
   });

@@ -3,6 +3,7 @@ import { partialWithoutDefaults, optionalBooleanMap } from './zodCompat.js';
 import { REPO_INTAKE_KEYS } from './repoIntakeActions.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { canonicalThreadRefKind } from './threadRefKinds.js';
+import { THREAD_STATUSES, THREAD_PRIORITIES } from './brainThreads.js';
 import { MAX_QUALITY } from './spacedRepetition.js';
 
 // Destination enum. `links` is reachable only from the bare-URL capture
@@ -795,12 +796,10 @@ export const songAttachmentUploadSchema = z.object({
 // from, `externalState` what the tracker last said, and `closedAt` is stamped by
 // the route when the status enters a terminal state.
 
-export const threadStatusEnum = z.enum(['open', 'waiting', 'someday', 'done', 'archived']);
-export const threadPriorityEnum = z.enum(['low', 'normal', 'high', 'urgent']);
-
-// Statuses that mean the loop is shut. The route stamps/clears `closedAt` on
-// this set so "when did I finish it" is answerable without scanning history.
-export const THREAD_TERMINAL_STATUSES = Object.freeze(['done', 'archived']);
+// Vocabularies live in the pure leaf (`lib/brainThreads.js`) so the client
+// renders its pickers from the same arrays these enums validate against.
+export const threadStatusEnum = z.enum(THREAD_STATUSES);
+export const threadPriorityEnum = z.enum(THREAD_PRIORITIES);
 
 // A ref's `kind` is validated as a SHAPE, not against THREAD_REF_KIND_IDS. A
 // peer running newer code can sync a thread naming a kind this build has never
@@ -856,7 +855,13 @@ export const threadUpdateSchema = partialWithoutDefaults(threadInputSchema);
 // `isPaginationRequested`/`paginateArray` read them straight off req.query, and
 // coercing them here would make every request look paginated.
 export const threadQuerySchema = z.object({
-  status: threadStatusEnum.optional(),
+  // One status, or a comma list (`?status=open,waiting,someday`) so the working
+  // set is one request rather than the whole archive filtered client-side.
+  // Always an array after parsing.
+  status: z.preprocess(
+    (value) => (typeof value === 'string' ? value.split(',').map((s) => s.trim()).filter(Boolean) : value),
+    z.array(threadStatusEnum).min(1).max(THREAD_STATUSES.length),
+  ).optional(),
   priority: threadPriorityEnum.optional(),
   tag: z.string().trim().min(1).max(50).optional(),
   refKind: threadRefKindValue.optional(),

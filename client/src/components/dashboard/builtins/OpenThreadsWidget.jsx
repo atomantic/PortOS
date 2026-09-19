@@ -2,31 +2,32 @@ import { Link } from 'react-router';
 import { ListTodo, Pin } from 'lucide-react';
 import * as api from '../../../services/api';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { isThreadOverdue, threadNextLine } from '../../../lib/brainThreads.js';
 import { formatCount, formatDateShort } from '../../../utils/formatters';
 
-// The Brain bullet journal's open loops (#7664) — the same working set the
-// Threads tab shows, with the next action on each, so what you are on the hook
-// for is one glance away. A *thread* here is a tracked topic, never a message
-// thread. Rows deep-link to `?thread=<id>`, which opens the record's drawer.
+// The Brain bullet journal's open loops (#7664) with the next action on each,
+// so what you are on the hook for is one glance away. A *thread* here is a
+// tracked topic, never a message thread. Rows deep-link to `?thread=<id>`,
+// which opens the record's drawer on the Threads tab.
 //
+// Deliberately narrower than the tab's working set: `someday` is parked by
+// definition, so the widget asks the server for open + waiting only, and only
+// the first page — `total` carries the count without shipping the rest.
 // Self-fetched (like UpcomingTasksWidget) rather than read off dashboardState:
-// nothing else on the dashboard needs the list, and the server already orders
-// it pinned-first / soonest-due.
+// nothing else on the dashboard needs the list.
 const ROWS = 6;
-const WORKING = new Set(['open', 'waiting']);
-
-const isOverdue = (t) => typeof t.dueAt === 'string' && Date.parse(t.dueAt) < Date.now();
+const WIDGET_STATUSES = 'open,waiting';
 
 export default function OpenThreadsWidget() {
   const { data, loading } = useAutoRefetch(
-    () => api.listThreads({}, { silent: true }),
+    () => api.listThreads({ status: WIDGET_STATUSES, limit: ROWS, offset: 0 }, { silent: true }),
     60_000,
   );
 
   if (loading && !data) return null;
 
-  const open = (Array.isArray(data?.threads) ? data.threads : []).filter((t) => WORKING.has(t.status));
-  const rows = open.slice(0, ROWS);
+  const rows = Array.isArray(data?.threads) ? data.threads : [];
+  const total = Number.isFinite(data?.total) ? data.total : rows.length;
 
   return (
     <div className="@container bg-port-card border border-port-border rounded-xl p-4 h-full">
@@ -35,7 +36,7 @@ export default function OpenThreadsWidget() {
           <ListTodo size={16} className="text-gray-500" aria-hidden="true" />
           <h3 className="text-sm font-semibold text-white">Open Threads</h3>
         </Link>
-        {open.length > 0 && <span className="text-xs text-gray-500">{formatCount(open.length)} open</span>}
+        {total > 0 && <span className="text-xs text-gray-500">{formatCount(total)} open</span>}
       </div>
 
       {rows.length === 0 ? (
@@ -44,31 +45,30 @@ export default function OpenThreadsWidget() {
         </p>
       ) : (
         <ul className="space-y-2">
-          {rows.map((t) => (
-            <li key={t.id}>
-              <Link to={`/brain/threads?thread=${encodeURIComponent(t.id)}`} className="group flex items-start gap-2 text-xs">
-                {t.pinned
-                  ? <Pin size={12} className="shrink-0 mt-0.5 text-port-accent" aria-label="Pinned" />
-                  : <span className="shrink-0 mt-1 w-2 h-2 rounded-full border border-port-border" aria-hidden="true" />}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-gray-300 group-hover:text-white" title={t.title}>{t.title}</span>
-                  {(t.nextAction || t.waitingOn) && (
-                    <span className="block truncate text-gray-500">
-                      {t.status === 'waiting' && t.waitingOn ? `Waiting on ${t.waitingOn}` : t.nextAction || t.waitingOn}
-                    </span>
+          {rows.map((t) => {
+            const nextLine = threadNextLine(t);
+            return (
+              <li key={t.id}>
+                <Link to={`/brain/threads?thread=${encodeURIComponent(t.id)}`} className="group flex items-start gap-2 text-xs">
+                  {t.pinned
+                    ? <Pin size={12} className="shrink-0 mt-0.5 text-port-accent" aria-label="Pinned" />
+                    : <span className="shrink-0 mt-1 w-2 h-2 rounded-full border border-port-border" aria-hidden="true" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-gray-300 group-hover:text-white" title={t.title}>{t.title}</span>
+                    {nextLine && <span className="block truncate text-gray-500">{nextLine}</span>}
+                  </span>
+                  {t.dueAt && (
+                    <span className={`shrink-0 ${isThreadOverdue(t) ? 'text-port-error' : 'text-gray-500'}`}>{formatDateShort(t.dueAt)}</span>
                   )}
-                </span>
-                {t.dueAt && (
-                  <span className={`shrink-0 ${isOverdue(t) ? 'text-port-error' : 'text-gray-500'}`}>{formatDateShort(t.dueAt)}</span>
-                )}
-              </Link>
-            </li>
-          ))}
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       )}
-      {open.length > rows.length && (
+      {total > rows.length && (
         <Link to="/brain/threads" className="block text-xs text-gray-500 hover:text-port-accent mt-2">
-          +{formatCount(open.length - rows.length)} more
+          +{formatCount(total - rows.length)} more
         </Link>
       )}
     </div>

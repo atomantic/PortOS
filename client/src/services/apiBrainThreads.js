@@ -1,4 +1,4 @@
-import { request } from './apiCore.js';
+import { request, queryString } from './apiCore.js';
 
 // Brain Threads API surface — the bullet journal's open loops at
 // /brain/threads (#7664). A *thread* here is one tracked topic or commitment
@@ -15,20 +15,16 @@ import { request } from './apiCore.js';
 // - PUT is a defaults-free partial. `source`, `externalState` and `closedAt`
 //   are server-managed and stripped from a client write — never send them.
 // - POST /:id/refs is idempotent by (kind, id); both ref writes return the
-//   updated thread, usable directly for reactive state.
+//   same detail shape as getThread (with `resolvedRefs`), so the open record
+//   can be swapped in place.
 
 const enc = encodeURIComponent;
 
-// Filters: status, priority, tag, pinned ('true'/'false'), refKind, q. Empty
-// values are dropped so a cleared filter never reaches the server as `?q=`.
-export const listThreads = (filters = {}, options) => {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(filters)) {
-    if (value != null && value !== '') params.set(key, value);
-  }
-  const qs = params.toString();
-  return request(`/brain/threads${qs ? `?${qs}` : ''}`, options);
-};
+// Filters: status (one, or a comma list for the working set), priority, tag,
+// pinned ('true'/'false'), refKind, q — plus `limit`/`offset` to paginate, which
+// switches the response to `{ threads, total, limit, offset }`.
+export const listThreads = (filters = {}, options) =>
+  request(`/brain/threads${queryString(filters)}`, options);
 
 export const getThread = (id, options) => request(`/brain/threads/${enc(id)}`, options);
 
@@ -41,7 +37,7 @@ export const updateThread = (id, patch, options) =>
 export const deleteThread = (id, options) =>
   request(`/brain/threads/${enc(id)}`, { method: 'DELETE', ...options });
 
-// ref: { kind, id, label? } → the updated thread (201).
+// ref: { kind, id, label? } → the updated thread with `resolvedRefs` (201).
 export const addThreadRef = (id, ref, options) =>
   request(`/brain/threads/${enc(id)}/refs`, { method: 'POST', body: JSON.stringify(ref), ...options });
 
