@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react'
 import { Link } from 'react-router';
 import {
   AlertTriangle, Bot, CheckCircle2, ClipboardCheck, ExternalLink, FileSearch, GitBranch, GitMerge,
-  GitPullRequest, Info, Loader2, RefreshCw, Rocket, ScanSearch, Search, ShieldAlert, User
+  GitPullRequest, Info, RefreshCw, Rocket, ScanSearch, Search, ShieldAlert, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
@@ -23,6 +23,7 @@ import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../.
 import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
+import RunActionButton from './RunActionButton';
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
 
@@ -885,19 +886,17 @@ export default function PullRequestsTab({ appId, appName }) {
                         );
                       }
                       return (
-                        <button
+                        <RunActionButton
                           key={kind}
-                          type="button"
                           onClick={() => queueAction(kind, pullRequest)}
                           disabled={actionStatus === 'queuing'}
+                          busy={actionStatus === 'queuing'}
                           title={title(forgeLabel, pullRequest.number, appName)}
-                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 transition-colors"
+                          icon={Icon}
+                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs whitespace-nowrap"
                         >
-                          {actionStatus === 'queuing'
-                            ? <Loader2 size={14} className="animate-spin" />
-                            : <Icon size={14} />}
-                          {actionStatus === 'queuing' ? 'Queuing…' : label}
-                        </button>
+                          {label}
+                        </RunActionButton>
                       );
                     })}
 
