@@ -2324,7 +2324,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/--model gpt-5\.6-sol/);
     });
 
-    it('emits the local-LLM POST instruction when a local-LLM reviewer is configured', () => {
+    it('emits the local-LLM bridge instruction when a local-LLM reviewer is configured', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {
           reviewLoopFollowUp: true,
@@ -2337,12 +2337,14 @@ describe('buildLightContextPrompt', () => {
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta);
-      // The agent gets a copy-pasteable curl pipeline pointing at PortOS's
-      // loopback API — without it the lmstudio/ollama reviewer kinds have no
-      // way to actually run a review.
-      expect(prompt).toMatch(/POST the diff to PortOS's local reviewer endpoint/);
-      expect(prompt).toMatch(/http:\/\/127\.0\.0\.1:5555\/api\/code-review\/local/);
+      // The agent gets a copy-pasteable stdin bridge pipeline — no HTTP route,
+      // no instance-password gate — without it the lmstudio/ollama reviewer
+      // kinds have no way to actually run a review.
+      expect(prompt).toMatch(/Pipe the diff into PortOS's local-review bridge/);
+      expect(prompt).not.toMatch(/\/api\/code-review\/local/);
       expect(prompt).toMatch(/gh pr diff 9 \| jq/);
+      expect(prompt).toMatch(/run-local-code-review\.mjs/);
+      expect(prompt).toMatch(/timeoutMs: 1800000/);
       expect(prompt).toMatch(/jq -er '\.findings \| select\(type == "string" and length > 0\)'/);
       expect(prompt).toMatch(/Never treat an absent or malformed response as clean/);
     });
@@ -3322,7 +3324,7 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
       { verbose: false, localAgentLoopBody: null }
     );
     expect(out).toMatch(/Local reviewer failed:/);
-    expect(out).toMatch(/STATUS=no-verdict[^]*exit 1/);
+    expect(out).toMatch(/exit 1 # Never treat an absent or malformed response as clean/);
   });
 
   it('keeps an inline merge gate closed when the pre-PR required review is unavailable', () => {

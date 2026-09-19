@@ -1,10 +1,12 @@
 /**
- * The review-lifecycle prompt hands CoS agents two copy-pasteable `curl`
- * commands aimed at this install's own API. Those must resolve through
- * `localApiBaseUrl()` rather than a hardcoded origin: on an install that ran
- * `npm run setup:cert`, `:5555` is TLS-only and a plain-HTTP request to it dies
- * at the transport layer, so the local-LLM reviewer reports `cli-error` and the
- * challenge-protocol dispute silently cannot be filed (#5656).
+ * The review-lifecycle prompt hands CoS agents a copy-pasteable `curl` command
+ * aimed at this install's own API for the challenge protocol. That must resolve
+ * through `localApiBaseUrl()` rather than a hardcoded origin: on an install that
+ * ran `npm run setup:cert`, `:5555` is TLS-only and a plain-HTTP request to it
+ * dies at the transport layer, so the challenge-protocol dispute silently cannot
+ * be filed (#5656). The local-LLM reviewer itself goes through the
+ * auth-independent local-review bridge (`server/scripts/run-local-code-review.mjs`)
+ * instead of an HTTP call, so it needs no origin and no credential at all (#7670).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -38,13 +40,12 @@ describe('reviewLifecycle agent-facing API origin', () => {
     process.env = { ...ORIGINAL_ENV };
   });
 
-  it('points both agent curl commands at the loopback HTTP mirror when HTTPS is active', () => {
+  it('points the challenge-protocol curl at the loopback HTTP mirror when HTTPS is active', () => {
     getHttpsEnabledAtBoot.mockReturnValue({ value: true, initialized: true });
 
     const section = buildReviewLoopFollowUpSection(metadata);
 
     expect(section).not.toContain(':5555');
-    expect(section).toContain('http://127.0.0.1:5553/api/code-review/local');
     expect(section).toContain('http://127.0.0.1:5553/api/cos/tasks/task-example/challenge');
   });
 
@@ -53,7 +54,6 @@ describe('reviewLifecycle agent-facing API origin', () => {
 
     const section = buildReviewLoopFollowUpSection(metadata);
 
-    expect(section).toContain('http://127.0.0.1:5555/api/code-review/local');
     expect(section).toContain('http://127.0.0.1:5555/api/cos/tasks/task-example/challenge');
   });
 });
@@ -79,30 +79,28 @@ describe('reviewLifecycle reviewer invocation details', () => {
     expect(section).toContain('Substitute the active reviewer name');
   });
 
-  // Both commands hit `/api/*`, which the optional instance password gates. An
-  // agent holds no browser cookie, so without the injected session token every
-  // review came back `401 AUTH_REQUIRED` and read as a broken reviewer (#7660
-  // follow-on). The whole header is one quoted argument so a token can never be
-  // word-split, and the `:-` default keeps the command valid on an install with
-  // no password set.
-  it('spends the injected loopback session token on both agent curl commands', () => {
+  // The challenge-protocol curl hits `/api/*`, which the optional instance
+  // password gates. An agent holds no browser cookie, so without the injected
+  // session token the dispute came back `401 AUTH_REQUIRED` and read as a
+  // broken protocol (#7660 follow-on). The whole header is one quoted argument
+  // so a token can never be word-split, and the `:-` default keeps the command
+  // valid on an install with no password set.
+  it('spends the injected loopback session token on the challenge-protocol curl', () => {
     const section = buildReviewLoopFollowUpSection(metadata);
     const authHeader = '-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"';
 
-    expect(section).toContain(`/api/code-review/local -H 'Content-Type: application/json' ${authHeader}`);
     expect(section).toContain(`/api/cos/tasks/task-example/challenge -H 'Content-Type: application/json' ${authHeader}`);
   });
 
-  // A 401 is an absent credential, not a reviewer verdict — recording it as one
-  // would block the merge on an outage that does not exist. The bridge runs the
-  // same service over stdin with no gate.
-  it('points a 401 at the auth-independent review bridge instead of a verdict', () => {
+  // #7670: the local-LLM reviewer drives the same auth-independent stdin bridge
+  // the claim prompt already uses — no HTTP route, no 401, no credential.
+  it('pipes the local-LLM reviewer through the stdin bridge, not the HTTP route', () => {
     const section = buildReviewLoopFollowUpSection(metadata);
 
-    expect(section).toContain('An `HTTP 401` is not a review result');
-    // Basename only: the path is built with `join()`, so a Windows checkout
-    // renders it with backslashes.
+    expect(section).not.toContain('/api/code-review/local');
+    expect(section).not.toContain('An `HTTP 401` is not a review result');
     expect(section).toContain('run-local-code-review.mjs');
+    expect(section).toContain('timeoutMs: 1800000');
   });
 
   // `opencode run -m <provider/model>`: rendering `--model` here had agents
