@@ -16,7 +16,7 @@ vi.mock('../../lib/httpsState.js', () => ({
 }));
 
 import { getHttpsEnabledAtBoot } from '../../lib/httpsState.js';
-import { buildReviewLoopFollowUpSection } from './reviewLifecycle.js';
+import { buildReviewLoopFollowUpSection, prepareSandboxedReviewLoopBody } from './reviewLifecycle.js';
 
 const metadata = {
   reviewLoopFollowUp: true,
@@ -113,5 +113,34 @@ describe('reviewLifecycle reviewer invocation details', () => {
     });
     expect(section).toContain('`opencode -m mtplx/qwen38 …`');
     expect(section).toContain('`codex --model gpt-5.6-sol …`');
+  });
+});
+
+describe('public review CLI procedure sanitization', () => {
+  it('keeps a native read-only invocation when the recipe supports it', () => {
+    const body = prepareSandboxedReviewLoopBody(
+      'codex --sandbox danger-full-access -a never exec "$CODEX_APPLY_PROMPT"',
+    );
+
+    expect(body).toContain('codex ');
+    expect(body).toContain('--sandbox read-only review');
+    expect(body).not.toContain('danger-full-access');
+    expect(body).not.toContain('exec');
+  });
+
+  it('falls back to the supported agy procedure without inventing isolation flags', () => {
+    const body = prepareSandboxedReviewLoopBody(
+      'agy --dangerously-skip-permissions --model "$AGY_REVIEW_MODEL" --print-timeout 30m -p "$LOCAL_PROMPT"',
+    );
+
+    expect(body).toContain('agy --model "$AGY_REVIEW_MODEL" --print-timeout 30m --mode plan --sandbox -p "$LOCAL_PROMPT"');
+    expect(body).not.toContain('Reviewer unavailable');
+    expect(body).not.toContain('--dangerously-skip-permissions');
+  });
+
+  it('fails closed when no maintained procedure can be recognized', () => {
+    const body = prepareSandboxedReviewLoopBody('codex --danger-full-access exec "$LOCAL_PROMPT"');
+
+    expect(body).toContain('Reviewer unavailable');
   });
 });

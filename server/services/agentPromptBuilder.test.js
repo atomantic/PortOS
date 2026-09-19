@@ -1239,7 +1239,7 @@ describe('buildLightContextPrompt', () => {
       expect(renderedLocalRecipe).not.toContain('git push origin');
     });
 
-    it('rewrites public-content CLI review recipes into enforced safe modes', () => {
+    it('rewrites public-content CLI review recipes into supported safe procedures', () => {
       const unsafeRecipe = [
         'claude -p "$LOCAL_PROMPT" ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} --dangerously-skip-permissions',
         'codex ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} --sandbox danger-full-access -a never exec "$CODEX_APPLY_PROMPT"',
@@ -1268,7 +1268,9 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toContain(unsafeRecipe.split('\n')[2]);
       expect(prompt).not.toContain(unsafeRecipe.split('\n')[3]);
       expect(prompt).not.toContain(unsafeRecipe.split('\n')[4]);
-      expect(prompt.match(/Reviewer unavailable: public-content review requires an enforced read-only mode/g)).toHaveLength(2);
+      expect(prompt).not.toContain('Reviewer unavailable: public-content review requires an enforced read-only mode');
+      expect(prompt).toContain('--mode plan --sandbox');
+      expect(prompt).toContain('--permission-mode plan --disable-web-search --no-subagents --single');
       expect(prompt).toContain('--sandbox read-only review');
       expect(prompt).toContain('--mode=ask');
       expect(prompt).toContain('Reviewer applies (off)');
