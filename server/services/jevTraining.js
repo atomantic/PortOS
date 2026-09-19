@@ -31,14 +31,22 @@ import { findCachedRepoFiles } from '../lib/hfCache.js';
 import { JEV_MODEL, JEV_REQUIRED_FILES } from '../lib/jev.js';
 import { jevDecisionEmbeddingsDir } from '../lib/jevPaths.js';
 import { SCOPE_ADHERENCE_DECISION_ID } from '../lib/scopeAdherence.js';
-// The trainer runs under the SAME interpreter AND the SAME hardened spawn
-// options the sidecar runs under, resolved as ONE value from the module that
-// owns both. Recomposing the interpreter and the environment here is how the
-// "offline, no provider call" guarantee drifts apart from the process it is
-// supposed to describe.
-import { getJevStatus, jevVenvSpawnTarget } from './jev.js';
-import { buildScopeAdherenceCorpus } from './jevCorpusBuilder.js';
 import { saveCandidateJevHead } from './jevHeads.js';
+
+// Deferred into `runTraining`, not imported at module scope: `./jev.js` carries
+// the whole sidecar lifecycle (the pinned model contract, the venv installer,
+// the HF cache and download stack) and `./jevCorpusBuilder.js` carries the forge
+// reads. An install that never trains a head must not pay for either in its
+// static import closure (`server/lib/importScoping.test.js`), and a training run
+// pays a single dynamic hop against a job measured in minutes. Vitest's mock
+// registry covers dynamic imports, so the suites that double these still do.
+//
+// What the deferral must NOT lose: the trainer runs under the SAME interpreter
+// AND the SAME hardened spawn options the sidecar runs under, resolved as ONE
+// value from the module that owns both. Recomposing either here is how the
+// "offline, no provider call" guarantee drifts from the process it describes.
+const jevLifecycle = () => import('./jev.js');
+const corpusBuilder = () => import('./jevCorpusBuilder.js');
 
 const execFileAsync = promisify(execFile);
 const TRAINER_SCRIPT = join(PATHS.root, 'scripts', 'train_jev_head.py');
@@ -78,6 +86,7 @@ export function trainScopeAdherenceHead({ repoPath = PATHS.root, architecture = 
 }
 
 async function runTraining({ repoPath, architecture }) {
+  const { getJevStatus, jevVenvSpawnTarget } = await jevLifecycle();
   const status = await getJevStatus();
   // The trainer loads the same snapshot through the same venv the sidecar
   // uses. An install that has not finished the scorer install cannot train,
@@ -96,6 +105,7 @@ async function runTraining({ repoPath, architecture }) {
   // no other use for.
   const { resolveForgeForRepo } = await import('./forgeAuth.js');
   const forge = await resolveForgeForRepo(repoPath).catch(() => null);
+  const { buildScopeAdherenceCorpus } = await corpusBuilder();
   const corpus = await buildScopeAdherenceCorpus({ repoPath, env: forge?.env || null });
   if (!corpus.ok) return corpus;
 

@@ -24,7 +24,6 @@ import { describe, it, expect } from 'vitest';
 import { basename } from 'path';
 import { PEER_SUBSCRIBABLE_KINDS } from './peerSyncShared.js';
 import { NON_RECORD_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
-import { mediaLibraryDirs } from './peerMediaLibrarySync.js';
 
 // `jev` alone would miss a kind called `trainedHead`; `head` alone would fire
 // on an unrelated `headshot`. Both, anchored on a word-ish boundary.
@@ -65,12 +64,20 @@ describe('trained jev heads and their corpora never federate (#7689)', () => {
   // The media-library manifest is the OTHER way `data/` bytes reach a peer: it
   // walks whole directories rather than record kinds, so no schema-version or
   // subscription guard above covers it.
-  it('carries no jev directory into the media-library federation walk', () => {
+  //
+  // Imported INSIDE the body, like the dataSync check above: `peerMediaLibrarySync.js`
+  // drags ~400 modules, and this file would otherwise cost the whole server
+  // suite's import budget that much for one assertion (`lib/importScoping.test.js`).
+  // `beeperNeverFederates.test.js` pays it statically because Beeper attachments
+  // really are a media-shaped directory; `data/jev/` is a weights cache that
+  // could never be one, so the edge is not worth the budget.
+  it('carries no jev directory into the media-library federation walk', async () => {
+    const { mediaLibraryDirs } = await import('./peerMediaLibrarySync.js');
     const dirs = mediaLibraryDirs();
     // Non-vacuity pin: image, video, audio, music.
     expect(dirs).toHaveLength(4);
     expect(dirs.filter(namesJevMedia)).toEqual([]);
-  });
+  }, 30000);
 
   // The BACKUP tier, which is the other decision `data/jev/` needed making
   // explicitly. Corpora and cached embeddings are regenerable bulk and are
