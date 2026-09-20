@@ -48,7 +48,7 @@ describe('ProviderReadiness', () => {
 
     expect(screen.getByText('llama.cpp installed · standby')).toBeTruthy();
     expect(screen.getByText(/valid idle state/)).toBeTruthy();
-    expect(screen.getByText('Open the Runtimes page').closest('a').getAttribute('href')).toBe('/models/llms-runtimes');
+    expect(screen.getByText('Open the Model Library page').closest('a').getAttribute('href')).toBe('/models/llms');
     expect(screen.queryByText(/setup incomplete/)).toBeNull();
   });
 
@@ -78,7 +78,7 @@ describe('ProviderReadiness', () => {
 
   it('links to the manage page as an in-app action — never to vendor setup docs', () => {
     renderWithRouter(<ProviderReadiness readiness={readiness()} />);
-    expect(screen.getByText('Open the Runtimes page').closest('a').getAttribute('href')).toBe('/models/llms-runtimes');
+    expect(screen.getByText('Open the Model Library page').closest('a').getAttribute('href')).toBe('/models/llms');
     expect(screen.queryByText(/setup docs/i)).toBeNull();
     expect(screen.queryByRole('link', { name: /llama\.cpp setup docs/i })).toBeNull();
   });
