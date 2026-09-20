@@ -1649,7 +1649,7 @@ export default function VideoGen() {
                   onChange={(e) => handleModelChange(e.target.value)}
                   loading={modelsLoading}
                 />
-                <ModelWorkflowHelp model={currentModel} models={visibleModels} onResolutionChange={handleResolutionChange} />
+                <ModelWorkflowHelp model={currentModel} mode={mode} models={models} onResolutionChange={handleResolutionChange} />
                 {remixModelFallback && (
                   <p className="mt-1 text-[11px] text-port-accent leading-snug" role="status">
                     {remixModelFallback.sourceName} {remixModelFallback.samplerLocked && remixModelFallback.negativePromptUnsupported

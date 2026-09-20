@@ -318,7 +318,8 @@ const { mockInspectModelCache, mockFindCachedRepoFile } = vi.hoisted(() => ({
   // "resident", derived from the same mocked snapshot path the tests assert on.
   mockFindCachedRepoFile: vi.fn(async (_repo, filename) => join('/mock/hf/snap', filename)),
 }));
-vi.mock('../../lib/hfCache.js', () => ({
+vi.mock('../../lib/hfCache.js', async (original) => ({
+  isSafeHfRepoRelativePath: (await original()).isSafeHfRepoRelativePath,
   inspectModelCache: mockInspectModelCache,
   findCachedRepoFile: mockFindCachedRepoFile,
   // Built on the singular mock rather than stubbed independently, mirroring the
@@ -503,6 +504,10 @@ let videoGenEvents;
 
 beforeEach(async () => {
   vi.resetModules();
+  fsPromisesMock.readFile.mockReset().mockImplementation(async (path) => Buffer.from(
+    String(path).endsWith('model.safetensors.index.json')
+      ? JSON.stringify({ weight_map: { example: 'model-00001-of-00001.safetensors' } }) : '',
+  ));
   // Re-import fresh copies so mock reset above applies cleanly
   ({ generateChainedVideo, generateVideo, extractLastFrame, stitchVideos, updateHistoryItemPrompt } = await import('./local.js'));
   ({ videoGenEvents } = await import('./events.js'));
