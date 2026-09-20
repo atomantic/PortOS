@@ -257,17 +257,19 @@ export function buildGoalFidelityIssue({ task, review, fingerprint }) {
 export function buildGoalFidelityFollowUpTask({ task, review, fingerprint, issue = null, falsePositiveBlock = null }) {
   const subject = firstLine(task?.description) || 'a CoS agent task';
   const objective = taskObjective(task) || subject;
-  const header = `[Auto] Reconcile goal-fidelity ${review?.verdict} [${fingerprint}]: ${subject}`;
+  const header = `[Auto] Investigate goal-fidelity ${review?.verdict} [${fingerprint}]: ${subject}`;
   const claim = issue?.url
-    ? `## If the finding is right\nClaim ${issue.number ? `#${issue.number}` : 'the filed issue'} (${issue.url}) and ship the reconciliation through the project's normal claim flow.`
-    : `## If the finding is right\nRe-read the task above against what actually shipped, then reconcile the two. Ship the change through the project's normal PR flow.`;
+    ? `## If the finding is right\nClaim ${issue.number ? `#${issue.number}` : 'the filed issue'} (${issue.url}) and implement the missing work through the project's normal PR flow.`
+    : `## If the finding is right\nImplement the missing work through the project's normal PR flow.`;
   return [
     header,
-    `## What happened\nA goal-fidelity review of the finished run for task \`${task?.id || 'unknown'}\` returned **${review?.verdict}**: the diff does not deliver the stated objective.`,
+    `## Investigation mandate\nThis is a diagnostic follow-up, not a re-run of the original agent task. Independently verify the finding against the original acceptance criteria, the current default-branch code, the finished run's diff, and relevant tests before changing anything. Do not assume the review is correct merely because it named a gap.`,
+    `## What happened\nA goal-fidelity review of the finished run for task \`${task?.id || 'unknown'}\` returned **${review?.verdict}**: the diff was judged not to deliver the stated objective. The finding below is the reason for the investigation, not an instruction to repeat the task.`,
     `## What was asked\n${objective}`,
     `## Named as missing\n${bulletList(review?.missing, '_Nothing specific._')}`,
     `## Named as unrequested\n${bulletList(review?.unrequested, '_Nothing specific._')}`,
     falsePositiveBlock,
+    `## If the original work is already correct\nDo not manufacture a code change or re-run the original task. Report the concrete evidence that the objective was delivered and use the supplied calibration-report instructions to record what the fidelity checker misunderstood, so the checker can be fixed without weakening unrelated safeguards.`,
     claim,
   ].filter(Boolean).join('\n\n');
 }
