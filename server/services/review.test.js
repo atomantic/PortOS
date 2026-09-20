@@ -39,6 +39,7 @@ const {
   getItems,
   getPendingCounts,
   completeItem,
+  reopenItem,
   dismissItem,
   updateItem,
   deleteItem,
@@ -152,6 +153,15 @@ describe('review service', () => {
 
       const updated = await dismissItem('1');
       expect(updated.status).toBe('dismissed');
+    });
+
+    it('reopens a completed personal item', async () => {
+      const items = [{ id: '1', type: 'todo', title: 'Test', status: 'completed', createdAt: '', updatedAt: '' }];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      const updated = await reopenItem('1');
+      expect(updated.status).toBe('pending');
+      expect(atomicWrite).toHaveBeenCalled();
     });
 
     it('rejects generic completion for source-owned obligations', async () => {

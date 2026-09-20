@@ -432,6 +432,7 @@ export default function App() {
               satisfy with their :mode subtab (issue #3249). */}
           <Route path="post/:tab/:subtab/:mode" element={<Post />} />
           <Route path="review" element={<Review />} />
+          <Route path="review/:actionId" element={<Review />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
           {/* :chatKey is only used by the imessage tab; other tabs strip a stray second segment. */}
           <Route path="messages/:tab/:chatKey" element={<Messages />} />

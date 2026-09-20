@@ -62,7 +62,9 @@ vi.mock('../services/api', () => ({
   getReviewCounts: vi.fn(),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {} })),
-  createReviewTodo: vi.fn(() => Promise.resolve({})),
+  createThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action' })),
+  getThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action', status: 'open' })),
+  updateThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'Updated action', status: 'open' })),
   completeReviewItem: vi.fn(() => Promise.resolve({})),
   dismissReviewItem: vi.fn(() => Promise.resolve({})),
   deleteReviewItem: vi.fn(() => Promise.resolve({})),
@@ -77,8 +79,17 @@ vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() }
 }));
 
+const routerState = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  setSearchParams: vi.fn(),
+  actionId: undefined,
+  searchParams: new URLSearchParams(),
+}));
+
 vi.mock('react-router', () => ({
-  useNavigate: () => vi.fn()
+  useNavigate: () => routerState.navigate,
+  useParams: () => ({ actionId: routerState.actionId }),
+  useSearchParams: () => [routerState.searchParams, routerState.setSearchParams]
 }));
 
 import Review from './Review';
@@ -102,6 +113,8 @@ afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
   vi.clearAllMocks();
+  routerState.actionId = undefined;
+  routerState.searchParams = new URLSearchParams();
   api.getReviewCounts.mockResolvedValue(SUMMARY_COUNTS);
 });
 
@@ -236,6 +249,32 @@ describe('Review Hub queue-card triage (#3282)', () => {
   });
 });
 
+describe('Actions commitments workspace (#7739)', () => {
+  it('uses Brain threads for quick-add instead of the legacy todo endpoint', async () => {
+    render(<Review />);
+    const input = await screen.findByLabelText('Quick add action');
+    fireEvent.change(input, { target: { value: 'Track the example follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(api.createThread).toHaveBeenCalledWith(
+      { title: 'Track the example follow-up' },
+      { silent: true },
+    ));
+  });
+
+  it('opens a newly added thread in a view where an open commitment is visible', async () => {
+    routerState.searchParams = new URLSearchParams('view=waiting');
+    render(<Review />);
+    const input = await screen.findByLabelText('Quick add action');
+    fireEvent.change(input, { target: { value: 'Track the example follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(routerState.navigate).toHaveBeenCalledWith(
+      '/review/threads%3Athread-1?view=today',
+    ));
+  });
+});
+
 describe('Review Hub bulk status updates (#6853)', () => {
   it('applies a review:items:bulk-updated event to every affected item in one update', async () => {
     render(<Review />);
@@ -275,8 +314,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
     render(<Review />);
     await waitFor(() => expect(screen.getAllByText(ITEM.title).length).toBeGreaterThan(0));
 
-    const handler = [...socket.on.mock.calls]
-      .reverse()
+    const handler = socket.on.mock.calls
       .find(([name]) => name === 'review:item:updated')?.[1];
     expect(handler).toBeTypeOf('function');
 
@@ -297,8 +335,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
 
     await waitFor(() => expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument());
 
-    const handler = [...socket.on.mock.calls]
-      .reverse()
+    const handler = socket.on.mock.calls
       .find(([name]) => name === 'review:item:created')?.[1];
     expect(handler).toBeTypeOf('function');
 

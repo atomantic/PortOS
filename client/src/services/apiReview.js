@@ -13,8 +13,8 @@ export const getReviewBriefing = () => request('/review/briefing');
 // Cross-domain live queue (source-owned obligations plus domain projections).
 // Keep transport options (silent, headers, abort signal) separate from the
 // pagination query so callers can continue using the old options-only shape.
-export const getReviewQueue = ({ limit, cursor, ...options } = {}) => {
-  const query = queryString({ limit, cursor });
+export const getReviewQueue = ({ view, limit, cursor, ...options } = {}) => {
+  const query = queryString({ view, limit, cursor });
   return request(`/review/queue${query}`, options);
 };
 // Resolve a single queue row in place (id is `<source>:<rawId>`). Source-owned
@@ -33,13 +33,10 @@ export const promoteAskReviewQueueItem = (id, target, { goalId, ...options } = {
   body: JSON.stringify({ id, target, ...(goalId ? { goalId } : {}) }),
   ...options
 });
-export const createReviewTodo = (data) => request('/review/todo', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
-export const updateReviewItem = (id, data) => request(`/review/items/${id}`, {
+export const updateReviewItem = (id, data, options = {}) => request(`/review/items/${id}`, {
   method: 'PATCH',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const completeReviewItem = (id) => request(`/review/items/${id}/complete`, { method: 'POST' });
 export const dismissReviewItem = (id) => request(`/review/items/${id}/dismiss`, { method: 'POST' });

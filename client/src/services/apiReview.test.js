@@ -24,6 +24,14 @@ beforeEach(async () => {
 });
 
 describe('getReviewQueue', () => {
+  it('encodes the Actions view with pagination while preserving request options', async () => {
+    request.mockResolvedValue({ items: [] });
+
+    await getReviewQueue({ view: 'today', limit: 25, cursor: 'snapshot/page', silent: true });
+
+    expect(request).toHaveBeenCalledWith('/review/queue?view=today&limit=25&cursor=snapshot%2Fpage', { silent: true });
+  });
+
   it('encodes pagination in the query while preserving request options', async () => {
     request.mockResolvedValue({ items: [] });
 

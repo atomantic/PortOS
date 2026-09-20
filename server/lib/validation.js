@@ -1777,6 +1777,7 @@ export const agentActivityCleanupSchema = z.object({
 export const reviewQueueQuerySchema = z.object({
   limit: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(100).optional()),
   cursor: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(4096).optional()),
+  view: z.preprocess(emptyToUndefined, z.enum(['today', 'all', 'waiting', 'someday', 'history']).optional()),
 }).strict();
 
 // =============================================================================
