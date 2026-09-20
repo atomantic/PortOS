@@ -8,10 +8,12 @@
  * persisted here — so the queue always reflects live state.
  *
  * Each producer is gathered independently and defensively: a single producer
- * throwing (or its data file being absent) degrades that one source to empty
- * rather than sinking the whole queue. Every row is normalized to:
+ * throwing (or its data file being absent) degrades that one source to an
+ * unavailable projection rather than sinking the whole queue. Every row keeps
+ * the legacy fields and adds a canonical action projection:
  *
- *   { id, source, sourceLabel, title, summary, timestamp, severity, drillTo }
+ *   { id, source, sourceRef, actionKind, title, reason, nextAction,
+ *     severity, priority, dueAt, revision, occurrence, operations }
  *
  * `drillTo` is a client route the UI deep-links to so "drill-down" works without
  * the queue needing to know how to render each domain.
@@ -24,6 +26,7 @@
  * retries by re-running with settings) stay drill-down + session-dismiss only.
  */
 
+import { randomUUID } from 'node:crypto';
 import * as brain from './brain.js';
 import * as askConversations from './askConversations.js';
 import * as cosTaskStore from './cosTaskStore.js';
@@ -35,10 +38,42 @@ import * as stackerNews from './stackerNews.js';
 import * as x from './x.js';
 import { promoteLatestAssistantTurn } from './askPromote.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { safeJSONParse } from '../lib/fileUtils.js';
 
-// Per-source cap so one noisy producer can't flood the queue; the UI shows a
-// "+N more in <domain>" affordance via the per-source `total` vs `items.length`.
-const PER_SOURCE_LIMIT = 25;
+// Producers are read with a bounded upper limit. The queue reports a lower
+// bound, rather than pretending that a full count is known, when a producer
+// fills this window. Pagination then slices the normalized snapshot, not a
+// fresh set of source reads, so adjacent pages cannot reorder underneath a
+// caller.
+export const REVIEW_QUEUE_SOURCE_READ_LIMIT = 100;
+export const REVIEW_QUEUE_MAX_PAGE_SIZE = 100;
+const REVIEW_QUEUE_SOURCE_PROBE_LIMIT = REVIEW_QUEUE_SOURCE_READ_LIMIT + 1;
+const REVIEW_QUEUE_SNAPSHOT_TTL_MS = 30_000;
+const REVIEW_QUEUE_MAX_SNAPSHOTS = 100;
+
+const ACTION_KINDS = Object.freeze({
+  brain: 'brain.classify',
+  ask: 'ask.promote',
+  cos: 'cos.approve',
+  drafts: 'message.approve',
+  stacker: 'stacker.review',
+  x: 'x.review',
+  health: 'health.investigate',
+  backup: 'backup.retry',
+});
+
+const OPERATION_LABELS = Object.freeze({
+  brain: 'Done',
+  ask: 'Promote',
+  cos: 'Approve',
+  drafts: 'Approve',
+  stacker: 'Review',
+  x: 'Review',
+  health: 'Investigate',
+  backup: 'Retry',
+});
+
+const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
 
 // generateAlerts() runs a full system-health sweep (CPU/disk/PM2/goals/usage),
 // so cache it briefly — the Review Hub can be polled, and a stale-by-seconds
@@ -94,10 +129,10 @@ const PRODUCERS = [
     async resolve(id) {
       return brain.markInboxDone(id);
     },
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Inbox entries the auto-classifier couldn't place — they need a human
       // to pick a destination.
-      return brain.getInboxLog({ status: 'needs_review', limit: PER_SOURCE_LIMIT * 2 });
+      return brain.getInboxLog({ status: 'needs_review', limit });
     },
     map(entry) {
       const text = (entry.capturedText || '').trim();
@@ -128,15 +163,18 @@ const PRODUCERS = [
     // inline via `promoteTargets` + `goalOptions`: brain/task in one click and
     // goal via a picker (see map() below). Drilling into /ask still works for a
     // per-turn promote the queue's latest-turn shortcut doesn't cover.
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Conversations with a promotable assistant answer that haven't been
       // promoted to brain/task/goal. Gate on assistantTurnCount, NOT turnCount:
       // an Ask conversation whose stream errored (or whose client disconnected)
       // before the assistant turn persisted still has the user turn (turnCount
       // > 0), but promoteLatestAssistantTurn would fail with NO_ASSISTANT_TURN —
       // so advertising a promote action on it would be a dead-end button.
-      const convs = await askConversations.listConversations({ limit: PER_SOURCE_LIMIT * 2 });
-      return convs.filter(c => !c.promoted && (c.assistantTurnCount || 0) > 0);
+      const convs = await askConversations.listConversations({ limit });
+      return {
+        items: (Array.isArray(convs) ? convs : []).filter(c => !c.promoted && (c.assistantTurnCount || 0) > 0),
+        truncated: Array.isArray(convs) && convs.length >= limit,
+      };
     },
     // Inline promote targets the UI can offer without a per-turn drill-down.
     // The queue picks the conversation's latest assistant turn server-side, so
@@ -175,10 +213,10 @@ const PRODUCERS = [
       if (result && result.error) throw new ServerError(result.error, { status: 409, code: 'CONFLICT' });
       return result;
     },
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Internal CoS tasks parked awaiting the user's approval before they run.
       const { awaitingApproval = [] } = await cosTaskStore.getCosTasks();
-      return awaitingApproval;
+      return (Array.isArray(awaitingApproval) ? awaitingApproval : []).slice(0, limit);
     },
     map(task) {
       // Surface the task priority as a triage badge. Only HIGH/MEDIUM/LOW are
@@ -205,13 +243,14 @@ const PRODUCERS = [
     async resolve(id) {
       return messageDrafts.approveDraft(id);
     },
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Drafts the user (or an AI) prepared that haven't been sent yet. Today
       // messageDrafts only emits 'draft' (vs 'approved'); 'pending_review' is
       // matched ahead of the producer adding it. The multi-status filter is
       // pushed down to listDrafts so the whole store isn't loaded + filtered
       // in memory on every Review Hub load.
-      return messageDrafts.listDrafts({ status: ['draft', 'pending_review'] });
+      const drafts = await messageDrafts.listDrafts({ status: ['draft', 'pending_review'] });
+      return (Array.isArray(drafts) ? drafts : []).slice(0, limit);
     },
     map(draft) {
       // Show who/where the draft is headed so the user can triage without
@@ -243,8 +282,8 @@ const PRODUCERS = [
     source: 'stacker',
     label: 'Stacker News approvals',
     drillTo: '/stacker-news',
-    async gather() {
-      return stackerNews.listPendingReviewActions({ limit: PER_SOURCE_LIMIT * 2 });
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      return stackerNews.listPendingReviewActions({ limit });
     },
     map(action) {
       return {
@@ -262,8 +301,8 @@ const PRODUCERS = [
     source: 'x',
     label: 'X drafts',
     drillTo: '/x',
-    async gather() {
-      return x.listPendingReviewActions({ limit: PER_SOURCE_LIMIT * 2 });
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      return x.listPendingReviewActions({ limit });
     },
     map(draft) {
       return {
@@ -281,7 +320,7 @@ const PRODUCERS = [
     source: 'health',
     label: 'Health anomalies',
     drillTo: '/system-resources/overview',
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // System/health alerts; only surface the ones worth interrupting for.
       const { alerts = [] } = await getAlertsCached();
       const byId = new Map();
@@ -297,7 +336,7 @@ const PRODUCERS = [
           byId.set(alert.id, alert);
         }
       }
-      return [...byId.values()];
+      return [...byId.values()].slice(0, limit);
     },
     // The collector owns semantic identity; the queue only namespaces it.
     map(alert) {
@@ -323,14 +362,14 @@ const PRODUCERS = [
     source: 'backup',
     label: 'Failed backups',
     drillTo: '/settings/backup',
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // A backup needing acknowledgement is either a full failure (status
       // 'error') or a degraded run (status 'degraded' — file rsync succeeded but
       // the DB dump failed; it also carries an `error` string). Both warrant a
       // queue item, but they map to different severities below.
       const state = await backup.getState();
       const needsAttention = state && (state.status === 'error' || state.status === 'degraded' || state.error);
-      return needsAttention ? [state] : [];
+      return needsAttention ? [state].slice(0, limit) : [];
     },
     map(state) {
       // Degraded = files saved, DB dump failed → a warning, not a full failure.
@@ -360,26 +399,144 @@ const SEVERITY_ORDER = { critical: 0, high: 1, normal: 2 };
  * `goal` only when goals exist), so the map result is spread AFTER the
  * producer-level default.
  */
+const canonicalPriority = (value) =>
+  typeof value === 'string' && Object.hasOwn(PRIORITY_ORDER, value) ? value : null;
+
+const firstText = (...values) => values.find((value) => typeof value === 'string' && value.trim())?.trim() || null;
+
+const isCanonicalScalar = (value) => typeof value === 'string'
+  || (typeof value === 'number' && Number.isFinite(value));
+
+const firstScalar = (...values) => values.find(isCanonicalScalar) ?? null;
+
+function semanticOperations(producer, mapped) {
+  const operationId = producer.source === 'ask'
+    ? 'promote'
+    : producer.action && producer.resolve
+      ? 'resolve'
+      : producer.source === 'health'
+        ? 'investigate'
+        : producer.source === 'backup'
+          ? 'retry'
+          : 'review';
+  const targets = Array.isArray(mapped.promoteTargets) ? mapped.promoteTargets : null;
+  return [{
+    id: operationId,
+    label: OPERATION_LABELS[producer.source],
+    available: true,
+    ...(targets ? { targets } : {}),
+  }];
+}
+
+function normalizeQueueItem(producer, raw, mapped) {
+  const prefix = `${producer.source}:`;
+  const sourceRef = firstText(
+    raw?.id == null ? null : String(raw.id),
+    typeof mapped.id === 'string' && mapped.id.startsWith(prefix) ? mapped.id.slice(prefix.length) : null,
+  );
+  const priority = canonicalPriority(raw?.priority);
+  const required = typeof raw?.required === 'boolean'
+    ? raw.required
+    : !(raw?.recommendation === true || raw?.isRecommendation === true || raw?.optional === true);
+  const dueAt = firstText(raw?.dueAt, raw?.due, raw?.deadline, raw?.scheduledFor);
+  const revision = firstScalar(raw?.revision, raw?.version, raw?.updatedAt, raw?.updated_at, raw?.capturedAt, raw?.createdAt);
+  const occurrence = firstScalar(raw?.occurrence, raw?.occurrenceId);
+  const operations = semanticOperations(producer, mapped);
+
+  return {
+    ...mapped,
+    sourceRef,
+    actionKind: ACTION_KINDS[producer.source],
+    reason: firstText(raw?.reason, mapped.summary, mapped.title),
+    nextAction: firstText(raw?.nextAction, mapped.action, mapped.promoteTargets?.length ? 'Promote' : null, OPERATION_LABELS[producer.source]),
+    priority,
+    dueAt,
+    revision,
+    occurrence,
+    required,
+    isRecommendation: !required,
+    operations,
+    availability: 'available',
+    available: true,
+  };
+}
+
+/**
+ * Gather one producer into normalized rows. A producer may return either an
+ * array or `{ items, truncated }` when it filtered a bounded upstream read.
+ * Totals are nullable whenever the read filled its bound: the collected rows
+ * are a lower bound, not evidence that the source is exhausted.
+ */
 async function gatherProducer(producer, ctx = {}) {
-  const raw = await producer.gather();
-  const list = Array.isArray(raw) ? raw : [];
-  const items = list.slice(0, PER_SOURCE_LIMIT).map((item, index) => ({
-    source: producer.source,
-    sourceLabel: producer.label,
-    // Producer-level default promote targets — the row's map() may override
-    // this (Ask adds `goal` + `goalOptions` when active goals exist).
-    ...(Array.isArray(producer.promoteTargets) && producer.promoteTargets.length
-      ? { promoteTargets: producer.promoteTargets }
-      : {}),
-    ...producer.map(item, index, ctx),
-    // Inline-action verb when the producer declares one resolve primitive; the
-    // UI shows an accept/promote button only for rows that carry it.
-    ...(producer.action && producer.resolve ? { action: producer.action } : {})
-  }));
-  return { items, total: list.length };
+  const gathered = await producer.gather(REVIEW_QUEUE_SOURCE_PROBE_LIMIT);
+  const descriptor = Array.isArray(gathered) ? { items: gathered } : gathered;
+  const rawItems = Array.isArray(descriptor?.items) ? descriptor.items : [];
+  const truncated = descriptor?.truncated === true || rawItems.length > REVIEW_QUEUE_SOURCE_READ_LIMIT;
+  const list = rawItems.slice(0, REVIEW_QUEUE_SOURCE_READ_LIMIT);
+  const items = list.map((item, index) => {
+    const mapped = {
+      source: producer.source,
+      sourceLabel: producer.label,
+      ...(Array.isArray(producer.promoteTargets) && producer.promoteTargets.length
+        ? { promoteTargets: producer.promoteTargets }
+        : {}),
+      ...producer.map(item, index, ctx),
+      ...(producer.action && producer.resolve ? { action: producer.action } : {})
+    };
+    return normalizeQueueItem(producer, item, mapped);
+  });
+  return {
+    items,
+    total: truncated ? null : list.length,
+    lowerBound: list.length,
+    truncation: truncated,
+  };
 }
 
 const PRODUCERS_BY_SOURCE = Object.fromEntries(PRODUCERS.map(p => [p.source, p]));
+
+const queueSnapshots = new Map();
+
+const stableQueryValue = (value) => {
+  if (Array.isArray(value)) return value.map(stableQueryValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, child]) => [key, stableQueryValue(child)]));
+  }
+  return value;
+};
+
+const queryKeyFor = (query = {}) => JSON.stringify(stableQueryValue(query));
+
+const invalidCursor = (message = 'Invalid review queue cursor') => {
+  throw new ServerError(message, { status: 400, code: 'INVALID_CURSOR' });
+};
+
+function encodeQueueCursor(snapshotId, offset) {
+  return Buffer.from(JSON.stringify({ v: 1, snapshotId, offset }), 'utf8').toString('base64url');
+}
+
+function decodeQueueCursor(cursor) {
+  const decoded = Buffer.from(String(cursor), 'base64url').toString('utf8');
+  const payload = safeJSONParse(decoded, null, { allowArray: false });
+  if (!payload || payload.v !== 1 || typeof payload.snapshotId !== 'string' || !payload.snapshotId
+    || !Number.isSafeInteger(payload.offset) || payload.offset < 0) {
+    invalidCursor();
+  }
+  return payload;
+}
+
+function pruneQueueSnapshots(now = Date.now()) {
+  for (const [id, snapshot] of queueSnapshots) {
+    if (snapshot.expiresAt <= now) queueSnapshots.delete(id);
+  }
+}
+
+// Test seam: snapshots are intentionally process-local and short-lived.
+export function __resetQueueSnapshots() {
+  queueSnapshots.clear();
+}
 
 /**
  * Accept/promote a single queue row in place. `queueItemId` is the row's
@@ -442,13 +599,56 @@ export async function promoteAskQueueItem(queueItemId, target, goalId) {
   return { source, id: queueItemId, promoted: true, target: result.target, ref: result.ref };
 }
 
-/**
- * Build the cross-domain review queue. Returns the normalized item list (sorted
- * by severity then recency), aggregate `counts`, and a `sources` map with
- * per-source `total` (pre-cap) + `error` so the UI can show "+N more" and flag
- * a source that failed to load.
- */
-export async function buildQueue() {
+const validDateMs = (value) => {
+  const parsed = Date.parse(value || '');
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+function compareQueueItems(a, b, now = Date.now()) {
+  const required = Number(Boolean(b.required)) - Number(Boolean(a.required));
+  if (required !== 0) return required;
+
+  const severity = (SEVERITY_ORDER[a.severity] ?? 2) - (SEVERITY_ORDER[b.severity] ?? 2);
+  if (severity !== 0) return severity;
+
+  const dueA = validDateMs(a.dueAt);
+  const dueB = validDateMs(b.dueAt);
+  const dueBucket = (due) => due === null ? 2 : due < now ? 0 : 1;
+  const dueClass = dueBucket(dueA) - dueBucket(dueB);
+  if (dueClass !== 0) return dueClass;
+  if (dueA !== null && dueB !== null && dueA !== dueB) return dueA - dueB;
+
+  const priority = (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3);
+  if (priority !== 0) return priority;
+
+  return String(a.id || '').localeCompare(String(b.id || ''));
+}
+
+function deduplicateItems(items) {
+  const byId = new Map();
+  for (const item of items) {
+    const previous = byId.get(item.id);
+    if (!previous || compareQueueItems(item, previous) < 0) byId.set(item.id, item);
+  }
+  return [...byId.values()];
+}
+
+function queueCounts(items) {
+  const counts = { total: items.length, critical: 0, high: 0 };
+  for (const item of items) {
+    if (item.severity === 'critical') counts.critical++;
+    else if (item.severity === 'high') counts.high++;
+  }
+  return counts;
+}
+
+function sourceShownCounts(items) {
+  const shown = {};
+  for (const item of items) shown[item.source] = (shown[item.source] || 0) + 1;
+  return shown;
+}
+
+async function gatherFullQueue() {
   // Fetch active goals once (not per Ask row) so the goal picker on Ask rows
   // has targets. A failure here degrades to no goal targets, not a sunk queue.
   const goalOptions = await getActiveGoalOptions();
@@ -456,36 +656,149 @@ export async function buildQueue() {
 
   const results = await Promise.all(PRODUCERS.map(async (producer) => {
     return gatherProducer(producer, ctx)
-      .then(r => ({ source: producer.source, label: producer.label, ...r, error: null }))
-      .catch(err => {
-        console.error(`❌ Review queue: ${producer.source} source failed: ${err.message}`);
-        return { source: producer.source, label: producer.label, items: [], total: 0, error: err.message };
+      .then((result) => ({ source: producer.source, label: producer.label, ...result, error: null }))
+      .catch((err) => {
+        const message = String(err?.message || err || 'Source read failed').slice(0, 300);
+        console.error(`❌ Review queue: ${producer.source} source failed: ${message}`);
+        return {
+          source: producer.source,
+          label: producer.label,
+          items: [],
+          total: null,
+          lowerBound: 0,
+          truncation: false,
+          error: message,
+        };
       });
   }));
 
-  const items = results.flatMap(r => r.items);
-
-  items.sort((a, b) => {
-    const sev = (SEVERITY_ORDER[a.severity] ?? 2) - (SEVERITY_ORDER[b.severity] ?? 2);
-    if (sev !== 0) return sev;
-    return new Date(b.timestamp || 0) - new Date(a.timestamp || 0);
-  });
-
+  const items = deduplicateItems(results.flatMap((result) => result.items));
+  items.sort((a, b) => compareQueueItems(a, b));
+  const shownCounts = sourceShownCounts(items);
   const sources = {};
-  for (const r of results) {
-    sources[r.source] = { label: r.label, total: r.total, shown: r.items.length, error: r.error };
+  const totalsBySource = {};
+
+  for (const result of results) {
+    const shown = shownCounts[result.source] || 0;
+    const knownTotal = result.error === null && !result.truncation && Number.isSafeInteger(result.total)
+      ? shown
+      : null;
+    totalsBySource[result.source] = knownTotal;
+    sources[result.source] = {
+      label: result.label,
+      total: knownTotal,
+      shown,
+      error: result.error,
+      availability: result.error ? 'unavailable' : 'available',
+      available: !result.error,
+      truncation: Boolean(result.truncation),
+      lowerBound: result.error ? 0 : shown,
+    };
   }
 
-  const counts = { total: items.length, critical: 0, high: 0 };
-  for (const i of items) {
-    if (i.severity === 'critical') counts.critical++;
-    else if (i.severity === 'high') counts.high++;
-  }
-
+  const partial = results.some((result) => result.error || result.truncation);
   return {
     items,
-    counts,
+    total: partial ? null : items.length,
+    totalsBySource,
     sources,
-    generatedAt: new Date().toISOString()
+    nextCursor: null,
+    partial,
+    counts: queueCounts(items),
+    generatedAt: new Date().toISOString(),
   };
+}
+
+function pageSources(sources, pageItems) {
+  const shown = sourceShownCounts(pageItems);
+  return Object.fromEntries(Object.entries(sources).map(([source, descriptor]) => [source, {
+    ...descriptor,
+    shown: shown[source] || 0,
+  }]));
+}
+
+function pageFromSnapshot(snapshot, offset) {
+  if (offset > snapshot.items.length) invalidCursor('Review queue cursor offset is outside the snapshot');
+  const items = snapshot.items.slice(offset, offset + snapshot.pageSize);
+  const nextOffset = offset + items.length;
+  return {
+    items,
+    total: snapshot.total,
+    totalsBySource: snapshot.totalsBySource,
+    sources: pageSources(snapshot.sources, items),
+    nextCursor: nextOffset < snapshot.items.length ? encodeQueueCursor(snapshot.id, nextOffset) : null,
+    partial: snapshot.partial,
+    counts: snapshot.counts,
+    generatedAt: snapshot.generatedAt,
+  };
+}
+
+function validatePageSize(limit) {
+  if (limit === undefined || limit === null) return null;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > REVIEW_QUEUE_MAX_PAGE_SIZE) {
+    throw new ServerError(`Review queue limit must be an integer from 1 to ${REVIEW_QUEUE_MAX_PAGE_SIZE}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+  return limit;
+}
+
+function saveQueueSnapshot(queue, queryKey, pageSize) {
+  const now = Date.now();
+  pruneQueueSnapshots(now);
+  while (queueSnapshots.size >= REVIEW_QUEUE_MAX_SNAPSHOTS) {
+    queueSnapshots.delete(queueSnapshots.keys().next().value);
+  }
+  const id = randomUUID();
+  queueSnapshots.set(id, {
+    id,
+    ...queue,
+    pageSize,
+    queryKey,
+    expiresAt: now + REVIEW_QUEUE_SNAPSHOT_TTL_MS,
+  });
+  return queueSnapshots.get(id);
+}
+
+/**
+ * Build the cross-domain review queue. A request without pagination parameters
+ * retains the original full-list response. Passing `limit` opts into a
+ * short-lived process-local snapshot with an opaque offset cursor.
+ */
+export async function buildQueue({ limit, cursor, query = {} } = {}) {
+  const requestedLimit = validatePageSize(limit);
+  const queryKey = queryKeyFor(query);
+
+  if (cursor !== undefined && cursor !== null) {
+    const payload = decodeQueueCursor(cursor);
+    pruneQueueSnapshots();
+    const snapshot = queueSnapshots.get(payload.snapshotId);
+    if (!snapshot || snapshot.expiresAt <= Date.now()) {
+      queueSnapshots.delete(payload.snapshotId);
+      throw new ServerError('Review queue snapshot expired; restart pagination', {
+        status: 409,
+        code: 'CURSOR_EXPIRED',
+      });
+    }
+    if (snapshot.queryKey !== queryKey) {
+      throw new ServerError('Review queue query changed; restart pagination', {
+        status: 400,
+        code: 'CURSOR_QUERY_MISMATCH',
+      });
+    }
+    if (requestedLimit !== null && requestedLimit !== snapshot.pageSize) {
+      throw new ServerError('Review queue page size changed; restart pagination', {
+        status: 400,
+        code: 'CURSOR_QUERY_MISMATCH',
+      });
+    }
+    return pageFromSnapshot(snapshot, payload.offset);
+  }
+
+  const queue = await gatherFullQueue();
+  if (requestedLimit === null) return queue;
+
+  const snapshot = saveQueueSnapshot(queue, queryKey, requestedLimit);
+  return pageFromSnapshot(snapshot, 0);
 }

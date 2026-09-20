@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock every producer service the aggregator pulls from, so the test exercises
-// only the normalization / sort / cap / degrade-on-failure logic.
+// only the normalization / sort / bounded-read / snapshot / degrade-on-failure logic.
 const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
 const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn() };
@@ -29,7 +29,14 @@ vi.mock('./askPromote.js', () => askPromote);
 vi.mock('./stackerNews.js', () => stackerNews);
 vi.mock('./x.js', () => x);
 
-const { buildQueue, resolveQueueItem, promoteAskQueueItem, __resetAlertsCache } = await import('./reviewQueue.js');
+const {
+  buildQueue,
+  resolveQueueItem,
+  promoteAskQueueItem,
+  __resetAlertsCache,
+  __resetQueueSnapshots,
+  REVIEW_QUEUE_SOURCE_READ_LIMIT,
+} = await import('./reviewQueue.js');
 
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
@@ -51,6 +58,12 @@ describe('reviewQueue.buildQueue', () => {
     // The alerts sweep is cached with a TTL; clear it so each case sees its
     // own generateAlerts mock rather than a prior case's cached result.
     __resetAlertsCache();
+    __resetQueueSnapshots();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    __resetQueueSnapshots();
   });
 
   it('returns an empty queue when nothing needs attention', async () => {
@@ -70,7 +83,20 @@ describe('reviewQueue.buildQueue', () => {
       sourceLabel: 'Brain inbox',
       title: 'Inbox item needs classification',
       summary: 'classify me',
-      drillTo: '/brain/inbox'
+      drillTo: '/brain/inbox',
+      sourceRef: 'b1',
+      actionKind: 'brain.classify',
+      reason: 'classify me',
+      nextAction: 'Done',
+      priority: null,
+      dueAt: null,
+      revision: '2026-06-03T10:00:00.000Z',
+      occurrence: null,
+      required: true,
+      isRecommendation: false,
+      operations: [{ id: 'resolve', label: 'Done', available: true }],
+      availability: 'available',
+      available: true,
     });
   });
 
@@ -200,13 +226,33 @@ describe('reviewQueue.buildQueue', () => {
     expect(queue.items.map(i => i.id)).toEqual(['brain:b1']);
   });
 
-  it('sorts by severity then recency', async () => {
+  it('sorts required work by severity, then due time, priority, and stable ID', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'normal', capturedAt: '2026-06-03T12:00:00.000Z' }]);
     proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps', timestamp: '2026-06-03T01:00:00.000Z' }] });
     const queue = await buildQueue();
-    // critical alert sorts ahead of the (newer) normal brain item
+    // critical alert sorts ahead of the normal brain item.
     expect(queue.items[0].severity).toBe('critical');
     expect(queue.counts.critical).toBe(1);
+
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 60_000).toISOString();
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
+    brain.getInboxLog.mockResolvedValue([
+      { id: 'optional', capturedText: 'optional', required: false, dueAt: past },
+      { id: 'required-low', capturedText: 'low', required: true, dueAt: future, priority: 'LOW' },
+      { id: 'required-high-b', capturedText: 'high b', required: true, dueAt: future, priority: 'HIGH' },
+      { id: 'required-overdue', capturedText: 'overdue', required: true, dueAt: past, priority: 'LOW' },
+      { id: 'required-high-a', capturedText: 'high a', required: true, dueAt: future, priority: 'HIGH' },
+    ]);
+    __resetAlertsCache();
+    const ordered = await buildQueue();
+    expect(ordered.items.map((item) => item.id)).toEqual([
+      'brain:required-overdue',
+      'brain:required-high-a',
+      'brain:required-high-b',
+      'brain:required-low',
+      'brain:optional',
+    ]);
   });
 
   it('treats a producer returning null/non-array as empty', async () => {
@@ -223,18 +269,91 @@ describe('reviewQueue.buildQueue', () => {
     messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 'still here' }]);
     const queue = await buildQueue();
     expect(queue.sources.brain.error).toBe('inbox boom');
+    expect(queue.sources.brain.availability).toBe('unavailable');
+    expect(queue.sources.brain.total).toBeNull();
+    expect(queue.totalsBySource.brain).toBeNull();
+    expect(queue.total).toBeNull();
+    expect(queue.partial).toBe(true);
     expect(queue.items.find(i => i.source === 'drafts')).toBeTruthy();
   });
 
-  it('caps each source and reports the pre-cap total', async () => {
+  it('returns every row within the bounded source read and reports its total', async () => {
     brain.getInboxLog.mockResolvedValue(
       Array.from({ length: 40 }, (_, i) => ({ id: `b${i}`, capturedText: `t${i}`, capturedAt: '2026-06-03T10:00:00.000Z' }))
     );
     const queue = await buildQueue();
     const brainRows = queue.items.filter(i => i.source === 'brain');
-    expect(brainRows).toHaveLength(25);
+    expect(brainRows).toHaveLength(40);
     expect(queue.sources.brain.total).toBe(40);
-    expect(queue.sources.brain.shown).toBe(25);
+    expect(queue.sources.brain.shown).toBe(40);
+    expect(queue.sources.brain.truncation).toBe(false);
+  });
+
+  it('keeps page order stable when a source changes between cursor requests', async () => {
+    const firstRows = Array.from({ length: 5 }, (_, i) => ({
+      id: `b${i}`,
+      capturedText: `row ${i}`,
+      capturedAt: '2026-06-03T10:00:00.000Z',
+    }));
+    brain.getInboxLog.mockResolvedValue(firstRows);
+    const first = await buildQueue({ limit: 2 });
+    expect(first.items.map((item) => item.id)).toEqual(['brain:b0', 'brain:b1']);
+    expect(first.total).toBe(5);
+    expect(first.counts.total).toBe(5);
+    expect(first.nextCursor).toBeTruthy();
+
+    brain.getInboxLog.mockResolvedValue([{ id: 'new', capturedText: 'changed source' }]);
+    const second = await buildQueue({ limit: 2, cursor: first.nextCursor });
+    expect(second.items.map((item) => item.id)).toEqual(['brain:b2', 'brain:b3']);
+    expect(second.counts.total).toBe(5);
+    expect(brain.getInboxLog).toHaveBeenCalledTimes(1);
+
+    const third = await buildQueue({ cursor: second.nextCursor });
+    expect(third.items.map((item) => item.id)).toEqual(['brain:b4']);
+    expect(third.nextCursor).toBeNull();
+  });
+
+  it('rejects malformed, changed, and expired cursors explicitly', async () => {
+    await expect(buildQueue({ cursor: 'not-a-cursor' })).rejects.toMatchObject({
+      status: 400,
+      code: 'INVALID_CURSOR',
+    });
+
+    brain.getInboxLog.mockResolvedValue([
+      { id: 'b1', capturedText: 'one' },
+      { id: 'b2', capturedText: 'two' },
+    ]);
+    const first = await buildQueue({ limit: 1, query: { source: 'brain' } });
+    await expect(buildQueue({ cursor: first.nextCursor, query: { source: 'ask' } })).rejects.toMatchObject({
+      status: 400,
+      code: 'CURSOR_QUERY_MISMATCH',
+    });
+
+    vi.useFakeTimers({ now: Date.now() });
+    const expiring = await buildQueue({ limit: 1 });
+    vi.advanceTimersByTime(30_001);
+    await expect(buildQueue({ cursor: expiring.nextCursor })).rejects.toMatchObject({
+      status: 409,
+      code: 'CURSOR_EXPIRED',
+    });
+  });
+
+  it('marks a bounded source as partial instead of claiming inbox zero', async () => {
+    brain.getInboxLog.mockResolvedValue(
+      Array.from({ length: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 }, (_, i) => ({ id: `b${i}`, capturedText: `t${i}` }))
+    );
+    const queue = await buildQueue({ limit: 10 });
+    expect(brain.getInboxLog).toHaveBeenCalledWith({ status: 'needs_review', limit: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 });
+    expect(queue.partial).toBe(true);
+    expect(queue.total).toBeNull();
+    expect(queue.totalsBySource.brain).toBeNull();
+    expect(queue.sources.brain).toMatchObject({
+      total: null,
+      lowerBound: 100,
+      truncation: true,
+      availability: 'available',
+      error: null,
+    });
   });
 
   it('tags resolvable rows with an inline action verb, leaves no-clean-resolve sources without one', async () => {

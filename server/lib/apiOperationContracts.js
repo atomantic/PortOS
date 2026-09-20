@@ -33,6 +33,21 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
   '/api/api-docs/tools.min.json': {
     get: { summary: 'Read minimized semantic tool resource', responses: { 200: { description: 'Schema-optimized provider-neutral tool resource' } } },
   },
+  '/api/review/queue': {
+    get: {
+      summary: 'Read the cross-domain review action queue',
+      description: 'Returns the canonical action projection. Passing limit opts into a short-lived snapshot; echo nextCursor unchanged for the next page. A null total means one or more sources are unavailable or bounded.',
+      parameters: [
+        { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100 } },
+        { name: 'cursor', in: 'query', required: false, schema: { type: 'string', maxLength: 4096 } },
+      ],
+      responses: {
+        200: { description: 'Canonical action rows, per-source health, totals, and an optional snapshot cursor' },
+        400: { description: 'Invalid query or cursor', 'x-portos-error-codes': ['VALIDATION_ERROR', 'INVALID_CURSOR', 'CURSOR_QUERY_MISMATCH'] },
+        409: { description: 'The short-lived snapshot expired and pagination must restart', 'x-portos-error-codes': ['CURSOR_EXPIRED'] },
+      },
+    },
+  },
   '/api/agent-context/manifest': {
     get: { summary: 'Read local Agent Tools MCP manifest', responses: { 200: { description: 'MCP transport, context scopes, semantic grants, schemas, and limits' } } },
   },
