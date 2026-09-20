@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS review_queue_triage (
   snoozed_until TIMESTAMPTZ,
   dismissed BOOLEAN NOT NULL DEFAULT FALSE,
   delivery_generation INTEGER NOT NULL DEFAULT 0 CHECK (delivery_generation >= 0),
+  delivery JSONB,
   PRIMARY KEY (action_key, occurrence, revision)
 );
 
