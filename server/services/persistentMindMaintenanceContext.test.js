@@ -1,18 +1,20 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
-const mock = vi.hoisted(() => ({ root: null, scan: vi.fn(), actions: vi.fn(), queue: vi.fn(), save: vi.fn(), visibility: vi.fn() }));
+const mock = vi.hoisted(() => ({ root: null, scan: vi.fn(), actions: vi.fn(), queue: vi.fn(), save: vi.fn(), visibility: vi.fn(), reports: vi.fn() }));
 vi.mock('./cosState.js', () => ({ loadState: async () => mock.root, saveState: (...args) => mock.save(...args), withStateLock: fn => fn() }));
 vi.mock('./developmentWatchdog.js', () => ({ runDevelopmentWatchdog: (...args) => mock.scan(...args), readDevelopmentWatchdogSnapshot: (...args) => mock.scan(...args) }));
 vi.mock('./userActions.js', () => ({ listUserActions: (...args) => mock.actions(...args) }));
 vi.mock('./reviewQueue.js', () => ({ buildQueue: (...args) => mock.queue(...args) }));
 vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: (...args) => mock.visibility(...args) }));
 vi.mock('./persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({ ok: true, provider: { id: 'example' } }) }));
+vi.mock('./persistentMindProcessAudit.js', () => ({ readProcessAuditSummary: (...args) => mock.reports(...args) }));
 const { readPersistentMindMaintenanceContext: read, buildPersistentMindMaintenancePrompt: prompt } = await import('./persistentMindMaintenanceContext.js');
 const now = Date.parse('2026-01-02T00:00:00Z');
 const visibility = { capturedAt: new Date(now).toISOString(), health: { system: 'available', forge: 'ready', database: 'unknown' } };
 beforeEach(() => {
   vi.clearAllMocks();
   mock.visibility.mockResolvedValue(visibility);
+  mock.reports.mockResolvedValue({ sources: [{ appId: 'example', state: 'available', pending: 1, partial: true, metrics: { recovery: 2, lineageKnown: 1, cost: null } }], partial: true, providerCalls: 0 });
   mock.root = { config: { persistentMindMaintainer: { enabled: true, appIds: ['example'] }, persistentMindCapabilities: { readPortos: true, allowedAppIds: ['example'] } } };
   mock.scan.mockResolvedValue({ id: 'receipt', checkedAt: new Date(now).toISOString(), complete: true, blockers: [], apps: [{ appId: 'example', complete: true, blockers: [],
     pullRequests: [{ number: 12, disposition: 'actively-owned', url: 'private-url', headBranch: 'private-branch' }],
@@ -74,6 +76,16 @@ it('rechecks scope after collection and discards evidence revoked in flight', as
   mock.actions.mockImplementation(async () => { mock.root.config.persistentMindCapabilities.readPortos = false; return []; });
   expect(await read({ visibility, now })).toEqual({ enabled: true, granted: false });
   expect(mock.save).not.toHaveBeenCalled();
+});
+
+it('includes bounded recovery metrics only with the separate current report grant', async () => {
+  await read({ visibility, now });
+  expect(mock.reports).not.toHaveBeenCalled();
+  mock.root.config.persistentMindCapabilities.auditReports = true;
+  const result = await read({ visibility, now });
+  expect(mock.reports).toHaveBeenCalledWith({ appIds: ['example'] });
+  expect(result.sources.reports.sources[0].metrics).toEqual({ recovery: 2, lineageKnown: 1, cost: null });
+  expect(result.partial).toBe(true);
 });
 
 it('bounds oversized evidence without emitting a partial JSON document', () => {

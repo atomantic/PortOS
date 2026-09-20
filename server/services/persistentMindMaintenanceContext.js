@@ -16,9 +16,12 @@ const settled = async read => { try { return await read(); } catch { return unav
 function watchdogProjection(receipt, appIds, now) {
   if (!receipt) return unavailable();
   const apps = (receipt.apps || []).filter(app => appIds.includes(app.appId));
+  const decisions = (receipt.decisions || []).filter(item => appIds.includes(item.appId));
+  const truncated = apps.length > 10 || decisions.length > 10
+    || apps.some(app => (app.pullRequests || []).filter(pr => ['eligible', 'unknown', 'blocked'].includes(pr.disposition)).length > 5);
   return {
     state: 'available', observedAt: receipt.checkedAt, receiptId: receipt.id,
-    partial: !receipt.complete || apps.length !== appIds.length || apps.length > 10,
+    partial: !receipt.complete || apps.length !== appIds.length || truncated,
     blockers: (receipt.blockers || []).map(value => typeof value === 'string' ? value : value.reason).slice(0, 10),
     apps: apps.slice(0, 10).map(app => ({ appId: app.appId, complete: app.complete,
       blockers: app.blockers, pullRequests: counts(app.pullRequests || []), issues: counts(app.issues || []),
@@ -27,9 +30,9 @@ function watchdogProjection(receipt, appIds, now) {
         .slice(0, 5).map(pr => ({ number: pr.number, state: pr.disposition,
           observedAgeMs: Number.isFinite(Date.parse(pr.firstObservedAt)) ? Math.max(0, now - Date.parse(pr.firstObservedAt)) : null })),
     })),
-    truncated: apps.length > 10,
+    truncated,
     counts: receipt.counts, availableSlots: receipt.availableSlots,
-    decisions: (receipt.decisions || []).filter(item => appIds.includes(item.appId)).slice(0, 10)
+    decisions: decisions.slice(0, 10)
       .map(item => ({ appId: item.appId, kind: item.kind, number: item.number, outcome: item.outcome, reason: item.reason })),
     recoveryFollowUps: (receipt.recovery || []).length,
   };
@@ -59,7 +62,7 @@ async function canonicalActions(now) {
     sources[name] = value ? { state: value.availability, total: value.total,
       lowerBound: value.lowerBound, partial: value.truncation === true } : unavailable();
   }
-  return { state: 'available', observedAt: queue.generatedAt, partial: queue.partial,
+  return { state: 'available', observedAt: queue.generatedAt, partial: queue.partial || Object.values(sources).some(source => source.partial),
     sources, nextCursor: queue.nextCursor, scope: 'instance aggregates after canonical feedback; product engagement is not development toil' };
 }
 
