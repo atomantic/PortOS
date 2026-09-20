@@ -16,6 +16,21 @@ export async function installFleetHostLoginTask() {
   return runStreamingCommand('powershell.exe', ['-NoProfile', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')], undefined, { timeoutMs: 30000 });
 }
 
+/**
+ * Undo the login registration when the host is turned off.
+ *
+ * Without this, disabling the host leaves a scheduled task that starts PortOS's
+ * fleet-host resume path at every login — which is exactly the "it keeps coming
+ * back and I can't stop it" shape the Stop action exists to end. A task that is
+ * already gone is a success, not an error: `schtasks /Delete` fails on a missing
+ * task, and re-reporting that as a failed stop would be wrong.
+ */
+export async function removeFleetHostLoginTask() {
+  if (process.platform !== 'win32') return { success: true };
+  if (!(await isFleetHostLoginTaskInstalled())) return { success: true };
+  return runStreamingCommand('schtasks.exe', ['/Delete', '/TN', 'PortOS Dedicated Model Host', '/F'], undefined, { timeoutMs: 15000 });
+}
+
 export async function isFleetHostLoginTaskInstalled() {
   if (process.platform !== 'win32') return null;
   return Boolean(await commandOutput('schtasks.exe', ['/Query', '/TN', 'PortOS Dedicated Model Host', '/FO', 'CSV', '/NH'], { timeoutMs: 5000 }));

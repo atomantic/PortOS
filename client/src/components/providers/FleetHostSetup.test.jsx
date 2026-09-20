@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 const api = vi.hoisted(() => ({
   getFleetLlmHost: vi.fn(),
+  getFleetLlmHostUsage: vi.fn(),
   getFleetPeerHosts: vi.fn(),
   revealFleetLlmHostKey: vi.fn(),
+  stopFleetLlmHost: vi.fn(),
 }));
 vi.mock('../../services/apiProviders', () => api);
 vi.mock('../install/RuntimeInstallModal', () => ({ default: ({ open, installUrlBase, streamMethod }) => open ? <div data-testid="setup" data-url={installUrlBase} data-method={streamMethod} /> : null }));
@@ -47,6 +49,56 @@ describe('dedicated model host setup', () => {
   api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
   render(<MemoryRouter><FleetHostSetup /></MemoryRouter>);
   expect(await screen.findByRole('link', { name: 'Manage model servers' })).toHaveAttribute('href', href);
+ });
+
+ // The reported bug: the host was enabled from this page, the machine was
+ // running and serving, and there was no control anywhere that turned it off.
+ it('offers a two-step stop whenever there is something to turn off, and only acts on the second click', async () => {
+  api.getFleetLlmHost.mockResolvedValue({ ...state, enabled: true, listening: true, serving: false, stoppable: true });
+  api.getFleetLlmHostUsage.mockResolvedValue({ activeRequests: 0, clients: [], recent: [], totals: {}, queue: null });
+  api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
+  api.stopFleetLlmHost.mockResolvedValue({ success: true, containerStopped: true });
+  render(<MemoryRouter><FleetHostSetup /></MemoryRouter>);
+
+  const arm = await screen.findByRole('button', { name: 'Stop model host' });
+  fireEvent.click(arm);
+  // Arming alone must not disconnect anyone.
+  expect(api.stopFleetLlmHost).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: /Confirm stop/ }));
+  await waitFor(() => expect(api.stopFleetLlmHost).toHaveBeenCalledTimes(1));
+  expect(await screen.findByText(/image and weights are still on disk/)).toBeInTheDocument();
+ });
+
+ it('hides the stop control on a machine that has nothing hosting', async () => {
+  api.getFleetLlmHost.mockResolvedValue({ ...state, enabled: false, listening: false, stoppable: false });
+  api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
+  render(<MemoryRouter><FleetHostSetup /></MemoryRouter>);
+  await screen.findByText(/32 GB RAM/);
+  expect(screen.queryByRole('button', { name: 'Stop model host' })).not.toBeInTheDocument();
+ });
+
+ it('names the machines using this host, flagging one that matches no peer or tailnet node', async () => {
+  api.getFleetLlmHost.mockResolvedValue({ ...state, enabled: true, listening: true, stoppable: true });
+  api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
+  api.getFleetLlmHostUsage.mockResolvedValue({
+   activeRequests: 1,
+   queue: { active: 1, queued: 2 },
+   totals: { requests: 40, errors: 0, tokenReports: 12, promptTokens: 1000, completionTokens: 2762 },
+   clients: [
+    { address: '192.0.2.10', label: 'Workstation GPU', known: true, activeRequests: 1, requests: 30, errors: 0, tokenReports: 12, promptTokens: 1000, completionTokens: 2762, models: ['qwen3.8-27b'], lastSeen: Date.now(), days: [] },
+    { address: '192.0.2.99', label: null, known: false, activeRequests: 0, requests: 10, errors: 1, tokenReports: 0, promptTokens: 0, completionTokens: 0, models: [], lastSeen: Date.now(), days: [] },
+   ],
+   recent: [],
+  });
+  render(<MemoryRouter><FleetHostSetup /></MemoryRouter>);
+
+  expect(await screen.findByText('Workstation GPU')).toBeInTheDocument();
+  expect(screen.getByText('192.0.2.99')).toBeInTheDocument();
+  expect(screen.getByText('Unrecognized')).toBeInTheDocument();
+  // Thousands-grouped, and the partial token coverage is stated rather than
+  // implying the other 28 requests were free.
+  expect(screen.getByText('2,762')).toBeInTheDocument();
+  expect(screen.getByText('12 of 40 reported counts')).toBeInTheDocument();
  });
 
  it('keeps unsupported hardware on a connection path without offering the CUDA installer', async () => {

@@ -49,6 +49,12 @@ vi.mock('../../services/api', () => ({
   cancelSpecDecodeModelDownload: vi.fn(),
   removeSpecDecodeModel: vi.fn(),
 }));
+// The dedicated Qwen host is a docker container, so its status comes from the
+// providers API rather than the local-LLM status payload above.
+vi.mock('../../services/apiProviders', () => ({
+  getFleetLlmHost: vi.fn().mockResolvedValue({ enabled: false, listening: false, runtimeReachable: false, stoppable: false, recommendation: { supported: true } }),
+  stopFleetLlmHost: vi.fn().mockResolvedValue({ success: true, containerStopped: true }),
+}));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
 }));
@@ -64,6 +70,7 @@ import {
   installLocalLlmBackend,
   patchSettingsSlice,
 } from '../../services/api';
+import { getFleetLlmHost, stopFleetLlmHost } from '../../services/apiProviders';
 import socket from '../../services/socket';
 import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
 import LocalLlmRuntimesView from './LocalLlmRuntimesView.jsx';
@@ -1048,6 +1055,41 @@ describe('LocalLlmRuntimesView llama-server management', () => {
       await renderRuntimes();
       await fireFrame({ event: 'progress', message: 'pulling manifest' });
       expect(await screen.findByText(/pulling manifest/)).toBeInTheDocument();
+    });
+  });
+
+  // The reported dead end: the dedicated Qwen host is enabled from AI Providers
+  // and runs as a docker container, so it appeared on no runtime list at all —
+  // an operator who came here to stop a local model server found every one they
+  // were NOT running and no sign of the one they were.
+  describe('dedicated Qwen host row', () => {
+    it('shows the host as running and stops it on request', async () => {
+      getFleetLlmHost.mockResolvedValue({
+        enabled: true,
+        listening: true,
+        runtimeReachable: true,
+        serving: true,
+        stoppable: true,
+        endpoint: 'http://host-XXXX.example.ts.net:18022/v1',
+        queue: { active: 1, queued: 0 },
+        recommendation: { supported: true },
+      });
+      await renderRuntimes();
+
+      const row = screen.getByText('Dedicated Qwen host').closest('div').parentElement;
+      expect(within(row).getByText('Running')).toBeInTheDocument();
+      expect(within(row).getByText('1 generating · 0 queued')).toBeInTheDocument();
+
+      fireEvent.click(within(row).getByRole('button', { name: /Stop/ }));
+      await waitFor(() => expect(stopFleetLlmHost).toHaveBeenCalledTimes(1));
+    });
+
+    it('offers no Stop on a machine that is not hosting, and still links to the setup page', async () => {
+      getFleetLlmHost.mockResolvedValue({ enabled: false, listening: false, runtimeReachable: false, stoppable: false, recommendation: { supported: true } });
+      await renderRuntimes();
+      const row = screen.getByText('Dedicated Qwen host').closest('div').parentElement;
+      expect(within(row).queryByRole('button', { name: /Stop/ })).not.toBeInTheDocument();
+      expect(within(row).getByRole('link', { name: 'Set up host' })).toHaveAttribute('href', '/ai/fleet?fleetStep=host');
     });
   });
 });

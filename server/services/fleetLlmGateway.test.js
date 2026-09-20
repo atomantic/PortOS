@@ -80,3 +80,70 @@ describe('shared inference HTTP boundary', () => {
     await vi.waitFor(() => expect(gateway.status().queued).toBe(0));
   });
 });
+
+describe('inbound usage accounting', () => {
+  // The whole point of the ledger is attribution the queue depth cannot give,
+  // so it is asserted at the HTTP boundary — a unit test of the ledger alone
+  // cannot prove the gateway closes every entry it opens.
+  const ledgerDouble = () => {
+    const open = new Map();
+    const closed = [];
+    return {
+      closed,
+      openCount: () => open.size,
+      beginRequest({ address, path }) {
+        const handle = { id: `h${open.size + closed.length}`, address, path };
+        open.set(handle.id, handle);
+        return handle;
+      },
+      endRequest(handle, detail) {
+        open.delete(handle.id);
+        closed.push({ handle, ...detail });
+      },
+    };
+  };
+
+  it('records a completed generation with the model asked for and the tokens the reply reported', async () => {
+    const usage = ledgerDouble();
+    const { post, received, gateway } = await setup({ usage });
+    const pending = post(undefined, JSON.stringify({ model: 'qwen3.8-27b', messages: [] }));
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+    expect(usage.openCount()).toBe(1);
+    received[0].res.end('data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":34}}\n\ndata: [DONE]\n\n');
+    await (await pending).text();
+
+    await vi.waitFor(() => expect(usage.closed).toHaveLength(1));
+    expect(usage.closed[0]).toMatchObject({
+      status: 200,
+      model: 'qwen3.8-27b',
+      usage: { promptTokens: 12, completionTokens: 34 },
+    });
+    expect(usage.closed[0].handle.path).toBe('/v1/chat/completions');
+    await vi.waitFor(() => expect(gateway.status().active).toBe(0));
+  });
+
+  it('closes the entry for a client that hangs up while still queued', async () => {
+    // A queued job never reaches the run path, so without its own close it
+    // would count as generating forever on the report.
+    const usage = ledgerDouble();
+    const { post, received, gateway } = await setup({ usage });
+    const first = await post();
+    const abort = new AbortController();
+    const pending = post(abort.signal).catch(() => null);
+    await vi.waitFor(() => expect(gateway.status().queued).toBe(1));
+    abort.abort();
+    await pending;
+    await vi.waitFor(() => expect(usage.closed).toHaveLength(1));
+    received[0].res.end();
+    await first.text();
+    await vi.waitFor(() => expect(usage.openCount()).toBe(0));
+  });
+
+  it('does not count a /v1/models poll as a generation', async () => {
+    const usage = ledgerDouble();
+    const { base } = await setup({ usage });
+    expect((await fetch(base + '/v1/models', { headers })).status).toBe(200);
+    expect(usage.openCount()).toBe(0);
+    expect(usage.closed).toHaveLength(0);
+  });
+});

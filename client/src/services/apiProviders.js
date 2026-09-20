@@ -178,5 +178,7 @@ export const getCodexModels = (options = {}) => {
 
 export const getFleetLlmHost = (options) => request('/providers/fleet-host', options);
 export const revealFleetLlmHostKey = (options) => request('/providers/fleet-host/key', { method: 'POST', ...options });
+export const getFleetLlmHostUsage = (options) => request('/providers/fleet-host/usage', options);
+export const stopFleetLlmHost = (options) => request('/providers/fleet-host/stop', { method: 'POST', ...options });
 export const getFleetPeerHosts = (options) => request('/providers/fleet-peer-hosts', options);
 export const revealFleetPeerHostKey = (peerId, options) => request(`/providers/fleet-peer-hosts/${encodeURIComponent(peerId)}/key`, { method: 'POST', ...options });

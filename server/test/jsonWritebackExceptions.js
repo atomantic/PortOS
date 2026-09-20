@@ -2,6 +2,11 @@
 // module + normalized first argument, never source positions. See JSON_WRITEBACK.md.
 export const JSON_WRITEBACK_EXCEPTIONS = [
   {
+    key: 'fleetLlmUsage.js :: USAGE_FILE',
+    reason: 'The usage ledger hydrates with a non-strict read so a missing or damaged optional report does not prevent the host from serving; writes remain atomic.',
+    issue: '#7753',
+  },
+  {
     "key": "agentRunReconciler.js :: path",
     "reason": "No failed-read write-back: repair planning and its final re-read skip null run metadata."
   },
