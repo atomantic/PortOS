@@ -104,6 +104,7 @@ const ACTION_VIEWS = [
   { id: 'all', label: 'All', icon: ListTodo },
   { id: 'waiting', label: 'Waiting', icon: Hourglass },
   { id: 'someday', label: 'Someday', icon: Sparkles },
+  { id: 'snoozed', label: 'Snoozed', icon: Clock3 },
   { id: 'history', label: 'History', icon: HistoryIcon },
 ];
 const ACTION_VIEW_IDS = new Set(ACTION_VIEWS.map(({ id }) => id));

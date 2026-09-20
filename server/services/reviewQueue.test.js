@@ -721,6 +721,15 @@ describe('reviewQueue triage', () => {
 
     const visible = await buildQueue({ now: new Date('2026-09-20T11:00:00.000Z') });
     expect(visible.items.map((item) => item.id)).toEqual(['brain:b1']);
+
+    const snoozedView = await buildQueue({
+      query: { view: 'snoozed' },
+      now: new Date(now),
+    });
+    expect(snoozedView.items.map((item) => item.id)).toEqual(['brain:b1']);
+    expect(snoozedView.items[0].triageOperations).toEqual([
+      { id: 'unsnooze', label: 'Unsnooze', available: true },
+    ]);
   });
 
   it('keys presentation state by occurrence and revision instead of source id alone', () => {
@@ -772,7 +781,7 @@ describe('reviewQueue triage', () => {
 
     await expect(triageQueueItem('brain:b1', 'snooze', {
       snoozedUntil: '2026-09-20T11:00:00.000Z',
-    })).rejects.toMatchObject({ status: 503, code: 'SOURCE_UNAVAILABLE' });
+    }, { now: new Date('2026-09-20T10:00:00.000Z') })).rejects.toMatchObject({ status: 503, code: 'SOURCE_UNAVAILABLE' });
     expect(reviewQueueTriageStore.upsertReviewQueueTriage).not.toHaveBeenCalled();
   });
 
@@ -780,14 +789,23 @@ describe('reviewQueue triage', () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
 
     await expect(triageQueueItem('brain:b1', 'snooze', {
-      snoozedUntil: '2099-01-01T00:00:00.000Z',
-    })).resolves.toMatchObject({ id: 'brain:b1', operation: 'snooze', triaged: true });
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
+    }, { now: new Date('2026-09-20T10:00:00.000Z') })).resolves.toMatchObject({ id: 'brain:b1', operation: 'snooze', triaged: true });
     expect(reviewQueueTriageStore.upsertReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
       actionKey: 'brain.classify:b1',
       revision: 'revision-1',
-      snoozedUntil: '2099-01-01T00:00:00.000Z',
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
     }));
     expect(brain.markInboxDone).not.toHaveBeenCalled();
+  });
+
+  it('rejects an effectively permanent snooze window', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required' }]);
+
+    await expect(triageQueueItem('brain:b1', 'snooze', {
+      snoozedUntil: '2099-01-01T00:00:00.000Z',
+    }, { now: new Date('2026-09-20T10:00:00.000Z') })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(reviewQueueTriageStore.upsertReviewQueueTriage).not.toHaveBeenCalled();
   });
 
   it('clears a stored snooze through the explicit unsnooze operation', async () => {
@@ -809,6 +827,24 @@ describe('reviewQueue triage', () => {
       actionKey: 'brain.classify:b1',
       revision: 'revision-1',
     }));
+  });
+
+  it('invalidates a pagination snapshot after a triage mutation', async () => {
+    brain.getInboxLog.mockResolvedValue([
+      { id: 'b1', capturedText: 'first' },
+      { id: 'b2', capturedText: 'second' },
+    ]);
+    const first = await buildQueue({ limit: 1 });
+    expect(first.nextCursor).toBeTruthy();
+
+    await triageQueueItem('brain:b1', 'snooze', {
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
+    }, { now: new Date('2026-09-20T10:00:00.000Z') });
+
+    await expect(buildQueue({ limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({
+      status: 409,
+      code: 'CURSOR_EXPIRED',
+    });
   });
 });
 

@@ -60,6 +60,7 @@ export const REVIEW_QUEUE_MAX_PAGE_SIZE = 100;
 const REVIEW_QUEUE_SOURCE_PROBE_LIMIT = REVIEW_QUEUE_SOURCE_READ_LIMIT + 1;
 const REVIEW_QUEUE_SNAPSHOT_TTL_MS = 30_000;
 const REVIEW_QUEUE_MAX_SNAPSHOTS = 100;
+export const MAX_REVIEW_QUEUE_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const ACTION_KINDS = Object.freeze({
   brain: 'brain.classify',
@@ -136,7 +137,7 @@ async function getActiveGoalOptions() {
     .map((g) => ({ id: g.id, title: typeof g.title === 'string' && g.title ? g.title : '(untitled goal)' }));
 }
 
-const COMMITMENT_VIEWS = new Set(['today', 'all', 'waiting', 'someday', 'history']);
+const COMMITMENT_VIEWS = new Set(['today', 'all', 'waiting', 'someday', 'history', 'snoozed']);
 const ACTIVE_THREAD_STATUSES = new Set(['open', 'waiting', 'someday']);
 
 function isDueByLocalToday(thread, timezone, now = new Date()) {
@@ -154,12 +155,14 @@ function threadBelongsToView(thread, view, timezone, now = new Date()) {
   if (!COMMITMENT_VIEWS.has(view)) return ACTIVE_THREAD_STATUSES.has(thread.status);
   if (view === 'all') return ACTIVE_THREAD_STATUSES.has(thread.status);
   if (view === 'history') return isTerminalThreadStatus(thread.status);
+  if (view === 'snoozed') return ACTIVE_THREAD_STATUSES.has(thread.status);
   if (view === 'waiting' || view === 'someday') return thread.status === view;
   return ACTIVE_THREAD_STATUSES.has(thread.status) && isDueByLocalToday(thread, timezone, now);
 }
 
 const visibleInLiveViews = (producer, view) => {
   if (!view) return producer.source !== 'history';
+  if (view === 'snoozed') return producer.source !== 'history';
   if (Array.isArray(producer.views)) return producer.views.includes(view);
   return view === 'today' || view === 'all';
 };
@@ -763,9 +766,11 @@ const emptyTriageState = Object.freeze({
   deliveryGeneration: 0,
 });
 
-function triageOperationsFor(item) {
+function triageOperationsFor(item, { snoozed = false } = {}) {
   return [
-    { id: 'snooze', label: 'Snooze', available: true },
+    snoozed
+      ? { id: 'unsnooze', label: 'Unsnooze', available: true }
+      : { id: 'snooze', label: 'Snooze', available: true },
     ...(item.isRecommendation === true
       ? [{ id: 'dismiss', label: 'Dismiss', available: true }]
       : []),
@@ -777,7 +782,7 @@ function triageOperationsFor(item) {
  * This is exported as a pure boundary so expiry and occurrence rollover can
  * be tested with an injected clock.
  */
-export function applyQueueTriage(items, entries = [], now = new Date()) {
+export function applyQueueTriage(items, entries = [], now = new Date(), { includeSnoozed = false } = {}) {
   const byIdentity = new Map(
     entries
       .map((entry) => {
@@ -795,7 +800,7 @@ export function applyQueueTriage(items, entries = [], now = new Date()) {
     const snoozedUntilMs = state.snoozedUntil ? Date.parse(state.snoozedUntil) : NaN;
     const snoozed = Number.isFinite(snoozedUntilMs) && snoozedUntilMs > currentTime;
     const dismissed = state.dismissed && item.isRecommendation === true;
-    if (snoozed || dismissed) return [];
+    if (dismissed || (includeSnoozed ? !snoozed : snoozed)) return [];
     return [{
       ...item,
       triage: {
@@ -803,7 +808,7 @@ export function applyQueueTriage(items, entries = [], now = new Date()) {
         dismissed: state.dismissed,
         deliveryGeneration: state.deliveryGeneration,
       },
-      triageOperations: triageOperationsFor(item),
+      triageOperations: triageOperationsFor(item, { snoozed }),
     }];
   });
 }
@@ -1028,6 +1033,12 @@ export async function triageQueueItem(queueItemId, operation, input = {}, { now:
         code: 'VALIDATION_ERROR',
       });
     }
+    if (parsed.getTime() - now.getTime() > MAX_REVIEW_QUEUE_SNOOZE_MS) {
+      throw new ServerError('snoozedUntil cannot be more than 30 days in the future', {
+        status: 400,
+        code: 'VALIDATION_ERROR',
+      });
+    }
     snoozedUntil = parsed.toISOString();
   } else if (input?.snoozedUntil !== undefined) {
     throw new ServerError('snoozedUntil is only valid for the snooze operation', {
@@ -1078,6 +1089,7 @@ export async function triageQueueItem(queueItemId, operation, input = {}, { now:
   } else {
     await reviewQueueTriageStore.upsertReviewQueueTriage(next);
   }
+  __resetQueueSnapshots();
 
   return {
     id: queueItemId,
@@ -1215,7 +1227,9 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
   }));
 
   let items = deduplicateItems(results.flatMap((result) => result.items));
-  if (applyTriageState) items = applyQueueTriage(items, await readQueueTriageForProjection(), clock);
+  if (applyTriageState) {
+    items = applyQueueTriage(items, await readQueueTriageForProjection(), clock, { includeSnoozed: view === 'snoozed' });
+  }
   items.sort((a, b) => compareQueueItems(a, b, clock.getTime()));
   const shownCounts = sourceShownCounts(items);
   const sources = {};

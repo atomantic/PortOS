@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -7,10 +7,12 @@ const buildQueue = vi.fn();
 const resolveQueueItem = vi.fn();
 const triageQueueItem = vi.fn();
 const promoteAskQueueItem = vi.fn();
+const MAX_REVIEW_QUEUE_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
 vi.mock('../services/review.js', () => ({}));
 vi.mock('../services/reviewQueue.js', () => ({
   buildQueue,
+  MAX_REVIEW_QUEUE_SNOOZE_MS,
   resolveQueueItem,
   triageQueueItem,
   promoteAskQueueItem,
@@ -28,6 +30,10 @@ const makeApp = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('GET /api/review/queue', () => {
@@ -110,7 +116,7 @@ describe('POST /api/review/queue/resolve', () => {
 
 describe('POST /api/review/queue/triage', () => {
   it('validates the snooze timestamp and forwards it to the queue service', async () => {
-    const snoozedUntil = '2099-01-01T00:00:00.000Z';
+    const snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     triageQueueItem.mockResolvedValue({ id: 'brain:b1', operation: 'snooze', triaged: true });
 
     const response = await request(makeApp())
@@ -122,6 +128,7 @@ describe('POST /api/review/queue/triage', () => {
   });
 
   it('requires a timestamp for snooze and rejects timestamps on other operations', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-20T10:00:00.000Z') });
     const missing = await request(makeApp())
       .post('/api/review/queue/triage')
       .send({ id: 'brain:b1', operation: 'snooze' });
@@ -132,6 +139,16 @@ describe('POST /api/review/queue/triage', () => {
       .post('/api/review/queue/triage')
       .send({ id: 'ask:a1', operation: 'dismiss', snoozedUntil: '2099-01-01T00:00:00.000Z' });
     expect(extra.status).toBe(400);
+    expect(triageQueueItem).not.toHaveBeenCalled();
+
+    const tooFar = await request(makeApp())
+      .post('/api/review/queue/triage')
+      .send({
+        id: 'brain:b1',
+        operation: 'snooze',
+        snoozedUntil: new Date(Date.now() + MAX_REVIEW_QUEUE_SNOOZE_MS + 1).toISOString(),
+      });
+    expect(tooFar.status).toBe(400);
     expect(triageQueueItem).not.toHaveBeenCalled();
   });
 });

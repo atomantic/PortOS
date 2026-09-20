@@ -51,7 +51,8 @@ separate from notification-read state for the delivery layer. `snooze` and
 `unsnooze` change presentation only, while `dismiss` is advertised only for
 `isRecommendation` rows. A triage mutation re-reads the source and rejects
 unavailable sources or unsupported capabilities before writing the local
-marker.
+marker. Snoozes are limited to 30 days; the `snoozed` Actions view exposes
+active snoozes so the user can restore one early.
 
 Source-owned rows may also carry `sourceOwned: true` and `triageOnly: true`.
 Generic Review completion rejects those rows; an explicit source operation

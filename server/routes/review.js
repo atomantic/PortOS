@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { reviewQueueQuerySchema, validateRequest } from '../lib/validation.js';
 import * as reviewService from '../services/review.js';
-import { buildQueue, resolveQueueItem, triageQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
+import { buildQueue, MAX_REVIEW_QUEUE_SNOOZE_MS, resolveQueueItem, triageQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
 
 const router = express.Router();
 
@@ -83,6 +83,10 @@ const triageQueueSchema = z.object({
 }).superRefine((value, context) => {
   if (value.operation === 'snooze' && !value.snoozedUntil) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil is required for the snooze operation' });
+  }
+  if (value.operation === 'snooze' && value.snoozedUntil
+    && Date.parse(value.snoozedUntil) - Date.now() > MAX_REVIEW_QUEUE_SNOOZE_MS) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil cannot be more than 30 days in the future' });
   }
   if (value.operation !== 'snooze' && value.snoozedUntil !== undefined) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil is only valid for the snooze operation' });
