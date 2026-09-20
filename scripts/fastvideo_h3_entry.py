@@ -8,6 +8,7 @@ All adaptation is process-local, leaving the upstream checkout untouched.
 """
 import argparse
 import importlib.util
+import importlib
 import json
 import math
 import runpy
@@ -34,6 +35,16 @@ def main():
             raise ValueError(f'Unsupported FastH3 {name} configuration')
         shifts.append(shift)
     from fastvideo.mlx_runtime import minimax_h3_pipeline as pipeline
+    # Both modules expose the scheduler shifts, and the converter imports the
+    # values from ``minimax_h3`` while the inference pipeline reads its own
+    # module globals.  Updating only the pipeline (the old behavior) leaves
+    # conversion and inference using different schedules, which produces a
+    # VSA checkpoint that fails during the first render. Keep the two module
+    # views synchronized before either entry point is loaded.
+    h3 = (importlib.import_module('fastvideo.mlx_runtime.minimax_h3')
+          if importlib.util.find_spec('fastvideo.mlx_runtime.minimax_h3') else None)
+    if h3 is not None:
+        h3.MINIMAX_H3_VIDEO_SHIFT, h3.MINIMAX_H3_AUDIO_SHIFT = shifts
     pipeline.MINIMAX_H3_VIDEO_SHIFT, pipeline.MINIMAX_H3_AUDIO_SHIFT = shifts
     sys.argv = [args.entry_script, *remaining]
     if args.convert:
