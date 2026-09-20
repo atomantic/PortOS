@@ -5,7 +5,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const root = join(tmpdir(), `reactor-test-${process.pid}`);
-const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn(), samples: vi.fn(), runtime: vi.fn(), optimize: vi.fn(), thumbnail: vi.fn(), history: vi.fn() }));
+const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn(), samples: vi.fn(), runtime: vi.fn(), optimize: vi.fn(), thumbnail: vi.fn(), history: vi.fn(), rm: vi.fn() }));
 vi.mock('../../lib/childProcess.js', async (importOriginal) => ({ ...await importOriginal(), spawn: mocks.spawn }));
 vi.mock('./reactorRuntime.js', () => ({ ensureReactorRuntime: mocks.runtime }));
 vi.mock('../../lib/ffmpeg.js', () => ({ extractEvaluationFrames: mocks.samples, optimizeForStreaming: mocks.optimize, generateThumbnail: mocks.thumbnail }));
@@ -21,6 +21,12 @@ vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
   return { ...actual, PATHS: { ...actual.PATHS, videos: join(root, 'videos'), videoThumbnails: root, data: root }, ensureDir: (dir) => mkdir(dir, { recursive: true }) };
 });
+// fs/promises: real by default; mocks.rm allows a test to intercept rm without
+// affecting mkdir/writeFile/stat/readFile which are used directly in tests.
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, rm: (...args) => mocks.rm(...args) };
+});
 const reactor = await import('./reactor.js');
 const { videoGenEvents } = await import('./events.js');
 const settings = { videoGen: { reactor: { apiKey: 'example-key' } } };
@@ -28,6 +34,9 @@ let child;
 let input;
 beforeEach(async () => {
   vi.clearAllMocks();
+  // Default rm to the real implementation so existing tests use real FS operations.
+  const { rm: realRm } = await vi.importActual('fs/promises');
+  mocks.rm.mockImplementation(realRm);
   await mkdir(root, { recursive: true });
   await writeFile(join(root, 'python'), 'placeholder');
   vi.stubEnv('REACTOR_PYTHON_PATH', join(root, 'python'));
@@ -358,6 +367,41 @@ describe('Reactor SDK adapter', () => {
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
     await failed;
     expect(mocks.finalize).not.toHaveBeenCalled();
+  });
+
+  // Acceptance criteria for #7799: a cleanup rm that rejects must be logged with
+  // the path and error code; the job's success verdict must be unchanged.
+  it('logs a cleanup rm failure and still finalizes the job successfully', async () => {
+    const sourceImagePath = join(root, 'portrait.png');
+    const sharp = (await import('sharp')).default;
+    await sharp({ create: { width: 900, height: 1600, channels: 3, background: '#204080' } }).png().toFile(sourceImagePath);
+    const { rm: realRm } = await vi.importActual('fs/promises');
+    const eperm = Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    // Intercept only the fitted-frame removal; let all other rm calls through.
+    mocks.rm.mockImplementation(async (path, opts) => {
+      if (typeof path === 'string' && path.endsWith('.start.png')) throw eperm;
+      return realRm(path, opts);
+    });
+    const logged = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => { logged.push(args.join(' ')); });
+    const completed = vi.fn();
+    const failed = vi.fn();
+    videoGenEvents.on('completed', completed);
+    videoGenEvents.on('failed', failed);
+    const job = await started({ sourceImagePath });
+    await writeFile(input.outputPath, 'example-video');
+    child.stdout.emit('data', Buffer.from('{\"type\":\"complete\",\"clipId\":\"clip-example\",\"seconds\":6}\n'));
+    child.emit('close', 0);
+    // Job must finalize (success verdict unchanged even though cleanup rm failed).
+    await vi.waitFor(() => expect(mocks.finalize).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: job.jobId }),
+    ));
+    expect(failed).not.toHaveBeenCalled();
+    // Cleanup failure must have been logged with the path and error code.
+    const warning = logged.find((l) => l.includes('⚠️') && l.includes('EPERM'));
+    expect(warning, 'expected a ⚠️ log naming EPERM for the failed rm').toBeTruthy();
+    expect(warning).toContain('.start.png');
+    spy.mockRestore();
   });
 
 });
