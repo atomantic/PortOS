@@ -496,3 +496,11 @@ management endpoint includes disabled rows; generation lookups exclude them.
 Model-support requests use the existing CoS user-task store and explicitly
 request an isolated worktree and PR; no new store or background provider job is
 introduced.
+
+- Maintainer inference allowance — `data/cos/maintainer-inference.json` is a bounded,
+  machine-local `file-primary` operational budget, like domain usage. It stores
+  one UTC day, one current turn and the last reservation; no prompt or report
+  content. Atomic serialized reservations survive restart and count interrupted
+  calls conservatively. No federation, seed or migration: absence is the initial
+  unused allowance. Included in normal data backups; never treat deletion as a
+  routine reset because it reopens spending permission.

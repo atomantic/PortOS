@@ -636,7 +636,7 @@ describe('persistent mind adapter', () => {
     const admitted = [];
     const callBoundary = vi.fn(async (descriptor, run) => {
       admitted.push(descriptor);
-      return run({ reportRunId: () => {} });
+      return run({ reportRunId: () => {}, timeoutMs: 5000 });
     });
     const adapter = createPersistentMindTurnAdapter();
 
@@ -657,12 +657,18 @@ describe('persistent mind adapter', () => {
       callBoundary,
     });
 
-    expect(admitted).toEqual([
+    expect(admitted).toMatchObject([
       { purpose: 'summary' },
       { purpose: 'turn', round: 0 },
       { purpose: 'tool-round', round: 1 },
     ]);
     expect(mock.runPrompt).toHaveBeenCalledTimes(3);
+    mock.runPrompt.mock.calls.forEach(([request], index) => {
+      expect(admitted[index].promptChars).toBe(request.prompt.length);
+      expect(admitted[index].promptBytes).toBe(Buffer.byteLength(request.prompt));
+      expect(request.timeout).toBe(5000);
+      expect(request.allowFallback).toBe(false);
+    });
   });
 
   it('starts no further provider call once the boundary denies a later round', async () => {

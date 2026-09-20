@@ -30,10 +30,19 @@ export async function describePersistentMindMaintainerSetup({ config } = {}) {
   const { resolvePersistentMindProfile } = await import('./persistentMindProfile.js');
   const route = await resolvePersistentMindProfile(profile);
   if (!route.ok) prerequisites.push('Configure an enabled, available persistent mind provider and model.');
+  let inference = null;
+  if (role.enabled) {
+    const { inspectMaintainerInferenceRoute, readMaintainerInferenceBudget } = await import('./persistentMindMaintainerInference.js');
+    const checked = await inspectMaintainerInferenceRoute({ role, provider: route.provider, model: route.model, promptChars: role.inference.maxPromptChars, promptBytes: role.inference.maxPromptChars });
+    const budget = await readMaintainerInferenceBudget().catch(() => null);
+    inference = { ...checked, budget };
+    if (!checked.ok) prerequisites.push(checked.reason);
+    if (!budget) prerequisites.push('Maintainer inference budget could not be read.');
+  }
   if (getDomainMode(effective, 'cos') !== 'execute') prerequisites.push('CoS autonomy must allow execution.');
   if (root.paused) prerequisites.push('CoS is paused.');
   return {
-    role, apps, permissions, prerequisites,
+    role, apps, permissions, prerequisites, inference,
     availableApps: roster.map(app => ({ id: app.id, name: app.name, repository: app.fullName, granted: app.granted, available: !!app.forge })),
     ready: role.enabled && prerequisites.length === 0,
     readinessScope: 'configuration-only',

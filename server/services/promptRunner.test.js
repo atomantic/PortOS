@@ -202,6 +202,13 @@ describe('promptRunner — happy paths', () => {
     expect(runner.executeCliRun).not.toHaveBeenCalled();
   });
 
+  it('passes explicit API output and absolute spending caps without changing the route', async () => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => { onData('bounded'); onComplete({ success: true }); });
+    await runPromptThroughProvider({ provider: apiProvider(), prompt: 'p', source: 'test',
+      model: 'gpt-test', allowFallback: false, maxTokens: 8192, absoluteTimeoutMs: 120000 });
+    expect(runner.executeApiRun).toHaveBeenCalledWith(expect.objectContaining({ maxTokens: 8192, absoluteTimeoutMs: 120000, model: 'gpt-test' }));
+  });
+
   it('reports the concrete run lifecycle so a parent workflow can stop it', async () => {
     const events = [];
     runner.executeApiRun.mockImplementation(async ({ runId, onComplete }) => {

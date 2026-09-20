@@ -303,7 +303,7 @@ export function buildPersistentMindSummaryPrompt({ events, previousSummary, jour
  */
 const passthroughCallBoundary = (_descriptor, run) => run({ reportRunId: () => {} });
 
-async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId }) {
+async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId, timeoutMs }) {
   if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
   if (typeof heartbeat === 'function') await heartbeat();
   let activeRunId = null;
@@ -329,6 +329,7 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
     effort,
     prompt,
     source: 'cos-persistent-mind',
+    ...(timeoutMs ? { timeout: timeoutMs, absoluteTimeoutMs: timeoutMs, maxTokens: 8192, outputReserveTokens: 8192 } : {}),
     allowFallback: false,
     screenshots,
     responseSchema,
@@ -382,14 +383,15 @@ export function createPersistentMindTurnAdapter() {
     },
 
     async summarize({ events, previousSummary, journal, mindId, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
-      const result = await callBoundary({ purpose: 'summary' }, ({ reportRunId }) => runPinnedPrompt({
+      const prompt = buildPersistentMindSummaryPrompt({ events, previousSummary, journal, mindId });
+      const result = await callBoundary({ purpose: 'summary', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId, timeoutMs }) => runPinnedPrompt({
         provider,
         model,
         effort,
         signal,
         heartbeat,
         reportRunId,
-        prompt: buildPersistentMindSummaryPrompt({ events, previousSummary, journal, mindId }),
+        prompt, timeoutMs,
       }));
       return result.text.trim();
     },
@@ -398,8 +400,8 @@ export function createPersistentMindTurnAdapter() {
     // closed-schema validation and the single repair retry, so the adapter
     // cannot accidentally accept a batch the contract would have refused.
     async extractJournal({ prompt, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
-      const result = await callBoundary({ purpose: 'journal' }, ({ reportRunId }) => runPinnedPrompt({
-        provider, model, effort, signal, heartbeat, reportRunId, prompt,
+      const result = await callBoundary({ purpose: 'journal', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId, timeoutMs }) => runPinnedPrompt({
+        provider, model, effort, signal, heartbeat, reportRunId, prompt, timeoutMs,
       }));
       return result.text.trim();
     },
@@ -472,9 +474,10 @@ export function createPersistentMindTurnAdapter() {
       for (let round = 0; round < MAX_TOOL_PROVIDER_ROUNDS; round += 1) {
         // Round 0 is the turn itself; every later round is a continuation the
         // model earned by asking for tools. Each is admitted on its own.
+        const prompt = `${providerPrompt}\n\n# Current naming identity\n${persistentMindNamePrompt(await readPersistentMindName(PERSISTENT_MIND_ID), { canChoose: taskAccess.manageMind })}`;
         result = await callBoundary(
-          { purpose: round === 0 ? 'turn' : 'tool-round', round },
-          async ({ reportRunId }) => runPinnedPrompt({
+          { purpose: round === 0 ? 'turn' : 'tool-round', round, promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) },
+          async ({ reportRunId, timeoutMs }) => runPinnedPrompt({
             provider,
             model,
             effort,
@@ -482,7 +485,7 @@ export function createPersistentMindTurnAdapter() {
             heartbeat,
             screenshots,
             reportRunId,
-            prompt: `${providerPrompt}\n\n# Current naming identity\n${persistentMindNamePrompt(await readPersistentMindName(PERSISTENT_MIND_ID), { canChoose: taskAccess.manageMind })}`,
+            prompt, timeoutMs,
             responseSchema: persistentMindResponseSchema,
           }),
         );

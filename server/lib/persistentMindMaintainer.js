@@ -1,16 +1,35 @@
 /** Machine-local intent, separate from capability grants and provider choices. */
 import { z } from 'zod';
 
+export const maintainerInferenceSchema = z.object({
+  maxCallsPerTurn: z.number().int().min(1).max(20).optional(),
+  maxCallsPerDay: z.number().int().min(1).max(1000).optional(),
+  maxPromptChars: z.number().int().min(1000).max(250000).optional(),
+  maxCallMs: z.number().int().min(1000).max(600000).optional(),
+  maxReservedMsPerDay: z.number().int().min(1000).max(86400000).optional(),
+  paidPresetIds: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
+  maxPaidCallsPerDay: z.number().int().min(0).max(100).optional(),
+}).strict();
+
+export function normalizeMaintainerInference(raw) {
+  const defaults = { maxCallsPerTurn: 6, maxCallsPerDay: 48, maxPromptChars: 96000,
+    maxCallMs: 120000, maxReservedMsPerDay: 5760000, paidPresetIds: [], maxPaidCallsPerDay: 0 };
+  const parsed = maintainerInferenceSchema.safeParse(raw || {});
+  return { ...defaults, ...(parsed.success ? parsed.data : {}) };
+}
+
 export const persistentMindMaintainerSchema = z.object({
   schemaVersion: z.literal(1).optional(),
   enabled: z.boolean().optional(),
   appIds: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
+  inference: maintainerInferenceSchema.optional(),
   intervalMinutes: z.number().int().min(5).max(10080).optional(),
 }).strict();
 
 export function normalizePersistentMindMaintainer(raw) {
   return {
     schemaVersion: 1,
+    inference: normalizeMaintainerInference(raw?.inference),
     enabled: raw?.enabled === true,
     appIds: [...new Set((Array.isArray(raw?.appIds) ? raw.appIds : [])
       .filter(id => typeof id === 'string' && id.trim() && id.length <= 128)
@@ -21,7 +40,8 @@ export function normalizePersistentMindMaintainer(raw) {
 }
 
 export function mergePersistentMindMaintainer(previous, update) {
-  return normalizePersistentMindMaintainer({ ...normalizePersistentMindMaintainer(previous), ...update });
+  return normalizePersistentMindMaintainer({ ...normalizePersistentMindMaintainer(previous), ...update,
+    inference: { ...normalizeMaintainerInference(previous?.inference), ...update?.inference } });
 }
 
 export function maintainerInstructionBlock(raw) {
