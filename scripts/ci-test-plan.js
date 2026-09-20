@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 
@@ -809,14 +811,14 @@ function fullPlan(changedFiles, reason, options = {}) {
 
 // Git's display output quotes non-ASCII/control characters; trimming also
 // changes valid paths. Read raw NUL-delimited paths so selectors stay exact.
-const gitPaths = (args) => execFileSync('git', args, { encoding: 'utf8' })
+const gitPaths = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8' })
   .split('\0')
   .filter(Boolean);
 
 /** Tracked test files whose text matches `pattern`; `git grep` exit 1 is "none". */
-const gitGrepFiles = (pattern, pathspecs) => {
+const gitGrepFiles = (pattern, pathspecs, cwd) => {
   try {
-    return gitPaths(['grep', '-z', '-l', '-E', pattern, '--', ...pathspecs]);
+    return gitPaths(['grep', '-z', '-l', '-E', pattern, '--', ...pathspecs], cwd);
   } catch (err) {
     if (err.status === 1) return [];
     throw err;
@@ -866,6 +868,55 @@ export function forceFullReasonFor({ forceFull, baseRef }) {
   return null;
 }
 
+/**
+ * Collect the repository-derived inputs that surround the pure plan builder.
+ *
+ * CI leaves `changedFiles` unset and keeps deriving its diff from baseSha. A
+ * local caller may supply the complete committed + working-tree path list; in
+ * that mode files present but not yet tracked are plan inputs too, while paths
+ * deleted from the working tree are deliberately absent from trackedFiles.
+ */
+export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cwd = process.cwd() }) {
+  const hasChangedFilesOverride = changedFiles !== undefined;
+  const collectedChangedFiles = forceFull
+    ? []
+    : hasChangedFilesOverride
+      ? changedFiles
+      : gitPaths(['diff', '-z', '--name-only', '--diff-filter=ACMRD', `${baseSha}...HEAD`], cwd);
+  const trackedFiles = gitPaths(['ls-files', '-z'], cwd);
+  const presentFiles = hasChangedFilesOverride
+    ? uniqueSorted([
+      ...trackedFiles,
+      ...collectedChangedFiles.filter((path) => existsSync(join(cwd, path))),
+    ]).filter((path) => existsSync(join(cwd, path)))
+    : trackedFiles;
+
+  let appDiff = null;
+  if (!forceFull && collectedChangedFiles.includes('client/src/App.jsx')) {
+    const committedDiff = execFileSync(
+      'git', ['diff', '--unified=0', `${baseSha}...HEAD`, '--', 'client/src/App.jsx'],
+      { cwd, encoding: 'utf8' },
+    );
+    const workingTreeDiff = hasChangedFilesOverride
+      ? execFileSync('git', ['diff', '--unified=0', 'HEAD', '--', 'client/src/App.jsx'], { cwd, encoding: 'utf8' })
+      : '';
+    appDiff = `${committedDiff}${workingTreeDiff}`;
+  }
+
+  // Every changed executable, non-test source — not only python scripts — gets
+  // a basename lookup: `git grep`-ing tracked test files for its filename finds
+  // the text-reading contract tests (mirror parity, navManifest.js's 20+ client
+  // reads) that no import edge or feature-directory match can reach. Basename
+  // matching is deliberate: a mirror test names the client copy only as e.g.
+  // 'canonPrompt.js', never by its full path. Over-selection here costs
+  // seconds; under-selection is the bug this closes (issue #6363).
+  const pathContractTests = Object.fromEntries(collectedChangedFiles
+    .filter((path) => isExecutable(path) && !isTestFile(path))
+    .map((path) => [path, gitGrepFiles(sourceReferencePattern(path), TEST_FILE_GLOBS, cwd)]));
+
+  return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests };
+}
+
 function main() {
   const forceFullReason = forceFullReasonFor({
     forceFull: process.env.CI_FORCE_FULL === 'true',
@@ -880,23 +931,18 @@ function main() {
   if (!forceFull && !base) {
     throw new Error('CI_BASE_SHA is required unless the run is forced full (CI_FORCE_FULL=true or CI_BASE_REF=release).');
   }
-  const changedFiles = forceFull
-    ? []
-    : gitPaths(['diff', '-z', '--name-only', '--diff-filter=ACMRD', `${base}...HEAD`]);
-  const trackedFiles = gitPaths(['ls-files', '-z']);
-  const appDiff = forceFull || !changedFiles.includes('client/src/App.jsx')
-    ? null
-    : execFileSync('git', ['diff', '--unified=0', `${base}...HEAD`, '--', 'client/src/App.jsx'], { encoding: 'utf8' });
-  // Every changed executable, non-test source — not only python scripts — gets
-  // a basename lookup: `git grep`-ing tracked test files for its filename finds
-  // the text-reading contract tests (mirror parity, navManifest.js's 20+ client
-  // reads) that no import edge or feature-directory match can reach. Basename
-  // matching is deliberate: a mirror test names the client copy only as e.g.
-  // 'canonPrompt.js', never by its full path. Over-selection here costs
-  // seconds; under-selection is the bug this closes (issue #6363).
-  const pathContractTests = Object.fromEntries(changedFiles
-    .filter((path) => isExecutable(path) && !isTestFile(path))
-    .map((path) => [path, gitGrepFiles(sourceReferencePattern(path), TEST_FILE_GLOBS)]));
+  const changedFilesOverride = process.env.CI_CHANGED_FILES === undefined
+    ? undefined
+    : JSON.parse(process.env.CI_CHANGED_FILES);
+  if (changedFilesOverride !== undefined
+    && (!Array.isArray(changedFilesOverride) || changedFilesOverride.some((path) => typeof path !== 'string'))) {
+    throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
+  }
+  const { changedFiles, trackedFiles, appDiff, pathContractTests } = collectPlanInputs({
+    baseSha: base,
+    forceFull,
+    changedFiles: changedFilesOverride,
+  });
   emitGitHubPlan(buildCiTestPlan(changedFiles, {
     trackedFiles,
     forceFull,

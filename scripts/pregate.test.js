@@ -9,10 +9,22 @@
  */
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { buildCiTestPlan, ALWAYS_RUN_TESTS } from './ci-test-plan.js';
-import { resolvePlanStages, downgradeFullPlan, parseArgs, UNCOVERED_SUITES } from './pregate.js';
+import {
+  buildCiTestPlan,
+  collectPlanInputs,
+  ALWAYS_RUN_TESTS,
+} from './ci-test-plan.js';
+import {
+  collectPregateChangedFiles,
+  resolvePlanStages,
+  downgradeFullPlan,
+  parseArgs,
+  UNCOVERED_SUITES,
+} from './pregate.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -111,6 +123,36 @@ describe('UNCOVERED_SUITES', () => {
 });
 
 describe('the gate end to end', () => {
+  it('passes an uncommitted new test through the planner override', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-pregate-'));
+    const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    const test = 'server/services/example/newBehavior.test.js';
+    try {
+      git('init', '-q');
+      git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+      writeFileSync(join(root, 'README.md'), 'fixture\n');
+      git('add', '--all');
+      git('-c', 'user.name=Example Contributor', '-c', 'user.email=contributor@example.com',
+        '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
+      const base = git('rev-parse', 'HEAD');
+      mkdirSync(dirname(join(root, test)), { recursive: true });
+      writeFileSync(join(root, test), "import { it } from 'vitest';\nit('works', () => {});\n");
+
+      const { changedFiles, workingTreeFiles } = collectPregateChangedFiles(base, { cwd: root });
+      const inputs = collectPlanInputs({ baseSha: base, changedFiles, cwd: root });
+      const plan = buildCiTestPlan(inputs.changedFiles, {
+        trackedFiles: inputs.trackedFiles,
+        appRouteOnly: false,
+        pathContractTests: inputs.pathContractTests,
+      });
+
+      expect(workingTreeFiles).toContain(test);
+      expect(plan.server.files).toContain(test);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // `--base HEAD` rather than the default remote branch: CI clones at depth 2
   // with no `origin/main` ref, so the default would abort here on a fetch the
   // gate is right to demand of a human and wrong to demand of this test. HEAD

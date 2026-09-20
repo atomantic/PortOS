@@ -32,7 +32,7 @@ npm run test:db                  # DB-backed suites → portos_test ONLY (see Se
 npm run pregate                  # BEFORE EVERY PUSH — local CI-plan checks; limits below
 ```
 
-**Run `npm run pregate` on committed work before every push and again after rebasing onto a moved base.** It uses CI's planner and runners, including tree-wide guards for import boundaries, catalog merges, and generated manifests. It does not validate uncommitted changes.
+**Run `npm run pregate` before every push and again after rebasing onto a moved base.** It uses CI's planner and runners, including tree-wide guards for import boundaries, catalog merges, and generated manifests. The local plan includes both committed and uncommitted changes, including untracked files.
 
 A full-suite plan runs only the always-run guards unless `--full` is supplied. DB suites, Windows, client build, and boot smoke are reported but not run by pregate. A green pregate proves only the stages it ran; required CI checks still apply.
 
