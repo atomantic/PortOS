@@ -705,3 +705,4 @@ export * from './layaMlx.js';
 export * from './persistentMindMaintainer.js';
 
 export * from './developmentWorkIdentity.js';
+export * from './persistentMindProcessAudit.js';

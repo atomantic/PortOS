@@ -83,3 +83,30 @@ mid-turn invalidates that turn's remaining calls.
 After configuring this instance, inspect setup and runtime status, then explicitly
 request one `/api/cos/mind/wake` for a bounded smoke run. Do not change another
 install, fetch weights, or silently choose a remote model to make readiness green.
+## Private process audit
+
+Grant **Allow private CoS process audits** and bounded PortOS reads separately.
+The `reports` family provides `reports.next` (bounded scan and durable job
+reservation), `reports.read` (additional byte window), and `reports.record`
+(clean, insufficient evidence, transient provider, known issue, or finding). `reports.fix` records a tracked finding's candidate fix revision
+after verifying it appears in the fetched default branch. Subsequent comparable
+baselines measure recurrence or clean observations, never proof from a summary.
+Each call intersects maintainer scope with current managed-app permissions.
+A turn reserves at most three jobs, shares the normal five-call budget, and has
+an 18,000-byte excerpt allowance. Use returned cursors to continue partial scans.
+
+Reports are untrusted private evidence. Signals are observations, not proof of
+defects. Missing validation, legacy prompt versions, lineage, and unmetered cost
+remain unknown. Public finding tools accept only fixed templates and tracked
+code anchors, never free-text reports; the server renders synthetic reproduction
+and acceptance text. Filing also requires issue permission and an authorized
+target app, including slashdo when it owns the fix. Ambiguous publication is
+held durably for tracker reconciliation, never automatically retried.
+
+Recovery jobs retain typed parent references when supplied by their producer.
+Summaries measure recovery share and duration without another agent. The upstream
+merged-branch cleanup improvement in PR #7817 is already delivered; comparable
+post-fix failures remain eligible findings, while pre-fix observations reuse it.
+Dirty or unreadable state keeps existing safety holds. The audit never rewrites
+prompts or launches another healer; unchanged known findings preserve exploration
+time.

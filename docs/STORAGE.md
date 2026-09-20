@@ -504,3 +504,15 @@ introduced.
   calls conservatively. No federation, seed or migration: absence is the initial
   unused allowance. Included in normal data backups; never treat deletion as a
   routine reset because it reopens spending permission.
+### Persistent mind process audit
+
+`data/cos/persistent-mind-process-audit.json` is a bounded, machine-local
+`file-primary` operational ledger: turn reservations, evidence hashes, outcomes,
+checkpoints and issue-publication intents outlive raw log retention and process
+restarts. It follows the mind journal's strict reads and serialized atomic writes.
+No seed, migration or federation entry; existing CoS backups include it. Missing
+means empty; corrupt means unavailable. At 2,000 receipt/turn records it refuses
+new work instead of losing deduplication history. Transcript windows are read on
+demand, never copied into public findings or automatic wake summaries. Deleting
+the ledger loses duplicate-publication protection; reconcile tracker references
+before manually retiring history.

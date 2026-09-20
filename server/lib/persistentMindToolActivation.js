@@ -16,7 +16,7 @@ import { z } from 'zod';
 // Families mirror the existing capability/scope groupings already declared
 // per tool in cosToolRegistry.js (the precedent is TOOL_GROUPS/GROUP_INTENT
 // in server/services/voice/tools.js) — no new vocabulary.
-export const TOOL_ACTIVATION_FAMILIES = Object.freeze(['tasks', 'issues', 'mind', 'eidoverse', 'recipes', 'voice']);
+export const TOOL_ACTIVATION_FAMILIES = Object.freeze(['tasks', 'issues', 'reports', 'mind', 'eidoverse', 'recipes', 'voice']);
 
 export const TOOL_ACTIVATION_LIMITS = Object.freeze({
   MIN_RETENTION_TURNS: 0,

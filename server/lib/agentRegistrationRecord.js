@@ -1,3 +1,4 @@
+import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.js';
 /**
  * The agent record a spawn registers, projected from the task it is running.
  *
@@ -89,6 +90,8 @@ export function buildAgentRegistration({
     worktreeBranch: worktreeInfo?.branchName || null,
     isWorktree: !!worktreeInfo,
     isPersistentWorktree: !!worktreeInfo?.isPersistentWorktree,
+    isRecovery: isTruthyMetaFn(task.metadata?.isRecovery),
+    recoveryOrigin: processAuditRecoveryOriginSchema.safeParse(task.metadata?.recoveryOrigin).data || null,
     taskDescription: task.description,
     taskType: task.taskType,
     priority: task.priority,

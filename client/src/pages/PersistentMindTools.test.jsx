@@ -113,7 +113,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, auditReports: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -135,7 +135,7 @@ describe('PersistentMindTools', () => {
       { persistentMindCapabilities: {
         schemaVersion: 12,
         createTasks: false,
-        fileIssues: false,
+        fileIssues: false, auditReports: false,
         manageMind: true,
         manageToolRecipes: false,
         manageEidoverse: false,
@@ -174,7 +174,7 @@ describe('PersistentMindTools', () => {
       { persistentMindCapabilities: {
         schemaVersion: 12,
         createTasks: true,
-        fileIssues: false,
+        fileIssues: false, auditReports: false,
         manageMind: false,
         manageToolRecipes: false,
         manageEidoverse: false,
@@ -312,7 +312,7 @@ describe('PersistentMindTools', () => {
       { persistentMindCapabilities: {
         schemaVersion: 12,
         createTasks: false,
-        fileIssues: false,
+        fileIssues: false, auditReports: false,
         manageMind: false,
         manageToolRecipes: false,
         manageEidoverse: false,
