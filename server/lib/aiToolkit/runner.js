@@ -12,6 +12,10 @@ import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalReque
 // a leaf module so a host's own backstop timer can read the absolute bound
 // without dragging this file's fs/child_process closure with it.
 import { DEFAULT_API_RUN_TIMEOUT_MS, apiRunAbsoluteTimeoutMs } from './internal/runTimeouts.js';
+// undici arms its own 300s header/body ceilings under every fetch, which raced
+// — and beat — the two above. The streaming request goes through a dispatcher
+// with those disabled so the run's declared bounds are the only ones.
+import { streamTransportDispatcher } from './internal/streamTransport.js';
 
 // npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
 // shims on Windows; Node's spawn() can't execute those without going through
@@ -834,6 +838,10 @@ export function createRunnerService(config = {}) {
             method: 'POST',
             headers,
             signal: controller.signal,
+            // Hands the request undici's ceilings disabled, leaving `stallTimeout`
+            // / `absoluteTimeout` above as the run's only bounds — see
+            // ./internal/streamTransport.js for what fired first without it.
+            dispatcher: streamTransportDispatcher(),
             body: JSON.stringify({
               model: model || provider.defaultModel,
               messages: [{ role: 'user', content: messageContent }],
