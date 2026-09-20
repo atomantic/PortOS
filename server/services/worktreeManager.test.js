@@ -142,6 +142,13 @@ describe('Worktree dependency preparation', () => {
 
     expect(symlink).not.toHaveBeenCalled();
   });
+
+  it('does not require the PortOS layout for generic managed repositories', async () => {
+    lstat.mockRejectedValue(new Error('missing'));
+
+    await expect(linkWorktreeDependencies('/generic-repo', '/generic-worktree')).resolves.toBeUndefined();
+    expect(symlink).not.toHaveBeenCalled();
+  });
 });
 
 describe('Worktree Porcelain Parsing', () => {
