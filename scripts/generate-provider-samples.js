@@ -270,7 +270,7 @@ const TUPLES = [
     id: 'opencode-vllm', harnessId: 'opencode', method: 'cli',
     service: { definitionId: 'vllm', transports: { openai: { baseUrl: 'http://127.0.0.1:18020/v1' } } },
     overrides: {
-      name: 'OpenCode vLLM (Qwen3.8-27B)', enabled: false,
+      name: 'OpenCode vLLM (Qwen3.8-27B)', enabled: false, thinking: false,
       endpoint: 'http://127.0.0.1:18020/v1', apiKey: '', models: ['qwen3.8-27b'], defaultModel: 'qwen3.8-27b',
       envVars: { OPENCODE_CONFIG_CONTENT: opencodeConfigContent('vllm', 'vLLM Qwen3.8-27B (local)', 'http://127.0.0.1:18020/v1') },
     },
@@ -279,7 +279,7 @@ const TUPLES = [
     id: 'opencode-vllm-tui', harnessId: 'opencode', method: 'tui',
     service: { definitionId: 'vllm', transports: { openai: { baseUrl: 'http://127.0.0.1:18020/v1' } } },
     overrides: {
-      name: 'OpenCode vLLM TUI (Qwen3.8-27B)', enabled: false,
+      name: 'OpenCode vLLM TUI (Qwen3.8-27B)', enabled: false, thinking: false,
       endpoint: 'http://127.0.0.1:18020/v1', apiKey: '', models: ['qwen3.8-27b'], defaultModel: 'qwen3.8-27b',
       tuiIdleTimeoutMs: 180000,
       envVars: { OPENCODE_CONFIG_CONTENT: opencodeConfigContent('vllm', 'vLLM Qwen3.8-27B (local)', 'http://127.0.0.1:18020/v1') },
