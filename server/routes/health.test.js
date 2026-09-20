@@ -89,9 +89,11 @@ vi.mock('../services/github.js', () => ({
   })
 }));
 
-vi.mock('../services/codeReview.js', () => ({
+const codeReviewMock = vi.hoisted(() => ({
   getReviewerConfigHealth: vi.fn().mockResolvedValue({ status: 'ok', configFaults: {} }),
 }));
+
+vi.mock('../services/codeReview.js', () => codeReviewMock);
 
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn().mockResolvedValue({}),
@@ -109,8 +111,6 @@ vi.mock('../services/settings.js', () => ({
     return next;
   })
 }));
-
-const { getReviewerConfigHealth } = await import('../services/codeReview.js');
 
 describe('System Health Routes', () => {
   const app = express();
@@ -297,7 +297,7 @@ describe('System Health Routes', () => {
   });
 
   it('surfaces persisted reviewer configuration faults as install health', async () => {
-    getReviewerConfigHealth.mockResolvedValueOnce({
+    codeReviewMock.getReviewerConfigHealth.mockResolvedValueOnce({
       status: 'warning',
       configFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
     });

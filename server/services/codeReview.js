@@ -45,7 +45,6 @@ import {
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
 } from '../lib/validation.js'
-import { isReviewerConfigFault } from '../lib/reviewerConfig.js'
 import {
   MAX_FIDELITY_DIFF_CHARS,
   normalizeGoalFidelityVerdict,
@@ -56,6 +55,10 @@ import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
 const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|allowance|credit|capacity|exhausted|too many requests|429/i
+// Keep this tiny predicate local: codeReview.js is imported by health and API
+// routes, so reaching into reviewerConfig.js here would pull the entire review
+// configuration graph into a widely-reached module and trip the import budget.
+const isReviewerConfigFault = (code) => code === 'NO_MODEL' || code === 'REVIEWER_UNSUPPORTED'
 export const isReviewerQuotaFailure = (error) => QUOTA_FAILURE.test(String(error || ''))
 
 const normalizeFallbackGroups = (groups) => Array.isArray(groups)
