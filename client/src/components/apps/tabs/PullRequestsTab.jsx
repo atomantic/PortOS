@@ -1,22 +1,29 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import { Link } from 'react-router';
 import {
-  AlertTriangle, Bot, CheckCircle2, ExternalLink, FileSearch, GitBranch, GitMerge,
-  GitPullRequest, Loader2, RefreshCw, Rocket, ScanSearch, Search, ShieldAlert, User
+  AlertTriangle, Bot, CheckCircle2, ClipboardCheck, ExternalLink, FileSearch, GitBranch, GitMerge,
+  GitPullRequest, Info, RefreshCw, Rocket, ScanSearch, Search, ShieldAlert, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
+import CollapsibleSection from '../../ui/CollapsibleSection';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import ReviewerPicker from '../../cos/ReviewerPicker';
+import { PR_REVIEW_MODES, PR_REVIEW_MODE_OPTIONS, DEFAULT_PR_REVIEW_MODE, prReviewModeOption, REVIEWER_LIST_OVERRIDE_KEYS } from '../../cos/constants';
 import ScopeAdherenceCheck from '../ScopeAdherenceCheck';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
 import useProviderModels from '../../../hooks/useProviderModels';
+import useReviewerModelOptions from '../../../hooks/useReviewerModelOptions';
+import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../../hooks/useCodeReviewDefaults';
+import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../lib/reviewerModels';
 import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
+import RunActionButton from './RunActionButton';
 
 const FORGE_LABEL = { github: 'GitHub', gitlab: 'GitLab' };
 
@@ -48,6 +55,22 @@ const actionStatusForTask = status => ({
 // the action can run — absent means "always offered". `matches` is the
 // LATE-BINDING rule: a click knows its PR number before the server has a task
 // id, so a socket update is claimed by the row it names.
+//
+// `body` is what the click POSTs, built from the panel above the list. It is
+// per-kind because the three actions consume the panel differently, and that
+// difference is a real contract rather than a styling choice: `resolve` and
+// `doReview` are agents PortOS composes here, so they take the whole panel;
+// `review` hands its run to the `pr-reviewer` SCHEDULED task, whose providers
+// live on its own stages and whose review roster is that pipeline's, not this
+// panel's — so it takes only the provider pin, and only when the user opts in.
+//
+// `call` stays a lambda around each api function rather than a reference to it:
+// a reference is READ at module evaluation, and several suites that reach this
+// module transitively mock `services/api` with only the exports they use — so a
+// bare `call: api.resolveAppPullRequest` fails their import with "no export is
+// defined on the mock" before a single test runs.
+const wholePanelBody = ({ providerSettings, reviewSettings }) => ({ ...providerSettings, ...reviewSettings });
+
 const ACTION_KINDS = {
   resolve: {
     label: 'Resolve & merge',
@@ -57,7 +80,8 @@ const ACTION_KINDS = {
     // The only kind whose POST answers with a bare `task` rather than a record
     // named after its field.
     queued: result => result.task && { taskId: result.task.id, status: result.task.status },
-    call: (appId, number, settings) => api.resolveAppPullRequest(appId, number, settings),
+    body: wholePanelBody,
+    call: (appId, number, body) => api.resolveAppPullRequest(appId, number, body),
     title: (forgeLabel, number, appName) =>
       `Start a CoS agent now to resolve and merge ${forgeLabel} request #${number} for ${appName}`,
     matches: (task, appId, number) => task.metadata?.app === appId
@@ -71,8 +95,9 @@ const ACTION_KINDS = {
     eligibleField: 'reviewEligible',
     // The one action that follows its own saved stage providers unless the user
     // explicitly opts the page-level pin in.
-    call: (appId, number, settings, { overrideProvider }) =>
-      api.reviewAppPullRequest(appId, number, overrideProvider ? settings : {}),
+    body: ({ providerSettings, applyRunWithToPrReview }) =>
+      (applyRunWithToPrReview ? providerSettings : {}),
+    call: (appId, number, body) => api.reviewAppPullRequest(appId, number, body),
     title: (forgeLabel, number, appName) =>
       `Run the pr-reviewer scheduled task against ${forgeLabel} request #${number} for ${appName}`,
     matches: (task, appId, number) => task.metadata?.app === appId
@@ -85,7 +110,8 @@ const ACTION_KINDS = {
     Icon: FileSearch,
     field: 'doReviewAction',
     eligibleField: 'doReviewEligible',
-    call: (appId, number, settings) => api.doReviewAppPullRequest(appId, number, settings),
+    body: wholePanelBody,
+    call: (appId, number, body) => api.doReviewAppPullRequest(appId, number, body),
     title: (forgeLabel, number, appName) =>
       `Run the /do:review workflow against ${forgeLabel} request #${number} for ${appName} and post an inline review`,
     // Shares `targetPullRequest` with the pr-reviewer match above — one
@@ -97,6 +123,79 @@ const ACTION_KINDS = {
   },
 };
 const KIND_IDS = Object.keys(ACTION_KINDS);
+
+// The reviewer fields the run-settings panel may pin. `ReviewerPicker` emits a
+// partial against its baseline, and that partial can also carry the run flags
+// (`stopMode` / `reviewerApplies`) this panel deliberately does not offer — so
+// narrow it to the keys that actually change the resolved roster. That list is
+// `REVIEWER_LIST_OVERRIDE_KEYS` rather than a local copy: the server mirrors it
+// (`reviewerConfig.test.js` pins the two against each other), so a seventh
+// pinnable field reaches this filter with everything else instead of being
+// silently dropped on the way to the request. A partial with nothing left in it
+// is `null`: no override at all, which is what leaves the server resolving the
+// Code Review Defaults at spawn time.
+function pickReviewerOverride(next) {
+  const picked = Object.fromEntries(
+    REVIEWER_LIST_OVERRIDE_KEYS.filter(key => next?.[key] !== undefined).map(key => [key, next[key]]),
+  );
+  return Object.keys(picked).length ? picked : null;
+}
+
+/**
+ * The reviewer roster a delegated run uses, seeded from the install's Code
+ * Review Defaults and edited as a partial against them.
+ *
+ * Its own component, and its own `CodeReviewDefaultsProvider`, so that BOTH of
+ * its fetches are paid only by a user who opened the disclosure. That matters
+ * for one of them specifically: `useReviewerModelOptions` reads
+ * `/api/local-llm/status`, which is uncached and spawns `ollama --version` and
+ * `lms version` plus a forced LM Studio model list — a real cost to charge every
+ * visit to a tab whose common path is pressing Merge. The parent keeps it
+ * mounted once opened, so a second open costs nothing.
+ */
+function ReviewerOverrideBody({ override, onChange }) {
+  const codeReviewDefaults = useCodeReviewDefaults();
+  const reviewerModelOptions = useReviewerModelOptions();
+  // The defaults carry per-reviewer pins as `<reviewer>Model` / `<reviewer>Effort`
+  // scalars; the picker takes them as token-keyed maps.
+  const seeded = useMemo(() => ({
+    ...codeReviewDefaults,
+    reviewerModels: reviewerModelsFromDefaults(codeReviewDefaults),
+    reviewerEfforts: reviewerEffortsFromDefaults(codeReviewDefaults),
+  }), [codeReviewDefaults]);
+
+  return (
+    <>
+      <ReviewerPicker
+        {...seeded}
+        {...override}
+        defaults={seeded}
+        modelOptions={reviewerModelOptions}
+        showRunFlags={false}
+        onChange={next => onChange(pickReviewerOverride(next))}
+      />
+      <p className="text-xs text-gray-500">
+        Applies to Resolve &amp; merge and Do:Review. Left untouched, both resolve the install&apos;s Code Review Defaults when the agent starts.
+      </p>
+      {override && (
+        <button type="button" onClick={() => onChange(null)} className="text-xs text-port-accent hover:underline">
+          Use configured reviewers
+        </button>
+      )}
+    </>
+  );
+}
+
+// The defaults live in context, and this is the only consumer on the page — so
+// the provider is mounted with the picker rather than around the whole tab, which
+// is what keeps its fetch on the same lazy path as the model-options probe above.
+function ReviewerOverride(props) {
+  return (
+    <CodeReviewDefaultsProvider>
+      <ReviewerOverrideBody {...props} />
+    </CodeReviewDefaultsProvider>
+  );
+}
 
 // The direct merge's methods, in the order the forges list them.
 const MERGE_METHOD_LABELS = { merge: 'Merge commit', squash: 'Squash', rebase: 'Rebase' };
@@ -228,6 +327,7 @@ function actionRank(status) {
 export default function PullRequestsTab({ appId, appName }) {
   const searchId = useId();
   const mergeId = useId();
+  const reviewModeId = useId();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -246,8 +346,8 @@ export default function PullRequestsTab({ appId, appName }) {
   const [mergeMethod, setMergeMethod] = useState(DEFAULT_MERGE_METHOD);
   const [deleteBranchOnMerge, setDeleteBranchOnMerge] = useState(true);
 
-  // Resolve & merge defaults to the active provider. PR review follows its
-  // saved stages unless the user explicitly enables the eligibility override.
+  // Resolve & merge and Do:Review default to the active provider. PR review
+  // follows its own scheduled stages unless the user explicitly opts this pin in.
   // Auto remains available for server-side routing. Mirrors the Issues
   // tab's "Run with" picker: a session convenience, never persisted.
   const {
@@ -255,7 +355,31 @@ export default function PullRequestsTab({ appId, appName }) {
     setSelectedProviderId, setSelectedModel
   } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
-  const [overrideReviewProvider, setOverrideReviewProvider] = useState(false);
+  const [applyRunWithToPrReview, setApplyRunWithToPrReview] = useState(false);
+
+  // WHO reviews, for the two actions PortOS composes here. `delegated` keeps the
+  // historical behavior (the agent orchestrates the install's reviewer roster);
+  // `self` collapses the review onto the Run with provider, which is the cheaper
+  // answer whenever that provider is already the model you wanted the review
+  // from. Session state, like everything else in this panel.
+  const [reviewMode, setReviewMode] = useState(DEFAULT_PR_REVIEW_MODE);
+  // What this run changes about the reviewer roster, as the PARTIAL the picker
+  // emits against its baseline — or `null` for "nothing, use whatever the
+  // install's Code Review Defaults resolve to". A partial rather than a seeded
+  // copy is what gates SENDING the fields: an untouched picker must leave the
+  // server reading the defaults at spawn time rather than freezing whatever this
+  // tab happened to render, and per-FIELD precedence then means pinning only the
+  // reviewers still takes the usernames and pins from the defaults. Editing a
+  // field back to its default drops it from the partial, so the override empties
+  // itself out the same way the reset button does.
+  const [reviewOverride, setReviewOverride] = useState(null);
+  // Whether the override picker has ever been opened. It owns two fetches — one
+  // of which probes the local-LLM backends and spawns `ollama`/`lms` — so it is
+  // mounted on the first open rather than with the tab, and then KEPT mounted so
+  // reopening does not pay for them again. See `ReviewerOverride` below.
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideMounted, setOverrideMounted] = useState(false);
+  const selfReview = reviewMode === PR_REVIEW_MODES.SELF;
 
   // One writer for the whole `{ kind: { number: action } }` bag so the ref the
   // socket handler reads and the state React renders can never disagree.
@@ -388,14 +512,23 @@ export default function PullRequestsTab({ appId, appName }) {
     effort: effort || undefined,
   };
 
+  // This run's review settings. The mode always rides along (the server needs an
+  // explicit answer, and its own default is `delegated` either way); the roster
+  // only does when the user actually edited the picker, and never under
+  // self-review, where there is no roster to override.
+  const reviewSettings = {
+    reviewMode,
+    ...(selfReview ? {} : (reviewOverride || {})),
+  };
+
   // Every row action queues a CoS task and then tracks it identically: optimistic
   // `queuing`, roll back on failure, and never let a stale response downgrade a
   // status a socket update already advanced.
   const queueAction = async (kind, pullRequest) => {
     const { number } = pullRequest;
-    const { verb, call } = ACTION_KINDS[kind];
+    const { verb, call, body } = ACTION_KINDS[kind];
     setAction(kind, number, { status: 'queuing', taskId: null });
-    const result = await call(appId, number, providerSettings, { overrideProvider: overrideReviewProvider })
+    const result = await call(appId, number, body({ providerSettings, reviewSettings, applyRunWithToPrReview }))
       .catch(err => {
         toast.error(err?.message || `Failed to queue an agent for #${number}`);
         return null;
@@ -518,52 +651,108 @@ export default function PullRequestsTab({ appId, appName }) {
         </button>
       </div>
 
-      <div className="px-3 py-2 text-xs text-gray-500 bg-port-card border border-port-border rounded-lg space-y-1">
+      {/* Reference text, not a control — collapsed by default so the run
+          settings and the request list both stay above the fold. It used to be
+          four permanently-expanded paragraphs, which pushed the first row off a
+          laptop screen for an explanation you read once. */}
+      <CollapsibleSection
+        icon={Info}
+        label="What each action does"
+        size="bar"
+        id="pull-request-action-help"
+        className="px-3 py-1 bg-port-card border border-port-border rounded-lg"
+        bodyClassName="pb-2 space-y-1 text-xs text-gray-500"
+      >
         <p>
           Merge lands the request on the forge immediately — no agent, no review, no model spend. Pick the merge method and whether to delete the source branch, then confirm. A long-lived source branch (a <span className="font-mono">main → release</span> request) is never deleted.
         </p>
         <p>
-          Resolve and merge starts a PortOS agent right away to inspect feedback, fix the branch, wait for checks, and merge when the forge allows it. It uses the configured Code Review Defaults.
+          Resolve and merge starts a PortOS agent right away to inspect feedback, fix the branch, wait for checks, and merge when the forge allows it. It reviews the change under the Code review setting below.
         </p>
         {offersKind('review') && (
           <p>
-            PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and uses the providers saved on its review stages. The security scan must pass before either review stage runs.
+            PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and uses the providers saved on its review stages, so the Code review setting below does not apply to it. The security scan must pass before either review stage runs.
           </p>
         )}
         {offersKind('doReview') && (
           <p>
-            Do:Review runs the <span className="font-mono">/do:review</span> workflow against one request with your Code Review Defaults and posts the findings as an inline review. It is review-only — nothing is committed, pushed, or merged — and it is offered on every open request, including the code-contributor PRs the pr-reviewer task skips.
+            Do:Review runs the <span className="font-mono">/do:review</span> workflow against one request and posts the findings as an inline review. It is review-only — nothing is committed, pushed, or merged — and it is offered on every open request, including the code-contributor PRs the pr-reviewer task skips.
           </p>
         )}
-      </div>
+      </CollapsibleSection>
 
-      <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg">
-        <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
-          <Bot size={14} /> Run with
-        </span>
-        <div className="flex-1">
-          <ProviderModelSelector
-            providers={providers}
-            selectedProviderId={selectedProviderId}
-            selectedModel={selectedModel}
-            availableModels={availableModels}
-            onProviderChange={(id) => { setSelectedProviderId(id); setEffort(''); }}
-            onModelChange={setSelectedModel}
-            effort={effort}
-            onEffortChange={setEffort}
-            emptyProviderOption="Auto (default)"
-            emptyModelOption="Default model"
-            compact
-            highlightToolUse
-          />
+      <div className="space-y-3 px-3 py-2 bg-port-card border border-port-border rounded-lg">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+            <Bot size={14} /> Run with
+          </span>
+          <div className="flex-1">
+            <ProviderModelSelector
+              providers={providers}
+              selectedProviderId={selectedProviderId}
+              selectedModel={selectedModel}
+              availableModels={availableModels}
+              onProviderChange={(id) => { setSelectedProviderId(id); setEffort(''); }}
+              onModelChange={setSelectedModel}
+              effort={effort}
+              onEffortChange={setEffort}
+              emptyProviderOption="Auto (default)"
+              emptyModelOption="Default model"
+              compact
+              highlightToolUse
+            />
+          </div>
         </div>
-      </div>
 
-      <div className="text-xs text-gray-400">
-        <input id="override-pr-review-provider" type="checkbox" checked={overrideReviewProvider}
-          onChange={event => setOverrideReviewProvider(event.target.checked)} className="mr-2" />
-        <label htmlFor="override-pr-review-provider">Use Run with for PR review eligibility</label>
-        <p className="mt-1">Off by default to preserve your scheduled providers. The final code review keeps its own stage settings.</p>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <label htmlFor={reviewModeId} className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+            <ClipboardCheck size={14} /> Code review
+          </label>
+          <div className="flex-1 flex flex-wrap items-center gap-2">
+            <select
+              id={reviewModeId}
+              value={reviewMode}
+              onChange={event => setReviewMode(event.target.value)}
+              className="px-2.5 py-1.5 bg-port-bg border border-port-border rounded-lg text-xs text-white focus:border-port-accent focus:outline-hidden"
+            >
+              {PR_REVIEW_MODE_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <span className="text-xs text-gray-500">{prReviewModeOption(reviewMode)?.description}</span>
+          </div>
+        </div>
+
+        {/* Only a delegated run HAS a roster, so the override is hidden — not
+            disabled — under self-review: a picker whose every edit is discarded
+            reads as a setting that is being ignored. */}
+        {!selfReview && (
+          <CollapsibleSection
+            label={`Reviewer override${reviewOverride ? ' (active)' : ''}`}
+            size="md"
+            id="pull-request-reviewer-override"
+            bodyClassName="pt-2 space-y-2"
+            open={overrideOpen}
+            onOpenChange={next => { setOverrideOpen(next); if (next) setOverrideMounted(true); }}
+            // Only after the first open: before that the body is unmounted (and
+            // its fetches unspent); after it, hiding rather than unmounting is
+            // what keeps a reopen from refetching.
+            keepMounted={overrideMounted}
+          >
+            {overrideMounted && <ReviewerOverride override={reviewOverride} onChange={setReviewOverride} />}
+          </CollapsibleSection>
+        )}
+
+        {offersKind('review') && (
+          <div className="text-xs text-gray-400">
+            <input id="apply-run-with-to-pr-review" type="checkbox" checked={applyRunWithToPrReview}
+              onChange={event => setApplyRunWithToPrReview(event.target.checked)} className="mr-2" />
+            <label htmlFor="apply-run-with-to-pr-review">Also run PR review on the Run with provider</label>
+            <p className="mt-1">
+              Off by default: PR review is a <span className="font-mono">pr-reviewer</span> run, and that task keeps the providers saved on its own stages. Tick this to point its scan and review stages at the provider chosen above instead. Resolve &amp; merge and Do:Review always use it.
+            </p>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -697,19 +886,17 @@ export default function PullRequestsTab({ appId, appName }) {
                         );
                       }
                       return (
-                        <button
+                        <RunActionButton
                           key={kind}
-                          type="button"
                           onClick={() => queueAction(kind, pullRequest)}
                           disabled={actionStatus === 'queuing'}
+                          busy={actionStatus === 'queuing'}
                           title={title(forgeLabel, pullRequest.number, appName)}
-                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 transition-colors"
+                          icon={Icon}
+                          className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 border border-port-border rounded-lg text-xs whitespace-nowrap"
                         >
-                          {actionStatus === 'queuing'
-                            ? <Loader2 size={14} className="animate-spin" />
-                            : <Icon size={14} />}
-                          {actionStatus === 'queuing' ? 'Queuing…' : label}
-                        </button>
+                          {label}
+                        </RunActionButton>
                       );
                     })}
 

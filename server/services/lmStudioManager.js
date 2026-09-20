@@ -638,11 +638,23 @@ function resetCache() {
   lastCheckAt = null
 }
 
-// LM Studio can be installed as a macOS app without the `lms` CLI on PATH and
+// LM Studio can be installed as a desktop app without the `lms` CLI on PATH and
 // without the local server running — mirror scripts/setup-llm.js so status
 // doesn't report "Not installed" (and offer a redundant install) in that case.
+//
+// macOS has one fixed bundle path, so it is checked directly. Windows and Linux
+// do NOT: the installer lets the user place the app anywhere, including a
+// non-system drive, so there is no fixed path to probe.
+// What every platform DOES have is the app's own home directory — LM Studio
+// creates `~/.lmstudio` (or the older `~/.cache/lm-studio`) on first launch, and
+// `getModelsDir()` above already treats those two as its authoritative roots.
+// Keying off them makes a Windows install with the server stopped and `lms`
+// unbootstrapped read as installed instead of prompting to install it again.
+const LM_STUDIO_HOME_DIRS = ['.lmstudio', '.cache/lm-studio']
+
 function isAppInstalled() {
-  return process.platform === 'darwin' && existsSync('/Applications/LM Studio.app')
+  if (process.platform === 'darwin' && existsSync('/Applications/LM Studio.app')) return true
+  return LM_STUDIO_HOME_DIRS.some((dir) => existsSync(join(homedir(), ...dir.split('/'))))
 }
 
 /**

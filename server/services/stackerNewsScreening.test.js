@@ -18,7 +18,7 @@ const query = vi.fn(async (sql, params) => {
   if (sql.startsWith('SELECT * FROM stacker_news_territories')) return { rows: [] };
   if (sql.startsWith('SELECT content_hash')) return { rows: [{ content_hash: item.content_hash }] };
   if (sql.includes('INSERT INTO stacker_news_analyses')) {
-    analysisRows.push({ id: params[0], stage: params[2], provider: params[3], result: params[9] });
+    analysisRows.push({ id: params[0], stage: params[2], provider: params[3], status: params[5], result: params[9] });
   }
   return { rows: [], rowCount: 1 };
 });
@@ -26,13 +26,14 @@ const query = vi.fn(async (sql, params) => {
 const fetchWithTimeout = vi.fn();
 const fetchAndNormalizeStackerNewsImage = vi.fn();
 const screenUntrustedContent = vi.fn();
+const jevBatchGate = vi.fn();
 
 vi.mock('../lib/db.js', () => ({ query, withTransaction: vi.fn() }));
 vi.mock('../lib/vaultCrypto.js', () => ({ decryptValue: vi.fn(), encryptValue: vi.fn(), ensureVaultKey: vi.fn() }));
 vi.mock('../integrations/stackerNews/index.js', () => ({ executeStackerNewsOperation: vi.fn(), executeStackerNewsBrowserRead: vi.fn(), stackerNewsCapabilities: {} }));
 vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout }));
 vi.mock('./stackerNewsMedia.js', () => ({ fetchAndNormalizeStackerNewsImage, hashRemoteMediaUrl: (url) => `hash:${url}` }));
-vi.mock('./untrustedContent.js', () => ({ screenUntrustedContent }));
+vi.mock('./untrustedContent.js', () => ({ jevBatchGate, screenUntrustedContent }));
 
 const { analyzeItem } = await import('./stackerNews.js');
 const { UNTRUSTED_CONTENT_INSTRUCTIONS } = await import('../lib/untrustedContent.js');
@@ -40,13 +41,18 @@ const { UNTRUSTED_CONTENT_INSTRUCTIONS } = await import('../lib/untrustedContent
 const ollamaResponse = (body) => ({ ok: true, json: async () => ({ message: { content: JSON.stringify(body) } }) });
 const allowed = { classification: 'allowed', risk: 'low', summary: 'Ordinary post', findings: [], suggestedAction: 'none' };
 const stageResult = (stage) => analysisRows.find((row) => row.stage === stage)?.result;
+let gate;
 
 beforeEach(() => {
   analysisRows.length = 0;
+  account.rules = {};
   query.mockClear();
   fetchWithTimeout.mockReset();
   fetchAndNormalizeStackerNewsImage.mockReset();
   screenUntrustedContent.mockReset();
+  gate = { decided: new Map(), pending: [{ key: 'item' }], skipped: [], measure: vi.fn() };
+  jevBatchGate.mockReset();
+  jevBatchGate.mockResolvedValue(gate);
   item = {
     id: 'item', account_id: 'account', territory_id: null, content_hash: 'hash',
     // Deliberately free of the local INJECTION_PATTERNS, so a skipped model call
@@ -64,6 +70,65 @@ describe('Stacker News phase-1 screening', () => {
     // POST would still pull attacker-chosen media.
     expect(fetchWithTimeout).not.toHaveBeenCalled();
     expect(fetchAndNormalizeStackerNewsImage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['classification escalation', { classification: 'escalate', risk: 'low' }],
+    ['high risk', { classification: 'allowed', risk: 'high' }],
+  ])('uses jev %s without any text or vision calls', async (_label, choices) => {
+    screenUntrustedContent.mockResolvedValue({ ok: true, safe: true });
+    gate.decided.set('item', {
+      'stacker-news-classification': choices.classification,
+      'stacker-news-risk': choices.risk,
+    });
+    gate.pending = [];
+    gate.measure.mockResolvedValue(null);
+
+    const analysis = await analyzeItem('item');
+
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+    expect(fetchAndNormalizeStackerNewsImage).not.toHaveBeenCalled();
+    expect(analysis.policy).toMatchObject({ decision: 'escalate', allowedAction: 'none' });
+    expect(analysis.text).toMatchObject({ ...choices, summary: '', findings: [], suggestedAction: 'none' });
+    const jevRows = analysisRows.filter((row) => row.provider === 'jev');
+    expect(jevRows).toHaveLength(1);
+    expect(jevRows[0]).toMatchObject({ stage: 'text', status: 'completed' });
+    expect(jevRows[0].result).toMatchObject({ ...choices, summary: '', findings: [] });
+    expect(gate.measure).toHaveBeenCalledWith();
+  });
+
+  it('falls through on an allowed/low jev verdict so model prose still scans disallowed themes', async () => {
+    screenUntrustedContent.mockResolvedValue({ ok: true, safe: true });
+    account.rules = { disallowedThemes: ['ordinary'] };
+    fetchAndNormalizeStackerNewsImage.mockResolvedValue({
+      base64: 'image-bytes', sourceUrlHash: 'hash', contentHash: 'image-hash', mimeType: 'image/png', width: 1, height: 1, byteLength: 11,
+    });
+    fetchWithTimeout.mockResolvedValue(ollamaResponse(allowed));
+
+    const analysis = await analyzeItem('item');
+
+    expect(fetchWithTimeout).toHaveBeenCalledTimes(2);
+    expect(fetchAndNormalizeStackerNewsImage).toHaveBeenCalledTimes(1);
+    expect(analysis.policy).toMatchObject({ decision: 'review', reasons: ['disallowed_theme:ordinary'] });
+    expect(gate.measure).toHaveBeenCalledWith({
+      item: { 'stacker-news-classification': 'allowed', 'stacker-news-risk': 'low' },
+    });
+    expect(analysisRows.some((row) => row.provider === 'jev')).toBe(false);
+  });
+
+  it('records a skip instead of releasing an abstention in jev only mode', async () => {
+    screenUntrustedContent.mockResolvedValue({ ok: true, safe: true });
+    gate.pending = [];
+    gate.skipped = [{ key: 'item' }];
+    gate.measure.mockResolvedValue(null);
+
+    const analysis = await analyzeItem('item');
+
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
+    expect(fetchAndNormalizeStackerNewsImage).not.toHaveBeenCalled();
+    expect(analysis).toMatchObject({ skipped: true, skipReason: 'jev_only_unsettled', policy: { decision: 'review', reasons: ['jev_only_unsettled'] } });
+    expect(analysisRows.find((row) => row.provider === 'jev')).toMatchObject({ stage: 'policy', status: 'skipped', result: { reasons: ['jev_only_unsettled'] } });
+    expect(gate.measure).toHaveBeenCalledWith();
   });
 
   it('persists the screening code and escalates instead of returning allowed', async () => {

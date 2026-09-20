@@ -27,7 +27,7 @@ vi.mock('./git.js', () => ({ push: vi.fn(), getRepoBranches: vi.fn(), generatePR
 vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn().mockResolvedValue([]),
-  spawnMergeRecoveryTask: vi.fn().mockResolvedValue({}),
+  spawnMergeRecoveryTask: vi.fn().mockResolvedValue({ id: 'recovery-1' }),
   releaseRetryHold: vi.fn().mockResolvedValue({}),
 }));
 vi.mock('./notifications.js', () => ({
@@ -35,6 +35,7 @@ vi.mock('./notifications.js', () => ({
   NOTIFICATION_TYPES: { PLAN_QUESTION: 'plan_question', AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { MEDIUM: 'medium', HIGH: 'high' },
 }));
+vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}) }));
 vi.mock('./creativeDirector/completionHook.js', () => ({ handleCreativeDirectorCompletion: vi.fn().mockResolvedValue({}) }));
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
@@ -47,6 +48,7 @@ import { promptOpensOwnPr } from './promptSections/completion.js';
 import * as git from './git.js';
 import * as jira from './jira.js';
 import { addNotification } from './notifications.js';
+import { ensureTaskThread } from './brainTaskThreads.js';
 import { updateAgent } from './cosAgentLifecycle.js';
 import { handleCreativeDirectorCompletion } from './creativeDirector/completionHook.js';
 
@@ -665,9 +667,9 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     cleanupAgentWorktree.mockResolvedValueOnce(warnings);
     await complete({ appName: 'Example App' });
     expect(updateAgent).toHaveBeenCalledWith('a1', { result: { success: true, warnings } });
-    expect(addNotification).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'agent_warning', title: 'Agent cleanup issue: Example App',
-      description: warnings[0], priority: 'high', metadata: { agentId: 'a1', taskId: 't', warnings },
+    expect(addNotification).not.toHaveBeenCalled();
+    expect(ensureTaskThread).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Agent cleanup issue: Example App', notes: warnings[0], priority: 'high',
     }));
     expect(spawnMergeRecoveryTask).toHaveBeenCalledWith(warnings, 'a1', expect.objectContaining({ id: 't' }), 'Example App', '/example/repo');
   });
@@ -692,7 +694,7 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     expect(addNotification).toHaveBeenCalledWith({
       type: 'plan_question', title: 'Choose the example scope', message: marker,
       priority: 'medium', link: '/apps/example-app/documents',
-      metadata: { appId: 'example-app', agentId: 'a1', taskType: 'plan-task' },
+      metadata: { appId: 'example-app', agentId: 'a1', taskType: 'plan-task', category: 'plan-question' },
     });
     await expect(readFile(join(workspace, '.plan-questions.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(addNotification.mock.invocationCallOrder[0]).toBeLessThan(cleanupAgentWorktree.mock.invocationCallOrder[0]);

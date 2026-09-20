@@ -1,6 +1,18 @@
-vi.mock('./fleetLlmStartup.js', () => ({ installFleetHostLoginTask: async () => ({ success: true }), isFleetHostLoginTaskInstalled: async () => true }));
+vi.mock('./fleetLlmStartup.js', () => ({
+  installFleetHostLoginTask: async () => ({ success: true }),
+  isFleetHostLoginTaskInstalled: async () => true,
+  removeFleetHostLoginTask: async () => { state.loginTaskRemoved = true; return { success: true }; },
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ providers: [], writes: [], enabled: '', specs: { platform: 'win32', cuda: { gpus: [{ name: 'NVIDIA RTX 3090', vramGb: 24 }] } }, peers: [], peerResponses: new Map() }));
+const state = vi.hoisted(() => ({ providers: [], writes: [], enabled: '', loginTaskRemoved: false, specs: { platform: 'win32', cuda: { gpus: [{ name: 'NVIDIA RTX 3090', vramGb: 24 }] } }, peers: [], peerResponses: new Map() }));
+// The usage ledger has its own suite and its own disk; here it would only pull
+// `readJSONFile` into the narrow `fileUtils` double this file already declares.
+vi.mock('./fleetLlmUsage.js', () => ({
+  getFleetHostUsageLedger: async () => ({ beginRequest: () => ({}), endRequest: () => {} }),
+  getFleetHostUsageReport: async () => ({ clients: [], recent: [], totals: {} }),
+  scheduleFleetHostUsagePersist: () => {},
+  flushFleetHostUsage: async () => {},
+}));
 vi.mock('./instances.js', () => ({ getPeers: async () => state.peers }));
 vi.mock('../lib/peerHttpClient.js', () => ({
   peerFetch: async (url, opts, peer) => {
@@ -25,9 +37,9 @@ vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn(async ()
 vi.mock('./vllmQwenManager.js', () => ({ ensureVllmProjectDir: async () => null, provisionVllmQwenProject: async () => ({ success: true }) }));
 vi.mock('./providers.js', () => ({ getAllProviders: async () => ({ providers: state.providers }), createProvider: async (record) => state.providers.push(record), updateProvider: async (id, patch) => Object.assign(state.providers.find(p => p.id === id), patch) }));
 vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: () => ({ server: { once() {}, on() {}, listen(_port, _host, done) { done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }) }));
-import { configureFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
+import { configureFleetLlmHost, disableFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
-beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.enabled = ''; state.providers = []; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
+beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.enabled = ''; state.loginTaskRemoved = false; state.providers = []; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
 describe('dedicated host setup workflow', () => {
   it('pins the prepared image, keeps the runtime private and routes only local providers through the queue', async () => {
     state.providers = [
@@ -51,6 +63,37 @@ describe('dedicated host setup workflow', () => {
     await expect(configureFleetLlmHost({ isCancelled: () => true })).rejects.toThrow('cancelled');
     expect(runStreamingCommand).not.toHaveBeenCalled();
     expect(state.enabled).toBe('');
+  });
+});
+
+describe('stopping the dedicated host', () => {
+  it('clears every thing that would start it again, and removes rather than merely stops the container', async () => {
+    await configureFleetLlmHost();
+    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=1');
+    expect((await getFleetLlmHostStatus()).stoppable).toBe(true);
+    vi.clearAllMocks();
+
+    await expect(disableFleetLlmHost()).resolves.toEqual({ success: true, containerStopped: true });
+    // The marker, the login task and the container are three independent ways
+    // the host comes back; leaving any one of them is what made it feel
+    // impossible to stop.
+    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=0');
+    expect(state.loginTaskRemoved).toBe(true);
+    // `rm -s -f`, not `stop`: the container carries `restart: unless-stopped`,
+    // so a stopped one returns the next time the Docker engine starts.
+    expect(runStreamingCommand.mock.calls.at(-1)[1]).toEqual(expect.arrayContaining(['rm', '-s', '-f', 'single']));
+    const status = await getFleetLlmHostStatus();
+    expect(status.enabled).toBe(false);
+    expect(status.listening).toBe(false);
+  });
+
+  it('still disables the host when docker refuses, and says which half did not happen', async () => {
+    await configureFleetLlmHost();
+    runStreamingCommand.mockResolvedValueOnce({ success: false, error: 'the Docker daemon is not answering' });
+    const result = await disableFleetLlmHost();
+    expect(result).toMatchObject({ success: true, containerStopped: false });
+    expect(result.error).toContain('could not be stopped');
+    expect(state.enabled).toBe('PORTOS_FLEET_LLM_ENABLED=0');
   });
 });
 

@@ -39,7 +39,7 @@ vi.mock('../hooks/useDeckRenderTarget', () => ({
   default: () => ({ summary: 'Local · flux2 · 1096×1536', blocked: false, mode: 'local', options: [] }),
 }));
 
-const COMPOSED = 'copperplate engraving. Full tarot card, framed border. The Fool: a youth at a cliff edge';
+const COMPOSED = 'copperplate engraving. Full tarot card, framed border. One-way card face: all rank, suit and title markings share one upright reading direction; the top-left and bottom-right indices face the same way, with no 180-degree rotation or inverted duplicate. The Fool: a youth at a cliff edge';
 
 const deck = {
   id: 'd1',
@@ -114,7 +114,7 @@ describe('DeckDetail preview items', () => {
     await waitFor(() => expect(getGalleryImages).toHaveBeenCalled());
     await waitFor(() => {
       expect(previewProps?.preview?.prompt).toBe(COMPOSED);
-      expect(previewProps?.preview?.negativePrompt).toBe('blurry');
+      expect(previewProps?.preview?.negativePrompt).toBe('upside-down index, rotated bottom-right rank, inverted duplicate, mirrored lettering, blurry');
     });
   });
 });

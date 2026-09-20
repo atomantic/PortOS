@@ -67,3 +67,8 @@ export async function up(client) {
 - Keep each migration focused on one logical change.
 - Prefer `.sql` for plain DDL; reach for `.js` only when you need to read rows,
   branch, or transform data.
+
+The CoS feedback reference migration is input-gated: it derives rows from the
+install's existing `state.json` and therefore has no `data.reference` seed. A
+seed would be copied before the migration and could overwrite the meaning of a
+user's existing state.

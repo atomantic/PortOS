@@ -105,6 +105,7 @@ import {
   limitBranchesForAgent,
   branchPriorityRank, prioritizeBranches, worktreeProtectionExpiresAt, describeIdleReconcilePark,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
+  isMalformedClaimBranch,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes
 } from './branchReconcile.js';
 import * as git from './git.js';
@@ -336,6 +337,21 @@ describe('cleanupMerged', () => {
     expect(res.cleaned).toEqual(['claim/issue-1933']);
     expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-1933', expect.any(Object));
     expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-1933', { local: true });
+  });
+
+  it('reaps the invalid empty-issue claim immediately when merged and clean', async () => {
+    expect(isMalformedClaimBranch('claim/issue-')).toBe(true);
+    expect(isMalformedClaimBranch('claim/issue-42')).toBe(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+
+    const res = await cleanupMerged('/repo', 'main', [
+      { branch: 'claim/issue-', worktreePath: '/repo/data/cos/worktrees/claim-issue-', worktreeAgeMs: 2 * 60 * 60 * 1000 }
+    ]);
+
+    expect(res.cleaned).toEqual(['claim/issue-']);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', '/repo/data/cos/worktrees/claim-issue-', expect.any(Object));
+    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', 'claim/issue-', { local: true });
   });
 
   it('still protects a RECENT claim worktree even when merged + clean, and says when the hold lifts', async () => {

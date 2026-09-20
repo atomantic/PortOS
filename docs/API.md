@@ -419,6 +419,27 @@ Eidoverse — see [OpenWorld](./features/openworld.md).
 | GET | `/brain/reconcile/parity` | Last stored parity report per peer (local read, no peer I/O) |
 | POST | `/brain/reconcile/parity` | Run the record-level parity audit — body `{ peerId? }`, omitted sweeps every federating peer |
 
+### Brain Thread Ingestion
+
+A Brain thread is a tracked topic, distinct from a message thread.
+
+`POST /api/brain/threads/sync` accepts `{ "appId": "example-app", "pinned": false }`.
+It explicitly discovers issues assigned to the saved managed app's GitHub account
+and creates threads for observed open issues. The optional `pinned` value applies
+only to new records. Use the install's normal API authentication.
+
+The response contains `observed`, `created`, `updated`, `skipped`, and
+`possiblyTruncated`. The query reads at most 200 assigned open/closed issues;
+`possiblyTruncated: true` means this is not a complete inventory. Missing issues
+never imply closure or unassignment. Only an observed closed issue updates its
+existing thread's `externalState`; the human's status, title, notes, next action,
+priority and detached links remain untouched. Deleted threads stay deleted.
+A failed or malformed tracker response returns 502 without changing threads.
+
+Managed app GitHub Issues tabs expose this action as **Track my assigned issues in Brain**,
+with a link to the Threads list. This endpoint does not enable background polling. GitLab/JIRA sources, scheduling,
+settings controls and source-closed UI prompts are tracked separately in #7664.
+
 ### Brain Links
 
 | Method | Endpoint | Description |

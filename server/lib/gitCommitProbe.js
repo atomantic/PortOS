@@ -2,12 +2,11 @@
  * Run-window git probes — the machine-checkable "what did this run leave
  * behind?" primitives (#3637).
  *
- * Two questions share one window definition, so they share one module: `did it
+ * Two questions share one module: `did it
  * commit anything?` (the success criterion) and `what did it commit?` (the
- * accumulated diff the goal-fidelity review reads, #5994). Splitting them would
- * duplicate the "commits stamped inside the window are this run's" rule, and a
- * drift between the two would mean the gate reviewed a different set of commits
- * than the criterion counted.
+ * accumulated diff the goal-fidelity review reads, #5994). The count uses
+ * committer dates; the diff additionally excludes absorbed upstream history,
+ * which dates alone cannot attribute to the run (#7690).
  *
  * `commitsSince` replaced the `[task-<id>]` commit-marker grep that used to live in
  * `agentRunTracking.js`: nothing in PortOS ever emitted that marker (the root
@@ -22,6 +21,7 @@
  */
 
 import { execGit } from './execGit.js';
+import { resolveRemoteDefaultRef } from './primaryCheckoutGuard.js';
 
 /**
  * Count commits reachable from HEAD whose COMMITTER date falls inside the run
@@ -89,17 +89,23 @@ export async function committedDuringRun(workspacePath, sinceMs) {
 }
 
 /**
- * The ACCUMULATED diff of everything this run committed — the base being the
- * newest commit that predates the run window, so a run that landed five commits
- * is reviewed as the one change it actually made rather than five partial ones.
+ * The accumulated run-window diff, excluding history absorbed from the remote
+ * default branch. Start with the newest pre-window commit and advance to the
+ * remote-default merge base only when ancestry proves it is newer. Never use
+ * the remote tip directly: it can include work this checkout has not absorbed.
  *
  * Non-throwing, like its siblings, and every failure is a REASON rather than an
  * empty diff. That distinction is the whole point: `''` would read as "this run
  * changed nothing", and a consumer gating on the diff must never confuse a git
  * that could not answer with a run that did nothing.
  *
- * `--before` resolves the base off COMMITTER date, matching `commitsSince`'s
- * `--since` — so the two probes always agree on which commits belong to the run.
+ * No new persisted agent field is required: old records still supply startedAt.
+ * Without a resolvable local remote-default ref, retain the time-based fallback.
+ * This deliberately excludes agent work already reachable from that remote;
+ * it is a review of the remaining change, not exact authorship attribution.
+ * No fetch or other repository mutation is performed.
+ *
+ * `--before` resolves the initial base off COMMITTER date.
  * A repo whose entire history falls inside the window has no such base; that is
  * reported rather than diffed against the empty tree, because on a real
  * workspace it means the window is wrong, not that the run wrote the repo.
@@ -125,8 +131,37 @@ export async function runWindowDiff(workspacePath, sinceMs, { maxChars = 60_000 
     { ignoreExitCode: true, timeout: 10_000 },
   ).catch(() => null);
   if (!baseResult || baseResult.exitCode !== 0) return decline('could not resolve the run window base commit');
-  const base = baseResult.stdout.trim();
+  let base = baseResult.stdout.trim();
   if (!base) return decline('no commit predates the run window');
+
+  const upstream = await resolveRemoteDefaultRef(workspacePath);
+  if (upstream) {
+    const mergeBaseResult = await execGit(
+      ['merge-base', 'HEAD', upstream.sha], workspacePath,
+      { ignoreExitCode: true, timeout: 10_000 },
+    ).catch(() => null);
+    const upstreamBase = mergeBaseResult?.exitCode === 0 ? mergeBaseResult.stdout.trim() : null;
+    if (!upstreamBase) return decline('could not resolve the absorbed upstream base');
+    if (upstreamBase !== base) {
+      const ancestry = await execGit(
+        ['merge-base', '--is-ancestor', base, upstreamBase], workspacePath,
+        { ignoreExitCode: true, timeout: 10_000 },
+      ).catch(() => null);
+      if (ancestry?.exitCode === 0) {
+        base = upstreamBase;
+      } else if (ancestry?.exitCode === 1) {
+        // A later pre-window agent commit must stay excluded. If neither base
+        // contains the other, one two-tree diff cannot exclude both histories.
+        const reverse = await execGit(
+          ['merge-base', '--is-ancestor', upstreamBase, base], workspacePath,
+          { ignoreExitCode: true, timeout: 10_000 },
+        ).catch(() => null);
+        if (reverse?.exitCode !== 0) return decline('run window and upstream bases could not be ordered');
+      } else {
+        return decline('could not compare the run window and upstream bases');
+      }
+    }
+  }
 
   // `--no-ext-diff` so a user's configured external difftool can't replace the
   // unified text (or block on a GUI); `--no-color` so escape codes don't reach

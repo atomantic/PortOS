@@ -67,8 +67,8 @@ beforeEach(async () => {
 });
 
 describe('buildScopeAdherenceCorpus', () => {
-  it('builds a split corpus and reports counts, never examples', async () => {
-    mockForge({ merged: changes(60), notPlanned: changes(60, 500) });
+  it('builds a split corpus even when forge text names constructor, reporting counts only', async () => {
+    mockForge({ merged: changes(60).map(row => ({ ...row, body: `${row.body} Fix constructor and __proto__ handling.` })), notPlanned: changes(60, 500) });
     const result = await buildScopeAdherenceCorpus({ repoPath });
     expect(result.ok).toBe(true);
     expect(result.trainSize).toBeGreaterThan(0);

@@ -237,16 +237,16 @@ describe('buildGoalFidelityFollowUpTask', () => {
   const fingerprint = 'goal-fidelity:user:comics/add-retry-caps';
   const task = { id: 'task-7', description: 'Add retry caps' };
 
-  // With an issue the agent runs the project's normal claim flow, where the
-  // tracker's own conventions live; without one it must work the finding from
-  // this body, which is why the finding is restated in both shapes.
+  // With an issue the investigator uses the project's normal PR flow, where
+  // the tracker's own conventions live; without one it must work the finding
+  // from this body, which is why the finding is restated in both shapes.
   it('points the agent at the filed issue when there is one', () => {
     const body = buildGoalFidelityFollowUpTask({
       task, review: review(), fingerprint, issue: { number: 42, url: 'https://example.com/issues/42' },
     });
     expect(body).toContain('#42');
     expect(body).toContain('https://example.com/issues/42');
-    expect(body).toContain('claim flow');
+    expect(body).toContain('normal PR flow');
   });
 
   it('restates the finding when no issue was filed', () => {
@@ -254,6 +254,27 @@ describe('buildGoalFidelityFollowUpTask', () => {
     expect(body).not.toContain('claim flow');
     expect(body).toContain('the retry cap the task named');
     expect(body).toContain('task-7');
+  });
+
+  it('carries the full bounded task objective into the investigator prompt', () => {
+    const body = buildGoalFidelityFollowUpTask({
+      task: {
+        ...task,
+        description: 'Complete the requested change',
+        metadata: { prompt: 'Also verify the shipped outcome and preserve the existing contract.' },
+      },
+      review: review(),
+      fingerprint,
+    });
+    expect(body).toContain('## What was asked\nComplete the requested change\n\nAlso verify the shipped outcome and preserve the existing contract.');
+    expect(body).toContain('This is a diagnostic follow-up, not a re-run of the original agent task.');
+  });
+
+  it('makes independent verification the first action and calibrates false positives', () => {
+    const body = buildGoalFidelityFollowUpTask({ task, review: review(), fingerprint });
+    expect(body).toContain('Independently verify the finding against the original acceptance criteria');
+    expect(body).toContain('Do not manufacture a code change or re-run the original task.');
+    expect(body.indexOf('## Investigation mandate')).toBeLessThan(body.indexOf('## If the finding is right'));
   });
 
   // The fingerprint rides in the headline for the same reason the investigation

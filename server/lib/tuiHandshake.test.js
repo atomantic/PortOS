@@ -21,6 +21,8 @@ import {
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
   SELF_CLEARING_RESUBMIT_ECHO_MS,
   MCP_BOOT_PASTE_DEADLINE_MS,
+  isPasteCommitted,
+  isPasteConfirmed,
   MCP_BOOT_PASTE_RETRY_DELAY_MS,
   isMcpBootSignal,
   createMcpBootTracker,
@@ -59,6 +61,7 @@ import {
   TOOL_PERMISSION_REPAINT_COOLDOWN_MS,
   TOOL_PERMISSION_DECLINE_MAX,
   TOOL_PERMISSION_NUDGE_TEXT,
+  CODEX_COMPOSER_READY_PATTERN,
 } from './tuiHandshake.js';
 import { detectImmediateFallbackSignal } from './aiToolkit/errorDetection.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
@@ -2093,5 +2096,36 @@ describe('createStallNudgeGate', () => {
     // stall hours later is a fresh one, with the whole budget available again.
     const revivedAt = now + STALL_NUDGE_RECOVERY_MS + 1;
     expect(gate.takeNudge(revivedAt + STALL_NUDGE_IDLE_MS, revivedAt)).toBe(1);
+  });
+});
+
+// isPasteConfirmed answers "may I stop treating this as swallowed?", so an
+// unverifiable prompt passes. isPasteCommitted answers "has the TUI actually
+// taken it?", which must stay FALSE there — otherwise the patient wait would
+// submit immediately on an empty buffer and the patience would be dead code.
+describe('isPasteCommitted', () => {
+  it('requires real evidence where isPasteConfirmed accepts an unverifiable prompt', () => {
+    expect(isPasteConfirmed('', {})).toBe(true);
+    expect(isPasteCommitted('', {})).toBe(false);
+  });
+
+  it('accepts the commit marker and the rendered prompt text alike', () => {
+    expect(isPasteCommitted('[Pasted Content 900 chars]', { verifiablePrefix: 'never rendered' })).toBe(true);
+    expect(isPasteCommitted('> audit the provider list', { verifiablePrefix: 'audit the provider list' })).toBe(true);
+    expect(isPasteCommitted('> Ask Codex to do anything', { verifiablePrefix: 'audit the provider list' })).toBe(false);
+  });
+});
+
+describe('CODEX_COMPOSER_READY_PATTERN', () => {
+  it('matches the composer placeholder, including the whitespace-collapsed stripped form', () => {
+    expect(CODEX_COMPOSER_READY_PATTERN.test('› Ask Codex to do anything')).toBe(true);
+    // ANSI stripping can drop the cursor-positioned gaps between glyphs.
+    expect(CODEX_COMPOSER_READY_PATTERN.test('AskCodextodoanything')).toBe(true);
+  });
+
+  it('does not match codex startup chrome painted before the composer exists', () => {
+    // The header/border repaint the six 2026-09-20 agents died against.
+    expect(CODEX_COMPOSER_READY_PATTERN.test('╭╭╭╭╭╭gpt-6-astra default · /repo ╭───────╮')).toBe(false);
+    expect(CODEX_COMPOSER_READY_PATTERN.test('Loading MCP servers…')).toBe(false);
   });
 });

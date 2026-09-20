@@ -9,8 +9,9 @@ no provider quota. See the ADR
 for why it exists and what was rejected.
 
 It is an **optional** feature, off by default. Turn it on in **Settings >
-Features**; its page stays reachable at `/models/llms/jev` either way, and the
-nav entry appears once the feature is enabled.
+Features** or **Models > LLMs > jev**. The management page and navigation stay
+visible at `/models/llms/jev` even when integrations are disabled. Browsing the
+page never installs or loads the model.
 
 ## What gets installed
 
@@ -128,3 +129,23 @@ provider or model picker can offer it.
 It is also not a replacement for the abuse guard. Prompt Guard screens external
 content *before* anything reasons over it; jev is one of the things that may
 then reason over it. See [features/messages-security.md](./features/messages-security.md).
+
+## Integration management
+
+The Jev page separates installation, model residency, global integration enablement,
+and source policies. Source `off` retains its legacy meaning: **Shadow**, scoring
+alongside chat for comparison. **Disabled** (`disabled`) actually suppresses scoring
+for that source. **Prefer local** uses chat on abstention/failure; **Local only**
+skips unresolved items. Existing policies are unchanged until explicitly edited.
+
+Issue replies and forge maintenance share the GitHub issue policy; message action
+and priority share email policy; Stacker News classification and risk share its
+policy and remain escalation-only. Scope adherence has a separate on-demand switch
+(default enabled under the global gate). It provides issue/PR advisories, not agent
+completion grades. Completion goal fidelity remains the separate chat reviewer in
+Models > Code Reviewers, with forge verification for merge objectives.
+
+The page displays the shipped hypotheses directly from the decision registry and
+explains margin floors. Agreement is comparison with chat, not measured correctness;
+missing comparisons are not zero accuracy. Metrics and runtime status refresh while
+the page is visible. Trained-head evaluation remains a separate held-out comparison.

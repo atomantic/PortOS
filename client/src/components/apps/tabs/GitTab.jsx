@@ -147,6 +147,7 @@ export default function GitTab({ appId, appName, repoPath }) {
   const [pushing, setPushing] = useState(null);
   const [syncing, setSyncing] = useState(null);
   const [pushingAll, setPushingAll] = useState(false);
+  const [openingPullRequest, setOpeningPullRequest] = useState(false);
   const [remoteBranches, setRemoteBranches] = useState([]);
   const [_defaultBranch, setDefaultBranch] = useState('main');
   const [loadingRemote, setLoadingRemote] = useState(false);
@@ -331,6 +332,23 @@ export default function GitTab({ appId, appName, repoPath }) {
       toast.error(`Push failed for: ${failedNames.join(', ')}`);
     }
     await loadGitInfo();
+  };
+
+  const handleOpenPullRequest = async () => {
+    if (!appId || !repoPath || openingPullRequest) return;
+    setOpeningPullRequest(true);
+    const result = await api.createSlashdoTask('push', appId, {
+      prCompletion: 'review-then-merge',
+      overrideContext: `Work on the managed app repository at ${repoPath}. Reconcile all current work before delivery: include uncommitted changes, local commits not merged into the default branch, and commits not yet pushed. Preserve the app's existing intent, create or update a pull request against the default branch, then run the configured review process and merge it when review and CI are green. Do not discard work or push directly to the protected default branch.`,
+    }, { silent: true }).catch((err) => {
+      toast.error(`Could not queue pull request agent: ${err.message}`);
+      return null;
+    });
+    setOpeningPullRequest(false);
+    if (result) {
+      toast.success(`Pull request agent queued for ${appName} — check CoS Agents`);
+      await api.forceCosEvaluate().catch(() => null);
+    }
   };
 
   const handleDeleteBranch = async (branchName, { local, remote }) => {
@@ -533,6 +551,15 @@ export default function GitTab({ appId, appName, repoPath }) {
               {pushingAll ? 'Pushing...' : 'Push'}
             </button>
           )}
+          <button
+            onClick={handleOpenPullRequest}
+            disabled={openingPullRequest || !gitInfo?.isRepo}
+            title="Have an agent commit, push, review, and merge the current repository work through a pull request"
+            className="flex items-center gap-1.5 px-3 py-2 bg-port-accent/20 border border-port-accent/40 rounded-lg text-sm text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
+          >
+            <Rocket size={16} className={openingPullRequest ? 'animate-pulse' : ''} />
+            {openingPullRequest ? 'Queuing PR agent...' : 'Open PR with agent'}
+          </button>
           <button
             onClick={handleUpdateBranches}
             disabled={updating}

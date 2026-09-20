@@ -7,11 +7,9 @@ import AgentJobProviderFields, { hasRunnableAgentProvider } from '../AgentJobPro
 import { filterRunnableProviders } from '../../../utils/providers';
 import FormField from '../../ui/FormField';
 import JobCard, {
-  AUTONOMY_OPTIONS,
   JOB_TYPE_OPTIONS,
   isAgentJobType,
   normalizeJobPayload,
-  PRIORITY_OPTIONS,
   ScheduleFields,
   SHELL_TRIGGER_ACTION_OPTIONS,
   TRIGGER_ACTION_OPTIONS
@@ -268,26 +266,6 @@ export default function JobsTab() {
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
               />
             </FormField>
-            <div className="flex gap-3">
-              <select
-                aria-label="Priority"
-                value={newJob.priority}
-                onChange={e => setNewJob(j => ({ ...j, priority: e.target.value }))}
-                className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-              >
-                {PRIORITY_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-              {newJob.type !== 'shell' && (
-                <select
-                  aria-label="Autonomy level"
-                  value={newJob.autonomyLevel}
-                  onChange={e => setNewJob(j => ({ ...j, autonomyLevel: e.target.value }))}
-                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                >
-                  {AUTONOMY_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label} — {opt.desc}</option>)}
-                </select>
-              )}
-            </div>
             <ScheduleFields data={newJob} timezone={timezone} onChange={(key, val) => setNewJob(j => ({ ...j, [key]: val }))} />
             {isAgentJobType(newJob.type) && (
               <div className="flex items-center gap-2">

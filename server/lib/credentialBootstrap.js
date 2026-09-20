@@ -34,12 +34,31 @@
  * through the leaf below), and the readiness probes (`providerPrerequisites.js`,
  * the toolkit's `testProvider`).
  *
- * A public-review posture (`isPublicReviewRestrictedProfile`) is NEVER
- * wrapped, at any site: the vendor's enforced no-tool/sandboxed recipe IS the
- * sandbox, and its argv and env allowlists are both defeated by handing the
- * recipe to a user-configured binary that mints and re-injects a credential.
- * The skip lives here rather than at each call site so a new spawn site can't
- * forget it.
+ * The `sandboxed-actions` posture (`isPublicReviewActionsProfile`) is NEVER
+ * wrapped, at any site. That stage EXECUTES contributor-supplied code inside
+ * the vendor's own maintained sandbox, and the sandbox is spelled entirely in
+ * the recipe's argv — so an intermediary free to rewrite that argv before the
+ * harness ever sees it is the one place the wrap could turn a screened patch
+ * loose on the machine. It fails closed.
+ *
+ * The `no-tool` postures ARE wrapped, and must be (#7720). A reasoning-only
+ * stage spawned bare runs with NO credential: it falls through to whatever
+ * ambient vendor auth the machine happens to have — none, for a bootstrap-only
+ * record — and the harness answers "no matching provider is authenticated",
+ * which a review gate reads as a transient outage and waits out forever (the
+ * stall #7660 exists to prevent). The wrap is also how a credential reaches
+ * that stage at all: the bootstrap mints it into the environment of the child
+ * IT spawns, downstream of the allowlist `buildCliChildEnv` already applied, so
+ * PortOS's env boundary is untouched. Nothing about that posture is
+ * argv-enforced in a way a credential minter threatens — its threat model is
+ * "the model must not reach tools" — and the bootstrap binary is the operator's
+ * own configuration, exactly as `provider.command` (which the posture already
+ * spawns) is. `resolveBootstrapEnv` below stays available for a bootstrap that
+ * PRINTS credentials rather than exec'ing the harness; it is an alternative to
+ * the wrap for those records, not a precondition for a review.
+ *
+ * Both halves of that split live here rather than at each call site so a new
+ * spawn site can't forget either one.
  *
  * Wrapping also changes TEARDOWN, so every site that spawns a long-lived child
  * here owes a second thing: the direct child is then the WRAPPER, and nothing
@@ -50,7 +69,7 @@
  *
  * The argv SHAPE is composed one layer down, by the dependency-free
  * `aiToolkit/internal/credentialBootstrap.js` leaf (which documents why it sits
- * there); this module adds the public-review skip, the Windows resolution, and
+ * there); this module adds the posture split above, the Windows resolution, and
  * the teardown half above.
  *
  * Imports only `bufferedSpawn.js`, `agentExecutionProfiles.js` (both of which
@@ -60,11 +79,69 @@
  * the AI toolkit or the data layer.
  */
 
-import { IS_WIN32, resolveWindowsExecutable, prepareWindowsSafeSpawn, killProcessTree } from './bufferedSpawn.js';
-import { isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
+import { IS_WIN32, resolveWindowsExecutable, prepareWindowsSafeSpawn, prepareCliSpawn, killProcessTree } from './bufferedSpawn.js';
+import { execFile } from './childProcess.js';
+import { tmpdir } from 'node:os';
+import { withSpawnCwdEnv } from './spawnCwd.js';
+import { isPublicReviewNoToolProfile, isPublicReviewActionsProfile } from './agentExecutionProfiles.js';
 import { composeBootstrapSpawn, hasCredentialBootstrap } from './aiToolkit/internal/credentialBootstrap.js';
 
 export { hasCredentialBootstrap };
+
+// Credentials are memory-only and expire after one minute. Key by the record
+// and its configuration so editing a command or account cannot reuse old auth.
+const bootstrapEnvCache = new Map();
+const BOOTSTRAP_ENV_TTL_MS = 60_000;
+
+/**
+ * Materialize credentials independently of a review, for a bootstrap that
+ * PRINTS `KEY=value` assignments rather than exec'ing the harness itself. The
+ * command gets neither the prompt nor the enforced harness argv. Only no-tool
+ * callers may opt in; sandboxed actions must never acquire these credentials.
+ *
+ * Optional: a record that only names the ordinary wrap form is credentialed by
+ * the wrap (see module doc), and returns `{}` here. Nothing about a review
+ * requires an `envCommand`.
+ */
+export async function resolveBootstrapEnv(provider, { safetyProfile = null } = {}) {
+  const argv = provider?.credentialBootstrap?.envCommand;
+  if (!argv) return {};
+  if (!isPublicReviewNoToolProfile(safetyProfile)) {
+    throw new Error('Bootstrap credentials are available only for tool-free reviews.');
+  }
+  if (!Array.isArray(argv) || !argv.length || argv.some(value => typeof value !== 'string' || !value || value.includes('\0'))) {
+    throw new Error('Invalid bootstrap credential command.');
+  }
+  const key = JSON.stringify([provider.id, argv, provider.envVars]);
+  const now = Date.now();
+  for (const [cachedKey, entry] of bootstrapEnvCache) {
+    if (entry.expires <= now) bootstrapEnvCache.delete(cachedKey);
+  }
+  const cached = bootstrapEnvCache.get(key);
+  if (cached) return { ...cached.env };
+  const cwd = tmpdir();
+  const childEnv = withSpawnCwdEnv({ ...process.env, ...provider.envVars }, cwd);
+  const spawnConfig = prepareCliSpawn(argv[0], argv.slice(1), childEnv);
+  const env = await new Promise((resolve, reject) => {
+    // execFile never evaluates output or invokes a shell. Bound runtime and
+    // output, and never propagate stderr/stdout or the command in an error.
+    execFile(spawnConfig.command, spawnConfig.args, {
+      cwd, env: childEnv,
+      shell: false, timeout: 15_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+    }, (error, stdout) => {
+      if (error) return reject(new Error('Bootstrap credential command failed.'));
+      const entries = String(stdout).split(/\r?\n/).flatMap(line => {
+        const match = /^([A-Za-z_][A-Za-z0-9_]*)=([^\0\r\n]*)$/.exec(line);
+        return match ? [[match[1], match[2]]] : [];
+      });
+      resolve(Object.fromEntries(entries));
+    });
+  });
+  if (!Object.keys(env).length) throw new Error('Bootstrap credential command returned no environment assignments.');
+  if (bootstrapEnvCache.size >= 128) bootstrapEnvCache.delete(bootstrapEnvCache.keys().next().value);
+  bootstrapEnvCache.set(key, { env, expires: Date.now() + BOOTSTRAP_ENV_TTL_MS });
+  return { ...env };
+}
 
 /**
  * The command+args PortOS should actually spawn for this provider: the
@@ -74,14 +151,16 @@ export { hasCredentialBootstrap };
  * command this returns.
  *
  * The shape it composes — and why `harnessId` and `argsSeparator` exist — is
- * documented on `composeBootstrapSpawn`. What this adds is the safety skip: a
- * public-review posture is returned UNWRAPPED.
+ * documented on `composeBootstrapSpawn`. What this adds is the safety skip: the
+ * `sandboxed-actions` posture, and only it, is returned UNWRAPPED (see module
+ * doc). A `no-tool` posture wraps like any other spawn, because a
+ * reasoning-only stage spawned bare has no credential at all.
  *
  * @param {{credentialBootstrap?: {command: string, args?: string[], harnessId?: string, argsSeparator?: string}}|null|undefined} provider
  * @param {string} command - the harness binary PortOS would otherwise spawn
  * @param {string[]} [args] - the harness's own argv
  * `wrapped` reports whether the wrap actually applied — including the
- * public-review skip, so a posture that is deliberately NOT wrapped also keeps
+ * actions-posture skip, so a posture that is deliberately NOT wrapped also keeps
  * the unwrapped teardown. It matters for process teardown, not argv: once a
  * bootstrap CLI sits in front of the harness, the direct child PortOS holds is
  * the WRAPPER, and `<bootstrap> run <harness> -- <args>` is the shape of a
@@ -89,14 +168,14 @@ export { hasCredentialBootstrap };
  * harness running. See `needsProcessGroup` (#7496).
  *
  * @param {{safetyProfile?: string|null}} [options] - the run's execution
- *   profile; a public-review posture is returned unwrapped (see module doc)
+ *   profile; the `sandboxed-actions` posture is returned unwrapped (see module doc)
  * @returns {{command: string, args: string[], wrapped: boolean}}
  */
 export function applyCredentialBootstrap(provider, command, args, { safetyProfile = null } = {}) {
-  // A restricted posture composes against NO provider rather than short-circuiting,
+  // The skipped posture composes against NO provider rather than short-circuiting,
   // so argv normalization — and the `wrapped` flag teardown keys on — is stated
   // in exactly one place.
-  return composeBootstrapSpawn(isPublicReviewRestrictedProfile(safetyProfile) ? null : provider, command, args);
+  return composeBootstrapSpawn(isPublicReviewActionsProfile(safetyProfile) ? null : provider, command, args);
 }
 
 /**
@@ -117,9 +196,9 @@ export function applyCredentialBootstrap(provider, command, args, { safetyProfil
  *     tree-wide rather than group-based, so the hole does not exist there.
  *   - `detached: true` on Windows opens a new console window per spawn.
  *
- * False for an unwrapped spawn — including a public-review posture, which is
- * never wrapped — so nothing changes for those: the harness is the direct child
- * there and today's per-pid signal is exact.
+ * False for an unwrapped spawn — including the `sandboxed-actions` posture,
+ * which is never wrapped — so nothing changes for those: the harness is the
+ * direct child there and today's per-pid signal is exact.
  *
  * @param {boolean} wrapped - the `wrapped` flag from applyCredentialBootstrap/resolveCliSpawn
  * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform

@@ -8,6 +8,7 @@ import GoalFidelityControls from './GoalFidelityControls';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerModelsToDefaults, reviewerEffortsFromDefaults, reviewerEffortsToDefaults } from '../../lib/reviewerModels';
 import { DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER } from '../../lib/reviewerPins';
+import { formatDateTime } from '../../utils/formatters';
 import {
   DEFAULT_REVIEWERS,
   DEFAULT_REVIEW_STOP_MODE,
@@ -38,6 +39,8 @@ export default function CodeReviewersTab() {
   });
   const [installed, setInstalled] = useState({});
   const [providerReviewUnsupported, setProviderReviewUnsupported] = useState({});
+  const [reviewerHealth, setReviewerHealth] = useState({});
+  const [reviewerFallbackGroups, setReviewerFallbackGroups] = useState([]);
   const modelOptions = useReviewerModelOptions();
 
   const loadDefaults = useCallback(() => {
@@ -74,6 +77,8 @@ export default function CodeReviewersTab() {
           });
           setInstalled(defaults.installed && typeof defaults.installed === 'object' && !Array.isArray(defaults.installed) ? defaults.installed : {});
           setProviderReviewUnsupported(defaults.providerReviewUnsupported && typeof defaults.providerReviewUnsupported === 'object' && !Array.isArray(defaults.providerReviewUnsupported) ? defaults.providerReviewUnsupported : {});
+          setReviewerHealth(defaults.reviewerHealth && typeof defaults.reviewerHealth === 'object' && !Array.isArray(defaults.reviewerHealth) ? defaults.reviewerHealth : {});
+          setReviewerFallbackGroups(Array.isArray(defaults.reviewerFallbackGroups) ? defaults.reviewerFallbackGroups : []);
         } else {
           setLoadError(true);
         }
@@ -96,6 +101,7 @@ export default function CodeReviewersTab() {
     setSaving(true);
     const payload = {
       reviewers,
+      reviewerFallbackGroups,
       usernames,
       optionalReviewers,
       reviewerMaxRounds,
@@ -162,6 +168,24 @@ export default function CodeReviewersTab() {
         <div className="text-xs text-gray-500">Loading defaults…</div>
       ) : (
         <>
+          {Object.entries(reviewerHealth).filter(([, health]) => Number(health?.pausedUntil) > Date.now()).map(([reviewer, health]) => (
+            <Banner key={reviewer} tone="warning" size="sm" align="left">
+              {reviewer} is temporarily paused after a quota or usage-limit failure until {formatDateTime(health.pausedUntil)}.
+            </Banner>
+          ))}
+          <div className="space-y-1">
+            <label htmlFor="reviewer-fallback-groups" className="text-xs text-gray-400">Fallback reviewer groups</label>
+            <textarea
+              id="reviewer-fallback-groups"
+              value={reviewerFallbackGroups.map(group => group.join(', ')).join('\n')}
+              onChange={(event) => setReviewerFallbackGroups(event.target.value.split('\n').map(line => line.split(',').map(value => value.trim()).filter(Boolean)).filter(group => group.length))}
+              placeholder="nim, opencode\nollama\ncopilot"
+              rows={3}
+              className="w-full rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs text-white"
+              disabled={saving || loadError}
+            />
+            <p className="text-[11px] text-gray-500">One fallback tier per line. A tier runs together; the next tier is selected when every reviewer in it is paused.</p>
+          </div>
           <ReviewerPicker
             reviewers={reviewers}
             usernames={usernames}

@@ -19,7 +19,8 @@ vi.mock('../models/ModelAbuseGuardPanel.jsx', () => ({
 vi.mock('../models/JevPanel.jsx', () => ({
   default: () => <div data-testid="jev-view">jev</div>,
 }));
-// jev is an optional, default-OFF instance feature, so which pills the bar
+// Jev integrations are optional; management stays discoverable regardless.
+// Which pills the bar
 // advertises depends on live feature state rather than the static view list.
 const disabledFeatures = new Set();
 vi.mock('../../hooks/useInstanceFeatures.js', () => ({
@@ -87,21 +88,12 @@ describe('LocalLlmTab view dispatch', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/jev');
   });
 
-  // Settings > Features ships jev OFF, precisely so a fresh install does not
-  // advertise a page whose model is a ~9 GB download. The manifest entry is
-  // feature-tagged, so the sidebar and ⌘K already drop it; the pill bar is the
-  // third browse surface and has to apply the same gate or the opt-out leaks.
-  it('drops the jev pill while the feature is disabled', () => {
+  it('keeps the Jev install and management page discoverable while disabled', () => {
     disabledFeatures.add('jev');
     renderTab();
-
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard']);
+    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Model Library', 'Abuse Guard', 'jev']);
   });
 
-  // Gating covers BROWSE surfaces only. A bookmark, a shared link, or voice
-  // `ui_navigate` still resolves /models/llms/jev, so the panel must mount —
-  // and its pill must stay visible while it is the one on screen, or the tab
-  // bar would render with nothing selected.
   it('still mounts jev from a direct URL while the feature is disabled', () => {
     disabledFeatures.add('jev');
     renderTab('jev');

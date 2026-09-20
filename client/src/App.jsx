@@ -5,8 +5,10 @@ import Layout from './components/Layout';
 import { getSettings, updateSettings, getSelfInstance, PORTOS_APP_ID } from './services/api';
 import BrailleSpinner from './components/BrailleSpinner';
 import { CatalogTypesProvider } from './hooks/useCatalogTypes.jsx';
-import Dashboard from './pages/Dashboard';
 import { lazyWithReload } from './utils/lazyWithReload';
+
+// Direct links to other pages should not download the dashboard's grid/editor.
+const Dashboard = lazyWithReload(() => import('./pages/Dashboard'));
 
 // Neither /apps nor /ambient is the landing route, so keep them out of the eager
 // entry chunk — lazy-load them like every other non-index page.
@@ -45,6 +47,7 @@ const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
 const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
+const PromptFromMediaPage = lazyWithReload(() => import('./pages/PromptFromMediaPage'));
 const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
 const MediaAnnotate = lazyWithReload(() => import('./pages/MediaAnnotate'));
 const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections'));
@@ -429,6 +432,7 @@ export default function App() {
               satisfy with their :mode subtab (issue #3249). */}
           <Route path="post/:tab/:subtab/:mode" element={<Post />} />
           <Route path="review" element={<Review />} />
+          <Route path="review/:actionId" element={<Review />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
           {/* :chatKey is only used by the imessage tab; other tabs strip a stray second segment. */}
           <Route path="messages/:tab/:chatKey" element={<Messages />} />
@@ -464,6 +468,7 @@ export default function App() {
             <Route index element={<Navigate to="/media/image" replace />} />
             <Route path="image" element={<ImageGen />} />
             <Route path="video" element={<RedirectWithSearch to="/video/generate" />} />
+            <Route path="prompt" element={<PromptFromMediaPage />} />
             <Route path="history" element={<MediaHistory />} />
             <Route path="annotate" element={<MediaAnnotate />} />
             <Route path="annotate/:mediaKey" element={<MediaAnnotate />} />

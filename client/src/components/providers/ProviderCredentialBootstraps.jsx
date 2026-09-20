@@ -29,7 +29,7 @@ import { SERVICE_SLUG_RE } from '../../../../server/lib/serviceDefinitions.js';
 const SLUG_PATTERN = SERVICE_SLUG_RE.source.slice(1, -1);
 
 const EMPTY_DRAFT = Object.freeze({
-  slug: '', label: '', command: '', args: '', argsSeparator: '', setupCommand: '', harnessNames: {},
+  slug: '', label: '', command: '', args: '', envCommand: '', argsSeparator: '', setupCommand: '', harnessNames: {},
 });
 
 /** A stored app as the form edits it: argv as one space-separated line. */
@@ -38,6 +38,7 @@ const draftFromApp = (slug, app) => ({
   label: app.label || '',
   command: app.command || '',
   args: Array.isArray(app.args) ? app.args.join(' ') : '',
+  envCommand: app.envCommand?.join('\n') || '',
   argsSeparator: app.argsSeparator || '',
   setupCommand: app.setupCommand || '',
   harnessNames: { ...(app.harnessNames || {}) },
@@ -53,6 +54,7 @@ function appFromDraft(draft) {
     label: draft.label.trim(),
     command: draft.command.trim(),
     ...(args.length > 0 ? { args } : {}),
+    ...(draft.envCommand.trim() ? { envCommand: draft.envCommand.split('\n').filter(line => line.trim()) } : {}),
     ...(draft.argsSeparator.trim() ? { argsSeparator: draft.argsSeparator.trim() } : {}),
     ...(draft.setupCommand.trim() ? { setupCommand: draft.setupCommand.trim() } : {}),
     ...(Object.keys(harnessNames).length > 0 ? { harnessNames } : {}),
@@ -80,6 +82,9 @@ function BootstrapForm({ draft, editing, harnesses, busy, onChange, onSubmit, on
         </FormField>
         <FormField label="Arguments" hint="Space-separated, before the harness name" compact>
           <input id="bootstrap-args" type="text" value={draft.args} onChange={set('args')} className={INPUT_CLASS} placeholder="run" />
+        </FormField>
+        <FormField label="Review credential command" hint="Optional, tool-free reviews only — for an app that PRINTS credentials instead of running the harness; leave it empty and the wrap above credentials the review. Executable then one argument per line; prints KEY=value credentials, never shell code or JSON. Cached for one minute. Keep secrets out of argv." compact>
+          <textarea id="bootstrap-env-command" value={draft.envCommand} onChange={set('envCommand')} rows={3} className={INPUT_CLASS} placeholder={'corp-auth\nprint-env'} />
         </FormField>
         <FormField label="Args separator" hint="Inserted between the harness name and its own args, e.g. --" compact>
           <input id="bootstrap-separator" type="text" value={draft.argsSeparator} onChange={set('argsSeparator')} className={INPUT_CLASS} placeholder="--" />

@@ -5,8 +5,8 @@
  * questions the generic CoS telemetry cannot: did the user exercise POST today,
  * and did they close the feedback loop on completed creative commissions?
  * The aggregate shape is deliberately safe to put in a reasoning prompt; the
- * user-facing action projection may additionally carry a deep link to the
- * oldest item needing attention.
+ * user-facing action projection may additionally carry deep links to every
+ * item needing attention.
  */
 
 import { getPostSessions } from './meatspacePost.js';
@@ -20,7 +20,6 @@ import { getUserTimezone } from './userTimezone.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FEEDBACK_WINDOW_DAYS = 30;
-const ACTION_PENDING_LIMIT = 8;
 const SOURCE_MAX_CHARS = 8000;
 const COMPLETED_PROJECT_STATUSES = new Set(['complete', 'completed']);
 const NON_REVIEWABLE_RUN_STATUSES = new Set(['failed', 'skipped', 'cancelled', 'canceled', 'error']);
@@ -172,7 +171,10 @@ export function summarizeCreativeFeedback({ commissions = [], projects = [], now
     oldestUnreviewedAgeDays: pendingReviews.length ? pendingReviews[0].ageDays : null,
     feedbackCoveragePercent: coverage(reviewedCount, reviewable.length),
     feedbackCoverageLast30Percent: coverage(recentReviewedCount, recent.length),
-    pendingReviews: pendingReviews.slice(0, ACTION_PENDING_LIMIT),
+    // Keep every reviewable run addressable. The Review Queue applies its own
+    // bounded source read and discloses truncation at that boundary, while
+    // this compatibility service remains a complete metrics projection.
+    pendingReviews,
   };
 }
 
@@ -197,6 +199,9 @@ export function buildProductActions({ post, creativeCommissions }) {
       link: '/post/launcher',
       featureId: 'post',
       featureLabel: 'POST',
+      required: false,
+      isRecommendation: true,
+      ...(typeof post.today === 'string' && post.today ? { occurrence: post.today } : {}),
       metadata: {
         completedToday: false,
         daysSinceActivity: daysSince,
@@ -207,27 +212,48 @@ export function buildProductActions({ post, creativeCommissions }) {
   }
 
   if (creativeCommissions?.status === 'ok' && creativeCommissions.unreviewedRenders > 0) {
-    const oldest = creativeCommissions.pendingReviews?.[0];
-    const link = oldest
-      ? `/creative-commission/${encodeURIComponent(oldest.commissionId)}?run=${encodeURIComponent(oldest.runId)}`
-      : '/creative-commission';
-    const name = oldest?.commissionName && oldest.commissionName !== 'Creative commission'
-      ? `: ${oldest.commissionName}`
-      : '';
-    const age = creativeCommissions.oldestUnreviewedAgeDays;
-    actions.push({
-      id: `creative-feedback:${oldest?.commissionId || 'pending'}:${oldest?.runId || 'latest'}`,
-      type: 'commission_feedback',
-      severity: age !== null && age >= 3 ? 'high' : 'medium',
-      title: `Creative feedback overdue${name}`,
-      detail: `${creativeCommissions.unreviewedRenders} completed render${creativeCommissions.unreviewedRenders === 1 ? '' : 's'} ${age > 0 ? 'awaiting review' : 'awaiting your rating'}${age > 0 ? ` for up to ${age} days` : ''}.`,
-      link,
-      metadata: {
-        unreviewedRenders: creativeCommissions.unreviewedRenders,
-        oldestUnreviewedAgeDays: age,
-        feedbackCoveragePercent: creativeCommissions.feedbackCoveragePercent,
-      },
-    });
+    const pendingReviews = Array.isArray(creativeCommissions.pendingReviews)
+      ? creativeCommissions.pendingReviews
+      : [];
+    const renderCount = creativeCommissions.unreviewedRenders;
+
+    for (const pending of pendingReviews) {
+      // A queue row without both source identifiers cannot be opened or
+      // triaged safely. summarizeCreativeFeedback only emits valid entries,
+      // but retain the guard for legacy/forward-version records.
+      if (!pending?.commissionId || !pending?.runId) continue;
+      const age = Number.isFinite(pending.ageDays)
+        ? pending.ageDays
+        : (Number.isFinite(creativeCommissions.oldestUnreviewedAgeDays)
+          ? creativeCommissions.oldestUnreviewedAgeDays
+          : null);
+      const name = pending.commissionName && pending.commissionName !== 'Creative commission'
+        ? `: ${pending.commissionName}`
+        : '';
+      const runId = encodeURIComponent(pending.runId);
+      const commissionId = encodeURIComponent(pending.commissionId);
+      actions.push({
+        id: `creative-feedback:${commissionId}:${runId}`,
+        type: 'commission_feedback',
+        severity: age !== null && age >= 3 ? 'high' : 'medium',
+        title: `Creative feedback overdue${name}`,
+        detail: `${renderCount} completed render${renderCount === 1 ? '' : 's'} ${age !== null && age > 0 ? 'awaiting review' : 'awaiting your rating'}${age !== null && age > 0 ? ` for up to ${age} days` : ''}.`,
+        link: `/creative-commission/${commissionId}?run=${runId}`,
+        timestamp: pending.ranAt || null,
+        required: false,
+        isRecommendation: true,
+        // A run is the durable occurrence identity. It keeps a snooze or
+        // dismissal attached to this run even when another run becomes oldest.
+        occurrence: pending.runId,
+        metadata: {
+          commissionId: pending.commissionId,
+          runId: pending.runId,
+          unreviewedRenders: renderCount,
+          oldestUnreviewedAgeDays: creativeCommissions.oldestUnreviewedAgeDays,
+          feedbackCoveragePercent: creativeCommissions.feedbackCoveragePercent,
+        },
+      });
+    }
   }
 
   return actions;

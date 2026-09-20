@@ -36,8 +36,11 @@ import StatCard from '../components/cos/StatCard';
 import StatusBubble from '../components/cos/StatusBubble';
 import EventLog from '../components/cos/EventLog';
 import ActionableInsightsBanner from '../components/cos/ActionableInsightsBanner';
-import TasksTab from '../components/cos/tabs/TasksTab';
 import AgentsTab from '../components/cos/tabs/AgentsTab';
+
+// Task editing is not needed to view agents, so keep its forms and drag/drop
+// dependencies out of the agents page's initial download.
+const TasksTab = lazy(() => import('../components/cos/tabs/TasksTab'));
 
 // The Runs tab (full AI run history + its log modal) is lazy-loaded so its weight
 // stays out of the eager CoS chunk every /cos/* visit pays for — same reason the
@@ -48,7 +51,7 @@ const RunsTab = lazy(() => import('../components/cos/tabs/RunsTab'));
 // ledger read path with it.
 const RunEventsTab = lazy(() => import('../components/cos/tabs/RunEventsTab'));
 const MindTab = lazy(() => import('../components/cos/tabs/MindTab'));
-// The task and agent tabs are the default CoS landing surfaces and stay eager.
+// Keep the agents landing surface eager; task editing loads only on its tab.
 // Every other tab is loaded only when selected so the common queue view does
 // not pay for charts, memory graphs, briefing readers, or configuration forms.
 const JobsTab = lazy(() => import('../components/cos/tabs/JobsTab'));
@@ -1189,7 +1192,9 @@ export default function ChiefOfStaff() {
         {activeTab === 'tasks' && (
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
-            <TasksTab tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+            <Suspense fallback={<TabLoadFallback label="tasks" />}>
+              <TasksTab tasks={tasks} agents={agents} liveOutputs={liveOutputs} onRefresh={fetchData} onTaskAdded={handleUserTaskAdded} onTaskUnblocked={handleTaskUnblocked} providers={providers} providersLoaded={providersLoaded} apps={apps} />
+            </Suspense>
           </div>
         )}
         {activeTab === 'agents' && (

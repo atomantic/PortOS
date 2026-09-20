@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  CARD_STATUS, DECK_BACK_KEY, DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DECK_KIND, DECK_KINDS, DEFAULT_LAYOUT_PROMPT,
-  cardStatus, composeCardRenderPrompt, deckCardAspectStyle, deckCardRoster, deckCardSize, deckCompletion,
+  CARD_STATUS, DECK_BACK_KEY, DECK_CARD_ORIENTATION, DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DECK_KIND, DECK_KINDS,
+  DEFAULT_LAYOUT_PROMPT, cardStatus, composeCardRenderPrompt, deckCardAspectStyle, deckCardRoster, deckCardSize,
+  deckCompletion, defaultDeckCardOrientationPrompt,
 } from './deckTemplates.js';
 import { aspectRatioPhrase } from './aspectRatio.js';
 
@@ -45,7 +46,7 @@ describe('composeCardRenderPrompt', () => {
     const out = composeCardRenderPrompt({}, { name: 'Ace of Spades', prompt: 'one large ornate spade' });
     expect(out.prompt).toBe('Ace of Spades: one large ornate spade');
     expect(out.negativePrompt).toBe('');
-    expect(out.parts).toEqual({ style: '', layout: '', subject: 'Ace of Spades: one large ornate spade' });
+    expect(out.parts).toEqual({ style: '', layout: '', orientation: '', subject: 'Ace of Spades: one large ornate spade' });
   });
 
   it('reports each contribution unjoined so the editor can attribute it', () => {
@@ -53,8 +54,37 @@ describe('composeCardRenderPrompt', () => {
     expect(out.parts).toEqual({
       style: 'copperplate engraving, aged paper',
       layout: 'Full tarot card, framed border',
+      orientation: '',
       subject: 'XVII · The Star: a kneeling figure',
     });
+  });
+
+  it('spells out the standard two-way rotation so a six cannot become a nine', () => {
+    const out = composeCardRenderPrompt(
+      { kind: DECK_KIND.PLAYING, layoutPrompt: 'Complete card' },
+      { name: 'Six of Hearts', prompt: 'six heart pips' },
+    );
+    expect(out.prompt).toContain('bottom-right index is an exact 180-degree rotation');
+    expect(out.prompt).toContain('a six remains a six and never becomes a nine');
+    expect(out.negativePrompt).toContain('six rendered as nine');
+    expect(out.parts.orientation).toBe(defaultDeckCardOrientationPrompt({ kind: DECK_KIND.PLAYING }));
+  });
+
+  it('supports one-way faces and a true authored prompt override', () => {
+    const oneWay = composeCardRenderPrompt(
+      { kind: DECK_KIND.PLAYING, cardOrientation: DECK_CARD_ORIENTATION.ONE_WAY },
+      { name: 'Six of Hearts', prompt: 'six heart pips' },
+    );
+    expect(oneWay.prompt).toContain('all rank, suit and title markings share one upright reading direction');
+    expect(oneWay.prompt).not.toContain('exact 180-degree rotation');
+
+    const custom = composeCardRenderPrompt(
+      { kind: DECK_KIND.PLAYING, cardOrientation: DECK_CARD_ORIENTATION.STANDARD, cardOrientationPrompt: 'Use a custom diagonal index treatment' },
+      { name: 'Six of Hearts', prompt: 'six heart pips' },
+    );
+    expect(custom.prompt).toContain('Use a custom diagonal index treatment');
+    expect(custom.prompt).not.toContain('a six remains a six and never becomes a nine');
+    expect(custom.negativePrompt).toBe('');
   });
 });
 

@@ -84,6 +84,18 @@ describe('deck routes', () => {
     }));
   });
 
+  it('validates and forwards the deck-wide face orientation settings', async () => {
+    svc.updateDeck.mockResolvedValueOnce(deck({ cardOrientation: 'one-way', cardOrientationPrompt: 'Keep both indices upright' }));
+    const res = await request(makeApp()).patch(`/api/decks/${D1}`).send({
+      cardOrientation: 'one-way', cardOrientationPrompt: 'Keep both indices upright',
+    });
+    expect(res.status).toBe(200);
+    expect(svc.updateDeck).toHaveBeenCalledWith(D1, {
+      cardOrientation: 'one-way', cardOrientationPrompt: 'Keep both indices upright',
+    });
+    expect((await request(makeApp()).patch(`/api/decks/${D1}`).send({ cardOrientation: 'diagonal' })).status).toBe(400);
+  });
+
   it('generate-prompts targets only empty cards by default and skips casting without a universe', async () => {
     const res = await request(makeApp()).post(`/api/decks/${D1}/generate-prompts`).send({});
     expect(res.status).toBe(200);

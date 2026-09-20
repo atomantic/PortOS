@@ -29,7 +29,17 @@
  *    `--review-with` at queue time instead would take slashdo's precedence-1
  *    path, which makes task-level reviewer pins unreachable, suppresses the
  *    per-reviewer effort note, and freezes a roster that may sit in the queue
- *    while the defaults change.
+ *    while the defaults change. A per-run reviewer OVERRIDE is therefore
+ *    persisted as task metadata (`reviewerConfig`), not flattened into a flag —
+ *    it then wins over the defaults through that same resolver.
+ *
+ *    **Self-review is the one exception**, and deliberately so. It is not a
+ *    roster at all but slashdo's own documented opt-out, so it has to ride the
+ *    invocation: `--review-with none` sets `REVIEW_AGENTS=[]` with no fallback,
+ *    which leaves the host CLI's own self-review as the whole review. Because it
+ *    IS precedence-1, `resolveSlashdoReviewContract` recognizes it and prunes
+ *    every delegated reviewer loop out of the prompt — the pruning and the run
+ *    stay in agreement, which is exactly what that precedence exists to protect.
  *  - **No contributor prose enters the prompt.** The context names the PR
  *    number and URL; the title, body, and diff stay on the forge, where the
  *    workflow reads them as the untrusted data the prompt says they are.
@@ -58,13 +68,17 @@ export const isDoReviewTask = (metadata) => metadata?.slashdoCommand === DO_REVI
  * `/do:review` body the prompt builder inlines; this says which request, and
  * that the request is evidence rather than instruction.
  */
-function renderContext({ number, url, repoLabel }) {
+function renderContext({ number, url, repoLabel, selfReview }) {
   return [
     `Review pull request #${number} in ${repoLabel} (${url}) and publish the result as a review on that pull request.`,
     '',
     UNTRUSTED_PULL_REQUEST_NOTICE,
     '',
     'This run is review-only. The invocation carries `--no-apply`: publish findings as an inline review and do not commit, push, check the branch out, or merge. Landing the PR is a separate action the user triggers themselves.',
+    ...(selfReview ? [
+      '',
+      'The invocation also carries `--review-with none`: YOU are the reviewer. Do not spawn, shell out to, or request any other review agent — your own pass is the whole review, so read the diff with the care you would otherwise delegate.',
+    ] : []),
   ].join('\n');
 }
 
@@ -90,9 +104,18 @@ function renderContext({ number, url, repoLabel }) {
  * @param {string} [params.provider] - "Run with" provider pin
  * @param {string} [params.model] - "Run with" model pin
  * @param {string} [params.effort] - "Run with" reasoning-effort pin
+ * @param {boolean} [params.selfReview] - run with no delegated reviewers, so the
+ *   provider above is the only thing that reads the diff (`--review-with none`)
+ * @param {Object} [params.reviewerConfig] - already-sanitized reviewer override
+ *   (`reviewerConfigMetadata`) persisted for the prompt layer to resolve over
+ *   the install's Code Review Defaults. Ignored under `selfReview`, which has no
+ *   roster to override.
  * @returns {Promise<{task: Object|null, duplicate: boolean, dispatch: {started: boolean, reason: string|null}}>}
  */
-export async function spawnPrDoReviewTask({ app, pullRequest, repoFullName = '', provider, model, effort } = {}) {
+export async function spawnPrDoReviewTask({
+  app, pullRequest, repoFullName = '', provider, model, effort,
+  selfReview = false, reviewerConfig = null,
+} = {}) {
   const { addTask, forceSpawnTask } = await import('./cos.js');
   const { number, url } = pullRequest;
   const appLabel = String(app.name || app.id).replace(/\s+/g, ' ').trim();
@@ -102,12 +125,20 @@ export async function spawnPrDoReviewTask({ app, pullRequest, repoFullName = '',
     description: `Review PR #${number} for ${appLabel}`,
     app: app.id,
     priority: 'HIGH',
-    context: renderContext({ number, url, repoLabel }),
+    context: renderContext({ number, url, repoLabel, selfReview }),
     slashdoCommand: DO_REVIEW_COMMAND,
     // The URL is what puts slashdo into PR mode; `--no-apply` is the one flag
-    // this button owns. Everything about reviewers is left to the prompt layer.
-    slashdoArgs: `${url} --no-apply`,
+    // this button always owns. `--review-with none` joins it only for a
+    // self-review run — see the module doc for why that one review setting has
+    // to ride the invocation while a roster override rides the metadata.
+    slashdoArgs: `${url} --no-apply${selfReview ? ' --review-with none' : ''}`,
     provider, model, effort,
+    // The per-run reviewer override, spread as top-level task fields so
+    // `buildTaskMetadata` normalizes each one exactly as it does for every other
+    // dispatch surface. Absent under self-review and absent when the panel was
+    // left untouched — either way the prompt layer falls back to the install's
+    // Code Review Defaults, which is the behavior this button always had.
+    ...(selfReview ? {} : (reviewerConfig || {})),
     // The catalog's own posture for `review` (no worktree, no PR, no simplify,
     // a clean tree IS the success shape), read rather than restated so a catalog
     // change reaches this surface too.

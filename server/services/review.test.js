@@ -39,6 +39,7 @@ const {
   getItems,
   getPendingCounts,
   completeItem,
+  reopenItem,
   dismissItem,
   updateItem,
   deleteItem,
@@ -153,6 +154,34 @@ describe('review service', () => {
       const updated = await dismissItem('1');
       expect(updated.status).toBe('dismissed');
     });
+
+    it('reopens a completed personal item', async () => {
+      const items = [{ id: '1', type: 'todo', title: 'Test', status: 'completed', createdAt: '', updatedAt: '' }];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      const updated = await reopenItem('1');
+      expect(updated.status).toBe('pending');
+      expect(atomicWrite).toHaveBeenCalled();
+    });
+
+    it('rejects generic completion for source-owned obligations', async () => {
+      const items = [{
+        id: 'memory-review',
+        type: 'alert',
+        title: 'Approve memory',
+        status: 'pending',
+        metadata: { category: 'memory-approval', sourceOwned: true },
+        createdAt: '',
+        updatedAt: '',
+      }];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      await expect(completeItem('memory-review')).rejects.toMatchObject({
+        status: 409,
+        code: 'SOURCE_ACTION_REQUIRED',
+      });
+      expect(atomicWrite).not.toHaveBeenCalled();
+    });
   });
 
   describe('updateItem', () => {
@@ -178,6 +207,22 @@ describe('review service', () => {
     it('throws on non-existent item', async () => {
       readFile.mockResolvedValue('[]');
       await expect(deleteItem('missing')).rejects.toThrow('Review item not found: missing');
+    });
+
+    it('rejects deleting source-owned obligations', async () => {
+      readFile.mockResolvedValue(JSON.stringify([{
+        id: 'legacy-alert',
+        type: 'alert',
+        title: 'Needs triage',
+        status: 'pending',
+        metadata: {},
+      }]));
+
+      await expect(deleteItem('legacy-alert')).rejects.toMatchObject({
+        status: 409,
+        code: 'SOURCE_ACTION_REQUIRED',
+      });
+      expect(atomicWrite).not.toHaveBeenCalled();
     });
   });
 
@@ -256,6 +301,21 @@ describe('review service', () => {
       expect(written.find(i => i.id === 'b').status).toBe('pending');
     });
 
+    it('does not complete source-owned obligations through the bulk path', async () => {
+      const items = [
+        { id: 'todo', type: 'todo', status: 'pending', metadata: {} },
+        { id: 'memory', type: 'alert', status: 'pending', metadata: { category: 'memory-approval', sourceOwned: true } },
+      ];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      const updated = await bulkUpdateStatus({ status: 'completed' });
+
+      expect(updated.map(item => item.id)).toEqual(['todo']);
+      const written = atomicWrite.mock.calls[0][1];
+      expect(written.find(i => i.id === 'todo').status).toBe('completed');
+      expect(written.find(i => i.id === 'memory').status).toBe('pending');
+    });
+
     it('skips the write entirely when nothing matches', async () => {
       const { bulkUpdateStatus } = await import('./review.js');
       readFile.mockResolvedValue(JSON.stringify([{ id: 'a', status: 'completed', metadata: {} }]));
@@ -273,68 +333,10 @@ describe('review service', () => {
   });
 
   describe('cosEvents bridge', () => {
-    it('auto-completes the matching review item when an agent finishes successfully', async () => {
-      const handler = registeredHandlers['agent:completed'];
-      expect(handler).toBeDefined();
-
-      const items = [
-        { id: 'r1', type: 'cos', status: 'pending', metadata: { referenceId: 'task-42', taskId: 'task-42' } },
-        { id: 'r2', type: 'cos', status: 'pending', metadata: { referenceId: 'task-99', taskId: 'task-99' } }
-      ];
-      readFile.mockResolvedValue(JSON.stringify(items));
-
-      handler({ taskId: 'task-42', result: { success: true } });
-      // Wait a tick for the async chain inside the handler to flush
-      await new Promise(r => setImmediate(r));
-
-      const written = atomicWrite.mock.calls[0][1];
-      const updated = written.find(i => i.id === 'r1');
-      const untouched = written.find(i => i.id === 'r2');
-      expect(updated.status).toBe('completed');
-      expect(untouched.status).toBe('pending');
-    });
-
-    it('does not auto-complete when the agent failed', async () => {
-      const handler = registeredHandlers['agent:completed'];
-      const items = [
-        { id: 'r1', type: 'cos', status: 'pending', metadata: { referenceId: 'task-42', taskId: 'task-42' } }
-      ];
-      readFile.mockResolvedValue(JSON.stringify(items));
-
-      handler({ taskId: 'task-42', result: { success: false, error: 'boom' } });
-      await new Promise(r => setImmediate(r));
-
-      expect(atomicWrite).not.toHaveBeenCalled();
-    });
-
-    it('dismisses pending review items when their task is deleted', async () => {
-      const handler = registeredHandlers['tasks:changed'];
-      expect(handler).toBeDefined();
-
-      const items = [
-        { id: 'r1', type: 'cos', status: 'pending', metadata: { referenceId: 'task-42', taskId: 'task-42' } },
-        { id: 'r2', type: 'cos', status: 'pending', metadata: { referenceId: 'task-99', taskId: 'task-99' } }
-      ];
-      readFile.mockResolvedValue(JSON.stringify(items));
-
-      handler({ type: 'user', action: 'deleted', taskId: 'task-42' });
-      await new Promise(r => setImmediate(r));
-
-      const written = atomicWrite.mock.calls[0][1];
-      expect(written.find(i => i.id === 'r1').status).toBe('dismissed');
-      expect(written.find(i => i.id === 'r2').status).toBe('pending');
-    });
-
-    it('ignores non-deletion task changes', async () => {
-      const handler = registeredHandlers['tasks:changed'];
-      readFile.mockResolvedValue(JSON.stringify([
-        { id: 'r1', type: 'cos', status: 'pending', metadata: { referenceId: 'task-42', taskId: 'task-42' } }
-      ]));
-
-      handler({ type: 'user', action: 'updated', task: { id: 'task-42' } });
-      await new Promise(r => setImmediate(r));
-
-      expect(atomicWrite).not.toHaveBeenCalled();
+    it('does not auto-resolve task obligations from execution outcomes', () => {
+      expect(registeredHandlers['agent:completed']).toBeUndefined();
+      expect(registeredHandlers['tasks:changed']).toBeUndefined();
+      expect(registeredHandlers['task:ready']).toBeUndefined();
     });
   });
 

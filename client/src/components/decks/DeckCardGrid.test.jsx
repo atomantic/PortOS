@@ -122,6 +122,36 @@ describe('DeckCardGrid', () => {
     expect(screen.getByText('v1')).toBeInTheDocument();
   });
 
+  it('identifies the service and model for the active render', () => {
+    renderGrid({
+      deck: {
+        ...deck,
+        cards: [card('rendered', 'major', {
+          prompt: 'a rendered card', imageRefs: ['rendered.png'], primaryImageRef: 'rendered.png',
+          render: { status: 'completed', mode: 'local', model: 'flux2-klein-9b', filename: 'rendered.png' },
+        })],
+      },
+    });
+
+    expect(screen.getByText('Rendered by Local · flux2-klein-9b')).toBeInTheDocument();
+  });
+
+  it('does not attribute a non-active version to the current card', () => {
+    renderGrid({
+      deck: {
+        ...deck,
+        cards: [card('versions', 'major', {
+          prompt: 'versioned card', imageRefs: ['old.png', 'active.png'], primaryImageRef: 'active.png',
+          render: { status: 'completed', mode: 'local', model: 'flux2-klein-9b', filename: 'active.png' },
+        })],
+      },
+    });
+
+    const prev = screen.getByRole('button', { name: 'Previous render version for Card versions' });
+    fireEvent.click(prev);
+    expect(screen.queryByText('Rendered by Local · flux2-klein-9b')).not.toBeInTheDocument();
+  });
+
   it('allows viewing different versions and toggling active version on a multi-render card', () => {
     const multiDeck = {
       id: 'd1',

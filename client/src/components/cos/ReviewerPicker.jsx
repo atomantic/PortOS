@@ -250,7 +250,7 @@ export default function ReviewerPicker({
   const efforts = keyedLookup(effortsMap);
   // Why this reviewer can't run here, or null when nothing says it can't.
   //
-  // Two independent signals, both warn-only and both reported only when the
+  // Three independent signals, all warn-only and each reported only when the
   // caller actually fetched them — a reviewer stays selectable and selected
   // either way, since the checks are local-machine-only and a federated peer
   // (or a later install / a flip in Settings) may satisfy them:
@@ -258,6 +258,11 @@ export default function ReviewerPicker({
   // - `installed[token] === false` — the CLI binary isn't on PATH. Only an
   //   explicit `false` counts; `undefined` covers both "not a CLI reviewer"
   //   (copilot/@username) and "caller didn't fetch `installed`".
+  // - `unavailable[token] === true` — a LOCAL backend (LM Studio / Ollama) that
+  //   didn't answer its probe. This is the ONLY availability signal those three
+  //   get: their reviews hit the daemon's base URL directly, so a same-named
+  //   provider record's on/off switch says nothing about them (the hook exempts
+  //   them from `providerDisabled` for that reason).
   // - `providerDisabled[token]` — every provider record fronting that binary is
   //   switched off on this install, so the user has said they don't use it. A
   //   `/api/providers` that failed or hasn't landed reports nothing (see the
@@ -282,6 +287,16 @@ export default function ReviewerPicker({
       return {
         label: 'not installed',
         title: `${labelFor(token)}'s CLI binary wasn't found on this machine. It still runs (federation-wide config), but the review loop here will report it unsatisfied until it's installed.`
+      };
+    }
+    // A local backend answers from its own daemon, so the live probe — not a
+    // provider record — is what says whether it can review. `=== true` keeps a
+    // pre-fetch render (undefined) from accusing a healthy backend.
+    if (modelOptions?.unavailable?.[token] === true) {
+      const backendPage = LOCAL_BACKEND_MANAGE_PAGES[token];
+      return {
+        label: 'not running',
+        title: `${labelFor(token)} isn't answering on this machine${backendPage ? ` — start its server from ${backendPage}` : ''}. It still runs (federation-wide config), but a review here won't complete until it's up.`
       };
     }
     if (modelOptions?.providerDisabled?.[token]) {

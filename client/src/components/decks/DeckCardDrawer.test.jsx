@@ -34,9 +34,10 @@ describe('DeckCardDrawer render prompt', () => {
     renderDrawer();
     expect(screen.getByText('copperplate engraving')).toBeInTheDocument();
     expect(screen.getByText('Full tarot card, framed border')).toBeInTheDocument();
+    expect(screen.getAllByText(/One-way card face: all rank, suit and title markings/).length).toBeGreaterThan(0);
     expect(screen.getByText('The Fool: a youth at a cliff edge')).toBeInTheDocument();
-    expect(screen.getByText('text, blurry')).toBeInTheDocument();
-    expect(screen.getByText(/copperplate engraving\. Full tarot card, framed border\. The Fool: a youth at a cliff edge/)).toBeInTheDocument();
+    expect(screen.getByText('text, upside-down index, rotated bottom-right rank, inverted duplicate, mirrored lettering, blurry')).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`copperplate engraving\\. Full tarot card, framed border\\. One-way card face:.*The Fool: a youth at a cliff edge`))).toBeInTheDocument();
   });
 
   it('still names a clause the deck has not filled in', () => {
@@ -84,4 +85,3 @@ describe('DeckCardDrawer render prompt', () => {
     });
   });
 });
-

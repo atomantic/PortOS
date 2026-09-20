@@ -12,6 +12,10 @@ import {
 } from './jevDecisions.js';
 import { UNTRUSTED_CONTENT_SOURCES, untrustedContentPolicySchema } from './untrustedContent.js';
 
+// Keep the contract assertion from making the broad jev test suite eagerly
+// instantiate the Stacker News service subtree.
+const { modelAnalysisSchema } = await import('../services/stackerNewsPolicy.js');
+
 describe('shipped jev decisions', () => {
   // A typo here is silent in production: the scorer rejects the request, the
   // caller falls back, and the chat model keeps answering forever.
@@ -55,6 +59,7 @@ describe('shipped jev decisions', () => {
     expect(jevMinMarginFor('message-triage', { optionValue: 'delete', policyMinMargin: 0 })).toBe(0.6);
     expect(jevMinMarginFor('message-triage', { optionValue: 'archive', policyMinMargin: 0 })).toBe(JEV_DECISIONS['message-triage'].minMargin);
     expect(jevMinMarginFor('message-triage', { optionValue: 'archive', policyMinMargin: 0.9 })).toBe(0.9);
+    expect(jevMinMarginFor('stacker-news-classification', { optionValue: 'allowed', policyMinMargin: 0 })).toBe(1);
     expect(jevMinMarginFor('no-such-decision')).toBeNull();
     // Every destructive-leaning option carries a floor above its decision's.
     for (const [decisionId, optionValue] of [['message-triage', 'delete'], ['forge-maintenance-disposition', 'inspect-trusted-change']]) {
@@ -79,6 +84,8 @@ describe('shipped jev decisions', () => {
       'issue-comment-reply': z.enum(['reply', 'none']),
       'message-triage': z.enum(['reply', 'archive', 'delete', 'review']),
       'message-priority': z.enum(['high', 'medium', 'low']),
+      'stacker-news-classification': modelAnalysisSchema.shape.classification,
+      'stacker-news-risk': modelAnalysisSchema.shape.risk,
       'forge-maintenance-disposition': z.enum(['inspect-trusted-change', 'defer']),
       'scope-adherence': z.enum(['aligned', 'unrelated', 'contradicts']),
     };

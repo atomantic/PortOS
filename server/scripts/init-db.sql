@@ -246,6 +246,27 @@ CREATE INDEX IF NOT EXISTS idx_user_action_happened ON user_action_events (happe
 CREATE INDEX IF NOT EXISTS idx_user_action_type_time ON user_action_events (type, happened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_action_actor_time ON user_action_events (actor, happened_at DESC);
 
+-- Machine-local Review Hub presentation markers. Queue payloads remain owned by
+-- their source records; this table stores only keyed snooze/dismissal state and
+-- a delivery-generation marker reserved for the delivery layer.
+CREATE TABLE IF NOT EXISTS review_queue_triage (
+  action_key TEXT NOT NULL,
+  occurrence TEXT NOT NULL DEFAULT '',
+  revision TEXT NOT NULL DEFAULT '',
+  snoozed_until TIMESTAMPTZ,
+  dismissed BOOLEAN NOT NULL DEFAULT FALSE,
+  delivery_generation INTEGER NOT NULL DEFAULT 0 CHECK (delivery_generation >= 0),
+  PRIMARY KEY (action_key, occurrence, revision)
+);
+
+-- Machine-local CoS feedback obligations. Only the completed agent id and its
+-- archive date-bucket locator are retained here; prose and ratings stay with
+-- the source agent record and this table never enters federation payloads.
+CREATE TABLE IF NOT EXISTS cos_pending_agent_feedback (
+  agent_id TEXT PRIMARY KEY,
+  archive_date TEXT
+);
+
 -- Auto-update updated_at and sync_sequence on content/metadata changes.
 -- Skips bump for access-stat-only updates (access_count, last_accessed)
 -- to avoid sync noise from read operations.

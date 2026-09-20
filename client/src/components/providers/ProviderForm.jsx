@@ -102,6 +102,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     tuiPromptDelayMs: provider?.tuiPromptDelayMs || 2500,
     credentialBootstrapSetupCommand: provider?.credentialBootstrap?.setupCommand || '',
     credentialBootstrapCommand: provider?.credentialBootstrap?.command || '',
+    credentialBootstrapEnvCommand: provider?.credentialBootstrap?.envCommand?.join('\n') || '',
     credentialBootstrapArgs: provider?.credentialBootstrap?.args?.join(' ') || '',
     credentialBootstrapHarnessId: provider?.credentialBootstrap?.harnessId || '',
     credentialBootstrapArgsSeparator: provider?.credentialBootstrap?.argsSeparator || '',
@@ -470,6 +471,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
           ...(formData.credentialBootstrapSetupCommand.trim() ? { setupCommand: formData.credentialBootstrapSetupCommand.trim() } : {}),
           command: bootstrapCommand,
           args: argList(formData.credentialBootstrapArgs),
+          ...(formData.credentialBootstrapEnvCommand.trim()
+            ? { envCommand: formData.credentialBootstrapEnvCommand.split('\n').filter(line => line.trim()) } : {}),
           ...(formData.credentialBootstrapHarnessId.trim() ? { harnessId: formData.credentialBootstrapHarnessId.trim() } : {}),
           ...(formData.credentialBootstrapArgsSeparator.trim() ? { argsSeparator: formData.credentialBootstrapArgsSeparator.trim() } : {}),
         }
@@ -477,6 +480,7 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
     }
     delete data.credentialBootstrapSetupCommand;
     delete data.credentialBootstrapCommand;
+    delete data.credentialBootstrapEnvCommand;
     delete data.credentialBootstrapArgs;
     delete data.credentialBootstrapHarnessId;
     delete data.credentialBootstrapArgsSeparator;
@@ -722,6 +726,25 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                       />
                     </FormField>
                   </div>
+                  <FormField label="Review credential command (optional)" compact>
+                    <textarea
+                      id="provider-bootstrap-env-command"
+                      value={formData.credentialBootstrapEnvCommand}
+                      onChange={(e) => setFormData(prev => ({ ...prev, credentialBootstrapEnvCommand: e.target.value }))}
+                      placeholder={'token-cli\nprint-env'}
+                      rows={3}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                    />
+                  </FormField>
+                  <p className="text-xs text-gray-500">
+                    Optional, and only for tool-free reviews. Leave it empty unless this app
+                    PRINTS credentials instead of running the harness itself — a review already
+                    runs through the wrap above, so an ordinary bootstrap app needs nothing here.
+                    Enter the executable, then one argument per line (no shell quoting).
+                    It must print KEY=value lines for provider authentication; JSON and other lines are ignored.
+                    Only recognized provider credentials and API endpoints are passed to the reviewer.
+                    Credentials are cached in memory for one minute. Do not put secrets in command arguments.
+                  </p>
                   <p className="text-xs text-gray-500">
                     For a CLI that provisions its own short-lived credential (e.g. a token for a proxy) and then
                     runs the harness itself. <strong>Setup Command</strong> is a one-time step shown to you —

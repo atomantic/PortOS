@@ -15,6 +15,25 @@ import {
 } from './bm25.js';
 
 describe('BM25 Algorithm', () => {
+  it('treats prototype names as terms and IDs across indexing, persistence, and updates', () => {
+    const index = buildInvertedIndex([{ id: 'example', text: 'agent routing' }]);
+    expect(search('constructor __proto__', index)).toEqual([]);
+    addDocument(index, '__proto__', 'constructor constructor agent');
+    expect(search('constructor', index).map(row => row.docId)).toEqual(['__proto__']);
+    const restored = deserializeIndex(JSON.parse(JSON.stringify(serializeIndex(index))));
+    addDocument(restored, 'constructor', '__proto__ routing');
+    expect(search('__proto__', restored).map(row => row.docId)).toEqual(['constructor']);
+    expect(search('constructor', restored)[0].score).toBeGreaterThan(0);
+    addDocument(restored, '__proto__', 'ordinary replacement');
+    expect(search('constructor', restored)).toEqual([]);
+    removeDocument(restored, 'constructor');
+    expect(search('__proto__', restored)).toEqual([]);
+    // Initial bulk indexing must use the same dictionary semantics as updates.
+    expect(search('constructor', buildInvertedIndex([
+      { id: '__proto__', text: 'constructor' },
+    ]))[0].docId).toBe('__proto__');
+  });
+
   describe('tokenize', () => {
     it('should tokenize text into lowercase terms', () => {
       const result = tokenize('Hello World');

@@ -90,6 +90,47 @@ netstat -an | grep 5555
 - Verify server is running: `pm2 status`
 - Restart server: `pm2 restart ecosystem.config.cjs`
 
+## Browser Console Warnings
+
+### `contentscript.js` listener and `ObjectMultiplex` warnings
+
+**Symptoms**: `MaxListenersExceededWarning` for 11 `close` or `end` listeners,
+alongside orphaned `app-init-liveness` or `background-liveness` streams.
+
+This combination matches [MetaMask's reported extension issue](https://github.com/MetaMask/metamask-extension/issues/43090).
+Confirm the source by clicking the console's script link: a
+`chrome-extension://` URL identifies extension code, rather than a PortOS bundle.
+The warning alone does not establish a PortOS memory leak. Raising PortOS's
+EventEmitter listener limit would not repair the extension's emitter.
+
+Reload PortOS in a fresh browser profile with no extensions to isolate the
+cause. An incognito window only serves this purpose if no extensions are allowed
+there. If the warnings disappear, update the identified extension or restrict
+its site access to sites where it is needed, then reload the original tab.
+
+### Preload rejected with a cross-world service worker resource mismatch
+
+Chromium refuses to reuse a service-worker response across different script
+worlds (such as the page and an extension's isolated world). This is a browser
+isolation check, distinct from an incorrect preload `as` attribute; see
+[Chromium's resource reuse checks](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/platform/loader/fetch/resource.cc).
+An accompanying unused-preload warning can be a consequence of that rejection.
+Neither warning by itself means the app's script failed to load.
+
+PortOS intentionally uses Vite's module preloads and a service worker for its
+offline shell and cached build assets. First compare the same page in a profile
+without extensions. If the warning persists, temporarily select **Application >
+Service Workers > Bypass for network** in Chromium DevTools and reload to
+isolate service-worker involvement; turn the bypass off afterward. Do not
+permanently disable preloads or offline caching just to suppress a warning.
+
+If the page fails to render, inspect Network for failed JS/CSS requests and the
+console for an actual import/load error. Record the browser version, whether
+extensions and service-worker bypass change the result, and a redacted failing
+asset path. Remove private hostnames, record identifiers, and credentials before
+sharing diagnostics. The warning text alone cannot identify which extension or
+request caused the preload mismatch.
+
 ## AI Provider Issues
 
 ### Claude Code CLI Not Found

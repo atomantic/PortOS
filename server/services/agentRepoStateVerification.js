@@ -45,6 +45,7 @@ import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
 import { probePrForBranch } from './prProbe.js';
+import { ensureTaskThread } from './brainTaskThreads.js';
 import {
   REPO_STATE_ISSUES,
   REPO_STATE_SKIPS,
@@ -320,7 +321,15 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
     return null;
   });
 
-  await notifyRepoStateDivergence({ agentId, task, branchName, issues, appId }).catch(() => {});
+  if (recoveryTaskId) {
+    await ensureTaskThread({
+      taskId: recoveryTaskId,
+      title: `${RECOVERY_TASK_PREFIX} Finish incomplete cleanup for branch ${branchName}`,
+      nextAction: 'Let the recovery task finish, then verify the branch and worktree are clean.',
+      notes: issues.map(issue => issue.message).join('\n'),
+      priority: 'high',
+    }).catch(err => emitLog('warn', `Failed to create repo-state Brain thread for ${branchName}: ${err.message}`, { agentId, branchName }));
+  }
 
   return { verified: false, skipReason: null, issues, observed, recoveryTaskId };
 }
@@ -404,26 +413,4 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
   }
   emitLog('info', `🔧 Filed repo-state recovery task for ${branchName} (${issues.length} issue(s))`, { agentId, branchName, appName });
   return created?.id || null;
-}
-
-/**
- * Surface the divergence alongside the auto-filed task, so a repeatedly-diverging
- * app is visible rather than only inferable from a growing recovery queue.
- *
- * Deduped on the branch (the way `orphanedPrNotifier` dedupes on the PR url) —
- * `addTask` collapses repeats on its side, and a notification card per audit
- * would otherwise stack for a branch nothing manages to fix.
- */
-async function notifyRepoStateDivergence({ agentId, task, branchName, issues, appId }) {
-  const { addNotification, exists, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
-  if (await exists(NOTIFICATION_TYPES.AGENT_WARNING, 'branchName', branchName)) return;
-  const appName = task?.metadata?.appName || appId || 'PortOS';
-  await addNotification({
-    type: NOTIFICATION_TYPES.AGENT_WARNING,
-    title: `Repo state not clean after agent: ${appName}`,
-    description: `Branch ${branchName}\n${issues.map(i => `• ${i.message}`).join('\n')}`,
-    priority: PRIORITY_LEVELS.HIGH,
-    link: '/cos/agents',
-    metadata: { agentId, taskId: task?.id, branchName, issues: issues.map(i => i.code) },
-  });
 }

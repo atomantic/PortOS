@@ -115,8 +115,9 @@ export default function UntrustedContentPolicyPanel() {
                     if (value) patch({ jevMode: value });
                     else clearField('jevMode');
                   }} className={INPUT_CLASS}>
-                    <option value="">{source === 'defaults' ? 'Off (shipped default)' : `Inherit ${inheritanceName} (${defaults.jevMode || 'off'})`}</option>
-                    <option value="off">Off — always ask the provider</option>
+                    <option value="">{source === 'defaults' ? 'Shadow (shipped default)' : `Inherit ${inheritanceName} (${defaults.jevMode || 'off'})`}</option>
+                    <option value="off">Shadow — compare with the provider</option>
+                    <option value="disabled">Disabled — do not run Jev</option>
                     <option value="prefer">Prefer — local first, provider on abstain</option>
                     <option value="only">Only — local first, skip the item on abstain</option>
                   </select>

@@ -177,6 +177,26 @@ describe('Error Detection', () => {
       expect(result.category).toBe(ERROR_CATEGORIES.NETWORK_ERROR);
     });
 
+    it('classifies undici\'s bare mid-stream "terminated" as a network error', () => {
+      // A peer that drops the connection while the response body is streaming
+      // rejects the reader with `TypeError: terminated`, and the actionable
+      // code is only on `.cause` — which a cause-less rejection does not carry
+      // at all. That single word used to reach UNKNOWN, escalating a 319s
+      // NVIDIA NIM nemotron run to a tier-4 investigation task.
+      expect(analyzeError('terminated').category).toBe(ERROR_CATEGORIES.NETWORK_ERROR);
+      expect(analyzeError('TypeError: terminated').category).toBe(ERROR_CATEGORIES.NETWORK_ERROR);
+      expect(analyzeError('terminated: UND_ERR_SOCKET: other side closed').category)
+        .toBe(ERROR_CATEGORIES.NETWORK_ERROR);
+    });
+
+    it('does not read an agent\'s prose about a terminated process as a network error', () => {
+      // `analyzeError` also scans a CLI agent's entire screen, so the bare-word
+      // clause is anchored to the WHOLE string: only a cause-less transport
+      // rejection ever arrives as that one word by itself.
+      const result = analyzeError('The build script terminated\nand I restarted it', 1);
+      expect(result.category).toBe(ERROR_CATEGORIES.UNKNOWN);
+    });
+
     it('should detect timeout errors', () => {
       const result = analyzeError('Process timed out after 300000ms');
       expect(result.hasError).toBe(true);

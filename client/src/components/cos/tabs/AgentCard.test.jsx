@@ -787,6 +787,26 @@ describe('AgentCard goal fidelity', () => {
     expect(screen.getByText('no tests were run')).toBeInTheDocument();
   });
 
+  it('shows an overturned verdict with its context gap and hides the investigation action', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard agent={withReview({
+          verdict: 'rethink',
+          missing: ['the retry backoff'],
+          overturned: {
+            gap: 'work-outside-diff',
+            calibrationTaskId: 'calib-1',
+            at: '2026-09-19T10:00:00.000Z',
+          },
+        })} completed />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('Goal fidelity:', { exact: false })).toHaveTextContent('Overturned');
+    expect(screen.getByText(/context gap: work-outside-diff/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+  });
+
   // #7690: the automatic follow-up — the finding's durable half. What it did
   // belongs beside the verdict, or a filed issue is unreachable from the card
   // that reported the problem.

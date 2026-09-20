@@ -9,7 +9,7 @@
 // drawer's section (`?threadTab=`), so the dashboard widget, unified search and
 // a shared link all land on the same drawer. Full-bleed: this tab owns its own
 // scroll region like the Daily Log.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Info, Link2, ListTodo, Pin, Plus, Search, Trash2, X } from 'lucide-react';
 import useUrlParams from '../../../hooks/useUrlParams';
 import useDrawerTab from '../../../hooks/useDrawerTab';
@@ -22,6 +22,7 @@ import { FormField } from '../../ui/FormField';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import toast from '../../ui/Toast';
 import ThreadRefChip from '../ThreadRefChip';
+import ThreadSourceClosedAction from '../ThreadSourceClosedAction';
 import { THREAD_REF_KIND_IDS, threadRefLabel } from '../../../lib/threadRefKinds.js';
 import {
   THREAD_STATUSES, THREAD_PRIORITIES, THREAD_ACTIVE_STATUSES,
@@ -145,6 +146,8 @@ export default function ThreadsTab() {
   const tag = searchParams.get('tag') || '';
   const q = searchParams.get('q') || '';
   const selectedId = searchParams.get('thread');
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   const [drawerTab, setDrawerTab] = useDrawerTab('threadTab', 'details', DRAWER_TAB_IDS);
 
   const [threads, setThreads] = useState([]);
@@ -153,6 +156,7 @@ export default function ThreadsTab() {
   const [record, setRecord] = useState(null);
   const [draft, setDraft] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [completingSource, setCompletingSource] = useState(false);
   const [newRef, setNewRef] = useState({ kind: 'url', id: '', label: '' });
 
   // Two-stage search (the Catalog page's pattern): `searchInput` is what the
@@ -222,6 +226,15 @@ export default function ThreadsTab() {
   const adoptRecord = (full) => {
     setRecord(full);
     replaceRow(full);
+  };
+
+  const completeFromSource = (updated) => {
+    replaceRow(updated);
+    // The user can navigate while a save is pending. Never replace another
+    // drawer's record, or discard edits typed while the request was in flight.
+    if (selectedIdRef.current !== updated.id) return;
+    setRecord((prev) => ({ ...prev, ...updated }));
+    setDraft((prev) => ({ ...prev, status: updated.status }));
   };
 
   const [create, creating] = useAsyncAction(async () => {
@@ -375,7 +388,7 @@ export default function ThreadsTab() {
         closeOnBackdrop={!dirty}
       >
         {record && draft && (
-          <div className="space-y-4">
+          <fieldset disabled={completingSource} className="space-y-4 min-w-0">
             <div className="flex items-center justify-end gap-2">
               {dirty && <span className="text-xs text-port-warning">Unsaved changes</span>}
               <button
@@ -421,9 +434,13 @@ export default function ThreadsTab() {
                   <input type="checkbox" checked={draft.pinned} onChange={(e) => patchDraft({ pinned: e.target.checked })} />
                   Pinned
                 </label>
-                {record.externalState === 'closed' && (
-                  <p className="text-xs text-port-warning">The source this thread was discovered from is closed. Mark it done when you are.</p>
-                )}
+                <ThreadSourceClosedAction
+                  key={record.id}
+                  thread={record}
+                  onCompleted={completeFromSource}
+                  onPendingChange={setCompletingSource}
+                  disabled={dirty || saving || removing}
+                />
                 <div className="pt-2 border-t border-port-border">
                   {confirmDelete ? (
                     <InlineConfirmRow
@@ -485,7 +502,7 @@ export default function ThreadsTab() {
                 />
               </FormField>
             )}
-          </div>
+          </fieldset>
         )}
       </Drawer>
     </div>

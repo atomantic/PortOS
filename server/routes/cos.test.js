@@ -52,6 +52,7 @@ vi.mock('../services/cos.js', () => ({
   getAgents: vi.fn(),
   getAgentDates: vi.fn(),
   getAgentsByDate: vi.fn(),
+  getPendingAgentFeedback: vi.fn(),
   getAgent: vi.fn(),
   deleteAgent: vi.fn(),
   clearCompletedAgents: vi.fn(),
@@ -1473,6 +1474,7 @@ describe('CoS Routes', () => {
       expect(taskData.model).toBe('claude-opus-5');
       expect(taskData.effort).toBe('high');
       expect(taskData.claimTarget).toBe('412');
+      expect(taskData.metadata).toEqual({ prompt: 'CLAIM ISSUE PROMPT' });
       expect(taskData.simplify).toBe(true);
       // The claim prompt owns its own review sequence — no CoS loop on top.
       expect(taskData.reviewLoop).toBe(false);
@@ -1698,6 +1700,23 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.cleared).toBe(3);
+    });
+  });
+
+  describe('GET /api/cos/agents/feedback/pending', () => {
+    it('returns the durable count and the reconciled eligible agent projection', async () => {
+      cos.getPendingAgentFeedback.mockResolvedValue({
+        count: 1,
+        agents: [{ id: 'agent-001', status: 'completed', metadata: { taskType: 'user' } }],
+        unavailable: [{ agentId: 'agent-old', availability: 'unavailable', unavailableReason: 'deleted' }],
+      });
+
+      const response = await request(app).get('/api/cos/agents/feedback/pending');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ count: 1 });
+      expect(response.body.agents).toEqual([{ id: 'agent-001', status: 'completed', metadata: { taskType: 'user' } }]);
+      expect(response.body.unavailable).toEqual([{ agentId: 'agent-old', availability: 'unavailable', unavailableReason: 'deleted' }]);
     });
   });
 

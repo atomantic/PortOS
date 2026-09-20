@@ -918,13 +918,21 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata }
  *                 automatic dequeue and force-spawns the task instead (same path
  *                 as that Run now button), reporting the outcome as `dispatch`.
  *
+ * `selfReview` says the follow-up agent is the reviewer: it EMPTIES the roster
+ * (reviewers, usernames and the `~opt` set alike) and then marks the resulting
+ * no-roster run as one that still owes the change a review. That distinction is
+ * the whole point — an empty roster has always meant "nothing reviews this, just
+ * land it on green CI", and that stays what it means without this flag.
+ * Deliberately ignored on a `merge-on-green` run, where the caller asked for no
+ * review at all rather than for an undelegated one.
+ *
  * Returns the follow-up task, or — when an equivalent follow-up was already
  * queued — that existing task with `duplicate: true`. `dispatch: 'immediate'`
  * additionally stamps `dispatch: { started, reason }` so the caller can say
  * whether an agent actually started or the task is still waiting (no slots,
  * daemon stopped, …) rather than guessing.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, dispatch = 'queue' }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, forkHead = null, sourceWorkspace, prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, leaveOpen = false, selfReview = false, dispatch = 'queue' }) {
   if (!prUrl || !prBranch) return null;
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
 
@@ -936,30 +944,49 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // misreading it as non-GitHub would strip the only reviewer and silently
   // downgrade the run to merge-only.
   const isNonGithubForge = !!parsedPr?.host && detectForgeCli(parsedPr.host) !== 'gh';
+  // Self-review empties the roster HERE rather than at each caller. "The agent
+  // reviews it itself" and "these reviewers review it" are mutually exclusive, so
+  // whoever holds the flag has to hold the emptying too — and the non-obvious
+  // half is the usernames: a single `@login` inherited from the Code Review
+  // Defaults keeps the roster non-empty and quietly puts the run back on the
+  // delegated path the caller opted out of. One owner, so a second caller adopting
+  // the mode cannot rediscover that the hard way.
+  //
   // An EXPLICITLY empty list means "no review was requested" and must stay empty —
   // normalizeReviewers' `[copilot]` default would otherwise resurrect a reviewer.
-  const reviewerList = (Array.isArray(reviewers) && reviewers.length === 0) ? [] : normalizeReviewers({ reviewers });
+  const reviewerList = (selfReview || (Array.isArray(reviewers) && reviewers.length === 0))
+    ? []
+    : normalizeReviewers({ reviewers });
   const effectiveReviewers = prioritizeToolFreeReviewers(
     isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList
   );
   // GitHub reviewer usernames are forge-agnostic requested reviewers, so they are
   // NOT stripped on a non-GitHub forge — a username reviewer alone can drive the
   // loop even when copilot was dropped.
-  const effectiveUsernames = normalizeReviewUsernames(usernames);
+  const effectiveUsernames = selfReview ? [] : normalizeReviewUsernames(usernames);
   // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
   // follow-up's `--review-with` marks the same reviewers optional.
-  const effectiveOptionalReviewers = normalizeOptionalReviewers(optionalReviewers) || [];
+  const effectiveOptionalReviewers = selfReview ? [] : (normalizeOptionalReviewers(optionalReviewers) || []);
   // Per-reviewer iteration caps (`~max=<n>`) — forge-agnostic, threaded verbatim
   // so the follow-up's `--review-with` carries the same budgets. Entries for
   // reviewers that were stripped are inert (the emitter only marks tokens it
   // actually emits), so no narrowing is needed here.
   const effectiveReviewerMaxRounds = normalizeReviewerMaxRounds(reviewerMaxRounds) || {};
-  // Merge-on-green deliberately skips every reviewer. A legacy review loop
-  // whose GitHub-only reviewer vanishes on another forge retains its prior
-  // merge-only fallback instead of leaving an orphaned PR.
-  const mergeOnly = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN
-    || (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE
-      && effectiveReviewers.length === 0 && effectiveUsernames.length === 0);
+  // A review WAS asked for, but nothing is left to perform it — a legacy review
+  // loop whose GitHub-only reviewer vanished on another forge (which retains its
+  // prior merge-only fallback rather than leaving an orphaned PR), or a caller
+  // that deliberately resolved no roster. Named rather than inlined into
+  // `mergeOnly`, because the self-review branch below is exactly this case and
+  // re-deriving it by conjunction reads as a condition that might contradict it.
+  const noRosterMerge = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE
+    && effectiveReviewers.length === 0 && effectiveUsernames.length === 0;
+  // Merge-on-green deliberately skips every reviewer.
+  const mergeOnly = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN || noRosterMerge;
+  // The follow-up reviews the change ITSELF before the CI gate. Only meaningful
+  // on the no-roster path — with reviewers configured the review loop already
+  // runs — and never on a `merge-on-green` run, where the caller asked for no
+  // review at all rather than for an undelegated one.
+  const selfReviewMerge = selfReview && noRosterMerge;
   // ...and with nothing to review AND nothing to merge there is no follow-up at
   // all (a JIRA-tracked task whose reviewers were all stripped). The caller
   // normally catches this; the guard keeps the invariant local to this function.
@@ -989,7 +1016,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // One place that names the mode, so the title, the log line, and the warning
   // can't drift apart as the two follow-up kinds evolve.
   const kind = mergeOnly
-    ? { title: 'Merge', label: 'merge', reviewers: 'merge on green CI, no review' }
+    ? (selfReviewMerge
+      ? { title: 'Self-Review & Merge', label: 'self-review-merge', reviewers: 'self-review, no delegated reviewer' }
+      : { title: 'Merge', label: 'merge', reviewers: 'merge on green CI, no review' })
     : { title: 'Review Loop', label: 'review-loop', reviewers: [...effectiveReviewers, ...effectiveUsernames.map(u => `@${u}`)].join(', ') };
 
   // Inherit the source task's provider/model/effort pins. A follow-up runs a
@@ -1045,6 +1074,11 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopFollowUp: true,
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
       reviewLoopMergeOnly: mergeOnly,
+      // …and, on that same path, whether the agent owes the change its OWN
+      // review first. Read by `buildMergeFollowUpSection`, which is why it sits
+      // beside the flag that selects that section rather than in the roster keys
+      // below — there is no roster in this mode.
+      reviewLoopSelfReview: selfReviewMerge,
       // Review, but do NOT merge — the PR is a human's to land (JIRA hand-off).
       reviewLoopLeaveOpen: leaveOpen,
       reviewLoopPRUrl: prUrl,
@@ -1150,7 +1184,7 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
 
   if (isMergeFail) {
     const defaultBr = await git.getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
-    addTask({
+    const recoveryTask = await addTask({
       description: `${RECOVERY_TASK_PREFIX} Resolve merge conflict and clean up stale branch ${staleBranch} in ${appName}`,
       priority: 'HIGH',
       app: appId,
@@ -1164,8 +1198,10 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       useWorktree: false,
     }, 'user').catch(err => {
       emitLog('warn', `Failed to create merge recovery task: ${err.message}`, { agentId, staleBranch });
+      return null;
     });
     emitLog('info', `🔧 Auto-created merge recovery task for stale branch ${staleBranch}`, { agentId, appName });
+    return recoveryTask;
   } else {
     // PR/MR creation failed — spawn an agent to investigate and retry. Pick gh vs
     // glab based on the repo's forge so the recovery agent gets commands that
@@ -1184,7 +1220,7 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       ? `glab mr create --source-branch ${staleBranch} --target-branch ${targetBase} --title '...' --description '...'`
       : `gh pr create --head ${staleBranch} --base ${targetBase} --title '...' --body '...'`;
 
-    addTask({
+    const recoveryTask = await addTask({
       description: `${RECOVERY_TASK_PREFIX} Investigate and retry failed ${reqWord} for branch ${staleBranch} in ${appName}`,
       priority: 'HIGH',
       app: appId,
@@ -1197,7 +1233,9 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       useWorktree: false,
     }, 'user').catch(err => {
       emitLog('warn', `Failed to create ${reqWord} recovery task: ${err.message}`, { agentId, staleBranch });
+      return null;
     });
     emitLog('info', `🔧 Auto-created ${reqWord} recovery task for branch ${staleBranch}`, { agentId, appName, cli });
+    return recoveryTask;
   }
 }

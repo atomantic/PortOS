@@ -217,6 +217,23 @@ export const STYLE_PRESETS = [
     negativePrompt: 'photoreal humans, 3d render polish, cartoon flat, anime, digital smooth, vector clean, plastic toy',
   },
 
+  {
+    id: 'rotoscope-cinematic',
+    label: 'Rotoscope cinematic',
+    category: 'Animation',
+    description: 'Painted cel shading, ink contours, grounded motion and cinematic depth.',
+    prompt: 'hand-painted rotoscope animation aesthetic, grounded anatomy and natural weight, expressive restrained gestures, bold dark ink contours, matte two-tone cel shading, painterly textured backgrounds, cool blue shadows and warm amber highlights, cinematic low-angle perspective, subtle film grain, coherent silhouettes and consistent character design',
+    negativePrompt: 'plastic gloss, rubbery anatomy, flat lighting, inconsistent outlines, text, watermark',
+  },
+  {
+    id: 'unreal-stylized',
+    label: 'Unreal stylized cinema',
+    category: 'Animation',
+    description: 'Stylized 3D cinematic lighting with painted surfaces and cel-shaded characters.',
+    prompt: 'stylized Unreal Engine cinematic aesthetic, sculpted three-dimensional forms with hand-painted surface textures, cel-shaded characters with ink contours, rich indirect lighting, atmospheric depth, dramatic rim light, controlled depth of field, tactile worn materials, grounded composition and clear silhouettes',
+    negativePrompt: 'flat unlit surfaces, plastic toy gloss, excessive bloom, text, watermark',
+  },
+
   // ─── Illustration / Comics ─────────────────────────────────────────
   {
     id: 'graphic-novel',

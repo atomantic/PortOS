@@ -81,6 +81,24 @@ describe('summarizeCreativeFeedback', () => {
       commissionName: 'Example Nightly Commission',
     });
   });
+
+  it('keeps every pending run addressable instead of truncating the compatibility metrics', () => {
+    const runs = Array.from({ length: 9 }, (_, index) => ({
+      id: `run-${index}`,
+      projectId: `project-${index}`,
+      ranAt: `2026-08-${String(10 + index).padStart(2, '0')}T12:00:00.000Z`,
+      status: 'started',
+    }));
+    const result = summarizeCreativeFeedback({
+      now: new Date(`${today}T12:00:00.000Z`),
+      commissions: [{ id: 'commission-example', runs, feedback: [] }],
+      projects: runs.map((run) => ({ id: run.projectId, status: 'complete' })),
+    });
+
+    expect(result.unreviewedRenders).toBe(9);
+    expect(result.pendingReviews).toHaveLength(9);
+    expect(result.pendingReviews.at(-1).runId).toBe('run-8');
+  });
 });
 
 describe('buildProductActions', () => {
@@ -88,7 +106,7 @@ describe('buildProductActions', () => {
     const actions = buildProductActions({
       post: {
         status: 'ok', completedToday: false, daysSinceActivity: 3,
-        activeDaysLast7: 2, currentStreak: 1,
+        activeDaysLast7: 2, currentStreak: 1, today,
       },
       creativeCommissions: {
         status: 'ok', unreviewedRenders: 1, oldestUnreviewedAgeDays: 4,
@@ -104,6 +122,9 @@ describe('buildProductActions', () => {
       link: '/post/launcher',
       featureId: 'post',
       featureLabel: 'POST',
+      required: false,
+      isRecommendation: true,
+      occurrence: today,
     });
     expect(actions[1]).toMatchObject({
       type: 'commission_feedback',
@@ -112,6 +133,56 @@ describe('buildProductActions', () => {
     });
     expect(actions[1].detail).toContain('awaiting review');
     expect(actions[1].detail).not.toContain('awaitsing');
+  });
+
+  it('creates one optional feedback action per pending run with stable occurrence identity', () => {
+    const actions = buildProductActions({
+      post: { status: 'ok', completedToday: true, today },
+      creativeCommissions: {
+        status: 'ok',
+        unreviewedRenders: 2,
+        oldestUnreviewedAgeDays: 5,
+        feedbackCoveragePercent: 33,
+        pendingReviews: [
+          {
+            commissionId: 'commission-example',
+            commissionName: 'Example Commission',
+            runId: 'run-old',
+            ranAt: '2026-08-19T12:00:00.000Z',
+            ageDays: 5,
+          },
+          {
+            commissionId: 'commission-example',
+            commissionName: 'Example Commission',
+            runId: 'run-new',
+            ranAt: '2026-08-23T12:00:00.000Z',
+            ageDays: 1,
+          },
+        ],
+      },
+    });
+
+    expect(actions).toHaveLength(2);
+    expect(actions.map((action) => action.id)).toEqual([
+      'creative-feedback:commission-example:run-old',
+      'creative-feedback:commission-example:run-new',
+    ]);
+    expect(actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        occurrence: 'run-old',
+        timestamp: '2026-08-19T12:00:00.000Z',
+        required: false,
+        isRecommendation: true,
+        severity: 'high',
+      }),
+      expect.objectContaining({
+        occurrence: 'run-new',
+        timestamp: '2026-08-23T12:00:00.000Z',
+        required: false,
+        isRecommendation: true,
+        severity: 'medium',
+      }),
+    ]));
   });
 
   it('does not create actions from unavailable metrics', () => {

@@ -31,6 +31,10 @@ vi.mock('../../../services/api', () => ({
   doReviewAppPullRequest: vi.fn(),
   mergeAppPullRequest: vi.fn(),
   getProviders: vi.fn(),
+  // The run-settings panel's reviewer override reads the install's Code Review
+  // Defaults for its seed and the reviewer Model column's options.
+  getCodeReviewDefaults: vi.fn(),
+  getLocalLlmStatus: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
@@ -106,6 +110,11 @@ beforeEach(() => {
   });
   api.mergeAppPullRequest.mockResolvedValue({ number: 17, merged: true, method: 'merge', deletedBranch: true });
   api.getProviders.mockResolvedValue({ activeProvider: '', providers: [] });
+  api.getCodeReviewDefaults.mockResolvedValue({
+    reviewers: ['codex'], usernames: [], optionalReviewers: [], reviewerMaxRounds: {},
+    stopMode: 'all', reviewerApplies: false, installed: {},
+  });
+  api.getLocalLlmStatus.mockResolvedValue({ backends: {} });
 });
 
 afterEach(() => {
@@ -144,7 +153,7 @@ describe('PullRequestsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Resolve & merge/ }));
 
     await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
-      'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
+      'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined, reviewMode: 'delegated' },
     ));
   });
 
@@ -168,7 +177,10 @@ describe('PullRequestsTab', () => {
     ));
   });
 
-  it('passes an explicitly enabled eligibility provider override', async () => {
+  // PR review hands its run to the `pr-reviewer` scheduled task, so it takes the
+  // provider pin only when the user opts in — and never the Code review setting,
+  // which governs the two actions PortOS composes here.
+  it('passes the Run with pin to PR review once the opt-in is ticked, and nothing else', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{
         id: 'claude', name: 'Claude', type: 'cli', enabled: true,
@@ -180,8 +192,9 @@ describe('PullRequestsTab', () => {
     await screen.findByText('Fix the save path');
     fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-5' } });
+    fireEvent.change(screen.getByLabelText('Code review'), { target: { value: 'self' } });
 
-    fireEvent.click(screen.getByLabelText('Use Run with for PR review eligibility'));
+    fireEvent.click(screen.getByLabelText('Also run PR review on the Run with provider'));
     fireEvent.click(screen.getByRole('button', { name: /PR review/ }));
 
     await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
@@ -194,7 +207,7 @@ describe('PullRequestsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Resolve & merge/ }));
 
     await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
-      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+      'app-1', 17, { provider: undefined, model: undefined, effort: undefined, reviewMode: 'delegated' },
     ));
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
   });
@@ -407,7 +420,7 @@ describe('PullRequestsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Do:Review' }));
 
     await waitFor(() => expect(api.doReviewAppPullRequest).toHaveBeenCalledWith(
-      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+      'app-1', 17, { provider: undefined, model: undefined, effort: undefined, reviewMode: 'delegated' },
     ));
     expect(await screen.findByRole('link', { name: /Do:Review: Queued/ })).toBeInTheDocument();
     expect(toastMock.success).toHaveBeenCalledWith('Started an agent to run /do:review against GitHub #17');
@@ -454,7 +467,7 @@ describe('PullRequestsTab', () => {
     expect(screen.queryByRole('button', { name: 'Retry PR review' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry Resolve & merge' }));
     await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
-      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+      'app-1', 17, { provider: undefined, model: undefined, effort: undefined, reviewMode: 'delegated' },
     ));
     expect(api.reviewAppPullRequest).not.toHaveBeenCalled();
     expect(await screen.findByRole('link', { name: /Resolve & merge: Queued/ })).toBeInTheDocument();
@@ -558,5 +571,95 @@ describe('PullRequestsTab', () => {
     await renderTab();
 
     expect(await screen.findByText('No open pull requests or merge requests.')).toBeInTheDocument();
+  });
+
+  // Four permanently-expanded paragraphs of reference text used to push the run
+  // settings and the first request off a laptop screen.
+  it('keeps the action explainer collapsed until asked for', async () => {
+    await renderTab();
+
+    const disclosure = await screen.findByRole('button', { name: /What each action does/ });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/Merge lands the request on the forge immediately/)).not.toBeInTheDocument();
+
+    fireEvent.click(disclosure);
+
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/Merge lands the request on the forge immediately/)).toBeInTheDocument();
+  });
+
+  it('sends the self-review mode with the two actions PortOS composes itself', async () => {
+    await renderTab();
+    await screen.findByText('Fix the save path');
+
+    fireEvent.change(screen.getByLabelText('Code review'), { target: { value: 'self' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, expect.objectContaining({ reviewMode: 'self' }),
+    ));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Do:Review' }));
+    await waitFor(() => expect(api.doReviewAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, expect.objectContaining({ reviewMode: 'self' }),
+    ));
+  });
+
+  // The roster only travels when the user actually edited it — an untouched
+  // picker must leave the server resolving the defaults at spawn time rather
+  // than freezing whatever this tab happened to render.
+  it('omits the reviewer roster while the picker is untouched', async () => {
+    await renderTab();
+    await screen.findByText('Fix the save path');
+
+    fireEvent.click(screen.getByRole('button', { name: /Reviewer override/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));
+
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalled());
+    expect(api.resolveAppPullRequest.mock.calls[0][2]).not.toHaveProperty('reviewers');
+  });
+
+  // Dropping the seeded `codex` row is an edit, so the (now empty) roster has to
+  // be sent — otherwise the run silently reviews with the very default the user
+  // just removed.
+  it('sends an edited roster, including one edited down to empty', async () => {
+    await renderTab();
+    await screen.findByText('Fix the save path');
+
+    fireEvent.click(screen.getByRole('button', { name: /Reviewer override/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Remove codex$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));
+
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalled());
+    expect(api.resolveAppPullRequest.mock.calls[0][2]).toMatchObject({ reviewers: [] });
+  });
+
+  // The picker emits a partial against its baseline, so editing a field back to
+  // the default empties that partial — the override has to disappear with it,
+  // or the panel keeps claiming an override the run no longer has.
+  it('drops the override once every edit is undone', async () => {
+    await renderTab();
+    await screen.findByText('Fix the save path');
+
+    fireEvent.click(screen.getByRole('button', { name: /Reviewer override/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Remove codex$/i }));
+    expect(screen.getByRole('button', { name: /Reviewer override \(active\)/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Codex$/ }));
+    expect(screen.getByRole('button', { name: /^Reviewer override$/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalled());
+    expect(api.resolveAppPullRequest.mock.calls[0][2]).not.toHaveProperty('reviewers');
+  });
+
+  // A picker whose every edit would be discarded reads as a setting being
+  // ignored, so self-review hides it rather than disabling it.
+  it('hides the reviewer override under self-review', async () => {
+    await renderTab();
+    await screen.findByText('Fix the save path');
+
+    expect(screen.getByRole('button', { name: /Reviewer override/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Code review'), { target: { value: 'self' } });
+    expect(screen.queryByRole('button', { name: /Reviewer override/ })).not.toBeInTheDocument();
   });
 });

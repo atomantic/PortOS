@@ -8,6 +8,17 @@ import fs from 'fs';
 // developer's LM Studio.
 const lmsSpawn = vi.fn();
 vi.mock('../lib/bufferedSpawn.js', () => ({ bufferedSpawn: (...args) => lmsSpawn(...args) }));
+// `isAppInstalled` reads LM Studio's home directory, which is the only
+// cross-platform install marker (the app's own location is user-chosen off
+// macOS). Redirected to a temp dir so the assertion never depends on whether
+// the developer's machine happens to have LM Studio.
+const fakeHome = { path: null };
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal();
+  const homedir = () => fakeHome.path ?? actual.homedir();
+  return { ...actual, homedir, default: { ...actual, homedir } };
+});
+
 const lmsBinary = { path: '/usr/local/bin/lms' };
 vi.mock('../lib/processEnv.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -29,6 +40,7 @@ beforeEach(() => {
   process.env.LM_STUDIO_URL = 'http://127.0.0.1:1';
   lmsSpawn.mockReset().mockResolvedValue({ success: true, code: 0, stdout: '', stderr: '' });
   lmsBinary.path = '/usr/local/bin/lms';
+  fakeHome.path = null;
   vi.resetModules();
 });
 
@@ -476,5 +488,41 @@ describe('lmStudioManager.loadModelWithArgs', () => {
     const { loadModelWithArgs } = await import('./lmStudioManager.js');
     expect(await loadModelWithArgs('', [])).toEqual({ success: false, error: 'No model was named to load.' });
     expect(lmsSpawn).not.toHaveBeenCalled();
+  });
+});
+
+// Before this, `isAppInstalled` was hard-gated to `process.platform === 'darwin'`
+// plus the fixed `/Applications` bundle path, so a Windows or Linux install —
+// where the user picks the install drive and there is no path to probe — always
+// read false. With the `lms` CLI unbootstrapped and the local server stopped,
+// that made `getStatus()` report an installed LM Studio as "Not installed" and
+// offer to install it again.
+describe('isAppInstalled', () => {
+  const home = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'portos-lms-home-'));
+    fakeHome.path = dir;
+    return dir;
+  };
+
+  it('counts an LM Studio home directory as installed on any platform', async () => {
+    fs.mkdirSync(path.join(home(), '.lmstudio'), { recursive: true });
+    const { isAppInstalled } = await import('./lmStudioManager.js');
+    expect(isAppInstalled()).toBe(true);
+  });
+
+  it('counts the older ~/.cache/lm-studio layout too', async () => {
+    fs.mkdirSync(path.join(home(), '.cache', 'lm-studio'), { recursive: true });
+    const { isAppInstalled } = await import('./lmStudioManager.js');
+    expect(isAppInstalled()).toBe(true);
+  });
+
+  it('stays false when neither marker exists', async () => {
+    home();
+    const { isAppInstalled } = await import('./lmStudioManager.js');
+    // A macOS dev box with a real bundle would answer true through the other
+    // branch, so only assert the no-bundle case.
+    if (process.platform !== 'darwin' || !fs.existsSync('/Applications/LM Studio.app')) {
+      expect(isAppInstalled()).toBe(false);
+    }
   });
 });

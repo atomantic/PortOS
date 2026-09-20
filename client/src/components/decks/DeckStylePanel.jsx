@@ -3,7 +3,10 @@ import { ImagePlus, Trash2 } from 'lucide-react';
 import InfluenceChipsInput from '../universeBuilder/InfluenceChipsInput';
 import DeckSampleModal from './DeckSampleModal';
 import useFieldDraft from '../../hooks/useFieldDraft';
-import { DECK_KIND_LABELS, deckCardAspectStyle } from '../../lib/decks';
+import {
+  DECK_CARD_ORIENTATION, DECK_CARD_ORIENTATION_LABELS, DECK_CARD_ORIENTATIONS, DECK_KIND_LABELS,
+  DEFAULT_DECK_CARD_ORIENTATION, deckCardAspectStyle, defaultDeckCardOrientationPrompt,
+} from '../../lib/decks';
 
 const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
@@ -17,6 +20,12 @@ export default function DeckStylePanel({ deck, universes, onPatch, onDeckReplace
   const description = useFieldDraft(deck.description, (v) => onPatch({ description: v }));
   const styleNotes = useFieldDraft(deck.styleNotes, (v) => onPatch({ styleNotes: v }));
   const layoutPrompt = useFieldDraft(deck.layoutPrompt, (v) => onPatch({ layoutPrompt: v }));
+  const orientation = deck.cardOrientation || DEFAULT_DECK_CARD_ORIENTATION[deck.kind] || DECK_CARD_ORIENTATIONS[0];
+  const builtInOrientationPrompt = defaultDeckCardOrientationPrompt({ ...deck, cardOrientation: orientation, cardOrientationPrompt: null });
+  const orientationPrompt = useFieldDraft(
+    deck.cardOrientationPrompt || builtInOrientationPrompt,
+    (value) => onPatch({ cardOrientationPrompt: value.trim() === builtInOrientationPrompt ? null : (value.trim() || null) }),
+  );
   const influences = deck.influences || { embrace: [], avoid: [] };
   const samples = Array.isArray(deck.samples) ? deck.samples : [];
 
@@ -56,6 +65,45 @@ export default function DeckStylePanel({ deck, universes, onPatch, onDeckReplace
           <label htmlFor="deck-layout-prompt" className="block text-xs text-gray-400 mb-1">Shared card layout ({DECK_KIND_LABELS[deck.kind] || deck.kind})</label>
           <textarea id="deck-layout-prompt" rows={3} value={layoutPrompt.value} onChange={layoutPrompt.onChange} onBlur={layoutPrompt.onBlur} className={INPUT_CLASS} />
           <p className="text-[11px] text-gray-500 mt-1">Sits between the style prompt and each card's subject so every card shares one border, index and title treatment.</p>
+        </div>
+        <div>
+          <label htmlFor="deck-card-orientation" className="block text-xs text-gray-400 mb-1">Card face orientation</label>
+          <select
+            id="deck-card-orientation"
+            value={orientation}
+            onChange={(e) => onPatch({ cardOrientation: e.target.value })}
+            className={INPUT_CLASS}
+          >
+            {DECK_CARD_ORIENTATIONS.map((value) => <option key={value} value={value}>{DECK_CARD_ORIENTATION_LABELS[value]}</option>)}
+          </select>
+          <p className="text-[11px] text-gray-500 mt-1">
+            {orientation === DECK_CARD_ORIENTATION.STANDARD
+              ? 'The top-left index is upright and the matching bottom-right index is rotated 180°, so a 6 stays a 6 when the card is turned over.'
+              : 'All indices and titles face one direction; the bottom-right copy is not rotated.'}
+          </p>
+        </div>
+        <div>
+          <div className="flex items-start justify-between gap-2 mb-1 flex-wrap">
+            <label htmlFor="deck-card-orientation-prompt" className="block text-xs text-gray-400">Face-orientation prompt (built-in, overridable)</label>
+            {deck.cardOrientationPrompt ? (
+              <button
+                type="button"
+                onClick={() => { orientationPrompt.reset(); onPatch({ cardOrientationPrompt: null }); }}
+                className="min-h-[32px] shrink-0 rounded px-2 text-[11px] text-gray-400 hover:bg-white/5 hover:text-white"
+              >
+                Use built-in
+              </button>
+            ) : null}
+          </div>
+          <textarea
+            id="deck-card-orientation-prompt"
+            rows={4}
+            value={orientationPrompt.value}
+            onChange={orientationPrompt.onChange}
+            onBlur={orientationPrompt.onBlur}
+            className={INPUT_CLASS}
+          />
+          <p className="text-[11px] text-gray-500 mt-1">This guard is added to every card render after the shared layout. Leave the built-in wording in place unless this deck needs a different physical reading convention.</p>
         </div>
         <div>
           <label htmlFor="deck-universe" className="block text-xs text-gray-400 mb-1">Universe</label>

@@ -446,7 +446,7 @@ export async function analyzeItem(itemId) {
   // Deferred: `services/untrustedContent.js` pulls settings + providers, and
   // `stackerNews.js` is reached by the routes and a dozen suites that never
   // analyze anything. See "Import scoping" in server/AGENTS.md.
-  const { screenUntrustedContent } = await import('./untrustedContent.js');
+  const { jevBatchGate, screenUntrustedContent } = await import('./untrustedContent.js');
   const screening = await screenUntrustedContent({ content: fullContent, source: UNTRUSTED_CONTENT_SOURCE });
   const deterministic = {
     injectionRisk: injectionMatches.length ? 'high' : 'low', injectionMatches, sourceTrusted: false, contentLength: content.length,
@@ -462,6 +462,42 @@ export async function analyzeItem(itemId) {
     const blocked = evaluateStackerNewsPolicy({ deterministic, model: null, rules });
     const blockedId = await persistAnalysis({ item, stage: 'policy', provider: 'deterministic', rulesHash, result: blocked });
     return { item: itemView(item), analysisId: blockedId, stale: false, deterministic, text: null, vision: null, combinedModel: null, policy: blocked, errors: [] };
+  }
+
+  const jevGate = await jevBatchGate({
+    content: fullContent,
+    source: UNTRUSTED_CONTENT_SOURCE,
+    items: [{
+      key: item.id,
+      premise: () => fullContent,
+      decisionIds: ['stacker-news-classification', 'stacker-news-risk'],
+    }],
+    // A local allowed/low answer cannot replace the prose-bearing chat result:
+    // evaluateStackerNewsPolicy needs that prose to scan disallowedThemes. Only
+    // the restrictive side of either enum is safe to act on without it.
+    accept: (choices) => choices['stacker-news-classification'] === 'escalate'
+      || choices['stacker-news-risk'] === 'high',
+  });
+  const jevChoices = jevGate.decided.get(item.id);
+  if (jevChoices && !injectionMatches.length) {
+    const jevModel = {
+      classification: jevChoices['stacker-news-classification'],
+      risk: jevChoices['stacker-news-risk'],
+      summary: '',
+      findings: [],
+      suggestedAction: 'none',
+    };
+    await jevGate.measure();
+    const policy = evaluateStackerNewsPolicy({ deterministic, model: jevModel, rules });
+    await persistAnalysis({ item, stage: 'text', provider: 'jev', rulesHash, result: jevModel });
+    const analysisId = await persistAnalysis({ item, stage: 'policy', provider: 'deterministic', rulesHash, result: policy });
+    return { item: itemView(item), analysisId, stale: false, deterministic, text: jevModel, vision: null, combinedModel: jevModel, policy, errors: [] };
+  }
+  if (jevGate.skipped.some((entry) => entry.key === item.id) && !injectionMatches.length) {
+    const policy = { decision: 'review', reasons: ['jev_only_unsettled'], allowedAction: 'none' };
+    await jevGate.measure();
+    const analysisId = await persistAnalysis({ item, stage: 'policy', provider: 'jev', status: 'skipped', rulesHash, result: policy });
+    return { item: itemView(item), analysisId, stale: false, skipped: true, skipReason: 'jev_only_unsettled', deterministic, text: null, vision: null, combinedModel: null, policy, errors: [] };
   }
 
   let textResult = null;
@@ -500,6 +536,12 @@ export async function analyzeItem(itemId) {
   const fresh = await query('SELECT content_hash FROM stacker_news_items WHERE id=$1', [item.id]);
   if (fresh.rows[0]?.content_hash !== item.content_hash) return { item: itemView(item), stale: true, deterministic, errors };
   const combinedModel = combineStackerNewsModelResults(textResult, visionResult);
+  await jevGate.measure(combinedModel ? {
+    [item.id]: {
+      'stacker-news-classification': combinedModel.classification,
+      'stacker-news-risk': combinedModel.risk,
+    },
+  } : undefined);
   const policy = evaluateStackerNewsPolicy({ deterministic, model: combinedModel, rules });
   const analysisId = await persistAnalysis({ item, stage: 'policy', provider: 'deterministic', rulesHash, result: policy });
   return { item: itemView(item), analysisId, stale: false, deterministic, text: textResult, vision: visionResult, combinedModel, policy, errors };

@@ -9,7 +9,7 @@ export const DEFAULT_UNTRUSTED_CONTENT_POLICY = Object.freeze({
   classifierMode: 'required', minBenignScore: 0.9,
   maxInputChars: MODEL_ABUSE_GUARD_MAX_INPUT_CHARS, maxOutputChars: 32_000,
   providerId: null, model: null,
-  // The local entailment scorer is OFF until an operator opts a source in.
+  // The global feature gates scoring; legacy off means shadow-only comparison.
   // `jevMinMargin: null` means "use the per-decision floor in
   // `lib/jevDecisions.js`"; a number can only raise that floor, never lower it.
   jevMode: 'off', jevMinMargin: null,
@@ -22,18 +22,28 @@ export const untrustedContentPolicySchema = z.object({
   maxOutputChars: z.number().int().min(100).max(100_000).optional(),
   providerId: z.string().trim().min(1).max(128).nullable().optional(),
   model: z.string().trim().min(1).max(300).nullable().optional(),
-  // off    — today's behavior exactly, and the shipped default.
+  // disabled — no scorer call, including no shadow measurement.
+  // off    — legacy shadow mode; chat still owns the answer (shipped default).
   // prefer — jev first, chat-LLM fallback whenever it abstains or is unavailable.
   // only   — jev first, and an abstention SKIPS the item with a recorded reason
   //          rather than spending provider quota. Never coerced into the
   //          permissive enum member (`none`/`defer`); that would turn a
   //          "cannot tell" into a silent approval.
-  jevMode: z.enum(['off', 'prefer', 'only']).optional(),
+  jevMode: z.enum(['off', 'disabled', 'prefer', 'only']).optional(),
   jevMinMargin: z.number().min(0).max(1).nullable().optional(),
 }).strict();
 export const untrustedContentSettingsSchema = z.object({
+  scopeAdherenceEnabled: z.boolean().optional(),
   defaults: untrustedContentPolicySchema.optional(),
   sources: z.object(Object.fromEntries(UNTRUSTED_CONTENT_SOURCES.map(source => [source, untrustedContentPolicySchema.optional()]))).strict().optional(),
+}).strict();
+
+// Narrow management writes preserve screening and provider settings owned by other panels.
+export const jevPolicyPatchSchema = z.object({
+  scopeAdherenceEnabled: z.boolean().optional(),
+  sources: z.object(Object.fromEntries(['github-issue', 'email', 'stacker-news'].map(source => [
+    source, untrustedContentPolicySchema.pick({ jevMode: true, jevMinMargin: true }).optional(),
+  ]))).strict().optional(),
 }).strict();
 
 /** Invalid persisted policies block processing instead of silently losing a pin. */

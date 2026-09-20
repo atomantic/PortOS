@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useParams } from 'react-router';
 import {
   ClipboardList,
   AlertTriangle,
@@ -23,20 +23,31 @@ import {
   MessageCircle,
   Mail,
   Activity,
-  DatabaseBackup
+  DatabaseBackup,
+  CalendarDays,
+  ListTodo,
+  Hourglass,
+  Sparkles,
+  History as HistoryIcon,
+  ExternalLink,
+  Save
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
-import { timeAgo, formatDateTime } from '../utils/formatters';
+import Drawer from '../components/Drawer';
+import TabPills from '../components/ui/TabPills';
+import useUrlParams from '../hooks/useUrlParams';
+import useAsyncAction from '../hooks/useAsyncAction';
+import { timeAgo, formatDateTime, formatCount, localDateKey } from '../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
 import { coalesce } from '../utils/coalesce';
 import * as api from '../services/api';
 import socket from '../services/socket';
 
-// Producer-domain socket events that change what the cross-domain "Needs
-// Attention" queue (GET /api/review/queue) would return. The queue is derived
+// Producer-domain socket events that change what the unified Actions queue
+// (GET /api/review/queue) would return. The queue is derived
 // live from each producer, so when any of these fire — a draft sent, an inbox
 // item classified, a CoS task resolved, a backup finishing — we re-pull the
 // queue (debounced) instead of waiting for a manual reload. Ask is omitted
@@ -45,12 +56,18 @@ const QUEUE_INVALIDATION_EVENTS = [
   'brain:classified',          // inbox item classified / re-reviewed
   'cos:tasks:user:changed',    // CoS user-task list changed
   'cos:tasks:cos:changed',     // CoS internal-task list changed
+  'cos:agent:completed',       // a newly completed run may need feedback
   'messages:changed',          // draft approved/deleted/status changed
   'messages:draft:created',    // new draft awaiting review
   'messages:draft:sent',       // draft sent (resolves a drafts row)
   'backup:started',            // backup state transitioning
   'backup:completed',          // backup succeeded (clears a failed-backup row)
-  'backup:failed'              // backup errored (surfaces a failed-backup row)
+  'backup:failed',              // backup errored (surfaces a failed-backup row)
+  'brain:threads:changed',      // Brain commitment created/edited/completed
+  'review:item:created',        // legacy manual todo created
+  'review:item:updated',        // legacy manual todo status/title changed
+  'review:item:deleted',        // legacy manual todo removed
+  'review:items:bulk-updated'
 ];
 
 // Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
@@ -59,8 +76,12 @@ const QUEUE_SOURCE_CONFIG = {
   ask: { icon: MessageCircle, color: 'text-port-accent' },
   cos: { icon: Crown, color: 'text-port-accent' },
   drafts: { icon: Mail, color: 'text-port-accent' },
+  feedback: { icon: MessageCircle, color: 'text-port-warning' },
   health: { icon: Activity, color: 'text-port-warning' },
-  backup: { icon: DatabaseBackup, color: 'text-port-error' }
+  backup: { icon: DatabaseBackup, color: 'text-port-error' },
+  threads: { icon: BrainIcon, color: 'text-port-accent-2' },
+  todo: { icon: ListTodo, color: 'text-port-success' },
+  history: { icon: HistoryIcon, color: 'text-gray-400' },
 };
 
 const QUEUE_SEVERITY_STYLE = {
@@ -78,6 +99,52 @@ const TYPE_CONFIG = {
 
 const TYPE_PRIORITY = { alert: 0, cos: 1, todo: 2, briefing: 3 };
 
+const ACTION_VIEWS = [
+  { id: 'today', label: 'Today', icon: CalendarDays },
+  { id: 'all', label: 'All', icon: ListTodo },
+  { id: 'waiting', label: 'Waiting', icon: Hourglass },
+  { id: 'someday', label: 'Someday', icon: Sparkles },
+  { id: 'snoozed', label: 'Snoozed', icon: Clock3 },
+  { id: 'history', label: 'History', icon: HistoryIcon },
+];
+const ACTION_VIEW_IDS = new Set(ACTION_VIEWS.map(({ id }) => id));
+
+const QUEUE_SNOOZE_OPTIONS = [
+  { value: 60 * 60 * 1000, label: '1 hour' },
+  { value: 24 * 60 * 60 * 1000, label: '1 day' },
+  { value: 7 * 24 * 60 * 60 * 1000, label: '1 week' },
+];
+
+const queueItemKey = (itemOrId) => {
+  if (itemOrId && typeof itemOrId === 'object') {
+    return JSON.stringify([itemOrId.id || '', itemOrId.occurrence ?? '', itemOrId.revision ?? '']);
+  }
+  return JSON.stringify([itemOrId || '', '', '']);
+};
+
+const SOURCE_OWNED_REVIEW_CATEGORIES = new Set([
+  'content-review',
+  'goal-fidelity',
+  'memory-approval',
+  'plan-question',
+  'task-approval',
+  'autopilot-paused',
+]);
+
+function isSourceOwnedReviewItem(item) {
+  const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  const hasReference = (value) => (typeof value === 'string' && value.trim())
+    || (typeof value === 'number' && Number.isFinite(value));
+  if (metadata.sourceOwned === true || metadata.triageOnly === true) return true;
+  if (SOURCE_OWNED_REVIEW_CATEGORIES.has(metadata.category)) return true;
+  if (item?.type === 'cos' && (hasReference(metadata.taskId) || hasReference(metadata.referenceId))) return true;
+  return item?.type === 'alert';
+}
+
+function isGenericCompletableItem(item) {
+  return !isSourceOwnedReviewItem(item);
+}
+
 function isActionableItem(item) {
   if (item.type === 'alert' || item.type === 'todo') return true;
   if (item.type === 'cos') {
@@ -88,6 +155,10 @@ function isActionableItem(item) {
 
 export default function Review() {
   const navigate = useNavigate();
+  const { actionId } = useParams();
+  const [searchParams, updateParams] = useUrlParams();
+  const requestedActionView = searchParams.get('view');
+  const actionView = ACTION_VIEW_IDS.has(requestedActionView) ? requestedActionView : 'today';
   const [items, setItems] = useState([]);
   const [briefing, setBriefing] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -98,10 +169,9 @@ export default function Review() {
   const [counts, setCounts] = useState(null);
   const countsRequestId = useRef(0);
 
-  // Cross-domain live queue (M42 P5). These rows are derived live from each
-  // producer, not stored, so "dismiss" is a per-session client-side hide rather
-  // than a server mutation. Rows whose producer declares an inline action also
-  // get a server-backed accept/promote that resolves the underlying record.
+  // Cross-domain live queue (M42 P5). Source payloads remain live projections;
+  // presentation decisions are durable server-side markers keyed by the row's
+  // canonical action identity, occurrence, and revision.
   const [queue, setQueue] = useState(null);
   const [dismissedQueueIds, setDismissedQueueIds] = useState(() => new Set());
   // Rows with an inline accept/promote in flight — disables the button so a
@@ -129,9 +199,9 @@ export default function Review() {
 
   const fetchQueue = useCallback(async () => {
     // Owns its own fallback, so silence the helper's default error toast.
-    const data = await api.getReviewQueue({ silent: true }).catch(() => null);
+    const data = await api.getReviewQueue({ view: actionView, silent: true }).catch(() => null);
     setQueue(data);
-  }, []);
+  }, [actionView]);
 
   useEffect(() => {
     fetchItems();
@@ -196,8 +266,13 @@ export default function Review() {
   const handleCreateTodo = async (e) => {
     e.preventDefault();
     if (!newTodo.trim()) return;
-    await api.createReviewTodo({ title: newTodo.trim() }).catch(() => null);
+    const thread = await api.createThread({ title: newTodo.trim() }, { silent: true }).catch(() => null);
     setNewTodo('');
+    await fetchQueue();
+    if (thread?.id) {
+      const threadView = actionView === 'all' || actionView === 'today' ? actionView : 'today';
+      navigate(`/review/${encodeURIComponent(`threads:${thread.id}`)}?view=${threadView}`);
+    }
   };
 
   const handleComplete = async (id) => {
@@ -220,31 +295,64 @@ export default function Review() {
   const handleMarkAllRead = () => api.bulkUpdateReviewStatus({ status: 'dismissed' }).catch(() => null);
   const handleCompleteAll = () => api.bulkUpdateReviewStatus({ status: 'completed' }).catch(() => null);
 
-  const handleQueueDismiss = (id) => {
+  const handleQueueDismiss = (itemOrId) => {
+    const key = queueItemKey(itemOrId);
     setDismissedQueueIds(prev => {
       const next = new Set(prev);
-      next.add(id);
+      next.add(key);
       return next;
     });
   };
 
   const handleQueueDrill = (item) => {
-    handleQueueDismiss(item.id);
     if (item.drillTo) navigate(item.drillTo);
   };
 
-  const handleQueueResolve = async (item) => {
+  const handleQueueSelect = (item) => {
+    navigate(`/review/${encodeURIComponent(item.id)}?view=${actionView}`);
+  };
+
+  const handleQueueResolve = async (item, operation, input = {}) => {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
     // The helper toasts on failure (default), so don't add a custom catch toast.
-    const ok = await api.resolveReviewQueueItem(item.id).then(() => true).catch(() => false);
+    const ok = await api.resolveReviewQueueItem(
+      item.id,
+      operation ? { operation, ...input } : {},
+    ).then(() => true).catch(() => false);
     setResolvingQueueIds(prev => {
       const next = new Set(prev);
       next.delete(item.id);
       return next;
     });
-    // Reactive removal — drop the resolved row in place rather than refetching.
-    if (ok) handleQueueDismiss(item.id);
+    // Keep the visible row responsive, then re-read the canonical source. This
+    // matters for status views: a completed commitment must disappear from
+    // Today but remain reachable in History.
+    if (ok) {
+      handleQueueDismiss(item);
+      await fetchQueue();
+      if (actionId === item.id) navigate(`/review?view=${actionView}`, { replace: true });
+    }
+    return ok;
+  };
+
+  const handleQueueTriage = async (item, operation, input = {}) => {
+    if (resolvingQueueIds.has(item.id)) return false;
+    setResolvingQueueIds(prev => new Set(prev).add(item.id));
+    const ok = await api.triageReviewQueueItem(item.id, { operation, ...input })
+      .then(() => true)
+      .catch(() => false);
+    setResolvingQueueIds(prev => {
+      const next = new Set(prev);
+      next.delete(item.id);
+      return next;
+    });
+    if (ok) {
+      handleQueueDismiss(item);
+      await fetchQueue();
+      if (actionId === item.id) navigate(`/review?view=${actionView}`, { replace: true });
+    }
+    return ok;
   };
 
   const handleQueuePromoteAsk = async (item, target, goalId) => {
@@ -257,8 +365,17 @@ export default function Review() {
       next.delete(item.id);
       return next;
     });
-    // Reactive removal — drop the promoted row in place rather than refetching.
-    if (ok) handleQueueDismiss(item.id);
+    // Reactive removal — drop the promoted row in place, then refresh the
+    // source-backed queue so counts and partial-source metadata stay truthful.
+    if (ok) {
+      handleQueueDismiss(item);
+      await fetchQueue();
+    }
+  };
+
+  const setActionView = (view) => {
+    setDismissedQueueIds(new Set());
+    updateParams({ view });
   };
 
   // Derived review state. Memoized because this page subscribes to
@@ -280,13 +397,21 @@ export default function Review() {
   }, {}), [visibleItems]);
 
   const queueItems = useMemo(
-    () => (queue?.items || []).filter(i => !dismissedQueueIds.has(i.id)),
+    () => (queue?.items || []).filter(i => !dismissedQueueIds.has(queueItemKey(i))),
     [queue, dismissedQueueIds]);
   const queueSourceErrors = useMemo(
     () => Object.entries(queue?.sources || {}).filter(([, s]) => s.error),
     [queue]);
+  const selectedAction = useMemo(
+    () => (queue?.items || []).find((item) => item.id === actionId) || null,
+    [queue, actionId]);
+  // Keep old stored Review records rendered only as a compatibility fallback
+  // while the live Actions projection is empty. Once a canonical row exists,
+  // rendering the old lists as well would show the same obligation twice.
+  const showLegacyReviewSurface = queueItems.length === 0 && queueSourceErrors.length === 0 && !queue?.partial;
 
   const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
+  const genericCompletableCount = pendingItems.filter(isGenericCompletableItem).length;
 
   const actionableItems = useMemo(() => pendingItems
     .filter(isActionableItem)
@@ -298,7 +423,7 @@ export default function Review() {
 
   if (loading) {
     return <PageSkeleton
-        label="Loading review hub"
+        label="Loading Actions"
         header="bar"
         padded
         fullHeight
@@ -323,7 +448,7 @@ export default function Review() {
       <PageHeader
         icon={ClipboardList}
         iconColor="text-white"
-        title="Review Hub"
+        title="Actions"
         actions={(
           <>
             <select
@@ -339,13 +464,15 @@ export default function Review() {
             </select>
             {pendingCount > 0 && (
               <>
-                <button
-                  onClick={handleCompleteAll}
-                  className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
-                  title="Mark all pending items as completed"
-                >
-                  Complete All
-                </button>
+                {genericCompletableCount > 0 && (
+                  <button
+                    onClick={handleCompleteAll}
+                    className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
+                    title="Mark all general pending items as completed"
+                  >
+                    Complete All
+                  </button>
+                )}
                 <button
                   onClick={handleMarkAllRead}
                   className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
@@ -359,6 +486,15 @@ export default function Review() {
         )}
       />
       <div className="flex-1 min-h-0 overflow-auto p-4 md:p-6 space-y-3">
+        <TabPills
+          tabs={ACTION_VIEWS}
+          activeTab={actionView}
+          onChange={setActionView}
+          ariaLabel="Actions views"
+          mobileCompact
+          mobileSelectId="actions-view-select"
+          controlsIdPrefix="actions-view"
+        />
         {/* Triage summary */}
         <section className="flex flex-wrap gap-2">
           <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
@@ -367,20 +503,20 @@ export default function Review() {
           <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
         </section>
 
-        {/* Cross-domain "Needs Attention" queue (M42 P5) — live-pulled from
-            Brain, Ask, CoS, Messages, Health, and Backups. Shown whenever there
+        {/* Canonical Actions queue — live-pulled from Brain commitments, manual
+            todos, Ask, CoS, Messages, Health, and Backups. Shown whenever there
             are items OR a source failed to load (so the degraded-source notice
             isn't hidden behind an otherwise-empty queue). */}
-        {(queueItems.length > 0 || queueSourceErrors.length > 0) && (
+        {(queueItems.length > 0 || queueSourceErrors.length > 0 || queue?.partial) && (
           <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-sm font-semibold text-white flex items-center gap-2">
                 <Inbox size={16} className="text-port-accent" />
-                Needs Attention
+                Actions
               </h3>
               {queueItems.length > 0 && (
                 <span className="text-xs rounded-full px-2 py-0.5 bg-port-accent/10 text-port-accent border border-port-accent/20">
-                  {queueItems.length} across domains
+                  {formatCount(queueItems.length)} across domains
                 </span>
               )}
             </div>
@@ -390,10 +526,11 @@ export default function Review() {
                   <QueueRow
                     key={item.id}
                     item={item}
+                    onSelect={handleQueueSelect}
                     onDrill={handleQueueDrill}
-                    onDismiss={handleQueueDismiss}
                     onResolve={handleQueueResolve}
                     onPromoteAsk={handleQueuePromoteAsk}
+                    onTriage={handleQueueTriage}
                     resolving={resolvingQueueIds.has(item.id)}
                   />
                 ))}
@@ -402,6 +539,11 @@ export default function Review() {
             {queueSourceErrors.length > 0 && (
               <p role="status" className="text-xs text-gray-600">
                 Couldn&apos;t load: {queueSourceErrors.map(([, s]) => s.label).join(', ')}.
+              </p>
+            )}
+            {queue?.partial && (
+              <p role="status" className="text-xs text-gray-500">
+                This bounded view may omit additional actions; open a source to see its complete list.
               </p>
             )}
           </section>
@@ -413,8 +555,8 @@ export default function Review() {
             type="text"
             value={newTodo}
             onChange={(e) => setNewTodo(e.target.value)}
-            aria-label="Quick add todo"
-            placeholder="Quick add todo..."
+            aria-label="Quick add action"
+            placeholder="Quick add action..."
             className="flex-1 bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
           />
           <button
@@ -427,8 +569,10 @@ export default function Review() {
           </button>
         </form>
 
-        {/* Action queue — only shown when there are actionable items */}
-        {topActionItems.length > 0 && (
+        {/* Legacy Review list — only shown when the canonical projection is
+            empty, so old stored records remain usable without duplicating the
+            Actions rows. */}
+        {showLegacyReviewSurface && topActionItems.length > 0 && (
           <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-sm font-semibold text-white flex items-center gap-2">
@@ -436,7 +580,7 @@ export default function Review() {
                 Action Queue
               </h3>
               <span className="text-xs rounded-full px-2 py-0.5 bg-port-warning/10 text-port-warning border border-port-warning/20">
-                {actionableItems.length} actionable
+                {formatCount(actionableItems.length)} actionable
               </span>
             </div>
             <div className="space-y-2">
@@ -459,14 +603,14 @@ export default function Review() {
             </div>
             {remainingActionCount > 0 && (
               <p className="text-xs text-gray-500">
-                {remainingActionCount} more actionable item{remainingActionCount !== 1 ? 's' : ''} below.
+                {formatCount(remainingActionCount)} more actionable item{remainingActionCount !== 1 ? 's' : ''} below.
               </p>
             )}
           </section>
         )}
 
-        {/* Daily Briefing */}
-        {briefing && briefing.source !== 'none' && (
+        {/* Daily Briefing remains available as compatibility/history context. */}
+        {showLegacyReviewSurface && briefing && briefing.source !== 'none' && (
           <section className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : ''}`}>
             <div className="flex items-center justify-between gap-2 mb-2">
               <h3 className="text-sm font-semibold text-white flex items-center gap-2">
@@ -494,7 +638,7 @@ export default function Review() {
 
         {/* Detailed sections — tiled two-up on wide screens so the per-type
             queues use the full width instead of stacking in one column. */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+        {showLegacyReviewSurface && <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
         {['alert', 'cos', 'todo', 'briefing'].map(type => {
           const typeItems = grouped[type];
           if (!typeItems?.length) return null;
@@ -506,7 +650,7 @@ export default function Review() {
               <h3 className={`text-sm font-semibold uppercase tracking-wide ${config.color} flex items-center gap-2`}>
                 <TypeIcon size={16} />
                 {config.label}
-                <span className="text-gray-600">({typeItems.length})</span>
+                <span className="text-gray-600">({formatCount(typeItems.length)})</span>
               </h3>
               <div className="space-y-1">
                 {typeItems.map(item => (
@@ -529,9 +673,9 @@ export default function Review() {
             </section>
           );
         })}
-        </div>
+        </div>}
 
-        {visibleItems.length === 0 && (
+        {showLegacyReviewSurface && visibleItems.length === 0 && (
           <div className="text-center py-12 text-gray-500">
             <ClipboardList size={48} className="mx-auto mb-3 opacity-30" />
             <p className="text-lg">No review items in this view</p>
@@ -539,6 +683,15 @@ export default function Review() {
           </div>
         )}
       </div>
+      <ActionDetail
+        item={selectedAction}
+        onClose={() => navigate(`/review?view=${actionView}`, { replace: true })}
+        onResolve={handleQueueResolve}
+        onTriage={handleQueueTriage}
+        triagePending={Boolean(actionId && resolvingQueueIds.has(actionId))}
+        onSaved={fetchQueue}
+        onDrill={handleQueueDrill}
+      />
     </div>
   );
 }
@@ -566,7 +719,7 @@ function QueueMetaChips({ meta }) {
   if (typeof meta.turnCount === 'number') {
     chips.push(
       <span key="turns" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
-        {meta.turnCount} turn{meta.turnCount === 1 ? '' : 's'}
+        {formatCount(meta.turnCount)} turn{meta.turnCount === 1 ? '' : 's'}
       </span>
     );
   }
@@ -598,6 +751,20 @@ function QueueMetaChips({ meta }) {
       </span>
     );
   }
+  if (meta.localStatus) {
+    chips.push(
+      <span key="local-status" className="text-[10px] px-1.5 py-0.5 rounded border border-port-accent/30 text-port-accent">
+        local: {meta.localStatus}
+      </span>
+    );
+  }
+  if (meta.externalState) {
+    chips.push(
+      <span key="external-state" className="text-[10px] px-1.5 py-0.5 rounded border border-port-border text-gray-400">
+        external: {meta.externalState}
+      </span>
+    );
+  }
   if (!chips.length) return null;
   return <div className="flex items-center gap-1.5 flex-wrap mt-1">{chips}</div>;
 }
@@ -605,7 +772,122 @@ function QueueMetaChips({ meta }) {
 // Promote-target label for the Ask picker buttons.
 const PROMOTE_TARGET_LABEL = { brain: 'Brain', task: 'Task', goal: 'Goal' };
 
-function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving = false }) {
+function FeedbackRatingControls({ id, onSubmit, disabled = false, options = ['positive', 'negative', 'neutral'] }) {
+  const [rating, setRating] = useState('');
+  const [comment, setComment] = useState('');
+  const safeId = String(id || 'feedback').replace(/[^a-zA-Z0-9_-]/g, '-');
+  const ratingId = `feedback-rating-${safeId}`;
+  const commentId = `feedback-comment-${safeId}`;
+  const submit = () => {
+    if (!rating) return;
+    const trimmedComment = comment.trim();
+    onSubmit({ rating, ...(trimmedComment ? { comment: trimmedComment } : {}) });
+  };
+
+  return (
+    <div className="flex items-end gap-2 flex-wrap rounded-md border border-port-border/60 bg-port-bg/40 p-2">
+      <label className="text-xs text-gray-400" htmlFor={ratingId}>
+        Rating (required)
+        <select
+          id={ratingId}
+          value={rating}
+          onChange={(event) => setRating(event.target.value)}
+          disabled={disabled}
+          className="mt-1 block min-h-[36px] rounded border border-port-border bg-port-card px-2 py-1 text-xs text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
+        >
+          <option value="">Choose…</option>
+          {options.map((option) => (
+            <option key={option} value={option}>{option[0].toUpperCase() + option.slice(1)}</option>
+          ))}
+        </select>
+      </label>
+      <label className="min-w-[12rem] flex-1 text-xs text-gray-400" htmlFor={commentId}>
+        Comment (optional)
+        <input
+          id={commentId}
+          value={comment}
+          onChange={(event) => setComment(event.target.value)}
+          maxLength={5000}
+          disabled={disabled}
+          className="mt-1 block min-h-[36px] w-full rounded border border-port-border bg-port-card px-2 py-1 text-xs text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
+        />
+      </label>
+      <button
+        type="button"
+        onClick={submit}
+        disabled={disabled || !rating}
+        className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-port-success/30 bg-port-success/10 px-2 py-1 text-xs font-medium text-port-success hover:bg-port-success/20 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <Check size={14} />
+        Rate
+      </button>
+    </div>
+  );
+}
+
+function QueueTriageControls({ item, onTriage, disabled = false }) {
+  const operations = Array.isArray(item?.triageOperations)
+    ? item.triageOperations.filter((operation) => operation?.available !== false)
+    : [];
+  if (!onTriage || operations.length === 0) return null;
+
+  const hasOperation = (id) => operations.some((operation) => operation.id === id);
+  const snooze = (event) => {
+    const duration = Number(event.target.value);
+    event.target.value = '';
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    onTriage(item, 'snooze', { snoozedUntil: new Date(Date.now() + duration).toISOString() });
+  };
+
+  return (
+    <div className="inline-flex items-center gap-2 flex-wrap">
+      {hasOperation('snooze') && (
+        <label className="inline-flex items-center">
+          <span className="sr-only">Snooze {item.title}</span>
+          <select
+            defaultValue=""
+            aria-label={`Snooze ${item.title}`}
+            onChange={snooze}
+            disabled={disabled}
+            className="min-h-[36px] rounded-md border border-port-warning/30 bg-port-warning/10 px-2 py-1 text-xs font-medium text-port-warning transition-colors hover:bg-port-warning/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:cursor-not-allowed disabled:opacity-40"
+            title="Snooze this action"
+          >
+            <option value="">Snooze…</option>
+            {QUEUE_SNOOZE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {hasOperation('unsnooze') && (
+        <button
+          type="button"
+          onClick={() => onTriage(item, 'unsnooze')}
+          disabled={disabled}
+          className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-port-warning/30 bg-port-warning/10 px-2 py-1 text-xs font-medium text-port-warning transition-colors hover:bg-port-warning/20 disabled:cursor-not-allowed disabled:opacity-40"
+          title="Show this action again"
+        >
+          <Clock3 size={13} />
+          Unsnooze
+        </button>
+      )}
+      {hasOperation('dismiss') && (
+        <button
+          type="button"
+          onClick={() => onTriage(item, 'dismiss')}
+          disabled={disabled}
+          className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-md border border-port-border px-2 py-1 text-gray-500 transition-colors hover:border-port-warning/40 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-40"
+          title="Dismiss this recommendation"
+          aria-label="Dismiss this recommendation"
+        >
+          <X size={15} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, resolving = false }) {
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
@@ -615,6 +897,13 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
   // one-click button — split it out from the simple brain/task targets.
   const simpleTargets = promoteTargets.filter(t => t !== 'goal');
   const showGoalPicker = promoteTargets.includes('goal') && goalOptions.length > 0;
+  const sourceOperations = !promoteTargets.length && Array.isArray(item.operations)
+    ? item.operations.filter(operation => operation && operation.available !== false)
+    : [];
+  const rateOperation = sourceOperations.find((operation) => operation.id === 'rate' && operation.input?.type === 'rating');
+  const inlineActions = item.action
+    ? [{ id: 'resolve', label: item.action }]
+    : sourceOperations.filter((operation) => operation.id !== 'rate');
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
@@ -623,7 +912,14 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <p className="text-sm font-medium text-white">{item.title}</p>
+          <button
+            type="button"
+            onClick={() => onSelect?.(item)}
+            className="text-sm font-medium text-white text-left hover:text-port-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent rounded"
+            aria-label={`Open action ${item.title}`}
+          >
+            {item.title}
+          </button>
           <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border border-current/20 ${config.color}`}>
             {item.sourceLabel}
           </span>
@@ -640,17 +936,26 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
         )}
       </div>
       <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-        {item.action && onResolve && (
+        {onResolve && rateOperation && (
+          <FeedbackRatingControls
+            id={item.id}
+            options={rateOperation.input.options}
+            disabled={resolving}
+            onSubmit={(input) => onResolve(item, rateOperation.id, input)}
+          />
+        )}
+        {onResolve && inlineActions.map(action => (
           <button
-            onClick={() => onResolve(item)}
+            key={action.id}
+            onClick={() => onResolve(item, action.id === 'resolve' ? undefined : action.id)}
             disabled={resolving}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-port-success bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title={`${item.action} this item in place`}
+            title={`${action.label} this item in place`}
           >
             <Check size={14} />
-            {item.action}
+            {action.label}
           </button>
-        )}
+        ))}
         {onPromoteAsk && simpleTargets.map(target => (
           <button
             key={target}
@@ -685,19 +990,14 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
             </select>
           </label>
         )}
+        <QueueTriageControls item={item} onTriage={onTriage} disabled={resolving} />
         <button
+          type="button"
           onClick={() => onDrill(item)}
           className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-accent transition-colors"
           title="Open" aria-label="Open"
         >
           <ArrowRight size={16} />
-        </button>
-        <button
-          onClick={() => onDismiss(item.id)}
-          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-warning transition-colors"
-          title="Dismiss from queue (this session)" aria-label="Dismiss from queue (this session)"
-        >
-          <X size={16} />
         </button>
       </div>
     </div>
@@ -709,7 +1009,7 @@ function SummaryPill({ icon: Icon, label, value, tone = 'text-white', urgent = f
     <div className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 bg-port-card ${urgent ? 'border-port-warning/40' : 'border-port-border'}`}>
       <Icon size={14} className={urgent ? 'text-port-warning' : tone} />
       <span className="text-xs text-gray-500">{label}</span>
-      <span className={`text-sm font-bold ${tone}`}>{value}</span>
+      <span className={`text-sm font-bold ${tone}`}>{formatCount(value, { fallback: '0' })}</span>
     </div>
   );
 }
@@ -851,13 +1151,15 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
               <Pencil size={14} />
             </button>
           )}
-          <button
-            onClick={() => onComplete(item.id)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-success transition-colors"
-            title={item.type === 'alert' ? 'Accept' : 'Complete'} aria-label={item.type === 'alert' ? 'Accept' : 'Complete'}
-          >
-            <CheckCircle2 size={16} />
-          </button>
+          {isGenericCompletableItem(item) && (
+            <button
+              onClick={() => onComplete(item.id)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-success transition-colors"
+              title="Complete" aria-label="Complete"
+            >
+              <CheckCircle2 size={16} />
+            </button>
+          )}
           <button
             onClick={() => onDismiss(item.id)}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-warning transition-colors"
@@ -865,15 +1167,210 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
           >
             <X size={16} />
           </button>
-          <button
-            onClick={() => onDelete(item.id)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
-            title="Delete" aria-label="Delete"
-          >
-            <Trash2 size={14} />
-          </button>
+          {isGenericCompletableItem(item) && (
+            <button
+              onClick={() => onDelete(item.id)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
+              title="Delete" aria-label="Delete"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+const threadDraft = (record) => ({
+  title: record?.title || '',
+  status: record?.status || 'open',
+  priority: record?.priority || 'normal',
+  nextAction: record?.nextAction || '',
+  dueAt: typeof record?.dueAt === 'string' ? localDateKey(new Date(record.dueAt)) : '',
+  notes: record?.notes || '',
+});
+
+function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = false, onSaved, onDrill }) {
+  const isThread = item?.source === 'threads';
+  const isTodo = item?.source === 'todo';
+  const [record, setRecord] = useState(item);
+  const [draft, setDraft] = useState(() => (isThread ? threadDraft(item) : {
+    title: item?.title || '',
+    description: item?.summary || '',
+  }));
+
+  useEffect(() => {
+    if (!item) return;
+    let cancelled = false;
+    setRecord(item);
+    setDraft(isThread ? threadDraft(item) : {
+      title: item.title || '',
+      description: item.summary || '',
+    });
+    if (isThread && item.sourceRef) {
+      api.getThread(item.sourceRef, { silent: true })
+        .then((full) => {
+          if (cancelled) return;
+          setRecord(full);
+          setDraft(threadDraft(full));
+        })
+        .catch(() => null);
+    }
+    return () => { cancelled = true; };
+  }, [item?.id, item?.sourceRef, isThread]);
+
+  const [save, saving] = useAsyncAction(async () => {
+    if (!item || !draft || (!isThread && !isTodo)) return null;
+    const updated = isThread
+      ? await api.updateThread(item.sourceRef, {
+        title: draft.title.trim(),
+        status: draft.status,
+        priority: draft.priority,
+        nextAction: draft.nextAction.trim(),
+        dueAt: draft.dueAt ? new Date(`${draft.dueAt}T00:00:00`).toISOString() : null,
+        notes: draft.notes,
+      }, { silent: true })
+      : await api.updateReviewItem(item.sourceRef, {
+        title: draft.title.trim(),
+        description: draft.description.trim(),
+      }, { silent: true });
+    setRecord((previous) => ({ ...previous, ...updated }));
+    setDraft(isThread ? threadDraft({ ...record, ...updated }) : {
+      title: updated.title || '',
+      description: updated.description || '',
+    });
+    await onSaved?.(updated);
+    return updated;
+  }, { errorMessage: 'Failed to save action' });
+
+  if (!item) return null;
+
+  const operations = Array.isArray(item.operations)
+    ? item.operations.filter((operation) => operation?.available !== false)
+    : [];
+  const localStatus = item.meta?.localStatus || record?.status || item.meta?.status;
+  const externalState = item.meta?.externalState;
+  const updateDraft = (patch) => setDraft((previous) => ({ ...previous, ...patch }));
+  const resolve = async (operation, input = {}) => {
+    const ok = await onResolve(item, operation, input);
+    if (ok) onClose();
+  };
+
+  return (
+    <Drawer
+      open
+      onClose={onClose}
+      title={item.title}
+      subtitle={item.sourceLabel}
+      size="md"
+      closeLabel="Close action"
+    >
+      <div className="space-y-5">
+        <div className="space-y-2">
+          <p className="text-sm text-gray-300">{item.summary || 'No additional context.'}</p>
+          <div className="flex flex-wrap gap-2 text-xs">
+            {localStatus && <span className="rounded border border-port-accent/30 px-2 py-1 text-port-accent">Local: {localStatus}</span>}
+            {externalState && <span className="rounded border border-port-border px-2 py-1 text-gray-400">External: {externalState}</span>}
+            {item.meta?.externalSource && <span className="rounded border border-port-border px-2 py-1 text-gray-400">Source: {item.meta.externalSource}</span>}
+          </div>
+        </div>
+
+        {(isThread || isTodo) && (
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold text-white">Edit commitment</h3>
+            <label className="block text-xs text-gray-400" htmlFor="action-detail-title">
+              Title
+              <input
+                id="action-detail-title"
+                value={draft?.title || ''}
+                onChange={(e) => updateDraft({ title: e.target.value })}
+                className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white"
+              />
+            </label>
+            {isThread ? (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block text-xs text-gray-400" htmlFor="action-detail-status">
+                    Local status
+                    <select id="action-detail-status" value={draft.status} onChange={(e) => updateDraft({ status: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
+                      <option value="open">Open</option>
+                      <option value="waiting">Waiting</option>
+                      <option value="someday">Someday</option>
+                      <option value="done">Done</option>
+                      <option value="archived">Archived</option>
+                    </select>
+                  </label>
+                  <label className="block text-xs text-gray-400" htmlFor="action-detail-priority">
+                    Priority
+                    <select id="action-detail-priority" value={draft.priority} onChange={(e) => updateDraft({ priority: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white">
+                      <option value="urgent">Urgent</option>
+                      <option value="high">High</option>
+                      <option value="normal">Normal</option>
+                      <option value="low">Low</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="block text-xs text-gray-400" htmlFor="action-detail-next-action">
+                    Next action
+                    <input id="action-detail-next-action" value={draft.nextAction} onChange={(e) => updateDraft({ nextAction: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white" />
+                  </label>
+                  <label className="block text-xs text-gray-400" htmlFor="action-detail-due">
+                    Due date
+                    <input id="action-detail-due" type="date" value={draft.dueAt} onChange={(e) => updateDraft({ dueAt: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white" />
+                  </label>
+                </div>
+                <label className="block text-xs text-gray-400" htmlFor="action-detail-notes">
+                  Notes
+                  <textarea id="action-detail-notes" rows={5} value={draft.notes} onChange={(e) => updateDraft({ notes: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
+                </label>
+              </>
+            ) : (
+              <label className="block text-xs text-gray-400" htmlFor="action-detail-description">
+                Notes
+                <textarea id="action-detail-description" rows={5} value={draft.description} onChange={(e) => updateDraft({ description: e.target.value })} className="mt-1 w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white resize-y" />
+              </label>
+            )}
+            <button type="button" onClick={save} disabled={saving || !draft?.title?.trim()} className="inline-flex items-center gap-2 rounded border border-port-accent/40 px-3 py-2 text-sm text-port-accent hover:bg-port-accent/10 disabled:opacity-50">
+              <Save size={14} /> {saving ? 'Saving…' : 'Save changes'}
+            </button>
+          </section>
+        )}
+
+        {operations.length > 0 && (
+          <section className="flex flex-wrap gap-2">
+            {operations.map((operation) => (
+              operation.input?.type === 'rating'
+                ? <FeedbackRatingControls
+                    key={operation.id}
+                    id={`detail-${item.id}`}
+                    options={operation.input.options}
+                    onSubmit={(input) => resolve(operation.id, input)}
+                  />
+                : <button key={operation.id} type="button" onClick={() => resolve(operation.id)} className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3 py-2 text-sm text-port-success hover:bg-port-success/20">
+                    <Check size={14} /> {operation.label}
+                  </button>
+            ))}
+          </section>
+        )}
+
+        <QueueTriageControls
+          item={item}
+          onTriage={async (...args) => {
+            const ok = await onTriage?.(...args);
+            if (ok) onClose();
+            return ok;
+          }}
+          disabled={triagePending}
+        />
+
+        {item.drillTo && (
+          <button type="button" onClick={() => { onClose(); onDrill(item); }} className="inline-flex items-center gap-2 text-sm text-port-accent hover:underline">
+            <ExternalLink size={14} /> Open source editor
+          </button>
+        )}
+      </div>
+    </Drawer>
   );
 }

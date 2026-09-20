@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { Cpu, Box, Zap, Gauge, HardDrive, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink } from 'lucide-react';
+import { Cpu, Box, Zap, Gauge, HardDrive, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 
 /**
@@ -95,6 +95,44 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
     updateVia: status?.packageManagerLabel || null,
     onUpgrade: updateAvailable && status?.canUpgrade ? onUpgrade : null,
     updateUrl: updateAvailable && !status?.canUpgrade ? status?.downloadUrl : null,
+  };
+}
+
+/**
+ * The dedicated Qwen host — the one runtime on this page PortOS runs as a
+ * DOCKER container rather than a PM2 process.
+ *
+ * It belongs here for the same reason as the rest: it is a local model server,
+ * it is either up or it is not, and it can be stopped. Leaving it off was a
+ * real dead end — enabling it lives on AI Providers → Model host setup, so an
+ * operator who later came to the page named "Runtimes" to turn their GPU loose
+ * again found every server they were NOT running and no sign of the one they
+ * were.
+ *
+ * `onStart` is deliberately absent: a first start can mean cloning a compose
+ * project and downloading ~30 GB, and the decision (and its progress stream)
+ * belongs on the setup page that names the payload. Getting OUT does not need
+ * that ceremony, so Stop is here.
+ */
+function fleetHostRow({ status, onStop }) {
+  const up = Boolean(status?.listening || status?.runtimeReachable);
+  const state = up ? 'running'
+    : status?.enabled ? 'stopped'
+      : status?.recommendation?.supported === false ? 'unsupported' : 'missing';
+  return {
+    id: 'fleet-host',
+    label: 'Dedicated Qwen host',
+    icon: Server,
+    state,
+    endpoint: status?.endpoint || null,
+    detail: !up && status?.recommendation?.supported === false
+      ? status.recommendation.title
+      : up && !status?.serving
+        ? 'Container up, model still loading'
+        : up && status?.queue
+          ? `${status.queue.active} generating · ${status.queue.queued} queued`
+          : null,
+    onStop: status?.stoppable ? onStop : null,
   };
 }
 
@@ -303,6 +341,8 @@ export default function RuntimeServersCard({
   onSaveStartup,
   onSaveIdleWindow,
   onToggleKeepLoaded,
+  fleetHostStatus,
+  onStopFleetHost,
 }) {
   // Read off each daemon's own status payload — the same place `runAtStartup`
   // and Ollama's `disabled` come from — so there is no second settings fetch on
@@ -399,6 +439,9 @@ export default function RuntimeServersCard({
           && `${slotstreamStatus.cachedModels.length} checkpoint${slotstreamStatus.cachedModels.length === 1 ? '' : 's'} cached`,
       ].filter(Boolean).join(' · ') || null,
     }),
+    // Last, and only once its status has landed: an absent payload would
+    // otherwise render a "Not installed" row for a host that is serving.
+    ...(fleetHostStatus ? [fleetHostRow({ status: fleetHostStatus, onStop: onStopFleetHost })] : []),
   ];
 
   return (
@@ -422,6 +465,16 @@ export default function RuntimeServersCard({
       <div className="space-y-2">
         {rows.map((row) => (
           <ServerRow key={row.id} row={row} busy={busy} actionInProgress={actionInProgress}>
+            {row.id === 'fleet-host' && (
+              <Link
+                to="/ai/fleet?fleetStep=host"
+                className={`${neutralBtn} no-underline`}
+                title="Set up, reconfigure or inspect the dedicated Qwen host and its inbound usage"
+              >
+                <Settings2 size={12} />
+                {fleetHostStatus?.stoppable ? 'Host setup & usage' : 'Set up host'}
+              </Link>
+            )}
             {row.id === 'ollama' && ollamaService?.supported && (
               <button
                 onClick={() => onControlOllama(ollamaRunsAtStartup ? 'disable' : 'enable')}

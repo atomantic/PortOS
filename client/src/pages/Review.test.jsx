@@ -57,18 +57,49 @@ const CREATED_PENDING_ITEM = {
   description: 'Created after the completed view loaded.'
 };
 
+const FEEDBACK_ITEM = {
+  id: 'feedback:agent-example',
+  source: 'feedback',
+  sourceLabel: 'CoS run feedback',
+  title: 'Rate completed CoS run',
+  summary: 'Review an example change',
+  timestamp: '2026-08-01T12:00:00.000Z',
+  drillTo: '/cos/agents/agent-example?feedback=needs-feedback',
+  operations: [{
+    id: 'rate',
+    label: 'Rate',
+    available: true,
+    input: { type: 'rating', required: true, options: ['positive', 'negative', 'neutral'] },
+  }],
+};
+
+const TRIAGE_RECOMMENDATION = {
+  id: 'ask:conversation-example',
+  source: 'ask',
+  sourceLabel: 'Ask answers',
+  title: 'Optional answer ready',
+  summary: 'A recommendation to triage',
+  triageOperations: [
+    { id: 'snooze', label: 'Snooze', available: true },
+    { id: 'dismiss', label: 'Dismiss', available: true },
+  ],
+};
+
 vi.mock('../services/api', () => ({
   getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
   getReviewCounts: vi.fn(),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {} })),
-  createReviewTodo: vi.fn(() => Promise.resolve({})),
+  createThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action' })),
+  getThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action', status: 'open' })),
+  updateThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'Updated action', status: 'open' })),
   completeReviewItem: vi.fn(() => Promise.resolve({})),
   dismissReviewItem: vi.fn(() => Promise.resolve({})),
   deleteReviewItem: vi.fn(() => Promise.resolve({})),
   updateReviewItem: vi.fn(() => Promise.resolve({})),
   bulkUpdateReviewStatus: vi.fn(() => Promise.resolve({})),
   resolveReviewQueueItem: vi.fn(() => Promise.resolve({})),
+  triageReviewQueueItem: vi.fn(() => Promise.resolve({})),
   promoteAskReviewQueueItem: vi.fn(() => Promise.resolve({})),
   normalizeBrainScanReportPath: vi.fn((p) => p)
 }));
@@ -77,8 +108,17 @@ vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() }
 }));
 
+const routerState = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  setSearchParams: vi.fn(),
+  actionId: undefined,
+  searchParams: new URLSearchParams(),
+}));
+
 vi.mock('react-router', () => ({
-  useNavigate: () => vi.fn()
+  useNavigate: () => routerState.navigate,
+  useParams: () => ({ actionId: routerState.actionId }),
+  useSearchParams: () => [routerState.searchParams, routerState.setSearchParams]
 }));
 
 import Review from './Review';
@@ -102,6 +142,8 @@ afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
   vi.clearAllMocks();
+  routerState.actionId = undefined;
+  routerState.searchParams = new URLSearchParams();
   api.getReviewCounts.mockResolvedValue(SUMMARY_COUNTS);
 });
 
@@ -152,10 +194,83 @@ describe('Review Hub queue-card triage (#3282)', () => {
     render(<Review />);
     await waitFor(() => expect(actionQueueBody()).toBeTruthy());
 
-    // Accept / Reject / Delete are all reachable on the collapsed card.
-    expect(screen.getAllByTitle('Accept').length).toBeGreaterThan(0);
+    // Source-owned alerts cannot be silently accepted or deleted. Dismissal
+    // remains available as the explicit triage action.
+    expect(screen.queryByTitle('Accept')).not.toBeInTheDocument();
     expect(screen.getAllByTitle('Reject').length).toBeGreaterThan(0);
-    expect(screen.getAllByTitle('Delete').length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle('Delete')).toHaveLength(2);
+  });
+
+  it('forwards an explicit source operation for source-owned queue actions', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({
+      items: [{
+        id: 'memory:memory-1',
+        source: 'review',
+        sourceLabel: 'Stored review obligations',
+        title: 'Memory approval',
+        summary: 'Approve a memory',
+        timestamp: '2026-09-20T00:00:00.000Z',
+        drillTo: '/cos/memory',
+        operations: [
+          { id: 'approve', label: 'Approve', available: true },
+          { id: 'reject', label: 'Reject', available: true },
+        ],
+      }],
+      sources: {},
+    });
+
+    render(<Review />);
+    const approve = await screen.findByRole('button', { name: 'Approve' });
+    fireEvent.click(approve);
+
+    await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(
+      'memory:memory-1',
+      { operation: 'approve' },
+    ));
+  });
+
+  it('shows durable snooze and recommendation-dismiss controls', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {} });
+
+    render(<Review />);
+    const snooze = await screen.findByRole('combobox', { name: 'Snooze Optional answer ready' });
+    expect(screen.getByRole('button', { name: 'Dismiss this recommendation' })).toBeInTheDocument();
+
+    fireEvent.change(snooze, { target: { value: String(60 * 60 * 1000) } });
+
+    await waitFor(() => expect(api.triageReviewQueueItem).toHaveBeenCalledWith(
+      TRIAGE_RECOMMENDATION.id,
+      { operation: 'snooze', snoozedUntil: expect.any(String) },
+    ));
+  });
+
+  it('persists dismissal only for an optional recommendation', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {} });
+
+    render(<Review />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss this recommendation' }));
+
+    await waitFor(() => expect(api.triageReviewQueueItem).toHaveBeenCalledWith(
+      TRIAGE_RECOMMENDATION.id,
+      { operation: 'dismiss' },
+    ));
+  });
+
+  it('requires a rating before sending the source-owned feedback action', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {} });
+
+    render(<Review />);
+    const rate = await screen.findByRole('button', { name: 'Rate' });
+    expect(rate).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Rating (required)'), { target: { value: 'negative' } });
+    fireEvent.change(screen.getByLabelText('Comment (optional)'), { target: { value: 'Needs a clearer result.' } });
+    fireEvent.click(rate);
+
+    await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(
+      FEEDBACK_ITEM.id,
+      { operation: 'rate', rating: 'negative', comment: 'Needs a clearer result.' },
+    ));
   });
 
   it('renders the full markdown behind Show more, height-capped', async () => {
@@ -207,6 +322,32 @@ describe('Review Hub queue-card triage (#3282)', () => {
   });
 });
 
+describe('Actions commitments workspace (#7739)', () => {
+  it('uses Brain threads for quick-add instead of the legacy todo endpoint', async () => {
+    render(<Review />);
+    const input = await screen.findByLabelText('Quick add action');
+    fireEvent.change(input, { target: { value: 'Track the example follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(api.createThread).toHaveBeenCalledWith(
+      { title: 'Track the example follow-up' },
+      { silent: true },
+    ));
+  });
+
+  it('opens a newly added thread in a view where an open commitment is visible', async () => {
+    routerState.searchParams = new URLSearchParams('view=waiting');
+    render(<Review />);
+    const input = await screen.findByLabelText('Quick add action');
+    fireEvent.change(input, { target: { value: 'Track the example follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(routerState.navigate).toHaveBeenCalledWith(
+      '/review/threads%3Athread-1?view=today',
+    ));
+  });
+});
+
 describe('Review Hub bulk status updates (#6853)', () => {
   it('applies a review:items:bulk-updated event to every affected item in one update', async () => {
     render(<Review />);
@@ -246,8 +387,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
     render(<Review />);
     await waitFor(() => expect(screen.getAllByText(ITEM.title).length).toBeGreaterThan(0));
 
-    const handler = [...socket.on.mock.calls]
-      .reverse()
+    const handler = socket.on.mock.calls
       .find(([name]) => name === 'review:item:updated')?.[1];
     expect(handler).toBeTypeOf('function');
 
@@ -268,8 +408,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
 
     await waitFor(() => expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument());
 
-    const handler = [...socket.on.mock.calls]
-      .reverse()
+    const handler = socket.on.mock.calls
       .find(([name]) => name === 'review:item:created')?.[1];
     expect(handler).toBeTypeOf('function');
 

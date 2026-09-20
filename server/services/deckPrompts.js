@@ -20,7 +20,9 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { stripPromptControlChars, buildUniverseStyleContext } from './universeBuilder/compile.js';
 import { truncDesc } from '../lib/universePromptRenderers.js';
-import { DECK_KIND, DECK_KIND_LABELS } from '../lib/deckTemplates.js';
+import {
+  DECK_KIND, DECK_KIND_LABELS, deckCardOrientation, deckCardOrientationPrompt,
+} from '../lib/deckTemplates.js';
 import { DECK_CARD_PROMPT_MAX } from '../lib/deckValidation.js';
 
 // Small enough that one bad string can't sink a long response; a 79-card
@@ -82,12 +84,14 @@ const rosterLine = (card) => {
 
 const deckContext = (deck) => {
   const embrace = Array.isArray(deck.influences?.embrace) ? deck.influences.embrace : [];
+  const orientation = deckCardOrientation(deck);
   const lines = [
     `DECK: "${safe(deck.name)}" (${DECK_KIND_LABELS[deck.kind] || deck.kind})`,
     deck.description ? `CONCEPT: ${safe(deck.description)}` : '',
     deck.styleNotes ? `ART DIRECTION: ${safe(deck.styleNotes)}` : '',
     embrace.length ? `STYLE TOKENS (prepended automatically at render time): ${safe(embrace.join(', '))}` : '',
     deck.layoutPrompt ? `SHARED LAYOUT (also prepended automatically): ${safe(deck.layoutPrompt)}` : '',
+    orientation ? `FACE ORIENTATION (also prepended automatically): ${safe(deckCardOrientationPrompt(deck))}` : '',
   ].filter(Boolean);
   return `# Deck\n${lines.join('\n')}\n`;
 };
@@ -136,7 +140,7 @@ ${targets.map((c) => `  - ${c.key}: ${safe(c.name)}${c.canonRef?.name ? ` → de
 Return a SINGLE JSON object: { "prompts": [ { "key": "<card key>", "prompt": "<string, max 600 chars>" } ] } — exactly one entry per card in the list above.
 
 # Rules
-- "prompt" describes the SUBJECT of the card only — figures, pose, setting, symbols, composition, the suit emblem count — as comma-separated renderable phrases. The deck's style tokens and shared layout are prepended automatically at render time, so do NOT repeat style, medium, palette, border or index/title instructions.
+- "prompt" describes the SUBJECT of the card only — figures, pose, setting, symbols, composition, the suit emblem count — as comma-separated renderable phrases. The deck's style tokens, shared layout and face-orientation instructions are prepended automatically at render time, so do NOT repeat style, medium, palette, border, index/title or orientation instructions.
 ${kindRules}
 - When a card is cast with a canon entry, depict that entry faithfully to its description; otherwise invent a subject that belongs in this deck's world.
 - Cards of one suit should share a visual through-line (a recurring emblem, setting or color accent) so the suit reads as a family.

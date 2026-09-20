@@ -37,6 +37,10 @@ describe('spawnPrDoReviewTask', () => {
     // pins unreachable and freeze the roster at click time. `promptSections/
     // slashdo.js` resolves it from Code Review Defaults when the prompt is built.
     expect(task.slashdoArgs).toBe('https://github.com/acme/widget/pull/17 --no-apply');
+    // …and nothing about the roster or the reviewer is pinned onto the task
+    // either, so the default run is exactly the one this button always queued.
+    expect(task).not.toHaveProperty('reviewers');
+    expect(task.context).not.toContain('YOU are the reviewer');
   });
 
   it('forces a posture that cannot switch the app\'s live checkout to the PR branch', async () => {
@@ -95,6 +99,47 @@ describe('spawnPrDoReviewTask', () => {
 
     expect(result).toMatchObject({ duplicate: true, dispatch: { started: false } });
     expect(forceSpawnTask).not.toHaveBeenCalled();
+  });
+
+  // A per-run roster is persisted as task metadata so the prompt layer resolves
+  // it OVER the Code Review Defaults. Rendering it as `--review-with` here would
+  // take slashdo's precedence-1 path and freeze the roster at click time.
+  it('persists a reviewer override as task fields rather than as a flag', async () => {
+    await queue({ reviewerConfig: { reviewers: ['codex'], reviewerModels: { codex: 'gpt-5.6-sol' } } });
+
+    const task = queuedTask();
+    expect(task).toMatchObject({ reviewers: ['codex'], reviewerModels: { codex: 'gpt-5.6-sol' } });
+    expect(task.slashdoArgs).not.toContain('--review-with');
+  });
+
+  // The one review setting that MUST ride the invocation: `none` is slashdo's
+  // own opt-out, and being precedence-1 is what lets the prompt builder prune
+  // every delegated reviewer loop and still describe the run accurately.
+  it('opts out of delegated reviewers with --review-with none under self-review', async () => {
+    await queue({ selfReview: true });
+
+    const task = queuedTask();
+    expect(task.slashdoArgs).toBe('https://github.com/acme/widget/pull/17 --no-apply --review-with none');
+    expect(task.context).toContain('YOU are the reviewer');
+  });
+
+  // Self-review has no roster, so an override that arrived alongside it would be
+  // a reviewer list the run then refuses to use — a task record that disagrees
+  // with the prompt built from it.
+  it('drops a reviewer override under self-review instead of persisting a roster it will not use', async () => {
+    await queue({ selfReview: true, reviewerConfig: { reviewers: ['codex'] } });
+
+    const task = queuedTask();
+    expect(task).not.toHaveProperty('reviewers');
+  });
+
+  it('leaves the invocation and the roster alone for an untouched delegated run', async () => {
+    await queue();
+
+    const task = queuedTask();
+    expect(task.slashdoArgs).toBe('https://github.com/acme/widget/pull/17 --no-apply');
+    expect(task).not.toHaveProperty('reviewers');
+    expect(task.context).not.toContain('YOU are the reviewer');
   });
 });
 

@@ -78,6 +78,60 @@ export const PASTE_MARKER_PATTERN = /\[Pasted?\s*(?:text\s*#\d+[^\]]*|content\s*
 export const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
 export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 
+// Codex QUEUES a bracketed paste that arrives before its composer has finished
+// initializing and commits it once the composer is live — it is not lost. On a
+// cold Windows start (`cmd.exe /c codex.cmd` -> node -> the native binary) that
+// commit was measured at ~11s for a paste written at 3.7s, far past the 3.5s
+// marker wait + 2s verify window above. The first attempt was therefore
+// declared swallowed and the retry ladder wrote a SECOND 29KB bracketed paste
+// on top of the queued one; codex then committed NEITHER, all three attempts
+// "failed", and the agent was killed `paste-not-rendered` with a healthy TUI
+// sitting at its composer (2026-09-20: six codex-tui agents each dead in ~24s
+// with an empty "Ask Codex to do anything" box in the transcript). Re-pasting
+// is the destructive half — a single early paste, left alone, lands on its own.
+//
+// So codex's FIRST attempt waits this long for the commit instead of retrying.
+// It costs nothing in the healthy case: the wait exits the instant the paste is
+// confirmed (the `[Pasted Content N chars]` chip, or the prompt text rendering
+// for a paste too small to chip), which on a ready codex is ~200ms. Only
+// attempt 1 is patient: 45s is the WHOLE queued-commit window (4x the measured
+// 11s), so a paste still uncommitted after it is genuinely gone and attempts 2
+// and 3 revert to the short #2192 swallow-recovery ladder — a run with no live
+// TUI at all still fails in ~60s.
+//
+// It does NOT apply while codex is booting MCP servers. There it renders its
+// input box early and SWALLOWS pastes outright (see createMcpBootTracker
+// below), so nothing is queued to wait for and patience would only delay the
+// re-paste cadence that IS the recovery. The spawner reads the boot tracker
+// live for that reason — the banner can latch after the paste went out.
+//
+// The one-shot runner (tuiPromptRunner.js) keeps the flat fallback: it never
+// re-pastes, so it has nothing for patience to protect, and it tracks no
+// verifiable prompt prefix, so a short codex prompt renders no chip there and
+// would simply wait the full window for nothing.
+export const PASTE_COMMIT_PATIENCE_MS = 45000;
+
+// Codex's composer placeholder — the ONLY positive evidence its input box is
+// live and will accept a paste. Codex is not on the requireInputReady path
+// (that would fail a run hard the first time a wording change outran us), so
+// this is a SOFT gate: the idle heuristic waits for it, and PASTE_DEADLINE_MS
+// still backstops delivery if it never paints.
+//
+// It is what the idle heuristic was missing. On a cold Windows start
+// (`cmd.exe /c codex.cmd` -> node -> the native binary) codex paints its
+// header, then goes quiet for seconds while the binary boots — output-idle
+// alone reads that lull as "ready" and pastes into a composer that does not
+// exist yet, which swallows the paste (2026-09-20: six codex-tui agents dead
+// in ~24s, each with an empty composer in the transcript). Waiting for the
+// placeholder orders the two correctly; PASTE_COMMIT_PATIENCE_MS above stays
+// as the rescue for a paste that still goes out early.
+//
+// Matched against ANSI-STRIPPED output, and deliberately shorter than the full
+// "Ask Codex to do anything" sentence: the stripped stream collapses the
+// cursor-positioned gaps between glyphs, so the pattern tolerates arbitrary
+// (including zero) whitespace and matches only the stable leading words.
+export const CODEX_COMPOSER_READY_PATTERN = /Ask\s*Codex/i;
+
 /**
  * Extract a verifiable prefix from a prompt for paste verification. The prefix
  * is a unique-enough substring from the prompt's first "content" line (skipping
@@ -135,6 +189,8 @@ export function verifyPasteRendered(strippedBuffer, prefix) {
   return collapseWhitespace(strippedBuffer).includes(collapseWhitespace(prefix));
 }
 
+const PASTE_MARKER_PATTERN_GLOBAL = new RegExp(PASTE_MARKER_PATTERN.source, 'gi');
+
 /**
  * Count paste-commit markers from Claude Code, Codex, OpenCode, or Grok in
  * `strippedText`.
@@ -163,8 +219,9 @@ export function verifyPasteRendered(strippedBuffer, prefix) {
  */
 export function countPasteMarkers(strippedText) {
   if (typeof strippedText !== 'string' || !strippedText) return 0;
-  const re = new RegExp(PASTE_MARKER_PATTERN.source, 'gi');
-  const m = strippedText.match(re);
+  // `match` with a /g regex ignores and resets lastIndex, so one shared
+  // instance is safe and saves recompiling it on every poll tick.
+  const m = strippedText.match(PASTE_MARKER_PATTERN_GLOBAL);
   return m ? m.length : 0;
 }
 
@@ -239,17 +296,41 @@ export function isCollapsedPasteChip(strippedText) {
  *      possible, so this returns true (nothing to disconfirm).
  *
  * Callers MUST pass an ANSI-STRIPPED buffer (both signals require it — see
- * countPasteMarkers / verifyPasteRendered).
+ * countPasteMarkers / verifyPasteRendered). Signals 1/1b/2 live in
+ * isPasteCommitted below; this wrapper adds only the "nothing to verify" pass.
  *
  * @param {string} strippedBuffer — ANSI-stripped post-paste output accumulator.
  * @param {{ verifiablePrefix?: string|null, promptMarkerCount?: number }} [opts]
  * @returns {boolean}
  */
-export function isPasteConfirmed(strippedBuffer, { verifiablePrefix = null, promptMarkerCount = 0 } = {}) {
-  if (countPasteMarkers(strippedBuffer) > promptMarkerCount) return true; // marker is authoritative
-  if (isCollapsedPasteChip(strippedBuffer)) return true; // collapsed chip is the TUI's own commit (#2228)
-  if (!verifiablePrefix) return true; // nothing to verify against
-  return verifyPasteRendered(strippedBuffer, verifiablePrefix);
+export function isPasteConfirmed(strippedBuffer, options = {}) {
+  if (isPasteCommitted(strippedBuffer, options)) return true;
+  return !options.verifiablePrefix; // nothing to verify against
+}
+
+/**
+ * The POSITIVE half of isPasteConfirmed: true only when the buffer carries
+ * actual evidence the TUI committed the paste (its own marker, Claude's
+ * collapsed chip, or the prompt text rendering). Unlike isPasteConfirmed it
+ * does NOT return true just because there is nothing to verify against, so a
+ * caller can use it to WAIT for a commit rather than to decide whether to
+ * declare one swallowed. That distinction is what the patient codex paste
+ * attempt (PASTE_COMMIT_PATIENCE_MS) polls on.
+ *
+ * Callers MUST pass an ANSI-STRIPPED buffer.
+ *
+ * @param {string} strippedBuffer - ANSI-stripped post-paste output accumulator.
+ * @param {{ verifiablePrefix?: string|null, promptMarkerCount?: number }} [opts]
+ * @returns {boolean}
+ */
+export function isPasteCommitted(strippedBuffer, { verifiablePrefix = null, promptMarkerCount = 0 } = {}) {
+  // Counted once and reused for the chip check below — isCollapsedPasteChip
+  // would re-scan the whole buffer, and this runs on the paste poll.
+  const markers = countPasteMarkers(strippedBuffer);
+  if (markers > promptMarkerCount) return true; // marker is authoritative
+  // Collapsed chip is the TUI's own commit (#2228).
+  if (markers >= 1 && COLLAPSED_PASTE_CHIP_PATTERN.test(strippedBuffer)) return true;
+  return !!verifiablePrefix && verifyPasteRendered(strippedBuffer, verifiablePrefix);
 }
 
 // Positive "the launched program's input is ready to receive a bracketed paste"
@@ -1051,6 +1132,14 @@ export function createMcpBootTracker() {
 // window, plus screen chrome) fit cleanly. Consumers should still treat
 // overflow as a fault — see `outputBufferTruncated` tracking in
 // `tuiPromptRunner.js`.
+// Cap on the spawner's post-paste accumulator (agentTuiSpawning.js's
+// `postPasteBuffer`), which retains stripped output from a paste attempt until
+// the commit resolves. Both signals it carries are LOCAL — a paste-commit chip
+// and a ~40-char prompt prefix — so a few screens of tail is everything the
+// predicate can use, while a codex booting for the full PASTE_COMMIT_PATIENCE_MS
+// window would otherwise retain every byte of its boot repaint and make each
+// poll scan grow without bound.
+export const POST_PASTE_BUFFER_CAP = 64 * 1024;
 export const RAW_BUFFER_CAP = 512 * 1024;
 export const RAW_BUFFER_HEADROOM = 640 * 1024;
 export const OUTPUT_BUFFER_CAP = 8 * 1024 * 1024;

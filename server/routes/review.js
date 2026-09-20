@@ -1,9 +1,9 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { reviewQueueQuerySchema, validateRequest } from '../lib/validation.js';
 import * as reviewService from '../services/review.js';
-import { buildQueue, resolveQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
+import { buildQueue, MAX_REVIEW_QUEUE_SNOOZE_MS, resolveQueueItem, triageQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
 
 const router = express.Router();
 
@@ -42,24 +42,62 @@ router.get('/briefing', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/review/queue — cross-domain live aggregator of items needing
-// attention (brain inbox, ask answers, CoS approvals, drafts, health, backups)
+// attention, including source-owned review obligations and actionable
+// notifications.
 router.get('/queue', asyncHandler(async (req, res) => {
-  const queue = await buildQueue();
+  const { limit, cursor, view } = validateRequest(reviewQueueQuerySchema, req.query);
+  const queue = await buildQueue({ limit, cursor, query: { ...(view ? { view } : {}) } });
   res.json(queue);
 }));
 
 const resolveQueueSchema = z.object({
-  id: z.string().min(1).max(500)
+  id: z.string().min(1).max(500),
+  operation: z.enum(['resolve', 'approve', 'reject', 'complete', 'reopen', 'rate']).optional(),
+  rating: z.enum(['positive', 'negative', 'neutral']).optional(),
+  comment: z.string().max(5000).optional(),
+}).superRefine((value, context) => {
+  if (value.operation === 'rate' && !value.rating) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['rating'], message: 'rating is required for the rate operation' });
+  }
+  if (value.operation !== 'rate' && (value.rating !== undefined || value.comment !== undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['operation'], message: 'rating and comment are only valid for the rate operation' });
+  }
 });
 
 // POST /api/review/queue/resolve — accept a single cross-domain queue row in
-// place (mark a Brain inbox item done, approve a CoS task or message draft)
-// without leaving the Review Hub. Sources with no clean one-click resolve
-// (Ask, health, backup) have no inline action and 400 here. The `id` is the
-// row's `<source>:<rawId>` — the service dispatches to that source's primitive.
+// place. Source-owned approvals carry an explicit operation so the mutation
+// revalidates the owning domain instead of using generic Review completion.
 router.post('/queue/resolve', asyncHandler(async (req, res) => {
-  const { id } = validateRequest(resolveQueueSchema, req.body);
-  const result = await resolveQueueItem(id);
+  const { id, operation, rating, comment } = validateRequest(resolveQueueSchema, req.body);
+  const input = { ...(rating ? { rating } : {}), ...(comment !== undefined ? { comment } : {}) };
+  const result = operation
+    ? (Object.keys(input).length ? await resolveQueueItem(id, operation, input) : await resolveQueueItem(id, operation))
+    : await resolveQueueItem(id);
+  res.json(result);
+}));
+
+const triageQueueSchema = z.object({
+  id: z.string().min(1).max(500),
+  operation: z.enum(['snooze', 'unsnooze', 'dismiss']),
+  snoozedUntil: z.string().datetime().optional(),
+}).superRefine((value, context) => {
+  if (value.operation === 'snooze' && !value.snoozedUntil) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil is required for the snooze operation' });
+  }
+  if (value.operation === 'snooze' && value.snoozedUntil
+    && Date.parse(value.snoozedUntil) - Date.now() > MAX_REVIEW_QUEUE_SNOOZE_MS) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil cannot be more than 30 days in the future' });
+  }
+  if (value.operation !== 'snooze' && value.snoozedUntil !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil is only valid for the snooze operation' });
+  }
+});
+
+// POST /api/review/queue/triage — persist a presentation-only decision after
+// the queue service re-reads the source and its current capabilities.
+router.post('/queue/triage', asyncHandler(async (req, res) => {
+  const { id, operation, snoozedUntil } = validateRequest(triageQueueSchema, req.body);
+  const result = await triageQueueItem(id, operation, snoozedUntil ? { snoozedUntil } : {});
   res.json(result);
 }));
 
@@ -85,7 +123,8 @@ router.post('/queue/promote-ask', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/review/todo — create a user todo
+// POST /api/review/todo — legacy compatibility endpoint. New Actions quick-add
+// writes Brain threads; existing clients keep this endpoint and store shape.
 router.post('/todo', asyncHandler(async (req, res) => {
   const data = validateRequest(createTodoSchema, req.body);
   const item = await reviewService.createItem({

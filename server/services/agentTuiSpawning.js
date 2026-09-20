@@ -63,6 +63,9 @@ import {
   AGY_INPUT_READY_PATTERN,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
+  PASTE_COMMIT_PATIENCE_MS,
+  CODEX_COMPOSER_READY_PATTERN,
+  POST_PASTE_BUFFER_CAP,
   scheduleSubmitEnters,
   PASTE_DEADLINE_MS,
   TUI_INPUT_READY_DEADLINE_MS,
@@ -74,6 +77,7 @@ import {
   PASTE_RETRY_BASE_DELAY_MS,
   extractVerifiablePromptPrefix,
   isPasteConfirmed,
+  isPasteCommitted,
   SUBMIT_KEY,
   detectMissingTuiBinary,
 } from '../lib/tuiHandshake.js';
@@ -319,11 +323,12 @@ export function buildTuiSpawnConfig(provider, model, {
       safetyProfile,
       tui: true,
     });
-    // Public-review postures never get credential-bootstrap-wrapped — the
-    // enforced recipe above IS the sandbox. `applyCredentialBootstrap` owns
-    // that skip (keyed on `safetyProfile`), so `spawnCommand`/`spawnArgs` come
-    // back identical to `command`/`args` and every branch of this function
-    // returns the same shape.
+    // A `sandboxed-actions` posture never gets credential-bootstrap-wrapped —
+    // the enforced recipe above IS the sandbox there, and it is spelled entirely
+    // in argv. A `no-tool` posture IS wrapped, because spawned bare it would
+    // carry no credential at all (#7720). `applyCredentialBootstrap` owns that
+    // split (keyed on `safetyProfile`); either way this branch returns the same
+    // shape as every other, with `command`/`args` still naming the harness.
     const { command: spawnCommand, args: spawnArgs } = applyCredentialBootstrap(provider, recipe.command, recipe.args, { safetyProfile });
     return {
       command: recipe.command,
@@ -393,6 +398,7 @@ function createPasteRetryController({
   prompt,
   tuiConfig,
   mcpBoot,
+  isCodexSession,
   appendLine,
   isFinalized,
   markPromptSent,
@@ -413,6 +419,25 @@ function createPasteRetryController({
   const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
   const pasteConfirmed = (buffer) =>
     isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
+  // Same evidence, minus isPasteConfirmed's "nothing to verify against" pass —
+  // the commit-wait below must keep WAITING while a prompt too short to carry a
+  // verifiable prefix has not visibly landed, not treat it as already committed.
+  //
+  // Memoized on buffer identity because the marker poll re-asks every
+  // PASTE_MARKER_POLL_MS for up to PASTE_COMMIT_PATIENCE_MS — ~300 ticks — while
+  // a booting codex is silent, and the predicate is three full-buffer regex
+  // scans plus two whitespace-stripped copies of it. `postPasteBuffer` is only
+  // ever rebound when output actually arrives, so an idle tick is a pointer
+  // compare.
+  let lastCommitBuffer = null;
+  let lastCommitVerdict = false;
+  const pasteCommitted = (buffer) => {
+    if (buffer !== lastCommitBuffer) {
+      lastCommitBuffer = buffer;
+      lastCommitVerdict = isPasteCommitted(buffer, { verifiablePrefix, promptMarkerCount });
+    }
+    return lastCommitVerdict;
+  };
 
   // Bounded post-paste accumulator. Lives from an attempt through its marker /
   // verification windows and any bounded retry backoff, so delayed TUI output
@@ -592,6 +617,14 @@ function createPasteRetryController({
     };
 
     const pasteSentAt = Date.now();
+    // How long THIS attempt waits for the TUI to commit the paste before
+    // handing over to the verify/retry budget. Read live rather than captured:
+    // codex's MCP-boot banner can latch after the paste went out, and a
+    // swallowing codex must not spend the patient window — see
+    // PASTE_COMMIT_PATIENCE_MS.
+    const commitWaitMs = () => (isCodexSession && attemptNum <= 1 && !mcpBoot.active
+      ? PASTE_COMMIT_PATIENCE_MS
+      : PASTE_TO_ENTER_FALLBACK_MS);
     pasteEnterTimer = setInterval(() => {
       if (isFinalized()) {
         clearInterval(pasteEnterTimer);
@@ -600,12 +633,13 @@ function createPasteRetryController({
         return;
       }
       const elapsed = Date.now() - pasteSentAt;
-      const markerSeen = countPasteMarkers(postPasteBuffer) > promptMarkerCount;
-      // Submit when EITHER the paste-commit marker appears (preferred) or
-      // the fallback window elapses (covers small prompts that don't render
-      // the marker).
-      if ((markerSeen && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
-        || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
+      // Submit when EITHER the TUI's paste commit shows up (preferred) or the
+      // commit-wait window elapses (covers small prompts that don't render the
+      // marker). Waiting on the full commit evidence rather than the marker
+      // alone is what lets codex's patient first attempt (PASTE_COMMIT_PATIENCE_MS)
+      // exit in ~200ms when the composer was live all along.
+      if ((pasteCommitted(postPasteBuffer || '') && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
+        || elapsed >= commitWaitMs()) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
         // Capture the buffer before clearing, then confirm the paste (issue #2192).
@@ -614,6 +648,8 @@ function createPasteRetryController({
         // Marker present (or text already visible, or nothing to verify) → the
         // paste landed; submit now. Trusting the marker here is what fixes the
         // multi-line-collapse false negative — Claude hides the pasted body text.
+        // pasteConfirmed is a superset of the pasteCommitted exit above, so only
+        // the commitWaitMs timeout can fall through to the verification window.
         if (pasteConfirmed(commitBuffer)) {
           submitPaste();
           return;
@@ -658,7 +694,9 @@ function createPasteRetryController({
   // above). A no-op the rest of the time.
   const ingestChunk = (stripped) => {
     if (postPasteBuffer === null || !stripped) return;
-    postPasteBuffer += stripped;
+    // Tail-bounded: see POST_PASTE_BUFFER_CAP for why a few screens is all the
+    // commit predicates can use.
+    postPasteBuffer = (postPasteBuffer + stripped).slice(-POST_PASTE_BUFFER_CAP);
     // The retry backoff used to be a blind spot: output was discarded after
     // verification failed and before the next attempt began. A late marker or
     // prompt echo still proves the existing paste landed, so submit it now and
@@ -882,7 +920,17 @@ export async function spawnTuiAgent({
   // TUI whose startup text happened to contain "starting mcp servers" inherit
   // codex's 150s budget and its misleading codex-config guidance, breaking the
   // "non-codex TUIs are unchanged" contract (codex review [P2]).
-  const isCodexSession = commandName.toLowerCase().includes('codex');
+  //
+  // One verdict for the session, through the shared predicate: it also gates the
+  // patient first paste (PASTE_COMMIT_PATIENCE_MS), and the two codex-only paste
+  // mechanisms must agree on what codex is. It keys on `command` (the harness),
+  // not `spawnCommand` — a credential-bootstrap wrap makes the latter the
+  // bootstrap CLI.
+  const isCodexSession = isCodexCommand(tuiConfig.command);
+  // Latches once codex's composer placeholder paints — the positive "the input
+  // box exists" signal the idle heuristic lacks. See
+  // CODEX_COMPOSER_READY_PATTERN; consumed by the idle paste branch below.
+  let codexComposerReady = false;
   const mcpBoot = createMcpBootTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
@@ -1440,6 +1488,10 @@ export async function spawnTuiAgent({
       // CONFIRMED paste) means a banner that arrives AFTER an early swallowed paste
       // still latches — the swallowed paste never sets promptSubmittedAt.
       if (isCodexSession && !promptSubmittedAt && stripped && !mcpBoot.active) mcpBoot.observe(stripped);
+      // Same window as the MCP-boot latch, and for the same reason: only codex's
+      // own startup chrome (never the echoed prompt) may trip it.
+      if (isCodexSession && !codexComposerReady && !promptSentAt && commandInjected && stripped
+        && CODEX_COMPOSER_READY_PATTERN.test(stripped)) codexComposerReady = true;
       const now = Date.now();
       // Startup-idle detection (the promptTimer's non-inputReady branch below)
       // reads lastOutputAt/firstOutputAt to decide the TUI has gone quiet and is
@@ -1835,6 +1887,7 @@ export async function spawnTuiAgent({
     prompt,
     tuiConfig,
     mcpBoot,
+    isCodexSession,
     appendLine,
     isFinalized: isTerminal,
     markPromptSent: () => { promptSentAt = Date.now(); },
@@ -1972,6 +2025,12 @@ export async function spawnTuiAgent({
     if (elapsed < tuiConfig.promptDelayMs) return;
     if (firstOutputAt === null) return;
     if (now - lastOutputAt < READY_IDLE_THRESHOLD_MS) return;
+    // Codex goes quiet for seconds mid-boot with no composer painted, and the
+    // idle heuristic alone reads that lull as ready — pasting into nothing.
+    // Hold the idle path until its composer placeholder has actually rendered;
+    // the PASTE_DEADLINE_MS fallback above still delivers if it never does, so
+    // this can only delay a paste, never cancel one.
+    if (isCodexSession && !codexComposerReady) return;
     safeSendPrompt('ready');
     clearInterval(promptTimer);
   }, READY_POLL_INTERVAL_MS);

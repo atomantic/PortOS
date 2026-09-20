@@ -260,7 +260,7 @@ async function resolveUpstreamRef(checkoutPath, branch) {
  *
  * NON-THROWING, like the rest of the module.
  */
-async function resolveRemoteDefaultRef(checkoutPath) {
+export async function resolveRemoteDefaultRef(checkoutPath) {
   for (const ref of ['origin/HEAD', 'origin/main', 'origin/master']) {
     const result = await execGit(
       ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],

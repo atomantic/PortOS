@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -78,6 +79,21 @@ class BuildCommandTest(unittest.TestCase):
         self.assertEqual(self.flag(cmd, "--fps"), "24")
         self.assertEqual(self.flag(cmd, "--mlx-checkpoint"), str(self.ckpt))
         self.assertNotIn("--steps", cmd)
+
+    def test_5b_uses_wan22_schedule_and_component_paths(self):
+        cmd, _ = self.build(family="fastmetal5b", steps=3)
+        self.assertEqual(self.flag(cmd, "--text-encoder-root"), str(self.root))
+        self.assertEqual(self.flag(cmd, "--vae-root"), str(self.root / "vae"))
+        self.assertEqual(self.flag(cmd, "--dmd-denoising-steps"), "1000,757,522")
+        self.assertNotIn("--num-inference-steps", cmd)
+        self.assertNotIn("--model-root", cmd)
+
+    def test_v2_uses_reference_vsa_with_explicit_trained_sparsity(self):
+        cmd, _ = self.build(family="fasth3", vsa=True, steps=8)
+        self.assertEqual(self.flag(cmd, "--vsa-sparsity"), "0.8")
+        self.assertEqual(self.flag(cmd, "--vsa-impl"), "reference")
+        dense, _ = self.build(family="fasth3")
+        self.assertNotIn("--vsa", dense)
 
     def test_fastmetal_argv_is_byte_identical_to_the_pre_split_baseline(self):
         # The exact list this helper emitted before the family split. Pinned so
@@ -244,6 +260,26 @@ class MlxCheckpointTest(unittest.TestCase):
             with self.assertRaises(FileNotFoundError) as ctx:
                 self.helper.ensure_mlx_checkpoint(Path(tmp), model_root, "int4", {}, Path(tmp) / "cache")
             self.assertIn("transformer", str(ctx.exception))
+
+    def test_vsa_never_reuses_a_dense_conversion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "model"
+            root.mkdir()
+            for name, shift in (("scheduler", 10), ("audio_scheduler", 3)):
+                (root / name).mkdir()
+                (root / name / "scheduler_config.json").write_text(json.dumps({"shift": shift}))
+            (root / "fastvideo_inference.json").write_text("{}")
+            base = Path(tmp) / "cache"
+            dense = self.helper.mlx_checkpoint_root(root, base) / "int6"
+            dense.mkdir(parents=True)
+            for name in ("mlx_h3_dit.safetensors", "mlx_h3_dit.json"):
+                (dense / name).write_text("")
+            legacy_vsa = self.helper.mlx_checkpoint_root(root, base) / "vsa" / "int6"
+            legacy_vsa.mkdir(parents=True)
+            for name in ("mlx_h3_dit.safetensors", "mlx_h3_dit.json"):
+                (legacy_vsa / name).write_text("")
+            with self.assertRaisesRegex(FileNotFoundError, "transformer"):
+                self.helper.ensure_mlx_checkpoint(Path(tmp), root, "int6", {}, base, vsa=True, steps=8)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 // The widget owns only what to show from a fetched list; the polling belongs
@@ -8,9 +8,11 @@ const mockUseAutoRefetch = vi.fn();
 vi.mock('../../../hooks/useAutoRefetch', () => ({
   useAutoRefetch: (...args) => mockUseAutoRefetch(...args),
 }));
-vi.mock('../../../services/api', () => ({ listThreads: vi.fn() }));
+vi.mock('../../../services/api', () => ({ listThreads: vi.fn(), updateThread: vi.fn() }));
+vi.mock('../../ui/Toast', () => ({ default: { error: vi.fn() } }));
 
 import * as api from '../../../services/api';
+import toast from '../../ui/Toast';
 import OpenThreadsWidget from './OpenThreadsWidget';
 
 const renderWidget = () => render(<MemoryRouter><OpenThreadsWidget /></MemoryRouter>);
@@ -56,6 +58,63 @@ describe('OpenThreadsWidget', () => {
     renderWidget();
     expect(screen.getAllByRole('listitem')).toHaveLength(6);
     expect(screen.getByText('+2 more').closest('a')).toHaveAttribute('href', '/brain/threads');
+  });
+
+  it('offers completion only for an unfinished thread with a positively closed source', () => {
+    mockUseAutoRefetch.mockReturnValue({ loading: false, data: { threads: [
+      { id: 'open', title: 'Open source', status: 'open', externalState: 'open' },
+      { id: 'unknown', title: 'Unknown source', status: 'waiting', externalState: 'unknown' },
+      { id: 'manual', title: 'Manual loop', status: 'open' },
+      { id: 'done', title: 'Done loop', status: 'done', externalState: 'closed' },
+      { id: 'archived', title: 'Archived loop', status: 'archived', externalState: 'closed' },
+      { id: 'closed', title: 'Closed source', status: 'waiting', externalState: 'closed' },
+    ] } });
+    renderWidget();
+    expect(screen.getAllByText('Source closed — mark done?')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Mark "Closed source" done' }).closest('a')).toBeNull();
+    expect(api.updateThread).not.toHaveBeenCalled();
+  });
+
+  it('removes a completed row and updates the count without fetching, tolerating stale polls and later reopening', async () => {
+    const thread = { id: 'closed', title: 'Closed source', status: 'waiting', externalState: 'closed', updatedAt: '2026-01-01T00:00:00.000Z' };
+    mockUseAutoRefetch.mockReturnValue({ loading: false, data: { total: 8, threads: [thread] } });
+    let finish;
+    api.updateThread.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const view = renderWidget();
+    const button = screen.getByRole('button', { name: 'Mark "Closed source" done' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    expect(api.updateThread).toHaveBeenCalledTimes(1);
+    expect(api.updateThread).toHaveBeenCalledWith('closed', { status: 'done' }, { silent: true });
+    await act(async () => { finish({ ...thread, status: 'done', updatedAt: '2026-01-02T00:00:00.000Z' }); });
+    expect(screen.queryByText('Closed source')).toBeNull();
+    expect(screen.getByText('7 open')).toBeTruthy();
+    expect(screen.queryByText(/No open loops/)).toBeNull();
+    expect(api.listThreads).not.toHaveBeenCalled();
+    mockUseAutoRefetch.mockReturnValue({ loading: false, data: { total: 8, threads: [{ ...thread }] } });
+    view.rerender(<MemoryRouter><OpenThreadsWidget /></MemoryRouter>);
+    expect(screen.queryByText('Closed source')).toBeNull();
+    mockUseAutoRefetch.mockReturnValue({ loading: false, data: { total: 8, threads: [{ ...thread, updatedAt: '2026-01-03T00:00:00.000Z' }] } });
+    view.rerender(<MemoryRouter><OpenThreadsWidget /></MemoryRouter>);
+    expect(screen.getByText('Closed source')).toBeTruthy();
+    expect(screen.getByText('8 open')).toBeTruthy();
+  });
+
+  it('keeps the row after a failed completion, reports the error once and permits retry', async () => {
+    const thread = { id: 'closed', title: 'Closed source', status: 'open', externalState: 'closed' };
+    mockUseAutoRefetch.mockReturnValue({ loading: false, data: { total: 1, threads: [thread] } });
+    api.updateThread.mockRejectedValueOnce(new Error('Connection lost')).mockResolvedValueOnce({ ...thread, status: 'done', updatedAt: '2026-01-02T00:00:00.000Z' });
+    renderWidget();
+    const button = screen.getByRole('button', { name: 'Mark "Closed source" done' });
+    fireEvent.click(button);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Connection lost'));
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('1 open')).toBeTruthy();
+    expect(button).not.toBeDisabled();
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText('Closed source')).toBeNull());
+    expect(api.updateThread).toHaveBeenCalledTimes(2);
   });
 
   it('offers to track one when the list is empty', () => {

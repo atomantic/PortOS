@@ -122,10 +122,6 @@
         ]
       },
       {
-        "id": "minimax_h3_8bit",
-        "name": "MiniMax H3 MLX 8-bit (joint video + audio, ~103 GB download, 128 GB RAM)",
-        "repo": "pipenetwork/MiniMax-H3-MLX-8bit",
-        "revision": "3ac52081470b0488921c3ec3ba84a39097bf2361",
         "runtime": "minimax_h3",
         "supportedModes": [
           "text",
@@ -238,6 +234,10 @@
             ]
           }
         ],
+        "id": "minimax_h3_8bit",
+        "name": "MiniMax H3 MLX 8-bit (reference quality, very slow, 128 GB RAM)",
+        "repo": "pipenetwork/MiniMax-H3-MLX-8bit",
+        "revision": "3ac52081470b0488921c3ec3ba84a39097bf2361",
         "disclosure": {
           "modelCardUrl": "https://huggingface.co/pipenetwork/MiniMax-H3-MLX-8bit",
           "weightsLicense": {
@@ -269,6 +269,312 @@
             "id": "unified-8bit",
             "name": "Unified 8-bit",
             "description": "8-bit quantized DiT with the bf16 Qwen3-VL conditioner, resident in unified memory.",
+            "minMemoryGb": 128,
+            "minVramGb": null,
+            "unified": true
+          }
+        ]
+      },
+      {
+        "runtime": "minimax_h3",
+        "supportedModes": [
+          "text",
+          "image",
+          "fflf"
+        ],
+        "defaultFrames": 124,
+        "frameOptions": [
+          107,
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345,
+          362
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "defaultWidth": 1344,
+        "defaultHeight": 768,
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "1536x672 (21:9 H3 native)",
+            "w": 1536,
+            "h": 672
+          },
+          {
+            "label": "1344x768 (16:9 H3 default)",
+            "w": 1344,
+            "h": 768
+          },
+          {
+            "label": "1024x768 (4:3 H3 native)",
+            "w": 1024,
+            "h": 768
+          },
+          {
+            "label": "768x768 (1:1 H3 native)",
+            "w": 768,
+            "h": 768
+          },
+          {
+            "label": "768x1024 (3:4 H3 native)",
+            "w": 768,
+            "h": 1024
+          },
+          {
+            "label": "768x1344 (9:16 H3 native)",
+            "w": 768,
+            "h": 1344
+          }
+        ],
+        "memoryGb": 128,
+        "steps": 9,
+        "guidance": 0,
+        "samplerLocked": true,
+        "samplerNote": "MiniMax H3 is CFG-distilled; this profile locks the MLX reference 9-point sigma schedule (8 DiT forwards) and does not use CFG.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "requiredWeights": [
+          {
+            "repo": "MiniMaxAI/MiniMax-H3",
+            "revision": "6818f6c32d12b210915e44ad56a4228c2608f160",
+            "files": [
+              "LICENSE",
+              "FL2VA/model_index.json",
+              "FL2VA/audio_vae/config.json",
+              "FL2VA/audio_vae/metadata.json",
+              "FL2VA/audio_vae/model.safetensors",
+              "FL2VA/text_encoder/config.json",
+              "FL2VA/text_encoder/model-00001-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00002-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00003-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00004-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00005-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00006-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00007-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00008-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00009-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00010-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00011-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00014-of-00014.safetensors",
+              "FL2VA/text_encoder/model.safetensors.index.json",
+              "FL2VA/processor/chat_template.json",
+              "FL2VA/processor/merges.txt",
+              "FL2VA/processor/preprocessor_config.json",
+              "FL2VA/processor/tokenizer.json",
+              "FL2VA/processor/tokenizer_config.json",
+              "FL2VA/processor/video_preprocessor_config.json",
+              "FL2VA/processor/vocab.json",
+              "FL2VA/tokenizer/merges.txt",
+              "FL2VA/tokenizer/tokenizer.json",
+              "FL2VA/tokenizer/tokenizer_config.json",
+              "FL2VA/tokenizer/vocab.json",
+              "FL2VA/video_vae/config.json",
+              "FL2VA/video_vae/source/config.json",
+              "FL2VA/video_vae/source/model.safetensors"
+            ]
+          }
+        ],
+        "id": "minimax_h3_6bit",
+        "name": "MiniMax H3 MLX 6-bit (reference quality, very slow, 128 GB RAM)",
+        "repo": "pipenetwork/MiniMax-H3-MLX-6bit",
+        "revision": "58ea790a856734132293164b8305c8bb80bee6fe",
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/pipenetwork/MiniMax-H3-MLX-6bit",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/LICENSE"
+          },
+          "reviewedAt": "2026-09-19"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
+        },
+        "memoryProfiles": [
+          {
+            "id": "unified-6bit",
+            "name": "Unified 6-bit",
+            "description": "Quantized DiT with the shared bf16 conditioner. Conservative memory floor pending end-to-end measurements.",
+            "minMemoryGb": 128,
+            "minVramGb": null,
+            "unified": true
+          }
+        ]
+      },
+      {
+        "runtime": "minimax_h3",
+        "supportedModes": [
+          "text",
+          "image",
+          "fflf"
+        ],
+        "defaultFrames": 124,
+        "frameOptions": [
+          107,
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345,
+          362
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "defaultWidth": 1344,
+        "defaultHeight": 768,
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "1536x672 (21:9 H3 native)",
+            "w": 1536,
+            "h": 672
+          },
+          {
+            "label": "1344x768 (16:9 H3 default)",
+            "w": 1344,
+            "h": 768
+          },
+          {
+            "label": "1024x768 (4:3 H3 native)",
+            "w": 1024,
+            "h": 768
+          },
+          {
+            "label": "768x768 (1:1 H3 native)",
+            "w": 768,
+            "h": 768
+          },
+          {
+            "label": "768x1024 (3:4 H3 native)",
+            "w": 768,
+            "h": 1024
+          },
+          {
+            "label": "768x1344 (9:16 H3 native)",
+            "w": 768,
+            "h": 1344
+          }
+        ],
+        "memoryGb": 128,
+        "steps": 9,
+        "guidance": 0,
+        "samplerLocked": true,
+        "samplerNote": "MiniMax H3 is CFG-distilled; this profile locks the MLX reference 9-point sigma schedule (8 DiT forwards) and does not use CFG.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "requiredWeights": [
+          {
+            "repo": "MiniMaxAI/MiniMax-H3",
+            "revision": "6818f6c32d12b210915e44ad56a4228c2608f160",
+            "files": [
+              "LICENSE",
+              "FL2VA/model_index.json",
+              "FL2VA/audio_vae/config.json",
+              "FL2VA/audio_vae/metadata.json",
+              "FL2VA/audio_vae/model.safetensors",
+              "FL2VA/text_encoder/config.json",
+              "FL2VA/text_encoder/model-00001-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00002-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00003-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00004-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00005-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00006-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00007-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00008-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00009-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00010-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00011-of-00014.safetensors",
+              "FL2VA/text_encoder/model-00014-of-00014.safetensors",
+              "FL2VA/text_encoder/model.safetensors.index.json",
+              "FL2VA/processor/chat_template.json",
+              "FL2VA/processor/merges.txt",
+              "FL2VA/processor/preprocessor_config.json",
+              "FL2VA/processor/tokenizer.json",
+              "FL2VA/processor/tokenizer_config.json",
+              "FL2VA/processor/video_preprocessor_config.json",
+              "FL2VA/processor/vocab.json",
+              "FL2VA/tokenizer/merges.txt",
+              "FL2VA/tokenizer/tokenizer.json",
+              "FL2VA/tokenizer/tokenizer_config.json",
+              "FL2VA/tokenizer/vocab.json",
+              "FL2VA/video_vae/config.json",
+              "FL2VA/video_vae/source/config.json",
+              "FL2VA/video_vae/source/model.safetensors"
+            ]
+          }
+        ],
+        "id": "minimax_h3_4bit",
+        "name": "MiniMax H3 MLX 4-bit (reference quality, very slow, 128 GB RAM)",
+        "repo": "pipenetwork/MiniMax-H3-MLX-4bit",
+        "revision": "95a0e7d97f23f8b0029afea9411f13535262d935",
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/pipenetwork/MiniMax-H3-MLX-4bit",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/LICENSE"
+          },
+          "reviewedAt": "2026-09-19"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
+        },
+        "memoryProfiles": [
+          {
+            "id": "unified-4bit",
+            "name": "Unified 4-bit",
+            "description": "Quantized DiT with the shared bf16 conditioner. Conservative memory floor pending end-to-end measurements.",
             "minMemoryGb": 128,
             "minVramGb": null,
             "unified": true
@@ -923,6 +1229,170 @@
           },
           "estimatedDownloadGb": 144,
           "reviewedAt": "2026-09-02"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
+        }
+      },
+      {
+        "id": "fasth3_v2_int8",
+        "name": "FastH3 8-Step V2 — MLX INT8 + VSA (quality, local conversion)",
+        "repo": "FastVideo/FastVideo-FastH3-8-Step-V2",
+        "revision": "3da2ddfe1954d9cda4c05b643dc0f26007a655c5",
+        "runtime": "fastvideo",
+        "fastvideoFamily": "fasth3",
+        "fastvideoMlxFormat": "int8",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 832,
+        "defaultHeight": 480,
+        "defaultFrames": 124,
+        "frameOptions": [
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "832x480 (16:9 FastH3 default)",
+            "w": 832,
+            "h": 480
+          },
+          {
+            "label": "1280x720 (16:9 HD)",
+            "w": 1280,
+            "h": 720
+          }
+        ],
+        "memoryGb": 48,
+        "steps": 8,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "Quality option: 8 steps with 80% sparse attention, reference implementation. Requires an updated FastVideo runtime with VSA support. INT6 and INT8 share one ~147.9 GB source download; first use converts the DiT locally with routing weights retained. Not a real-time model.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "fastvideoVsa": true,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/FastVideo/FastVideo-FastH3-8-Step-V2",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 147.9,
+          "reviewedAt": "2026-09-19"
+        },
+        "termsGate": {
+          "id": "minimax-h3-community-license-2026-08-02",
+          "title": "MiniMax H3 eligibility and terms",
+          "summary": "MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.",
+          "acknowledgement": "I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.",
+          "licenseUrl": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE",
+          "excludedTerritories": [
+            "European Union",
+            "United Kingdom",
+            "Republic of Korea",
+            "United States of America"
+          ]
+        }
+      },
+      {
+        "id": "fasth3_v2_int6",
+        "name": "FastH3 8-Step V2 — MLX INT6 + VSA (quality, local conversion)",
+        "repo": "FastVideo/FastVideo-FastH3-8-Step-V2",
+        "revision": "3da2ddfe1954d9cda4c05b643dc0f26007a655c5",
+        "runtime": "fastvideo",
+        "fastvideoFamily": "fasth3",
+        "fastvideoMlxFormat": "int6",
+        "supportedModes": [
+          "text"
+        ],
+        "defaultWidth": 832,
+        "defaultHeight": 480,
+        "defaultFrames": 124,
+        "frameOptions": [
+          124,
+          141,
+          158,
+          175,
+          192,
+          209,
+          226,
+          243,
+          260,
+          277,
+          294,
+          311,
+          328,
+          345
+        ],
+        "fpsOptions": [
+          24
+        ],
+        "resolutionStep": 32,
+        "resolutionOptions": [
+          {
+            "label": "832x480 (16:9 FastH3 default)",
+            "w": 832,
+            "h": 480
+          },
+          {
+            "label": "1280x720 (16:9 HD)",
+            "w": 1280,
+            "h": 720
+          }
+        ],
+        "memoryGb": 42,
+        "steps": 8,
+        "guidance": 1,
+        "samplerLocked": true,
+        "samplerNote": "Quality option: 8 steps with 80% sparse attention, reference implementation. Requires an updated FastVideo runtime with VSA support. INT6 and INT8 share one ~147.9 GB source download; first use converts the DiT locally with routing weights retained. Not a real-time model.",
+        "supportsNegativePrompt": false,
+        "supportsTiling": false,
+        "supportsDisableAudio": false,
+        "fastvideoVsa": true,
+        "disclosure": {
+          "modelCardUrl": "https://huggingface.co/FastVideo/FastVideo-FastH3-8-Step-V2",
+          "weightsLicense": {
+            "name": "MiniMax H3 Community License",
+            "url": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/6818f6c32d12b210915e44ad56a4228c2608f160/LICENSE"
+          },
+          "runtimeLicense": {
+            "name": "Apache-2.0",
+            "url": "https://github.com/hao-ai-lab/FastVideo/blob/main/LICENSE"
+          },
+          "estimatedDownloadGb": 147.9,
+          "reviewedAt": "2026-09-19"
         },
         "termsGate": {
           "id": "minimax-h3-community-license-2026-08-02",

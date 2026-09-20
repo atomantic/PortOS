@@ -567,6 +567,7 @@ export const providerSchema = z.object({
     setupCommand: z.string().trim().max(500).optional(),
     command: z.string().trim().min(1).max(200),
     args: z.array(z.string().max(200)).max(20).optional(),
+    envCommand: z.array(z.string().min(1).max(500)).min(1).max(21).optional(),
     harnessId: z.string().trim().min(1).max(100).optional(),
     argsSeparator: z.string().trim().max(20).optional(),
   }).strict().nullable().optional(),
@@ -1770,6 +1771,15 @@ export const agentActivityCleanupSchema = z.object({
   daysToKeep: z.coerce.number().int().min(1).max(3650).default(30),
 }).strict();
 
+// GET /api/review/queue — pagination is opt-in so existing Review Hub clients
+// keep receiving the legacy full-list envelope. Cursors are opaque and bounded
+// before they reach the queue snapshot decoder.
+export const reviewQueueQuerySchema = z.object({
+  limit: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(100).optional()),
+  cursor: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(4096).optional()),
+  view: z.preprocess(emptyToUndefined, z.enum(['today', 'all', 'waiting', 'someday', 'history', 'snoozed']).optional()),
+}).strict();
+
 // =============================================================================
 // CLIENT ERROR REPORT
 // =============================================================================
@@ -2282,6 +2292,7 @@ export const credentialBootstrapSchema = z.object({
   label: z.string().trim().min(1).max(100),
   command: z.string().trim().min(1).max(200),
   args: z.array(z.string().max(200)).max(20).optional(),
+  envCommand: z.array(z.string().min(1).max(500)).min(1).max(21).optional(),
   argsSeparator: z.string().trim().max(20).optional(),
   setupCommand: z.string().trim().max(500).optional(),
   harnessNames: z.partialRecord(z.enum(PROVIDER_HARNESS_IDS), z.string().trim().min(1).max(100)).optional(),

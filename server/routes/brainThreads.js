@@ -32,6 +32,7 @@ import {
   threadQuerySchema,
   threadRefInputSchema,
   threadAttachSchema,
+  threadSyncInputSchema,
 } from '../lib/brainValidation.js';
 import { isTerminalThreadStatus as isTerminal, compareThreads } from '../lib/brainThreads.js';
 import { canonicalThreadRefKind } from '../lib/threadRefKinds.js';
@@ -106,6 +107,12 @@ function matchesQuery(thread, q) {
 // =============================================================================
 // ATTACH (before /:id routes so 'attach' is never treated as an id)
 // =============================================================================
+
+router.post('/sync', asyncHandler(async (req, res) => {
+  const input = validateRequest(threadSyncInputSchema, req.body);
+  const { syncGithubThreads } = await import('../services/threadSync.js');
+  res.json(await syncGithubThreads(input));
+}));
 
 // POST /attach — `{ ref, threadId?, title? }`. Attaches to an existing thread,
 // or mints one and attaches, in a single call: the one-click affordance every

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { CheckCircle2, HelpCircle, Server, XCircle } from 'lucide-react';
-import { getFleetLlmHost, getFleetPeerHosts, revealFleetLlmHostKey } from '../../services/apiProviders';
+import { getFleetLlmHost, getFleetPeerHosts, revealFleetLlmHostKey, stopFleetLlmHost } from '../../services/apiProviders';
+import FleetHostUsage from './FleetHostUsage';
 import { isFleetHostConfigured } from '../../utils/providers';
 import { copyToClipboard } from '../../lib/clipboard';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
@@ -25,6 +26,14 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
   const [installing, setInstalling] = useState(false);
   const [key, setKey] = useState('');
   const [revealing, setRevealing] = useState(false);
+  // Two-click stop rather than a `confirm()` (which this codebase does not
+  // use): the first click arms, the second acts. Stopping the host cuts off
+  // every federated peer currently pointed at it, so it should not be one
+  // mis-click away — but it must also never be unreachable, which is the state
+  // this whole section is fixing.
+  const [stopArmed, setStopArmed] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopNote, setStopNote] = useState('');
   const load = useCallback(() => {
     getFleetLlmHost({ silent: true })
       .then((value) => { setStatus(value); setError(''); })
@@ -61,6 +70,23 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
     revealFleetLlmHostKey({ silent: true }).then(({ apiKey }) => setKey(apiKey))
       .catch(() => setError('Could not read the host API key. Complete host setup first.'))
       .finally(() => setRevealing(false));
+  };
+  const stop = () => {
+    setStopping(true);
+    setStopNote('');
+    stopFleetLlmHost({ silent: true })
+      .then((result) => {
+        setStopArmed(false);
+        setStopNote(result?.error
+          ? result.error
+          : result?.containerStopped
+            ? 'Host stopped. The container was removed; its image and weights are still on disk, so starting it again takes minutes, not another download.'
+            : 'Host stopped and disabled.');
+        load();
+        onConfigured?.();
+      })
+      .catch(() => setStopNote('Could not stop the host. Check that Docker is responding, then try again.'))
+      .finally(() => setStopping(false));
   };
   const actionClass = 'inline-flex items-center justify-center min-h-[40px] px-3 py-2 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50';
   const title = status?.recommendation.title || 'Recommended model host setup';
@@ -149,6 +175,34 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
               <p className="mt-1 text-xs">{status.queue.active} generating · {status.queue.queued} queued · limit {status.queue.maxActive} active / {status.queue.maxQueued} waiting</p>
             </Banner>
           )}
+          {/* Offered whenever there is anything to turn off — a listening
+              queue, a container answering on the runtime port, or just the
+              enable marker that would start both again at the next boot.
+              Gating this on `serving` would hide it in exactly the state that
+              made the host feel unstoppable: container up, model still loading. */}
+          {status.stoppable && (
+            <section className="rounded-lg border border-port-border p-3 space-y-2 text-sm" aria-label="Stop this machine's model host">
+              <h3 className="font-medium">Stop hosting on this machine</h3>
+              <p className="text-xs text-gray-400">
+                Closes the shared API queue, turns the host off for future restarts, removes the Windows login-recovery task, and stops and removes the vLLM container. The prepared image and weights stay on disk. Any federated instance using this host loses it immediately, and any generation in flight is cancelled.
+              </p>
+              <div className="flex flex-wrap gap-2 items-center">
+                <button
+                  type="button"
+                  disabled={stopping || status.setupRunning}
+                  onClick={() => (stopArmed ? stop() : setStopArmed(true))}
+                  className={`inline-flex items-center justify-center min-h-[40px] px-3 py-2 rounded-lg text-sm disabled:opacity-50 ${stopArmed ? 'bg-port-error text-white' : 'bg-port-border text-white'}`}
+                >
+                  {stopping ? 'Stopping…' : stopArmed ? 'Confirm stop — disconnect peers now' : 'Stop model host'}
+                </button>
+                {stopArmed && !stopping && (
+                  <button type="button" onClick={() => setStopArmed(false)} className="min-h-[40px] px-3 text-sm text-gray-400">Cancel</button>
+                )}
+              </div>
+              {stopNote && <Banner tone="info">{stopNote}</Banner>}
+            </section>
+          )}
+          {(status.enabled || status.listening) && <FleetHostUsage />}
           {status.hasApiKey && status.endpoint && (
             <section className="space-y-2 text-sm">
               <h3 className="font-medium">Use this host from this same machine</h3>

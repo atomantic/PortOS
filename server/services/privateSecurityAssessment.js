@@ -122,6 +122,14 @@ export async function processTaskOutput({ success, payload, task, agentId }, dep
   ].join('\n\n');
   const review = deps.review || await import('./review.js');
   const item = await review.createItem({ type: 'alert', title: 'Private security assessment report', description,
-    metadata: { referenceId: `private-security:${agentId}`, privateSecurity: true, agentId, appId: task.metadata.app } });
+    metadata: {
+      referenceId: `private-security:${agentId}`,
+      category: 'content-review',
+      actionKind: 'content.review',
+      sourceOwned: true,
+      privateSecurity: true,
+      agentId,
+      appId: task.metadata.app,
+    } });
   return { accepted: true, success: true, reportId: item.id, findings: report.findings.length };
 }

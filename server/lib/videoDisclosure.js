@@ -141,6 +141,27 @@ const customLicense = (repo) => ({ name: 'Custom — see model card', url: hfMod
  * Lightning entries include their `requiredWeights` LoRA files.
  */
 export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
+  ...Object.fromEntries(['int8', 'int6'].map((format) => [`fasth3_v2_${format}`, {
+    shippedRepo: 'FastVideo/FastVideo-FastH3-8-Step-V2',
+    disclosure: {
+      modelCardUrl: hfModelCard('FastVideo/FastVideo-FastH3-8-Step-V2'),
+      weightsLicense: MINIMAX_H3_WEIGHTS,
+      runtimeLicense: RUNTIME_LICENSE.fastvideo,
+      estimatedDownloadGb: 147.9,
+      reviewedAt: '2026-09-19',
+    },
+    termsGate: MINIMAX_H3_TERMS_GATE,
+  }])),
+  ...Object.fromEntries([4, 6].map((bits) => [`minimax_h3_${bits}bit`, {
+    shippedRepo: `pipenetwork/MiniMax-H3-MLX-${bits}bit`,
+    disclosure: {
+      modelCardUrl: hfModelCard(`pipenetwork/MiniMax-H3-MLX-${bits}bit`),
+      weightsLicense: MINIMAX_H3_WEIGHTS,
+      runtimeLicense: RUNTIME_LICENSE.minimax_h3,
+      reviewedAt: '2026-09-19',
+    },
+    termsGate: MINIMAX_H3_TERMS_GATE,
+  }])),
   minimax_h3_ref2va_8bit: {
     shippedRepo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
     disclosure: {

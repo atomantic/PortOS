@@ -19,6 +19,7 @@ import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
 import { AVATAR_STYLE_LABELS } from '../../lib/avatarStyles';
 import { inPlaceClipName } from '../../utils/animationClips';
 import { getNavPageForPath, getPageNavTabs } from '../../../../server/lib/navManifest.js';
+import { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE } from '../../../../server/lib/prDisposition.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
 // Icon per tab id. The manifest (`tabGroup: 'cos'`) owns id/label/order — this
@@ -263,6 +264,27 @@ export const PR_COMPLETION_OPTIONS = [
 export const prCompletionOption = (value) => PR_COMPLETION_OPTIONS.find(option => option.value === value);
 
 export const DEFAULT_PR_COMPLETION = 'review-then-merge';
+
+// WHO reviews a PR action's change — orthogonal to `PR_COMPLETION_OPTIONS`
+// above, which decides whether a review happens at all. The values come from
+// the server leaf that owns the vocabulary (it imports nothing, so reaching for
+// it costs the bundle nothing); only the UI copy lives here.
+export const PR_REVIEW_MODE_OPTIONS = [
+  {
+    value: PR_REVIEW_MODES.DELEGATED,
+    label: 'Delegated reviewers',
+    description: 'The agent orchestrates your Code Review Defaults roster as separate reviewer runs.',
+  },
+  {
+    value: PR_REVIEW_MODES.SELF,
+    label: 'Self-review only',
+    description: 'The Run with provider reviews the change itself — no child review agents.',
+  },
+];
+
+export const prReviewModeOption = (value) => PR_REVIEW_MODE_OPTIONS.find(option => option.value === value);
+
+export { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE };
 
 // The policy a task falls back to when nothing pins `prCompletion` — mirrors the
 // `resolvePrCompletion` fallback in server/lib/prDisposition.js (legacy

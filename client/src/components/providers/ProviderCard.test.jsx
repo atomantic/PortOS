@@ -367,3 +367,26 @@ describe('ProviderCard "Add interactive mode"', () => {
     expect(onAddTuiMode).not.toHaveBeenCalled();
   });
 });
+
+describe('ProviderCard default highlight', () => {
+  it('highlights the default card with accent background, ring, and DEFAULT badge', () => {
+    const { container } = renderCard(wrapper(), null, { isDefault: true });
+    const cardEl = container.firstChild;
+    expect(cardEl.className).toContain('bg-port-accent/10');
+    expect(cardEl.className).not.toContain('bg-port-card');
+    expect(cardEl.className).toContain('ring-1 ring-port-accent/60');
+    expect(screen.getByText('DEFAULT')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set Default' })).toBeNull();
+  });
+
+  it('renders standard card background when not default', () => {
+    const { container } = renderCard(wrapper(), null, { isDefault: false });
+    const cardEl = container.firstChild;
+    expect(cardEl.className).toContain('bg-port-card');
+    expect(cardEl.className).not.toContain('bg-port-accent/10');
+    expect(cardEl.className).not.toContain('ring-port-accent');
+    expect(screen.queryByText('DEFAULT')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Set Default' })).toBeInTheDocument();
+  });
+});
+

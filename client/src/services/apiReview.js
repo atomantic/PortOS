@@ -1,4 +1,4 @@
-import { request } from './apiCore.js';
+import { request, queryString } from './apiCore.js';
 
 // Review Hub
 export const getReviewItems = (params) => {
@@ -10,12 +10,36 @@ export const getReviewItems = (params) => {
 };
 export const getReviewCounts = (options = {}) => request('/review/counts', options);
 export const getReviewBriefing = () => request('/review/briefing');
-// Cross-domain live queue (brain inbox, ask, CoS approvals, drafts, health, backups)
-export const getReviewQueue = (options = {}) => request('/review/queue', options);
-// Accept/promote a single queue row in place (id is `<source>:<rawId>`)
-export const resolveReviewQueueItem = (id, options = {}) => request('/review/queue/resolve', {
+// Cross-domain live queue (source-owned obligations plus domain projections).
+// Keep transport options (silent, headers, abort signal) separate from the
+// pagination query so callers can continue using the old options-only shape.
+export const getReviewQueue = ({ view, limit, cursor, ...options } = {}) => {
+  const query = queryString({ view, limit, cursor });
+  return request(`/review/queue${query}`, options);
+};
+// Resolve a single queue row in place (id is `<source>:<rawId>`). Source-owned
+// approvals may pass `operation` (approve/reject); feedback's `rate` operation
+// additionally carries the required rating and optional comment. Transport
+// options stay out of the JSON body.
+export const resolveReviewQueueItem = (id, { operation, rating, comment, ...options } = {}) => request('/review/queue/resolve', {
   method: 'POST',
-  body: JSON.stringify({ id }),
+  body: JSON.stringify({
+    id,
+    ...(operation ? { operation } : {}),
+    ...(rating ? { rating } : {}),
+    ...(comment !== undefined ? { comment } : {}),
+  }),
+  ...options
+});
+// Persist a presentation-only queue decision. The server re-reads the source
+// row, so the client supplies only the row id and the selected operation/time.
+export const triageReviewQueueItem = (id, { operation, snoozedUntil, ...options } = {}) => request('/review/queue/triage', {
+  method: 'POST',
+  body: JSON.stringify({
+    id,
+    operation,
+    ...(snoozedUntil ? { snoozedUntil } : {}),
+  }),
   ...options
 });
 // Promote an Ask row's latest assistant answer into Brain, a CoS task, or a
@@ -26,13 +50,10 @@ export const promoteAskReviewQueueItem = (id, target, { goalId, ...options } = {
   body: JSON.stringify({ id, target, ...(goalId ? { goalId } : {}) }),
   ...options
 });
-export const createReviewTodo = (data) => request('/review/todo', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
-export const updateReviewItem = (id, data) => request(`/review/items/${id}`, {
+export const updateReviewItem = (id, data, options = {}) => request(`/review/items/${id}`, {
   method: 'PATCH',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const completeReviewItem = (id) => request(`/review/items/${id}/complete`, { method: 'POST' });
 export const dismissReviewItem = (id) => request(`/review/items/${id}/dismiss`, { method: 'POST' });

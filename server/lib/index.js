@@ -322,6 +322,7 @@ export * from './zipWriter.js';
 // === Process execution ===
 export * from './agentGuard/index.js';
 export * from './agentOutcome.js';
+export * from './cosAgentFeedback.js';
 export * from './agentOutputMarkers.js';
 export * from './agentRunEvents.js';
 export * from './agentRunReconcile.js';
@@ -505,6 +506,7 @@ export * from './subscriptionPlanTiers.js';
 export * from './subscriptionSavings.js';
 export * from './providerFamilies.js';
 export * from './fleetQuotas.js';
+export * from './fleetHostUsage.js';
 export * from './harnessOutput.js';
 export * from './providerGateways.js';
 export * from './providerHarnesses.js';

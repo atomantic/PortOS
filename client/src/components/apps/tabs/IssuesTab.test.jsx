@@ -28,6 +28,7 @@ vi.mock('../../ThemeContext', () => ({
 
 vi.mock('../../../services/api', () => ({
   getAppIssues: vi.fn(),
+  syncGithubThreads: vi.fn(),
   createSlashdoTask: vi.fn(),
   getProviders: vi.fn(),
   getLocalLlmStatus: vi.fn().mockResolvedValue(null),
@@ -117,6 +118,7 @@ describe('IssuesTab', () => {
     expect(linkButton).toHaveAttribute('rel', 'noreferrer');
     expect(linkButton.className).toContain('min-h-[44px]');
     expect(linkButton.className).toContain('min-w-[44px]');
+    expect(linkButton).toHaveTextContent('GitHub');
   });
 
   it('activates the issue link button on Space keydown', async () => {
@@ -911,4 +913,20 @@ describe('IssuesTab replan', () => {
     expect(payload.prCompletion).toBe('merge-on-green');
     expect(payload.reviewers).toBeUndefined();
   });
+});
+
+// One click imports the server-selected account's assignments, independent of
+// the visible list filters, and blocks another click until the request settles.
+it('tracks assigned GitHub issues explicitly and links to the resulting Brain list', async () => {
+  api.getAppIssues.mockResolvedValue(okPayload([ISSUE]));
+  let finish;
+  api.syncGithubThreads.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  await renderTab();
+  const button = await findEnabledByRole('button', { name: 'Track my assigned issues in Brain' });
+  fireEvent.click(button);
+  expect(api.syncGithubThreads).toHaveBeenCalledWith({ appId: 'app-1' }, { silent: true });
+  expect(button.disabled).toBe(true);
+  expect(screen.getByRole('link', { name: 'Open Threads' }).getAttribute('href')).toBe('/brain/threads');
+  await act(async () => finish({ created: 1, updated: 0, possiblyTruncated: false }));
+  expect(button.disabled).toBe(false);
 });

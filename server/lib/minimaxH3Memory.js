@@ -91,6 +91,21 @@ export const MINIMAX_H3_AUTO_PROFILE_ID = 'auto';
  *   unified      true when host and device memory are the same pool
  */
 export const MINIMAX_H3_MEMORY_PROFILES = Object.freeze({
+  ...Object.fromEntries([
+    [4, '95a0e7d97f23f8b0029afea9411f13535262d935'],
+    [6, '58ea790a856734132293164b8305c8bb80bee6fe'],
+  ].map(([bits, revision]) => [`minimax_h3_${bits}bit`, Object.freeze({
+    shippedRepo: `pipenetwork/MiniMax-H3-MLX-${bits}bit`,
+    shippedRevision: revision,
+    profiles: Object.freeze([Object.freeze({
+      id: `unified-${bits}bit`,
+      name: `Unified ${bits}-bit`,
+      description: 'Quantized DiT with the shared bf16 conditioner. Conservative memory floor pending end-to-end measurements.',
+      minMemoryGb: 128,
+      minVramGb: null,
+      unified: true,
+    })]),
+  })])),
   // PipeNetwork's Apple-Silicon MLX port. ONE profile deliberately: the port
   // has a single placement (8-bit DiT plus the bf16 conditioner, all in unified
   // memory), and 128 GB is the figure the shipped entry has always stated. A

@@ -193,7 +193,16 @@ const ERROR_PATTERNS = [
     // remote gateway retiring a pooled connection classified as UNKNOWN and was
     // escalated to an open-ended tier-4 investigation, when the honest reading
     // is a transient connectivity fault with a 2m bench.
-    pattern: /ECONNREFUSED|ENOTFOUND|network error|connection refused|timeout|ETIMEDOUT|GOAWAY|UND_ERR_SOCKET/i,
+    //
+    // `terminated` is the same family seen from the other half of a run: undici
+    // raises `TypeError: terminated` when the peer drops the connection while
+    // the RESPONSE BODY is streaming, normally with the code on `.cause` (so
+    // `UND_ERR_SOCKET` above already matches the flattened chain) but not
+    // always. It is anchored to the WHOLE string rather than line-anchored on
+    // purpose — `analyzeError` also scans an agent's entire CLI screen, where
+    // "… terminated" is ordinary prose, and only a cause-less transport
+    // rejection ever arrives as that single word on its own.
+    pattern: /ECONNREFUSED|ENOTFOUND|network error|connection refused|timeout|ETIMEDOUT|GOAWAY|UND_ERR_SOCKET|ERR_STREAM_PREMATURE_CLOSE|^terminated$|TypeError: terminated/i,
     category: ERROR_CATEGORIES.NETWORK_ERROR,
     requiresFallback: false,
     actionable: false,

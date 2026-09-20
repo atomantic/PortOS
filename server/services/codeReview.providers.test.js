@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access } from 'node:fs/promises';
 import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cosValidation.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
-import { buildLocalReviewerInstructions } from './cosTaskPrompts.js';
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
 vi.mock('./providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
@@ -15,7 +14,7 @@ vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities
 const { getProviderById, listProviders } = await import('./providers.js');
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js');
-const { pickCodeReviewDefaults, runLocalCodeReview, getProviderReviewUnsupported } = await import('./codeReview.js');
+const { pickCodeReviewDefaults, runLocalCodeReview, getProviderReviewUnsupported, pickAvailableReviewerGroups, isReviewerQuotaFailure } = await import('./codeReview.js');
 
 const backend = 'provider:example-gpu';
 const provider = { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true,
@@ -30,6 +29,17 @@ beforeEach(() => {
 });
 
 describe('configured provider reviewers', () => {
+  it('selects the first fallback group whose reviewers are not paused', () => {
+    expect(pickAvailableReviewerGroups({ reviewerFallbackGroups: [['ollama'], ['codex']], reviewerHealth: { ollama: { pausedUntil: 200 } } }, 100)).toEqual(['codex']);
+    expect(pickAvailableReviewerGroups({ reviewerFallbackGroups: [['ollama'], ['codex']], reviewerHealth: { ollama: { pausedUntil: 50 } } }, 100)).toEqual(['ollama']);
+  });
+
+  it('recognizes quota and usage allowance failures without classifying ordinary review failures', () => {
+    expect(isReviewerQuotaFailure('429 rate limit exceeded')).toBe(true);
+    expect(isReviewerQuotaFailure('monthly usage allowance exhausted')).toBe(true);
+    expect(isReviewerQuotaFailure('syntax findings returned')).toBe(false);
+  });
+
   it('keeps a saved provider/model through settings, task metadata, prompt generation and execution', async () => {
     const settings = codeReviewSettingsSchema.parse({ reviewers: ['codex', backend],
       providerModels: { [backend]: 'pinned-coder' }, codexModel: 'example-cloud-model',
@@ -41,6 +51,7 @@ describe('configured provider reviewers', () => {
     expect(task.reviewerModels).toEqual({ [backend]: 'pinned-coder', codex: 'example-cloud-model' });
     expect(task.optionalReviewers).toEqual([backend]);
     expect(task.reviewerMaxRounds).toEqual({ [backend]: 1 });
+    const { buildLocalReviewerInstructions } = await import('./cosTaskPrompts.js');
     const instructions = buildLocalReviewerInstructions(task.reviewers, task.reviewerModels);
     expect(instructions).toContain(backend);
     expect(instructions).toContain('pinned-coder');
@@ -88,6 +99,44 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
     runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: true });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
+  });
+
+  // #7720: a bootstrap-credentialed harness has a maintained no-tool recipe and
+  // must be usable as a reviewer, not refused at selection time. The record
+  // reaches the CLI spawn with its `credentialBootstrap` intact — that is what
+  // `applyCredentialBootstrap` wraps under the gate's no-tool profile, so the
+  // bootstrap mints the credential into the harness it execs. A record that
+  // instead PRINTS assignments supplies them through `bootstrapEnv`, which the
+  // wrap does not replace.
+  it('runs a bootstrap reviewer on the wrap alone, and passes minted env when the record prints one', async () => {
+    const cli = { ...provider, type: 'cli', command: 'claude', credentialBootstrap: { command: 'example-wrapper', args: ['run'] } };
+    getProviderById.mockResolvedValue(cli);
+    listProviders.mockResolvedValue([cli]);
+    runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
+    expect(await getProviderReviewUnsupported()).toEqual({});
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+    expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      provider: expect.objectContaining({ credentialBootstrap: cli.credentialBootstrap }),
+      bootstrapEnv: {},
+      safetyProfile: 'public-review-gate',
+    }));
+
+    cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.log("ANTHROPIC_AUTH_TOKEN=example-minted-token")'];
+    expect(await getProviderReviewUnsupported()).toEqual({});
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+    expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      bootstrapEnv: { ANTHROPIC_AUTH_TOKEN: 'example-minted-token' },
+      safetyProfile: 'public-review-gate',
+    }));
+
+    // A credential command that FAILS is still a failed review, not a silent
+    // spawn with no credential.
+    cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.error("example-secret"); process.exit(1)'];
+    runCliProviderPrompt.mockClear();
+    expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({
+      ok: false, error: 'Reviewer credential setup or execution failed.',
+    });
+    expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
   it('refuses an unsupported effort before invoking the provider', async () => {

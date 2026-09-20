@@ -10,7 +10,8 @@ import { commandOutput } from '../lib/commandExists.js';
 import { inspectVllmQwenProject } from '../lib/vllmQwenProject.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
-import { installFleetHostLoginTask, isFleetHostLoginTaskInstalled } from './fleetLlmStartup.js';
+import { installFleetHostLoginTask, isFleetHostLoginTaskInstalled, removeFleetHostLoginTask } from './fleetLlmStartup.js';
+import { flushFleetHostUsage, getFleetHostUsageLedger, getFleetHostUsageReport, scheduleFleetHostUsagePersist } from './fleetLlmUsage.js';
 import { ensureFleetDockerIntegration } from './fleetLlmDocker.js';
 import { createFleetLlmGateway } from './fleetLlmGateway.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
@@ -61,7 +62,11 @@ export async function startFleetLlmHost() {
   const enabled = parseEnvContents((await tryReadFile(PORTOS_ENV_PATH)) || '').get(ENABLED_KEY) === '1';
   if (!enabled) return;
   const { apiKey } = await readHostEnv();
-  const next = createFleetLlmGateway({ upstream, apiKey });
+  // Hydrated before the listener binds, so the first inbound request is
+  // recorded against the history already on disk rather than starting a second
+  // ledger that the hydrate would then overwrite.
+  const usage = await getFleetHostUsageLedger();
+  const next = createFleetLlmGateway({ upstream, apiKey, usage, onRecorded: scheduleFleetHostUsagePersist });
   await new Promise((resolve, reject) => {
     next.server.once('error', reject);
     next.server.listen(PORTS.FLEET_LLM, '0.0.0.0', resolve);
@@ -74,6 +79,70 @@ export async function stopFleetLlmHost() {
   const previous = gateway;
   gateway = null;
   await previous?.close();
+  // The in-flight requests `close()` just cancelled are the newest rows in the
+  // ledger; write them before the listener is gone rather than leaving them to
+  // a debounce timer that a shutdown may never run.
+  await flushFleetHostUsage();
+}
+
+/** Inbound usage, with this host's live admission state folded in. */
+export async function getFleetLlmHostUsage() {
+  return getFleetHostUsageReport({ queue: gateway?.status() || null });
+}
+
+/**
+ * Turn the dedicated host OFF — every part of it, in the order that makes the
+ * machine quiet and keeps it quiet.
+ *
+ * `configureFleetLlmHost` arms four separate things, and until this existed the
+ * only way to undo any of them was by hand: the shared API listener, the
+ * `PORTOS_FLEET_LLM_ENABLED` marker that brings it back on the next boot, a
+ * container written with `restart: unless-stopped` (so stopping Docker does not
+ * stop it), and — on Windows — a scheduled task that re-runs the resume path at
+ * every login. Stopping only the container leaves three of those to start it
+ * again, which is why the host looked impossible to stop.
+ *
+ * The listener and the marker are cleared FIRST and unconditionally: even if
+ * docker is not answering, the host must stop accepting peer requests and must
+ * not come back on the next restart. Docker's own step reports its failure as a
+ * value, so an unreachable engine leaves the operator disabled-but-with-a-
+ * container rather than enabled-and-confused.
+ *
+ * @returns {Promise<{success: boolean, containerStopped: boolean, error?: string}>}
+ */
+export async function disableFleetLlmHost({ emit = () => {} } = {}) {
+  emit('Closing the shared API queue — no new peer requests will be admitted.');
+  await stopFleetLlmHost();
+  await upsertPortosEnvLine(ENABLED_KEY, '0');
+  emit('Disabled the model host for the next restart.');
+
+  const loginTask = await removeFleetHostLoginTask();
+  if (!loginTask.success) emit(`Could not remove the Windows login task (${loginTask.error}) — it will try to resume the host at the next login.`);
+  else if (process.platform === 'win32') emit('Removed the Windows login-recovery task.');
+
+  const project = await inspectVllmQwenProject();
+  if (!project.composeFile) {
+    return { success: true, containerStopped: false, error: 'No prepared compose project was found, so no container was stopped. The API queue is closed and the host will stay off.' };
+  }
+  const override = join(project.dir, 'compose.portos-host.yaml');
+  const files = (await tryReadFile(override)) === null
+    ? ['-f', project.composeFile]
+    : ['-f', project.composeFile, '-f', override];
+  emit('Stopping and removing the vLLM container. Its image and weights stay on disk.');
+  // `rm -s -f` stops AND removes: the host container carries
+  // `restart: unless-stopped`, so a container merely stopped comes back the
+  // next time the Docker engine starts. The weights and the image are
+  // untouched — a later setup run starts again in minutes, not 30 GB.
+  const stopped = await runStreamingCommand(
+    'docker',
+    ['compose', ...files, '--profile', 'single', 'rm', '-s', '-f', 'single'],
+    emit,
+    { cwd: project.dir, env: { PORT: String(PORTS.VLLM_QWEN) }, timeoutMs: 120000 },
+  );
+  if (!stopped.success) {
+    return { success: true, containerStopped: false, error: `The host is disabled and its API queue is closed, but the container could not be stopped: ${stopped.error}` };
+  }
+  return { success: true, containerStopped: true };
 }
 
 export async function getFleetLlmHostStatus() {
@@ -88,6 +157,13 @@ export async function getFleetLlmHostStatus() {
   const enabled = parseEnvContents((await tryReadFile(PORTOS_ENV_PATH)) || '').get(ENABLED_KEY) === '1';
   return {
     recommendation, specs, enabled, serving: Boolean(gateway && probe?.models?.includes(MODEL)), setupRunning,
+    // What a Stop action would actually have to turn off. Reported separately
+    // from `serving` because the case the operator hits is precisely the one
+    // where those disagree: a container answering on the runtime port while the
+    // model has not finished loading still reads `serving: false`, and offering
+    // no Stop button there is how the host became impossible to turn off.
+    listening: Boolean(gateway), runtimeReachable: Boolean(probe?.reachable),
+    stoppable: Boolean(gateway) || Boolean(probe?.reachable) || enabled,
     endpoint: tailnet.running && tailnet.dnsName ? `http://${tailnet.dnsName}:${PORTS.FLEET_LLM}/v1` : null,
     model: MODEL, hasApiKey: Boolean(host?.apiKey),
     queue: gateway?.status() || { active: 0, queued: 0, maxActive: 1, maxQueued: 16 },

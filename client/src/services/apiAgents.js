@@ -238,6 +238,7 @@ export const getCosAgents = (options) => request('/cos/agents', options);
 export const getCosAgentDates = ({ hydrate = false } = {}) =>
   request(`/cos/agents/history${hydrate ? '?hydrate=1' : ''}`);
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
+export const getCosPendingAgentFeedback = (options = {}) => request('/cos/agents/feedback/pending', options);
 // `lines` caps the transcript TAIL the server hydrates (server default: 1000
 // lines / 512 KB). Pass it when the record is wanted for its metadata rather
 // than its log.

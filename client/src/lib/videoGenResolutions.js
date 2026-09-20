@@ -16,6 +16,9 @@ export const VIDEO_RESOLUTIONS = [
   { label: '512×768 (portrait)', w: 512, h: 768 },
   { label: '512×512 (1:1)', w: 512, h: 512 },
   { label: '768×768 (1:1)', w: 768, h: 768 },
+  // Append so aspect-based I2V defaults keep their existing quality canvas.
+  { label: '384×256 (small preview)', w: 384, h: 256 },
+  { label: '256×384 (small portrait preview)', w: 256, h: 384 },
 ];
 
 export const DEFAULT_VIDEO_RESOLUTION = { w: 768, h: 512 };
