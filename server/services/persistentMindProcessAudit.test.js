@@ -29,7 +29,7 @@ const turn = { turnId: 'example-turn' };
 const storePath = () => join(mocks.dir, 'persistent-mind-process-audit.json');
 const addJob = async (id, text = 'unknown tool: example\n', extra = {}) => {
   const completedAt = new Date().toISOString();
-  mocks.records[id] = { id, status: 'completed', completedAt, metadata: { taskApp: 'example', taskDescription: 'Synthetic task', taskType: 'example-workflow', ...extra }, result: { success: true, validationPassed: true, duration: 1200 } };
+  mocks.records[id] = { id, status: 'completed', completedAt, metadata: { taskApp: 'example', taskDescription: 'Synthetic task', taskType: 'user', taskAnalysisType: 'example-workflow', ...extra }, result: { success: true, validationPassed: true, duration: 1200 } };
   const path = join(mocks.dir, completedAt.slice(0, 10), id);
   await mkdir(path, { recursive: true }); await writeFile(join(path, 'output.txt'), text);
 };
@@ -157,10 +157,14 @@ it('allows one post-fix recurrence while keeping the open-issue duplicate bounda
   expect(summary.sources[0].fixes[0].recurrences).toBe(1);
   const replay = await audit.recordProcessAuditFix({ appId: 'example', fingerprint: filed.fingerprint, revision: 'a'.repeat(40) });
   expect(replay).toMatchObject({ duplicate: true, fix: { recurrences: 1 } });
-  await addJob('agent-unrelated', 'clean', { taskType: 'unrelated-workflow', primaryCheckoutBaseline: { head: 'b'.repeat(40) } });
+  await addJob('agent-unrelated', 'clean', { taskType: 'user', taskAnalysisType: undefined, primaryCheckoutBaseline: { head: 'b'.repeat(40) } });
   const cleanTurn = { turnId: 'unrelated-clean' }; const clean = (await next(cleanTurn)).jobs[0];
   await audit.recordProcessAuditOutcome({ appId: 'example', receiptId: clean.receiptId, outcome: 'clean' }, cleanTurn);
   expect((await audit.readProcessAuditSummary({ appIds: ['example'] })).sources[0].fixes[0].cleanObservations).toBe(0);
+  await addJob('agent-comparable', 'clean', { primaryCheckoutBaseline: { head: 'b'.repeat(40) } });
+  const comparableTurn = { turnId: 'comparable-clean' }; const comparable = (await next(comparableTurn)).jobs[0];
+  await audit.recordProcessAuditOutcome({ appId: 'example', receiptId: comparable.receiptId, outcome: 'clean' }, comparableTurn);
+  expect((await audit.readProcessAuditSummary({ appIds: ['example'] })).sources[0].fixes[0].cleanObservations).toBe(1);
 });
 it('does not let unrelated or unreadable source state become a finding', async () => {
   await rm(join(mocks.dir, mocks.records['agent-example'].completedAt.slice(0, 10), 'agent-example', 'output.txt'));

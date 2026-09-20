@@ -35,6 +35,14 @@ async function authorize(appId) {
 }
 const safeAgentId = id => typeof id === 'string' && /^agent-[a-zA-Z0-9_-]+$/.test(id);
 const appOf = record => record.metadata?.taskApp || null;
+// Queue categories (user/internal) cannot establish comparable process evidence.
+function workflowOf(record) {
+  const metadata = record.metadata || {};
+  for (const [kind, value] of [['recovery', metadata.recoveryOrigin?.subsystem], ['improvement', metadata.selfImprovementType], ['analysis', metadata.taskAnalysisType]]) {
+    if (typeof value === 'string' && value.trim()) return `${kind}:${value.trim()}`;
+  }
+  return null;
+}
 async function transcript(record, offset = 0) {
   const date = (await loadAgentIndex()).get(record.id);
   if (!safeAgentId(record.id) || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return { state: 'missing', excerpt: '', nextOffset: null };
@@ -100,7 +108,7 @@ export async function nextProcessAuditBatch(raw, context = {}) {
       if (Object.keys(store.receipts).length >= LIMITS.records && !store.receipts[receiptId]) throw new Error('Process audit ledger at capacity; refusing to discard dedup history');
       const evidence = await transcript(record);
       store.receipts[receiptId] ||= { id: receiptId, appId: args.appId, agentId: record.id, auditKey: record.auditKey,
-        completedAt: record.completedAt, taskType: record.metadata?.taskType || null, recoverySubsystem: record.metadata?.recoveryOrigin?.subsystem || null, signals: processAuditSignals(record, evidence.excerpt), evidenceState: evidence.state,
+        completedAt: record.completedAt, workflowKey: workflowOf(record), signals: processAuditSignals(record, evidence.excerpt), evidenceState: evidence.state,
         evidenceHash: processAuditFingerprint(evidence.excerpt), revision: record.metadata?.primaryCheckoutBaseline?.head || null, followUp: record.result?.goalFidelity?.followUp || null };
       ids.push(receiptId);
     }
@@ -205,7 +213,7 @@ export async function recordProcessAuditOutcome(raw, context = {}) {
         const anchors = await verifiedAnchors(app, args.anchors);
         let fingerprint = processAuditFingerprint([app.fullName, args.template, anchors]);
         let previous = store.findings[fingerprint];
-        if (previous?.fix && previous.taskType && previous.taskType === receipt.taskType && previous.recoverySubsystem === receipt.recoverySubsystem && await revisionContains(app, previous.fix.revision, receipt.revision)) {
+        if (previous?.fix && previous.workflowKey && previous.workflowKey === receipt.workflowKey && await revisionContains(app, previous.fix.revision, receipt.revision)) {
           previous.fix.recurrences = (previous.fix.recurrences || 0) + 1;
           fingerprint = processAuditFingerprint([fingerprint, previous.fix.revision]);
           previous = store.findings[fingerprint];
@@ -244,14 +252,14 @@ export async function recordProcessAuditOutcome(raw, context = {}) {
             if (!filed.ok) { store.findings[fingerprint].status = 'ambiguous'; await atomicWrite(STORE, store); return filed; }
             issue = { number: filed.number, url: filed.url }; outcome = filed.duplicate ? 'known-issue' : 'filed';
           }
-          store.findings[fingerprint] = { ...(issue?.fixRevision ? { fix: { revision: issue.fixRevision, recurrences: 0, cleanObservations: 0, status: 'known-delivered-fix' } } : {}), template: args.template, anchors, targetAppId: app.id, sourceAppId: args.appId, taskType: receipt.taskType, recoverySubsystem: receipt.recoverySubsystem, status: 'tracked', issue, receiptId: receipt.id };
+          store.findings[fingerprint] = { ...(issue?.fixRevision ? { fix: { revision: issue.fixRevision, recurrences: 0, cleanObservations: 0, status: 'known-delivered-fix' } } : {}), template: args.template, anchors, targetAppId: app.id, sourceAppId: args.appId, workflowKey: receipt.workflowKey, status: 'tracked', issue, receiptId: receipt.id };
         }
       }
     }
     if (outcome === 'clean') {
       const { app } = await authorize(args.appId);
       for (const finding of Object.values(store.findings)) {
-        if (finding.fix && finding.taskType && finding.taskType === receipt.taskType && finding.recoverySubsystem === receipt.recoverySubsystem && finding.sourceAppId === args.appId && finding.targetAppId === args.appId
+        if (finding.fix && finding.workflowKey && finding.workflowKey === receipt.workflowKey && finding.sourceAppId === args.appId && finding.targetAppId === args.appId
           && await revisionContains(app, finding.fix.revision, receipt.revision)) {
           finding.fix.cleanObservations = (finding.fix.cleanObservations || 0) + 1;
         }
