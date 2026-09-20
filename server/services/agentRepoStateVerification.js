@@ -36,7 +36,7 @@ import { emitLog } from './cosEvents.js';
 import { addTask } from './cos.js';
 import * as git from './git.js';
 import { listWorktrees } from './worktreeManager.js';
-import { listRemoteHeads, driveToMerge } from './branchReconcile.js';
+import { listRemoteHeads, driveToMerge, cleanupMerged } from './branchReconcile.js';
 import { readAllTasksFlat } from './investigationTaskProducer.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -310,6 +310,26 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
     }
     emitLog('info', `🔎 Repo state verified clean for ${agentId} (${branchName})`, { agentId, branchName });
     return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
+  }
+
+  // A merged branch with no remote ref is safe for the deterministic reaper to
+  // retire. Do this before creating another agent task: the common failure is
+  // simply that the completing agent exited before its worktree teardown ran.
+  // `cleanupMerged` repeats merge evidence and the clean-worktree/protection
+  // gates at action time, so an unsafe or racing state falls through to the
+  // existing evidence-backed recovery task.
+  const cleanupOnly = observed.branchMerged === true
+    && observed.remoteBranchPresent === false
+    && !issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED);
+  if (cleanupOnly) {
+    const retired = await cleanupMerged(sourceWorkspace, observed.defaultBranch, [{
+      branch: branchName,
+      upstreamGone: true,
+    }]).catch(() => ({ cleaned: [] }));
+    if (retired.cleaned.includes(branchName)) {
+      emitLog('info', `🔎 Deterministic cleanup retired merged branch ${branchName} for ${agentId}`, { agentId, branchName });
+      return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
+    }
   }
 
   emitLog('warn', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });

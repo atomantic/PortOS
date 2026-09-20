@@ -25,6 +25,7 @@ vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: vi.fn().mockReturnValue(
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn().mockResolvedValue([]) }));
 vi.mock('./branchReconcile.js', () => ({
   listRemoteHeads: vi.fn().mockResolvedValue(new Map()),
+  cleanupMerged: vi.fn().mockResolvedValue({ cleaned: [] }),
   driveToMerge: (pr) => `merge ${pr} from the repo root once CI is green`,
 }));
 vi.mock('./git.js', () => ({
@@ -53,7 +54,7 @@ import { verifyAgentRepoState, REPO_STATE_REMEDIATIONS } from './agentRepoStateV
 import { addTask, getAllTasks } from './cos.js';
 import { ensureTaskThread } from './brainTaskThreads.js';
 import { listWorktrees } from './worktreeManager.js';
-import { listRemoteHeads } from './branchReconcile.js';
+import { listRemoteHeads, cleanupMerged } from './branchReconcile.js';
 import { hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
 import { findPullRequestForBranch } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
@@ -102,6 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   listWorktrees.mockResolvedValue([]);
   listRemoteHeads.mockResolvedValue(new Map());
+  cleanupMerged.mockResolvedValue({ cleaned: [] });
   existsSync.mockReturnValue(false);
   hasBranchMergeEvidence.mockResolvedValue(true);
   queuedTasks([]);
@@ -136,6 +138,19 @@ describe('verifyAgentRepoState — clean runs', () => {
 });
 
 describe('verifyAgentRepoState — divergent runs', () => {
+  it('retires a clean merged branch deterministically instead of queuing an agent', async () => {
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/1', detail: 'MERGED' });
+    cleanupMerged.mockResolvedValue({ cleaned: [BRANCH], skipped: [] });
+
+    const result = await run();
+
+    expect(result).toMatchObject({ verified: true, recoveryTaskId: null });
+    expect(cleanupMerged).toHaveBeenCalledWith('/repo', 'main', [{ branch: BRANCH, upstreamGone: true }]);
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it('files ONE recovery task for a leftover worktree and branch after a merged PR', async () => {
     // The reported failure shape: the agent merged its own PR (branch gone on the
     // forge) but its local branch and worktree survived cleanup silently.
