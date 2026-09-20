@@ -67,7 +67,33 @@ Restrict `:18022` to your clients using Tailscale/network rules. Existing instal
 
 One inference request runs at a time across clients, with at most 16 waiting requests. Waiting expires after two minutes with HTTP 429 and Retry-After; active requests have a ten-minute ceiling. Bodies are limited to 2 MiB. SSE streams pass through, disconnects cancel work, and requests are never persisted or replayed after restart. Each model call acquires a slot; a coding agent's tool execution happens on its client and does not hold a GPU slot. The underlying runtime also uses one sequence as a backstop. Direct runtime calls bypass the gateway and should be reserved for local diagnostics.
 
-To revert dedicated hosting, set `PORTOS_FLEET_LLM_ENABLED=0` in the install's `.env`, restart PortOS, stop the Qwen container, and re-enable the desired providers. This does not delete weights or provider settings.
+### Stopping the host
+
+**AI Providers → Model host setup → Stop hosting on this machine**, or the **Dedicated Qwen host** row on **Models → Runtimes**. Both call the same action, which undoes all four things setup armed:
+
+1. closes the shared API queue, so no new peer request is admitted (anything in flight is cancelled);
+2. writes `PORTOS_FLEET_LLM_ENABLED=0`, so the queue does not return on the next restart;
+3. removes the Windows login-recovery task;
+4. stops **and removes** the vLLM container.
+
+Step 4 removes rather than merely stops because setup writes the container with `restart: unless-stopped` — a stopped container comes back the next time the Docker engine starts, which is why turning the host off used to feel impossible. The prepared image and the ~20 GB of weights stay on disk, so starting again takes minutes, not another download.
+
+If Docker is not answering, the first three steps still happen and the action reports that the container could not be stopped — the host is disabled either way. Providers that setup disabled stay disabled; re-enable the ones you want on the AI Providers page.
+
+The setup-page button arms on the first click and acts on the second ("Confirm stop — disconnect peers now"), because stopping cuts off every federated client immediately. The Runtimes row is a one-click Stop like the other runtimes on that card.
+
+### Seeing who is using the host
+
+The host panel shows a **Who is using this host** report while hosting is enabled, read from `GET /api/providers/fleet-host/usage`:
+
+- how many generations are running and waiting right now;
+- one row per calling machine — requests, prompt and generated token totals, failures, and when it was last active;
+- a live dot on any machine generating at that moment, so a busy GPU can be attributed rather than guessed at;
+- the last 50 completed requests, with duration, model and status.
+
+Callers are keyed by their address (every client authenticates with the one shared host key, so the wire carries no per-peer identity) and named from the peer list, falling back to the tailnet's node name. An address matching neither is shown as **Unrecognized** rather than hidden — an unknown machine holding the host key is the case worth seeing.
+
+Token counts come from the model's own reply. A streamed request whose client did not ask for usage reports none, so a row can show requests with no tokens; the panel states how many requests carried counts rather than implying the rest were free. Nothing from a request or response body is stored — the ledger is counts, timestamps, a model id and an HTTP status, kept for 30 days in `data/fleet-host-usage.json` and never federated.
 
 ## Client setup
 

@@ -505,6 +505,7 @@ export * from './subscriptionPlanTiers.js';
 export * from './subscriptionSavings.js';
 export * from './providerFamilies.js';
 export * from './fleetQuotas.js';
+export * from './fleetHostUsage.js';
 export * from './harnessOutput.js';
 export * from './providerGateways.js';
 export * from './providerHarnesses.js';

@@ -765,7 +765,15 @@ describe('deferred imports stay deferred (#6156)', () => {
 // reaches `jevRouter.js`, `untrustedContent.js` and `jev.js` only through
 // `await import()`. Measured before 115,283, after 115,479; restores the ~400
 // of headroom the recent entries carry — main had eroded to 17.
-const MAX_STATIC_INSTANTIATIONS = 116100;
+// 116,100 → 116,500 (fleet host inbound usage): one new lib leaf,
+// `fleetHostUsage.js`, one new service (`fleetLlmUsage.js`) and their two
+// suites. The leaf's only edge is `openAiChatStream.js` for `normalizeUsage`,
+// which `lib/index.js` already re-exports, so nothing gains a subtree — the
+// whole share is the two new nodes once per reaching suite plus the two new
+// test files' own closures. Measured before 116,066, after 116,111 (+45);
+// restores the ~400 of headroom the recent entries carry — main had eroded
+// to 34.
+const MAX_STATIC_INSTANTIATIONS = 116500;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

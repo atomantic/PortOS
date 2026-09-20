@@ -8,6 +8,7 @@ import { formatBytes } from '../../utils/formatters';
 import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
 import useLocalLlmStatus from '../../hooks/useLocalLlmStatus';
 import { migrateLocalLlmBackend, controlOllamaService, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer, downloadSpecDecodeModel, cancelSpecDecodeModelDownload, removeSpecDecodeModel, previewLocalLlmDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, searchMtplxModels, pullMtplxModel, removeMtplxModel, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, downloadSlotstreamModel, cancelSlotstreamModelDownload, saveRuntimeStartupList } from '../../services/api';
+import { getFleetLlmHost, stopFleetLlmHost } from '../../services/apiProviders';
 import socket from '../../services/socket';
 import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
 import RuntimeServersCard from './RuntimeServersCard.jsx';
@@ -76,6 +77,11 @@ export default function LocalLlmRuntimesView() {
   const [llamaStatus, setLlamaStatus] = useState(null);
   const [mtplxStatus, setMtplxStatus] = useState(null);
   const [slotstreamStatus, setSlotstreamStatus] = useState(null);
+  // The dedicated Qwen host is a docker container rather than a PM2 process, so
+  // it is not part of the shared local-LLM status payload — but it IS a local
+  // model server, and this is the page an operator comes to when they want to
+  // stop one (#7414 moved every other lifecycle control here).
+  const [fleetHostStatus, setFleetHostStatus] = useState(null);
   // Live byte progress for an in-flight `mtplx pull`, driven by the socket. One
   // at a time on purpose: a checkpoint is tens of gigabytes, so two concurrent
   // pulls just make both slower.
@@ -171,11 +177,21 @@ export default function LocalLlmRuntimesView() {
 
   // The three managed runtimes refresh alongside the shared status, so one
   // Refresh — or one completed action — repaints every row on this view.
+  const loadFleetHostStatus = useCallback(() => (
+    getFleetLlmHost({ silent: true })
+      .then((res) => { if (res) setFleetHostStatus(res); return res; })
+      // Silent by design: this row is one of several on a shared card, and a
+      // machine with no dedicated host configured must not toast on every
+      // refresh of the page.
+      .catch(() => null)
+  ), []);
+
   const refreshRuntimes = useCallback(() => {
     loadLlamaStatus();
     loadMtplxStatus();
     loadSlotstreamStatus();
-  }, [loadLlamaStatus, loadMtplxStatus, loadSlotstreamStatus]);
+    loadFleetHostStatus();
+  }, [loadLlamaStatus, loadMtplxStatus, loadSlotstreamStatus, loadFleetHostStatus]);
   const {
     status, loading, loadStatus, runAction, installBackend: installRuntimeBackend,
     actionInProgress, busy, progressMsg, confirmAction, setConfirmAction,
@@ -290,6 +306,20 @@ export default function LocalLlmRuntimesView() {
     { start: 'Ollama is running', stop: 'Ollama stopped', enable: 'Ollama will run at login', disable: 'Ollama background service disabled' }[action],
     { ollamaService: true }
   );
+  // Not silent: a failed stop must say so, and this row has no banner of its
+  // own to put it in. The two-step "confirm — disconnect peers now" gate lives
+  // on the host setup page, which is also where the inbound-usage report shows
+  // who would be cut off; this row is the same one-click Stop the other
+  // runtimes on this card offer.
+  const stopFleetHost = () => runAction(
+    'runtime-stop-fleet-host',
+    () => stopFleetLlmHost(),
+    (result) => (result?.error
+      ? result.error
+      : result?.containerStopped
+        ? 'Dedicated Qwen host stopped and its container removed'
+        : 'Dedicated Qwen host disabled'),
+  ).then(loadFleetHostStatus);
   const controlLmStudio = (action) => runAction(
     `runtime-${action}-lmstudio`,
     () => controlLmStudioService(action),
@@ -720,6 +750,8 @@ export default function LocalLlmRuntimesView() {
         onSaveStartup={saveRuntimeStartup}
         onSaveIdleWindow={saveIdleWindow}
         onToggleKeepLoaded={toggleKeepLoaded}
+        fleetHostStatus={fleetHostStatus}
+        onStopFleetHost={stopFleetHost}
       />
       <LocalPersistentMindSetupCard />
       <HardwareLlmRecommendation />
