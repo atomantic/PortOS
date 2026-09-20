@@ -89,6 +89,12 @@ vi.mock('../services/github.js', () => ({
   })
 }));
 
+const codeReviewMock = vi.hoisted(() => ({
+  getReviewerConfigHealth: vi.fn().mockResolvedValue({ status: 'ok', configFaults: {} }),
+}));
+
+vi.mock('../services/codeReview.js', () => codeReviewMock);
+
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn().mockResolvedValue({}),
   updateSettings: vi.fn().mockResolvedValue({}),
@@ -288,6 +294,24 @@ describe('System Health Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.forge).toMatchObject({ status: 'error', ok: false });
     });
+  });
+
+  it('surfaces persisted reviewer configuration faults as install health', async () => {
+    codeReviewMock.getReviewerConfigHealth.mockResolvedValueOnce({
+      status: 'warning',
+      configFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
+    });
+    const response = await request(app).get('/api/system/health/details');
+
+    expect(response.body.codeReview).toEqual({
+      status: 'warning',
+      configFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
+    });
+    expect(response.body.warnings).toContainEqual(expect.objectContaining({
+      type: 'code-review',
+      message: expect.stringContaining('ollama'),
+    }));
+    expect(response.body.overallHealth).toBe('warning');
   });
 
   describe('PUT /health/thresholds', () => {

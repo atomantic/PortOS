@@ -55,6 +55,10 @@ import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
 const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|allowance|credit|capacity|exhausted|too many requests|429/i
+// Keep this tiny predicate local: codeReview.js is imported by health and API
+// routes, so reaching into reviewerConfig.js here would pull the entire review
+// configuration graph into a widely-reached module and trip the import budget.
+const isReviewerConfigFault = (code) => code === 'NO_MODEL' || code === 'REVIEWER_UNSUPPORTED'
 export const isReviewerQuotaFailure = (error) => QUOTA_FAILURE.test(String(error || ''))
 
 const normalizeFallbackGroups = (groups) => Array.isArray(groups)
@@ -68,19 +72,63 @@ export function pickAvailableReviewerGroups(raw, now = Date.now()) {
 }
 
 export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
-  if (!isReviewerQuotaFailure(error) || !isReviewer(reviewer)) return false
+  if (!isReviewer(reviewer)) return false
+  const result = error && typeof error === 'object' ? error : { error }
+  const message = String(result.error || 'Reviewer failed')
+  const code = typeof result.code === 'string' ? result.code : null
+  const isConfigFault = isReviewerConfigFault(code)
+  if (!isConfigFault && !isReviewerQuotaFailure(message)) return false
   await updateSettingsWith((settings) => ({
     ...settings,
     codeReview: {
       ...(settings.codeReview || {}),
       reviewerHealth: {
         ...(settings.codeReview?.reviewerHealth || {}),
-        [reviewer]: { pausedUntil: now + REVIEWER_PAUSE_MS, reason: 'quota', lastFailureAt: now },
+        [reviewer]: isConfigFault
+          ? { code, reason: 'configuration', lastFailureAt: now }
+          : { pausedUntil: now + REVIEWER_PAUSE_MS, reason: 'quota', lastFailureAt: now },
       },
     },
   }))
   cachedDefaults = null
   return true
+}
+
+export async function reportReviewerSuccess(reviewer, now = Date.now()) {
+  if (!isReviewer(reviewer)) return false
+  const settings = await getSettings()
+  const health = settings?.codeReview?.reviewerHealth
+  const prior = health?.[reviewer]
+  if (!prior || (!isReviewerConfigFault(prior.code) && Number(prior.pausedUntil) > now)) return false
+  const remaining = Object.fromEntries(Object.entries(health).filter(([key]) => key !== reviewer))
+  await updateSettingsWith((current) => ({
+    ...current,
+    codeReview: {
+      ...Object.fromEntries(Object.entries(current.codeReview || {}).filter(([key]) => key !== 'reviewerHealth')),
+      ...(Object.keys(remaining).length ? { reviewerHealth: remaining } : {}),
+    },
+  }))
+  cachedDefaults = null
+  return true
+}
+
+export function reviewerConfigFaultsFromHealth(raw) {
+  const health = raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? raw.reviewerHealth : {}
+  return Object.fromEntries(Object.entries(health)
+    .filter(([, entry]) => isReviewerConfigFault(entry?.code))
+    .map(([reviewer, entry]) => [reviewer, {
+      code: entry.code,
+      lastFailureAt: entry.lastFailureAt || null,
+    }]))
+}
+
+export async function getReviewerConfigHealth() {
+  const settings = await getSettings()
+  const configFaults = reviewerConfigFaultsFromHealth(settings?.codeReview)
+  return {
+    status: Object.keys(configFaults).length ? 'warning' : 'ok',
+    configFaults,
+  }
 }
 
 // LM Studio (`:1234`), Ollama (`:11434`) and MTPLX (`:8000/v1`) all ship
@@ -136,10 +184,12 @@ export function pickCodeReviewDefaults(settings) {
   const reviewers = configuredReviewers(settings)
   const fallbackGroups = normalizeFallbackGroups(raw?.reviewerFallbackGroups)
   const activeFallbackGroup = pickAvailableReviewerGroups(raw, Date.now())
+  const reviewerConfigFaults = reviewerConfigFaultsFromHealth(raw)
   return {
     reviewers: activeFallbackGroup || (reviewers.length ? reviewers : [...DEFAULT_REVIEWERS]),
     ...(Array.isArray(raw?.reviewerFallbackGroups) ? { reviewerFallbackGroups: fallbackGroups } : {}),
     ...(raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? { reviewerHealth: raw.reviewerHealth } : {}),
+    ...(Object.keys(reviewerConfigFaults).length ? { reviewerConfigFaults } : {}),
     // Arbitrary GitHub reviewer usernames appended to `--review-with` to gate the
     // merge. Normalized so a hand-edited settings.json can't smuggle in unsafe
     // tokens. Empty array = none configured.

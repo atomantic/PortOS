@@ -803,7 +803,10 @@ describe('deferred imports stay deferred (#6156)', () => {
 // imported at module scope even though each runs only from an explicit queue,
 // mutation, forwarding, or H3-render path. Keep those boundaries deferred so
 // unrelated server suites do not pay their subtrees.
-const MAX_STATIC_INSTANTIATIONS = 116500;
+// 116,500 -> 116,600 (reviewer configuration health): the health route's
+// code-review mock adds 47 measured static instantiations across the suite;
+// the production route keeps the service import dynamic to avoid that graph.
+const MAX_STATIC_INSTANTIATIONS = 116600;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

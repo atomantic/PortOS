@@ -2,7 +2,7 @@
  * Review-loop, CI-gate, and merge prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, hasRequiredReviewer, isOptionalReviewer, isToolFreeReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isOptionalReviewer, isToolFreeReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { oversizedBodyPointer } from '../../lib/slashdoInvocation.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
 import { shellQuote } from '../../lib/shellQuote.js';
@@ -320,7 +320,7 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
       ...usernames.map(u => `\`@${u}\``),
     ].join(' → '),
     optionalReviewNote: optionalConfiguredReviewers.length
-      ? `**Optional reviewers (~opt):** ${optionalConfiguredReviewers.join(', ')} still run and their findings must still be fixed, but a timeout, skipped/incomplete pass, or missing/malformed/no-verdict result from one of them is non-blocking; provider/transport failure from one of them is also non-blocking. A substantive rejection, failed build/test, or push failure still blocks.`
+      ? `**Optional reviewers (~opt):** ${optionalConfiguredReviewers.join(', ')} still run and their findings must still be fixed, but a timeout, skipped/incomplete pass, or missing/malformed/no-verdict result from one of them is non-blocking; provider/transport failure from one of them is also non-blocking. If every configured reviewer returns a configuration fault and none produces a verdict, report this distinct run-summary state: ${ZERO_REVIEWER_COVERAGE_NOTE} This remains non-blocking when every reviewer is marked \`~opt\`; do not use that wording when any reviewer produces a verdict. A substantive rejection, failed build/test, or push failure still blocks.`
       : '',
     equiv: equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '',
   };

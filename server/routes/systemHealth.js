@@ -133,7 +133,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity] = await Promise.all([
+  const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
     cos.getStatus().catch(() => null),
@@ -152,7 +152,10 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     checkGhHealth().catch(() => ({ status: 'error', ok: false, detail: 'Health check failed', remedy: null, checkedAt: null })),
     // Media-lane capacity never fails the health report: an unreadable GPU probe
     // degrades to `null`, which the UI renders as unknown rather than as idle.
-    getMediaCapacity().catch(() => null)
+    getMediaCapacity().catch(() => null),
+    import('../services/codeReview.js')
+      .then(({ getReviewerConfigHealth }) => getReviewerConfigHealth())
+      .catch(() => ({ status: 'unknown', configFaults: {} }))
   ]);
   const { thresholds, dismissedWarnings } = healthSettings;
 
@@ -272,6 +275,15 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     });
   }
 
+  const reviewerConfigFaults = reviewerConfigHealth.configFaults || {};
+  if (Object.keys(reviewerConfigFaults).length) {
+    rawWarnings.push({
+      type: 'code-review',
+      severity: 'warning',
+      message: `Code review configuration needs attention for ${Object.keys(reviewerConfigFaults).join(', ')} — open Settings → Code Reviewers`
+    });
+  }
+
   // A dismissal only stays applied while the warning it was recorded against
   // is still current (same type AND same message) — see loadHealthSettings.
   // Anything else (the condition cleared, or recurred with a different
@@ -356,6 +368,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     media: mediaCapacity,
     database: dbHealth,
     forge: forgeHealth,
+    codeReview: reviewerConfigHealth,
     thresholds,
     topProcesses: [...pm2Processes]
       .sort((a, b) => (b.memory || 0) - (a.memory || 0))

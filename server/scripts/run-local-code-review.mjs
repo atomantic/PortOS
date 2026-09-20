@@ -4,7 +4,7 @@
  * Auth-independent local-review bridge for unattended claim agents.
  * Reads one JSON request from stdin and writes the service result to stdout.
  */
-import { getCodeReviewDefaults, runLocalClaimCommentReview, runLocalCodeReview } from '../services/codeReview.js';
+import { getCodeReviewDefaults, reportReviewerFailure, reportReviewerSuccess, runLocalClaimCommentReview, runLocalCodeReview } from '../services/codeReview.js';
 
 import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
@@ -25,6 +25,12 @@ try {
     : runLocalCodeReview;
   const result = await review({ ...request, model, effort });
   process.stdout.write(`${JSON.stringify(result)}\n`);
+  const recordOutcome = result.ok
+    ? reportReviewerSuccess(request.backend)
+    : reportReviewerFailure(request.backend, result);
+  await recordOutcome.catch((err) => {
+    process.stderr.write(`Unable to persist reviewer health: ${err.message}\n`);
+  });
   if (!result.ok) {
     // A reviewer that CAN'T be satisfied reads identically to one that merely
     // timed out, and the claim procedure answers both with `review-blocked` —

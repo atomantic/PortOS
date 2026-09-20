@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import { validateRequest, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
 import { getSettings } from '../services/settings.js'
-import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewUnsupported, reportReviewerFailure } from '../services/codeReview.js'
+import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewUnsupported, reportReviewerFailure, reportReviewerSuccess } from '../services/codeReview.js'
 
 const router = Router()
 
@@ -86,7 +86,7 @@ router.post('/local', asyncHandler(async (req, res) => {
     timeoutMs: body.timeoutMs,
   })
   if (!result.ok) {
-    await reportReviewerFailure(body.backend, result.error)
+    await reportReviewerFailure(body.backend, result)
     // A refusal the caller can fix by changing configuration — no model, a
     // missing/disabled provider, or one that can never run a tool-free review —
     // is a config gap (400). The 502 bucket is for a reviewer that was actually
@@ -96,6 +96,7 @@ router.post('/local', asyncHandler(async (req, res) => {
       context: { backend: result.backend, model: result.model }
     })
   }
+  await reportReviewerSuccess(body.backend)
   res.json(result)
 }))
 

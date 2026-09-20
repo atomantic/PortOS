@@ -75,6 +75,55 @@ export const REVIEW_UNAVAILABLE_REPORTING_NOTE = 'Report the pending review in y
 export const isReviewerConfigFault = (code) => REVIEWER_CONFIG_FAULT_CODES.includes(code);
 
 /**
+ * What an agent does when EVERY configured reviewer returned a config fault:
+ * distinguish it from clean in the run summary, so the operator sees "no
+ * reviewer reviewed this branch" rather than a silent success.
+ *
+ * One exported sentence for the same reason as `REVIEW_UNAVAILABLE_REPORTING_NOTE`:
+ * the rule reaches prompt sites and run-summary builders, and spelled out at each
+ * one it drifts. `reviewerConfig.test.js` pins the claim.
+ */
+export const ZERO_REVIEWER_COVERAGE_NOTE = 'No reviewer reviewed this branch — every configured reviewer returned a configuration fault. The review loop is currently a no-op. Check Settings → Code Reviewers for the setting that fixes each reviewer.';
+
+/**
+ * Did any configured reviewer produce a verdict this run?
+ *
+ * Inputs: the configured reviewer list and a map of per-reviewer statuses from
+ * the run, where each value is either `{ code }` (a fault code from
+ * `REVIEWER_CONFIG_FAULT_CODES`) or `{ verdict }` (a real result).
+ * `isReviewerConfigFault(status.code)` identifies the config faults.
+ *
+ * Returns `true` when at least one reviewer produced a non-empty `verdict`.
+ * A non-configuration failure code without a verdict is still inconclusive.
+ * Returns
+ * `false` when every reviewer's status is a config fault, or when the reviewer
+ * list is empty. The empty-list case is a distinct condition from zero coverage
+ * (no reviewers were configured at all vs. reviewers were configured but none
+ * could answer); callers that need to distinguish them check the reviewer list
+ * length separately.
+ *
+ * This is the resolver the issue (#7783) names: it sits beside
+ * `hasRequiredReviewer()` and answers a complementary question — one asks
+ * "is any reviewer binding?", this asks "did any reviewer actually review?".
+ *
+ * @param {string[]} reviewers - the configured reviewer list for this run
+ * @param {Object<string, { code?: string, verdict?: string }>} perReviewerStatus
+ *   - per-reviewer status map keyed by reviewer token
+ * @returns {boolean}
+ */
+export function hasReviewerCoverage(reviewers, perReviewerStatus) {
+  const list = Array.isArray(reviewers) ? reviewers : [];
+  if (!list.length) return false;
+  const statuses = perReviewerStatus && typeof perReviewerStatus === 'object' ? perReviewerStatus : {};
+  return list.some(reviewer => {
+    const status = statuses[reviewer] || statuses[reviewer?.toLowerCase?.()];
+    if (!status || typeof status !== 'object') return false; // no status recorded = did not run
+    if (isReviewerConfigFault(status.code)) return false;
+    return typeof status.verdict === 'string' && status.verdict.trim().length > 0;
+  });
+}
+
+/**
  * Vendors PortOS can spawn that are deliberately NOT reviewers, each mapped to
  * the reason. The roster above claims to cover every spawnable vendor; this is
  * the other half of that claim, and `reviewerConfig.test.js` fails on a

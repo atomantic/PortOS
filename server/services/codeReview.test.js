@@ -6,6 +6,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const mockedSettings = { current: {} }
 vi.mock('./settings.js', () => ({
   getSettings: () => Promise.resolve(mockedSettings.current),
+  updateSettingsWith: vi.fn(async (mutate) => {
+    mockedSettings.current = await mutate(mockedSettings.current)
+    return mockedSettings.current
+  }),
   // Stub the EventEmitter shape the module subscribes to for cache
   // invalidation — only `.on()` is hit at import time; the SUT never emits.
   settingsEvents: { on: () => {}, emit: () => {} },
@@ -43,6 +47,10 @@ import {
   getGoalFidelityConfig,
   runLocalCodeReview,
   getReviewerCliInstalled,
+  getReviewerConfigHealth,
+  reportReviewerFailure,
+  reportReviewerSuccess,
+  reviewerConfigFaultsFromHealth,
   __resetCodeReviewDefaultsCache,
   __resetReviewerCliInstalledCache,
   __resetThinkingUnsupportedCache,
@@ -233,6 +241,49 @@ describe('codeReview helpers', () => {
       const out = await getCodeReviewDefaults()
       expect(out.reviewers).toEqual([])
       expect(out.codexModel).toBeNull()
+    })
+
+    it('exposes only persisted configuration faults as reviewer health', () => {
+      const defaults = pickCodeReviewDefaults({
+        codeReview: {
+          reviewers: ['ollama'],
+          reviewerHealth: {
+            ollama: { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 123 },
+            codex: { pausedUntil: 999, reason: 'quota', lastFailureAt: 456 },
+          },
+        },
+      })
+      expect(defaults.reviewerConfigFaults).toEqual({
+        ollama: { code: 'NO_MODEL', lastFailureAt: 123 },
+      })
+    })
+  })
+
+  describe('reviewer configuration health', () => {
+    it('records config faults from a real failed review and clears them after success', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['ollama'] } }
+
+      await reportReviewerFailure('ollama', {
+        code: 'NO_MODEL',
+        error: 'No model configured for ollama reviewer',
+      }, 100)
+      expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({
+        ollama: { code: 'NO_MODEL', lastFailureAt: 100 },
+      })
+      expect(await getReviewerConfigHealth()).toMatchObject({
+        status: 'warning',
+        configFaults: { ollama: { code: 'NO_MODEL' } },
+      })
+
+      await reportReviewerSuccess('ollama', 200)
+      expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
+      expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
+    })
+
+    it('does not turn a real transport failure into a configuration fault', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['ollama'] } }
+      expect(await reportReviewerFailure('ollama', { error: 'ollama timed out' }, 100)).toBe(false)
+      expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
     })
   })
 

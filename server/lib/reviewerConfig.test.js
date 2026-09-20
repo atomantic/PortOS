@@ -49,6 +49,8 @@ import {
   hasRequiredReviewer,
   isOptionalReviewer,
   REVIEW_UNAVAILABLE_REPORTING_NOTE,
+  ZERO_REVIEWER_COVERAGE_NOTE,
+  hasReviewerCoverage,
 } from './reviewerConfig.js';
 import { PROVIDER_VENDORS } from './providerVendors.js';
 // The Zod half of the old cosValidation.js — these cases assert that a reviewer
@@ -918,6 +920,26 @@ describe('hasRequiredReviewer / isOptionalReviewer', () => {
   it('reports no required reviewer for an empty list, leaving the emptiness test to callers', () => {
     expect(hasRequiredReviewer([], [])).toBe(false);
     expect(hasRequiredReviewer(undefined, undefined)).toBe(false);
+  });
+});
+
+describe('hasReviewerCoverage', () => {
+  it('distinguishes all config faults from a clean verdict', () => {
+    expect(hasReviewerCoverage(['ollama', 'provider:example'], {
+      ollama: { code: 'NO_MODEL' },
+      'provider:example': { code: 'REVIEWER_UNSUPPORTED' },
+    })).toBe(false);
+    expect(hasReviewerCoverage(['ollama', 'codex'], {
+      ollama: { code: 'NO_MODEL' },
+      codex: { verdict: 'clean' },
+    })).toBe(true);
+  });
+
+  it('does not treat a missing or empty status as coverage', () => {
+    expect(hasReviewerCoverage(['ollama'], {})).toBe(false);
+    expect(hasReviewerCoverage(['ollama'], { ollama: { code: 'TIMEOUT' } })).toBe(false);
+    expect(hasReviewerCoverage([], {})).toBe(false);
+    expect(ZERO_REVIEWER_COVERAGE_NOTE).toContain('No reviewer reviewed this branch');
   });
 });
 
