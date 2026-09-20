@@ -715,7 +715,17 @@ function normalizeQueueItem(producer, raw, mapped) {
     ? raw.required
     : !(raw?.recommendation === true || raw?.isRecommendation === true || raw?.optional === true);
   const dueAt = firstText(raw?.dueAt, raw?.due, raw?.deadline, raw?.scheduledFor, mapped.dueAt);
-  const revision = firstScalar(raw?.revision, raw?.version, raw?.updatedAt, raw?.updated_at, raw?.capturedAt, raw?.createdAt, mapped.revision);
+  const revision = firstScalar(
+    raw?.revision,
+    raw?.version,
+    raw?.updatedAt,
+    raw?.updated_at,
+    raw?.capturedAt,
+    raw?.createdAt,
+    raw?.timestamp,
+    mapped.revision,
+    mapped.timestamp,
+  );
   const occurrence = firstScalar(raw?.occurrence, raw?.occurrenceId, mapped.occurrence);
   const operations = semanticOperations(producer, mapped, raw);
   const availableOperation = operations.find((entry) => entry.available)?.label;
@@ -766,7 +776,17 @@ const emptyTriageState = Object.freeze({
   deliveryGeneration: 0,
 });
 
+function queueItemSupportsTriage(item) {
+  if (!item || item.source === 'history' || item.availability === 'unavailable' || item.available === false) {
+    return false;
+  }
+  if (item.source === 'threads' && isTerminalThreadStatus(item.meta?.localStatus)) return false;
+  if (item.source === 'todo' && item.meta?.status && item.meta.status !== 'pending') return false;
+  return true;
+}
+
 function triageOperationsFor(item, { snoozed = false } = {}) {
+  if (!queueItemSupportsTriage(item)) return [];
   return [
     snoozed
       ? { id: 'unsnooze', label: 'Unsnooze', available: true }
@@ -981,6 +1001,7 @@ export async function resolveQueueItem(queueItemId, operation = 'resolve', input
     if (result == null) {
       throw new ServerError(`${source} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
     }
+    await clearQueueTriageMarkersForItem(queueItemId);
     return { source, id: queueItemId, operation, resolved: true };
   }
 
@@ -994,6 +1015,7 @@ export async function resolveQueueItem(queueItemId, operation = 'resolve', input
   if (result == null) {
     throw new ServerError(`${producer.label} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
   }
+  await clearQueueTriageMarkersForItem(queueItemId);
   return { source, id: queueItemId, resolved: true };
 }
 
@@ -1006,6 +1028,29 @@ function queueSourceAndRawId(queueItemId) {
     source: sep === -1 ? value : value.slice(0, sep),
     rawId: sep === -1 ? '' : value.slice(sep + 1),
   };
+}
+
+const TRIAGE_ACTION_KINDS_BY_SOURCE = Object.freeze({
+  ...ACTION_KINDS,
+  cos: ['cos.approve', 'task.approval'],
+  memory: 'memory.approval',
+  'goal-fidelity': 'goal-fidelity.review',
+  plan: 'plan.question',
+  autopilot: 'autopilot.resume',
+  content: 'content.review',
+});
+
+async function clearQueueTriageMarkersForItem(queueItemId) {
+  const { source, rawId } = queueSourceAndRawId(queueItemId);
+  const configuredKinds = TRIAGE_ACTION_KINDS_BY_SOURCE[source];
+  if (!configuredKinds || !rawId) return;
+  const actionKinds = Array.isArray(configuredKinds) ? configuredKinds : [configuredKinds];
+  const actionKeys = new Set(actionKinds.map((actionKind) => `${actionKind}:${rawId}`));
+  const entries = await reviewQueueTriageStore.listReviewQueueTriage();
+  if (!Array.isArray(entries)) return;
+  for (const entry of entries) {
+    if (actionKeys.has(entry.actionKey)) await reviewQueueTriageStore.removeReviewQueueTriage(entry);
+  }
 }
 
 /**
@@ -1136,6 +1181,7 @@ export async function promoteAskQueueItem(queueItemId, target, goalId) {
   }
 
   const result = await promoteLatestAssistantTurn({ conversationId, target, goalId });
+  await clearQueueTriageMarkersForItem(queueItemId);
   return { source, id: queueItemId, promoted: true, target: result.target, ref: result.ref };
 }
 
@@ -1188,9 +1234,28 @@ function sourceShownCounts(items) {
   return shown;
 }
 
-async function readQueueTriageForProjection() {
+async function readQueueTriageForProjection({ now = new Date(), currentItems = [], pruneOrphans = false } = {}) {
   const entries = await reviewQueueTriageStore.listReviewQueueTriage();
-  return Array.isArray(entries) ? entries : [];
+  if (!Array.isArray(entries)) return [];
+
+  const nowMs = now instanceof Date && Number.isFinite(now.getTime()) ? now.getTime() : Date.now();
+  const currentKeys = pruneOrphans
+    ? new Set(currentItems.map((item) => reviewQueueTriageStore.triageIdentityKey(queueActionIdentity(item))))
+    : null;
+  const removableKeys = new Set();
+  for (const entry of entries) {
+    const key = reviewQueueTriageStore.triageIdentityKey(entry);
+    const expired = entry.snoozedUntil && Date.parse(entry.snoozedUntil) <= nowMs;
+    const unused = expired && entry.dismissed !== true && entry.deliveryGeneration === 0;
+    const orphaned = currentKeys && !currentKeys.has(key);
+    if (unused || orphaned) removableKeys.add(key);
+  }
+  for (const entry of entries) {
+    if (removableKeys.has(reviewQueueTriageStore.triageIdentityKey(entry))) {
+      await reviewQueueTriageStore.removeReviewQueueTriage(entry);
+    }
+  }
+  return entries.filter((entry) => !removableKeys.has(reviewQueueTriageStore.triageIdentityKey(entry)));
 }
 
 async function gatherFullQueue(query = {}, { applyTriageState = true, now = new Date() } = {}) {
@@ -1228,7 +1293,13 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
 
   let items = deduplicateItems(results.flatMap((result) => result.items));
   if (applyTriageState) {
-    items = applyQueueTriage(items, await readQueueTriageForProjection(), clock, { includeSnoozed: view === 'snoozed' });
+    const sourceReadComplete = results.every((result) => result.error === null && !result.truncation);
+    const triageEntries = await readQueueTriageForProjection({
+      now: clock,
+      currentItems: items,
+      pruneOrphans: sourceReadComplete && (view === null || view === 'all'),
+    });
+    items = applyQueueTriage(items, triageEntries, clock, { includeSnoozed: view === 'snoozed' });
   }
   items.sort((a, b) => compareQueueItems(a, b, clock.getTime()));
   const shownCounts = sourceShownCounts(items);
