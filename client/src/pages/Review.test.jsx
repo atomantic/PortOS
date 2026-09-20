@@ -62,6 +62,9 @@ vi.mock('../services/api', () => ({
   getReviewCounts: vi.fn(),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {} })),
+  createThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action' })),
+  getThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action', status: 'open' })),
+  updateThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'Updated action', status: 'open' })),
   createReviewTodo: vi.fn(() => Promise.resolve({})),
   completeReviewItem: vi.fn(() => Promise.resolve({})),
   dismissReviewItem: vi.fn(() => Promise.resolve({})),
@@ -78,7 +81,9 @@ vi.mock('../services/socket', () => ({
 }));
 
 vi.mock('react-router', () => ({
-  useNavigate: () => vi.fn()
+  useNavigate: () => vi.fn(),
+  useParams: () => ({}),
+  useSearchParams: () => [new URLSearchParams(), vi.fn()]
 }));
 
 import Review from './Review';
@@ -233,6 +238,21 @@ describe('Review Hub queue-card triage (#3282)', () => {
     // The same actionable item renders twice: Action Queue + its Alerts section.
     expect(document.getElementById(`review-item-body-section-alert-${ITEM.id}`)).toBeTruthy();
     expect(document.querySelectorAll(`[id="review-item-body-action-queue-${ITEM.id}"]`)).toHaveLength(1);
+  });
+});
+
+describe('Actions commitments workspace (#7739)', () => {
+  it('uses Brain threads for quick-add instead of the legacy todo endpoint', async () => {
+    render(<Review />);
+    const input = await screen.findByLabelText('Quick add action');
+    fireEvent.change(input, { target: { value: 'Track the example follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(api.createThread).toHaveBeenCalledWith(
+      { title: 'Track the example follow-up' },
+      { silent: true },
+    ));
+    expect(api.createReviewTodo).not.toHaveBeenCalled();
   });
 });
 

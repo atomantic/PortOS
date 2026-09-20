@@ -28,6 +28,7 @@
 
 import { randomUUID } from 'node:crypto';
 import * as brain from './brain.js';
+import * as brainStorage from './brainStorage.js';
 import * as askConversations from './askConversations.js';
 import * as cosTaskStore from './cosTaskStore.js';
 import * as messageDrafts from './messageDrafts.js';
@@ -42,6 +43,9 @@ import { promoteLatestAssistantTurn } from './askPromote.js';
 import { adaptNotification, adaptStoredReviewItem } from './reviewActionAdapters.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { getUserTimezone } from './userTimezone.js';
+import { todayInTimezone } from '../lib/timezone.js';
+import { isTerminalThreadStatus, threadNextLine } from '../lib/brainThreads.js';
 
 // Producers are read with a bounded upper limit. The queue reports a lower
 // bound, rather than pretending that a full count is known, when a producer
@@ -65,6 +69,9 @@ const ACTION_KINDS = Object.freeze({
   backup: 'backup.retry',
   review: 'review.triage',
   notifications: 'notification.action',
+  threads: 'brain.thread',
+  todo: 'review.todo',
+  history: 'review.history',
 });
 
 const OPERATION_LABELS = Object.freeze({
@@ -78,6 +85,9 @@ const OPERATION_LABELS = Object.freeze({
   backup: 'Retry',
   review: 'Review',
   notifications: 'Review',
+  threads: 'Complete',
+  todo: 'Complete',
+  history: 'History',
 });
 
 const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
@@ -121,6 +131,51 @@ async function getActiveGoalOptions() {
     .map((g) => ({ id: g.id, title: typeof g.title === 'string' && g.title ? g.title : '(untitled goal)' }));
 }
 
+const COMMITMENT_VIEWS = new Set(['today', 'all', 'waiting', 'someday', 'history']);
+const ACTIVE_THREAD_STATUSES = new Set(['open', 'waiting', 'someday']);
+
+function isDueByLocalToday(thread, timezone, now = new Date()) {
+  if (!thread.dueAt) return thread.status === 'open';
+  const dueAt = Date.parse(thread.dueAt);
+  if (!Number.isFinite(dueAt)) return false;
+  const today = todayInTimezone(timezone, now);
+  const dueDay = todayInTimezone(timezone, new Date(dueAt));
+  return dueDay <= today;
+}
+
+function threadBelongsToView(thread, view, timezone, now = new Date()) {
+  if (!thread || typeof thread.id !== 'string' || !thread.id) return false;
+  if (!view) return ACTIVE_THREAD_STATUSES.has(thread.status);
+  if (!COMMITMENT_VIEWS.has(view)) return ACTIVE_THREAD_STATUSES.has(thread.status);
+  if (view === 'all') return ACTIVE_THREAD_STATUSES.has(thread.status);
+  if (view === 'history') return isTerminalThreadStatus(thread.status);
+  if (view === 'waiting' || view === 'someday') return thread.status === view;
+  return ACTIVE_THREAD_STATUSES.has(thread.status) && isDueByLocalToday(thread, timezone, now);
+}
+
+const visibleInLiveViews = (producer, view) => {
+  if (!view) return producer.source !== 'history';
+  if (Array.isArray(producer.views)) return producer.views.includes(view);
+  return view === 'today' || view === 'all';
+};
+
+const threadAction = (thread) => {
+  const terminal = isTerminalThreadStatus(thread.status);
+  return terminal
+    ? [{ id: 'reopen', label: 'Reopen', available: true }]
+    : [{ id: 'complete', label: 'Complete', available: true }];
+};
+
+const threadMeta = (thread) => ({
+  localStatus: thread.status,
+  externalState: typeof thread.externalState === 'string' && thread.externalState
+    ? thread.externalState
+    : 'unknown',
+  ...(typeof thread.source === 'string' && thread.source.trim()
+    ? { externalSource: thread.source.trim() }
+    : {}),
+});
+
 /**
  * Producer registry. Each entry knows how to gather its raw items and map one
  * into the normalized queue shape. `gather` returns the raw list (already
@@ -159,6 +214,37 @@ const PRODUCERS = [
         ...(captureSource ? { meta: { captureSource } } : {})
       };
     }
+  },
+  {
+    source: 'threads',
+    label: 'Brain commitments',
+    drillTo: '/brain/threads',
+    views: ['today', 'all', 'waiting', 'someday', 'history'],
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT, ctx = {}) {
+      const timezone = ctx.timezone || 'UTC';
+      const now = ctx.now || new Date();
+      const threads = await brainStorage.getThreads();
+      const matching = (Array.isArray(threads) ? threads : [])
+        .filter((thread) => threadBelongsToView(thread, ctx.view, timezone, now));
+      return { items: matching, truncated: matching.length > limit };
+    },
+    map(thread) {
+      const nextAction = threadNextLine(thread);
+      const summary = nextAction || (thread.waitingOn ? `Waiting on ${thread.waitingOn}` : 'No next action set');
+      return {
+        id: `threads:${thread.id}`,
+        title: thread.title || 'Untitled commitment',
+        summary,
+        timestamp: thread.updatedAt || thread.createdAt || null,
+        severity: thread.priority === 'urgent' ? 'high' : 'normal',
+        required: true,
+        isRecommendation: false,
+        dueAt: thread.dueAt || null,
+        drillTo: `/brain/threads?thread=${encodeURIComponent(thread.id)}`,
+        operations: threadAction(thread),
+        meta: threadMeta(thread),
+      };
+    },
   },
   {
     source: 'ask',
@@ -312,6 +398,68 @@ const PRODUCERS = [
     },
   },
   {
+    source: 'todo',
+    label: 'Manual commitments',
+    drillTo: '/review?view=history',
+    views: ['today', 'all', 'history'],
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT, ctx = {}) {
+      const history = ctx.view === 'history';
+      const items = await reviewService.getItems({
+        type: 'todo',
+        ...(history ? {} : { status: 'pending' }),
+      });
+      const matching = (Array.isArray(items) ? items : [])
+        .filter((item) => item.type === 'todo')
+        .filter((item) => history ? item.status !== 'pending' : item.status === 'pending');
+      return { items: matching, truncated: matching.length > limit };
+    },
+    map(item) {
+      const completed = item.status !== 'pending';
+      return {
+        id: `todo:${item.id}`,
+        title: item.title || 'Untitled commitment',
+        summary: item.description || item.title || '',
+        timestamp: item.updatedAt || item.createdAt || null,
+        dueAt: item.metadata?.dueAt || null,
+        required: !completed,
+        isRecommendation: false,
+        drillTo: `/review/${encodeURIComponent(`todo:${item.id}`)}?view=${completed ? 'history' : 'today'}`,
+        operations: completed
+          ? [{ id: 'reopen', label: 'Reopen', available: true }]
+          : [{ id: 'complete', label: 'Complete', available: true }],
+        meta: { status: item.status, reviewItemId: item.id },
+      };
+    },
+  },
+  {
+    source: 'history',
+    label: 'Review history',
+    drillTo: '/review?view=history',
+    views: ['history'],
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const items = await reviewService.getItems();
+      const matching = (Array.isArray(items) ? items : [])
+        .filter((item) => item.status !== 'pending' && item.type !== 'todo');
+      return {
+        items: matching,
+        truncated: matching.length > limit,
+      };
+    },
+    map(item) {
+      return {
+        id: `history:${item.id}`,
+        title: item.title || 'Review history item',
+        summary: item.description || item.title || '',
+        timestamp: item.updatedAt || item.createdAt || null,
+        required: false,
+        isRecommendation: false,
+        operations: [],
+        drillTo: item.metadata?.link || '/review?view=history',
+        meta: { status: item.status, type: item.type, reviewItemId: item.id },
+      };
+    },
+  },
+  {
     source: 'notifications',
     label: 'Actionable notifications',
     drillTo: '/review',
@@ -452,8 +600,15 @@ const SEVERITY_ORDER = { critical: 0, high: 1, normal: 2 };
  * `goal` only when goals exist), so the map result is spread AFTER the
  * producer-level default.
  */
-const canonicalPriority = (value) =>
-  typeof value === 'string' && Object.hasOwn(PRIORITY_ORDER, value) ? value : null;
+const canonicalPriority = (value) => {
+  if (typeof value !== 'string') return null;
+  if (Object.hasOwn(PRIORITY_ORDER, value)) return value;
+  const normalized = value.toLowerCase();
+  if (normalized === 'urgent' || normalized === 'high') return 'HIGH';
+  if (normalized === 'normal' || normalized === 'medium') return 'MEDIUM';
+  if (normalized === 'low') return 'LOW';
+  return null;
+};
 
 const firstText = (...values) => values.find((value) => typeof value === 'string' && value.trim())?.trim() || null;
 
@@ -494,15 +649,15 @@ function normalizeQueueItem(producer, raw, mapped) {
     raw?.id == null ? null : String(raw.id),
     typeof mapped.id === 'string' && mapped.id.startsWith(prefix) ? mapped.id.slice(prefix.length) : null,
   );
-  const priority = canonicalPriority(raw?.priority);
+  const priority = canonicalPriority(raw?.priority ?? mapped.priority);
   const required = typeof mapped.required === 'boolean'
     ? mapped.required
     : typeof raw?.required === 'boolean'
     ? raw.required
     : !(raw?.recommendation === true || raw?.isRecommendation === true || raw?.optional === true);
-  const dueAt = firstText(raw?.dueAt, raw?.due, raw?.deadline, raw?.scheduledFor);
-  const revision = firstScalar(raw?.revision, raw?.version, raw?.updatedAt, raw?.updated_at, raw?.capturedAt, raw?.createdAt);
-  const occurrence = firstScalar(raw?.occurrence, raw?.occurrenceId);
+  const dueAt = firstText(raw?.dueAt, raw?.due, raw?.deadline, raw?.scheduledFor, mapped.dueAt);
+  const revision = firstScalar(raw?.revision, raw?.version, raw?.updatedAt, raw?.updated_at, raw?.capturedAt, raw?.createdAt, mapped.revision);
+  const occurrence = firstScalar(raw?.occurrence, raw?.occurrenceId, mapped.occurrence);
   const operations = semanticOperations(producer, mapped, raw);
   const availableOperation = operations.find((entry) => entry.available)?.label;
 
@@ -538,7 +693,7 @@ function normalizeQueueItem(producer, raw, mapped) {
  * are a lower bound, not evidence that the source is exhausted.
  */
 async function gatherProducer(producer, ctx = {}) {
-  const gathered = await producer.gather(REVIEW_QUEUE_SOURCE_PROBE_LIMIT);
+  const gathered = await producer.gather(REVIEW_QUEUE_SOURCE_PROBE_LIMIT, ctx);
   const descriptor = Array.isArray(gathered) ? { items: gathered } : gathered;
   const rawItems = Array.isArray(descriptor?.items) ? descriptor.items : [];
   const truncated = descriptor?.truncated === true || rawItems.length > REVIEW_QUEUE_SOURCE_READ_LIMIT;
@@ -644,6 +799,23 @@ async function resolveCosApproval(id) {
   return result;
 }
 
+async function resolveThreadAction(id, status) {
+  const result = await brainStorage.updateWith('threads', id, (fresh) => {
+    const terminal = isTerminalThreadStatus(status);
+    return {
+      status,
+      // Keep Brain's closedAt contract when an Actions button changes only the
+      // local thread state. Refs and externalState are deliberately untouched.
+      closedAt: terminal
+        ? (isTerminalThreadStatus(fresh.status) && fresh.closedAt
+          ? fresh.closedAt
+          : new Date().toISOString())
+        : null,
+    };
+  });
+  return result;
+}
+
 const SOURCE_ACTIONS = Object.freeze({
   memory: Object.freeze({
     approve: (id) => resolveMemoryAction(id, 'approve'),
@@ -651,6 +823,14 @@ const SOURCE_ACTIONS = Object.freeze({
   }),
   cos: Object.freeze({
     approve: resolveCosApproval,
+  }),
+  threads: Object.freeze({
+    complete: (id) => resolveThreadAction(id, 'done'),
+    reopen: (id) => resolveThreadAction(id, 'open'),
+  }),
+  todo: Object.freeze({
+    complete: (id) => reviewService.completeItem(id),
+    reopen: (id) => reviewService.reopenItem(id),
   }),
 });
 
@@ -772,13 +952,21 @@ function sourceShownCounts(items) {
   return shown;
 }
 
-async function gatherFullQueue() {
+async function gatherFullQueue(query = {}) {
   // Fetch active goals once (not per Ask row) so the goal picker on Ask rows
   // has targets. A failure here degrades to no goal targets, not a sunk queue.
   const goalOptions = await getActiveGoalOptions();
-  const ctx = { goalOptions };
+  const view = typeof query.view === 'string' && query.view ? query.view : null;
+  const timezone = view === 'today'
+    ? await getUserTimezone().catch((err) => {
+      console.error(`⚠️ Review queue: timezone read failed: ${err.message}`);
+      return 'UTC';
+    })
+    : 'UTC';
+  const ctx = { goalOptions, view, timezone, now: new Date() };
+  const visibleProducers = PRODUCERS.filter((producer) => visibleInLiveViews(producer, view));
 
-  const results = await Promise.all(PRODUCERS.map(async (producer) => {
+  const results = await Promise.all(visibleProducers.map(async (producer) => {
     return gatherProducer(producer, ctx)
       .then((result) => ({ source: producer.source, label: producer.label, ...result, error: null }))
       .catch((err) => {
@@ -920,7 +1108,7 @@ export async function buildQueue({ limit, cursor, query = {} } = {}) {
     return pageFromSnapshot(snapshot, payload.offset);
   }
 
-  const queue = await gatherFullQueue();
+  const queue = await gatherFullQueue(query);
   if (requestedLimit === null) return queue;
 
   const snapshot = saveQueueSnapshot(queue, queryKey, requestedLimit);

@@ -324,6 +324,34 @@ export async function completeItem(id) {
 }
 
 /**
+ * Reopen a completed or dismissed personal item. Archived items are moved back
+ * into the live collection before the archive entry is removed so pending work
+ * never remains stranded in cold storage.
+ */
+export async function reopenItem(id) {
+  const liveItems = await loadItems();
+  if (liveItems.some((item) => item.id === id)) {
+    return updateItemStatus(id, 'pending');
+  }
+
+  const archive = await loadArchive();
+  const index = archive.findIndex((item) => item.id === id);
+  if (index === -1) {
+    const err = new Error(`Review item not found: ${id}`);
+    err.status = 404;
+    throw err;
+  }
+
+  const [item] = archive.splice(index, 1);
+  const reopened = { ...item, status: 'pending', updatedAt: new Date().toISOString() };
+  await saveItems([...liveItems, reopened]);
+  await atomicWrite(ARCHIVE_FILE, archive);
+  console.log(`📋 Review item reopened: ${reopened.type} — ${reopened.title}`);
+  reviewEvents.emit('item:updated', reopened);
+  return reopened;
+}
+
+/**
  * Dismiss an item
  */
 export async function dismissItem(id) {

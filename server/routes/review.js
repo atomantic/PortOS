@@ -45,14 +45,14 @@ router.get('/briefing', asyncHandler(async (req, res) => {
 // attention, including source-owned review obligations and actionable
 // notifications.
 router.get('/queue', asyncHandler(async (req, res) => {
-  const { limit, cursor } = validateRequest(reviewQueueQuerySchema, req.query);
-  const queue = await buildQueue({ limit, cursor, query: {} });
+  const { limit, cursor, view } = validateRequest(reviewQueueQuerySchema, req.query);
+  const queue = await buildQueue({ limit, cursor, query: { ...(view ? { view } : {}) } });
   res.json(queue);
 }));
 
 const resolveQueueSchema = z.object({
   id: z.string().min(1).max(500),
-  operation: z.enum(['resolve', 'approve', 'reject']).optional(),
+  operation: z.enum(['resolve', 'approve', 'reject', 'complete', 'reopen']).optional(),
 });
 
 // POST /api/review/queue/resolve — accept a single cross-domain queue row in
@@ -86,7 +86,8 @@ router.post('/queue/promote-ask', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/review/todo — create a user todo
+// POST /api/review/todo — legacy compatibility endpoint. New Actions quick-add
+// writes Brain threads; existing clients keep this endpoint and store shape.
 router.post('/todo', asyncHandler(async (req, res) => {
   const data = validateRequest(createTodoSchema, req.body);
   const item = await reviewService.createItem({

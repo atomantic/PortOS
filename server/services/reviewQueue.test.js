@@ -3,12 +3,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mock every producer service the aggregator pulls from, so the test exercises
 // only the normalization / sort / bounded-read / snapshot / degrade-on-failure logic.
 const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
+const brainStorage = { getThreads: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
 const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn() };
 const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateAlerts: vi.fn() };
 const backup = { getState: vi.fn() };
-const reviewService = { getItems: vi.fn(), dismissByReferenceId: vi.fn() };
+const reviewService = { getItems: vi.fn(), dismissByReferenceId: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
 const notifications = { getNotifications: vi.fn() };
 // Mocked so the meta-field / buildQueue cases don't pull the brain/cos/identity
 // stack in transitively (askPromote imports all three). The promoteAskQueueItem
@@ -19,8 +20,10 @@ const askPromote = { promoteLatestAssistantTurn: vi.fn() };
 const identity = { getGoals: vi.fn() };
 const stackerNews = { listPendingReviewActions: vi.fn() };
 const x = { listPendingReviewActions: vi.fn() };
+const userTimezone = { getUserTimezone: vi.fn() };
 
 vi.mock('./brain.js', () => brain);
+vi.mock('./brainStorage.js', () => brainStorage);
 vi.mock('./askConversations.js', () => askConversations);
 vi.mock('./cosTaskStore.js', () => cosTaskStore);
 vi.mock('./messageDrafts.js', () => messageDrafts);
@@ -32,6 +35,7 @@ vi.mock('./identity.js', () => identity);
 vi.mock('./askPromote.js', () => askPromote);
 vi.mock('./stackerNews.js', () => stackerNews);
 vi.mock('./x.js', () => x);
+vi.mock('./userTimezone.js', () => userTimezone);
 
 const {
   buildQueue,
@@ -45,6 +49,9 @@ const {
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
   brain.getInboxLog.mockResolvedValue([]);
+  brainStorage.getThreads.mockResolvedValue([]);
+  brainStorage.getThreadById.mockResolvedValue(null);
+  brainStorage.updateWith.mockResolvedValue(null);
   askConversations.listConversations.mockResolvedValue([]);
   cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [] });
   messageDrafts.listDrafts.mockResolvedValue([]);
@@ -52,10 +59,13 @@ function resetEmpty() {
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
   reviewService.getItems.mockResolvedValue([]);
   reviewService.dismissByReferenceId.mockResolvedValue(undefined);
+  reviewService.completeItem.mockResolvedValue({ id: 'todo-1', status: 'completed' });
+  reviewService.reopenItem.mockResolvedValue({ id: 'todo-1', status: 'pending' });
   notifications.getNotifications.mockResolvedValue([]);
   identity.getGoals.mockResolvedValue({ goals: [] });
   stackerNews.listPendingReviewActions.mockResolvedValue([]);
   x.listPendingReviewActions.mockResolvedValue([]);
+  userTimezone.getUserTimezone.mockResolvedValue('UTC');
 }
 
 describe('reviewQueue.buildQueue', () => {
@@ -105,6 +115,82 @@ describe('reviewQueue.buildQueue', () => {
       availability: 'available',
       available: true,
     });
+  });
+
+  it('projects active Brain commitments and manual todos into the all view', async () => {
+    brainStorage.getThreads.mockResolvedValue([
+      {
+        id: 'thread-1',
+        title: 'Ship the example follow-up',
+        status: 'open',
+        priority: 'high',
+        nextAction: 'Write the acceptance test',
+        externalState: 'open',
+        source: 'github',
+        updatedAt: '2026-09-20T10:00:00.000Z',
+      },
+      { id: 'thread-done', title: 'Finished loop', status: 'done' },
+    ]);
+    reviewService.getItems.mockResolvedValue([
+      { id: 'todo-1', type: 'todo', title: 'Call the example office', status: 'pending', createdAt: '2026-09-20T09:00:00.000Z' },
+    ]);
+
+    const queue = await buildQueue({ query: { view: 'all' } });
+
+    expect(queue.items.find((item) => item.id === 'threads:thread-1')).toMatchObject({
+      source: 'threads',
+      actionKind: 'brain.thread',
+      priority: 'HIGH',
+      summary: 'Write the acceptance test',
+      operations: [{ id: 'complete', label: 'Complete', available: true }],
+      meta: { localStatus: 'open', externalState: 'open', externalSource: 'github' },
+    });
+    expect(queue.items.find((item) => item.id === 'todo:todo-1')).toMatchObject({
+      source: 'todo',
+      actionKind: 'review.todo',
+      operations: [{ id: 'complete', label: 'Complete', available: true }],
+    });
+    expect(queue.items.some((item) => item.id === 'threads:thread-done')).toBe(false);
+  });
+
+  it('keeps waiting and someday commitments out of Today unless their follow-up is due', async () => {
+    userTimezone.getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    brainStorage.getThreads.mockResolvedValue([
+      { id: 'waiting-future', title: 'Waiting future', status: 'waiting', dueAt: '2026-09-22T12:00:00.000Z' },
+      { id: 'waiting-due', title: 'Waiting due', status: 'waiting', dueAt: '2026-09-20T12:00:00.000Z' },
+      { id: 'someday-undated', title: 'Someday undated', status: 'someday' },
+      { id: 'open-undated', title: 'Open undated', status: 'open' },
+    ]);
+
+    vi.useFakeTimers({ now: new Date('2026-09-20T20:00:00.000Z') });
+    const today = await buildQueue({ query: { view: 'today' } });
+    expect(today.items.map((item) => item.id)).toEqual([
+      'threads:waiting-due',
+      'threads:open-undated',
+    ]);
+
+    const waiting = await buildQueue({ query: { view: 'waiting' } });
+    expect(waiting.items.map((item) => item.id)).toEqual(['threads:waiting-due', 'threads:waiting-future']);
+  });
+
+  it('keeps terminal Brain commitments and completed manual todos in History', async () => {
+    brainStorage.getThreads.mockResolvedValue([
+      { id: 'thread-done', title: 'Finished loop', status: 'done', updatedAt: '2026-09-20T10:00:00.000Z' },
+      { id: 'thread-open', title: 'Open loop', status: 'open' },
+    ]);
+    reviewService.getItems.mockResolvedValue([
+      { id: 'todo-done', type: 'todo', title: 'Completed personal item', status: 'completed', updatedAt: '2026-09-20T09:00:00.000Z' },
+      { id: 'alert-done', type: 'alert', title: 'Past alert', status: 'dismissed', updatedAt: '2026-09-20T08:00:00.000Z' },
+    ]);
+
+    const history = await buildQueue({ query: { view: 'history' } });
+    expect(history.items.map((item) => item.id).sort()).toEqual([
+      'history:alert-done',
+      'threads:thread-done',
+      'todo:todo-done',
+    ]);
+    expect(history.items.find((item) => item.id === 'todo:todo-done').operations)
+      .toEqual([{ id: 'reopen', label: 'Reopen', available: true }]);
   });
 
   it('surfaces pending Stacker News approvals with an account-specific drill-down', async () => {
@@ -590,6 +676,33 @@ describe('reviewQueue.resolveQueueItem', () => {
     messageDrafts.approveDraft.mockResolvedValue({ id: 'd1', status: 'approved' });
     await resolveQueueItem('drafts:d1');
     expect(messageDrafts.approveDraft).toHaveBeenCalledWith('d1');
+  });
+
+  it('completes and reopens Brain commitments through the locked Brain store', async () => {
+    brainStorage.updateWith.mockImplementation(async (type, id, mutate) => {
+      expect(type).toBe('threads');
+      expect(id).toBe('thread-1');
+      return { id, ...(await mutate({ id, status: 'open', externalState: 'open' })) };
+    });
+
+    await expect(resolveQueueItem('threads:thread-1', 'complete')).resolves.toMatchObject({
+      source: 'threads', operation: 'complete', resolved: true,
+    });
+    await expect(resolveQueueItem('threads:thread-1', 'reopen')).resolves.toMatchObject({
+      source: 'threads', operation: 'reopen', resolved: true,
+    });
+    expect(brainStorage.updateWith).toHaveBeenCalledTimes(2);
+  });
+
+  it('completes and reopens manual todo rows without using generic Review completion', async () => {
+    await expect(resolveQueueItem('todo:todo-1', 'complete')).resolves.toMatchObject({
+      source: 'todo', operation: 'complete', resolved: true,
+    });
+    await expect(resolveQueueItem('todo:todo-1', 'reopen')).resolves.toMatchObject({
+      source: 'todo', operation: 'reopen', resolved: true,
+    });
+    expect(reviewService.completeItem).toHaveBeenCalledWith('todo-1');
+    expect(reviewService.reopenItem).toHaveBeenCalledWith('todo-1');
   });
 
   it('dispatches explicit source operations through the owning service', async () => {

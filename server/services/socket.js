@@ -472,6 +472,12 @@ function setupBrainEventForwarding() {
       ioInstance.emit('brain:classified', data);
     }
   });
+  brainEvents.on('threads:upserted', (data) => {
+    if (ioInstance) ioInstance.emit('brain:threads:changed', data);
+  });
+  brainEvents.on('threads:deleted', (data) => {
+    if (ioInstance) ioInstance.emit('brain:threads:changed', data);
+  });
 }
 
 // Set up Moltworld WebSocket event forwarding to agent subscribers
