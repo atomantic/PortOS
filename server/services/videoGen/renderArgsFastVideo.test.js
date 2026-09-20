@@ -151,6 +151,18 @@ describe('fastvideoMlxFormat', () => {
 });
 
 describe('buildFastVideoArgs — upstream FastH3 snapshot', () => {
+  it('routes an existing FastMetal 5B registry row to the Wan 2.2 sampler', () => {
+    const { args } = buildFastVideoArgs({ ...base, model: { ...fastmetal, repo: 'FastVideo/FastMetal-5B-QAD' } });
+    expect(flagValue(args, '--family')).toBe('fastmetal5b');
+  });
+
+  it('retains VSA when requesting a V2 local conversion', () => {
+    const { args } = buildFastVideoArgs({ ...base, model: { ...fasth3Source, fastvideoVsa: true }, steps: 8 });
+    expect(args).toContain('--vsa');
+    expect(flagValue(args, '--steps')).toBe('8');
+    expect(flagValue(args, '--mlx-format')).toBe('int6');
+  });
+
   it('asks the helper to convert, and does not pin a checkpoint path', () => {
     const { args } = buildFastVideoArgs({
       ...base, model: fasth3Source, fastvideoModelPath: '/fixture/models/fasth3-source',

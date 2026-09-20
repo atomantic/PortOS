@@ -29,6 +29,23 @@ afterEach(() => {
 // Compares the seed file to a freshly-bootstrapped registry with
 // _shippedDefaults stripped (that's a runtime-only field).
 describe('data.reference seed file', () => {
+  it('appends new Apple video choices to an existing registry and preserves later removals', async () => {
+    const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
+    const fresh = loadMediaModels();
+    const ids = ['fasth3_v2_int8', 'fasth3_v2_int6', 'minimax_h3_6bit', 'minimax_h3_4bit'];
+    fresh.video.mlx = fresh.video.mlx.filter((entry) => !ids.includes(entry.id));
+    fresh._shippedDefaults.video.mlx = fresh._shippedDefaults.video.mlx.filter((id) => !ids.includes(id));
+    writeFileSync(registryFile, JSON.stringify(fresh));
+    const upgraded = reloadMediaModels();
+    for (const id of ids) expect(upgraded.video.mlx.find((entry) => entry.id === id)).toBeDefined();
+    const v2 = upgraded.video.mlx.find((entry) => entry.id === 'fasth3_v2_int6');
+    expect(v2).toMatchObject({ steps: 8, samplerLocked: true, fastvideoVsa: true, fastvideoMlxFormat: 'int6' });
+    expect(v2.termsGate.id).toBe('minimax-h3-community-license-2026-08-02');
+    upgraded.video.mlx = upgraded.video.mlx.filter((entry) => entry.id !== v2.id);
+    writeFileSync(registryFile, JSON.stringify(upgraded));
+    expect(reloadMediaModels().video.mlx.some((entry) => entry.id === v2.id)).toBe(false);
+  });
+
   it('matches the runtime-seeded DEFAULT_REGISTRY', async () => {
     const sample = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'));
     const { loadMediaModels } = await import('./mediaModels.js');

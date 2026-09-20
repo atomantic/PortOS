@@ -15,9 +15,10 @@ const CANONICAL_FIELDS = ['repo', 'revision', 'runtime', 'memoryGb', 'supportedM
 const RANKING_WORDS = /uncensored|unrestricted|\bunsafe\b|\bsafe\b|less restrictive|no limits/i;
 
 describe('VIDEO_MODEL_DISCLOSURES', () => {
-  it('carries a reviewedAt on every entry, stamped with the module review date', () => {
+  it('carries the verification date for new entries and preserves previous review dates', () => {
     for (const [id, spec] of Object.entries(VIDEO_MODEL_DISCLOSURES)) {
-      expect(spec.disclosure.reviewedAt, id).toBe(VIDEO_DISCLOSURE_REVIEWED_AT);
+      const newlyReviewed = ['fasth3_v2_int8', 'fasth3_v2_int6', 'minimax_h3_4bit', 'minimax_h3_6bit'].includes(id);
+      expect(spec.disclosure.reviewedAt, id).toBe(newlyReviewed ? '2026-09-19' : VIDEO_DISCLOSURE_REVIEWED_AT);
     }
     expect(VIDEO_DISCLOSURE_REVIEWED_AT).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });

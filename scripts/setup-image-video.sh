@@ -423,7 +423,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
   fi
 
-  FASTVIDEO_PIN="${FASTVIDEO_PIN:-main}"
+  FASTVIDEO_PIN="${FASTVIDEO_PIN:-430e52154e76b902c3cc17a16b3edc1fad790012}"
   FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
   FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -445,6 +445,8 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     "FastVideo synced but the runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
     "${FASTVIDEO_PY}" -c "import fastvideo; import mlx.core"
+  echo "📦 Preparing FastMetal preview decoders..."
+  "${FASTVIDEO_PY}" -c "from fastvideo.mlx_runtime.wan_vae import ensure_taehv_checkpoint; ensure_taehv_checkpoint(z_dim=16); ensure_taehv_checkpoint(z_dim=48)"
   echo "✅ FastVideo MLX runtime ready: ${FASTVIDEO_PY}"
 fi
 

@@ -545,11 +545,11 @@ const DEFAULT_REGISTRY = {
       // downloads are explicit in Video Gen, and render-time resolution is
       // cache-only. The server-owned disclosure attaches the mandatory,
       // versioned territory/license acceptance gate.
-      {
-        id: 'minimax_h3_8bit',
-        name: 'MiniMax H3 MLX 8-bit (joint video + audio, ~103 GB download, 128 GB RAM)',
-        repo: 'pipenetwork/MiniMax-H3-MLX-8bit',
-        revision: '3ac52081470b0488921c3ec3ba84a39097bf2361',
+      ...[
+        { bits: 8, revision: '3ac52081470b0488921c3ec3ba84a39097bf2361' },
+        { bits: 6, revision: '58ea790a856734132293164b8305c8bb80bee6fe' },
+        { bits: 4, revision: '95a0e7d97f23f8b0029afea9411f13535262d935' },
+      ].map(({ bits, revision }) => ({
         runtime: 'minimax_h3',
         // H3 is an fl2va model: it conditions on up to two keyframes anchored
         // at the first / last latent frame. 'image' anchors one at 'first',
@@ -621,7 +621,11 @@ const DEFAULT_REGISTRY = {
             'FL2VA/video_vae/source/model.safetensors',
           ],
         }],
-      },
+        id: `minimax_h3_${bits}bit`,
+        name: `MiniMax H3 MLX ${bits}-bit (reference quality, very slow, 128 GB RAM)`,
+        repo: `pipenetwork/MiniMax-H3-MLX-${bits}bit`,
+        revision,
+      })),
       // MiniMax H3 Ref2VA through the signed mere.run native runtime. The
       // checkpoint accepts at most 15 seconds of reference audio per call;
       // PortOS chains those windows and remuxes the exact source audio so the
@@ -814,6 +818,17 @@ const DEFAULT_REGISTRY = {
       // this machine. Listed before the third-party repack below because it is
       // the upstream checkpoint the repack is derived from.
       ...FASTH3_SOURCE_ENTRIES,
+      // Convert the official V2 snapshot locally, retaining its VSA routing weights.
+      ...FASTH3_SOURCE_ENTRIES.filter((entry) => entry.fastvideoMlxFormat !== 'int4').map((entry) => ({
+        ...entry,
+        id: `fasth3_v2_${entry.fastvideoMlxFormat}`,
+        name: `FastH3 8-Step V2 — MLX ${entry.fastvideoMlxFormat.toUpperCase()} + VSA (quality, local conversion)`,
+        repo: 'FastVideo/FastVideo-FastH3-8-Step-V2',
+        revision: '3da2ddfe1954d9cda4c05b643dc0f26007a655c5',
+        fastvideoVsa: true,
+        steps: 8,
+        samplerNote: 'Quality option: 8 steps with 80% sparse attention, reference implementation. Requires an updated FastVideo runtime with VSA support. INT6 and INT8 share one ~147.9 GB source download; first use converts the DiT locally with routing weights retained. Not a real-time model.',
+      })),
       // FastH3 Preview v1 Dense / Data-Free, packed for MLX (#5860). Same
       // `fastvideo` venv and checkout as FastMetal above, but a different entry
       // script and argv shape — `fastvideoFamily` is what routes it, see

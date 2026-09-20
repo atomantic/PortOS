@@ -579,9 +579,10 @@ export const assertRenderModeContract = ({
 // this file — the same "execution facts live on the entry" convention
 // `samplerLocked` and `supportedModes` already use. An absent/unknown value
 // means FastMetal, which is what every pre-#5860 row is.
-export const FASTVIDEO_FAMILIES = Object.freeze(['fastmetal', 'fasth3']);
+export const FASTVIDEO_FAMILIES = Object.freeze(['fastmetal', 'fastmetal5b', 'fasth3']);
 export const fastvideoFamily = (model) =>
-  (FASTVIDEO_FAMILIES.includes(model?.fastvideoFamily) ? model.fastvideoFamily : 'fastmetal');
+  (FASTVIDEO_FAMILIES.includes(model?.fastvideoFamily) ? model.fastvideoFamily
+    : model?.repo === 'FastVideo/FastMetal-5B-QAD' ? 'fastmetal5b' : 'fastmetal');
 
 // FastVideo publishes FastH3 as a bf16 diffusers snapshot whose DiT sits under
 // `transformer/`, but mlx_fasth3.py loads a pre-quantized `mlx_h3_dit`
@@ -628,6 +629,7 @@ export const buildFastVideoArgs = ({
   // vae/audio_vae/text_encoder/tokenizer IS its own checkpoint, and says so
   // explicitly rather than leaning on the helper's default-to-model-root.
   if (family === 'fasth3') {
+    if (model.fastvideoVsa === true) args.push('--vsa');
     // Conditioning is half the wall clock of a render and recomputes identical
     // embeddings every time, so every FastH3 row reuses one cache.
     args.push('--prompt-cache-dir', FASTVIDEO_PROMPT_CACHE_DIR);

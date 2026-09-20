@@ -99,6 +99,16 @@ describe.skipIf(!pyBin)('generate_fastvideo.py phase reporting', () => {
     expect(lines(output)).toEqual(['conditioning', 'sampling', 'sampling', 'mux']);
   });
 
+  it('reports Wan 2.2 conditioning, sampling and decode from its milestone output', () => {
+    const output = runPython(`${importRunner}\n${[
+      'phase = runner.INITIAL_PHASE',
+      'for line in ["[5B] latent 48x19x16x24", "[5B] DiT loaded in 1.0s", "[5B] denoise 3 steps in 19.0s, peak 7.3 GiB"]:',
+      '    phase = runner.advance_phase(line, phase)',
+      '    print(phase)',
+    ].join('\n')}`);
+    expect(lines(output)).toEqual(['conditioning', 'sampling', 'mux']);
+  });
+
   it('never moves the phase backwards when a milestone line repeats', () => {
     const output = runPython(`${importRunner}\n${[
       'print(runner.advance_phase("INFO Geometry: output=832x480x124", "sampling"))',
@@ -125,5 +135,36 @@ describe.skipIf(!pyBin)('generate_fastvideo.py phase reporting', () => {
     ].join('\n')}`);
 
     expect(lines(output)).toEqual(['True']);
+  });
+});
+
+// Exercise the subprocess boundary without requiring MLX or model weights.
+describe.skipIf(!pyBin)('FastH3 checkpoint schedule adapter', () => {
+  it('uses the same checkpoint shifts and eight-step ladder for conversion and inference', () => {
+    const output = runPython(`${importRunner}\n${String.raw`
+import json, os, subprocess, tempfile
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    package = root / 'fastvideo' / 'mlx_runtime'
+    package.mkdir(parents=True)
+    (package / 'minimax_h3_pipeline.py').write_text('MINIMAX_H3_VIDEO_SHIFT=12\nMINIMAX_H3_AUDIO_SHIFT=3\ndef _adaln_schedule_union(steps):\n    return [MINIMAX_H3_VIDEO_SHIFT, MINIMAX_H3_AUDIO_SHIFT, steps]\n')
+    for name, shift in [('scheduler', 10), ('audio_scheduler', 3)]:
+        folder = root / name
+        folder.mkdir()
+        (folder / 'scheduler_config.json').write_text(json.dumps({'_class_name': 'MiniMaxH3Scheduler', 'shift': shift}))
+    converter = root / 'convert.py'
+    converter.write_text('import json\ndef _adaln_cache_timesteps():\n    return [12, 3, 4]\ndef main():\n    print(json.dumps(_adaln_cache_timesteps()))\n')
+    entry = root / 'render.py'
+    entry.write_text('import json, sys\nfrom fastvideo.mlx_runtime import minimax_h3_pipeline as p\nprint(json.dumps(p._adaln_schedule_union(int(sys.argv[sys.argv.index("--steps")+1]))))\n')
+    wrapper = script.with_name('fastvideo_h3_entry.py')
+    env = {**os.environ, 'PYTHONPATH': str(root)}
+    base = [sys.executable, str(wrapper), '--scheduler-root', str(root), '--schedule-steps', '8']
+    for target, tail in [(converter, ['--convert']), (entry, ['--steps', '8'])]:
+        print(subprocess.check_output(base + ['--entry-script', str(target)] + tail, env=env, text=True).strip())
+    (root / 'scheduler' / 'scheduler_config.json').write_text('{"_class_name":"MiniMaxH3Scheduler","shift":true}')
+    invalid = subprocess.run(base + ['--entry-script', str(entry), '--steps', '8'], env=env, text=True, capture_output=True)
+    print(invalid.returncode != 0 and not invalid.stdout and 'Unsupported FastH3 scheduler' in invalid.stderr)
+`}`);
+    expect(lines(output)).toEqual(['[10, 3, 8]', '[10, 3, 8]', 'True']);
   });
 });
