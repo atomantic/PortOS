@@ -366,6 +366,7 @@
         "qwen3.8-27b"
       ],
       "defaultModel": "qwen3.8-27b",
+      "thinking": false,
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -387,6 +388,7 @@
         "qwen3.8-27b"
       ],
       "defaultModel": "qwen3.8-27b",
+      "thinking": false,
       "timeout": 600000,
       "enabled": false,
       "envVars": {

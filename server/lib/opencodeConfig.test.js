@@ -311,6 +311,15 @@ describe('buildOpencodeEnvVars', () => {
     expect(JSON.parse(result.OPENCODE_CONFIG_CONTENT).agent).toBeUndefined();
   });
 
+  it('forwards the concise vLLM preset as disabled chat-template thinking', () => {
+    const result = buildOpencodeEnvVars(
+      { command: 'opencode', vllmBacked: true, models: [], thinking: false },
+      'qwen3.8-27b',
+    );
+    expect(JSON.parse(result.OPENCODE_CONFIG_CONTENT).agent.build.chat_template_kwargs)
+      .toEqual({ enable_thinking: false });
+  });
+
   it("injects the vLLM container's API key into options.apiKey, and no ORCAROUTER_API_KEY", () => {
     const result = buildOpencodeEnvVars({
       command: 'opencode',
