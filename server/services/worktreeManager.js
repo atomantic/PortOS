@@ -10,7 +10,7 @@
  */
 
 import { existsSync, realpathSync } from 'fs';
-import { readdir, rm, stat } from 'fs/promises';
+import { lstat, readdir, rm, stat, symlink } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName } from '../lib/agentSentinel.js';
@@ -41,6 +41,30 @@ const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.y
 // up in a notification and on the agent card, and a broad sweep can dirty
 // hundreds of files. Enough to identify the work, short enough to read.
 const DIRT_PATHS_IN_WARNING = 5;
+
+// Dependencies are intentionally linked from the source checkout rather than
+// installed in each ephemeral worktree. npm follows these links and can erase
+// the primary checkout if an agent runs npm install, so agents must use the
+// already-installed workspace binaries instead.
+const WORKTREE_DEPENDENCY_PATHS = ['node_modules', 'client/node_modules', 'server/node_modules'];
+
+/**
+ * Make installed dependencies available to a fresh worktree without copying
+ * or reinstalling them. Missing source directories are skipped so this also
+ * works for managed repositories that do not use PortOS's client/server
+ * layout. Existing paths are preserved, including real directories and links.
+ */
+export async function linkWorktreeDependencies(sourceWorkspace, worktreePath) {
+  await Promise.all(WORKTREE_DEPENDENCY_PATHS.map(async (relativePath) => {
+    const sourcePath = join(sourceWorkspace, relativePath);
+    const targetPath = join(worktreePath, relativePath);
+    const sourceExists = await lstat(sourcePath).then(() => true).catch(() => false);
+    if (!sourceExists) return;
+    const targetExists = await lstat(targetPath).then(() => true).catch(() => false);
+    if (targetExists) return;
+    await symlink(sourcePath, targetPath, 'dir');
+  }));
+}
 
 // `git worktree add` lock-contention retry (#2193). Git guards a repo's
 // worktree bookkeeping (`.git/worktrees`, `.git/index.lock`) with a per-repo
@@ -530,6 +554,7 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
     // both pass untouched — which is required: dropping the fork upstream would
     // aim a config-derived push back at origin.
     await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch: false });
+    await linkWorktreeDependencies(sourceWorkspace, worktreePath);
     console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} on existing branch ${branchName}`);
     return { worktreePath, branchName, baseBranch: null, existingBranch: true, instanceId };
   }
@@ -574,6 +599,7 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
   // Backstop the flag above — an older git, or a repo-level `branch.autoSetupMerge`
   // setting, must not be able to hand an agent a branch aimed at the default branch.
   await enforceUpstreamOrUndoAdd(sourceWorkspace, branchName, worktreePath, { deleteBranch: true });
+  await linkWorktreeDependencies(sourceWorkspace, worktreePath);
 
   console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} (branch: ${branchName}, base: ${baseRef})`);
 
