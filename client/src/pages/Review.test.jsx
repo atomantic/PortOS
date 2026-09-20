@@ -314,8 +314,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
     render(<Review />);
     await waitFor(() => expect(screen.getAllByText(ITEM.title).length).toBeGreaterThan(0));
 
-    const handler = [...socket.on.mock.calls]
-      .reverse()
+    const handler = socket.on.mock.calls
       .find(([name]) => name === 'review:item:updated')?.[1];
     expect(handler).toBeTypeOf('function');
 
@@ -336,8 +335,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
 
     await waitFor(() => expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument());
 
-    const handler = [...socket.on.mock.calls]
-      .reverse()
+    const handler = socket.on.mock.calls
       .find(([name]) => name === 'review:item:created')?.[1];
     expect(handler).toBeTypeOf('function');
 
