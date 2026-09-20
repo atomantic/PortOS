@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import DeckDetail from './DeckDetail';
 
@@ -57,11 +57,15 @@ const deck = {
   }],
 };
 
-const renderPage = (search = '') => render(
-  <MemoryRouter initialEntries={[`/decks/d1${search}`]}>
-    <Routes><Route path="/decks/:id" element={<DeckDetail />} /></Routes>
-  </MemoryRouter>,
-);
+const renderPage = async (search = '') => {
+  const result = render(
+    <MemoryRouter initialEntries={[`/decks/d1${search}`]}>
+      <Routes><Route path="/decks/:id" element={<DeckDetail />} /></Routes>
+    </MemoryRouter>,
+  );
+  await act(async () => {});
+  return result;
+};
 
 describe('DeckDetail preview items', () => {
   beforeEach(() => {
@@ -73,7 +77,7 @@ describe('DeckDetail preview items', () => {
 
   it('reads no sidecars until a card is actually opened', async () => {
     getGalleryImages.mockResolvedValue([]);
-    renderPage();
+    await renderPage();
     // The list itself is enough to render the grid — hydration is the
     // lightbox's concern, so loading the deck must cost zero lookups.
     await waitFor(() => expect(previewProps?.items?.length).toBe(1));
@@ -88,7 +92,7 @@ describe('DeckDetail preview items', () => {
       modelId: 'flux2-klein-9b',
       seed: 42,
     }]);
-    renderPage('?preview=fool.png');
+    await renderPage('?preview=fool.png');
     await waitFor(() => expect(getGalleryImages).toHaveBeenCalledWith(['fool.png'], { silent: true }));
     await waitFor(() => {
       expect(previewProps?.preview?.prompt).toBe(`${COMPOSED}, hand-inked`);
@@ -99,7 +103,7 @@ describe('DeckDetail preview items', () => {
 
   it('keeps the open card addressable by its list key so prev/next still match', async () => {
     getGalleryImages.mockResolvedValue([{ filename: 'fool.png', prompt: 'whatever was sent' }]);
-    renderPage('?preview=fool.png');
+    await renderPage('?preview=fool.png');
     await waitFor(() => expect(previewProps?.preview?.prompt).toBe('whatever was sent'));
     expect(previewProps.preview.key).toBe(previewProps.items[0].key);
   });
@@ -110,7 +114,7 @@ describe('DeckDetail preview items', () => {
     // back to the card's subject line would re-show the wording that was
     // never sent.
     getGalleryImages.mockResolvedValue([]);
-    renderPage('?preview=fool.png');
+    await renderPage('?preview=fool.png');
     await waitFor(() => expect(getGalleryImages).toHaveBeenCalled());
     await waitFor(() => {
       expect(previewProps?.preview?.prompt).toBe(COMPOSED);

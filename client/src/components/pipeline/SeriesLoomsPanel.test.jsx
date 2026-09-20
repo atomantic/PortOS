@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -30,8 +30,11 @@ const summary = {
   endingCount: 2,
 };
 
-const renderPanel = (props = {}) =>
-  render(<MemoryRouter><SeriesLoomsPanel series={series} {...props} /></MemoryRouter>);
+const renderPanel = async (props = {}) => {
+  const result = render(<MemoryRouter><SeriesLoomsPanel series={series} {...props} /></MemoryRouter>);
+  await act(async () => {});
+  return result;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -40,7 +43,7 @@ beforeEach(() => {
 
 describe('SeriesLoomsPanel', () => {
   it('lists the series-scoped looms with their counts and a link to the editor', async () => {
-    renderPanel();
+    await renderPanel();
     await waitFor(() => expect(screen.getByText('Example Series — branching narrative')).toBeInTheDocument());
     expect(api.listLooms).toHaveBeenCalledWith({ seriesId: 'ser-1', silent: true });
     expect(screen.getByText('1 episode')).toBeInTheDocument();
@@ -52,20 +55,20 @@ describe('SeriesLoomsPanel', () => {
 
   it('shows an empty state when nothing links to the series', async () => {
     api.listLooms.mockResolvedValue([]);
-    renderPanel();
+    await renderPanel();
     await waitFor(() => expect(screen.getByText(/None yet/)).toBeInTheDocument());
   });
 
   it('degrades to the empty state when the list fetch fails', async () => {
     api.listLooms.mockRejectedValue(new Error('offline'));
-    renderPanel();
+    await renderPanel();
     await waitFor(() => expect(screen.getByText(/None yet/)).toBeInTheDocument());
   });
 
   it('creates a loom pre-linked to the series and its universe, then opens the editor', async () => {
     api.createLoom.mockResolvedValue({ id: 'loom-9' });
     const user = userEvent.setup();
-    renderPanel();
+    await renderPanel();
     await waitFor(() => expect(screen.getByText('Example Series — branching narrative')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /New branching narrative/ }));
@@ -86,7 +89,7 @@ describe('SeriesLoomsPanel', () => {
     api.listLooms.mockResolvedValue([]);
     api.createLoom.mockResolvedValue({ id: 'loom-9' });
     const user = userEvent.setup();
-    renderPanel({ series: { id: 'ser-2', name: 'Bare Series' } });
+    await renderPanel({ series: { id: 'ser-2', name: 'Bare Series' } });
     await waitFor(() => expect(screen.getByText(/None yet/)).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /New branching narrative/ }));

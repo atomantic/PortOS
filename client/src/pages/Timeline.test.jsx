@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', () => ({
@@ -22,13 +22,17 @@ vi.mock('../services/api', () => ({
 import Timeline from './Timeline';
 import { IMPORT_SOURCE_COUNT } from '../components/timeline/TimelineImportPanels';
 
-const renderPage = () => render(<MemoryRouter><Timeline /></MemoryRouter>);
+const renderPage = async () => {
+  const result = render(<MemoryRouter><Timeline /></MemoryRouter>);
+  await act(async () => {});
+  return result;
+};
 
 const panelRegion = () => document.getElementById('timeline-import-panels');
 
 describe('Timeline import-history disclosure (#3789)', () => {
   it('keeps the backfill importers collapsed so the day view stays above the fold', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('No recorded activity on this day.');
     const toggle = screen.getByRole('button', { name: `Import history (${IMPORT_SOURCE_COUNT})` });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
@@ -41,7 +45,7 @@ describe('Timeline import-history disclosure (#3789)', () => {
   });
 
   it('reveals every source panel when the disclosure is opened', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('No recorded activity on this day.');
     fireEvent.click(screen.getByRole('button', { name: `Import history (${IMPORT_SOURCE_COUNT})` }));
     expect(panelRegion().hidden).toBe(false);
@@ -51,7 +55,7 @@ describe('Timeline import-history disclosure (#3789)', () => {
 
   it('offers the backfill affordance from the empty-day state and scrolls the panels into view', async () => {
     const scrollIntoView = vi.fn();
-    renderPage();
+    await renderPage();
     const backfill = await screen.findByRole('button', { name: 'Backfill from an export' });
     panelRegion().scrollIntoView = scrollIntoView;
     fireEvent.click(backfill);

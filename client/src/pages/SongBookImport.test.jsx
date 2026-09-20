@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
 // Mock the api barrel (RoundEditor.test.jsx harness style).
@@ -16,11 +16,15 @@ vi.mock('../lib/clipboard.js', () => clipboard);
 import toast from '../components/ui/Toast';
 import SongBookImport from './SongBookImport.jsx';
 
-const renderPage = (path = '/songbook/import') => render(
-  <MemoryRouter initialEntries={[path]}>
-    <Routes><Route path="/songbook/import" element={<SongBookImport />} /></Routes>
-  </MemoryRouter>,
-);
+const renderPage = async (path = '/songbook/import') => {
+  const result = render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes><Route path="/songbook/import" element={<SongBookImport />} /></Routes>
+    </MemoryRouter>,
+  );
+  await act(async () => {});
+  return result;
+};
 
 // All fixture content is invented (privacy convention).
 describe('SongBookImport', () => {
@@ -36,7 +40,7 @@ describe('SongBookImport', () => {
     // &amp;lt; → &lt; (first pass) → < (memo's second pass), turning
     // entity-encoded markup into tags that get stripped.
     clipboard.readClipboard.mockResolvedValue('&amp;lt; C   G   Am');
-    renderPage();
+    await renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Paste' }));
     const textarea = await screen.findByLabelText('Pasted tab content');
     await waitFor(() => expect(textarea.value).toBe('&amp;lt; C   G   Am'));
@@ -53,7 +57,7 @@ describe('SongBookImport', () => {
     // The form's own Save sits below the textarea + preview — off-screen on a
     // phone — so the header copy is the one that has to work above the fold.
     clipboard.readClipboard.mockResolvedValue('C   G   Am');
-    renderPage();
+    await renderPage();
     const headerSave = screen.getByRole('button', { name: 'Save' });
     expect(headerSave.disabled).toBe(true);
 
@@ -69,7 +73,7 @@ describe('SongBookImport', () => {
 
   it('clamps ChordPro meta before sending: out-of-range capo dropped, long key sliced to 20', async () => {
     const sheet = '{key: ThisKeyNameIsWayTooLongForTheSchema}\n{capo: 13}\nC   G   Am\nInvented lyric line';
-    renderPage();
+    await renderPage();
     fireEvent.change(screen.getByLabelText('Pasted tab content'), { target: { value: sheet } });
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Example Song' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save song' }));
@@ -80,7 +84,7 @@ describe('SongBookImport', () => {
   });
 
   it('a second meta-less import clears a stale auto-fill but never a user edit', async () => {
-    renderPage();
+    await renderPage();
     const textarea = screen.getByLabelText('Pasted tab content');
     const title = screen.getByLabelText('Title');
 
@@ -106,7 +110,7 @@ describe('SongBookImport', () => {
     api.importSongFromUrl.mockResolvedValue({
       draft: { title: 'Url Song', artist: 'Url Artist', content: { format: 'tab', text: 'C G' }, sourceUrl: 'https://example.com/t' },
     });
-    renderPage();
+    await renderPage();
     const title = screen.getByLabelText('Title');
 
     // Paste tab fills from ChordPro meta.
@@ -132,7 +136,7 @@ describe('SongBookImport', () => {
     const DRUM_CHART = 'time: 4/4\ntempo: 96\nsubdivision: 2\n\nHH: x x x x x x x x\nS:  - - - - o - - -\nK:  o - - - - - o -';
 
     it('auto-detects a pasted drum chart and previews it on the kit grid', async () => {
-      renderPage();
+      await renderPage();
       fireEvent.change(screen.getByLabelText('Pasted tab content'), { target: { value: DRUM_CHART } });
       // isDrumNotation runs BEFORE detectFormat — a grid row would otherwise
       // classify as plain text.
@@ -143,7 +147,7 @@ describe('SongBookImport', () => {
     });
 
     it('saves the drum format with the chart text', async () => {
-      renderPage();
+      await renderPage();
       fireEvent.change(screen.getByLabelText('Pasted tab content'), { target: { value: DRUM_CHART } });
       fireEvent.change(screen.getByLabelText('Instrument'), { target: { value: 'drums' } });
       fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Example Groove' } });
@@ -156,7 +160,7 @@ describe('SongBookImport', () => {
     });
 
     it('choosing the Drums instrument defaults the format to drum', async () => {
-      renderPage();
+      await renderPage();
       // Content the drum sniff would NOT recognize — the instrument decides.
       fireEvent.change(screen.getByLabelText('Pasted tab content'), { target: { value: 'K: o\nnot yet a grid' } });
       fireEvent.change(screen.getByLabelText('Instrument'), { target: { value: 'drums' } });
@@ -170,7 +174,7 @@ describe('SongBookImport', () => {
       api.importSongFromUrl.mockResolvedValue({
         draft: { title: 'Fetched Groove', artist: '', content: { format: 'tab', text: DRUM_CHART }, sourceUrl: 'https://example.com/g' },
       });
-      renderPage();
+      await renderPage();
       fireEvent.click(screen.getByRole('tab', { name: 'From URL' }));
       fireEvent.change(screen.getByLabelText('Tab / chord-sheet URL'), { target: { value: 'https://example.com/g' } });
       fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
@@ -188,7 +192,7 @@ describe('SongBookImport', () => {
     });
 
     it('leaves a chord sheet on its detected format with the tab preview', async () => {
-      renderPage();
+      await renderPage();
       fireEvent.change(screen.getByLabelText('Pasted tab content'), { target: { value: '[Verse]\nC  G  Am  F\nInvented lyric line' } });
       expect(await screen.findByText('tab')).toBeTruthy();
       expect(screen.queryByLabelText(/^Drum bar/)).toBeNull();
@@ -200,7 +204,7 @@ describe('SongBookImport', () => {
     const fetchFailure = Object.assign(new Error('Bad gateway'), { code: 'SONG_IMPORT_FETCH_FAILED' });
 
     const failFetch = async (url = 'https://example.com/missing') => {
-      renderPage();
+      await renderPage();
       fireEvent.click(screen.getByRole('tab', { name: 'From URL' }));
       fireEvent.change(screen.getByLabelText('Tab / chord-sheet URL'), { target: { value: url } });
       fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
@@ -237,7 +241,7 @@ describe('SongBookImport', () => {
       api.importSongFromUrl.mockResolvedValueOnce({
         draft: { title: 'First Fetch', artist: '', content: { format: 'tab', text: 'C G Am' }, sourceUrl: 'https://example.com/a' },
       }).mockRejectedValueOnce(fetchFailure);
-      renderPage();
+      await renderPage();
       fireEvent.click(screen.getByRole('tab', { name: 'From URL' }));
       const input = screen.getByLabelText('Tab / chord-sheet URL');
       fireEvent.change(input, { target: { value: 'https://example.com/a' } });
@@ -258,7 +262,7 @@ describe('SongBookImport', () => {
     // write a draft (or an error) under a URL that never produced it.
     let rejectFetch;
     api.importSongFromUrl.mockReturnValue(new Promise((_, reject) => { rejectFetch = reject; }));
-    renderPage();
+    await renderPage();
     fireEvent.click(screen.getByRole('tab', { name: 'From URL' }));
     const input = screen.getByLabelText('Tab / chord-sheet URL');
     fireEvent.change(input, { target: { value: 'https://example.com/slow' } });
@@ -273,7 +277,7 @@ describe('SongBookImport', () => {
   });
 
   it('sends an in-range pasted capo through unchanged', async () => {
-    renderPage();
+    await renderPage();
     fireEvent.change(screen.getByLabelText('Pasted tab content'), {
       target: { value: '{capo: 3}\nC   G   Am' },
     });

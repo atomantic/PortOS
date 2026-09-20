@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -38,7 +38,11 @@ const dupGroup = {
   ],
 };
 
-const renderPage = () => render(<MemoryRouter><Universes /></MemoryRouter>);
+const renderPage = async () => {
+  const result = render(<MemoryRouter><Universes /></MemoryRouter>);
+  await act(async () => {});
+  return result;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -53,14 +57,14 @@ beforeEach(() => {
 
 describe('Universes page — duplicate detection', () => {
   it('shows a banner when duplicate-named universes are detected', async () => {
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText(/1 duplicate-named universe detected/)).toBeInTheDocument());
     expect(screen.getByText(/2 copies/)).toBeInTheDocument();
   });
 
   it('hides the banner when no duplicates exist', async () => {
     api.listUniverseDuplicates.mockResolvedValue({ groups: [] });
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText('Universes')).toBeInTheDocument());
     expect(screen.queryByText(/duplicate-named/)).not.toBeInTheDocument();
   });
@@ -77,7 +81,7 @@ describe('Universes page — duplicate detection', () => {
       .mockResolvedValue({ groups: [] });
 
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText(/2 copies/)).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /Merge…/ }));
@@ -96,7 +100,7 @@ describe('Universes page — duplicate detection', () => {
 
   it('dismisses a group via "Keep both" for the session', async () => {
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText(/duplicate-named/)).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /Keep both/ }));
@@ -117,7 +121,7 @@ describe('Universes page — row thumbnail', () => {
     api.listMediaCollections.mockResolvedValue([
       { universeId: 'u1', items: [{ kind: 'image', ref: 'contact-sheet.png', addedAt: '2026-06-10T00:00:00Z' }] },
     ]);
-    const { container } = renderPage();
+    const { container } = await renderPage();
     await waitFor(() => expect(screen.getAllByText('Neon Expanse').length).toBeGreaterThan(0));
     const img = container.querySelector('img');
     expect(img).toBeTruthy();
@@ -133,7 +137,7 @@ describe('Universes page — row thumbnail', () => {
     api.listMediaCollections.mockResolvedValue([
       { universeId: 'u3', items: [{ kind: 'image', ref: 'media.png', addedAt: '2026-06-10T00:00:00Z' }] },
     ]);
-    const { container } = renderPage();
+    const { container } = await renderPage();
     await waitFor(() => expect(screen.getAllByText('Void').length).toBeGreaterThan(0));
     expect(container.querySelector('img').getAttribute('src')).toContain('media.png');
   });
@@ -145,7 +149,7 @@ describe('Universes page — row thumbnail', () => {
     api.listMediaCollections.mockResolvedValue([
       { universeId: 'u2', items: [{ kind: 'image', ref: 'fallback.png', addedAt: '2026-06-10T00:00:00Z' }] },
     ]);
-    const { container } = renderPage();
+    const { container } = await renderPage();
     await waitFor(() => expect(screen.getAllByText('Reality').length).toBeGreaterThan(0));
     const img = container.querySelector('img');
     expect(img.getAttribute('src')).toContain('fallback.png');
@@ -163,7 +167,7 @@ describe('Universes page — factual badge (#7616)', () => {
       { id: 'universe-reality', name: 'Reality', factual: true, updatedAt: '2026-06-02T00:00:00Z', createdAt: '2026-06-02T00:00:00Z' },
       { id: 'u-fiction', name: 'Example Universe', factual: false, updatedAt: '2026-06-01T00:00:00Z', createdAt: '2026-06-01T00:00:00Z' },
     ]);
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getAllByText('Example Universe').length).toBeGreaterThan(0));
     // One badge per layout (desktop table + mobile cards), and none for the
     // fiction world — the regression is a badge keyed on truthiness of a field

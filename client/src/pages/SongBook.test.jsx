@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
 
 // Mock the api barrel (RoundEditor.test.jsx harness style).
@@ -40,12 +40,16 @@ const LocationProbe = () => {
   return <output data-testid="location">{location.pathname}{location.search}</output>;
 };
 
-const renderPage = (path = '/songbook') => render(
-  <MemoryRouter initialEntries={[path]}>
-    <LocationProbe />
-    <Routes><Route path="/songbook" element={<SongBook />} /></Routes>
-  </MemoryRouter>,
-);
+const renderPage = async (path = '/songbook') => {
+  const result = render(
+    <MemoryRouter initialEntries={[path]}>
+      <LocationProbe />
+      <Routes><Route path="/songbook" element={<SongBook />} /></Routes>
+    </MemoryRouter>,
+  );
+  await act(async () => {});
+  return result;
+};
 
 describe('SongBook index', () => {
   beforeEach(() => {
@@ -58,14 +62,14 @@ describe('SongBook index', () => {
   });
 
   it('renders the loaded songs', async () => {
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Example Song')).toBeTruthy();
     expect(screen.getByText('The Placeholders')).toBeTruthy();
   });
 
   it('opens creation from the header and navigates to edit mode after submitting', async () => {
     api.createSong.mockResolvedValue({ id: 'new-song' });
-    renderPage();
+    await renderPage();
     await screen.findByText('Example Song');
 
     fireEvent.click(screen.getByRole('button', { name: 'New Song' }));
@@ -81,7 +85,7 @@ describe('SongBook index', () => {
 
   it('flips a song stage via a partial updateSong and updates local state reactively', async () => {
     api.updateSong.mockResolvedValue(song('s1', 'Example Song', { stage: 'learning' }));
-    renderPage();
+    await renderPage();
     const select = await screen.findByLabelText('Stage for Example Song');
     expect(select.value).toBe('new');
     fireEvent.change(select, { target: { value: 'learning' } });
@@ -93,7 +97,7 @@ describe('SongBook index', () => {
 
   it('deletes a song after inline confirmation and removes its card', async () => {
     api.deleteSong.mockResolvedValue({ id: 's1' });
-    renderPage();
+    await renderPage();
     await screen.findByText('Example Song');
     fireEvent.click(screen.getByLabelText('Delete Example Song'));
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
@@ -105,7 +109,7 @@ describe('SongBook index', () => {
     api.listSongs.mockResolvedValue({
       songs: [song('s1', 'Example Song'), song('s2', 'Other Tune', { stage: 'memorized' })],
     });
-    renderPage('/songbook?stage=memorized');
+    await renderPage('/songbook?stage=memorized');
     expect(await screen.findByText('Other Tune')).toBeTruthy();
     expect(screen.queryByText('Example Song')).toBeNull();
   });
@@ -119,7 +123,7 @@ describe('SongBook index', () => {
         song('s2', 'Other Tune', { practice: { nextReview: soon, sessions: 2 } }),
       ],
     });
-    renderPage('/songbook?due=1');
+    await renderPage('/songbook?due=1');
     expect(await screen.findByText('Example Song')).toBeTruthy();
     expect(screen.queryByText('Other Tune')).toBeNull();
     // Count is over ALL songs, not the filtered view.
@@ -131,13 +135,13 @@ describe('SongBook index', () => {
     api.listSongs.mockResolvedValue({
       songs: [song('s1', 'Example Song'), song('s2', 'Other Tune', { practice: { nextReview: soon } })],
     });
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Due for practice')).toBeTruthy();
     expect(screen.getByText(/^Review in \d/)).toBeTruthy();
   });
 
   it('toggles the due filter into the URL rather than local state', async () => {
-    renderPage();
+    await renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /^Due/ }));
     await waitFor(() => expect(
       screen.getByRole('button', { name: /^Due/ }).getAttribute('aria-pressed'),
@@ -146,7 +150,7 @@ describe('SongBook index', () => {
 
   it('shows the teaching empty state when there are no songs', async () => {
     api.listSongs.mockResolvedValue({ songs: [] });
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('No songs yet')).toBeTruthy();
     expect(screen.getByText('Import a song')).toBeTruthy();
   });
@@ -154,7 +158,7 @@ describe('SongBook index', () => {
   // A failed fetch must not collapse into the fetched-and-empty state (#3899).
   it('renders a retryable error banner instead of the empty state when the load fails', async () => {
     api.listSongs.mockRejectedValue(new Error('Network down'));
-    renderPage();
+    await renderPage();
     expect(await screen.findByText("Couldn't load your songs")).toBeTruthy();
     expect(screen.queryByText('No songs yet')).toBeNull();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
@@ -163,7 +167,7 @@ describe('SongBook index', () => {
   it('re-fetches and clears the error banner when Retry is clicked', async () => {
     api.listSongs.mockRejectedValueOnce(new Error('Network down'))
       .mockResolvedValueOnce({ songs: [song('s1', 'Example Song')] });
-    renderPage();
+    await renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Example Song')).toBeTruthy();
     await waitFor(() => expect(screen.queryByText("Couldn't load your songs")).toBeNull());
@@ -172,7 +176,7 @@ describe('SongBook index', () => {
 
   it('does not double-toast on a failed load — the banner owns the error UI', async () => {
     api.listSongs.mockRejectedValue(new Error('Network down'));
-    renderPage();
+    await renderPage();
     await screen.findByText("Couldn't load your songs");
     expect(api.listSongs).toHaveBeenCalledWith({ silent: true });
     expect(toast.error).not.toHaveBeenCalled();
