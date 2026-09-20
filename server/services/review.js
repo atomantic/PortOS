@@ -11,8 +11,42 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
-import { isSourceOwnedReviewItem } from './reviewActionAdapters.js';
 import { GOAL_FIDELITY_HOLD_EVENT, formatGoalFidelitySummary } from '../lib/goalFidelity.js';
+
+const SOURCE_OWNED_REVIEW_CATEGORIES = new Set([
+  'content-review',
+  'goal-fidelity',
+  'memory-approval',
+  'plan-question',
+  'task-approval',
+  'autopilot-paused',
+]);
+
+const toText = (value) => (typeof value === 'string' ? value.trim() : '');
+
+const toReference = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return toText(value);
+};
+
+/**
+ * Source-owned obligations must be completed by their owning action, not by
+ * the generic Review service. Keep this classifier beside the policy it
+ * protects so review.js does not eagerly load the queue's notification
+ * adapters and their vocabulary for every caller that only needs review
+ * storage.
+ */
+export const isSourceOwnedReviewItem = (item) => {
+  const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  const category = toText(metadata.category);
+
+  if (metadata.sourceOwned === true || metadata.triageOnly === true) return true;
+  if (SOURCE_OWNED_REVIEW_CATEGORIES.has(category)) return true;
+  if (item?.type === 'cos' && (toReference(metadata.taskId) || toReference(metadata.referenceId))) {
+    return true;
+  }
+  return item?.type === 'alert';
+};
 
 const DATA_DIR = join(PATHS.data, 'review');
 const ITEMS_FILE = join(DATA_DIR, 'items.json');

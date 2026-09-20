@@ -29,7 +29,6 @@ import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../.
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { resolveVideoModelSelection } from './modelSelection.js';
 import { findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
-import { ensureMiniMaxH3Weights } from './ensureWeights.js';
 import { describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
@@ -681,7 +680,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       ffprobePath: ffprobe,
     }));
     if (batch) args.push('--batch-seeds', JSON.stringify(batch.map((item) => item.seed)));
-    await ensureMiniMaxH3Weights(model);
+    if (model.runtime === 'minimax_h3') {
+      const { ensureMiniMaxH3Weights } = await import('./ensureWeights.js');
+      await ensureMiniMaxH3Weights(model);
+    }
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to prepare video generation';

@@ -32,17 +32,13 @@ import * as brain from './brain.js';
 import * as brainStorage from './brainStorage.js';
 import * as askConversations from './askConversations.js';
 import * as cosTaskStore from './cosTaskStore.js';
-import * as cosAgentFeedback from './cosAgentFeedback.js';
 import * as messageDrafts from './messageDrafts.js';
 import { generateNonProductAlerts } from './proactiveAlertSources.js';
-import * as backup from './backup.js';
 import * as identity from './identity.js';
 import * as reviewService from './review.js';
 import * as notifications from './notifications.js';
 import * as stackerNews from './stackerNews.js';
 import * as x from './x.js';
-import { promoteLatestAssistantTurn } from './askPromote.js';
-import { adaptNotification, adaptStoredReviewItem } from './reviewActionAdapters.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -346,7 +342,8 @@ const PRODUCERS = [
     drillTo: '/cos/agents?feedback=needs-feedback',
     views: ['today', 'all', 'history'],
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT, ctx = {}) {
-      const pending = await cosAgentFeedback.getPendingAgentFeedback({ includeUnavailable: ctx.view === 'history' });
+      const { getPendingAgentFeedback } = await import('./cosAgentFeedback.js');
+      const pending = await getPendingAgentFeedback({ includeUnavailable: ctx.view === 'history' });
       const items = [
         ...(Array.isArray(pending?.agents) ? pending.agents : []),
         ...(ctx.view === 'history' && Array.isArray(pending?.unavailable) ? pending.unavailable : []),
@@ -445,6 +442,7 @@ const PRODUCERS = [
     label: 'Stored review obligations',
     drillTo: '/review',
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const { adaptStoredReviewItem } = await import('./reviewActionAdapters.js');
       const pendingItems = await reviewService.getItems({ status: 'pending' });
       const items = (Array.isArray(pendingItems) ? pendingItems : [])
         .map(adaptStoredReviewItem)
@@ -525,6 +523,7 @@ const PRODUCERS = [
     label: 'Actionable notifications',
     drillTo: '/review',
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const { adaptNotification } = await import('./reviewActionAdapters.js');
       // Filter before applying the queue cap. A busy history stream must not
       // hide a source-owned approval that happens to be older than it.
       const records = await notifications.getNotifications({ includeHidden: true });
@@ -674,11 +673,12 @@ const PRODUCERS = [
     label: 'Failed backups',
     drillTo: '/settings/backup',
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const { getState } = await import('./backup.js');
       // A backup needing acknowledgement is either a full failure (status
       // 'error') or a degraded run (status 'degraded' — file rsync succeeded but
       // the DB dump failed; it also carries an `error` string). Both warrant a
       // queue item, but they map to different severities below.
-      const state = await backup.getState();
+      const state = await getState();
       const needsAttention = state && (state.status === 'error' || state.status === 'degraded' || state.error);
       return needsAttention ? [state].slice(0, limit) : [];
     },
@@ -1037,7 +1037,10 @@ const SOURCE_ACTIONS = Object.freeze({
     reopen: (id) => reviewService.reopenItem(id),
   }),
   feedback: Object.freeze({
-    rate: (id, input) => cosAgentFeedback.submitAgentFeedback(id, input),
+    rate: async (id, input) => {
+      const { submitAgentFeedback } = await import('./cosAgentFeedback.js');
+      return submitAgentFeedback(id, input);
+    },
   }),
 });
 
@@ -1237,6 +1240,7 @@ export async function promoteAskQueueItem(queueItemId, target, goalId) {
     throw new ServerError('goalId is required to promote into a goal', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
+  const { promoteLatestAssistantTurn } = await import('./askPromote.js');
   const result = await promoteLatestAssistantTurn({ conversationId, target, goalId });
   await clearQueueTriageMarkersForItem(queueItemId);
   return { source, id: queueItemId, promoted: true, target: result.target, ref: result.ref };

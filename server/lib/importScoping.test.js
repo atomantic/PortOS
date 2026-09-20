@@ -121,6 +121,8 @@ const NARROWED = [
     'needs isStr / trimTo, which textUtils.js declares'],
   ['lib/renderSlot.js', 'lib/storyBible.js',
     'needs isStr / trimTo, which textUtils.js declares'],
+  ['services/review.js', 'services/reviewActionAdapters.js',
+    'owns source-owned completion policy without the queue action adapters'],
 ];
 
 describe('narrowed imports stay narrow (#6009)', () => {
@@ -252,6 +254,27 @@ const DEFERRED = [
   ['services/runner.js', 'services/ollamaAgentContext.js',
     'needs the daemon manager only for an ollama-backed CLI run; the call was already predicate-gated',
     './ollamaAgentContext.js'],
+  ['services/reviewQueue.js', 'services/cosAgentFeedback.js',
+    'loads feedback persistence only when gathering or rating CoS feedback',
+    './cosAgentFeedback.js'],
+  ['services/reviewQueue.js', 'services/askPromote.js',
+    'loads Ask promotion orchestration only for an explicit promotion action',
+    './askPromote.js'],
+  ['services/reviewQueue.js', 'services/backup.js',
+    'reads backup status only while gathering the failed-backup producer',
+    './backup.js'],
+  ['services/reviewQueue.js', 'services/reviewActionAdapters.js',
+    'adapts stored review and notification rows only while building the queue',
+    './reviewActionAdapters.js'],
+  ['services/notifications.js', 'services/reviewActionAdapters.js',
+    'classifies action history only on notification mutations',
+    './reviewActionAdapters.js'],
+  ['services/telegramForward.js', 'services/reviewActionAdapters.js',
+    'adapts a notification only when a forward is actually sent',
+    './reviewActionAdapters.js'],
+  ['services/videoGen/generateVideo.js', 'services/videoGen/ensureWeights.js',
+    'provisions MiniMax H3 weights only for an actual H3 render',
+    './ensureWeights.js'],
 ];
 
 describe('deferred imports stay deferred (#6156)', () => {
@@ -773,6 +796,11 @@ describe('deferred imports stay deferred (#6156)', () => {
 // test files' own closures. Measured before 116,066, after 116,111 (+45);
 // restores the ~400 of headroom the recent entries carry — main had eroded
 // to 34.
+// The current tree also carries three avoidable operational edges: the review
+// queue's feedback store, its action adapters, and H3 weight provisioning were
+// imported at module scope even though each runs only from an explicit queue,
+// mutation, forwarding, or H3-render path. Keep those boundaries deferred so
+// unrelated server suites do not pay their subtrees.
 const MAX_STATIC_INSTANTIATIONS = 116500;
 
 
