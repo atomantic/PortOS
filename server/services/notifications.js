@@ -13,7 +13,6 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
-import { adaptNotification } from './reviewActionAdapters.js';
 
 const withLock = createMutex();
 
@@ -35,6 +34,8 @@ export const PRIORITY_LEVELS = {
   HIGH: 'high',
   CRITICAL: 'critical'
 };
+
+const loadActionAdapter = () => import('./reviewActionAdapters.js');
 
 /**
  * Ensure data directory exists
@@ -132,6 +133,7 @@ export async function getCountsByType() {
  */
 export async function addNotification(notification) {
   return withLock(async () => {
+    const { adaptNotification } = await loadActionAdapter();
     const data = await loadNotifications();
 
     const newNotification = {
@@ -178,6 +180,7 @@ export async function addNotification(notification) {
  */
 export async function removeNotification(id) {
   return withLock(async () => {
+    const { adaptNotification } = await loadActionAdapter();
     const data = await loadNotifications();
     const index = data.notifications.findIndex(n => n.id === id);
 
@@ -277,6 +280,7 @@ export async function markAllAsRead() {
  */
 export async function clearAll() {
   return withLock(async () => {
+    const { adaptNotification } = await loadActionAdapter();
     const data = await loadNotifications();
     const count = data.notifications.filter(n => !n.historyHidden).length;
 

@@ -18,7 +18,6 @@ import { getDomainAutonomyMode } from './cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { peekMemory } from './memoryBackend.js';
 import { buildNotificationMessage, isMemoryApprovalNotification } from '../lib/telegramMessage.js';
-import { adaptNotification } from './reviewActionAdapters.js';
 
 const DOMAIN = 'messages';
 
@@ -75,6 +74,7 @@ export async function forwardNotification(notification, { cachedForwardTypes, se
   if (!await shouldForward(notification, cachedForwardTypes)) return;
   // Only proven references participate. Legacy uncorrelated forwards retain
   // their existing type/autonomy/budget behavior.
+  const { adaptNotification } = await import('./reviewActionAdapters.js');
   const action = adaptNotification(notification);
   const actionId = action?.id || (notification.type === 'daily_post_reminder'
     && notification.metadata?.actionId === 'product:daily-post' ? 'product:daily-post' : null);
