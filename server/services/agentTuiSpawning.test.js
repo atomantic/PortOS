@@ -1166,7 +1166,7 @@ describe('spawnTuiAgent runtime', () => {
     const spawnPromise = runSpawn();
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from('Codex booting...\\n'));
+    await capturedOnData(Buffer.from('Codex booting...\\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -1263,7 +1263,7 @@ describe('spawnTuiAgent runtime', () => {
     const spawnPromise = runSpawn();
     await flushMicrotasks();
 
-    await capturedOnData(Buffer.from('booting...\n'));
+    await capturedOnData(Buffer.from('booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
 
     // Open the ready-gate (promptDelay floor + idle threshold) so sendPrompt fires.
@@ -1291,6 +1291,10 @@ describe('spawnTuiAgent runtime', () => {
   const claudeTuiConfig = { command: 'claude', args: [], spawnCommand: 'claude', spawnArgs: [], commandLine: 'claude', promptDelayMs: 100 };
   // Antigravity (agy) gets the SAME positive input-ready gate as claude (#2705).
   const agyTuiConfig = { command: 'agy', args: [], spawnCommand: 'agy', spawnArgs: [], commandLine: 'agy', promptDelayMs: 100 };
+  // Codex's composer placeholder — the positive 	he input box is live signal
+  // the idle paste path now requires (CODEX_COMPOSER_READY_PATTERN). A codex
+  // that has not painted it is still booting, and a paste into it is swallowed.
+  const CODEX_COMPOSER = '> Ask Codex to do anything\n';
   const pasteCount = () => vi.mocked(shellService.writeToSession).mock.calls
     .filter(([, d]) => typeof d === 'string' && d.includes('\x1b[200~')).length;
   // The launch shell turns bracketed-paste OFF to run the command, then claude
@@ -1507,7 +1511,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // The selector clears and Codex repaints its composer; only then can the
     // ordinary Codex readiness path paste the task.
-    await capturedOnData(Buffer.from('OpenAI Codex ready\n'));
+    await capturedOnData(Buffer.from(CODEX_COMPOSER));
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
@@ -1542,7 +1546,7 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(0);
 
     // Trust accepted → codex paints its composer → the ordinary idle path pastes.
-    await capturedOnData(Buffer.from('OpenAI Codex ready\n'));
+    await capturedOnData(Buffer.from(CODEX_COMPOSER));
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
     expect(pasteCount()).toBe(1);
@@ -2047,7 +2051,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // Banner output so firstOutputAt is set, then advance past the prompt-delay
     // floor + readiness idle threshold so the ready poll fires the paste.
-    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2147,7 +2151,7 @@ describe('spawnTuiAgent runtime', () => {
     // Now the real command is injected and the CLI produces its own output —
     // the idle clock should start from here and the paste should proceed.
     sendInitialCommand();
-    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2164,6 +2168,44 @@ describe('spawnTuiAgent runtime', () => {
   // `paste-not-rendered` in ~24s with a healthy composer on screen. The paste
   // must be left alone long enough for that late commit, and submitted when it
   // arrives — never re-pasted over.
+  // Regression (2026-09-20, six codex-tui agents dead in ~24s): on a cold
+  // Windows start codex paints its header and then goes SILENT for seconds
+  // while the native binary boots. Output-idle alone read that lull as "ready"
+  // and pasted into a composer that did not exist yet, which swallowed the
+  // paste. The idle path must wait for codex's composer placeholder; the
+  // PASTE_DEADLINE_MS fallback still delivers if it never paints.
+  it('codex composer gate: idle silence before the composer paints does not paste', async () => {
+    runSpawn();
+    await flushMicrotasks();
+
+    // Header only — no composer. Then well past the 1200ms idle threshold.
+    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(3000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(0);
+
+    // Composer paints → the ordinary idle path delivers.
+    await capturedOnData(Buffer.from(CODEX_COMPOSER));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
+  // The gate can only DELAY a paste: a codex whose composer wording we no
+  // longer recognize still gets the prompt at the blind-paste deadline.
+  it('codex composer gate: still blind-pastes at PASTE_DEADLINE_MS if the composer is never recognized', async () => {
+    const { PASTE_DEADLINE_MS } = await vi.importActual('../lib/tuiHandshake.js');
+
+    runSpawn();
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('>_ OpenAI Codex (v9.9.9)\n  some future composer wording\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(PASTE_DEADLINE_MS + 1000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
   it('codex late paste commit: waits for the chip past the old window instead of re-pasting', async () => {
     const pasteFailSpy = vi.fn();
     vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async (args) => {
@@ -2174,7 +2216,7 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
     // Ordinary banner — deliberately NOT an MCP-boot signal, so the extended
     // boot budget is not what rescues this run.
-    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n  directory: loading\n'));
+    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n  directory: loading\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2210,7 +2252,7 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n'));
+    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2218,7 +2260,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // Boot banner arrives only now — after the paste. The attempt must abandon
     // the patient window and fall back to the short swallow-recovery ladder.
-    await capturedOnData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n'));
+    await capturedOnData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n' + CODEX_COMPOSER));
     await flushMicrotasks();
 
     // Well inside the patient window, so a captured 45s wait would still be
@@ -2284,7 +2326,7 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n'));
+    await capturedOnData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2325,7 +2367,7 @@ describe('spawnTuiAgent runtime', () => {
 
     runSpawn();
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('Booting MCP server: node_repl(0s • esc to interrupt)\n'));
+    await capturedOnData(Buffer.from('Booting MCP server: node_repl(0s • esc to interrupt)\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2349,7 +2391,7 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn();
     await flushMicrotasks();
     // Ordinary banner chrome — NOT an MCP-boot signal, so the budget stays fixed.
-    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
@@ -2714,7 +2756,7 @@ describe('spawnTuiAgent runtime', () => {
 
     // Drive the prompt far enough to exercise normal post-submit output, then
     // use the ordinary shell-exit completion path.
-    await capturedOnData(Buffer.from('Codex booting...\n'));
+    await capturedOnData(Buffer.from('Codex booting...\n' + CODEX_COMPOSER));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
