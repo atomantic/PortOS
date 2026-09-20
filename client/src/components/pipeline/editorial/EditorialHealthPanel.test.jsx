@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, useSearchParams } from 'react-router';
 import EditorialHealthPanel from './EditorialHealthPanel';
 
@@ -23,7 +23,11 @@ const wrap = (props, route = '/') => (
     <Probe />
   </MemoryRouter>
 );
-const renderPanel = (props = {}, route) => render(wrap(props, route));
+const renderPanel = async (props = {}, route) => {
+  const result = render(wrap(props, route));
+  await act(async () => {});
+  return result;
+};
 const params = () => screen.getByTestId('search-params').textContent;
 
 const health = (over = {}) => ({
@@ -52,8 +56,8 @@ beforeEach(() => {
 });
 
 describe('EditorialHealthPanel', () => {
-  it('renders nothing without a series', () => {
-    const { container } = renderPanel({ seriesId: '' });
+  it('renders nothing without a series', async () => {
+    const { container } = await renderPanel({ seriesId: '' });
     // The router + probe still render; the panel itself renders null.
     expect(screen.queryByText('Editorial Health')).toBeNull();
     expect(getEditorialHealth).not.toHaveBeenCalled();
@@ -62,7 +66,7 @@ describe('EditorialHealthPanel', () => {
 
   it('shows the score, readiness, severity breakdown and trend delta', async () => {
     getEditorialHealth.mockResolvedValue(health());
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     expect(await screen.findByText('83')).toBeTruthy();
     expect(screen.getByText('Not ready')).toBeTruthy();
     expect(screen.getByText('+13')).toBeTruthy();
@@ -73,13 +77,13 @@ describe('EditorialHealthPanel', () => {
     getEditorialHealth.mockResolvedValue(health({
       trend: { points: [{ score: 90 }, { score: 70 }], regressions: [{ category: 'continuity', from: 1, to: 2 }], delta: -20 },
     }));
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     expect(await screen.findByText('1→2')).toBeTruthy();
   });
 
   it('marks ready when the gate is satisfied', async () => {
     getEditorialHealth.mockResolvedValue(health({ ready: true, score: 100, openBySeverity: { high: 0, medium: 0, low: 0 }, open: 0 }));
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     expect(await screen.findByText('Ready')).toBeTruthy();
     expect(screen.getByText('No open findings')).toBeTruthy();
   });
@@ -87,7 +91,7 @@ describe('EditorialHealthPanel', () => {
   it('persists a readiness-gate change and refetches', async () => {
     getEditorialHealth.mockResolvedValue(health());
     setEditorialReadinessGate.mockResolvedValue({ readinessGate: 'noOpenHighOrMedium' });
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     await screen.findByText('83');
     fireEvent.change(screen.getByLabelText('Ready when:'), { target: { value: 'noOpenHighOrMedium' } });
     await waitFor(() => expect(setEditorialReadinessGate).toHaveBeenCalledWith('noOpenHighOrMedium', { silent: true }));
@@ -97,7 +101,7 @@ describe('EditorialHealthPanel', () => {
 
   it('refetches when refreshKey changes', async () => {
     getEditorialHealth.mockResolvedValue(health());
-    const { rerender } = renderPanel({ seriesId: 'ser-1', refreshKey: 0 });
+    const { rerender } = await renderPanel({ seriesId: 'ser-1', refreshKey: 0 });
     await screen.findByText('83');
     rerender(wrap({ seriesId: 'ser-1', refreshKey: 1 }));
     await waitFor(() => expect(getEditorialHealth).toHaveBeenCalledTimes(2));
@@ -107,7 +111,7 @@ describe('EditorialHealthPanel', () => {
     getEditorialHealth.mockResolvedValue(health({
       trend: { points: [{ score: 83 }], regressions: [], delta: 0 },
     }));
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     await screen.findByText('83');
     // The "+0/0" delta chip should not render for a single revision.
     expect(screen.queryByTitle('Change since the previous revision')).toBeNull();
@@ -130,7 +134,7 @@ describe('EditorialHealthPanel', () => {
       'naming.dissimilar-names': { label: 'Name dissimilarity' },
       'roster.economy': { label: 'Cast economy' },
     };
-    renderPanel({ seriesId: 'ser-1', checksById });
+    await renderPanel({ seriesId: 'ser-1', checksById });
     await screen.findByText('83');
     expect(screen.getByText('Open by check')).toBeTruthy();
     // Labels resolved from the catalog, sorted by count desc.
@@ -145,7 +149,7 @@ describe('EditorialHealthPanel', () => {
       openByCheck: { 'custom.orphan': 1 },
       trend: { points: [{ score: 83, openByCheck: { 'custom.orphan': 1 } }], regressions: [], checkRegressions: [], delta: 0 },
     }));
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     await screen.findByText('83');
     expect(screen.getByText('custom.orphan')).toBeTruthy();
   });
@@ -158,7 +162,7 @@ describe('EditorialHealthPanel', () => {
         { issueNumber: 3, score: 100, open: 0, openBySeverity: { high: 0, medium: 0, low: 0 } },
       ],
     }));
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     await screen.findByText('83');
     // Two issues carry open findings (issue 3 is clean → excluded); expand.
     const toggle = screen.getByText(/By issue \(2\)/);
@@ -170,7 +174,7 @@ describe('EditorialHealthPanel', () => {
 
   it('deep-links the triage category filter when a category row is clicked (#1606)', async () => {
     getEditorialHealth.mockResolvedValue(health());
-    renderPanel({ seriesId: 'ser-1' }, '/?series=ser-1');
+    await renderPanel({ seriesId: 'ser-1' }, '/?series=ser-1');
     await screen.findByText('83');
     fireEvent.click(screen.getByTitle('Filter findings to continuity'));
     await waitFor(() => expect(params()).toContain('fcat=continuity'));
@@ -180,7 +184,7 @@ describe('EditorialHealthPanel', () => {
 
   it('toggles the category filter off when its active row is clicked again (#1606)', async () => {
     getEditorialHealth.mockResolvedValue(health());
-    renderPanel({ seriesId: 'ser-1' }, '/?fcat=continuity');
+    await renderPanel({ seriesId: 'ser-1' }, '/?fcat=continuity');
     await screen.findByText('83');
     // The active row offers a clear affordance.
     fireEvent.click(screen.getByTitle('Clear the continuity filter'));
@@ -192,7 +196,7 @@ describe('EditorialHealthPanel', () => {
       openByCheck: { 'roster.economy': 1 },
       trend: { points: [{ score: 83, openByCheck: { 'roster.economy': 1 } }], regressions: [], checkRegressions: [], delta: 0 },
     }));
-    renderPanel({ seriesId: 'ser-1', checksById: { 'roster.economy': { label: 'Cast economy' } } });
+    await renderPanel({ seriesId: 'ser-1', checksById: { 'roster.economy': { label: 'Cast economy' } } });
     await screen.findByText('83');
     fireEvent.click(screen.getByTitle('Filter findings to Cast economy'));
     await waitFor(() => expect(params()).toContain('fcheck=roster.economy'));
@@ -205,7 +209,7 @@ describe('EditorialHealthPanel', () => {
       openByCheck: { completeness: 2 },
       trend: { points: [{ score: 83, openByCheck: { completeness: 2 } }], regressions: [], checkRegressions: [], delta: 0 },
     }));
-    renderPanel({ seriesId: 'ser-1', filterableCheckIds: new Set(), filterableCategories: new Set() });
+    await renderPanel({ seriesId: 'ser-1', filterableCheckIds: new Set(), filterableCategories: new Set() });
     await screen.findByText('83');
     const row = screen.getByTitle(/completeness findings aren't in the triage filter/i);
     expect(row.tagName).toBe('SPAN');
@@ -214,7 +218,7 @@ describe('EditorialHealthPanel', () => {
 
   it('renders a non-triage-filterable category row as static text (#1606)', async () => {
     getEditorialHealth.mockResolvedValue(health({ openByCategory: { plot: 2 } }));
-    renderPanel({ seriesId: 'ser-1', filterableCheckIds: new Set(), filterableCategories: new Set() });
+    await renderPanel({ seriesId: 'ser-1', filterableCheckIds: new Set(), filterableCategories: new Set() });
     await screen.findByText('83');
     const row = screen.getByTitle(/plot findings aren't in the triage filter/i);
     expect(row.tagName).toBe('SPAN');
@@ -226,7 +230,7 @@ describe('EditorialHealthPanel', () => {
       openByCheck: { 'roster.economy': 1 },
       trend: { points: [{ score: 83, openByCheck: { 'roster.economy': 1 } }], regressions: [], checkRegressions: [], delta: 0 },
     }));
-    renderPanel({
+    await renderPanel({
       seriesId: 'ser-1',
       checksById: { 'roster.economy': { label: 'Cast economy' } },
       filterableCheckIds: new Set(['roster.economy']),
@@ -254,7 +258,7 @@ describe('EditorialHealthPanel', () => {
 
   it('drills into a snapshot when a sparkline point is clicked (#1630)', async () => {
     getEditorialHealth.mockResolvedValue(trendHealth());
-    renderPanel({ seriesId: 'ser-1', checksById: { 'continuity.x': { label: 'Continuity X' } } });
+    await renderPanel({ seriesId: 'ser-1', checksById: { 'continuity.x': { label: 'Continuity X' } } });
     await screen.findByText('83');
     // No drill-down until a point is selected.
     expect(screen.queryByText('Changed since previous revision')).toBeNull();
@@ -271,7 +275,7 @@ describe('EditorialHealthPanel', () => {
 
   it('notes the first revision has nothing to compare against (#1630)', async () => {
     getEditorialHealth.mockResolvedValue(trendHealth());
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     await screen.findByText('83');
     fireEvent.click(screen.getByRole('button', { name: /Revision 1 of 2, score 70/ }));
     expect(await screen.findByText(/First recorded revision/)).toBeTruthy();
@@ -279,7 +283,7 @@ describe('EditorialHealthPanel', () => {
 
   it('closes the snapshot drill-down (#1630)', async () => {
     getEditorialHealth.mockResolvedValue(trendHealth());
-    renderPanel({ seriesId: 'ser-1' });
+    await renderPanel({ seriesId: 'ser-1' });
     await screen.findByText('83');
     fireEvent.click(screen.getByRole('button', { name: /Revision 2 of 2/ }));
     await screen.findByText('Changed since previous revision');

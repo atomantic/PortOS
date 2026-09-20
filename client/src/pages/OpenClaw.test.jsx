@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const openClawApi = vi.hoisted(() => ({
@@ -20,11 +20,15 @@ vi.mock('../components/settings/SettingsTabsHeader', () => ({
 
 import OpenClaw from './OpenClaw';
 
-const renderPage = () => render(
-  <MemoryRouter initialEntries={['/openclaw']}>
-    <OpenClaw />
-  </MemoryRouter>,
-);
+const renderPage = async () => {
+  const result = render(
+    <MemoryRouter initialEntries={['/openclaw']}>
+      <OpenClaw />
+    </MemoryRouter>,
+  );
+  await act(async () => {});
+  return result;
+};
 
 describe('OpenClaw page header', () => {
   beforeEach(() => {
@@ -45,7 +49,7 @@ describe('OpenClaw page header', () => {
   // Before #5653 the page duplicated PageHeader's structure by hand with `p-4`
   // padding, so it drifted from every other settings-group page's bar height.
   it('renders exactly one h1 through the shared PageHeader', async () => {
-    renderPage();
+    await renderPage();
 
     const heading = await screen.findByRole('heading', { level: 1 });
     expect(heading).toHaveAccessibleName('OpenClaw');
@@ -53,7 +57,7 @@ describe('OpenClaw page header', () => {
   });
 
   it('uses the shared compact bar padding rather than a hand-rolled p-4 one', async () => {
-    renderPage();
+    await renderPage();
 
     const heading = await screen.findByRole('heading', { level: 1 });
     const bar = heading.closest('div.border-b');

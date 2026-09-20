@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', async (importOriginal) => ({
@@ -20,18 +20,22 @@ vi.mock('../components/ui/Toast', () => ({
 import CreativeCommissions from './CreativeCommissions';
 import { listCommissions } from '../services/api';
 
-const renderPage = () => render(
-  <MemoryRouter initialEntries={['/creative-commission']}>
-    <CreativeCommissions />
-  </MemoryRouter>
-);
+const renderPage = async () => {
+  const result = render(
+    <MemoryRouter initialEntries={['/creative-commission']}>
+      <CreativeCommissions />
+    </MemoryRouter>
+  );
+  await act(async () => {});
+  return result;
+};
 
 describe('CreativeCommissions index empty state', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('routes the empty state to the create drawer via a named link', async () => {
     listCommissions.mockResolvedValue([]);
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('No commissions yet')).toBeInTheDocument();
     // The only actionTo conversion — assert the Link branch in situ so a
     // dropped actionTo/actionLabel leaves a detectable dead end.
@@ -43,7 +47,7 @@ describe('CreativeCommissions index empty state', () => {
     listCommissions.mockResolvedValue([
       { id: 'commission-1', name: 'Example Commission', enabled: true, schedule: {}, createdAt: '2026-01-01T00:00:00.000Z' },
     ]);
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Example Commission')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Create your first commission' })).toBeNull();
   });

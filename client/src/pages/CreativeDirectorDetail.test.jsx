@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
@@ -52,6 +52,7 @@ const renderPage = async () => {
     </MemoryRouter>,
   );
   await screen.findByRole('heading', { name: PROJECT.name });
+  await act(async () => {});
 };
 
 describe('CreativeDirectorDetail project deletion', () => {

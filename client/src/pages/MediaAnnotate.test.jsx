@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import MediaAnnotate from './MediaAnnotate';
 import { awaitEnabled } from '../test/enabledBarrier.js';
@@ -51,13 +51,17 @@ vi.mock('react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => navigate };
 });
 
-const renderPage = () => render(
-  <MemoryRouter initialEntries={['/media/annotate/image:foo.png']}>
-    <Routes>
-      <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
-    </Routes>
-  </MemoryRouter>,
-);
+const renderPage = async () => {
+  const result = render(
+    <MemoryRouter initialEntries={['/media/annotate/image:foo.png']}>
+      <Routes>
+        <Route path="/media/annotate/:mediaKey" element={<MediaAnnotate />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  await act(async () => {});
+  return result;
+};
 
 describe('MediaAnnotate re-render with annotations', () => {
   beforeEach(() => {
@@ -69,7 +73,7 @@ describe('MediaAnnotate re-render with annotations', () => {
   });
 
   it('saves the annotation and enqueues an img2img re-render, naming the local model', async () => {
-    renderPage();
+    await renderPage();
 
     // The button enables once the canvas reports dims AND saved strokes load.
     const btn = await awaitEnabled(() => screen.getByTitle('Re-render this image guided by your annotations'));
@@ -95,7 +99,7 @@ describe('MediaAnnotate re-render with annotations', () => {
 
   it('disables re-render and surfaces the reason when local img2img is unavailable', async () => {
     getRegenAvailability.mockResolvedValue({ available: false, reason: 'No local FLUX runner installed.' });
-    renderPage();
+    await renderPage();
 
     const btn = await awaitEnabled(() => screen.getByTitle('Re-render this image guided by your annotations'));
     fireEvent.click(btn);
