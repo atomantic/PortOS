@@ -241,10 +241,11 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // on `decks` and gets a 409 — only the decks category pauses, every other
   // category keeps flowing. A v1 receiver still accepts a ≤v0 sender
   // (sender-behind): pre-feature peers never push a `deck` record at all. The
-  // FIRST incompatible deck/card-shape change MUST bump this to 2 (where a v1
-  // peer would round-trip the new shape through an unaware sanitizer and LWW
-  // the strip back onto the newer peer).
-  decks: 1,
+  // v2 = deck-level `cardOrientation` + optional `cardOrientationPrompt`.
+  // A v1 peer would round-trip the deck through an unaware projection and
+  // silently strip a user's face-orientation choice, so only the decks
+  // category pauses until that peer upgrades.
+  decks: 2,
   // v1 = author personas (PostgreSQL `authors` table) federated via the
   // per-record peer-sync push pipeline (record kind `author`, sync category
   // `authors`). A brand-NEW synced record type like `storyBuilder` below, so it

@@ -60,7 +60,8 @@ describe('renderDeckCards', () => {
     expect(owner).toBe('decks');
     expect(params).toMatchObject({
       mode: 'local', pythonPath: '/py', modelId: 'flux2-klein-4b', width: 1024, height: 1536, seed: 7,
-      prompt: 'engraving. Full card. Ace of Spades: one spade', negativePrompt: 'blurry',
+      prompt: expect.stringContaining('Standard two-way playing-card face'),
+      negativePrompt: expect.stringContaining('six rendered as nine'),
       deckCard: { deckId: 'd1', cardId: 'a', key: 'spades-A' },
     });
     expect(markCardsRenderQueued).toHaveBeenCalledTimes(1);
@@ -71,7 +72,11 @@ describe('renderDeckCards', () => {
     resolveRenderTargetConfig.mockReturnValue({ mode: 'codex', cloud: { enabled: true, modelId: 'gpt-image-2', jobParams: { mode: 'codex', model: 'gpt-image-2', effort: 'high' } } });
     await renderDeckCards('d1', { cardIds: ['b'] });
     const { params } = enqueueJob.mock.calls[0][0];
-    expect(params).toMatchObject({ mode: 'codex', model: 'gpt-image-2', effort: 'high', negativePrompt: 'text, blurry', deckCard: { cardId: 'b' } });
+    expect(params).toMatchObject({
+      mode: 'codex', model: 'gpt-image-2', effort: 'high',
+      negativePrompt: expect.stringContaining('text, upright duplicate bottom-right index'),
+      deckCard: { cardId: 'b' },
+    });
     expect(params.pythonPath).toBeUndefined();
     expect(markCardsRenderQueued.mock.calls[0][1][0].render).toMatchObject({ model: 'gpt-image-2' });
   });

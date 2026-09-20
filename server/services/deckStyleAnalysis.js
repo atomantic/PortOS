@@ -18,7 +18,9 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { trimTo } from '../lib/textUtils.js';
-import { DECK_KIND_LABELS, DEFAULT_LAYOUT_PROMPT } from '../lib/deckTemplates.js';
+import {
+  DECK_KIND_LABELS, DEFAULT_LAYOUT_PROMPT, deckCardOrientation, deckCardOrientationPrompt,
+} from '../lib/deckTemplates.js';
 import { DECK_LAYOUT_PROMPT_MAX, DECK_SAMPLE_PROMPT_MAX, DECK_SAMPLE_TITLE_MAX } from '../lib/deckValidation.js';
 import { STYLE_NOTES_MAX } from '../lib/universeBibleLimits.js';
 import { universeVisualStyleTokens } from '../lib/universeVisualStyle.js';
@@ -32,10 +34,12 @@ export function buildDeckSamplePrompt({ deck, title }) {
     currentStyleNotes: trimTo(deck.styleNotes, STYLE_NOTES_MAX),
     currentInfluences: universeVisualStyleTokens(deck),
     currentLayoutPrompt: trimTo(deck.layoutPrompt, DECK_LAYOUT_PROMPT_MAX) || DEFAULT_LAYOUT_PROMPT[deck.kind],
+    cardOrientation: deckCardOrientation(deck),
+    cardOrientationPrompt: deckCardOrientationPrompt(deck),
   });
   return `Analyze the attached image as a SAMPLE DESIGN for a ${kindLabel} deck called "${deck.name}". Every card in the deck must read as one physical object printed in this visual language.
 
-Concentrate on renderable visual style: medium and finish (engraving, gouache, risograph, foil, letterpress…), line and brush treatment, palette (name the dominant colors and the paper/ground tone), lighting, texture, ornament and border language, typographic feel, era and mood. Also decide how a single CARD in this style should be laid out — border/frame treatment, where indices or titles sit, how much of the face the central illustration fills. Do not invent story facts or named characters, and do not attribute the style to a copyrighted living artist.
+Concentrate on renderable visual style: medium and finish (engraving, gouache, risograph, foil, letterpress…), line and brush treatment, palette (name the dominant colors and the paper/ground tone), lighting, texture, ornament and border language, typographic feel, era and mood. Also decide how a single CARD in this style should be laid out — border/frame treatment, where indices or titles sit, how much of the face the central illustration fills. The deck's face-orientation setting is authoritative: describe index/title placement in the layout only, never contradict or restate its one-way/two-way rotation rule. Do not invent story facts or named characters, and do not attribute the style to a copyrighted living artist.
 
 Current deck context:
 ${context}
@@ -49,7 +53,7 @@ Return JSON only:
     "embrace": ["complete ordered list of 8–18 comma-free style tokens an image model should lean into"],
     "avoid": ["complete ordered list of 4–12 tokens for the negative prompt"]
   },
-  "layoutPrompt": "one sentence describing the shared card layout in this style (border, index/title placement, illustration framing) — keep it usable as a prefix on every card prompt",
+  "layoutPrompt": "one sentence describing the shared card layout in this style (border, index/title placement, illustration framing, but not face-orientation rotation) — keep it usable as a prefix on every card prompt",
   "rationale": "one concise explanation of the proposed changes"
 }
 

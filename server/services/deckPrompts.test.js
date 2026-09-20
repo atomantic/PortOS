@@ -119,6 +119,7 @@ describe('generateDeckCardPrompts', () => {
     });
     expect(text).toContain('→ depict The Keeper (character)');
     expect(text).toContain('STYLE TOKENS (prepended automatically at render time): sepia');
+    expect(text).toContain('FACE ORIENTATION (also prepended automatically): One-way card face');
     expect(text).toContain('do NOT repeat style');
   });
 });

@@ -39,6 +39,8 @@ describe.skipIf(!ready)('decks over HTTP and PostgreSQL', () => {
     const deck = await create({ name: 'Example Deck', kind: 'tarot' });
     expect(deck.cards).toHaveLength(79);
     expect(deck.layoutPrompt).toMatch(/tarot card/);
+    expect(deck.cardOrientation).toBe('one-way');
+    expect(deck.cardOrientationPrompt).toBeNull();
     expect(deck.completion).toMatchObject({ total: 79, prompted: 0, rendered: 0, percent: 0 });
     const fool = deck.cards.find((c) => c.key === 'major-0');
     expect(fool).toMatchObject({ name: '0 · The Fool', imageRefs: [] });
@@ -61,6 +63,8 @@ describe.skipIf(!ready)('decks over HTTP and PostgreSQL', () => {
       styleNotes: 'Engraved, sepia, celestial.',
       influences: { embrace: ['copperplate engraving', '  aged paper  '], avoid: ['blurry'] },
       layoutPrompt: 'Full playing card',
+      cardOrientation: 'one-way',
+      cardOrientationPrompt: 'Keep both indices upright in this custom deck',
       imageMode: 'codex',
       imageModelId: 'gpt-image-2',
       promptLlm: { providerId: 'p1', model: 'm1', effort: 'high' },
@@ -70,12 +74,15 @@ describe.skipIf(!ready)('decks over HTTP and PostgreSQL', () => {
       styleNotes: 'Engraved, sepia, celestial.',
       influences: { embrace: ['copperplate engraving', 'aged paper'], avoid: ['blurry'] },
       layoutPrompt: 'Full playing card',
+      cardOrientation: 'one-way',
+      cardOrientationPrompt: 'Keep both indices upright in this custom deck',
       imageMode: 'codex',
       imageModelId: 'gpt-image-2',
       promptLlm: { providerId: 'p1', model: 'm1', effort: 'high' },
     });
     // Clearing the pin: key present with null.
     expect((await patch(`/${deck.id}`, { imageMode: null, imageModelId: null })).body).toMatchObject({ imageMode: null, imageModelId: null });
+    expect((await patch(`/${deck.id}`, { cardOrientationPrompt: null })).body.cardOrientationPrompt).toBeNull();
     expect((await patch(`/${deck.id}`, { bogus: 1 })).status).toBe(400);
     expect((await get('/not-a-uuid')).status).toBe(400);
 

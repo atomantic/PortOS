@@ -77,6 +77,7 @@ export default function DeckCardDrawer({ deck, card, open, inFlight, onClose, on
           </div>
           <PromptPart label="Deck style" hint="from the style guide" value={composed.parts.style} />
           <PromptPart label="Layout" hint="shared by every card" value={composed.parts.layout} />
+          <PromptPart label="Face orientation" hint="shared by every card" value={composed.parts.orientation} />
           <PromptPart label="Subject" hint="this card" value={composed.parts.subject} />
           <PromptPart label="Negative" value={composed.negativePrompt} tone="error" />
           <details>

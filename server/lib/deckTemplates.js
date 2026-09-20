@@ -2,9 +2,10 @@
  * Decks — the pure, dependency-free half of the card-deck designer.
  *
  * Owns the deck alphabet (`playing` | `tarot`), the card roster each kind
- * mints on creation, the layout clause each kind renders with, the render
- * prompt composition (deck style → layout → card subject), and the completion
- * math the index page and the detail header both show. Keeping this leaf
+ * mints on creation, the layout clause and face-orientation prompt each kind
+ * renders with, the render prompt composition (deck style → layout → face
+ * orientation → card subject), and the completion math the index page and the
+ * detail header both show. Keeping this leaf
  * import-free lets `client/src/lib/decks.js` re-export it verbatim, so the
  * client never carries a second copy of the roster or the completion rule.
  *
@@ -23,6 +24,63 @@ export const DECK_KIND_LABELS = Object.freeze({
   [DECK_KIND.PLAYING]: 'Playing cards',
   [DECK_KIND.TAROT]: 'Tarot',
 });
+
+const trimmed = (v) => (typeof v === 'string' ? v.trim() : '');
+
+// Face orientation is a deck-wide property because every card in a physical
+// deck must agree on how its indices read. Playing cards default to the
+// conventional two-way face; tarot defaults to one-way because its title and
+// illustration are normally read from one direction.
+export const DECK_CARD_ORIENTATION = Object.freeze({
+  STANDARD: 'standard',
+  ONE_WAY: 'one-way',
+});
+export const DECK_CARD_ORIENTATIONS = Object.freeze(Object.values(DECK_CARD_ORIENTATION));
+export const DECK_CARD_ORIENTATION_LABELS = Object.freeze({
+  [DECK_CARD_ORIENTATION.STANDARD]: 'Standard two-way (mirrored indices)',
+  [DECK_CARD_ORIENTATION.ONE_WAY]: 'One-way (upright indices)',
+});
+export const DEFAULT_DECK_CARD_ORIENTATION = Object.freeze({
+  [DECK_KIND.PLAYING]: DECK_CARD_ORIENTATION.STANDARD,
+  [DECK_KIND.TAROT]: DECK_CARD_ORIENTATION.ONE_WAY,
+});
+
+// These are intentionally explicit rather than relying on a model to infer
+// what "symmetrical" means. In particular, a bottom-right upright 6 is easily
+// read as a 9 after the physical card is turned around.
+const BUILT_IN_CARD_ORIENTATION_PROMPTS = Object.freeze({
+  [DECK_CARD_ORIENTATION.STANDARD]: 'Standard two-way playing-card face, vertically mirrored: the top-left rank and suit index is upright, while the matching bottom-right index is an exact 180-degree rotation and reads upside down from the top edge; the two indices must be the same glyph and rank, so a six remains a six and never becomes a nine',
+  [DECK_CARD_ORIENTATION.ONE_WAY]: 'One-way card face: all rank, suit and title markings share one upright reading direction; the top-left and bottom-right indices face the same way, with no 180-degree rotation or inverted duplicate',
+});
+const BUILT_IN_CARD_ORIENTATION_NEGATIVES = Object.freeze({
+  [DECK_CARD_ORIENTATION.STANDARD]: 'upright duplicate bottom-right index, mismatched rank indices, six rendered as nine, incorrect glyph rotation',
+  [DECK_CARD_ORIENTATION.ONE_WAY]: 'upside-down index, rotated bottom-right rank, inverted duplicate, mirrored lettering',
+});
+
+/** The effective face orientation, or null for a non-deck-shaped prompt input. */
+export function deckCardOrientation(deck) {
+  if (DECK_CARD_ORIENTATIONS.includes(deck?.cardOrientation)) return deck.cardOrientation;
+  return DEFAULT_DECK_CARD_ORIENTATION[deck?.kind] || null;
+}
+
+/** The built-in orientation prompt, ignoring a deck's authored override. */
+export function defaultDeckCardOrientationPrompt(deck) {
+  const orientation = deckCardOrientation(deck);
+  return orientation ? BUILT_IN_CARD_ORIENTATION_PROMPTS[orientation] : '';
+}
+
+/** The effective orientation prompt: an authored override or the safe default. */
+export function deckCardOrientationPrompt(deck) {
+  const override = trimmed(deck?.cardOrientationPrompt);
+  return override || defaultDeckCardOrientationPrompt(deck);
+}
+
+/** The matching built-in negative guard; custom positive prompts own their negatives. */
+export function deckCardOrientationNegativePrompt(deck) {
+  if (trimmed(deck?.cardOrientationPrompt)) return '';
+  const orientation = deckCardOrientation(deck);
+  return orientation ? BUILT_IN_CARD_ORIENTATION_NEGATIVES[orientation] : '';
+}
 
 // Fallback portrait size for an unrecognized deck kind (2:3, matching the
 // universe canon thumbnail convention `EntryThumbSlot` was built around).
@@ -95,7 +153,7 @@ export const CARD_STATUS = Object.freeze({
 // canvas disagreed about the shape being drawn. Deriving means changing a
 // canvas changes the sentence, and the two cannot drift apart again.
 const layoutClauseFor = {
-  [DECK_KIND.PLAYING]: (framing) => `Complete playing-card face, ${framing}, ornate decorative border, the rank and suit index drawn in the top-left and bottom-right corners, symmetrical composition`,
+  [DECK_KIND.PLAYING]: (framing) => `Complete playing-card face, ${framing}, ornate decorative border, the rank and suit index placed in the top-left and bottom-right corners, symmetrical composition`,
   [DECK_KIND.TAROT]: (framing) => `Complete tarot card, ${framing}, decorative framed border, the card title lettered in a banner along the bottom edge, symbolic centered composition`,
 };
 
@@ -235,8 +293,6 @@ export function deckCardRoster(kind) {
   throw new Error(`Unknown deck kind: ${kind}`);
 }
 
-const trimmed = (v) => (typeof v === 'string' ? v.trim() : '');
-
 /**
  * Compose the prompt one card renders with. Order is deliberate: the deck's
  * embrace influences lead (diffusion models weight early tokens heaviest),
@@ -255,10 +311,13 @@ export function composeCardRenderPrompt(deck, card) {
   const style = buildVisualStyleClause(deck);
   const avoid = universeVisualStyleTokens(deck).avoid.join(', ');
   const layout = trimmed(deck?.layoutPrompt);
+  const orientation = deckCardOrientationPrompt(deck);
+  const orientationNegative = deckCardOrientationNegativePrompt(deck);
   const subject = [trimmed(card?.name), trimmed(card?.prompt)].filter(Boolean).join(': ');
-  const body = [layout, subject].filter(Boolean).join('. ');
-  const composed = composeStyledPrompt(body, trimmed(card?.negativePrompt), { prompt: style, negativePrompt: avoid });
-  return { ...composed, parts: { style, layout, subject } };
+  const body = [layout, orientation, subject].filter(Boolean).join('. ');
+  const cardNegative = [trimmed(card?.negativePrompt), orientationNegative].filter(Boolean).join(', ');
+  const composed = composeStyledPrompt(body, cardNegative, { prompt: style, negativePrompt: avoid });
+  return { ...composed, parts: { style, layout, orientation, subject } };
 }
 
 const IN_FLIGHT_RENDER = new Set(['queued', 'running']);
