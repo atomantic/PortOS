@@ -47,6 +47,7 @@ const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
 const VideoGen = lazyWithReload(() => import('./pages/VideoGen'));
+const PromptFromMediaPage = lazyWithReload(() => import('./pages/PromptFromMediaPage'));
 const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
 const MediaAnnotate = lazyWithReload(() => import('./pages/MediaAnnotate'));
 const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections'));
@@ -466,6 +467,7 @@ export default function App() {
             <Route index element={<Navigate to="/media/image" replace />} />
             <Route path="image" element={<ImageGen />} />
             <Route path="video" element={<RedirectWithSearch to="/video/generate" />} />
+            <Route path="prompt" element={<PromptFromMediaPage />} />
             <Route path="history" element={<MediaHistory />} />
             <Route path="annotate" element={<MediaAnnotate />} />
             <Route path="annotate/:mediaKey" element={<MediaAnnotate />} />

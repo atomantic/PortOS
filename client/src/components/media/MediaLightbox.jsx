@@ -118,6 +118,7 @@ export default function MediaLightbox({
   annotation = null,
   onAnnotationChange,
   onPromptChange,
+  onPromptAnalysis,
   variantGroup = null,
   onSelectVariant,
 }) {
@@ -440,7 +441,7 @@ export default function MediaLightbox({
         )}
       </div>
       <PromptRefineModal item={item} open={refineOpen} onClose={() => setRefineOpen(false)} />
-      <PromptFromMediaModal item={item} open={promptFromOpen} onClose={() => setPromptFromOpen(false)} />
+      <PromptFromMediaModal item={item} open={promptFromOpen} onClose={() => setPromptFromOpen(false)} onResult={onPromptAnalysis} />
     </div>,
     document.body
   );
@@ -766,7 +767,7 @@ function SettingsPane({
             title="Ask a vision model to write the image and/or video prompt that would recreate this"
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
           >
-            <ScanEye className="w-3.5 h-3.5" /> Prompt from this
+            <ScanEye className="w-3.5 h-3.5" /> {item.prompt && item.prompt !== '(no prompt)' ? 'Prompt from this' : 'Analyze prompt'}
           </button>
         )}
         {onRemix && (
