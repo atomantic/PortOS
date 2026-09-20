@@ -318,7 +318,7 @@ async function runReactorVideo(job, jobId, {
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, aspect: frame.aspect, width: frame.canvas.width, height: frame.canvas.height, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
-    await rm(outputPath, { force: true }).catch(() => {});
+    await rm(outputPath, { force: true }).catch((cleanupError) => { console.log(`⚠️ Reactor cleanup: could not remove failed output ${outputPath} (${cleanupError.code})`); });
     // A continuation names a clip reactor rendered in an EARLIER session, and
     // reactor decides whether it still holds it. Say so on the failure rather
     // than leaving the user re-reading a prompt that was never the problem.
