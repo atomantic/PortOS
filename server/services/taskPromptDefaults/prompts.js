@@ -50,6 +50,17 @@ const CONTRIBUTOR_RELEASE_GLAB = formatContributorLabelReleaseCommands('"${NUM}"
 // `${CANDIDATE}` is likewise literal shell text set by the agent's own script.
 const VOLUNTEER_CLAIM_GH = formatVolunteerClaimCommands('"${CANDIDATE}"').join('\n   ');
 
+const ISSUE_BLOCKER_RECONCILIATION_GH = `**Reconcile stale \`blocked\` labels before selecting work.** For every open issue that
+has the \`blocked\` label, inspect its referenced blockers in the body, comments,
+and native blocked-by relationships. Re-read each blocker live; a blocker is
+satisfied only when it is closed (or its linked PR/MR is merged). If every
+referenced blocker is satisfied, remove the stale label and verify the readback
+(\`gh issue edit "<num>" --remove-label blocked\`), then treat the issue as
+eligible in this same run. If a blocker is still open, leave the label in place.
+If dependency lookup fails, preserve the label and report the uncertainty; never
+fail open. Apply the same reconciliation to GitLab with \`glab issue update
+"<iid>" --unlabel blocked\`.`;
+
 const LINKED_ISSUE_INTENT_EVIDENCE = `Each PR carries a \`linkedIssues\` array — the number, title, and description of
 every open issue it links, as the server read and screened them. That text is the
 requirement this change is measured against; the PR's own title and description
@@ -2090,6 +2101,8 @@ Run steps 1–6 in order.
    gh pr list --state open --json headRefName -q '.[].headRefName' 2>/dev/null
    \`\`\`
    For each ref (after stripping any leading \`origin/\` / \`upstream/\` prefix), extract the issue number **only when the ref matches** \`claim/issue-<num>\` (number after \`claim/issue-\`) or \`cos/<task>/issue-<num>/<agent>\` (the \`issue-<num>\` third segment). Do NOT flag an issue just because its bare number appears elsewhere in a ref.
+${ISSUE_BLOCKER_RECONCILIATION_GH}
+
 4. **Build the target order:** walk the candidate list oldest-first in TWO passes. First pass, consider only NON-epic issues that satisfy every rule below — atomic work always outranks an epic, whatever their relative age. Only if that pass finds nothing do you make a second pass for an undecomposed epic (same rules), and an epic you eventually pick goes to **Phase 1b**, not Phase 2. A single oldest-first pass would enter a decomposition the moment an epic happened to be older than claimable work, which is exactly backwards. The rules:
    - Its number is NOT in the in-flight set.
    - It has no assignees, or at least one assignee's login matches \`$ME\` (an issue assigned only to another account is already claimed). If \`$ME\` is empty, skip every assigned issue.
@@ -2347,6 +2360,8 @@ Run steps 1–5 in order.
    glab mr list --per-page 100 --output json   # read each MR's source_branch
    \`\`\`
    For each ref (after stripping any leading \`origin/\` prefix), extract the issue number **only when the ref matches** \`claim/issue-<num>\` (number after \`claim/issue-\`) or \`cos/<task>/issue-<num>/<agent>\` (the \`issue-<num>\` third segment). Do NOT flag an issue just because its bare number appears elsewhere in a ref.
+${ISSUE_BLOCKER_RECONCILIATION_GH}
+
 4. **Pick the target issue:** walk the candidate list oldest-first in TWO passes. First pass, consider only NON-epic issues and take the first that satisfies every rule below — atomic work always outranks an epic, whatever their relative age. Only if that pass finds nothing do you make a second pass for an undecomposed epic (same rules), and an epic you pick goes to **Phase 1b**, not Phase 2. A single oldest-first pass would enter a decomposition the moment an epic happened to be older than claimable work, which is exactly backwards. The rules:
    - Its number (\`iid\`) is NOT in the in-flight set.
    - It has no assignees, or at least one assignee's username matches \`$ME\` (an issue assigned only to another account is already claimed). If \`$ME\` is empty, skip every assigned issue.
