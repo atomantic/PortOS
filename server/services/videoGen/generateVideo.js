@@ -104,7 +104,8 @@ export { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem };
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
 
 // Resolve a model by id from the LIVE registry (getVideoModels reads the
-// hot-reloadable cache), falling back to the boot snapshot. This is what the
+// hot-reloadable cache). Never revive disabled or removed entries from the
+// boot snapshot. This is what the
 // render path uses so a runtime-added model resolves without a server restart.
 // Attach the runtime capabilities a model entry can't express on its own:
 // whether an FFLF last frame is a real anchor, and whether the *installed* BYOV
@@ -143,7 +144,7 @@ const decorateVideoModel = (m) => (m ? {
 } : m);
 
 export const resolveVideoModel = (modelId) =>
-  decorateVideoModel(getVideoModels().find((m) => m.id === modelId) || VIDEO_MODELS[modelId] || null);
+  decorateVideoModel(getVideoModels().find((m) => m.id === modelId) || null);
 
 export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 

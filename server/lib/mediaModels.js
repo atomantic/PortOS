@@ -59,7 +59,7 @@
  *   - selectedTextEncoder: id of the active text encoder
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
@@ -1762,7 +1762,9 @@ export const reloadMediaModels = () => {
 // the shared cache in place). Single-user trust model → no file lock needed.
 const persistRegistry = (reg) => {
   ensureDir(REGISTRY_FILE);
-  writeFileSync(REGISTRY_FILE, JSON.stringify(reg, null, 2) + '\n');
+  const temporary = `${REGISTRY_FILE}.tmp`;
+  writeFileSync(temporary, JSON.stringify(reg, null, 2) + '\n');
+  renameSync(temporary, REGISTRY_FILE);
   cached = reg;
   return reg;
 };
@@ -1880,6 +1882,18 @@ export const patchUserModelEntry = (id, patch) => {
   return updated;
 };
 
+// Availability is install configuration, including for shipped entries. Keep
+// disabled rows in the registry so they can be re-enabled without reinstalling.
+export const setMediaModelEnabled = (id, enabled) => {
+  const reg = loadMediaModels();
+  const loc = findModelLocation(reg, id);
+  if (!loc) throw new ServerError(`Unknown model id: ${id}`, { status: 404, code: 'NOT_FOUND' });
+  if (typeof enabled !== 'boolean') throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  const updated = { ...loc.entry, enabled };
+  persistRegistry(withList(reg, loc.listKey, loc.list.map((m, i) => i === loc.idx ? updated : m)));
+  return updated;
+};
+
 // Remove a USER model entry. Refuses built-ins and unknown ids. Persists +
 // hot-reloads. Returns `{ ok, id }`.
 export const removeUserModelEntry = (id) => {
@@ -1923,12 +1937,12 @@ export const requiredModelCacheGroups = (model) => {
   return groups;
 };
 
-export const getVideoModels = () => {
+export const getVideoModels = ({ includeDisabled = false } = {}) => {
   const reg = loadMediaModels();
   const bucket = activeVideoBucket();
   const capabilities = captureSystemCapabilities();
   const list = readVideoBucket(reg.video, bucket) || [];
-  return applyVideoSupportedModes(list.filter((m) => !platformBroken(m.broken))).map((model) => (
+  return applyVideoSupportedModes(list.filter((m) => !platformBroken(m.broken) && (includeDisabled || m.enabled !== false))).map((model) => (
     withHardwareCompatibility(
       model,
       capabilities,
@@ -1966,11 +1980,11 @@ export const getDefaultVideoModelId = (capabilities = captureSystemCapabilities(
   return configuredId;
 };
 
-export const getImageModels = () => {
+export const getImageModels = ({ includeDisabled = false } = {}) => {
   const reg = loadMediaModels();
   const capabilities = captureSystemCapabilities();
   return (reg.image || [])
-    .filter((m) => !platformBroken(m.broken))
+    .filter((m) => !platformBroken(m.broken) && (includeDisabled || m.enabled !== false))
     .map((model) => withHardwareCompatibility(
       model,
       capabilities,

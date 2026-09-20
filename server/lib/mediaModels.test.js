@@ -1646,3 +1646,23 @@ describe('video registry upgrade chain', () => {
     expect(registry.video.cuda.find((m) => m.id === 'ltx_video').runtime).toBe('cuda_video');
   });
 });
+
+describe('catalog availability', () => {
+  it('persists disabled built-in and custom models while retaining management access', async () => {
+    const registry = await import('./mediaModels.js');
+    const builtin = registry.getImageModels()[0];
+    registry.setMediaModelEnabled(builtin.id, false);
+    registry.addUserModelEntry({ id: 'example-custom', name: 'Example', runner: 'flux2', source: 'user' }, { kind: 'image' });
+    registry.setMediaModelEnabled('example-custom', false);
+    const video = registry.getVideoModels()[0];
+    registry.setMediaModelEnabled(video.id, false);
+    registry.reloadMediaModels();
+    expect(registry.getVideoModels().some(m => m.id === video.id)).toBe(false);
+    expect(registry.getVideoModels({ includeDisabled: true }).find(m => m.id === video.id).enabled).toBe(false);
+    expect(registry.getImageModels().some(m => [builtin.id, 'example-custom'].includes(m.id))).toBe(false);
+    expect(registry.getImageModels({ includeDisabled: true }).find(m => m.id === builtin.id).enabled).toBe(false);
+    registry.setMediaModelEnabled(builtin.id, true);
+    expect(registry.getImageModels().some(m => m.id === builtin.id)).toBe(true);
+    expect(() => registry.setMediaModelEnabled('missing', false)).toThrow(/Unknown/);
+  });
+});

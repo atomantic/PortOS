@@ -29,6 +29,8 @@ import { useModelDownloadStatus, textEncoderDownloadId } from '../hooks/useModel
 import ModelDownloadBadge from '../components/media/ModelDownloadBadge';
 import { formatBytes } from '../utils/formatters.js';
 import {
+  setMediaModelEnabled,
+  requestMediaModelSupport,
   listCachedModels,
   deleteCachedModel,
   deleteLora,
@@ -101,6 +103,10 @@ export default function MediaModels() {
   // Add-from-HF form state
   const [hfUrl, setHfUrl] = useState('');
   const [adding, setAdding] = useState(false);
+  const [supportKind, setSupportKind] = useState('image');
+  const [supportRequest, setSupportRequest] = useState('');
+  const [requestingSupport, setRequestingSupport] = useState(false);
+  const [supportTask, setSupportTask] = useState(null);
   const [addError, setAddError] = useState(null);
 
   // Inline edit state for a user-added entry
@@ -199,6 +205,27 @@ export default function MediaModels() {
       })
       .catch((err) => setAddError(err?.message || 'Failed to add model'))
       .finally(() => setAdding(false));
+  };
+
+  const toggleEnabled = async (model) => {
+    setBusy(model.id);
+    await setMediaModelEnabled(model.id, model.enabled === false, { silent: true })
+      .then(updated => {
+        const merge = list => list.map(m => m.id === model.id ? { ...m, enabled: updated.enabled } : m);
+        setRegistry(r => ({ ...r, video: merge(r.video), image: merge(r.image) }));
+      })
+      .catch(err => toast.error(err.message || 'Could not update model availability'))
+      .finally(() => setBusy(null));
+  };
+
+  const requestSupport = async (event) => {
+    event.preventDefault();
+    setRequestingSupport(true);
+    setSupportTask(null);
+    await requestMediaModelSupport({ kind: supportKind, request: supportRequest.trim() }, { silent: true })
+      .then(task => { setSupportTask(task); setSupportRequest(''); })
+      .catch(err => toast.error(err.message || 'Could not queue support request'))
+      .finally(() => setRequestingSupport(false));
   };
 
   const startEdit = (m) => {
@@ -364,6 +391,9 @@ export default function MediaModels() {
               </div>
             </div>
             <div className="flex flex-wrap gap-1 shrink-0">
+              <button type="button" aria-label={`${m.enabled === false ? 'Enable' : 'Disable'} ${m.name}`} aria-pressed={m.enabled !== false} disabled={busy !== null} onClick={() => toggleEnabled(m)} className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded text-gray-300 disabled:opacity-50">
+                {m.enabled === false ? 'Disabled — enable' : 'Enabled — disable'}
+              </button>
               {!m.builtIn && (
                 <button type="button" onClick={() => startEdit(m)} disabled={busy === m.id} className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:bg-port-bg disabled:opacity-50 flex items-center gap-1">
                   <Pencil className="w-3 h-3" /> Edit
@@ -542,6 +572,19 @@ export default function MediaModels() {
           </p>
         </form>
       </div>
+
+      <form onSubmit={requestSupport} className="bg-port-card border border-port-border rounded-xl p-5 space-y-3">
+        <h2 className="text-sm font-medium text-gray-300">Request new model or method support</h2>
+        <p className="text-xs text-gray-400">Ask a CoS agent to research compatibility, implement support, and open a PortOS PR with a shipped catalog option. This queues AI-backed work using your configured CoS provider; progress appears in CoS tasks.</p>
+        <label htmlFor="support-kind" className="block text-xs text-gray-400">Generation type</label>
+        <select id="support-kind" value={supportKind} disabled={requestingSupport} onChange={e => setSupportKind(e.target.value)} className="bg-port-bg border border-port-border rounded p-2 text-white">
+          <option value="image">Image</option><option value="video">Video</option>
+        </select>
+        <label htmlFor="model-support-request" className="block text-xs text-gray-400">Model or method, source links, and desired capabilities</label>
+        <textarea id="model-support-request" value={supportRequest} disabled={requestingSupport} onChange={e => setSupportRequest(e.target.value)} maxLength={4000} rows={3} className="w-full bg-port-bg border border-port-border rounded p-2 text-white" />
+        <button type="submit" disabled={requestingSupport || supportRequest.trim().length < 3} className="px-4 py-2 text-sm bg-port-accent/20 text-port-accent rounded disabled:opacity-50">{requestingSupport ? 'Queuing…' : 'Investigate and open PR'}</button>
+        {supportTask && <p role="status" className="text-sm text-port-success">{supportTask.duplicate ? 'Existing request found' : 'Request queued'}: {supportTask.id}. <a href="/cos/tasks" className="underline">View CoS tasks</a></p>}
+      </form>
 
       {data.hubDir && (
         <p className="text-xs text-gray-500">
