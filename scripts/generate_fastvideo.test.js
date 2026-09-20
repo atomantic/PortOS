@@ -147,7 +147,9 @@ with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
     package = root / 'fastvideo' / 'mlx_runtime'
     package.mkdir(parents=True)
-    (package / 'minimax_h3_pipeline.py').write_text('MINIMAX_H3_VIDEO_SHIFT=12\nMINIMAX_H3_AUDIO_SHIFT=3\ndef _adaln_schedule_union(steps):\n    return [MINIMAX_H3_VIDEO_SHIFT, MINIMAX_H3_AUDIO_SHIFT, steps]\n')
+    (package / 'minimax_h3.py').write_text('from types import SimpleNamespace\nnp=SimpleNamespace(asarray=lambda values, dtype: values, float32=float)\n')
+    (package / 'minimax_h3_pipeline.py').write_text('from . import minimax_h3 as h3\nMINIMAX_H3_VIDEO_SHIFT=12\nMINIMAX_H3_AUDIO_SHIFT=3\ndef _adaln_schedule_union(steps):\n    return [h3.minimax_h3_sigmas(shift, steps) for shift in (MINIMAX_H3_VIDEO_SHIFT, MINIMAX_H3_AUDIO_SHIFT)]\n')
+    (root / 'fastvideo_inference.json').write_text(json.dumps({'schema_version': 'fasth3-inference-contract-v1', 'dmd_denoising_steps': [999,874,749,624,500,375,250,125], 'video_scheduler_shift': 10, 'audio_scheduler_shift': 3}))
     for name, shift in [('scheduler', 10), ('audio_scheduler', 3)]:
         folder = root / name
         folder.mkdir()
@@ -161,10 +163,22 @@ with tempfile.TemporaryDirectory() as tmp:
     base = [sys.executable, str(wrapper), '--scheduler-root', str(root), '--schedule-steps', '8']
     for target, tail in [(converter, ['--convert']), (entry, ['--steps', '8'])]:
         print(subprocess.check_output(base + ['--entry-script', str(target)] + tail, env=env, text=True).strip())
+    contract = root / 'fastvideo_inference.json'
+    value = json.loads(contract.read_text())
+    value['dmd_denoising_steps'][1] = 999
+    contract.write_text(json.dumps(value))
+    invalid_contract = subprocess.run(base + ['--entry-script', str(entry), '--steps', '8'], env=env, text=True, capture_output=True)
+    print(invalid_contract.returncode != 0 and not invalid_contract.stdout and 'inference contract' in invalid_contract.stderr)
     (root / 'scheduler' / 'scheduler_config.json').write_text('{"_class_name":"MiniMaxH3Scheduler","shift":true}')
     invalid = subprocess.run(base + ['--entry-script', str(entry), '--steps', '8'], env=env, text=True, capture_output=True)
     print(invalid.returncode != 0 and not invalid.stdout and 'Unsupported FastH3 scheduler' in invalid.stderr)
 `}`);
-    expect(lines(output)).toEqual(['[10, 3, 8]', '[10, 3, 8]', 'True']);
+    const [conversion, inference, invalidContract, invalid] = lines(output);
+    const expected = [10, 3].map((shift) => [999, 874, 749, 624, 500, 375, 250, 125, 0]
+      .map((rung) => shift * (rung / 1000) / (1 + (shift - 1) * (rung / 1000))));
+    expect(JSON.parse(conversion)).toEqual(expected);
+    expect(JSON.parse(inference)).toEqual(expected);
+    expect(invalidContract).toBe('True');
+    expect(invalid).toBe('True');
   });
 });

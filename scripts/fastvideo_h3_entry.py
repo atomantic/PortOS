@@ -34,6 +34,15 @@ def main():
                 or not math.isfinite(shift) or shift <= 0):
             raise ValueError(f'Unsupported FastH3 {name} configuration')
         shifts.append(shift)
+    contract = json.loads((Path(args.scheduler_root) / 'fastvideo_inference.json').read_text())
+    rungs = contract.get('dmd_denoising_steps')
+    if (contract.get('schema_version') != 'fasth3-inference-contract-v1'
+            or not isinstance(rungs, list) or len(rungs) != args.schedule_steps
+            or any(type(rung) is not int or not 0 < rung <= 1000 for rung in rungs)
+            or any(left <= right for left, right in zip(rungs, rungs[1:]))
+            or contract.get('video_scheduler_shift') != shifts[0]
+            or contract.get('audio_scheduler_shift') != shifts[1]):
+        raise ValueError('Unsupported FastH3 checkpoint inference contract')
     from fastvideo.mlx_runtime import minimax_h3_pipeline as pipeline
     # Both modules expose the scheduler shifts, and the converter imports the
     # values from ``minimax_h3`` while the inference pipeline reads its own
@@ -41,10 +50,18 @@ def main():
     # conversion and inference using different schedules, which produces a
     # VSA checkpoint that fails during the first render. Keep the two module
     # views synchronized before either entry point is loaded.
-    h3 = (importlib.import_module('fastvideo.mlx_runtime.minimax_h3')
-          if importlib.util.find_spec('fastvideo.mlx_runtime.minimax_h3') else None)
-    if h3 is not None:
-        h3.MINIMAX_H3_VIDEO_SHIFT, h3.MINIMAX_H3_AUDIO_SHIFT = shifts
+    h3 = importlib.import_module('fastvideo.mlx_runtime.minimax_h3')
+    h3.MINIMAX_H3_VIDEO_SHIFT, h3.MINIMAX_H3_AUDIO_SHIFT = shifts
+    # The upstream MLX scheduler uses a uniform linspace. V2's trained ladder
+    # differs (999, 874, ...), so patch the function used by SchedulerState
+    # before loading either entry point. Shift the shared noise clock once.
+    def checkpoint_sigmas(shift, num_denoise_steps):
+        if num_denoise_steps != len(rungs):
+            raise ValueError('FastH3 step count differs from its trained ladder')
+        base = [rung / 1000.0 for rung in rungs] + [0.0]
+        return h3.np.asarray([shift * value / (1.0 + (shift - 1.0) * value)
+                              for value in base], dtype=h3.np.float32)
+    h3.minimax_h3_sigmas = checkpoint_sigmas
     pipeline.MINIMAX_H3_VIDEO_SHIFT, pipeline.MINIMAX_H3_AUDIO_SHIFT = shifts
     sys.argv = [args.entry_script, *remaining]
     if args.convert:

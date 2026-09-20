@@ -259,8 +259,9 @@ def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
     if vsa:
         schedule = b"".join((model_root / name / "scheduler_config.json").read_bytes()
                             for name in ("scheduler", "audio_scheduler"))
+        schedule += (model_root / "fastvideo_inference.json").read_bytes()
         schedule_key = hashlib.sha256(schedule).hexdigest()[:12]
-        out_base = out_base / f"vsa-schedule-v1-{steps}-{schedule_key}"
+        out_base = out_base / f"vsa-schedule-v2-{steps}-{schedule_key}"
     out_dir = out_base / fmt
     if is_converted(out_dir):
         return out_dir
