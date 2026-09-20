@@ -9,7 +9,7 @@ import RelaunchAgentModal from './RelaunchAgentModal';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { agentResumeMessage } from '../../../lib/agentResumeOutcome';
-import { isAgentHandoff } from '../../../lib/agentOutcome';
+import { isAgentFeedbackEligible } from '../../../lib/cosAgentFeedback';
 import { formatCount } from '../../../utils/formatters';
 
 // What each `resumeAgent` outcome actually did (server modes, agentManagement.js).
@@ -32,18 +32,7 @@ const RESUME_MESSAGES = {
   superseded: { queued: 'A later agent now holds this task paused — that pause was left intact' },
 };
 
-// Only agents from a manually-filled task form ask for a rating — scheduled/
-// autopilot runs (taskType 'internal') are already auto-evaluated by
-// task-learning's success/failure tracking. See cosAgentFeedback.js.
-// A run retired by Resume/Relaunch is excluded too — it has no result to rate,
-// and the continuation it handed the task to is the run that asks for the rating.
-// Without this, every provider swap left a permanent entry in the needs-feedback
-// count that nothing the user does can clear (AgentCard hides the buttons).
-const needsAgentFeedback = (agent) => {
-  const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
-  const isManualUserAgent = agent.metadata?.taskType === 'user';
-  return !isSystemAgent && isManualUserAgent && !isAgentHandoff(agent) && !agent.feedback?.rating;
-};
+const needsAgentFeedback = isAgentFeedbackEligible;
 
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
   const { agentId } = useParams();
@@ -64,6 +53,8 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
   const [durations, setDurations] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [feedbackUpdates, setFeedbackUpdates] = useState({});
+  const [pendingFeedbackAgents, setPendingFeedbackAgents] = useState([]);
+  const [pendingFeedbackCount, setPendingFeedbackCount] = useState(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
 
   // Date-based lazy loading for completed agents
@@ -85,6 +76,22 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
   // Fetch duration estimates for progress indicators
   useEffect(() => {
     api.getCosLearningDurations().then(setDurations).catch(() => {});
+  }, []);
+
+  // The durable reference index is the bounded source of truth for feedback
+  // actions. It brings older eligible runs into the filter without walking every
+  // historical date bucket; the response uses the same predicate as the server
+  // queue and supplies a count even when those cards are not otherwise loaded.
+  useEffect(() => {
+    let cancelled = false;
+    api.getCosPendingAgentFeedback({ silent: true })
+      .then((result) => {
+        if (cancelled) return;
+        setPendingFeedbackAgents(Array.isArray(result?.agents) ? result.agents : []);
+        setPendingFeedbackCount(Number.isFinite(result?.count) ? result.count : null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   // Fetch date buckets on mount, with the most recent one hydrated in the SAME
@@ -174,6 +181,15 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
         agent.id === updatedAgent.id ? { ...agent, feedback: updatedAgent.feedback } : agent
       ));
     }
+    setPendingFeedbackAgents(prev => {
+      const wasPending = prev.some(agent => agent.id === updatedAgent?.id);
+      if (wasPending && !needsAgentFeedback(updatedAgent)) {
+        setPendingFeedbackCount(count => (typeof count === 'number' ? Math.max(0, count - 1) : count));
+      }
+      return needsAgentFeedback(updatedAgent)
+        ? prev.map(agent => agent.id === updatedAgent.id ? updatedAgent : agent)
+        : prev.filter(agent => agent.id !== updatedAgent?.id);
+    });
     onRefresh();
   }, [onRefresh]);
 
@@ -236,8 +252,11 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     for (const agent of recentCompleted) addAgent(agent);
     // Then disk-loaded agents
     for (const agent of loadedAgents) addAgent(agent);
+    // Finally the durable pending index, which may contain an older archived
+    // run that has not been loaded through the date-bucket pager yet.
+    for (const agent of pendingFeedbackAgents) addAgent(agent);
     return merged.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
-  }, [recentCompleted, loadedAgents, feedbackUpdates]);
+  }, [recentCompleted, loadedAgents, pendingFeedbackAgents, feedbackUpdates]);
 
   const totalCount = useMemo(() => {
     const indexTotal = dateBuckets.reduce((sum, d) => sum + d.count, 0);
@@ -265,10 +284,14 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     });
   }, [allCompleted, feedbackFilter, searchQuery]);
 
-  const needsFeedbackCount = useMemo(
-    () => allCompleted.filter(needsAgentFeedback).length,
-    [allCompleted]
-  );
+  const locallyVisibleNeedsFeedback = allCompleted.filter(needsAgentFeedback).length;
+  // A completion can arrive through the live agent stream just after the
+  // durable-index request resolves. Never let that race hide a newly actionable
+  // run; the server count still carries older archived obligations that are not
+  // in the currently loaded cards.
+  const needsFeedbackCount = pendingFeedbackCount == null
+    ? locallyVisibleNeedsFeedback
+    : Math.max(pendingFeedbackCount, locallyVisibleNeedsFeedback);
 
   const selectedAgent = agents.find(agent => agent.id === agentId) || (focusedAgent?.id === agentId ? focusedAgent : null);
   const hasMoreDates = dateBuckets.some(d => !loadedDates.has(d.date));
@@ -340,7 +363,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
       )}
 
       {/* Completed Agents */}
-      {(totalCount > 0 || recentCompleted.length > 0) && (
+      {(totalCount > 0 || recentCompleted.length > 0 || pendingFeedbackAgents.length > 0) && (
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-white">

@@ -31,6 +31,7 @@ import * as brain from './brain.js';
 import * as brainStorage from './brainStorage.js';
 import * as askConversations from './askConversations.js';
 import * as cosTaskStore from './cosTaskStore.js';
+import * as cosAgentFeedback from './cosAgentFeedback.js';
 import * as messageDrafts from './messageDrafts.js';
 import * as proactiveAlerts from './proactiveAlerts.js';
 import * as backup from './backup.js';
@@ -72,6 +73,7 @@ const ACTION_KINDS = Object.freeze({
   threads: 'brain.thread',
   todo: 'review.todo',
   history: 'review.history',
+  feedback: 'cos.feedback',
 });
 
 const OPERATION_LABELS = Object.freeze({
@@ -88,6 +90,7 @@ const OPERATION_LABELS = Object.freeze({
   threads: 'Complete',
   todo: 'Complete',
   history: 'History',
+  feedback: 'Rate',
 });
 
 const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
@@ -329,6 +332,57 @@ const PRODUCERS = [
         ...(priority ? { meta: { priority } } : {})
       };
     }
+  },
+  {
+    source: 'feedback',
+    label: 'CoS run feedback',
+    drillTo: '/cos/agents?feedback=needs-feedback',
+    views: ['today', 'all', 'history'],
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT, ctx = {}) {
+      const pending = await cosAgentFeedback.getPendingAgentFeedback({ includeUnavailable: ctx.view === 'history' });
+      const items = [
+        ...(Array.isArray(pending?.agents) ? pending.agents : []),
+        ...(ctx.view === 'history' && Array.isArray(pending?.unavailable) ? pending.unavailable : []),
+      ];
+      return { items: items.slice(0, limit), truncated: items.length > limit };
+    },
+    map(agent) {
+      const unavailable = agent.availability === 'unavailable';
+      const description = agent.metadata?.taskDescription;
+      return {
+        id: `feedback:${agent.id || agent.agentId}`,
+        title: unavailable ? 'Completed CoS run unavailable for feedback' : 'Rate completed CoS run',
+        summary: unavailable
+          ? 'The source run is no longer available to rate; the action is retained as history.'
+          : (typeof description === 'string' && description.trim()
+            ? description.trim().slice(0, 200)
+            : 'Completed manual CoS run'),
+        timestamp: agent.completedAt || null,
+        severity: 'normal',
+        required: !unavailable,
+        isRecommendation: false,
+        sourceRef: agent.id || agent.agentId,
+        ...(!unavailable
+          ? { drillTo: `/cos/agents/${encodeURIComponent(agent.id || agent.agentId)}?feedback=needs-feedback` }
+          : {}),
+        availability: unavailable ? 'unavailable' : 'available',
+        available: !unavailable,
+        ...(unavailable
+          ? {
+            meta: { unavailableReason: agent.unavailableReason || 'unavailable' },
+            nextAction: 'Unavailable',
+            operations: [],
+          }
+          : {
+            operations: [{
+              id: 'rate',
+              label: 'Rate',
+              available: true,
+              input: { type: 'rating', required: true, options: ['positive', 'negative', 'neutral'] },
+            }],
+          }),
+      };
+    },
   },
   {
     source: 'drafts',
@@ -832,9 +886,12 @@ const SOURCE_ACTIONS = Object.freeze({
     complete: (id) => reviewService.completeItem(id),
     reopen: (id) => reviewService.reopenItem(id),
   }),
+  feedback: Object.freeze({
+    rate: (id, input) => cosAgentFeedback.submitAgentFeedback(id, input),
+  }),
 });
 
-export async function resolveQueueItem(queueItemId, operation = 'resolve') {
+export async function resolveQueueItem(queueItemId, operation = 'resolve', input = {}) {
   const sep = String(queueItemId).indexOf(':');
   const source = sep === -1 ? queueItemId : queueItemId.slice(0, sep);
   const rawId = sep === -1 ? '' : queueItemId.slice(sep + 1);
@@ -847,7 +904,7 @@ export async function resolveQueueItem(queueItemId, operation = 'resolve') {
         code: 'BAD_REQUEST',
       });
     }
-    const result = await resolver(rawId);
+    const result = await resolver(rawId, input);
     if (result == null) {
       throw new ServerError(`${source} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
     }

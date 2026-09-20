@@ -93,6 +93,7 @@ export * from './goalFeatureMap.js';
 // === Generic UI / collection utilities ===
 export * from './a11yKeyboard.js';
 export * from './agentOutcome.js';
+export * from './cosAgentFeedback.js';
 export * from './agentResumeOutcome.js';
 export * from './appIdentity.js';
 export * from './applyManuscriptEdits.js';

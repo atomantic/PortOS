@@ -61,4 +61,20 @@ describe('resolveReviewQueueItem', () => {
       silent: true,
     });
   });
+
+  it('keeps feedback rating input in the mutation body', async () => {
+    request.mockResolvedValue({ resolved: true });
+
+    await resolveReviewQueueItem('feedback:agent-1', {
+      operation: 'rate', rating: 'negative', comment: 'Needs a follow-up', silent: true,
+    });
+
+    expect(request).toHaveBeenCalledWith('/review/queue/resolve', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: 'feedback:agent-1', operation: 'rate', rating: 'negative', comment: 'Needs a follow-up',
+      }),
+      silent: true,
+    });
+  });
 });

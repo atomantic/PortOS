@@ -19,6 +19,7 @@ import { humanActivityDdl } from './humanActivity.js';
 import { postDdl } from './post.js';
 import { commissionsDdl } from './commissions.js';
 import { userActionsDdl } from './userActions.js';
+import { cosAgentFeedbackDdl } from './cosAgentFeedback.js';
 import { aiGraphDdl } from './aiGraph.js';
 import { catalogDdl, catalogUserTypesDdl } from './catalog.js';
 import { mediaDdl } from './media.js';
@@ -42,6 +43,7 @@ export {
   postDdl,
   commissionsDdl,
   userActionsDdl,
+  cosAgentFeedbackDdl,
   aiGraphDdl,
   catalogDdl,
   catalogUserTypesDdl,
@@ -73,6 +75,7 @@ export function buildUpgradeDdl() {
     ...postDdl,
     ...commissionsDdl,
     ...userActionsDdl,
+    ...cosAgentFeedbackDdl,
     ...aiGraphDdl,
   ];
 }

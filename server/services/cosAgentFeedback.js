@@ -8,30 +8,31 @@
  * (#3450) — callers import from here directly.
  */
 
-import { existsSync } from 'fs';
-import { join } from 'path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
+import { loadState, saveState, withStateLock } from './cosState.js';
 import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { loadAgentIndex, getAgentDir } from './cosAgentIndex.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { recordUserAction } from './userActions.js';
-import { isAgentHandoff } from '../lib/agentOutcome.js';
+import {
+  FEEDBACK_RATINGS,
+  feedbackArchiveDate,
+  hasValidAgentFeedback,
+  isAgentFeedbackEligible,
+  isAgentFeedbackTarget,
+  isAgentFeedbackUpdateTarget,
+  isFeedbackRating,
+} from '../lib/cosAgentFeedback.js';
+import {
+  listPendingAgentFeedbackRefs,
+  removePendingAgentFeedbackRef,
+  upsertPendingAgentFeedbackRef,
+} from './cosAgentFeedbackStore.js';
 
-const isSystemAgent = (agent) =>
-  agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
-
-// Only agents spawned from a manually-filled task form are worth asking the
-// user to rate. Scheduled-task and autopilot runs carry taskType 'internal'
-// and already get an automatic success/failure verdict from task-learning
-// (buildTaskTelemetryContext's outcomeSuccess) — asking for a manual rating
-// on top of that is redundant nagging, not a useful signal.
-const isManualUserAgent = (agent) => agent.metadata?.taskType === 'user';
-
-const FEEDBACK_RATINGS = new Set(['positive', 'negative', 'neutral']);
 const ARCHIVE_READ_BATCH_SIZE = 50;
-
-const hasValidFeedback = (agent) => FEEDBACK_RATINGS.has(agent?.feedback?.rating);
+const hasValidFeedback = hasValidAgentFeedback;
 
 // Completed agents are written to their date-bucket archive before they age out
 // of live state. Feedback statistics therefore have to read both stores and
@@ -61,24 +62,113 @@ async function loadArchivedAgentsWithFeedback() {
   return agents;
 }
 
-// Count completed user-facing agents that are still retained in live CoS state
-// and have not received a rating. Archived history is intentionally excluded:
-// actionable insights refresh every 30s, so this remains a cheap, exact count
-// of the recent runs a user can immediately review in the Agents queue.
-export async function getPendingAgentFeedbackCount() {
+async function readArchivedAgent(agentId, dateBucket) {
+  const metadataPath = join(getAgentDir(agentId, dateBucket), 'metadata.json');
+  const read = await readFile(metadataPath, 'utf8').then(
+    (content) => ({ content }),
+    (error) => ({ error }),
+  );
+  if (read.error) {
+    return { kind: read.error.code === 'ENOENT' ? 'missing' : 'read-failed', metadataPath };
+  }
+  const { content } = read;
+  const raw = safeJSONParse(content, null, { allowArray: false });
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { kind: 'read-failed', metadataPath };
+  }
+  return {
+    kind: 'found',
+    metadataPath,
+    agent: { ...raw, id: raw.id || raw.agentId || agentId },
+  };
+}
+
+function unavailableFeedbackRef(ref, reason) {
+  return {
+    id: ref.agentId,
+    agentId: ref.agentId,
+    archiveDate: ref.archiveDate || null,
+    availability: 'unavailable',
+    unavailableReason: reason,
+  };
+}
+
+/**
+ * Reconcile the durable references with live state and indexed archive records.
+ * The only broad read here is live state plus the referenced archive files; it
+ * never scans the historical archive looking for work.
+ */
+export async function getPendingAgentFeedback({ includeUnavailable = false } = {}) {
   const state = await loadState();
-  return Object.values(state.agents)
-    .filter(agent =>
-      agent.status === 'completed' &&
-      !isSystemAgent(agent) &&
-      isManualUserAgent(agent) &&
-      // A record Resume/Relaunch retired has no result to rate — the continuation
-      // it handed the task to is the run that gets rated. Counting it banners a
-      // review item the Agents queue then refuses to show rating buttons for, so
-      // the banner never clears.
-      !isAgentHandoff(agent) &&
-      !agent.feedback?.rating)
-    .length;
+  const refs = await listPendingAgentFeedbackRefs();
+  const refsById = new Map(refs.map((ref) => [ref.agentId, ref]));
+  const liveById = new Map(Object.entries(state?.agents || {}).map(([id, agent]) => [agent.id || id, agent]));
+
+  // Enrollment is also performed here so a live completion remains discoverable
+  // when an event arrived during a restart window or before the migration ran.
+  for (const [agentId, agent] of liveById) {
+    if (!isAgentFeedbackEligible(agent)) continue;
+    const ref = { agentId, archiveDate: feedbackArchiveDate(agent) };
+    refsById.set(agentId, ref);
+    await upsertPendingAgentFeedbackRef(ref);
+  }
+
+  const idx = refsById.size > 0 ? await loadAgentIndex() : new Map();
+  const agents = [];
+  const unavailable = [];
+
+  for (const ref of refsById.values()) {
+    const live = liveById.get(ref.agentId);
+    if (live) {
+      if (isAgentFeedbackEligible(live)) {
+        agents.push(live);
+        continue;
+      }
+
+      // A rated live record is not actionable, but retain its reference until
+      // the same rating is durable in the archive. This prevents archive
+      // eviction from resurrecting a rating obligation after a partial write.
+      if (isAgentFeedbackTarget(live) && hasValidFeedback(live)) {
+        const archived = await readArchivedAgent(ref.agentId, idx.get(ref.agentId) || ref.archiveDate);
+        if (archived.kind === 'found' && hasValidFeedback(archived.agent)) {
+          await removePendingAgentFeedbackRef(ref.agentId);
+        }
+        continue;
+      }
+
+      await removePendingAgentFeedbackRef(ref.agentId);
+      continue;
+    }
+
+    const archiveDate = idx.get(ref.agentId) || ref.archiveDate;
+    if (!archiveDate) {
+      if (includeUnavailable) unavailable.push(unavailableFeedbackRef(ref, 'deleted'));
+      continue;
+    }
+
+    const archived = await readArchivedAgent(ref.agentId, archiveDate);
+    if (archived.kind === 'read-failed') {
+      // An indexed reference with an unreadable metadata file is not proof that
+      // the run was deleted. Keep it pending and let History show the failure.
+      if (includeUnavailable) unavailable.push(unavailableFeedbackRef({ ...ref, archiveDate }, 'read-failed'));
+      continue;
+    }
+    if (archived.kind === 'missing') {
+      if (includeUnavailable) unavailable.push(unavailableFeedbackRef({ ...ref, archiveDate }, 'deleted'));
+      continue;
+    }
+    if (!isAgentFeedbackTarget(archived.agent) || hasValidFeedback(archived.agent)) {
+      await removePendingAgentFeedbackRef(ref.agentId);
+      continue;
+    }
+    agents.push(archived.agent);
+  }
+
+  return { agents, unavailable, count: agents.length };
+}
+
+export async function getPendingAgentFeedbackCount() {
+  return (await getPendingAgentFeedback()).count;
 }
 
 // Submit feedback for a completed agent.
@@ -89,6 +179,16 @@ export async function getPendingAgentFeedbackCount() {
 // write inside the CoS state lock would hold the lock across an I/O round trip
 // for a log line. The lock's own failures still reject before anything is logged.
 export async function submitAgentFeedback(agentId, feedback) {
+  if (!isFeedbackRating(feedback?.rating)) {
+    throw new ServerError(`rating must be one of: ${FEEDBACK_RATINGS.join(', ')}`, {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  // The durable reference is removed only after the source metadata write. Keep
+  // that small store mutation outside the CoS state lock so a database/file I/O
+  // round trip never serializes unrelated agent state updates.
   const result = await withStateLock(async () => {
     const state = await loadState();
     const feedbackData = {
@@ -100,30 +200,24 @@ export async function submitAgentFeedback(agentId, feedback) {
     // Try state first (recently completed agents still in state)
     if (state.agents[agentId]) {
       const agent = state.agents[agentId];
-      if (agent.status !== 'completed') {
+      if (!isAgentFeedbackUpdateTarget(agent)) {
         throw new ServerError('Can only submit feedback for completed agents', { status: 400, code: 'INVALID_STATE' });
       }
-      state.agents[agentId].feedback = feedbackData;
+      state.agents[agentId] = { ...agent, feedback: feedbackData };
       await saveState(state);
 
-      // Also update on-disk metadata (derive date bucket from completedAt if archived)
-      const dateBucket = agent.completedAt ? agent.completedAt.slice(0, 10) : null;
-      const agentDir = getAgentDir(agentId, dateBucket);
-      const metaPath = join(agentDir, 'metadata.json');
-      if (existsSync(metaPath)) {
-        const content = await tryReadFile(metaPath);
-        if (content) {
-          const raw = safeJSONParse(content, null);
-          if (raw) {
-            raw.feedback = feedbackData;
-            await atomicWrite(metaPath, raw).catch(() => {});
-          }
-        }
+      // Also update on-disk metadata. The live state write is authoritative for
+      // the current card, but the pending reference is cleared only after the
+      // source archive carries the same rating, so eviction cannot resurrect it.
+      const dateBucket = feedbackArchiveDate(agent);
+      const archived = await readArchivedAgent(agentId, dateBucket);
+      if (archived.kind === 'found') {
+        await atomicWrite(archived.metadataPath, { ...archived.agent, feedback: feedbackData });
       }
 
       emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
       cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
-      return { success: true, agent: state.agents[agentId], feedbackData };
+      return { success: true, agent: state.agents[agentId], feedbackData, clearPendingRef: archived.kind === 'found' };
     }
 
     // Agent not in state — look up from disk via index
@@ -131,22 +225,22 @@ export async function submitAgentFeedback(agentId, feedback) {
     const dateStr = idx.get(agentId);
     if (!dateStr) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
 
-    const metaPath = join(AGENTS_DIR, dateStr, agentId, 'metadata.json');
-    const content = await tryReadFile(metaPath);
-    if (!content) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
+    const archived = await readArchivedAgent(agentId, dateStr);
+    if (archived.kind !== 'found') throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
+    if (!isAgentFeedbackUpdateTarget(archived.agent)) {
+      throw new ServerError('Can only submit feedback for completed agents', { status: 400, code: 'INVALID_STATE' });
+    }
 
-    const raw = safeJSONParse(content, null);
-    if (!raw) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
-
-    raw.feedback = feedbackData;
-    await atomicWrite(metaPath, raw);
+    const updated = { ...archived.agent, feedback: feedbackData };
+    await atomicWrite(archived.metadataPath, updated);
 
     emitLog('info', `Feedback received for agent ${agentId}: ${feedback.rating}`, { agentId, rating: feedback.rating });
     cosEvents.emit('agent:feedback', { agentId, feedback: feedbackData });
-    return { success: true, agent: { ...raw, id: agentId }, feedbackData };
+    return { success: true, agent: { ...updated, id: agentId }, feedbackData, clearPendingRef: true };
   });
 
-  const { feedbackData, ...response } = result;
+  const { feedbackData, clearPendingRef, ...response } = result;
+  if (clearPendingRef) await removePendingAgentFeedbackRef(agentId);
   await recordUserAction({
     type: 'cos.agent.feedback',
     target: agentId,
@@ -221,6 +315,23 @@ export async function getFeedbackStats() {
     byTaskType,
     recentWithComments
   };
+}
+
+let feedbackEventsInitialized = false;
+
+/** Register future-completion enrollment without doing any cold-start provider work. */
+export function initializeAgentFeedback() {
+  if (feedbackEventsInitialized) return;
+  feedbackEventsInitialized = true;
+  cosEvents.on('agent:completed', (agent) => {
+    if (!isAgentFeedbackEligible(agent)) return;
+    upsertPendingAgentFeedbackRef({
+      agentId: agent.id,
+      archiveDate: feedbackArchiveDate(agent),
+    }).catch((err) => {
+      console.error(`❌ Failed to enroll CoS feedback for ${agent.id}: ${err.message}`);
+    });
+  });
 }
 
 // Helper to extract task type from description (mirrors client-side logic)

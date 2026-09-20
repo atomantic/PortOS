@@ -67,7 +67,14 @@ export { cosEvents, emitLog };
 // Callers ask `agentOrchestrator.js` for those (#3450).
 export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgent, getAgentRecord, getAgentPrompt, terminateAgent, sendBtwToAgent, cleanupZombieAgents, deleteAgent } from './cosAgentLifecycle.js';
 export { getAgentDates, getAgentsByDate, pruneOldAgentArchives } from './cosAgentIndex.js';
-export { submitAgentFeedback, getFeedbackStats, getPendingAgentFeedbackCount, extractTaskType } from './cosAgentFeedback.js';
+export {
+  submitAgentFeedback,
+  getFeedbackStats,
+  getPendingAgentFeedback,
+  getPendingAgentFeedbackCount,
+  initializeAgentFeedback,
+  extractTaskType,
+} from './cosAgentFeedback.js';
 export { archiveStaleAgents, clearCompletedAgents } from './cosAgentArchive.js';
 
 // Reports and activity (re-export for backward compat with `import * as cos`)
@@ -113,6 +120,7 @@ let daemonStartPromise = null;
 // Internal imports for functions used in this module
 import { pruneOldAgentArchives, loadAgentIndex } from './cosAgentIndex.js';
 import { archiveStaleAgents as _archiveStaleAgents } from './cosAgentArchive.js';
+import { initializeAgentFeedback } from './cosAgentFeedback.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 
 // Task generation + evaluation engine (extracted to cosTaskGenerator.js).
@@ -1442,6 +1450,7 @@ async function refillPerpetualForCompletedAgent(agent) {
  */
 export async function init() {
   await ensureDirectories();
+  initializeAgentFeedback();
 
   // When an agent completes, refill perpetual work then dequeue the next task
   cosEvents.on('agent:completed', (agent) => {

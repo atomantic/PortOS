@@ -56,6 +56,7 @@ const QUEUE_INVALIDATION_EVENTS = [
   'brain:classified',          // inbox item classified / re-reviewed
   'cos:tasks:user:changed',    // CoS user-task list changed
   'cos:tasks:cos:changed',     // CoS internal-task list changed
+  'cos:agent:completed',       // a newly completed run may need feedback
   'messages:changed',          // draft approved/deleted/status changed
   'messages:draft:created',    // new draft awaiting review
   'messages:draft:sent',       // draft sent (resolves a drafts row)
@@ -75,6 +76,7 @@ const QUEUE_SOURCE_CONFIG = {
   ask: { icon: MessageCircle, color: 'text-port-accent' },
   cos: { icon: Crown, color: 'text-port-accent' },
   drafts: { icon: Mail, color: 'text-port-accent' },
+  feedback: { icon: MessageCircle, color: 'text-port-warning' },
   health: { icon: Activity, color: 'text-port-warning' },
   backup: { icon: DatabaseBackup, color: 'text-port-error' },
   threads: { icon: BrainIcon, color: 'text-port-accent-2' },
@@ -296,13 +298,13 @@ export default function Review() {
     navigate(`/review/${encodeURIComponent(item.id)}?view=${actionView}`);
   };
 
-  const handleQueueResolve = async (item, operation) => {
+  const handleQueueResolve = async (item, operation, input = {}) => {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
     // The helper toasts on failure (default), so don't add a custom catch toast.
     const ok = await api.resolveReviewQueueItem(
       item.id,
-      operation ? { operation } : {},
+      operation ? { operation, ...input } : {},
     ).then(() => true).catch(() => false);
     setResolvingQueueIds(prev => {
       const next = new Set(prev);
@@ -735,6 +737,59 @@ function QueueMetaChips({ meta }) {
 // Promote-target label for the Ask picker buttons.
 const PROMOTE_TARGET_LABEL = { brain: 'Brain', task: 'Task', goal: 'Goal' };
 
+function FeedbackRatingControls({ id, onSubmit, disabled = false, options = ['positive', 'negative', 'neutral'] }) {
+  const [rating, setRating] = useState('');
+  const [comment, setComment] = useState('');
+  const safeId = String(id || 'feedback').replace(/[^a-zA-Z0-9_-]/g, '-');
+  const ratingId = `feedback-rating-${safeId}`;
+  const commentId = `feedback-comment-${safeId}`;
+  const submit = () => {
+    if (!rating) return;
+    const trimmedComment = comment.trim();
+    onSubmit({ rating, ...(trimmedComment ? { comment: trimmedComment } : {}) });
+  };
+
+  return (
+    <div className="flex items-end gap-2 flex-wrap rounded-md border border-port-border/60 bg-port-bg/40 p-2">
+      <label className="text-xs text-gray-400" htmlFor={ratingId}>
+        Rating (required)
+        <select
+          id={ratingId}
+          value={rating}
+          onChange={(event) => setRating(event.target.value)}
+          disabled={disabled}
+          className="mt-1 block min-h-[36px] rounded border border-port-border bg-port-card px-2 py-1 text-xs text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
+        >
+          <option value="">Choose…</option>
+          {options.map((option) => (
+            <option key={option} value={option}>{option[0].toUpperCase() + option.slice(1)}</option>
+          ))}
+        </select>
+      </label>
+      <label className="min-w-[12rem] flex-1 text-xs text-gray-400" htmlFor={commentId}>
+        Comment (optional)
+        <input
+          id={commentId}
+          value={comment}
+          onChange={(event) => setComment(event.target.value)}
+          maxLength={5000}
+          disabled={disabled}
+          className="mt-1 block min-h-[36px] w-full rounded border border-port-border bg-port-card px-2 py-1 text-xs text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
+        />
+      </label>
+      <button
+        type="button"
+        onClick={submit}
+        disabled={disabled || !rating}
+        className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-port-success/30 bg-port-success/10 px-2 py-1 text-xs font-medium text-port-success hover:bg-port-success/20 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <Check size={14} />
+        Rate
+      </button>
+    </div>
+  );
+}
+
 function QueueRow({ item, onSelect, onDrill, onDismiss, onResolve, onPromoteAsk, resolving = false }) {
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
@@ -748,9 +803,10 @@ function QueueRow({ item, onSelect, onDrill, onDismiss, onResolve, onPromoteAsk,
   const sourceOperations = !promoteTargets.length && Array.isArray(item.operations)
     ? item.operations.filter(operation => operation && operation.available !== false)
     : [];
+  const rateOperation = sourceOperations.find((operation) => operation.id === 'rate' && operation.input?.type === 'rating');
   const inlineActions = item.action
     ? [{ id: 'resolve', label: item.action }]
-    : sourceOperations;
+    : sourceOperations.filter((operation) => operation.id !== 'rate');
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
@@ -783,6 +839,14 @@ function QueueRow({ item, onSelect, onDrill, onDismiss, onResolve, onPromoteAsk,
         )}
       </div>
       <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+        {onResolve && rateOperation && (
+          <FeedbackRatingControls
+            id={item.id}
+            options={rateOperation.input.options}
+            disabled={resolving}
+            onSubmit={(input) => onResolve(item, rateOperation.id, input)}
+          />
+        )}
         {onResolve && inlineActions.map(action => (
           <button
             key={action.id}
@@ -1096,8 +1160,8 @@ function ActionDetail({ item, onClose, onResolve, onSaved, onDrill }) {
   const localStatus = item.meta?.localStatus || record?.status || item.meta?.status;
   const externalState = item.meta?.externalState;
   const updateDraft = (patch) => setDraft((previous) => ({ ...previous, ...patch }));
-  const resolve = async (operation) => {
-    const ok = await onResolve(item, operation);
+  const resolve = async (operation, input = {}) => {
+    const ok = await onResolve(item, operation, input);
     if (ok) onClose();
   };
 
@@ -1185,9 +1249,16 @@ function ActionDetail({ item, onClose, onResolve, onSaved, onDrill }) {
         {operations.length > 0 && (
           <section className="flex flex-wrap gap-2">
             {operations.map((operation) => (
-              <button key={operation.id} type="button" onClick={() => resolve(operation.id)} className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3 py-2 text-sm text-port-success hover:bg-port-success/20">
-                <Check size={14} /> {operation.label}
-              </button>
+              operation.input?.type === 'rating'
+                ? <FeedbackRatingControls
+                    key={operation.id}
+                    id={`detail-${item.id}`}
+                    options={operation.input.options}
+                    onSubmit={(input) => resolve(operation.id, input)}
+                  />
+                : <button key={operation.id} type="button" onClick={() => resolve(operation.id)} className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3 py-2 text-sm text-port-success hover:bg-port-success/20">
+                    <Check size={14} /> {operation.label}
+                  </button>
             ))}
           </section>
         )}

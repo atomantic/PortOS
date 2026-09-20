@@ -246,6 +246,14 @@ CREATE INDEX IF NOT EXISTS idx_user_action_happened ON user_action_events (happe
 CREATE INDEX IF NOT EXISTS idx_user_action_type_time ON user_action_events (type, happened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_action_actor_time ON user_action_events (actor, happened_at DESC);
 
+-- Machine-local CoS feedback obligations. Only the completed agent id and its
+-- archive date-bucket locator are retained here; prose and ratings stay with
+-- the source agent record and this table never enters federation payloads.
+CREATE TABLE IF NOT EXISTS cos_pending_agent_feedback (
+  agent_id TEXT PRIMARY KEY,
+  archive_date TEXT
+);
+
 -- Auto-update updated_at and sync_sequence on content/metadata changes.
 -- Skips bump for access-stat-only updates (access_count, last_accessed)
 -- to avoid sync noise from read operations.
