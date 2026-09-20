@@ -400,6 +400,7 @@ export const DEFAULT_TASK_INTERVALS = {
   //
   // ON_DEMAND with NO interval and NO cron: enabled so the user can press Run
   // Now, never clock-due, so a fresh install spends nothing until they do.
+  'development-watchdog': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: null },
   'universe-bible-describe': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', depth: 'full', maxEntries: 10 } },
   'universe-bible-images':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', maxEntries: 10, requireDescribed: false } }
 };
@@ -558,6 +559,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
   'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
   'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code",
+  'development-watchdog': 'Inspect maintainer repository ownership and queue eligible work without an inference call',
   'universe-bible-describe': 'Fill in blank universe bible sheets — one expand prompt per entry, emptiest first. No agent',
   'universe-bible-images': 'Render images for universe bible entries that have none yet. No agent — PortOS enqueues the renders itself'
 };
@@ -576,6 +578,7 @@ export function getTaskTypeDescription(taskType) {
  * real execution shape without changing prompt-version migration state.
  */
 export const TASK_TYPE_PROMPT_INFO = Object.freeze({
+  'development-watchdog': Object.freeze({ mode: 'programmatic', description: 'Agent-free maintenance. Configure recurring cadence and repository scope in the Persistent Mind maintainer role; Run Now scans immediately.' }),
   [PRIVATE_SECURITY_TASK_TYPE]: Object.freeze({ mode: 'runtime-generated', description: 'Private assessment of committed source and remediation guidance. Requires a pinned local Ollama or LM Studio CLI provider/model and macOS Seatbelt; tools, remote networking and publishing are disabled. Reports appear in the local Review Hub. No issues or PRs.' }),
   'pr-reviewer': Object.freeze({
     mode: 'runtime-generated',

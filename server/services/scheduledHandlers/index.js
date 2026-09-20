@@ -51,6 +51,7 @@
  * agree, so the split cannot drift.
  */
 export const SCHEDULED_HANDLER_MODULES = {
+  'development-watchdog': () => import('./developmentWatchdog.js'),
   'universe-bible-describe': () => import('./universeBibleDescribe.js'),
   'universe-bible-images': () => import('./universeBibleImages.js'),
 };

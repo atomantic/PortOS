@@ -69,6 +69,13 @@ describe('programmatic scheduled handlers — shipped params', () => {
     // it was started from.
     for (const taskType of PROGRAMMATIC_SCHEDULED_TASK_TYPES) {
       const params = catalogParams(taskType);
+      // Maintenance is configured by its standing instance role, never a quota
+      // spending form. It has no handler params or legacy quota catalog entry.
+      if (taskType === 'development-watchdog') {
+        expect(params).toEqual({});
+        expect(DEFAULT_TASK_INTERVALS[taskType].taskMetadata).toBeNull();
+        continue;
+      }
       expect(Object.keys(params).length, taskType).toBeGreaterThan(0);
       const expected = Object.fromEntries(
         Object.entries(params)

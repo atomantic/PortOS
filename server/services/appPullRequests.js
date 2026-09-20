@@ -26,7 +26,7 @@ const GL_PER_PAGE = 100;
 // fork's own address (#6064). They are free on this same call.
 const GH_PR_FIELDS = [
   'number', 'title', 'author', 'url', 'createdAt', 'updatedAt', 'isDraft',
-  'headRefName', 'baseRefName', 'reviewDecision', 'mergeStateStatus',
+  'headRefName', 'headRefOid', 'baseRefName', 'reviewDecision', 'mergeStateStatus',
   'mergeable', 'statusCheckRollup', 'labels',
   'isCrossRepository', 'maintainerCanModify', 'headRepository', 'headRepositoryOwner'
 ].join(',');
@@ -66,6 +66,7 @@ function normalizeGithubPullRequest(pr) {
     createdAt: typeof pr?.createdAt === 'string' ? pr.createdAt : null,
     updatedAt: typeof pr?.updatedAt === 'string' ? pr.updatedAt : null,
     isDraft: pr?.isDraft === true,
+    headSha: typeof pr?.headRefOid === 'string' ? pr.headRefOid : null,
     headBranch: typeof pr?.headRefName === 'string' ? pr.headRefName : '',
     baseBranch: typeof pr?.baseRefName === 'string' ? pr.baseRefName : '',
     reviewDecision: typeof pr?.reviewDecision === 'string' ? pr.reviewDecision : null,
@@ -134,9 +135,10 @@ function normalizeGitlabPullRequest(mr) {
   };
 }
 
-function answeredResult(rows, normalize) {
+function answeredResult(rows, normalize, limit) {
+  if (rows.length >= limit) return { pullRequests: [], reason: 'incomplete-page', transient: true };
   const pullRequests = rows.map(normalize).filter(pr => Number.isInteger(pr.number) && pr.number > 0);
-  if (rows.length > 0 && pullRequests.length === 0) {
+  if (pullRequests.length !== rows.length) {
     return {
       pullRequests: [],
       reason: 'unreadable-response',
@@ -185,12 +187,12 @@ async function fetchGithubPullRequests(repoSpec, apiHost, { repoPath = null, for
       remedy: 'run `gh pr list` in the repo to see what gh reports',
     };
   }
-  return answeredResult(rows, normalizeGithubPullRequest);
+  return answeredResult(rows, normalizeGithubPullRequest, GH_LIST_LIMIT);
 }
 
 async function fetchGitlabPullRequests(repoPath) {
   const { rows, reason } = await execGlabJson(['mr', 'list', '--per-page', String(GL_PER_PAGE)], repoPath);
-  if (rows) return answeredResult(rows, normalizeGitlabPullRequest);
+  if (rows) return answeredResult(rows, normalizeGitlabPullRequest, GL_PER_PAGE);
   if (reason === 'not-json') {
     return {
       pullRequests: [],

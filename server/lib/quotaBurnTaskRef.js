@@ -218,7 +218,8 @@ export function evaluateOnDemandEligibility({ taskType, appId = null, entry, imp
     return unavailable(QUOTA_BURN_UNAVAILABLE.WRONG_SCOPE, `Task type '${taskType}' is not enabled for app '${appId}'`);
   }
 
-  return improvementVerdict(improvementEnabled);
+  // The local maintainer role supplies its own standing grant and cadence.
+  return taskType === 'development-watchdog' ? null : improvementVerdict(improvementEnabled);
 }
 
 /**
