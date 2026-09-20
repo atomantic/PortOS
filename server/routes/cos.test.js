@@ -282,6 +282,15 @@ describe('CoS Routes', () => {
       expect(cos.updateConfig).toHaveBeenCalledWith(updates);
     });
 
+    it('validates machine-local maintainer intent without granting other capabilities', async () => {
+      const updates = { persistentMindMaintainer: { enabled: true, appIds: ['example-app'], intervalMinutes: 60 } };
+      cos.updateConfig.mockResolvedValue(updates);
+      expect((await request(app).put('/api/cos/config').send(updates)).status).toBe(200);
+      expect(cos.updateConfig).toHaveBeenCalledWith(updates);
+      expect((await request(app).put('/api/cos/config').send({ persistentMindMaintainer: { intervalMinutes: 0 } })).status).toBe(400);
+      expect((await request(app).put('/api/cos/config').send({ persistentMindMaintainer: { createTasks: true } })).status).toBe(400);
+    });
+
     it('validates the persistent mind wake cadence', async () => {
       const updates = { persistentMindProfile: { wakeIntervalMinutes: 60 } };
       cos.updateConfig.mockResolvedValue(updates);
