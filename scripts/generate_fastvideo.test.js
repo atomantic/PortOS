@@ -99,6 +99,16 @@ describe.skipIf(!pyBin)('generate_fastvideo.py phase reporting', () => {
     expect(lines(output)).toEqual(['conditioning', 'sampling', 'sampling', 'mux']);
   });
 
+  it('reports Wan 2.2 conditioning, sampling and decode from its milestone output', () => {
+    const output = runPython(`${importRunner}\n${[
+      'phase = runner.INITIAL_PHASE',
+      'for line in ["[5B] latent 48x19x16x24", "[5B] DiT loaded in 1.0s", "[5B] denoise 3 steps in 19.0s, peak 7.3 GiB"]:',
+      '    phase = runner.advance_phase(line, phase)',
+      '    print(phase)',
+    ].join('\n')}`);
+    expect(lines(output)).toEqual(['conditioning', 'sampling', 'mux']);
+  });
+
   it('never moves the phase backwards when a milestone line repeats', () => {
     const output = runPython(`${importRunner}\n${[
       'print(runner.advance_phase("INFO Geometry: output=832x480x124", "sampling"))',

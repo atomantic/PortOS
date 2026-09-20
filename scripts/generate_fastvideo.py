@@ -84,6 +84,10 @@ INITIAL_PHASE = _PHASE_ORDER[0]
 # a line upstream logs at the END of the work it names, so it opens the NEXT
 # phase rather than the one it describes.
 _PHASE_MARKERS = (
+    # Wan 2.2 reports completed milestones instead of per-step progress.
+    ("[5b] latent", "conditioning"),
+    ("[5b] dit loaded", "sampling"),
+    ("[5b] denoise", "mux"),
     # `Geometry: output=...` is the first line generate() logs, i.e. the
     # pipeline object is constructed and the long conditioning leg starts here.
     ("geometry:", "conditioning"),
