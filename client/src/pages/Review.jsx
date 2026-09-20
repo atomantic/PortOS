@@ -42,33 +42,9 @@ import useUrlParams from '../hooks/useUrlParams';
 import useAsyncAction from '../hooks/useAsyncAction';
 import { timeAgo, formatDateTime, formatCount, localDateKey } from '../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
-import { coalesce } from '../utils/coalesce';
+import { useActionQueue } from '../hooks/useActionQueue';
 import * as api from '../services/api';
 import socket from '../services/socket';
-
-// Producer-domain socket events that change what the unified Actions queue
-// (GET /api/review/queue) would return. The queue is derived
-// live from each producer, so when any of these fire — a draft sent, an inbox
-// item classified, a CoS task resolved, a backup finishing — we re-pull the
-// queue (debounced) instead of waiting for a manual reload. Ask is omitted
-// (no socket emit) and proactive alerts are live-computed (no event).
-const QUEUE_INVALIDATION_EVENTS = [
-  'brain:classified',          // inbox item classified / re-reviewed
-  'cos:tasks:user:changed',    // CoS user-task list changed
-  'cos:tasks:cos:changed',     // CoS internal-task list changed
-  'cos:agent:completed',       // a newly completed run may need feedback
-  'messages:changed',          // draft approved/deleted/status changed
-  'messages:draft:created',    // new draft awaiting review
-  'messages:draft:sent',       // draft sent (resolves a drafts row)
-  'backup:started',            // backup state transitioning
-  'backup:completed',          // backup succeeded (clears a failed-backup row)
-  'backup:failed',              // backup errored (surfaces a failed-backup row)
-  'brain:threads:changed',      // Brain commitment created/edited/completed
-  'review:item:created',        // legacy manual todo created
-  'review:item:updated',        // legacy manual todo status/title changed
-  'review:item:deleted',        // legacy manual todo removed
-  'review:items:bulk-updated'
-];
 
 // Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
 const QUEUE_SOURCE_CONFIG = {
@@ -172,7 +148,7 @@ export default function Review() {
   // Cross-domain live queue (M42 P5). Source payloads remain live projections;
   // presentation decisions are durable server-side markers keyed by the row's
   // canonical action identity, occurrence, and revision.
-  const [queue, setQueue] = useState(null);
+  const { data: queue, error: queueError, loading: queueLoading, refetch: fetchQueue } = useActionQueue(actionView);
   const [dismissedQueueIds, setDismissedQueueIds] = useState(() => new Set());
   // Rows with an inline accept/promote in flight — disables the button so a
   // double-tap can't double-resolve while the request is pending.
@@ -197,18 +173,11 @@ export default function Review() {
     setBriefing(data);
   }, []);
 
-  const fetchQueue = useCallback(async () => {
-    // Owns its own fallback, so silence the helper's default error toast.
-    const data = await api.getReviewQueue({ view: actionView, silent: true }).catch(() => null);
-    setQueue(data);
-  }, [actionView]);
-
   useEffect(() => {
     fetchItems();
     fetchCounts();
     fetchBriefing();
-    fetchQueue();
-  }, [fetchItems, fetchCounts, fetchBriefing, fetchQueue]);
+  }, [fetchItems, fetchCounts, fetchBriefing]);
 
   useEffect(() => {
     const handleCreated = (item) => {
@@ -248,20 +217,6 @@ export default function Review() {
       socket.off('review:items:bulk-updated', handleBulkUpdated);
     };
   }, [fetchCounts, fetchItems]);
-
-  // Live-invalidate the cross-domain queue. A burst of producer events (e.g.
-  // a draft sent fires both messages:draft:sent and messages:changed) coalesces
-  // into a single refetch on the trailing edge. dismissedQueueIds still filters
-  // the result, so a row the user dismissed this session won't pop back; a
-  // re-resolved item simply isn't returned by the server anymore.
-  useEffect(() => {
-    const refetch = coalesce(() => fetchQueue(), 400);
-    for (const evt of QUEUE_INVALIDATION_EVENTS) socket.on(evt, refetch);
-    return () => {
-      for (const evt of QUEUE_INVALIDATION_EVENTS) socket.off(evt, refetch);
-      refetch.cancel();
-    };
-  }, [fetchQueue]);
 
   const handleCreateTodo = async (e) => {
     e.preventDefault();
@@ -408,7 +363,7 @@ export default function Review() {
   // Keep old stored Review records rendered only as a compatibility fallback
   // while the live Actions projection is empty. Once a canonical row exists,
   // rendering the old lists as well would show the same obligation twice.
-  const showLegacyReviewSurface = queueItems.length === 0 && queueSourceErrors.length === 0 && !queue?.partial;
+  const showLegacyReviewSurface = queue && !queueError && queueItems.length === 0 && queueSourceErrors.length === 0 && !queue.partial;
 
   const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
   const genericCompletableCount = pendingItems.filter(isGenericCompletableItem).length;
@@ -497,11 +452,19 @@ export default function Review() {
         />
         {/* Triage summary */}
         <section className="flex flex-wrap gap-2">
-          <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
-          <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
-          <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
-          <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
+          {queue && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
+          {queueLoading && !queue && <span role="status">Loading actions…</span>}
+          {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button onClick={fetchQueue}>Retry</button></span>}
         </section>
+        <details>
+          <summary className="text-xs text-port-text-muted">Stored review history counts</summary>
+          <section className="flex flex-wrap gap-2">
+            <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
+            <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
+            <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
+            <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
+          </section>
+        </details>
 
         {/* Canonical Actions queue — live-pulled from Brain commitments, manual
             todos, Ask, CoS, Messages, Health, and Backups. Shown whenever there

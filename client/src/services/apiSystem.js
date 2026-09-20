@@ -5,9 +5,6 @@ export const rectifyModelDuplicates = (payload, options = {}) => request('/syste
   method: 'POST', body: JSON.stringify(payload), ...options,
 });
 
-// Alerts
-export const getAlertsSummary = (options) => request('/alerts/summary', options);
-
 // Health
 export const checkHealth = (options) => request('/system/health', options);
 export const getSystemHealth = (options) => request('/system/health/details', options);

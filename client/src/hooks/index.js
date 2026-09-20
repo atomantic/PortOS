@@ -232,3 +232,4 @@ export * from './useVoiceUiSync.js';
 export { default as useEidoverseFrame } from './useEidoverseFrame.js';
 export * from './useGalleryPage.js';
 export * from './useAccountSyncStatus.js';
+export * from './useActionQueue.js';

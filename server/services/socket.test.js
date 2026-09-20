@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Preserve installed once-only listeners across Vitest's per-test mock-call
+// clearing, just as the process-wide event buses retain their subscriptions.
+const queueListeners = vi.hoisted(() => ({ cos: [], review: [] }));
+
 /**
  * Tests for socket.js initSocket behavior.
  *
@@ -13,7 +17,7 @@ vi.mock('./pm2.js', () => ({
   buildEnv: vi.fn((pm2Home) => ({ PATH: '/usr/bin', ...(pm2Home ? { PM2_HOME: pm2Home } : {}) }))
 }));
 vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
 vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), resolvePm2HomeForProcess: vi.fn(), updateApp: vi.fn() }));
 // logAction appends to the real history file — mock it or this suite writes to data/.
 vi.mock('./history.js', () => ({ logAction: vi.fn(async () => {}) }));
@@ -39,7 +43,7 @@ vi.mock('./beeperSocketEvents.js', async () => {
   return { beeperSocketEvents: new EventEmitter() };
 });
 vi.mock('./instanceEvents.js', () => ({ instanceEvents: { on: vi.fn() } }));
-vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn() } }));
+vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn((...args) => queueListeners.review.push(args)) } }));
 vi.mock('./loops.js', () => ({ loopEvents: { on: vi.fn() } }));
 vi.mock('./imageGenEvents.js', () => ({ imageGenEvents: { on: vi.fn() } }));
 vi.mock('./shell.js', () => ({
@@ -277,6 +281,16 @@ describe('socket.js — initSocket', () => {
     listener(payload);
 
     expect(socket.emitted).toContainEqual(['cos:tasks:changed', payload]);
+  });
+
+  it('invalidates Actions globally without exposing domain payloads or requiring a CoS subscription', () => {
+    for (const [event, listener] of queueListeners.cos) {
+      if (event === 'tasks:changed') listener({ type: 'user', task: { id: 'example', description: 'Private source text' } });
+    }
+    expect(io.emitted).toContainEqual(['review:queue:changed']);
+    io.emitted.length = 0;
+    queueListeners.review.find(([event]) => event === 'queue:changed')[1]({ private: 'not forwarded' });
+    expect(io.emitted).toEqual([['review:queue:changed']]);
   });
 
   // The three agent-record events leave through the same listing projection as

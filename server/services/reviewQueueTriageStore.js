@@ -56,6 +56,14 @@ export function normalizeReviewQueueTriage(value = {}, { rejectInvalid = false }
     snoozedUntil,
     dismissed: value.dismissed === true,
     deliveryGeneration,
+    ...(value.delivery && typeof value.delivery === 'object' ? {
+      delivery: {
+        severity: Number.isSafeInteger(value.delivery.severity) ? value.delivery.severity : 0,
+        channels: Object.fromEntries(['toast', 'telegram', 'scheduled']
+          .filter((channel) => Number.isSafeInteger(value.delivery.channels?.[channel]) && value.delivery.channels[channel] >= 0)
+          .map((channel) => [channel, value.delivery.channels[channel]])),
+      },
+    } : {}),
   };
 }
 
@@ -95,7 +103,7 @@ function makePgBackend(db) {
     name: 'postgres',
     async list() {
       const { rows } = await db.query(
-        `SELECT action_key, occurrence, revision, snoozed_until, dismissed, delivery_generation
+        `SELECT action_key, occurrence, revision, snoozed_until, dismissed, delivery_generation, delivery
          FROM review_queue_triage
          ORDER BY action_key, occurrence, revision`,
       );
@@ -106,18 +114,20 @@ function makePgBackend(db) {
         snoozedUntil: row.snoozed_until,
         dismissed: row.dismissed,
         deliveryGeneration: row.delivery_generation,
+        delivery: row.delivery,
       })).filter(Boolean);
     },
     async upsert(value) {
       await db.query(
         `INSERT INTO review_queue_triage
-           (action_key, occurrence, revision, snoozed_until, dismissed, delivery_generation)
-         VALUES ($1, $2, $3, $4, $5, $6)
+           (action_key, occurrence, revision, snoozed_until, dismissed, delivery_generation, delivery)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (action_key, occurrence, revision) DO UPDATE SET
            snoozed_until = EXCLUDED.snoozed_until,
            dismissed = EXCLUDED.dismissed,
-           delivery_generation = EXCLUDED.delivery_generation`,
-        [value.actionKey, value.occurrence, value.revision, value.snoozedUntil, value.dismissed, value.deliveryGeneration],
+           delivery_generation = EXCLUDED.delivery_generation,
+           delivery = EXCLUDED.delivery`,
+        [value.actionKey, value.occurrence, value.revision, value.snoozedUntil, value.dismissed, value.deliveryGeneration, value.delivery || null],
       );
     },
     async remove(value) {
