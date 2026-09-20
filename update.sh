@@ -110,11 +110,8 @@ safe_install() {
 # Pull latest — always switch to main (detached HEAD or feature branch both
 # need to land on main before pulling, or the version won't advance). The
 # rest of the script (install, build, restart) runs on main so the app
-# starts on the freshly-pulled revision. Local edits on the original branch
-# are stashed first so checkout doesn't abort, and we leave them in the
-# stash list afterward — the user can restore with `git stash pop` after
-# the update completes (we don't auto-pop because the rest of the script
-# needs to keep running with main's contents).
+# starts on the freshly-pulled revision. A dirty checkout is refused rather
+# than stashed, so agent or user work cannot be duplicated by a later rebase.
 step "git-pull" "running" "Pulling latest changes..."
 origin_url=$(git remote get-url origin 2>/dev/null || echo "")
 if [ -n "$origin_url" ]; then
@@ -127,18 +124,15 @@ if [ -n "$origin_url" ]; then
   echo "🌐 Pulling from origin: $origin_url_safe" >> "$UPDATE_LOG"
 fi
 current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
-stashed_for_branch=""
-stashed_for_commit=""
+has_local_changes() {
+  ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]
+}
+if has_local_changes; then
+  log "❌ Refusing update: checkout has uncommitted changes; commit or restore them first"
+  step "git-pull" "failed" "Checkout is dirty; no stash was created"
+  exit 1
+fi
 if [ "$current_branch" != "main" ]; then
-  if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
-    log "⚠️  Stashing local changes from '${current_branch:-detached HEAD}' so checkout can proceed"
-    if run git stash push -u -m "portos-update-$(date +%s)"; then
-      stashed_for_branch="${current_branch:-detached HEAD}"
-      # Capture the original commit SHA so detached-HEAD users can return
-      # to the exact tree their stash was taken from.
-      stashed_for_commit=$(git rev-parse HEAD)
-    fi
-  fi
   log "⚠️  On branch '${current_branch:-detached HEAD}' — switching to main for update"
   run git checkout main
 fi
@@ -157,7 +151,7 @@ pre_pull_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
 # it; it refuses any lock young enough to still belong to a running command.
 # Builtins-only, so it runs before `npm install` — and never fatal.
 node -e "import('./server/lib/gitStaleLock.js').then(m => m.clearStaleGitLocksIn('.git')).catch(() => {})" 2>/dev/null || true
-run git pull --rebase --autostash
+run git pull --rebase
 step "git-pull" "done" "Latest changes pulled"
 
 # Determine which workspaces' package.json this update touched, so safe_install
@@ -513,15 +507,6 @@ if [ -n "$setup_guide" ]; then
   log ""
 fi
 
-if [ -n "$stashed_for_branch" ]; then
-  log "ℹ️  Your local changes from '$stashed_for_branch' were stashed for the update."
-  if [ "$stashed_for_branch" = "detached HEAD" ]; then
-    log "    To restore them: git checkout $stashed_for_commit && git stash pop"
-  else
-    log "    To restore them: git checkout '$stashed_for_branch' && git stash pop"
-  fi
-  log "    The stash entry is at the top of 'git stash list'."
-fi
 
 # Exit non-zero when the install did not come back. This script outlives the
 # server it restarts, so its status is the only signal a caller still has.

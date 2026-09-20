@@ -13,13 +13,13 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT_COMMANDS = [
   {
     path: 'update.sh',
-    pull: 'run git pull --rebase --autostash',
+    pull: 'run git pull --rebase',
     sync: 'run git submodule sync --recursive',
     update: 'run git submodule update --init --recursive',
   },
   {
     path: 'update.ps1',
-    pull: 'Invoke-Logged git pull --rebase --autostash',
+    pull: 'Invoke-Logged git pull --rebase',
     sync: 'Invoke-Logged git submodule sync --recursive',
     update: 'Invoke-Logged git submodule update --init --recursive',
   },
@@ -40,6 +40,11 @@ describe.each(SCRIPT_COMMANDS)('$path submodule update contract', ({ path, pull,
 
   it('does not advance submodules past the commits reviewed by PortOS', () => {
     expect(source).not.toMatch(/git submodule update[^\n]*--remote/);
+  });
+
+  it('never uses stash as an implicit update transport', () => {
+    expect(source).not.toMatch(/git\s+stash|--autostash/);
+    expect(source).toContain('Checkout is dirty; no stash was created');
   });
 
   // This script is the most likely producer of an abandoned lock (PM2 tree-kills
