@@ -65,7 +65,6 @@ vi.mock('../services/api', () => ({
   createThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action' })),
   getThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action', status: 'open' })),
   updateThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'Updated action', status: 'open' })),
-  createReviewTodo: vi.fn(() => Promise.resolve({})),
   completeReviewItem: vi.fn(() => Promise.resolve({})),
   dismissReviewItem: vi.fn(() => Promise.resolve({})),
   deleteReviewItem: vi.fn(() => Promise.resolve({})),
@@ -261,7 +260,6 @@ describe('Actions commitments workspace (#7739)', () => {
       { title: 'Track the example follow-up' },
       { silent: true },
     ));
-    expect(api.createReviewTodo).not.toHaveBeenCalled();
   });
 
   it('opens a newly added thread in a view where an open commitment is visible', async () => {

@@ -33,10 +33,6 @@ export const promoteAskReviewQueueItem = (id, target, { goalId, ...options } = {
   body: JSON.stringify({ id, target, ...(goalId ? { goalId } : {}) }),
   ...options
 });
-export const createReviewTodo = (data) => request('/review/todo', {
-  method: 'POST',
-  body: JSON.stringify(data)
-});
 export const updateReviewItem = (id, data, options = {}) => request(`/review/items/${id}`, {
   method: 'PATCH',
   body: JSON.stringify(data),
