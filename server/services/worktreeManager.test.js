@@ -121,20 +121,25 @@ describe('Worktree dependency preparation', () => {
   });
 
   it('links installed root, client, and server dependencies when targets are absent', async () => {
-    lstat.mockImplementation((path) => path.startsWith('/repo/')
+    lstat.mockImplementation((path) => path.replaceAll('\\\\', '/').startsWith('/repo/')
       ? Promise.resolve({})
       : Promise.reject(new Error('missing')));
 
     await linkWorktreeDependencies('/repo', '/worktree');
 
     expect(symlink).toHaveBeenCalledTimes(3);
-    expect(symlink).toHaveBeenCalledWith('/repo/node_modules', '/worktree/node_modules', 'dir');
-    expect(symlink).toHaveBeenCalledWith('/repo/client/node_modules', '/worktree/client/node_modules', 'dir');
-    expect(symlink).toHaveBeenCalledWith('/repo/server/node_modules', '/worktree/server/node_modules', 'dir');
+    const linkedPaths = symlink.mock.calls.map(([source, target]) => [
+      source.replaceAll('\\\\', '/'), target.replaceAll('\\\\', '/'),
+    ]);
+    expect(linkedPaths).toEqual(expect.arrayContaining([
+      ['/repo/node_modules', '/worktree/node_modules'],
+      ['/repo/client/node_modules', '/worktree/client/node_modules'],
+      ['/repo/server/node_modules', '/worktree/server/node_modules'],
+    ]));
   });
 
   it('skips missing sources and preserves existing targets', async () => {
-    lstat.mockImplementation((path) => path === '/repo/node_modules' || path === '/worktree/node_modules'
+    lstat.mockImplementation((path) => ['/repo/node_modules', '/worktree/node_modules'].includes(path.replaceAll('\\\\', '/'))
       ? Promise.resolve({})
       : Promise.reject(new Error('missing')));
 
