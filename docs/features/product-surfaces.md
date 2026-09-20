@@ -67,7 +67,7 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 | **Persistent Mind** | `/cos/mind` | Resident long-term conversational AI agent with persistent context memory, annotation support, and continuous system oversight. | [Agent Tools (MCP)](./agent-context.md), [Memory System](./memory-system.md) |
 | **Mind Tools Governance** | `/cos/mind?panel=tools` | Fine-grained tool permission controls, MCP context disclosure settings (metadata-only vs redacted summaries), and semantic action grants. | [Agent Tools (MCP)](./agent-context.md), [Agent Skills](./agent-skills.md) |
 | **Feature Agents** | `/feature-agents` | Durable, specialized agents assigned to specific feature domains or managed codebases. | — |
-| **Review Hub** | `/review` | Centralized triage inbox for agent-generated diffs, pull request reviews, approval requests, and code quality findings. | — |
+| **Review Hub** | `/review` | Centralized triage inbox for agent-generated diffs, pull request reviews, approval requests, and code quality findings. | [Review Queue Contract](./review-queue.md) |
 | **Social Agents** | `/agents` | Autonomous agent personas for managing external social communications and community presence. | — |
 | **AI Providers & Model Runner** | `/ai` | Multi-provider configuration supporting CLI agents (Claude Code, Codex, Antigravity, OpenCode), cloud APIs (OpenAI, Anthropic, Gemini, Grok), and local endpoints (Ollama, LM Studio, vLLM, SGLang). | [Claude on Ollama](./claude-ollama.md) |
 | **Prompt Manager** | `/prompts` | Reusable prompt template library, variable substitution engine, prompt versioning, and auto-upgrade migrations. | [Prompt Manager](./prompt-manager.md) |

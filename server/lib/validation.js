@@ -1771,6 +1771,14 @@ export const agentActivityCleanupSchema = z.object({
   daysToKeep: z.coerce.number().int().min(1).max(3650).default(30),
 }).strict();
 
+// GET /api/review/queue — pagination is opt-in so existing Review Hub clients
+// keep receiving the legacy full-list envelope. Cursors are opaque and bounded
+// before they reach the queue snapshot decoder.
+export const reviewQueueQuerySchema = z.object({
+  limit: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(100).optional()),
+  cursor: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(4096).optional()),
+}).strict();
+
 // =============================================================================
 // CLIENT ERROR REPORT
 // =============================================================================
