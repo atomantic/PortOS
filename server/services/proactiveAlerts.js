@@ -32,6 +32,21 @@ const USAGE_SPIKE_MULTIPLIER = 2.5;
 const USAGE_MIN_HISTORY_DAYS = 3;
 
 /**
+ * Condition + explicit resource identity, never presentation text or position.
+ * Encode each segment separately so a resource containing ':' cannot collide.
+ * These keys name the active condition; severity/wording changes keep the key.
+ * Domain-wide checks use an explicit 'all' resource. Recurring product actions
+ * supply their own IDs. Missing resource identity is a failed source read,
+ * not permission to mint a positional ID or claim the queue is empty.
+ */
+function alertId(condition, resource) {
+  const valid = typeof resource === 'string' ? resource.trim().length > 0
+    : Number.isSafeInteger(resource) && resource >= 0;
+  if (!valid) throw new Error('Alert resource identity is unavailable');
+  return `${condition}:${encodeURIComponent(resource)}`;
+}
+
+/**
  * Detect goals that have stalled (no progress update in 14+ days)
  */
 async function checkGoalStalls() {
@@ -53,6 +68,7 @@ async function checkGoalStalls() {
     const daysSince = Math.floor((now - new Date(lastUpdate).getTime()) / 86400000);
     if (daysSince >= STALL_THRESHOLD_DAYS) {
       alerts.push({
+        id: alertId('goal_stall', goal.id),
         type: 'goal_stall',
         severity: daysSince >= 30 ? 'high' : 'medium',
         title: `Goal stalled: ${goal.title}`,
@@ -85,6 +101,7 @@ async function checkSuccessRates() {
   return (perf.needsAttention || [])
     .filter(hasCurrentPerformanceEvidence)
     .map(item => ({
+      id: alertId('success_drop', item.taskType),
       type: 'success_drop',
       severity: item.successRate < 30 ? 'high' : 'medium',
       title: `Low success rate: ${item.taskType}`,
@@ -106,6 +123,7 @@ async function checkSystemHealth() {
   if (memPct >= MEMORY_WARNING_PCT) {
     const formatGB = (bytes) => `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
     alerts.push({
+      id: alertId('system_resource', 'memory'),
       type: 'system_resource',
       severity: memPct >= MEMORY_CRITICAL_PCT ? 'critical' : 'high',
       title: 'High memory usage',
@@ -122,6 +140,7 @@ async function checkSystemHealth() {
 
   if (cpuPct >= CPU_WARNING_PCT) {
     alerts.push({
+      id: alertId('system_resource', 'cpu'),
       type: 'system_resource',
       severity: 'high',
       title: 'High CPU usage',
@@ -136,29 +155,29 @@ async function checkSystemHealth() {
   // would report every play session as a failure. See issue #2991.
   const processes = await listProcesses().catch(() => []);
   const alertable = (await annotateExpectedExit(processes)).filter(p => !p.expectedExit);
-  const errored = alertable.filter(p => p.status === 'errored').length;
-  if (errored > 0) {
-    alerts.push({
-      type: 'process_error',
-      severity: 'high',
-      title: `${errored} errored process${errored > 1 ? 'es' : ''}`,
-      detail: `${errored} of ${alertable.length} processes in error state`,
-      link: '/apps',
-      metadata: { errored, total: alertable.length }
-    });
-  }
-
-  const crashing = alertable.filter(p => (p.unstableRestarts || 0) > 0);
-  if (crashing.length > 0) {
-    const total = crashing.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0);
-    alerts.push({
-      type: 'process_error',
-      severity: 'high',
-      title: `${crashing.length} process${crashing.length > 1 ? 'es' : ''} in crash loop`,
-      detail: `${total} crash-loop restart${total === 1 ? '' : 's'}: ${crashing.map(p => p.name).join(', ')}`,
-      link: '/apps',
-      metadata: { unstableRestarts: total, names: crashing.map(p => p.name) }
-    });
+  for (const process of alertable) {
+    if (process.status === 'errored') {
+      alerts.push({
+        id: alertId('process_errored', process.pm_id),
+        type: 'process_error',
+        severity: 'high',
+        title: `Errored process: ${process.name}`,
+        detail: 'Review the process logs and restart it after addressing the failure',
+        link: '/apps',
+        metadata: { processId: process.pm_id, errored: 1, total: alertable.length }
+      });
+    }
+    if ((process.unstableRestarts || 0) > 0) {
+      alerts.push({
+        id: alertId('process_crash_loop', process.pm_id),
+        type: 'process_error',
+        severity: 'high',
+        title: `Process in crash loop: ${process.name}`,
+        detail: `${process.unstableRestarts} crash-loop restarts — review the process logs`,
+        link: '/apps',
+        metadata: { processId: process.pm_id, unstableRestarts: process.unstableRestarts, names: [process.name] }
+      });
+    }
   }
 
   return alerts;
@@ -179,6 +198,7 @@ async function checkLearningHealth() {
 
   if (skipped > 0) {
     alerts.push({
+      id: alertId('learning_skipped', 'all'),
       type: 'learning_health',
       severity: 'high',
       title: `${skipped} task type${skipped > 1 ? 's' : ''} being skipped`,
@@ -188,6 +208,7 @@ async function checkLearningHealth() {
     });
   } else if (critical > 0) {
     alerts.push({
+      id: alertId('learning_critical', 'all'),
       type: 'learning_health',
       severity: 'medium',
       title: `${critical} task type${critical > 1 ? 's' : ''} need attention`,
@@ -235,6 +256,7 @@ async function checkUsageSpikes() {
     if (tokenRatio >= USAGE_SPIKE_MULTIPLIER) {
       const formatTokens = (t) => t >= 1000 ? `${(t / 1000).toFixed(1)}k` : String(t);
       alerts.push({
+        id: alertId('cost_spike', 'tokens'),
         type: 'cost_spike',
         severity: tokenRatio >= 5 ? 'high' : 'medium',
         title: 'AI token usage spike',
@@ -247,6 +269,7 @@ async function checkUsageSpikes() {
     const sessionRatio = todayData.sessions / avgSessions;
     if (sessionRatio >= USAGE_SPIKE_MULTIPLIER && avgSessions > 0) {
       alerts.push({
+        id: alertId('cost_spike', 'sessions'),
         type: 'cost_spike',
         severity: sessionRatio >= 5 ? 'high' : 'medium',
         title: 'AI session spike',
@@ -271,6 +294,7 @@ async function checkTribeCadence() {
   const names = summary.overdue.map((p) => p.name).filter(Boolean).join(', ');
   const overflow = summary.overdueCount > summary.overdue.length ? ', …' : '';
   return [{
+    id: alertId('tribe_cadence', 'all'),
     type: 'tribe_cadence',
     severity: summary.overdueCount >= 3 ? 'high' : 'medium',
     title: `${summary.overdueCount} ${summary.overdueCount === 1 ? 'person is' : 'people are'} overdue for contact`,
@@ -296,6 +320,7 @@ async function checkUnansweredTribeThreads() {
   return threads.map((t) => {
     const snippet = t.snippet ? `“${t.snippet}”` : 'their message';
     return {
+      id: alertId('tribe_unanswered', t.conversationKey),
       type: 'tribe_unanswered',
       // A week-stale unanswered message from someone you care about is worth more
       // than a fresh one still within normal reply latency.

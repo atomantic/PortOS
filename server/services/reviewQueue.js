@@ -284,18 +284,30 @@ const PRODUCERS = [
     async gather() {
       // System/health alerts; only surface the ones worth interrupting for.
       const { alerts = [] } = await getAlertsCached();
-      return alerts.filter(a => a.severity === 'critical' || a.severity === 'high');
+      const byId = new Map();
+      for (const alert of alerts) {
+        if (alert.severity !== 'critical' && alert.severity !== 'high') continue;
+        if (typeof alert.id !== 'string' || !alert.id.trim()) {
+          throw new Error('Health alert identity is unavailable');
+        }
+        // Deduplicate before the per-source cap/count. If two observations of
+        // a condition disagree, retain its strongest severity.
+        const previous = byId.get(alert.id);
+        if (!previous || SEVERITY_ORDER[alert.severity] < SEVERITY_ORDER[previous.severity]) {
+          byId.set(alert.id, alert);
+        }
+      }
+      return [...byId.values()];
     },
-    // proactiveAlerts emits { type, severity, title, detail, link } with no
-    // stable id and possibly-repeating types, so key on the array index too.
-    map(alert, index) {
+    // The collector owns semantic identity; the queue only namespaces it.
+    map(alert) {
       // Surface the alert category (system_resource / goal_stall / …) so the
       // user can tell at a glance what kind of anomaly it is. Absent → omitted.
       const alertType = typeof alert.type === 'string' && alert.type.trim()
         ? alert.type.trim()
         : null;
       return {
-        id: `health:${alert.type || 'alert'}:${index}`,
+        id: `health:${alert.id}`,
         title: alert.title || `${alert.type || 'System'} alert`,
         summary: (alert.detail || alert.message || '').slice(0, 200),
         timestamp: alert.timestamp || null,
