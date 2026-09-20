@@ -67,6 +67,14 @@ const taskRequest = (overrides = {}) => ({
   ...overrides,
 });
 
+it('routes maintainer-repository work through tracked issues and watchdog ownership instead of generic tasks', async () => {
+  mocks.root.config.persistentMindMaintainer = { enabled: true, appIds: ['portos'] };
+  const [result] = await executePersistentMindTaskRequests({ turnId: 'maintainer-turn', taskRequests: [taskRequest()] });
+  expect(result.success).toBe(false);
+  expect(result.error).toContain('maintenance.refresh');
+  expect(mocks.addTask).not.toHaveBeenCalled();
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.root = { config: { persistentMindCapabilities: { createTasks: true } } };

@@ -239,22 +239,23 @@ export function persistentMindHarnessInfo(provider) {
   };
 }
 
-const currentWakeText = (wake) => {
+const currentWakeText = (wake, maintenancePrompt) => {
   if (wake?.kind === 'message') {
     const imageCount = Array.isArray(wake.message?.images) ? wake.message.images.length : 0;
     const attachmentNote = imageCount > 0 ? `\n[${imageCount} image${imageCount === 1 ? '' : 's'} attached]` : '';
     return `A human message is waiting. Reply directly to it.\nmessageId=${wake.message?.id || 'unknown'}\n${wake.message?.text || ''}${attachmentNote}`;
   }
-  return `This is a self-directed wake. There is NO human message and NO implied user request this turn — do not invent one (no workouts, weather, inbox triage, or phone calls unless tools/capabilities explicitly require them for the playbook). Continue the standing playbook: prefer eidoverse.status then one concrete Eidoverse/PortOS action, then a short working note.\nreason=${wake?.reason || 'scheduled reflection'}`;
+  return `This is a self-directed wake. There is NO human message and NO implied user request this turn — do not invent one (no workouts, weather, inbox triage, or phone calls unless tools/capabilities explicitly require them for the playbook). ${maintenancePrompt ? 'Read the development maintenance evidence first; act only on new exceptions, then return to the standing Eidoverse playbook.' : 'Continue the standing playbook: prefer eidoverse.status then one concrete Eidoverse/PortOS action, then a short working note.'}\nreason=${wake?.reason || 'scheduled reflection'}`;
 };
 
-export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({ enabled: false }), toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
+export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, maintenancePrompt = '', issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({ enabled: false }), toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
   return `${context.text}
 
 ${visibilityPrompt}
 ${userActionsPrompt ? `\n${userActionsPrompt}\n` : ''}
+${maintenancePrompt ? `\n${maintenancePrompt}\n` : ''}
 # Current wake
-${currentWakeText(wake)}
+${currentWakeText(wake, maintenancePrompt)}
 
 ${taskCapabilityPrompt}
 
@@ -437,7 +438,14 @@ export function createPersistentMindTurnAdapter() {
       // Deterministic and always included (epic #5593 decision 14): bounded,
       // already redacted, no grant required. Deeper lookbacks use the
       // readPortos-gated user-actions.query tool.
-      const userActionsPrompt = await readPersistentMindUserActionsPrompt();
+      // Maintainers get aggregates, not automatic ledger summaries/transcript prose.
+      const userActionsPrompt = root.config?.persistentMindMaintainer?.enabled ? '' : await readPersistentMindUserActionsPrompt();
+      let maintenancePrompt = '';
+      if (root.config?.persistentMindMaintainer?.enabled) {
+        const maintenance = await import('./persistentMindMaintenanceContext.js');
+        maintenancePrompt = maintenance.buildPersistentMindMaintenancePrompt(
+          await maintenance.readPersistentMindMaintenanceContext({ visibility }));
+      }
       // Only the very first build of the turn ages the lease and traces —
       // every later rebuild (after a tool round) reuses the same turnId with
       // isUserTurn omitted so a multi-round turn can't age its own tools out
@@ -458,6 +466,7 @@ export function createPersistentMindTurnAdapter() {
         toolCapabilityPrompt,
         visibilityPrompt,
         userActionsPrompt,
+        maintenancePrompt,
         callCapabilityPrompt,
       });
       let providerPrompt = basePrompt;
@@ -601,7 +610,7 @@ export function createPersistentMindTurnAdapter() {
         // call may have just activated or renewed a family, so re-read the
         // live lease state, but this in-turn rebuild must never age it again
         // or log a second trace line for the same turn.
-        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
+        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, maintenancePrompt, callCapabilityPrompt,
           toolCapabilityPrompt: await buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities), { turnId }),
         });
         const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;

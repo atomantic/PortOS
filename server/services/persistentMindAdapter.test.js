@@ -14,6 +14,7 @@ const mock = vi.hoisted(() => ({
   readVisibility: vi.fn(),
   executeCallRequest: vi.fn(),
   resolvePlaybookPhase: vi.fn(),
+  readMaintenance: vi.fn(),
   createPersistentMindMemoryFromCandidate: vi.fn(async ({ candidateId, ...candidate }) => ({
     success: true,
     duplicate: false,
@@ -49,6 +50,10 @@ vi.mock('./persistentMindVisibility.js', () => ({
 vi.mock('./persistentMindUserActions.js', () => ({
   readPersistentMindUserActionsPrompt: vi.fn(async () => '# Recent user actions (last 24h)\n- 2× cos.schedule.trigger (branch-reconcile) actor=user'),
 }));
+vi.mock('./persistentMindMaintenanceContext.js', () => ({
+  readPersistentMindMaintenanceContext: (...args) => mock.readMaintenance(...args),
+  buildPersistentMindMaintenancePrompt: () => '# Development maintenance\nNo new maintenance; return to the existing Eidoverse playbook.',
+}));
 vi.mock('./persistentMindCallCapability.js', () => ({
   buildPersistentMindCallCapabilityPrompt: ({ enabled }) => `Call access: ${enabled ? 'ON' : 'OFF'}`,
   executePersistentMindCallRequest: (...args) => mock.executeCallRequest(...args),
@@ -69,6 +74,8 @@ const profile = { provider: { id: 'example-api', type: 'api' }, model: 'example-
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete mock.root.config.persistentMindMaintainer;
+  mock.readMaintenance.mockResolvedValue({ enabled: true, granted: true, changed: false });
   mock.memories = [{ id: 'memory-1', type: 'fact', content: 'A durable fact.', sourceAgentId: 'cos-persistent-mind', status: 'active' }];
   mock.root.config.persistentMindCapabilities = { createTasks: true };
   mock.readTaskCatalog.mockResolvedValue({ apps: [{ id: 'portos' }], providers: [{ id: 'codex' }] });
@@ -85,6 +92,16 @@ beforeEach(() => {
     memoryCandidates: [{ content: 'Remember this.', type: 'fact', category: 'other', tags: [], protection: 'important' }],
     selfWake: null,
   }) });
+});
+
+it('uses bounded maintenance context on opted-in wakes instead of raw action snippets', async () => {
+  mock.root.config.persistentMindMaintainer = { enabled: true, appIds: ['portos'] };
+  await createPersistentMindTurnAdapter().run({ ...profile, turnId: 'maintenance', wake: { kind: 'self' }, context: { text: 'Identity' } });
+  const text = mock.runPrompt.mock.calls[0][0].prompt;
+  expect(mock.readMaintenance).toHaveBeenCalledWith({ visibility: { readiness: 'ready', workspaces: [] } });
+  expect(text).toContain('Read the development maintenance evidence first');
+  expect(text).toContain('return to the existing Eidoverse playbook');
+  expect(text).not.toContain('# Recent user actions');
 });
 
 describe('naming on authorized turns', () => {
