@@ -183,6 +183,11 @@ export default function DeckCardGrid({
                       </span>
                     </div>
                   ) : null}
+                  {(isCurrentActive || viewedFilename === card.render?.filename) && (card.render?.mode || card.render?.model) ? (
+                    <p className="w-full truncate text-center text-[10px] text-gray-500" title={renderAttribution(card.render)}>
+                      {renderAttribution(card.render)}
+                    </p>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => onOpenCard(card)}
@@ -227,6 +232,11 @@ export default function DeckCardGrid({
       ))}
     </div>
   );
+}
+
+function renderAttribution(render) {
+  const service = render.mode ? render.mode.charAt(0).toUpperCase() + render.mode.slice(1) : null;
+  return `Rendered by ${[service, render.model].filter(Boolean).join(' · ')}`;
 }
 
 // Why this card's render button will or won't do anything, in one sentence.
