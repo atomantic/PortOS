@@ -233,7 +233,6 @@ export const NAV_PRESENTATION = {
   '/models/embeddings': { icon: Braces },
   '/models/llms': { icon: Cpu },
   '/models/llms/abuse': { icon: ShieldAlert },
-  '/models/llms/jev': { icon: Scale },
   '/models/llms-runtimes': { icon: Server },
   '/models/loras': { icon: Sparkles },
   '/models/media': { icon: HardDrive },
