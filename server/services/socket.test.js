@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Preserve installed once-only listeners across Vitest's per-test mock-call
+// clearing, just as the process-wide event buses retain their subscriptions.
+const queueListeners = vi.hoisted(() => ({ cos: [], review: [] }));
+
 /**
  * Tests for socket.js initSocket behavior.
  *
@@ -13,7 +17,7 @@ vi.mock('./pm2.js', () => ({
   buildEnv: vi.fn((pm2Home) => ({ PATH: '/usr/bin', ...(pm2Home ? { PM2_HOME: pm2Home } : {}) }))
 }));
 vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
 vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), resolvePm2HomeForProcess: vi.fn(), updateApp: vi.fn() }));
 // logAction appends to the real history file — mock it or this suite writes to data/.
 vi.mock('./history.js', () => ({ logAction: vi.fn(async () => {}) }));
@@ -39,7 +43,7 @@ vi.mock('./beeperSocketEvents.js', async () => {
   return { beeperSocketEvents: new EventEmitter() };
 });
 vi.mock('./instanceEvents.js', () => ({ instanceEvents: { on: vi.fn() } }));
-vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn() } }));
+vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn((...args) => queueListeners.review.push(args)) } }));
 vi.mock('./loops.js', () => ({ loopEvents: { on: vi.fn() } }));
 vi.mock('./imageGenEvents.js', () => ({ imageGenEvents: { on: vi.fn() } }));
 vi.mock('./shell.js', () => ({
@@ -84,7 +88,6 @@ import { spawnPm2 } from './pm2.js';
 import { getAppById, notifyAppsChanged, resolvePm2HomeForProcess } from './apps.js';
 import { logAction } from './history.js';
 import { cosEvents } from './cosEvents.js';
-import { reviewEvents } from './review.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
@@ -281,12 +284,12 @@ describe('socket.js — initSocket', () => {
   });
 
   it('invalidates Actions globally without exposing domain payloads or requiring a CoS subscription', () => {
-    for (const [event, listener] of cosEvents.on.mock.calls) {
+    for (const [event, listener] of queueListeners.cos) {
       if (event === 'tasks:changed') listener({ type: 'user', task: { id: 'example', description: 'Private source text' } });
     }
     expect(io.emitted).toContainEqual(['review:queue:changed']);
     io.emitted.length = 0;
-    reviewEvents.on.mock.calls.find(([event]) => event === 'queue:changed')[1]({ private: 'not forwarded' });
+    queueListeners.review.find(([event]) => event === 'queue:changed')[1]({ private: 'not forwarded' });
     expect(io.emitted).toEqual([['review:queue:changed']]);
   });
 
