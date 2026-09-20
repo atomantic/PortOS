@@ -713,16 +713,30 @@ export async function verifyPostCompletionOutputs({ outputPaths, completedOutput
  * attached is also valid: for a child that is being abandoned rather than
  * wired, it stays a harmless sink that keeps an 'error' from going unhandled.
  */
-export function bufferChildExit(proc) {
+export function bufferChildExit(proc, { bufferOutput = false } = {}) {
   let buffered = null;
+  const output = [];
   const onClose = (code, signal) => { buffered = buffered || { type: 'close', code, signal }; };
   const onError = (error) => { buffered = buffered || { type: 'error', error }; };
+  const onStdout = (chunk) => output.push({ stream: 'stdout', chunk });
+  const onStderr = (chunk) => output.push({ stream: 'stderr', chunk });
+  onStdout.__earlyBuffer = true;
+  onStderr.__earlyBuffer = true;
   proc.on('close', onClose);
   proc.on('error', onError);
+  if (bufferOutput) {
+    proc.stdout?.on('data', onStdout);
+    proc.stderr?.on('data', onStderr);
+  }
   return () => {
     proc.off?.('close', onClose);
     proc.off?.('error', onError);
-    return buffered;
+    if (bufferOutput) {
+      proc.stdout?.off?.('data', onStdout);
+      proc.stderr?.off?.('data', onStderr);
+    }
+    if (!buffered && output.length === 0) return null;
+    return output.length ? { ...(buffered || { type: 'output' }), output } : buffered;
   };
 }
 

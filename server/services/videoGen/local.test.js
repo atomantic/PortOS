@@ -5080,10 +5080,10 @@ describe('generateVideo — Gemma prompt-encode watchdog relaunch', () => {
     return {
       proc,
       // Full wiring — the stdout reader goes on with the real terminal handler,
-      // and only there. The pre-handoff exit buffer subscribes to 'close'/'error'
-      // alone, so this stays false across the handoff window even though the
-      // child's exit can no longer be lost.
-      isWired: () => typeof onData['stdout:data'] === 'function',
+      // and only there. The pre-handoff buffer's output listeners are marked
+      // separately, so this stays false across the handoff window even though
+      // the child's output and exit can no longer be lost.
+      isWired: () => typeof onData['stdout:data'] === 'function' && !onData['stdout:data'].__earlyBuffer,
       stderr: (text) => onData['stderr:data']?.(Buffer.from(`${text}\n`)),
       close: async (code, signal) => {
         proc.exitCode = code;
