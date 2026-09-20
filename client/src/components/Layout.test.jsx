@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { PINNED_KEY } from '../utils/navWorkingSet.js';
 import * as api from '../services/api';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
+import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
 
 // This suite locks the *integration* path that SingleNavRow.test.jsx can't reach:
 // pinning a top-level `single: true` row (Dashboard `/`, Review Hub `/review`,
@@ -415,9 +416,9 @@ describe('Layout — persistent mobile touch targets', () => {
     expect(openMenu.closest('header')?.className).toContain('lg:hidden');
     expect(closeMenu.className).toContain('lg:hidden');
 
-    const ambientLinks = screen.getAllByRole('link', { name: 'Ambient display' });
-    expect(ambientLinks).toHaveLength(2);
-    ambientLinks.forEach(expectAtLeast44px);
+    const searchButtons = screen.getAllByRole('button', { name: 'Open command palette' });
+    expect(searchButtons).toHaveLength(1);
+    searchButtons.forEach(expectAtLeast44px);
 
     const themeToggles = screen.getAllByRole('button', { name: 'Toggle day/night mode' });
     expect(themeToggles).toHaveLength(2);
@@ -442,6 +443,17 @@ describe('Layout — persistent mobile touch targets', () => {
 });
 
 describe('Layout — nav footer', () => {
+  it('opens the command palette from the footer search button', async () => {
+    await renderLayout();
+    const dispatchSpy = vi.spyOn(document, 'dispatchEvent');
+
+    const searchButton = screen.getByRole('button', { name: 'Open command palette' });
+    fireEvent.click(searchButton);
+
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: CMD_K_SEARCH_OPEN_EVENT }));
+    dispatchSpy.mockRestore();
+  });
+
   it('renders a compact footer layout preventing controls from overflowing the sidebar', async () => {
     await renderLayout();
 

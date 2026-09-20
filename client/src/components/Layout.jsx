@@ -27,6 +27,7 @@ import {
   Pin,
   PinOff,
   Navigation,
+  Search,
 } from 'lucide-react';
 // `__APP_VERSION__` is a Vite build-time define (see vite.config.js). Biome does
 // not honour ESLint-style "global" block comments, so it is declared in
@@ -65,6 +66,7 @@ import VoiceToggleButton from './voice/VoiceToggleButton';
 import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
 import VoiceWidget from './voice/VoiceWidget';
+import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
 
 function ThemeModeToggle({ className = '' }) {
   const { theme, toggleMode } = useThemeContext();
@@ -920,18 +922,15 @@ export default function Layout() {
               v{__APP_VERSION__}
             </span>
             <div className={`flex items-center gap-0.5 ${collapsed ? 'lg:flex-col lg:gap-1' : ''}`}>
-              <NavLink
-                to="/ambient"
-                className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
-                  isActive('/ambient')
-                    ? 'text-port-accent'
-                    : 'text-gray-500 hover:text-white'
-                }`}
-                title="Ambient"
-                aria-label="Ambient display"
+              <button
+                type="button"
+                onClick={openCmdKSearch}
+                className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} text-gray-500 hover:text-white`}
+                title="Search"
+                aria-label="Open command palette"
               >
-                <Monitor size={18} />
-              </NavLink>
+                <Search size={18} />
+              </button>
               <ThemeModeToggle />
               <ThemeSwitcher className={collapsed ? 'lg:hidden' : ''} />
               <VoiceToggleButton className={collapsed ? 'lg:hidden' : ''} />
