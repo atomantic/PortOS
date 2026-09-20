@@ -132,10 +132,10 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('only surfaces critical/high health alerts and a failed backup', async () => {
-    // Real proactiveAlerts shape: { type, severity, title, detail, link }.
+    // Real proactiveAlerts shape: { id, type, severity, title, detail, link }.
     proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [
-      { type: 'system_resource', severity: 'critical', title: 'High memory usage', detail: '95% used', link: '/apps' },
-      { type: 'goal_stall', severity: 'medium', title: 'meh', detail: 'low' }
+      { id: 'system_resource:memory', type: 'system_resource', severity: 'critical', title: 'High memory usage', detail: '95% used', link: '/apps' },
+      { id: 'goal_stall:example-goal', type: 'goal_stall', severity: 'medium', title: 'meh', detail: 'low' }
     ] });
     // Real backup failure shape: status 'error' with an `error` field.
     backup.getState.mockResolvedValue({ status: 'error', error: 'disk full', lastRun: '2026-06-03T07:00:00.000Z' });
@@ -156,19 +156,53 @@ describe('reviewQueue.buildQueue', () => {
     expect(row).toMatchObject({ title: 'Backup degraded (DB dump failed)', severity: 'normal' });
   });
 
-  it('gives same-type health alerts unique ids', async () => {
+  it('preserves condition identity through reorder, wording changes and severity escalation', async () => {
+    const memory = { id: 'system_resource:memory', type: 'system_resource', severity: 'high', title: 'High memory', detail: 'mem', link: '/apps' };
+    const cpu = { id: 'system_resource:cpu', type: 'system_resource', severity: 'high', title: 'High CPU', detail: 'cpu', link: '/apps' };
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [memory, cpu] });
+    const first = await buildQueue();
+    expect(first.items.map(i => i.id).sort()).toEqual(['health:system_resource:cpu', 'health:system_resource:memory']);
+
+    __resetAlertsCache();
     proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [
-      { type: 'system_resource', severity: 'high', title: 'High memory', detail: 'mem', link: '/apps' },
-      { type: 'system_resource', severity: 'high', title: 'High CPU', detail: 'cpu', link: '/apps' }
+      cpu, { ...memory, title: 'Memory pressure', severity: 'critical' },
+      { id: 'goal_stall:example', type: 'goal_stall', severity: 'high', title: 'Check goal' }
+    ] });
+    const next = await buildQueue();
+    expect(next.items.find(i => i.title === 'Memory pressure')).toMatchObject({
+      id: 'health:system_resource:memory', severity: 'critical'
+    });
+    expect(next.items.find(i => i.title === 'High CPU').id).toBe('health:system_resource:cpu');
+
+    __resetAlertsCache();
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [cpu] });
+    expect((await buildQueue()).items.map(i => i.id)).toEqual(['health:system_resource:cpu']);
+  });
+
+  it('deduplicates before caps and counts while retaining severity escalation', async () => {
+    const memory = { id: 'system_resource:memory', type: 'system_resource', severity: 'high' };
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [
+      ...Array.from({ length: 30 }, () => memory),
+      { ...memory, severity: 'critical' },
+      { id: 'system_resource:cpu', type: 'system_resource', severity: 'high' }
     ] });
     const queue = await buildQueue();
-    const ids = queue.items.filter(i => i.source === 'health').map(i => i.id);
-    expect(new Set(ids).size).toBe(2);
+    expect(queue.items.map(i => i.id)).toEqual(['health:system_resource:memory', 'health:system_resource:cpu']);
+    expect(queue.sources.health).toMatchObject({ total: 2, shown: 2, error: null });
+    expect(queue.counts).toEqual({ total: 2, critical: 1, high: 1 });
+  });
+
+  it('reports missing health identity without hiding healthy sources', async () => {
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'system_resource', severity: 'critical' }] });
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify' }]);
+    const queue = await buildQueue();
+    expect(queue.sources.health.error).toBe('Health alert identity is unavailable');
+    expect(queue.items.map(i => i.id)).toEqual(['brain:b1']);
   });
 
   it('sorts by severity then recency', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'normal', capturedAt: '2026-06-03T12:00:00.000Z' }]);
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps', timestamp: '2026-06-03T01:00:00.000Z' }] });
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps', timestamp: '2026-06-03T01:00:00.000Z' }] });
     const queue = await buildQueue();
     // critical alert sorts ahead of the (newer) normal brain item
     expect(queue.items[0].severity).toBe('critical');
@@ -207,7 +241,7 @@ describe('reviewQueue.buildQueue', () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps' }] });
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps' }] });
     backup.getState.mockResolvedValue({ status: 'error', error: 'disk full' });
     const queue = await buildQueue();
     expect(queue.items.find(i => i.source === 'brain').action).toBe('Done');
@@ -225,7 +259,7 @@ describe('reviewQueue.buildQueue', () => {
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 4, assistantTurnCount: 2 }]);
     cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'MEDIUM', createdAt: '2026-06-03T09:00:00.000Z' }] });
     messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 's', to: ['boss@example.com'], sendVia: 'gmail', updatedAt: '2026-06-03T08:00:00.000Z' }]);
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'system_resource', severity: 'critical', title: 'mem', detail: 'high', link: '/apps' }] });
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ id: 'system_resource:memory', type: 'system_resource', severity: 'critical', title: 'mem', detail: 'high', link: '/apps' }] });
     const queue = await buildQueue();
     expect(queue.items.find(i => i.source === 'brain').meta).toEqual({ captureSource: 'voice' });
     expect(queue.items.find(i => i.source === 'ask').meta).toEqual({ turnCount: 4 });
