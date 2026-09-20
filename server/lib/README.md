@@ -720,3 +720,5 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `layaMlx.js` | Pinned Laya-MLX experiment model, request validation and probability normalization; entropy confidence stays distinct from entailment. |
 
 | `persistentMindMaintainer.js` | Machine-local maintainer intent, inference allowance schema, normalization and additive wake charter; never grants authority. |
+
+| `developmentWorkIdentity.js` | Canonical development task identity and cross-producer ownership matching. |

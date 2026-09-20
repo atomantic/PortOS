@@ -425,6 +425,8 @@ async function runStart() {
     intervalMs: state.config.healthCheckIntervalMs,
     handler: async () => {
       await runHealthCheck();
+      const { runDevelopmentWatchdog } = await import('./developmentWatchdog.js');
+      await runDevelopmentWatchdog().catch(err => console.error(`❌ Development watchdog failed: ${err.message}`));
       const cleaned = await cleanupOrphanedAgents();
       if (cleaned > 0) {
         emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
@@ -1586,7 +1588,13 @@ export async function init() {
   // eligible. Re-run the normal dequeue so autonomy, budgets, leases, and
   // capacity remain the same as for every other system task.
   cosEvents.on('config:changed', () => {
-    if (isDaemonRunning()) scheduleDequeue();
+    if (isDaemonRunning()) {
+      scheduleDequeue();
+      // Standing role/grant changes reconcile immediately; the watchdog's
+      // persisted policy fingerprint coalesces unrelated config updates.
+      import('./developmentWatchdog.js').then(({ runDevelopmentWatchdog }) => runDevelopmentWatchdog({ source: 'configuration' }))
+        .catch(err => console.error(`❌ Development watchdog configuration reconciliation failed: ${err.message}`));
+    }
   });
 
   cosEvents.on('tasks:cos:added', () => {

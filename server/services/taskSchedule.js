@@ -854,6 +854,9 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
     return { shouldRun: false, reason: 'feature-disabled', feature: interval.feature };
   }
 
+  // The maintainer role owns recurring cadence; this card is its manual door.
+  if (taskType === 'development-watchdog') return { shouldRun: false, reason: 'on-demand-only' };
+
   // Fetch timezone once for reuse across weekday and cron checks
   const timezone = await getUserTimezone();
 

@@ -1149,6 +1149,11 @@ export async function evaluateTasks(options) {
     }
   }
 
+  if (state.config.persistentMindMaintainer?.enabled) {
+    const { runDevelopmentWatchdog } = await import('./developmentWatchdog.js');
+    await runDevelopmentWatchdog().catch(err => console.error(`❌ Development watchdog failed: ${err.message}`));
+  }
+
   // Resolve this instance's federation id once per cycle so the priority tiers
   // can skip tasks a peer holds a live lease on (#1650). Warm path is the cheap
   // cached read; only the cold boot creates the identity.
@@ -1728,6 +1733,7 @@ function stampApprovalReason(metadata, approval) {
  * Used by both normal rotation and on-demand task requests
  */
 export async function generateSelfImprovementTaskForType(taskType, state) {
+  if (taskType === 'development-watchdog') return null;
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
   const interval = await taskSchedule.getTaskInterval(taskType);
@@ -2177,7 +2183,7 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
   for (const request of pending) {
     const taskConfig = schedule?.tasks?.[request.taskType];
     handled.add(request.id);
-    if (!isImprovementEnabled(state)) {
+    if (request.taskType !== 'development-watchdog' && !isImprovementEnabled(state)) {
       emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;

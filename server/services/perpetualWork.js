@@ -558,7 +558,7 @@ async function countOpenIssuesUnfiltered(cfg, repoPath, env) {
  * issues; 'any' = every author). The in-flight scan runs only when the list is
  * non-empty, so an empty queue parks without a wasted branch/PR scan.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [] } = {}, contextOnly = false, env) {
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], requireComplete = false } = {}, contextOnly = false, env) {
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
@@ -691,6 +691,8 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
       ))
     };
   }
+
+  if (requireComplete && (listingTruncated || (trustedLogins?.size || 0) > MAX_COLLABORATOR_AUTHOR_QUERIES)) return transient('incomplete-issue-page');
 
   if (issues.length === 0) {
     // An empty *filtered* list is ambiguous: the repo may truly have no open

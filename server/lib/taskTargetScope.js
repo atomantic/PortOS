@@ -47,6 +47,7 @@ export function requiresManagedAppTarget(taskType) {
  * needs it, and `lib` may not import upward into `services`.
  */
 export const PROGRAMMATIC_SCHEDULED_TASK_TYPES = Object.freeze([
+  'development-watchdog',
   'universe-bible-describe',
   'universe-bible-images',
 ]);
