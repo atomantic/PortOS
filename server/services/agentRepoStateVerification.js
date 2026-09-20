@@ -1,3 +1,4 @@
+import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 /**
  * Agent Repo-State Verification
  *
@@ -327,6 +328,10 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
       upstreamGone: true,
     }]).catch(() => ({ cleaned: [] }));
     if (retired.cleaned.includes(branchName)) {
+      // Record the proven cleanup outcome, never infer it from an agent summary.
+      await import('./cosAgentLifecycle.js').then(({ updateAgent }) => updateAgent(agentId, {
+        metadata: { maintenanceOutcome: 'deterministic-cleanup' },
+      })).catch(error => emitLog('warn', `Could not record deterministic cleanup outcome: ${error.message}`, { agentId }));
       emitLog('info', `🔎 Deterministic cleanup retired merged branch ${branchName} for ${agentId}`, { agentId, branchName });
       return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
     }
@@ -418,11 +423,17 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
       + `Do not switch branches in ${sourceWorkspace} itself.`,
   ].join('\n');
 
+  const observation = processAuditFingerprint({ codes: issues.map(issue => issue.code).sort(),
+    merged: observed.branchMerged, remotePresent: observed.remoteBranchPresent, prState: observed.prState });
+  const previous = task?.metadata?.recoveryOrigin;
   const created = await addTask({
     description: `${RECOVERY_TASK_PREFIX} Finish incomplete cleanup for branch ${branchName} in ${appName}`,
     priority: 'HIGH',
     app: appId || undefined,
     isRecovery: true,
+    metadata: { recoveryOrigin: { parentAgentId: agentId, parentTaskId: task?.id || null,
+      subsystem: 'repository-cleanup', attempt: Math.min(1000, (previous?.attempt || 0) + 1),
+      observation, noProgress: previous?.observation === observation } },
     context,
     useWorktree: false,
   }, 'user');

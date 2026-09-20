@@ -1,3 +1,5 @@
+import { buildQueuedTask } from '../services/cosTaskIntake.js';
+import { generateTasksMarkdown, parseTasksMarkdown } from './taskParser.js';
 import { describe, it, expect } from 'vitest';
 import { buildAgentRegistration } from './agentRegistrationRecord.js';
 
@@ -45,4 +47,15 @@ describe('buildAgentRegistration — resume provenance', () => {
     // from "record written before this field shipped".
     expect(buildAgentRegistration(args({})).resumedFromAgentId).toBeNull();
   });
+});
+
+it('retains recovery lineage and the persisted boolean marker through task markdown', () => {
+  const recoveryOrigin = { parentAgentId: 'agent-parent', parentTaskId: 'task-parent', subsystem: 'repository-cleanup',
+    attempt: 2, observation: 'a'.repeat(64), noProgress: true };
+  const queued = buildQueuedTask({ description: 'Synthetic cleanup', isRecovery: true, metadata: { recoveryOrigin } }, 'user');
+  const parsed = parseTasksMarkdown(generateTasksMarkdown([queued]));
+  const task = parsed[0];
+  expect(task.metadata.isRecovery).toBe('true');
+  const record = buildAgentRegistration({ ...args({}), task });
+  expect(record).toMatchObject({ isRecovery: true, recoveryOrigin });
 });

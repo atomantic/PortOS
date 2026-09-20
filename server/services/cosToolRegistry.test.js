@@ -334,6 +334,7 @@ describe('cosToolRegistry', () => {
   it('exports a compact canonical catalog and provider translations', () => {
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
     expect(catalog.tools.map((tool) => tool.name)).toEqual([
+      'reports.fix', 'reports.next', 'reports.read', 'reports.record',
       'tools.activate', 'tools.deactivate',
       'mind.recipes.create', 'mind.recipes.list', 'mind.recipes.read', 'mind.recipes.update', 'mind.recipes.archive', 'mind.recipes.restore',
       'mind.thinking-presets',

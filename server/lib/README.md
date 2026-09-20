@@ -722,3 +722,6 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `persistentMindMaintainer.js` | Machine-local maintainer intent, inference allowance schema, normalization and additive wake charter; never grants authority. |
 
 | `developmentWorkIdentity.js` | Canonical development task identity and cross-producer ownership matching. |
+| `persistentMindMaintainer.js` | Machine-local opt-in development maintainer intent, schema, normalization and additive wake charter; never grants authority. |
+
+| `persistentMindProcessAudit.js` | Bounded process-audit schemas, deterministic observations, measured recovery ratios, and closed-vocabulary synthetic finding renderer. |
