@@ -185,6 +185,30 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
   });
 });
 
+// `uv pip install` picks its target interpreter from VIRTUAL_ENV, then
+// CONDA_PREFIX, and only then the cwd's .venv. On a machine whose login shell
+// activates conda, PortOS inherits CONDA_PREFIX through PM2 and hands it to the
+// installer — so a `uv pip install` that relies on cwd discovery installs into
+// the user's conda base environment (downgrading torch/transformers/gradio
+// there) and leaves the runtime venv empty. The import probe then fails with
+// "No module named 'fastvideo'" pointing at a venv nothing was ever written to.
+// `uv sync` is not affected: it always resolves the project's own .venv.
+describe('uv installs target their own venv, not an inherited one', () => {
+  it('passes --python to every uv pip install', () => {
+    // Every other install in this script runs `<interpreter> -m pip install`,
+    // which names its target outright. A bare `pip install` subcommand is uv's,
+    // and only uv's needs --python.
+    const undirected = source
+      .split('\n')
+      .filter((line) => /\bpip\s+install\b/.test(line))
+      .filter((line) => !/^\s*(#|echo\b)/.test(line) && !line.includes('"Try:'))
+      .filter((line) => !/-m\s+pip\s+install\b/.test(line))
+      .filter((line) => !line.includes('--python'));
+
+    expect(undirected).toEqual([]);
+  });
+});
+
 describe('setup-image-video clone/fetch progress reporting', () => {
   // The runtime installer streams the script's stdout AND stderr to the Video
   // Gen install modal, splitting on bare \r so progress redraws surface as log

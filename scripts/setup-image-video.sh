@@ -439,14 +439,35 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     echo "📦 Creating FastVideo venv with Python 3.11..."
     (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" venv --python 3.11)
   fi
-  echo "📦 Installing FastVideo MLX packages (uv pip install -e '.[mlx]')..."
-  (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" pip install -e '.[mlx]')
+  # --python is mandatory. `uv pip install` resolves its target interpreter from
+  # VIRTUAL_ENV, then CONDA_PREFIX, and only then the cwd's .venv — so on a
+  # machine whose shell activates conda (PortOS inherits that env through PM2)
+  # this silently installed FastVideo into the user's conda base environment,
+  # downgrading torch/transformers/gradio there while leaving this venv empty.
+  # The import probe below then failed with a message that pointed nowhere.
+  echo "📦 Installing FastVideo MLX packages into ${FASTVIDEO_DIR}/.venv..."
+  (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" pip install --python "${FASTVIDEO_PY}" -e '.[mlx]')
   probe_or_fail \
-    "FastVideo synced but the runtime import failed." \
-    "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
+    "FastVideo synced but the runtime import failed in ${FASTVIDEO_PY}." \
+    "Delete ${FASTVIDEO_DIR}/.venv and use Repair / Upgrade from the Video Gen runtime panel to retry." \
     "${FASTVIDEO_PY}" -c "import fastvideo; import mlx.core"
+  # The decoders come straight off raw.githubusercontent.com through urllib with
+  # no retry of its own, so one reset handshake ends the whole install in a bare
+  # Python traceback. Retry, and if it still fails say what is and isn't
+  # installed instead of leaving the last SSL frame as the only explanation.
   echo "📦 Preparing FastMetal preview decoders..."
-  "${FASTVIDEO_PY}" -c "from fastvideo.mlx_runtime.wan_vae import ensure_taehv_checkpoint; ensure_taehv_checkpoint(z_dim=16); ensure_taehv_checkpoint(z_dim=48)"
+  fastvideo_decoder_attempt=1
+  until "${FASTVIDEO_PY}" -c "from fastvideo.mlx_runtime.wan_vae import ensure_taehv_checkpoint; ensure_taehv_checkpoint(z_dim=16); ensure_taehv_checkpoint(z_dim=48)"; do
+    if (( fastvideo_decoder_attempt >= 3 )); then
+      echo "❌ FastMetal preview decoders could not be downloaded after 3 attempts." >&2
+      echo "   The FastVideo runtime itself installed fine at ${FASTVIDEO_PY} — only the TAEHV preview decoders are missing." >&2
+      echo "   This is usually a transient network failure reaching raw.githubusercontent.com; retry with Repair / Upgrade from the Video Gen runtime panel." >&2
+      exit 1
+    fi
+    echo "⚠️  Decoder download attempt ${fastvideo_decoder_attempt} failed; retrying in 5s..." >&2
+    sleep 5
+    fastvideo_decoder_attempt=$(( fastvideo_decoder_attempt + 1 ))
+  done
   echo "✅ FastVideo MLX runtime ready: ${FASTVIDEO_PY}"
 fi
 
