@@ -37,7 +37,9 @@ describe('cosState persistence', () => {
     writeConfig({ persistentMindMaintainer: { enabled: true, appIds: ['example-app'], intervalMinutes: 120 }, persistentMindPrompt: { instructions: 'Keep my voice.' } });
     store = await freshModule();
     const config = await store.getConfig();
-    expect(config.persistentMindMaintainer).toEqual({ schemaVersion: 1, enabled: true, appIds: ['example-app'], intervalMinutes: 120 });
+    expect(config.persistentMindMaintainer).toEqual({ schemaVersion: 1, enabled: true, appIds: ['example-app'], intervalMinutes: 120,
+      inference: { maxCallsPerTurn: 6, maxCallsPerDay: 48, maxPromptChars: 96000, maxCallMs: 120000,
+        maxReservedMsPerDay: 5760000, paidPresetIds: [], maxPaidCallsPerDay: 0 } });
     await store.saveConfig(config);
     expect(readJson(CONFIG_PATH).persistentMindMaintainer.enabled).toBe(true);
     expect(readJson(CONFIG_PATH).persistentMindPrompt.instructions).toBe('Keep my voice.');
