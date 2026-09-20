@@ -694,7 +694,7 @@ describe.each(['runner', 'spawner'])('%s completion side effects', (path) => {
     expect(addNotification).toHaveBeenCalledWith({
       type: 'plan_question', title: 'Choose the example scope', message: marker,
       priority: 'medium', link: '/apps/example-app/documents',
-      metadata: { appId: 'example-app', agentId: 'a1', taskType: 'plan-task' },
+      metadata: { appId: 'example-app', agentId: 'a1', taskType: 'plan-task', category: 'plan-question' },
     });
     await expect(readFile(join(workspace, '.plan-questions.md'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(addNotification.mock.invocationCallOrder[0]).toBeLessThan(cleanupAgentWorktree.mock.invocationCallOrder[0]);

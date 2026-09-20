@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { cosEvents } from './cosEvents.js';
+import { isSourceOwnedReviewItem } from './reviewActionAdapters.js';
 import { GOAL_FIDELITY_HOLD_EVENT, formatGoalFidelitySummary } from '../lib/goalFidelity.js';
 
 const DATA_DIR = join(PATHS.data, 'review');
@@ -285,7 +286,7 @@ export async function createItem({ type, title, description = '', metadata = {} 
 /**
  * Update an item's status
  */
-async function updateItemStatus(id, status) {
+async function updateItemStatus(id, status, { allowSourceOwned = false } = {}) {
   if (!ITEM_STATUSES.includes(status)) {
     const err = new Error(`Invalid status: ${status}`);
     err.status = 400;
@@ -297,6 +298,13 @@ async function updateItemStatus(id, status) {
   if (!item) {
     const err = new Error(`Review item not found: ${id}`);
     err.status = 404;
+    throw err;
+  }
+
+  if (status === 'completed' && !allowSourceOwned && isSourceOwnedReviewItem(item)) {
+    const err = new Error('Source-owned review obligations require their owning action');
+    err.status = 409;
+    err.code = 'SOURCE_ACTION_REQUIRED';
     throw err;
   }
 
@@ -319,7 +327,7 @@ export async function completeItem(id) {
  * Dismiss an item
  */
 export async function dismissItem(id) {
-  return updateItemStatus(id, 'dismissed');
+  return updateItemStatus(id, 'dismissed', { allowSourceOwned: true });
 }
 
 /**
@@ -346,6 +354,7 @@ export async function bulkUpdateStatus({ ids, status }) {
   for (const item of items) {
     if (item.status !== 'pending') continue;
     if (idSet && !idSet.has(item.id)) continue;
+    if (status === 'completed' && isSourceOwnedReviewItem(item)) continue;
     item.status = status;
     item.updatedAt = now;
     updated.push(item);
@@ -388,6 +397,13 @@ export async function deleteItem(id) {
   if (index === -1) {
     const err = new Error(`Review item not found: ${id}`);
     err.status = 404;
+    throw err;
+  }
+
+  if (isSourceOwnedReviewItem(items[index])) {
+    const err = new Error('Source-owned review obligations require triage or their owning action');
+    err.status = 409;
+    err.code = 'SOURCE_ACTION_REQUIRED';
     throw err;
   }
 
@@ -448,7 +464,14 @@ cosEvents.on('memory:approval-needed', (data) => {
       type: 'alert',
       title: `Memory approval: ${mem.content?.slice(0, 80) || 'New memory entry'}`,
       description: `Type: ${mem.type ?? 'unknown'} | Confidence: ${mem.confidence ?? 'N/A'}`,
-      metadata: { referenceId: mem.id, category: 'memory-approval', agentId: data?.agentId, taskId: data?.taskId }
+      metadata: {
+        referenceId: mem.id,
+        category: 'memory-approval',
+        actionKind: 'memory.approval',
+        sourceOwned: true,
+        agentId: data?.agentId,
+        taskId: data?.taskId,
+      }
     }).catch(err => console.error(`❌ Failed to create review alert: ${err.message}`));
   }
 });
@@ -476,6 +499,8 @@ cosEvents.on(GOAL_FIDELITY_HOLD_EVENT, (data) => {
     metadata: {
       referenceId: data?.agentId,
       category: 'goal-fidelity',
+      actionKind: 'goal-fidelity.review',
+      sourceOwned: true,
       agentId: data?.agentId,
       taskId: data?.taskId,
       verdict: review.verdict
@@ -502,8 +527,7 @@ async function updateStatusByReferenceId(referenceId, status) {
   for (const item of matching) reviewEvents.emit('item:updated', item);
 }
 
-const dismissByReferenceId = (referenceId) => updateStatusByReferenceId(referenceId, 'dismissed');
-const completeByReferenceId = (referenceId) => updateStatusByReferenceId(referenceId, 'completed');
+export const dismissByReferenceId = (referenceId) => updateStatusByReferenceId(referenceId, 'dismissed');
 
 cosEvents.on('memory:approved', (data) => {
   if (data?.id) dismissByReferenceId(data.id).catch(err => console.error(`❌ Failed to dismiss approved memory review item: ${err.message}`));
@@ -511,38 +535,4 @@ cosEvents.on('memory:approved', (data) => {
 
 cosEvents.on('memory:rejected', (data) => {
   if (data?.id) dismissByReferenceId(data.id).catch(err => console.error(`❌ Failed to dismiss rejected memory review item: ${err.message}`));
-});
-
-cosEvents.on('task:ready', (data) => {
-  createItem({
-    type: 'cos',
-    title: data?.title ?? data?.description ?? 'CoS action requires review',
-    description: data?.description ?? '',
-    metadata: { taskId: data?.id, referenceId: data?.id }
-  }).catch(err => console.error(`❌ Failed to create review item: ${err.message}`));
-});
-
-// When a CoS agent finishes a task, auto-resolve the matching review item so
-// the user isn't asked to manually mark something complete that an agent
-// already handled. Success → complete; failure stays pending so the user can
-// see and act on it.
-cosEvents.on('agent:completed', (agent) => {
-  const taskId = agent?.taskId;
-  if (!taskId) return;
-  if (agent.result?.success) {
-    completeByReferenceId(taskId).catch(err =>
-      console.error(`❌ Failed to auto-complete review item for task ${taskId}: ${err.message}`)
-    );
-  }
-});
-
-// When a task is deleted, dismiss any pending review items still pointing at it.
-// Otherwise the user is left staring at an orphaned alert for a task that no
-// longer exists — and its "Review"/approve action resolves nothing because the
-// underlying task is gone. Mirrors the memory:approved/rejected cleanup.
-cosEvents.on('tasks:changed', (data) => {
-  if (data?.action !== 'deleted' || !data?.taskId) return;
-  dismissByReferenceId(data.taskId).catch(err =>
-    console.error(`❌ Failed to dismiss review items for deleted task ${data.taskId}: ${err.message}`)
-  );
 });

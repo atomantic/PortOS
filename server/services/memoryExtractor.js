@@ -365,6 +365,9 @@ export async function extractAndStoreMemories(agentId, taskId, output, task = nu
           link: '/cos/memory',
           metadata: {
             memoryId: mem.id,
+            category: 'memory-approval',
+            actionKind: 'memory.approval',
+            sourceOwned: true,
             memoryType: mem.type,
             agentId,
             taskId

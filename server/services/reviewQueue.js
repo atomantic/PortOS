@@ -34,9 +34,12 @@ import * as messageDrafts from './messageDrafts.js';
 import * as proactiveAlerts from './proactiveAlerts.js';
 import * as backup from './backup.js';
 import * as identity from './identity.js';
+import * as reviewService from './review.js';
+import * as notifications from './notifications.js';
 import * as stackerNews from './stackerNews.js';
 import * as x from './x.js';
 import { promoteLatestAssistantTurn } from './askPromote.js';
+import { adaptNotification, adaptStoredReviewItem } from './reviewActionAdapters.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -60,6 +63,8 @@ const ACTION_KINDS = Object.freeze({
   x: 'x.review',
   health: 'health.investigate',
   backup: 'backup.retry',
+  review: 'review.triage',
+  notifications: 'notification.action',
 });
 
 const OPERATION_LABELS = Object.freeze({
@@ -71,6 +76,8 @@ const OPERATION_LABELS = Object.freeze({
   x: 'Review',
   health: 'Investigate',
   backup: 'Retry',
+  review: 'Review',
+  notifications: 'Review',
 });
 
 const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
@@ -125,7 +132,7 @@ const PRODUCERS = [
     label: 'Brain inbox',
     drillTo: '/brain/inbox',
     // Marking the entry done clears it from the needs-review queue.
-    action: 'Done',
+    actionLabel: 'Done',
     async resolve(id) {
       return brain.markInboxDone(id);
     },
@@ -192,6 +199,10 @@ const PRODUCERS = [
         summary: conv.title || '(untitled conversation)',
         timestamp: conv.updatedAt || conv.createdAt || null,
         severity: 'normal',
+        // Promotion is still available from Ask, but an optional answer is
+        // not a required user action in the canonical queue.
+        required: false,
+        isRecommendation: true,
         drillTo: `/ask/${conv.id}`,
         // Only advertise the goal target (and its picker options) when there's
         // at least one active goal to promote into — an empty picker would be a
@@ -205,7 +216,7 @@ const PRODUCERS = [
     source: 'cos',
     label: 'CoS approvals',
     drillTo: '/cos/tasks',
-    action: 'Approve',
+    actionLabel: 'Approve',
     // approveTask resolves to an `{ error }` object (not a throw) when the task
     // can't be approved; surface that as a failed resolve.
     async resolve(id) {
@@ -239,7 +250,8 @@ const PRODUCERS = [
     drillTo: '/messages/drafts',
     // Approve (not send) — clears it from the awaiting-review queue without an
     // outward side effect; the user still triggers the actual send from /messages.
-    action: 'Approve',
+    actionLabel: 'Approve',
+    actionFor: (draft) => draft.status === 'pending_review',
     async resolve(id) {
       return messageDrafts.approveDraft(id);
     },
@@ -273,10 +285,51 @@ const PRODUCERS = [
         summary: draft.subject || (draft.body || '').slice(0, 120) || '(no subject)',
         timestamp: draft.updatedAt || draft.createdAt || null,
         severity: 'normal',
+        required: draft.status === 'pending_review',
+        isRecommendation: draft.status !== 'pending_review',
         drillTo: '/messages/drafts',
+        nextAction: draft.status === 'pending_review' ? 'Approve' : 'Open draft',
         ...(Object.keys(meta).length ? { meta } : {})
       };
     }
+  },
+  {
+    source: 'review',
+    label: 'Stored review obligations',
+    drillTo: '/review',
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const pendingItems = await reviewService.getItems({ status: 'pending' });
+      const items = (Array.isArray(pendingItems) ? pendingItems : [])
+        .map(adaptStoredReviewItem)
+        .filter(Boolean);
+      return {
+        items,
+        truncated: items.length > limit,
+      };
+    },
+    map(item) {
+      return item;
+    },
+  },
+  {
+    source: 'notifications',
+    label: 'Actionable notifications',
+    drillTo: '/review',
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      // Filter before applying the queue cap. A busy history stream must not
+      // hide a source-owned approval that happens to be older than it.
+      const unread = await notifications.getNotifications({ unreadOnly: true });
+      const items = (Array.isArray(unread) ? unread : [])
+        .map(adaptNotification)
+        .filter(Boolean);
+      return {
+        items,
+        truncated: items.length > limit,
+      };
+    },
+    map(item) {
+      return item;
+    },
   },
   {
     source: 'stacker',
@@ -409,10 +462,16 @@ const isCanonicalScalar = (value) => typeof value === 'string'
 
 const firstScalar = (...values) => values.find(isCanonicalScalar) ?? null;
 
-function semanticOperations(producer, mapped) {
+function semanticOperations(producer, mapped, raw) {
+  if (Array.isArray(mapped.operations)) return mapped.operations;
+
+  const canResolve = Boolean(
+    producer.resolve
+    && (!producer.actionFor || producer.actionFor(raw)),
+  );
   const operationId = producer.source === 'ask'
     ? 'promote'
-    : producer.action && producer.resolve
+    : canResolve
       ? 'resolve'
       : producer.source === 'health'
         ? 'investigate'
@@ -423,7 +482,7 @@ function semanticOperations(producer, mapped) {
   return [{
     id: operationId,
     label: OPERATION_LABELS[producer.source],
-    available: true,
+    available: operationId !== 'investigate' && operationId !== 'retry',
     ...(targets ? { targets } : {}),
   }];
 }
@@ -431,33 +490,44 @@ function semanticOperations(producer, mapped) {
 function normalizeQueueItem(producer, raw, mapped) {
   const prefix = `${producer.source}:`;
   const sourceRef = firstText(
+    mapped.sourceRef,
     raw?.id == null ? null : String(raw.id),
     typeof mapped.id === 'string' && mapped.id.startsWith(prefix) ? mapped.id.slice(prefix.length) : null,
   );
   const priority = canonicalPriority(raw?.priority);
-  const required = typeof raw?.required === 'boolean'
+  const required = typeof mapped.required === 'boolean'
+    ? mapped.required
+    : typeof raw?.required === 'boolean'
     ? raw.required
     : !(raw?.recommendation === true || raw?.isRecommendation === true || raw?.optional === true);
   const dueAt = firstText(raw?.dueAt, raw?.due, raw?.deadline, raw?.scheduledFor);
   const revision = firstScalar(raw?.revision, raw?.version, raw?.updatedAt, raw?.updated_at, raw?.capturedAt, raw?.createdAt);
   const occurrence = firstScalar(raw?.occurrence, raw?.occurrenceId);
-  const operations = semanticOperations(producer, mapped);
+  const operations = semanticOperations(producer, mapped, raw);
+  const availableOperation = operations.find((entry) => entry.available)?.label;
 
   return {
     ...mapped,
     sourceRef,
-    actionKind: ACTION_KINDS[producer.source],
+    actionKind: mapped.actionKind || ACTION_KINDS[producer.source],
     reason: firstText(raw?.reason, mapped.summary, mapped.title),
-    nextAction: firstText(raw?.nextAction, mapped.action, mapped.promoteTargets?.length ? 'Promote' : null, OPERATION_LABELS[producer.source]),
+    nextAction: firstText(
+      raw?.nextAction,
+      mapped.nextAction,
+      mapped.action,
+      mapped.promoteTargets?.length ? 'Promote' : null,
+      availableOperation,
+      OPERATION_LABELS[producer.source],
+    ),
     priority,
     dueAt,
     revision,
     occurrence,
     required,
-    isRecommendation: !required,
+    isRecommendation: typeof mapped.isRecommendation === 'boolean' ? mapped.isRecommendation : !required,
     operations,
-    availability: 'available',
-    available: true,
+    availability: mapped.availability || 'available',
+    available: typeof mapped.available === 'boolean' ? mapped.available : true,
   };
 }
 
@@ -481,7 +551,10 @@ async function gatherProducer(producer, ctx = {}) {
         ? { promoteTargets: producer.promoteTargets }
         : {}),
       ...producer.map(item, index, ctx),
-      ...(producer.action && producer.resolve ? { action: producer.action } : {})
+      ...(producer.actionLabel && producer.resolve
+        && (!producer.actionFor || producer.actionFor(item))
+        ? { action: producer.actionLabel }
+        : {})
     };
     return normalizeQueueItem(producer, item, mapped);
   });
@@ -545,10 +618,61 @@ export function __resetQueueSnapshots() {
  * source is unknown, has no inline resolve, or the underlying primitive can't
  * find the record — so the route surfaces a clean status instead of a 500.
  */
-export async function resolveQueueItem(queueItemId) {
+async function resolveMemoryAction(id, operation) {
+  const memory = await import('./memory.js');
+  const result = await memory[operation === 'approve' ? 'approveMemory' : 'rejectMemory'](id);
+  if (result?.success === false || result?.error) {
+    const notFound = /not found/i.test(String(result.error || ''));
+    throw new ServerError(result.error || `Memory ${operation} failed`, {
+      status: notFound ? 404 : 409,
+      code: notFound ? 'NOT_FOUND' : 'CONFLICT',
+    });
+  }
+  return result;
+}
+
+async function resolveCosApproval(id) {
+  const result = await cosTaskStore.approveTask(id);
+  if (result && result.error) throw new ServerError(result.error, { status: 409, code: 'CONFLICT' });
+  // Older installs may still have a stored CoS approval row from the former
+  // task:ready bridge. The owning approval succeeded, so retire that legacy
+  // projection by reference without allowing generic Review completion to
+  // mutate the obligation directly.
+  await reviewService.dismissByReferenceId(id).catch((err) => {
+    console.error(`⚠️ Review queue: legacy CoS projection cleanup failed: ${err.message}`);
+  });
+  return result;
+}
+
+const SOURCE_ACTIONS = Object.freeze({
+  memory: Object.freeze({
+    approve: (id) => resolveMemoryAction(id, 'approve'),
+    reject: (id) => resolveMemoryAction(id, 'reject'),
+  }),
+  cos: Object.freeze({
+    approve: resolveCosApproval,
+  }),
+});
+
+export async function resolveQueueItem(queueItemId, operation = 'resolve') {
   const sep = String(queueItemId).indexOf(':');
   const source = sep === -1 ? queueItemId : queueItemId.slice(0, sep);
   const rawId = sep === -1 ? '' : queueItemId.slice(sep + 1);
+
+  if (operation !== 'resolve') {
+    const resolver = SOURCE_ACTIONS[source]?.[operation];
+    if (!resolver) {
+      throw new ServerError(`No ${operation} action for source "${source}"`, {
+        status: 400,
+        code: 'BAD_REQUEST',
+      });
+    }
+    const result = await resolver(rawId);
+    if (result == null) {
+      throw new ServerError(`${source} item not found: ${rawId}`, { status: 404, code: 'NOT_FOUND' });
+    }
+    return { source, id: queueItemId, operation, resolved: true };
+  }
 
   const producer = PRODUCERS_BY_SOURCE[source];
   if (!producer || !producer.resolve) {

@@ -468,7 +468,7 @@ async function notifyPlanQuestionIfNeeded({ agentId, task, agentState }) {
         message: markerContent,
         priority: PRIORITY_LEVELS.MEDIUM,
         link: appId ? `/apps/${appId}/documents` : undefined,
-        metadata: { appId, agentId, taskType: planAnalysisType }
+        metadata: { appId, agentId, taskType: planAnalysisType, category: 'plan-question' }
       }).catch(err => {
         emitLog('warn', `Failed to create plan_question notification: ${err.message}`, { agentId });
       });

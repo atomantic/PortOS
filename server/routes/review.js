@@ -42,7 +42,8 @@ router.get('/briefing', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/review/queue — cross-domain live aggregator of items needing
-// attention (brain inbox, ask answers, CoS approvals, drafts, health, backups)
+// attention, including source-owned review obligations and actionable
+// notifications.
 router.get('/queue', asyncHandler(async (req, res) => {
   const { limit, cursor } = validateRequest(reviewQueueQuerySchema, req.query);
   const queue = await buildQueue({ limit, cursor, query: {} });
@@ -50,17 +51,16 @@ router.get('/queue', asyncHandler(async (req, res) => {
 }));
 
 const resolveQueueSchema = z.object({
-  id: z.string().min(1).max(500)
+  id: z.string().min(1).max(500),
+  operation: z.enum(['resolve', 'approve', 'reject']).optional(),
 });
 
 // POST /api/review/queue/resolve — accept a single cross-domain queue row in
-// place (mark a Brain inbox item done, approve a CoS task or message draft)
-// without leaving the Review Hub. Sources with no clean one-click resolve
-// (Ask, health, backup) have no inline action and 400 here. The `id` is the
-// row's `<source>:<rawId>` — the service dispatches to that source's primitive.
+// place. Source-owned approvals carry an explicit operation so the mutation
+// revalidates the owning domain instead of using generic Review completion.
 router.post('/queue/resolve', asyncHandler(async (req, res) => {
-  const { id } = validateRequest(resolveQueueSchema, req.body);
-  const result = await resolveQueueItem(id);
+  const { id, operation } = validateRequest(resolveQueueSchema, req.body);
+  const result = operation ? await resolveQueueItem(id, operation) : await resolveQueueItem(id);
   res.json(result);
 }));
 

@@ -152,10 +152,39 @@ describe('Review Hub queue-card triage (#3282)', () => {
     render(<Review />);
     await waitFor(() => expect(actionQueueBody()).toBeTruthy());
 
-    // Accept / Reject / Delete are all reachable on the collapsed card.
-    expect(screen.getAllByTitle('Accept').length).toBeGreaterThan(0);
+    // Source-owned alerts cannot be silently accepted or deleted. Dismissal
+    // remains available as the explicit triage action.
+    expect(screen.queryByTitle('Accept')).not.toBeInTheDocument();
     expect(screen.getAllByTitle('Reject').length).toBeGreaterThan(0);
-    expect(screen.getAllByTitle('Delete').length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle('Delete')).toHaveLength(2);
+  });
+
+  it('forwards an explicit source operation for source-owned queue actions', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({
+      items: [{
+        id: 'memory:memory-1',
+        source: 'review',
+        sourceLabel: 'Stored review obligations',
+        title: 'Memory approval',
+        summary: 'Approve a memory',
+        timestamp: '2026-09-20T00:00:00.000Z',
+        drillTo: '/cos/memory',
+        operations: [
+          { id: 'approve', label: 'Approve', available: true },
+          { id: 'reject', label: 'Reject', available: true },
+        ],
+      }],
+      sources: {},
+    });
+
+    render(<Review />);
+    const approve = await screen.findByRole('button', { name: 'Approve' });
+    fireEvent.click(approve);
+
+    await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(
+      'memory:memory-1',
+      { operation: 'approve' },
+    ));
   });
 
   it('renders the full markdown behind Show more, height-capped', async () => {

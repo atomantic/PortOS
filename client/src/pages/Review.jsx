@@ -78,6 +78,29 @@ const TYPE_CONFIG = {
 
 const TYPE_PRIORITY = { alert: 0, cos: 1, todo: 2, briefing: 3 };
 
+const SOURCE_OWNED_REVIEW_CATEGORIES = new Set([
+  'content-review',
+  'goal-fidelity',
+  'memory-approval',
+  'plan-question',
+  'task-approval',
+  'autopilot-paused',
+]);
+
+function isSourceOwnedReviewItem(item) {
+  const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  const hasReference = (value) => (typeof value === 'string' && value.trim())
+    || (typeof value === 'number' && Number.isFinite(value));
+  if (metadata.sourceOwned === true || metadata.triageOnly === true) return true;
+  if (SOURCE_OWNED_REVIEW_CATEGORIES.has(metadata.category)) return true;
+  if (item?.type === 'cos' && (hasReference(metadata.taskId) || hasReference(metadata.referenceId))) return true;
+  return item?.type === 'alert';
+}
+
+function isGenericCompletableItem(item) {
+  return !isSourceOwnedReviewItem(item);
+}
+
 function isActionableItem(item) {
   if (item.type === 'alert' || item.type === 'todo') return true;
   if (item.type === 'cos') {
@@ -233,11 +256,14 @@ export default function Review() {
     if (item.drillTo) navigate(item.drillTo);
   };
 
-  const handleQueueResolve = async (item) => {
+  const handleQueueResolve = async (item, operation) => {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
     // The helper toasts on failure (default), so don't add a custom catch toast.
-    const ok = await api.resolveReviewQueueItem(item.id).then(() => true).catch(() => false);
+    const ok = await api.resolveReviewQueueItem(
+      item.id,
+      operation ? { operation } : {},
+    ).then(() => true).catch(() => false);
     setResolvingQueueIds(prev => {
       const next = new Set(prev);
       next.delete(item.id);
@@ -287,6 +313,7 @@ export default function Review() {
     [queue]);
 
   const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
+  const genericCompletableCount = pendingItems.filter(isGenericCompletableItem).length;
 
   const actionableItems = useMemo(() => pendingItems
     .filter(isActionableItem)
@@ -339,13 +366,15 @@ export default function Review() {
             </select>
             {pendingCount > 0 && (
               <>
-                <button
-                  onClick={handleCompleteAll}
-                  className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
-                  title="Mark all pending items as completed"
-                >
-                  Complete All
-                </button>
+                {genericCompletableCount > 0 && (
+                  <button
+                    onClick={handleCompleteAll}
+                    className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
+                    title="Mark all general pending items as completed"
+                  >
+                    Complete All
+                  </button>
+                )}
                 <button
                   onClick={handleMarkAllRead}
                   className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
@@ -615,6 +644,12 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
   // one-click button — split it out from the simple brain/task targets.
   const simpleTargets = promoteTargets.filter(t => t !== 'goal');
   const showGoalPicker = promoteTargets.includes('goal') && goalOptions.length > 0;
+  const sourceOperations = !promoteTargets.length && Array.isArray(item.operations)
+    ? item.operations.filter(operation => operation && operation.available !== false)
+    : [];
+  const inlineActions = item.action
+    ? [{ id: 'resolve', label: item.action }]
+    : sourceOperations;
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
@@ -640,17 +675,18 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
         )}
       </div>
       <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-        {item.action && onResolve && (
+        {onResolve && inlineActions.map(action => (
           <button
-            onClick={() => onResolve(item)}
+            key={action.id}
+            onClick={() => onResolve(item, action.id === 'resolve' ? undefined : action.id)}
             disabled={resolving}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-port-success bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title={`${item.action} this item in place`}
+            title={`${action.label} this item in place`}
           >
             <Check size={14} />
-            {item.action}
+            {action.label}
           </button>
-        )}
+        ))}
         {onPromoteAsk && simpleTargets.map(target => (
           <button
             key={target}
@@ -851,13 +887,15 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
               <Pencil size={14} />
             </button>
           )}
-          <button
-            onClick={() => onComplete(item.id)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-success transition-colors"
-            title={item.type === 'alert' ? 'Accept' : 'Complete'} aria-label={item.type === 'alert' ? 'Accept' : 'Complete'}
-          >
-            <CheckCircle2 size={16} />
-          </button>
+          {isGenericCompletableItem(item) && (
+            <button
+              onClick={() => onComplete(item.id)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-success transition-colors"
+              title="Complete" aria-label="Complete"
+            >
+              <CheckCircle2 size={16} />
+            </button>
+          )}
           <button
             onClick={() => onDismiss(item.id)}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-warning transition-colors"
@@ -865,13 +903,15 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
           >
             <X size={16} />
           </button>
-          <button
-            onClick={() => onDelete(item.id)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
-            title="Delete" aria-label="Delete"
-          >
-            <Trash2 size={14} />
-          </button>
+          {isGenericCompletableItem(item) && (
+            <button
+              onClick={() => onDelete(item.id)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
+              title="Delete" aria-label="Delete"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
         </div>
       )}
     </div>

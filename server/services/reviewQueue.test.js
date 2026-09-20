@@ -8,6 +8,8 @@ const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn() };
 const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateAlerts: vi.fn() };
 const backup = { getState: vi.fn() };
+const reviewService = { getItems: vi.fn(), dismissByReferenceId: vi.fn() };
+const notifications = { getNotifications: vi.fn() };
 // Mocked so the meta-field / buildQueue cases don't pull the brain/cos/identity
 // stack in transitively (askPromote imports all three). The promoteAskQueueItem
 // suite drives this mock directly.
@@ -24,6 +26,8 @@ vi.mock('./cosTaskStore.js', () => cosTaskStore);
 vi.mock('./messageDrafts.js', () => messageDrafts);
 vi.mock('./proactiveAlerts.js', () => proactiveAlerts);
 vi.mock('./backup.js', () => backup);
+vi.mock('./review.js', () => reviewService);
+vi.mock('./notifications.js', () => notifications);
 vi.mock('./identity.js', () => identity);
 vi.mock('./askPromote.js', () => askPromote);
 vi.mock('./stackerNews.js', () => stackerNews);
@@ -46,6 +50,9 @@ function resetEmpty() {
   messageDrafts.listDrafts.mockResolvedValue([]);
   proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
+  reviewService.getItems.mockResolvedValue([]);
+  reviewService.dismissByReferenceId.mockResolvedValue(undefined);
+  notifications.getNotifications.mockResolvedValue([]);
   identity.getGoals.mockResolvedValue({ goals: [] });
   stackerNews.listPendingReviewActions.mockResolvedValue([]);
   x.listPendingReviewActions.mockResolvedValue([]);
@@ -135,6 +142,7 @@ describe('reviewQueue.buildQueue', () => {
     expect(askRows).toHaveLength(1);
     expect(askRows[0].id).toBe('ask:a1');
     expect(askRows[0].drillTo).toBe('/ask/a1');
+    expect(askRows[0]).toMatchObject({ required: false, isRecommendation: true });
   });
 
   it('surfaces drafts and CoS approvals from their producers', async () => {
@@ -155,6 +163,72 @@ describe('reviewQueue.buildQueue', () => {
     const draftRows = queue.items.filter(i => i.source === 'drafts');
     expect(draftRows).toHaveLength(1);
     expect(draftRows[0].id).toBe('drafts:d1');
+    expect(draftRows[0]).toMatchObject({ required: false, isRecommendation: true, nextAction: 'Open draft' });
+  });
+
+  it('adapts stored obligations and notifications, deduplicating only proven references', async () => {
+    reviewService.getItems.mockResolvedValue([
+      {
+        id: 'review-memory',
+        type: 'alert',
+        title: 'Memory approval',
+        description: 'Approve a memory',
+        status: 'pending',
+        createdAt: '2026-09-20T00:00:00.000Z',
+        metadata: { referenceId: 'memory-1', category: 'memory-approval' },
+      },
+      {
+        id: 'legacy-alert',
+        type: 'alert',
+        title: 'Legacy review alert',
+        description: 'Needs triage',
+        status: 'pending',
+        createdAt: '2026-09-20T00:00:00.000Z',
+        metadata: {},
+      },
+    ]);
+    notifications.getNotifications.mockResolvedValue([
+      {
+        id: 'memory-notification',
+        type: 'memory_approval',
+        title: 'Memory approval',
+        description: 'Same obligation',
+        timestamp: '2026-09-20T00:00:00.000Z',
+        link: '/cos/memory',
+        metadata: { memoryId: 'memory-1' },
+      },
+      {
+        id: 'plan-notification',
+        type: 'plan_question',
+        title: 'Plan question',
+        message: 'Choose a direction',
+        timestamp: '2026-09-20T00:00:00.000Z',
+        link: '/apps/example/documents',
+        metadata: { agentId: 'agent-1' },
+      },
+      {
+        id: 'briefing-notification',
+        type: 'briefing_ready',
+        title: 'Briefing',
+        timestamp: '2026-09-20T00:00:00.000Z',
+        metadata: {},
+      },
+    ]);
+
+    const queue = await buildQueue();
+
+    expect(queue.items.filter(item => item.id === 'memory:memory-1')).toHaveLength(1);
+    expect(queue.items.find(item => item.id === 'review:legacy-alert')).toMatchObject({
+      actionKind: 'review.triage',
+      triageOnly: true,
+    });
+    expect(queue.items.find(item => item.id === 'plan:agent-1')).toMatchObject({
+      source: 'notifications',
+      actionKind: 'plan.question',
+      summary: 'Choose a direction',
+      operations: [{ id: 'review', available: false }],
+    });
+    expect(queue.items.find(item => item.id === 'briefing:briefing-notification')).toBeUndefined();
   });
 
   it('only surfaces critical/high health alerts and a failed backup', async () => {
@@ -516,6 +590,25 @@ describe('reviewQueue.resolveQueueItem', () => {
     messageDrafts.approveDraft.mockResolvedValue({ id: 'd1', status: 'approved' });
     await resolveQueueItem('drafts:d1');
     expect(messageDrafts.approveDraft).toHaveBeenCalledWith('d1');
+  });
+
+  it('dispatches explicit source operations through the owning service', async () => {
+    cosTaskStore.approveTask.mockResolvedValue({ id: 'sys-1', approvalRequired: false });
+    const result = await resolveQueueItem('cos:sys-1', 'approve');
+    expect(cosTaskStore.approveTask).toHaveBeenCalledWith('sys-1');
+    expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('sys-1');
+    expect(result).toMatchObject({ source: 'cos', id: 'cos:sys-1', operation: 'approve', resolved: true });
+  });
+
+  it('keeps a successful CoS approval successful when legacy cleanup fails', async () => {
+    cosTaskStore.approveTask.mockResolvedValue({ id: 'sys-1', approvalRequired: false });
+    reviewService.dismissByReferenceId.mockRejectedValueOnce(new Error('review store down'));
+
+    await expect(resolveQueueItem('cos:sys-1', 'approve')).resolves.toMatchObject({
+      source: 'cos',
+      operation: 'approve',
+      resolved: true,
+    });
   });
 
   it('preserves colons in the raw id (splits on the first only)', async () => {
