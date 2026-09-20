@@ -3,7 +3,7 @@ import { useParams, Navigate } from 'react-router';
 import { Cpu } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import ModelsTabsHeader, { ModelsDesktopNavigator } from '../components/models/ModelsTabsHeader';
 import Image3dRuntimes from '../components/models/Image3dRuntimes';
 import ModelStatusTab from '../components/models/ModelStatusTab';
 import SubscriptionsTab from '../components/models/SubscriptionsTab';
@@ -103,17 +103,20 @@ export default function Models() {
   const TabContent = TAB_CONTENT[activeTab];
 
   return (
-    <div className="flex flex-col h-full min-w-0 overflow-hidden">
-      <PageHeader icon={Cpu} title="Models" />
+    <div className="flex h-full min-w-0 overflow-hidden">
+      <ModelsDesktopNavigator activeTab={activeTab} />
+      <div className="flex flex-col h-full min-w-0 flex-1">
+        <PageHeader icon={Cpu} title="Models" />
 
-      <ModelsTabsHeader activeTab={activeTab} />
+        <ModelsTabsHeader activeTab={activeTab} desktop={false} />
 
-      <div className="flex-1 min-w-0 overflow-auto p-4">
-        {/* Local boundary rather than the App-level one: a lazy tab must not blank
-            out the section header and tab bar while its chunk loads. */}
-        <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
-          {DetailContent ? <DetailContent recordId={recordId} /> : <TabContent view={recordId} />}
-        </Suspense>
+        <div className="flex-1 min-w-0 overflow-auto p-4">
+          {/* Local boundary rather than the App-level one: a lazy tab must not blank
+              the section header and tab bar while its chunk loads. */}
+          <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
+            {DetailContent ? <DetailContent recordId={recordId} /> : <TabContent view={recordId} />}
+          </Suspense>
+        </div>
       </div>
     </div>
   );

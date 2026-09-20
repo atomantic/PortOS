@@ -8,9 +8,10 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { TABS } from '../components/models/ModelsTabsHeader';
+import { ModelsDesktopNavigator, TABS } from '../components/models/ModelsTabsHeader';
+import SidebarContext from '../components/SidebarContext';
 
 vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({ default: () => <div>assessments panel</div> }));
 vi.mock('../components/settings/LocalLlmTab', () => ({
@@ -42,6 +43,8 @@ const PANEL_MARKER = {
   'decision-classifiers': 'classifiers panel',
   embeddings: 'embeddings panel',
   llms: 'llms panel',
+  abuse: 'llms panel',
+  jev: 'llms panel',
   'llms-runtimes': 'runtimes panel',
   loras: 'loras panel',
   media: 'media models panel',
@@ -53,7 +56,7 @@ const PANEL_MARKER = {
 
 // These destinations belong to Models in the sidebar but keep their own route
 // shells, so their pages render the shared header directly.
-const EXTERNAL_TAB_IDS = ['playground', 'providers', 'usage'];
+const EXTERNAL_TAB_IDS = ['harnesses', 'playground', 'providers', 'quota-burn', 'services', 'usage'];
 const ownTabs = TABS.filter((t) => !EXTERNAL_TAB_IDS.includes(t.id));
 
 const renderAt = (path) => render(
@@ -66,10 +69,10 @@ const renderAt = (path) => render(
 );
 
 describe('Models', () => {
-  it('names the one destination served outside /models', () => {
-    // Asserted by id, not as a count: the day a second external destination joins
-    // the header, this should say WHICH one appeared, not just that a number moved.
-    expect(TABS.filter((t) => !t.to.startsWith('/models/')).map((t) => t.id)).toEqual(EXTERNAL_TAB_IDS);
+  it('names every destination served outside /models', () => {
+    // Asserted by id, not as a count: a moved or newly promoted destination must
+    // be identified here, not hidden by a count that still happens to match.
+    expect(TABS.filter((t) => !t.to.startsWith('/models/')).map((t) => t.id).sort()).toEqual([...EXTERNAL_TAB_IDS].sort());
   });
 
   it('has a panel marker for every tab this page serves', () => {
@@ -129,6 +132,31 @@ describe('Models', () => {
     expect(tabs.every((t) => t.querySelector('svg') && t.querySelector('.max-sm\\:sr-only'))).toBe(true);
   });
 
+  it('renders grouped desktop destinations with one active link and keyboard-sized targets', () => {
+    render(
+      <MemoryRouter initialEntries={['/models/llms/abuse']}>
+        <SidebarContext.Provider value={{ collapsed: true, desktop: true }}>
+          <ModelsDesktopNavigator activeTab="llms" />
+        </SidebarContext.Provider>
+      </MemoryRouter>,
+    );
+
+    const nav = screen.getByRole('navigation', { name: 'Models destinations' });
+    expect(within(nav).getByRole('heading', { name: 'Connect' })).toBeInTheDocument();
+    expect(within(nav).getByRole('heading', { name: 'Evaluate' })).toBeInTheDocument();
+    expect(within(nav).getByRole('heading', { name: 'Library' })).toBeInTheDocument();
+    expect(within(nav).getByRole('heading', { name: 'Operate' })).toBeInTheDocument();
+    expect(within(nav).getByRole('heading', { name: 'Policies' })).toBeInTheDocument();
+
+    const abuse = within(nav).getByRole('link', { name: 'Abuse Guard' });
+    expect(abuse).toHaveAttribute('aria-current', 'page');
+    expect(within(nav).getByRole('link', { name: 'Model Library' })).not.toHaveAttribute('aria-current');
+    expect(within(nav).getAllByRole('link').every((link) => link.getAttribute('class').includes('min-h-[44px]'))).toBe(true);
+
+    fireEvent.click(within(nav).getByRole('link', { name: 'Jev decision scorer' }));
+    expect(within(nav).getByRole('link', { name: 'Jev decision scorer' })).toHaveAttribute('aria-current', 'page');
+  });
+
   // A tab listed in the header but missing from TAB_CONTENT falls through to the
   // unknown-slug redirect and silently lands on LLMs. Selection state is what
   // distinguishes "rendered this tab" from "bounced to LLMs" — the
@@ -154,10 +182,10 @@ describe('Models — tab drill-downs', () => {
     expect(screen.queryByTestId('llms-view')).not.toBeInTheDocument();
   });
 
-  it.each(['library', 'abuse'])('passes the LLM %s sub-route through to the focused LLM view', async (view) => {
+  it.each(['library', 'abuse', 'jev'])('passes the LLM %s sub-route through to the focused LLM view', async (view) => {
     renderAt(`/models/llms/${view}`);
     expect(await screen.findByTestId('llms-view')).toHaveAttribute('data-view', view);
-    expect(screen.getByRole('tab', { name: 'LLMs' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: view === 'library' ? 'Model Library' : view === 'abuse' ? 'Abuse Guard' : 'Jev decision scorer' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('renders a tab detail view INSIDE the section shell, not as a bare page', async () => {

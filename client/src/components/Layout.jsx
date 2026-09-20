@@ -55,7 +55,7 @@ import {
   SECTIONS_BELOW_MORE,
 } from '../lib/navPresentation.js';
 import { isFullWidthRoute } from '../lib/layoutRoutes.js';
-import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
+import { getNavCommandForPath, getSectionNavGroups, NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
 import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
 import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
@@ -67,6 +67,7 @@ import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
 import VoiceWidget from './voice/VoiceWidget';
 import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
+import SidebarContext from './SidebarContext.jsx';
 
 function ThemeModeToggle({ className = '' }) {
   const { theme, toggleMode } = useThemeContext();
@@ -125,6 +126,7 @@ const navRowForPath = (path) => {
     label: command.label,
     section: command.section,
     feature: command.feature,
+    ...(command.navGroup ? { navGroup: command.navGroup } : {}),
     ...NAV_PRESENTATION[path],
   };
 };
@@ -140,7 +142,11 @@ const sectionNavItem = (section) => {
     && children.every((child) => child.feature === children[0].feature)
     ? children[0].feature
     : undefined;
-  return { label: section, feature: sharedFeature, children, ...SECTION_PRESENTATION[section] };
+  const childByPath = new Map(children.filter((child) => child.to).map((child) => [child.to, child]));
+  const groups = getSectionNavGroups(section)
+    .map((group) => ({ ...group, children: group.tabs.map((tab) => childByPath.get(tab.to)).filter(Boolean) }))
+    .filter((group) => group.children.length > 0);
+  return { label: section, feature: sharedFeature, children, groups, ...SECTION_PRESENTATION[section] };
 };
 
 const mainRows = ['/', '/review', '/eidoverse'].map(navRowForPath);
@@ -541,6 +547,11 @@ export default function Layout() {
 
   const isActive = (path) => {
     if (path === '/') return location.pathname === '/';
+    const declaredPath = commandByPath.has(path);
+    const matchedCommand = declaredPath ? getNavCommandForPath(location.pathname) : null;
+    if (matchedCommand?.section === 'Models') {
+      return matchedCommand.path === path;
+    }
     return location.pathname === path || location.pathname.startsWith(path + '/');
   };
 
@@ -698,7 +709,17 @@ export default function Layout() {
         {/* Children items */}
         {expandedSections[item.label] && !sidebarCollapsed && (
           <div className="ml-4 mt-1 min-w-0">
-            {item.children.map((child, childIndex) => {
+            {(item.groups?.length
+              ? item.groups.flatMap((group) => [{ groupLabel: group.label }, ...group.children])
+              : item.children
+            ).map((child, childIndex) => {
+              if (child.groupLabel) {
+                return (
+                  <div key={`child-group-${child.groupLabel}`} className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500" role="heading" aria-level="3">
+                    {child.groupLabel}
+                  </div>
+                );
+              }
               if (child.separator) {
                 return <div key={`child-sep-${childIndex}`} className="mx-3 my-1 border-t border-port-border" />;
               }
@@ -792,7 +813,8 @@ export default function Layout() {
   };
 
   return (
-    <div className="h-dvh-screen print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
+    <SidebarContext.Provider value={{ collapsed: sidebarCollapsed, desktop: desktopNav }}>
+      <div className="h-dvh-screen print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
@@ -955,6 +977,9 @@ export default function Layout() {
       {collapsed && flyoutSection && (() => {
         const item = resolvedNavItems.find((i) => i.label === flyoutSection);
         if (!item || !item.children || item.children.length === 0) return null;
+        const flyoutChildren = item.groups?.length
+          ? item.groups.flatMap((group) => [{ groupLabel: group.label }, ...group.children])
+          : item.children;
         // A list of navigation links, not a command menu — so <nav> + <ul>/<li>,
         // NOT role="menu"/"menuitem": those roles promise arrow-key roving
         // focus between items that this flyout doesn't implement (#7265).
@@ -974,7 +999,16 @@ export default function Layout() {
               {item.label}
             </div>
             <ul>
-              {item.children.map((child, childIndex) => {
+              {flyoutChildren.map((child, childIndex) => {
+                if (child.groupLabel) {
+                  return (
+                    <li key={`flyout-group-${child.groupLabel}`} role="presentation">
+                      <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500" role="heading" aria-level="3">
+                        {child.groupLabel}
+                      </div>
+                    </li>
+                  );
+                }
                 if (child.separator) {
                   // Decorative rule, not an item — hidden so it doesn't pad the
                   // list's "N items" count for screen readers.
@@ -1091,6 +1125,7 @@ export default function Layout() {
       <KeyboardHelp />
       {/* Push-to-talk voice widget — self-hides when voice.enabled is false */}
       <VoiceWidget />
-    </div>
+      </div>
+    </SidebarContext.Provider>
   );
 }

@@ -109,7 +109,7 @@ export default function ModelAbuseGuardPanel() {
     <section
       id="llm-management-panel-abuse"
       role="tabpanel"
-      aria-labelledby="tab-abuse"
+      aria-labelledby="model-abuse-guard-heading"
       data-testid="model-abuse-guard-card"
       className="max-w-6xl bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5"
     >
