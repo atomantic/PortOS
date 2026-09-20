@@ -11,7 +11,6 @@ import { checkGhHealth } from '../services/github.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { statfs } from 'fs/promises';
-import { getReviewerConfigHealth } from '../services/codeReview.js';
 
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([])
@@ -110,6 +109,8 @@ vi.mock('../services/settings.js', () => ({
     return next;
   })
 }));
+
+const { getReviewerConfigHealth } = await import('../services/codeReview.js');
 
 describe('System Health Routes', () => {
   const app = express();

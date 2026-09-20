@@ -20,7 +20,6 @@ import { getActiveProcessing } from '../services/activeProcessing.js';
 import { getMediaCapacity } from '../services/mediaCapacity.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
-import { getReviewerConfigHealth } from '../services/codeReview.js';
 
 // Defaults are tuned for a real dev machine: memory routinely sits in the
 // 75-85% band on a host with a couple of LLMs loaded, and big SSDs commonly
@@ -154,7 +153,9 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     // Media-lane capacity never fails the health report: an unreadable GPU probe
     // degrades to `null`, which the UI renders as unknown rather than as idle.
     getMediaCapacity().catch(() => null),
-    getReviewerConfigHealth().catch(() => ({ status: 'unknown', configFaults: {} }))
+    import('../services/codeReview.js')
+      .then(({ getReviewerConfigHealth }) => getReviewerConfigHealth())
+      .catch(() => ({ status: 'unknown', configFaults: {} }))
   ]);
   const { thresholds, dismissedWarnings } = healthSettings;
 
