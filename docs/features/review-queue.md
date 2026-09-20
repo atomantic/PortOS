@@ -97,9 +97,17 @@ action kinds and are never merged merely because they share a task or agent.
 | Paused automation | Required with series/run id and link | Series/run reference; `autopilot.resume` / Resume | Resume remains in the owning automation surface |
 | Explicit content review | Required with report/reference id and link | Report or review id; `content.review` / Review | Private security and malware reports remain source-owned |
 | Health and backup | Required only with a known human remedy | Alert or last-run identity; Investigate or Retry | No generic Complete operation |
+| Product recommendations | Optional when a current POST or creative-feedback signal is available | Product action id plus local-day/run occurrence; Open | Feature-disabled signals disappear without deleting their local triage marker |
 | Legacy Review alerts | Required as explicit triage | Stored Review item id; `review.triage` / Review | Never silently completed or deleted |
 | Briefings, generic warnings, client errors, and uncorrelated notifications | Not admitted | No proven obligation contract | Remain in Review history/context |
 
-Optional Ask promotion is still available from Ask and its API, but it is not
-required action admission. Routine task-ready/success attention generation is
-not a queue producer; execution history and private reports remain separate.
+Product recommendations are admitted once per current occurrence: POST uses the
+configured local calendar day, while creative feedback uses one row per
+reviewable commission run. The product source returns every pending run before
+the queue's bounded read, and a full bound is reported as truncation rather
+than an inbox-zero claim. Product read failures are reported as an unavailable
+source; legacy metrics and proactive-alert endpoints keep their existing
+compatibility projections. Optional Ask promotion is still available from Ask
+and its API, but it is not required action admission. Routine task-ready/success
+attention generation is not a queue producer; execution history and private
+reports remain separate.
