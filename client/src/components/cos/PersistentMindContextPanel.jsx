@@ -3,6 +3,7 @@ import { Brain, Database, Eye, Plus, RefreshCw, Save } from 'lucide-react';
 import * as api from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
+import PersistentMindMaintainerControls from './PersistentMindMaintainerControls';
 import { formatCount } from '../../utils/formatters';
 
 const EMPTY_MEMORY = {
@@ -80,6 +81,8 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
   return (
     <div className="space-y-4">
       {error && <Banner tone="error" title="Context unavailable">{error}</Banner>}
+
+      {view !== 'memories' && <PersistentMindMaintainerControls />}
 
       {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-architecture-heading">
         <div className="flex flex-wrap items-start justify-between gap-3">

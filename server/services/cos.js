@@ -1,3 +1,4 @@
+import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
  * Chief of Staff (CoS) Service
  *
@@ -250,6 +251,9 @@ export async function updateConfig(updates) {
     const priorPersistentMindPlaybook = current.persistentMindPlaybook;
     const priorPersistentMindThinkingPresets = current.persistentMindThinkingPresets;
     const next = { ...current, ...updates };
+    if (updates.persistentMindMaintainer !== undefined) {
+      next.persistentMindMaintainer = mergePersistentMindMaintainer(current.persistentMindMaintainer, updates.persistentMindMaintainer);
+    }
     if (updates.domainAutonomy !== undefined) {
       next.domainAutonomy = normalizeDomainAutonomy({
         ...priorDomainAutonomy,

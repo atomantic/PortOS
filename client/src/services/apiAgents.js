@@ -55,6 +55,7 @@ export const getPersistentMind = (filters = {}, options = {}) =>
   request(`/cos/mind${runEventQuery(filters)}`, options);
 export const cancelPersistentMindThinkingRequest = (options = {}) =>
   request('/cos/mind/thinking-request', { method: 'DELETE', ...options });
+export const getPersistentMindMaintainer = (options = {}) => request('/cos/mind/maintainer', options);
 export const getPersistentMindContext = (options = {}) => request('/cos/mind/context', options);
 export const getPersistentMindTools = (options = {}) => request('/cos/mind/tools', options);
 export const getPersistentMindJournal = ({ kind, status, ...options } = {}) => {

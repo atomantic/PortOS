@@ -31,6 +31,18 @@ beforeEach(() => {
 });
 
 describe('cosState persistence', () => {
+  it('persists opted-in maintainer intent while absence stays disabled', async () => {
+    let store = await freshModule();
+    expect((await store.getConfig()).persistentMindMaintainer.enabled).toBe(false);
+    writeConfig({ persistentMindMaintainer: { enabled: true, appIds: ['example-app'], intervalMinutes: 120 }, persistentMindPrompt: { instructions: 'Keep my voice.' } });
+    store = await freshModule();
+    const config = await store.getConfig();
+    expect(config.persistentMindMaintainer).toEqual({ schemaVersion: 1, enabled: true, appIds: ['example-app'], intervalMinutes: 120 });
+    await store.saveConfig(config);
+    expect(readJson(CONFIG_PATH).persistentMindMaintainer.enabled).toBe(true);
+    expect(readJson(CONFIG_PATH).persistentMindPrompt.instructions).toBe('Keep my voice.');
+  });
+
   // The regression: a `}{` heuristic declared VALID state files corrupt as soon
   // as any stored string held that byte pair (a slashdo doc quoting
   // `{value}{ — project|global}`, a diff carrying JSX), and the fallback reset

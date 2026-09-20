@@ -1,3 +1,4 @@
+import { composeMaintainerInstructions } from '../lib/persistentMindMaintainer.js';
 /**
  * Production text-provider adapter for the persistent Chief-of-Staff mind.
  *
@@ -373,7 +374,7 @@ export function createPersistentMindTurnAdapter() {
         model: profile.model,
         effort: profile.effort,
         identity: prompt.identity,
-        instructions: composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase),
+        instructions: composeMaintainerInstructions(composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase), root.config?.persistentMindMaintainer),
         playbook,
         playbookPhase,
         memories,

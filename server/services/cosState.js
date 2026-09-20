@@ -1,3 +1,4 @@
+import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
  * CoS State Module
  *
@@ -91,6 +92,7 @@ export const DEFAULT_CONFIG = {
   autoApproveInvestigations: false,
   // Persisting a profile is not consent to wake the mind. Fresh and upgraded
   // installs stay disabled until the user explicitly starts it.
+  persistentMindMaintainer: normalizePersistentMindMaintainer(),
   persistentMindProfile: createDefaultPersistentMindProfile(),
   persistentMindThinkingPresets: createDefaultPersistentMindThinkingPresets(),
   persistentMindPrompt: createDefaultPersistentMindPrompt(),
@@ -213,6 +215,7 @@ function mergeStoredConfig(storedConfig) {
     ...DEFAULT_CONFIG,
     ...persistedConfig,
     persistentMindCapabilities: normalizePersistentMindCapabilities(persistedConfig.persistentMindCapabilities),
+    persistentMindMaintainer: normalizePersistentMindMaintainer(persistedConfig.persistentMindMaintainer),
     persistentMindProfile: normalizePersistentMindProfile(persistedConfig.persistentMindProfile),
     persistentMindThinkingPresets: normalizePersistentMindThinkingPresets(persistedConfig.persistentMindThinkingPresets),
     persistentMindPrompt: normalizePersistentMindPrompt(persistedConfig.persistentMindPrompt),

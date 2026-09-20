@@ -1,3 +1,4 @@
+import { composeMaintainerInstructions } from '../lib/persistentMindMaintainer.js';
 import mindToolRecipeRoutes from './mindToolRecipeRoutes.js';
 import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistentMindThinkingRequests.js';
@@ -259,6 +260,11 @@ router.delete('/mind/thinking-request', asyncHandler(async (_req, res) => {
   res.json(await cancelPersistentMindThinkingRequest());
 }));
 
+router.get('/mind/maintainer', asyncHandler(async (_req, res) => {
+  const { describePersistentMindMaintainerSetup } = await import('../services/persistentMindMaintainer.js');
+  res.json(await describePersistentMindMaintainerSetup());
+}));
+
 router.get('/mind/context', asyncHandler(async (_req, res) => {
   const root = await loadState();
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
@@ -276,7 +282,7 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
   const preview = await preparePersistentMindContext({
     mindId: PERSISTENT_MIND_ID,
     identity: prompt.identity,
-    instructions: composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase),
+    instructions: composeMaintainerInstructions(composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase), root.config?.persistentMindMaintainer),
     memories,
   });
   res.json({

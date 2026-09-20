@@ -56,6 +56,7 @@ vi.mock('../services/persistentMindJournal.js', () => ({
   readPersistentMindJournal: mocks.readPersistentMindJournal,
   correctPersistentMindJournalEvent: mocks.correctPersistentMindJournalEvent,
 }));
+vi.mock('../services/persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({ ok: true }) }));
 vi.mock('../services/providers.js', () => ({ getProviderById: mocks.getProviderById }));
 vi.mock('../services/persistentMindAdapter.js', () => ({
   persistentMindHarnessInfo: (provider) => ({
@@ -300,6 +301,21 @@ describe('persistent mind routes', () => {
     expect(res.body.turnExecutions[0].calls[0].usage).toMatchObject({ state: 'unknown', totalTokens: null });
     expect(res.body).not.toHaveProperty('snapshot');
     expect(JSON.stringify(res.body)).not.toContain('must not leak');
+  });
+
+  it('previews scoped maintainer prerequisites and composes its charter without rewriting custom text', async () => {
+    const root = await mocks.loadState();
+    root.config.persistentMindMaintainer = { enabled: true, appIds: ['demo-app'] };
+    mocks.readPersistentMindManagedApps.mockResolvedValue([{ id: 'demo-app', name: 'Demo', fullName: 'example/project', forge: 'github', granted: false }]);
+    const setup = await get('/mind/maintainer');
+    expect(setup.status).toBe(200);
+    expect(setup.body.ready).toBe(false);
+    expect(setup.body.apps[0]).toMatchObject({ id: 'demo-app', granted: false });
+    await get('/mind/context');
+    expect(mocks.preparePersistentMindContext).toHaveBeenLastCalledWith(expect.objectContaining({
+      instructions: expect.stringContaining('Stay grounded.\n\n# Development maintainer role'),
+    }));
+    expect(root.config.persistentMindPrompt.instructions).toBe('Stay grounded.');
   });
 
   it('exposes the editable prompt, owned memories, derived rollups, and exact context preview', async () => {
