@@ -1305,13 +1305,22 @@ async function readQueueTriageForProjection({
   const currentKeys = pruneOrphans
     ? new Set(currentItems.map((item) => reviewQueueTriageStore.triageIdentityKey(queueActionIdentity(item))))
     : null;
+  const currentDeliveryIds = pruneOrphans
+    ? new Set(currentItems.map((item) => String(item.id)))
+    : null;
   const removableKeys = new Set();
   for (const entry of entries) {
     const key = reviewQueueTriageStore.triageIdentityKey(entry);
     const expired = entry.snoozedUntil && Date.parse(entry.snoozedUntil) <= nowMs;
     const unused = expired && entry.dismissed !== true && entry.deliveryGeneration === 0;
     const actionKind = typeof entry.actionKey === 'string' ? entry.actionKey.split(':')[0] : null;
-    const orphaned = currentKeys && !entry.delivery && !currentKeys.has(key) && !preservedKinds.has(actionKind);
+    const deliveryId = entry.delivery && typeof entry.actionKey === 'string'
+      ? entry.actionKey.startsWith('delivery:') ? entry.actionKey.slice('delivery:'.length) : null
+      : null;
+    const orphaned = currentKeys && (
+      (entry.delivery && deliveryId && !currentDeliveryIds.has(deliveryId))
+      || (!entry.delivery && !currentKeys.has(key) && !preservedKinds.has(actionKind))
+    );
     if (unused || orphaned) removableKeys.add(key);
   }
   for (const entry of entries) {

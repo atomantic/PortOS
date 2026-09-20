@@ -94,7 +94,7 @@ describe('notifications', () => {
     await clearAll()
     expect(await getNotifications()).toEqual([])
     const retained = await getNotifications({ includeHidden: true })
-    expect(retained.map(adaptNotification).filter(Boolean).map(item => item.id)).toEqual(['memory:mem-1', 'content:42'])
+    expect(retained.map(adaptNotification).filter(Boolean).map(item => item.id)).toEqual([])
     expect(await exists(NOTIFICATION_TYPES.MEMORY_APPROVAL, { memoryId: 'mem-1' })).toBe(true)
     await removeByMetadata('memoryId', 'mem-1')
     expect((await getNotifications({ includeHidden: true })).map(n => n.id)).toEqual(['n2'])

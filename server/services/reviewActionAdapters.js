@@ -194,6 +194,7 @@ const notificationReference = (notification, policy) => {
 export function adaptNotification(notification) {
   // Read and clear apply to event history, never to the source obligation.
   if (!notification) return null;
+  if (notification.historyHidden === true) return null;
 
   const policy = NOTIFICATION_ACTION_POLICY[notification.type];
   if (!policy) return null;
