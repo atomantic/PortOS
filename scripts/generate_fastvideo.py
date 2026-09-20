@@ -142,7 +142,7 @@ def translate_line(line: str, *, conversion: bool = False) -> str:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS FastVideo MLX helper")
     p.add_argument("--repo-dir", default=None, help="Path to cloned FastVideo repo")
-    p.add_argument("--family", choices=("fastmetal", "fasth3"), default="fastmetal",
+    p.add_argument("--family", choices=("fastmetal", "fastmetal5b", "fasth3"), default="fastmetal",
                    help="Which FastVideo entry script and argv shape to use")
     p.add_argument("--model-root", required=True, help="HF model snapshot path")
     p.add_argument("--mlx-checkpoint", default=None, help="MLX checkpoint path (defaults to model-root)")
@@ -166,12 +166,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fast", action="store_true", help="Enable fast mode (fewer steps + frame interpolation)")
     p.add_argument("--enhance-prompt", action="store_true", help="Enable prompt enhancer")
     p.add_argument("--refine", action="store_true", help="Enable second-pass refinement")
+    p.add_argument("--vsa", action="store_true", help="FastH3 V2: retain routing weights and use 80% sparse attention")
     return p.parse_args()
 
 
 # Per-family entry-script candidates, most-preferred first. The trailing glob
 # name is the fallback when a checkout moves the examples tree.
 _ENTRY_SCRIPTS = {
+    "fastmetal5b": (
+        [("examples", "inference", "basic", "mlx_wan22_generate.py")],
+        "mlx_wan22_generate.py",
+    ),
     "fastmetal": (
         [
             ("examples", "inference", "basic", "mlx_wan_prompt_to_video.py"),
@@ -242,9 +247,12 @@ def is_converted(checkpoint_dir: Path) -> bool:
 
 
 def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
-                          base: Path | None = None) -> Path:
+                          base: Path | None = None, *, vsa: bool = False) -> Path:
     """Return the converted MLX DiT for `fmt`, converting it if it is missing."""
     out_base = mlx_checkpoint_root(model_root, base)
+    # Dense conversions drop routing tensors; never reuse one for VSA.
+    if vsa:
+        out_base = out_base / "vsa"
     out_dir = out_base / fmt
     if is_converted(out_dir):
         return out_dir
@@ -263,7 +271,7 @@ def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
         [sys.executable, str(converter),
          "--model-root", str(transformer),
          "--out", str(out_base),
-         "--formats", fmt],
+         "--formats", fmt] + (["--include-vsa"] if vsa else []),
         env, repo_dir, lambda line: translate_line(line, conversion=True),
     )
     if code != 0:
@@ -350,6 +358,22 @@ def build_command(args, entry_script: Path, model_root: Path, mlx_checkpoint: Pa
         "--num-frames", str(args.num_frames),
     ]
     tail = ["--seed", str(args.seed), "--output-path", str(args.output)]
+    if args.family == "fastmetal5b":
+        if args.steps != 3 or args.image:
+            raise ValueError("FastMetal 5B requires its trained 3-step text-to-video schedule")
+        cmd = [sys.executable, str(entry_script),
+               "--text-encoder-root", str(model_root),
+               "--vae-root", str(model_root / "vae"),
+               "--mlx-checkpoint", str(mlx_checkpoint),
+               "--prompt", args.prompt,
+               "--width", str(args.width), "--height", str(args.height),
+               "--num-frames", str(args.num_frames), "--fps", str(args.fps),
+               "--dmd-denoising-steps", "1000,757,522"] + tail
+        for enabled, flag in ((args.fast, "--fast"), (args.refine, "--refine"),
+                              (args.enhance_prompt, "--enhance-prompt")):
+            if enabled:
+                cmd.append(flag)
+        return cmd
     if args.family != "fasth3":
         cmd = common + [
             "--num-inference-steps", str(args.steps),
@@ -383,6 +407,8 @@ def build_command(args, entry_script: Path, model_root: Path, mlx_checkpoint: Pa
               file=sys.stderr, flush=True)
     cmd = common + ["--steps", str(args.steps),
                     "--prompt-cache-dir", str(resolve_prompt_cache_dir(args))] + tail
+    if getattr(args, "vsa", False):
+        cmd.extend(["--vsa", "--vsa-sparsity", "0.8", "--vsa-tile-size", "64", "--vsa-impl", "reference"])
     if args.fast:
         cmd.append("--fast")
     return cmd
@@ -409,6 +435,19 @@ def main() -> int:
         return 1
 
     model_root = Path(args.model_root).resolve()
+    if args.family == "fastmetal5b":
+        decoder = Path.home() / ".cache" / "fastvideo" / "taehv" / "taew2_2.pth"
+        if not decoder.is_file():
+            print("RuntimeError: FastMetal 5B preview decoder is missing. Repair FastVideo in Media Gen Settings before rendering.", file=sys.stderr)
+            return 1
+    if args.vsa:
+        converter = repo_dir.joinpath(*_CONVERTER_SCRIPT)
+        if (args.family != "fasth3"
+                or '"--vsa"' not in entry_script.read_text()
+                or (args.mlx_format and (not converter.is_file()
+                    or "--include-vsa" not in converter.read_text()))):
+            print("RuntimeError: FastH3 V2 requires an updated FastVideo runtime with VSA inference and conversion support. Update FastVideo in Media Gen Settings.", file=sys.stderr)
+            return 1
     env = build_child_env(repo_dir)
     # Precedence: an explicit path always wins, so a row that ships a
     # pre-quantized DiT never triggers a conversion it does not need.
@@ -418,7 +457,8 @@ def main() -> int:
         try:
             mlx_checkpoint = ensure_mlx_checkpoint(
                 repo_dir, model_root, args.mlx_format, env,
-                Path(args.mlx_checkpoint_cache_dir) if args.mlx_checkpoint_cache_dir else None)
+                Path(args.mlx_checkpoint_cache_dir) if args.mlx_checkpoint_cache_dir else None,
+                vsa=args.vsa)
         except (FileNotFoundError, RuntimeError) as err:
             print(f"❌ {err}", file=sys.stderr)
             return 1

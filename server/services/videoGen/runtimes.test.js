@@ -461,6 +461,13 @@ describe('MiniMax H3 CUDA offload profiles', () => {
 describe('fastvideo runtime registration', () => {
   const info = BYOV_RUNTIME_INFO.fastvideo;
 
+  it('marks older FastVideo checkouts as upgradeable and recognizes the VSA-capable pin', async () => {
+    runtimeMocks.spawn.mockImplementation(() => statusChild('old-runtime-revision\n'));
+    await expect(isByovRuntimeCurrent('fastvideo')).resolves.toBe(false);
+    runtimeMocks.spawn.mockImplementation(() => statusChild(`${info.expectedRevision}\n`));
+    await expect(isByovRuntimeCurrent('fastvideo')).resolves.toBe(true);
+  });
+
   it('is a BYOV runtime with its own venv', () => {
     expect(BYOV_VIDEO_RUNTIMES.has('fastvideo')).toBe(true);
     expect(info.installEnvVar).toBe('INSTALL_FASTVIDEO');
