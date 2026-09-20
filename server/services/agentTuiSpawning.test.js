@@ -2155,6 +2155,80 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteWrites()).toHaveLength(1);
   });
 
+  // Regression (2026-09-20, agent-d4c7c237 and five siblings): codex QUEUES a
+  // bracketed paste written before its composer finished initializing and
+  // commits it once the composer is live — on a cold Windows start that was
+  // ~11s for a paste sent at 3.7s. The old 3.5s marker wait + 2s verify window
+  // expired first and the retry ladder wrote a SECOND full prompt on top of the
+  // queued one; codex committed NEITHER, and the agent was killed
+  // `paste-not-rendered` in ~24s with a healthy composer on screen. The paste
+  // must be left alone long enough for that late commit, and submitted when it
+  // arrives — never re-pasted over.
+  it('codex late paste commit: waits for the chip past the old window instead of re-pasting', async () => {
+    const pasteFailSpy = vi.fn();
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async (args) => {
+      if (args?.completionReason === 'paste-not-rendered') pasteFailSpy(args);
+    });
+
+    runSpawn({ prompt: 'review the provider install detection on this machine' });
+    await flushMicrotasks();
+    // Ordinary banner — deliberately NOT an MCP-boot signal, so the extended
+    // boot budget is not what rescues this run.
+    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n  directory: loading\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+
+    // Well past the old 5.5s marker+verify budget, codex is still initializing
+    // and has echoed nothing. Nothing may be re-pasted, and nothing may fail.
+    await vi.advanceTimersByTimeAsync(10000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+    expect(pasteFailSpy).not.toHaveBeenCalled();
+
+    // Composer goes live and commits the queued paste.
+    await capturedOnData(Buffer.from('[Pasted Content 29448 chars]\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+
+    const enterWrites = vi.mocked(shellService.writeToSession).mock.calls
+      .filter(([id, data]) => id === SESSION_ID && data === '\r');
+    expect(enterWrites.length).toBeGreaterThan(0);
+    expect(pasteCount()).toBe(1);
+    expect(pasteFailSpy).not.toHaveBeenCalled();
+  });
+
+  // The patient window is for a paste codex QUEUED. During an MCP boot codex
+  // renders its box early and SWALLOWS pastes outright, so there is nothing to
+  // wait for and patience would only delay the 5s re-paste cadence that IS the
+  // recovery. The boot banner can latch AFTER the paste went out, so the wait
+  // has to be read live rather than fixed when the attempt started.
+  it('codex MCP boot: drops the patient window when the boot banner latches after the paste', async () => {
+    const { PASTE_COMMIT_PATIENCE_MS } = await vi.importActual('../lib/tuiHandshake.js');
+
+    runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('>_ OpenAI Codex (v0.155.1)\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+
+    // Boot banner arrives only now — after the paste. The attempt must abandon
+    // the patient window and fall back to the short swallow-recovery ladder.
+    await capturedOnData(Buffer.from('Starting MCP servers (1/2): codex_apps (0s • esc to interrupt)\n'));
+    await flushMicrotasks();
+
+    // Well inside the patient window, so a captured 45s wait would still be
+    // sitting on attempt 1 with nothing re-pasted.
+    await vi.advanceTimersByTimeAsync(20000);
+    await flushMicrotasks();
+    expect(PASTE_COMMIT_PATIENCE_MS).toBeGreaterThan(20000);
+    expect(pasteCount()).toBeGreaterThan(1);
+  });
+
   // ── 1d. Codex MCP-server boot patience (incident 2026-07-10, agent-c5a26b40) ──
   // Codex boots the user's globally-configured MCP servers (playwright via npx,
   // a node_repl with startup_timeout_sec=120) on every headless spawn. During
@@ -2166,6 +2240,7 @@ describe('spawnTuiAgent runtime', () => {
   // budget must extend to MCP_BOOT_PASTE_DEADLINE_MS so a slow boot completes and
   // the paste finally lands.
   it('codex MCP boot: extends the paste-retry budget past the fixed 3-attempt cap while booting', async () => {
+    const { MCP_BOOT_PASTE_DEADLINE_MS } = await vi.importActual('../lib/tuiHandshake.js');
     const pasteFailSpy = vi.fn();
     vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async (args) => {
       if (args?.completionReason === 'paste-not-rendered') pasteFailSpy(args);
@@ -2187,9 +2262,9 @@ describe('spawnTuiAgent runtime', () => {
     await flushMicrotasks();
 
     // No marker and no echo ever arrive — every attempt is swallowed. Advance
-    // well past the ~19s that would exhaust the fixed 3-attempt budget, but under
-    // the 150s MCP-boot deadline.
-    await vi.advanceTimersByTimeAsync(45000);
+    // well past the point where the fixed 3-attempt budget would be exhausted,
+    // but under the MCP-boot deadline.
+    await vi.advanceTimersByTimeAsync(MCP_BOOT_PASTE_DEADLINE_MS - 5000);
     await flushMicrotasks();
 
     // Boot-aware budget kept retrying instead of failing paste-not-rendered…
@@ -2204,6 +2279,7 @@ describe('spawnTuiAgent runtime', () => {
       PASTE_TO_ENTER_FALLBACK_MS,
       PASTE_VERIFY_WINDOW_MS,
       PASTE_VERIFY_POLL_MS,
+      PASTE_MARKER_POLL_MS,
     } = await vi.importActual('../lib/tuiHandshake.js');
 
     runSpawn({ prompt: 'evaluate our animation prompts and generate drafts' });
@@ -2215,16 +2291,21 @@ describe('spawnTuiAgent runtime', () => {
 
     expect(pasteCount()).toBe(1);
 
-    // Let the marker and text verification windows expire so the controller is
-    // inside its MCP-aware retry backoff. The production incident delivered the
-    // paste chip in exactly this gap, after output from a busy Codex repaint was
-    // delayed; the old controller discarded it and stacked another full prompt.
+    // Deliver the chip well past the old marker + verification windows. The
+    // production incident delivered it in exactly this gap, after output from a
+    // busy Codex repaint was delayed; the old controller discarded it and
+    // stacked another full prompt on top.
     await vi.advanceTimersByTimeAsync(
       PASTE_TO_ENTER_FALLBACK_MS + PASTE_VERIFY_WINDOW_MS + PASTE_VERIFY_POLL_MS,
     );
     await flushMicrotasks();
 
     await capturedOnData(Buffer.from('[Pasted Content 12345 chars]\n'));
+    await flushMicrotasks();
+
+    // Codex's patient first attempt is still waiting for that chip, so the
+    // submit fires on the next marker poll.
+    await vi.advanceTimersByTimeAsync(PASTE_MARKER_POLL_MS);
     await flushMicrotasks();
 
     const enterWrites = () => vi.mocked(shellService.writeToSession).mock.calls
@@ -2259,7 +2340,8 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
-  it('paste-not-rendered: without an MCP-boot banner, still fails after the fixed 3 attempts (~19s)', async () => {
+  it('paste-not-rendered: without an MCP-boot banner, still fails after the fixed 3 attempts', async () => {
+    const { PASTE_COMMIT_PATIENCE_MS } = await vi.importActual('../lib/tuiHandshake.js');
     let resolveComplete;
     const completeDone = new Promise((r) => { resolveComplete = r; });
     vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
@@ -2272,9 +2354,10 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
 
-    // No marker/echo. Advance past the 3-attempt budget (~19s) but well under the
-    // 150s MCP-boot deadline — proves the non-boot path is unchanged.
-    await vi.advanceTimersByTimeAsync(25000);
+    // No marker/echo. Advance past attempt 1's patient commit window plus the
+    // two short retries behind it, but well under the 150s MCP-boot deadline —
+    // proving the non-boot path still fails at 3 attempts.
+    await vi.advanceTimersByTimeAsync(PASTE_COMMIT_PATIENCE_MS + 25000);
     vi.useRealTimers();
     await completeDone;
 
