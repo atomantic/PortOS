@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { reviewQueueQuerySchema, validateRequest } from '../lib/validation.js';
 import * as reviewService from '../services/review.js';
-import { buildQueue, resolveQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
+import { buildQueue, MAX_REVIEW_QUEUE_SNOOZE_MS, resolveQueueItem, triageQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
 
 const router = express.Router();
 
@@ -73,6 +73,31 @@ router.post('/queue/resolve', asyncHandler(async (req, res) => {
   const result = operation
     ? (Object.keys(input).length ? await resolveQueueItem(id, operation, input) : await resolveQueueItem(id, operation))
     : await resolveQueueItem(id);
+  res.json(result);
+}));
+
+const triageQueueSchema = z.object({
+  id: z.string().min(1).max(500),
+  operation: z.enum(['snooze', 'unsnooze', 'dismiss']),
+  snoozedUntil: z.string().datetime().optional(),
+}).superRefine((value, context) => {
+  if (value.operation === 'snooze' && !value.snoozedUntil) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil is required for the snooze operation' });
+  }
+  if (value.operation === 'snooze' && value.snoozedUntil
+    && Date.parse(value.snoozedUntil) - Date.now() > MAX_REVIEW_QUEUE_SNOOZE_MS) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil cannot be more than 30 days in the future' });
+  }
+  if (value.operation !== 'snooze' && value.snoozedUntil !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['snoozedUntil'], message: 'snoozedUntil is only valid for the snooze operation' });
+  }
+});
+
+// POST /api/review/queue/triage — persist a presentation-only decision after
+// the queue service re-reads the source and its current capabilities.
+router.post('/queue/triage', asyncHandler(async (req, res) => {
+  const { id, operation, snoozedUntil } = validateRequest(triageQueueSchema, req.body);
+  const result = await triageQueueItem(id, operation, snoozedUntil ? { snoozedUntil } : {});
   res.json(result);
 }));
 

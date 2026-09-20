@@ -22,6 +22,24 @@ const identity = { getGoals: vi.fn() };
 const stackerNews = { listPendingReviewActions: vi.fn() };
 const x = { listPendingReviewActions: vi.fn() };
 const userTimezone = { getUserTimezone: vi.fn() };
+const reviewQueueTriageStore = {
+  listReviewQueueTriage: vi.fn(),
+  upsertReviewQueueTriage: vi.fn(),
+  removeReviewQueueTriage: vi.fn(),
+  normalizeReviewQueueTriage: (value = {}) => ({
+    actionKey: String(value.actionKey || '').trim(),
+    occurrence: value.occurrence == null ? '' : String(value.occurrence),
+    revision: value.revision == null ? '' : String(value.revision),
+    snoozedUntil: value.snoozedUntil || null,
+    dismissed: value.dismissed === true,
+    deliveryGeneration: value.deliveryGeneration || 0,
+  }),
+  triageIdentityKey: (value = {}) => JSON.stringify([
+    String(value.actionKey || ''),
+    value.occurrence == null ? '' : String(value.occurrence),
+    value.revision == null ? '' : String(value.revision),
+  ]),
+};
 
 vi.mock('./brain.js', () => brain);
 vi.mock('./brainStorage.js', () => brainStorage);
@@ -38,10 +56,14 @@ vi.mock('./askPromote.js', () => askPromote);
 vi.mock('./stackerNews.js', () => stackerNews);
 vi.mock('./x.js', () => x);
 vi.mock('./userTimezone.js', () => userTimezone);
+vi.mock('./reviewQueueTriageStore.js', () => reviewQueueTriageStore);
 
 const {
   buildQueue,
   resolveQueueItem,
+  triageQueueItem,
+  applyQueueTriage,
+  queueActionIdentity,
   promoteAskQueueItem,
   __resetAlertsCache,
   __resetQueueSnapshots,
@@ -70,6 +92,9 @@ function resetEmpty() {
   stackerNews.listPendingReviewActions.mockResolvedValue([]);
   x.listPendingReviewActions.mockResolvedValue([]);
   userTimezone.getUserTimezone.mockResolvedValue('UTC');
+  reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([]);
+  reviewQueueTriageStore.upsertReviewQueueTriage.mockResolvedValue(undefined);
+  reviewQueueTriageStore.removeReviewQueueTriage.mockResolvedValue(undefined);
 }
 
 describe('reviewQueue.buildQueue', () => {
@@ -398,6 +423,49 @@ describe('reviewQueue.buildQueue', () => {
     expect(row).toMatchObject({ title: 'Backup degraded (DB dump failed)', severity: 'normal' });
   });
 
+  it('uses singleton source timestamps so a later backup failure is a new revision', async () => {
+    backup.getState.mockResolvedValue({ status: 'error', error: 'disk full', lastRun: 'revision-1' });
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([{
+      actionKey: 'backup.retry:last-run',
+      revision: 'revision-1',
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
+    }]);
+
+    const first = await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
+    expect(first.items.find((item) => item.id === 'backup:last-run')).toBeUndefined();
+
+    backup.getState.mockResolvedValue({ status: 'error', error: 'disk full', lastRun: 'revision-2' });
+    const second = await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
+    expect(second.items.find((item) => item.id === 'backup:last-run')).toMatchObject({ revision: 'revision-2' });
+  });
+
+  it('clears live health markers when the condition disappears', async () => {
+    const alert = { id: 'system_resource:memory', type: 'system_resource', severity: 'critical', title: 'High memory' };
+    const marker = {
+      actionKey: 'health.investigate:system_resource:memory',
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
+    };
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [alert] });
+    reviewQueueTriageStore.listReviewQueueTriage
+      .mockResolvedValueOnce([marker])
+      .mockResolvedValueOnce([marker])
+      .mockResolvedValueOnce([]);
+    await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
+
+    __resetAlertsCache();
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
+    const clear = await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
+    expect(clear.items.find((item) => item.id === 'health:system_resource:memory')).toBeUndefined();
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
+      actionKey: 'health.investigate:system_resource:memory',
+    }));
+
+    __resetAlertsCache();
+    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [alert] });
+    const reappeared = await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
+    expect(reappeared.items.find((item) => item.id === 'health:system_resource:memory')).toBeTruthy();
+  });
+
   it('preserves condition identity through reorder, wording changes and severity escalation', async () => {
     const memory = { id: 'system_resource:memory', type: 'system_resource', severity: 'high', title: 'High memory', detail: 'mem', link: '/apps' };
     const cpu = { id: 'system_resource:cpu', type: 'system_resource', severity: 'high', title: 'High CPU', detail: 'cpu', link: '/apps' };
@@ -668,6 +736,190 @@ describe('reviewQueue.buildQueue', () => {
   });
 });
 
+describe('reviewQueue triage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetEmpty();
+    __resetAlertsCache();
+    __resetQueueSnapshots();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('hides a snoozed row until the injected expiry, then shows it again', async () => {
+    const now = Date.parse('2026-09-20T10:00:00.000Z');
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: 'revision-1' }]);
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([{
+      actionKey: 'brain.classify:b1',
+      occurrence: '',
+      revision: 'revision-1',
+      snoozedUntil: '2026-09-20T11:00:00.000Z',
+    }]);
+
+    const hidden = await buildQueue({ now: new Date(now) });
+    expect(hidden.items).toEqual([]);
+    expect(hidden.counts.total).toBe(0);
+
+    const visible = await buildQueue({ now: new Date('2026-09-20T11:00:00.000Z') });
+    expect(visible.items.map((item) => item.id)).toEqual(['brain:b1']);
+
+    const snoozedView = await buildQueue({
+      query: { view: 'snoozed' },
+      now: new Date(now),
+    });
+    expect(snoozedView.items.map((item) => item.id)).toEqual(['brain:b1']);
+    expect(snoozedView.items[0].triageOperations).toEqual([
+      { id: 'unsnooze', label: 'Unsnooze', available: true },
+    ]);
+  });
+
+  it('keys presentation state by occurrence and revision instead of source id alone', () => {
+    const item = {
+      id: 'thread:one',
+      source: 'threads',
+      sourceRef: 'one',
+      actionKind: 'brain.thread',
+      occurrence: 'morning',
+      revision: 'revision-1',
+      isRecommendation: false,
+    };
+    const identity = queueActionIdentity(item);
+    const state = {
+      ...identity,
+      snoozedUntil: '2026-09-20T11:00:00.000Z',
+    };
+
+    expect(applyQueueTriage([item], [state], new Date('2026-09-20T10:00:00.000Z'))).toEqual([]);
+    expect(applyQueueTriage([
+      { ...item, occurrence: 'evening' },
+    ], [state], new Date('2026-09-20T10:00:00.000Z'))).toHaveLength(1);
+  });
+
+  it('does not advertise triage controls for history, terminal, or unavailable rows', () => {
+    const rows = applyQueueTriage([
+      { id: 'history:h1', source: 'history', isRecommendation: false },
+      { id: 'threads:t1', source: 'threads', meta: { localStatus: 'done' }, isRecommendation: false },
+      { id: 'todo:t1', source: 'todo', meta: { status: 'completed' }, isRecommendation: false },
+      { id: 'feedback:f1', source: 'feedback', availability: 'unavailable', available: false, isRecommendation: false },
+    ]);
+
+    expect(rows).toHaveLength(4);
+    expect(rows.every((row) => row.triageOperations.length === 0)).toBe(true);
+  });
+
+  it('revalidates capabilities before allowing an optional dismissal', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required' }]);
+
+    await expect(triageQueueItem('brain:b1', 'dismiss')).rejects.toMatchObject({
+      status: 400,
+      code: 'CAPABILITY_UNAVAILABLE',
+    });
+    expect(reviewQueueTriageStore.upsertReviewQueueTriage).not.toHaveBeenCalled();
+
+    askConversations.listConversations.mockResolvedValue([{
+      id: 'a1', title: 'optional', promoted: false, assistantTurnCount: 1, updatedAt: 'revision-1',
+    }]);
+    await expect(triageQueueItem('ask:a1', 'dismiss')).resolves.toMatchObject({
+      id: 'ask:a1', operation: 'dismiss', triaged: true,
+    });
+    expect(reviewQueueTriageStore.upsertReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
+      actionKey: 'ask.promote:a1',
+      revision: 'revision-1',
+      dismissed: true,
+    }));
+  });
+
+  it('rejects a triage mutation when the owning source read is unavailable', async () => {
+    brain.getInboxLog.mockRejectedValue(new Error('inbox unavailable'));
+
+    await expect(triageQueueItem('brain:b1', 'snooze', {
+      snoozedUntil: '2026-09-20T11:00:00.000Z',
+    }, { now: new Date('2026-09-20T10:00:00.000Z') })).rejects.toMatchObject({ status: 503, code: 'SOURCE_UNAVAILABLE' });
+    expect(reviewQueueTriageStore.upsertReviewQueueTriage).not.toHaveBeenCalled();
+  });
+
+  it('persists a future snooze without invoking the source completion primitive', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
+
+    await expect(triageQueueItem('brain:b1', 'snooze', {
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
+    }, { now: new Date('2026-09-20T10:00:00.000Z') })).resolves.toMatchObject({ id: 'brain:b1', operation: 'snooze', triaged: true });
+    expect(reviewQueueTriageStore.upsertReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
+      actionKey: 'brain.classify:b1',
+      revision: 'revision-1',
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
+    }));
+    expect(brain.markInboxDone).not.toHaveBeenCalled();
+  });
+
+  it('rejects an effectively permanent snooze window', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required' }]);
+
+    await expect(triageQueueItem('brain:b1', 'snooze', {
+      snoozedUntil: '2099-01-01T00:00:00.000Z',
+    }, { now: new Date('2026-09-20T10:00:00.000Z') })).rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(reviewQueueTriageStore.upsertReviewQueueTriage).not.toHaveBeenCalled();
+  });
+
+  it('clears a stored snooze through the explicit unsnooze operation', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([{
+      actionKey: 'brain.classify:b1',
+      occurrence: '',
+      revision: 'revision-1',
+      snoozedUntil: '2099-01-01T00:00:00.000Z',
+    }]);
+
+    await expect(triageQueueItem('brain:b1', 'unsnooze')).resolves.toMatchObject({
+      id: 'brain:b1',
+      operation: 'unsnooze',
+      triaged: true,
+      triage: { snoozedUntil: null },
+    });
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
+      actionKey: 'brain.classify:b1',
+      revision: 'revision-1',
+    }));
+  });
+
+  it('invalidates a pagination snapshot after a triage mutation', async () => {
+    brain.getInboxLog.mockResolvedValue([
+      { id: 'b1', capturedText: 'first' },
+      { id: 'b2', capturedText: 'second' },
+    ]);
+    const first = await buildQueue({ limit: 1 });
+    expect(first.nextCursor).toBeTruthy();
+
+    await triageQueueItem('brain:b1', 'snooze', {
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
+    }, { now: new Date('2026-09-20T10:00:00.000Z') });
+
+    await expect(buildQueue({ limit: 1, cursor: first.nextCursor })).rejects.toMatchObject({
+      status: 409,
+      code: 'CURSOR_EXPIRED',
+    });
+  });
+
+  it('removes an expired unused marker during projection', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'required', capturedAt: 'revision-1' }]);
+    const marker = {
+      actionKey: 'brain.classify:b1',
+      occurrence: '',
+      revision: 'revision-1',
+      snoozedUntil: '2026-09-20T09:00:00.000Z',
+      dismissed: false,
+      deliveryGeneration: 0,
+    };
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([marker]);
+
+    const queue = await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
+    expect(queue.items.map((item) => item.id)).toEqual(['brain:b1']);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(marker);
+  });
+});
+
 describe('reviewQueue.promoteAskQueueItem', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -675,9 +927,17 @@ describe('reviewQueue.promoteAskQueueItem', () => {
 
   it('promotes the latest assistant turn to brain via the shared promote helper', async () => {
     askPromote.promoteLatestAssistantTurn.mockResolvedValue({ target: 'brain', ref: { type: 'brain', id: 'note-1' } });
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([{
+      actionKey: 'ask.promote:conv-1',
+      revision: 'revision-1',
+      dismissed: true,
+    }]);
     const result = await promoteAskQueueItem('ask:conv-1', 'brain');
     expect(askPromote.promoteLatestAssistantTurn).toHaveBeenCalledWith({ conversationId: 'conv-1', target: 'brain', goalId: undefined });
     expect(result).toMatchObject({ source: 'ask', id: 'ask:conv-1', promoted: true, target: 'brain', ref: { type: 'brain', id: 'note-1' } });
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
+      actionKey: 'ask.promote:conv-1',
+    }));
   });
 
   it('promotes to task target', async () => {
@@ -723,9 +983,17 @@ describe('reviewQueue.resolveQueueItem', () => {
 
   it('dispatches brain rows to markInboxDone', async () => {
     brain.markInboxDone.mockResolvedValue({ id: 'b1', status: 'done' });
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([{
+      actionKey: 'brain.classify:b1',
+      revision: 'revision-1',
+      snoozedUntil: '2026-09-27T10:00:00.000Z',
+    }]);
     const result = await resolveQueueItem('brain:b1');
     expect(brain.markInboxDone).toHaveBeenCalledWith('b1');
     expect(result).toMatchObject({ source: 'brain', id: 'brain:b1', resolved: true });
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
+      actionKey: 'brain.classify:b1',
+    }));
   });
 
   it('dispatches draft rows to approveDraft', async () => {
