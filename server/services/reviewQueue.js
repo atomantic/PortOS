@@ -34,7 +34,7 @@ import * as askConversations from './askConversations.js';
 import * as cosTaskStore from './cosTaskStore.js';
 import * as cosAgentFeedback from './cosAgentFeedback.js';
 import * as messageDrafts from './messageDrafts.js';
-import * as proactiveAlerts from './proactiveAlerts.js';
+import { generateNonProductAlerts } from './proactiveAlertSources.js';
 import * as backup from './backup.js';
 import * as identity from './identity.js';
 import * as reviewService from './review.js';
@@ -46,6 +46,7 @@ import { adaptNotification, adaptStoredReviewItem } from './reviewActionAdapters
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from './userTimezone.js';
+import { getProductEngagement } from './portosProductMetrics.js';
 import * as reviewQueueTriageStore from './reviewQueueTriageStore.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { isTerminalThreadStatus, threadNextLine } from '../lib/brainThreads.js';
@@ -77,6 +78,7 @@ const ACTION_KINDS = Object.freeze({
   todo: 'review.todo',
   history: 'review.history',
   feedback: 'cos.feedback',
+  product: 'product.recommendation',
 });
 
 const OPERATION_LABELS = Object.freeze({
@@ -98,7 +100,7 @@ const OPERATION_LABELS = Object.freeze({
 
 const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
 
-// generateAlerts() runs a full system-health sweep (CPU/disk/PM2/goals/usage),
+// generateNonProductAlerts() runs a full system-health sweep (CPU/disk/PM2/goals/usage),
 // so cache it briefly — the Review Hub can be polled, and a stale-by-seconds
 // alert list is fine here (the dedicated health views read it live).
 const ALERTS_TTL_MS = 30_000;
@@ -108,7 +110,7 @@ async function getAlertsCached() {
   if (alertsCache.data && (Date.now() - alertsCache.timestamp) < ALERTS_TTL_MS) {
     return alertsCache.data;
   }
-  const result = await proactiveAlerts.generateAlerts();
+  const result = await generateNonProductAlerts();
   alertsCache = { data: result, timestamp: Date.now() };
   return result;
 }
@@ -577,12 +579,61 @@ const PRODUCERS = [
     },
   },
   {
+    source: 'product',
+    label: 'Product recommendations',
+    drillTo: '/review',
+    preserveTriageActionKinds: [ACTION_KINDS.product],
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const result = await getProductEngagement();
+      const actions = Array.isArray(result?.actions) ? result.actions : [];
+      const unavailable = [result?.post, result?.creativeCommissions]
+        .filter((metric) => metric?.status === 'unavailable');
+      if (unavailable.length) {
+        const reasons = unavailable
+          .map((metric) => metric.reason)
+          .filter((reason) => typeof reason === 'string' && reason.trim());
+        throw new Error(`Product metrics unavailable${reasons.length ? `: ${reasons.join(', ')}` : ''}`);
+      }
+      if (actions.some((action) => typeof action?.id !== 'string' || !action.id.trim())) {
+        throw new Error('Product recommendation identity is unavailable');
+      }
+      return {
+        items: actions.slice(0, limit),
+        truncated: actions.length > limit,
+      };
+    },
+    map(action) {
+      const metadata = action.metadata && typeof action.metadata === 'object' && !Array.isArray(action.metadata)
+        ? action.metadata
+        : {};
+      return {
+        id: `product:${action.id}`,
+        sourceRef: action.id,
+        actionKind: ACTION_KINDS.product,
+        title: action.title || 'Product recommendation',
+        summary: action.detail || '',
+        timestamp: action.timestamp || null,
+        severity: ['critical', 'high', 'medium', 'normal'].includes(action.severity) ? action.severity : 'normal',
+        drillTo: action.link || '/review',
+        nextAction: 'Open',
+        required: false,
+        isRecommendation: true,
+        occurrence: action.occurrence ?? null,
+        revision: action.revision ?? null,
+        operations: [],
+        ...(action.featureId ? { featureId: action.featureId } : {}),
+        ...(action.featureLabel ? { featureLabel: action.featureLabel } : {}),
+        ...(Object.keys(metadata).length ? { meta: metadata } : {}),
+      };
+    },
+  },
+  {
     source: 'health',
     label: 'Health anomalies',
     drillTo: '/system-resources/overview',
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // System/health alerts; only surface the ones worth interrupting for.
-      const { alerts = [] } = await getAlertsCached();
+      const alerts = await getAlertsCached();
       const byId = new Map();
       for (const alert of alerts) {
         if (alert.severity !== 'critical' && alert.severity !== 'high') continue;
@@ -865,6 +916,9 @@ async function gatherProducer(producer, ctx = {}) {
     total: truncated ? null : list.length,
     lowerBound: list.length,
     truncation: truncated,
+    preserveTriageActionKinds: Array.isArray(descriptor?.preserveTriageActionKinds)
+      ? descriptor.preserveTriageActionKinds
+      : (producer.preserveTriageActionKinds || []),
   };
 }
 
@@ -1234,11 +1288,17 @@ function sourceShownCounts(items) {
   return shown;
 }
 
-async function readQueueTriageForProjection({ now = new Date(), currentItems = [], pruneOrphans = false } = {}) {
+async function readQueueTriageForProjection({
+  now = new Date(),
+  currentItems = [],
+  pruneOrphans = false,
+  preserveTriageActionKinds = [],
+} = {}) {
   const entries = await reviewQueueTriageStore.listReviewQueueTriage();
   if (!Array.isArray(entries)) return [];
 
   const nowMs = now instanceof Date && Number.isFinite(now.getTime()) ? now.getTime() : Date.now();
+  const preservedKinds = new Set(preserveTriageActionKinds);
   const currentKeys = pruneOrphans
     ? new Set(currentItems.map((item) => reviewQueueTriageStore.triageIdentityKey(queueActionIdentity(item))))
     : null;
@@ -1247,7 +1307,8 @@ async function readQueueTriageForProjection({ now = new Date(), currentItems = [
     const key = reviewQueueTriageStore.triageIdentityKey(entry);
     const expired = entry.snoozedUntil && Date.parse(entry.snoozedUntil) <= nowMs;
     const unused = expired && entry.dismissed !== true && entry.deliveryGeneration === 0;
-    const orphaned = currentKeys && !currentKeys.has(key);
+    const actionKind = typeof entry.actionKey === 'string' ? entry.actionKey.split(':')[0] : null;
+    const orphaned = currentKeys && !currentKeys.has(key) && !preservedKinds.has(actionKind);
     if (unused || orphaned) removableKeys.add(key);
   }
   for (const entry of entries) {
@@ -1286,6 +1347,7 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
           total: null,
           lowerBound: 0,
           truncation: false,
+          preserveTriageActionKinds: producer.preserveTriageActionKinds || [],
           error: message,
         };
       });
@@ -1294,10 +1356,12 @@ async function gatherFullQueue(query = {}, { applyTriageState = true, now = new 
   let items = deduplicateItems(results.flatMap((result) => result.items));
   if (applyTriageState) {
     const sourceReadComplete = results.every((result) => result.error === null && !result.truncation);
+    const preserveTriageActionKinds = results.flatMap((result) => result.preserveTriageActionKinds || []);
     const triageEntries = await readQueueTriageForProjection({
       now: clock,
       currentItems: items,
       pruneOrphans: sourceReadComplete && (view === null || view === 'all'),
+      preserveTriageActionKinds,
     });
     items = applyQueueTriage(items, triageEntries, clock, { includeSnoozed: view === 'snoozed' });
   }

@@ -8,7 +8,8 @@ const askConversations = { listConversations: vi.fn() };
 const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn() };
 const cosAgentFeedback = { getPendingAgentFeedback: vi.fn(), submitAgentFeedback: vi.fn() };
 const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
-const proactiveAlerts = { generateAlerts: vi.fn() };
+const proactiveAlerts = { generateNonProductAlerts: vi.fn() };
+const productMetrics = { getProductEngagement: vi.fn() };
 const backup = { getState: vi.fn() };
 const reviewService = { getItems: vi.fn(), dismissByReferenceId: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
 const notifications = { getNotifications: vi.fn() };
@@ -47,7 +48,8 @@ vi.mock('./askConversations.js', () => askConversations);
 vi.mock('./cosTaskStore.js', () => cosTaskStore);
 vi.mock('./cosAgentFeedback.js', () => cosAgentFeedback);
 vi.mock('./messageDrafts.js', () => messageDrafts);
-vi.mock('./proactiveAlerts.js', () => proactiveAlerts);
+vi.mock('./proactiveAlertSources.js', () => proactiveAlerts);
+vi.mock('./portosProductMetrics.js', () => productMetrics);
 vi.mock('./backup.js', () => backup);
 vi.mock('./review.js', () => reviewService);
 vi.mock('./notifications.js', () => notifications);
@@ -81,7 +83,8 @@ function resetEmpty() {
   cosAgentFeedback.getPendingAgentFeedback.mockResolvedValue({ agents: [], unavailable: [], count: 0 });
   cosAgentFeedback.submitAgentFeedback.mockResolvedValue({ success: true });
   messageDrafts.listDrafts.mockResolvedValue([]);
-  proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
+  proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
+  productMetrics.getProductEngagement.mockResolvedValue({ actions: [] });
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
   reviewService.getItems.mockResolvedValue([]);
   reviewService.dismissByReferenceId.mockResolvedValue(undefined);
@@ -102,7 +105,7 @@ describe('reviewQueue.buildQueue', () => {
     vi.clearAllMocks();
     resetEmpty();
     // The alerts sweep is cached with a TTL; clear it so each case sees its
-    // own generateAlerts mock rather than a prior case's cached result.
+    // own generateNonProductAlerts mock rather than a prior case's cached result.
     __resetAlertsCache();
     __resetQueueSnapshots();
   });
@@ -143,6 +146,147 @@ describe('reviewQueue.buildQueue', () => {
       operations: [{ id: 'resolve', label: 'Done', available: true }],
       availability: 'available',
       available: true,
+    });
+  });
+
+  it('admits product recommendations once per occurrence below required work', async () => {
+    brain.getInboxLog.mockResolvedValue([{ id: 'required-1', capturedText: 'required work' }]);
+    productMetrics.getProductEngagement.mockResolvedValue({
+      actions: [
+        {
+          id: 'daily-post',
+          type: 'post_engagement',
+          severity: 'high',
+          title: 'Daily POST is waiting',
+          detail: 'No POST activity today.',
+          link: '/post/launcher',
+          occurrence: '2026-09-20',
+        },
+        {
+          id: 'creative-feedback:commission-example:run-1',
+          type: 'commission_feedback',
+          severity: 'medium',
+          title: 'Creative feedback overdue',
+          detail: 'A completed render is awaiting review.',
+          link: '/creative-commission/commission-example?run=run-1',
+          occurrence: 'run-1',
+        },
+      ],
+      post: { status: 'ok' },
+      creativeCommissions: { status: 'ok' },
+    });
+
+    const queue = await buildQueue();
+    const productRows = queue.items.filter((item) => item.source === 'product');
+
+    expect(queue.items[0].id).toBe('brain:required-1');
+    expect(productRows).toHaveLength(2);
+    expect(productRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'product:daily-post',
+        sourceRef: 'daily-post',
+        actionKind: 'product.recommendation',
+        required: false,
+        isRecommendation: true,
+        occurrence: '2026-09-20',
+        triageOperations: [
+          { id: 'snooze', label: 'Snooze', available: true },
+          { id: 'dismiss', label: 'Dismiss', available: true },
+        ],
+      }),
+      expect.objectContaining({
+        id: 'product:creative-feedback:commission-example:run-1',
+        occurrence: 'run-1',
+      }),
+    ]));
+  });
+
+  it('reports product-source truncation instead of claiming every recommendation was read', async () => {
+    productMetrics.getProductEngagement.mockResolvedValue({
+      actions: Array.from({ length: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 }, (_, index) => ({
+        id: `creative-feedback:commission-example:run-${index}`,
+        type: 'commission_feedback',
+        title: `Feedback ${index}`,
+        detail: 'Awaiting review.',
+        occurrence: `run-${index}`,
+      })),
+      post: { status: 'disabled' },
+      creativeCommissions: { status: 'ok' },
+    });
+
+    const queue = await buildQueue({ limit: 10 });
+
+    expect(queue.sources.product).toMatchObject({
+      total: null,
+      lowerBound: REVIEW_QUEUE_SOURCE_READ_LIMIT,
+      truncation: true,
+      availability: 'available',
+      error: null,
+    });
+    expect(queue.partial).toBe(true);
+  });
+
+  it('keeps a product triage marker through a disabled source and reapplies it after re-enable', async () => {
+    const action = {
+      id: 'daily-post',
+      type: 'post_engagement',
+      title: 'Daily POST is waiting',
+      detail: 'No POST activity today.',
+      occurrence: '2026-09-20',
+    };
+    productMetrics.getProductEngagement.mockResolvedValue({
+      actions: [action],
+      post: { status: 'ok' },
+      creativeCommissions: { status: 'ok' },
+    });
+
+    await expect(triageQueueItem('product:daily-post', 'dismiss')).resolves.toMatchObject({
+      id: 'product:daily-post',
+      operation: 'dismiss',
+      triaged: true,
+    });
+    const marker = {
+      actionKey: 'product.recommendation:daily-post',
+      occurrence: '2026-09-20',
+      revision: null,
+      dismissed: true,
+      deliveryGeneration: 0,
+    };
+    expect(reviewQueueTriageStore.upsertReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining(marker));
+
+    reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([marker]);
+    productMetrics.getProductEngagement.mockResolvedValue({
+      actions: [],
+      post: { status: 'disabled' },
+      creativeCommissions: { status: 'ok' },
+    });
+    const disabled = await buildQueue();
+    expect(disabled.items.find((item) => item.id === 'product:daily-post')).toBeUndefined();
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).not.toHaveBeenCalledWith(marker);
+
+    productMetrics.getProductEngagement.mockResolvedValue({
+      actions: [action],
+      post: { status: 'ok' },
+      creativeCommissions: { status: 'ok' },
+    });
+    const reenabled = await buildQueue();
+    expect(reenabled.items.find((item) => item.id === 'product:daily-post')).toBeUndefined();
+  });
+
+  it('surfaces product metric read failures as an unavailable source', async () => {
+    productMetrics.getProductEngagement.mockResolvedValue({
+      actions: [],
+      post: { status: 'unavailable', reason: 'post-read-failed' },
+      creativeCommissions: { status: 'ok' },
+    });
+
+    const queue = await buildQueue();
+
+    expect(queue.sources.product).toMatchObject({
+      availability: 'unavailable',
+      available: false,
+      total: null,
+      error: 'Product metrics unavailable: post-read-failed',
     });
   });
 
@@ -399,11 +543,11 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('only surfaces critical/high health alerts and a failed backup', async () => {
-    // Real proactiveAlerts shape: { id, type, severity, title, detail, link }.
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [
+    // Real non-product alert shape: { id, type, severity, title, detail, link }.
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([
       { id: 'system_resource:memory', type: 'system_resource', severity: 'critical', title: 'High memory usage', detail: '95% used', link: '/apps' },
       { id: 'goal_stall:example-goal', type: 'goal_stall', severity: 'medium', title: 'meh', detail: 'low' }
-    ] });
+    ]);
     // Real backup failure shape: status 'error' with an `error` field.
     backup.getState.mockResolvedValue({ status: 'error', error: 'disk full', lastRun: '2026-06-03T07:00:00.000Z' });
     const queue = await buildQueue();
@@ -414,7 +558,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('surfaces a degraded backup as a normal-severity warning, not a high-severity failure', async () => {
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
     // Degraded shape: files saved (status 'degraded') but the DB dump failed,
     // so an `error` string is also present. Must NOT read as a full failure.
     backup.getState.mockResolvedValue({ status: 'degraded', error: 'DB dump dump_error', lastRun: '2026-06-03T07:00:00.000Z' });
@@ -445,7 +589,7 @@ describe('reviewQueue.buildQueue', () => {
       actionKey: 'health.investigate:system_resource:memory',
       snoozedUntil: '2026-09-27T10:00:00.000Z',
     };
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [alert] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([alert]);
     reviewQueueTriageStore.listReviewQueueTriage
       .mockResolvedValueOnce([marker])
       .mockResolvedValueOnce([marker])
@@ -453,7 +597,7 @@ describe('reviewQueue.buildQueue', () => {
     await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
 
     __resetAlertsCache();
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
     const clear = await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
     expect(clear.items.find((item) => item.id === 'health:system_resource:memory')).toBeUndefined();
     expect(reviewQueueTriageStore.removeReviewQueueTriage).toHaveBeenCalledWith(expect.objectContaining({
@@ -461,7 +605,7 @@ describe('reviewQueue.buildQueue', () => {
     }));
 
     __resetAlertsCache();
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [alert] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([alert]);
     const reappeared = await buildQueue({ now: new Date('2026-09-20T10:00:00.000Z') });
     expect(reappeared.items.find((item) => item.id === 'health:system_resource:memory')).toBeTruthy();
   });
@@ -469,15 +613,15 @@ describe('reviewQueue.buildQueue', () => {
   it('preserves condition identity through reorder, wording changes and severity escalation', async () => {
     const memory = { id: 'system_resource:memory', type: 'system_resource', severity: 'high', title: 'High memory', detail: 'mem', link: '/apps' };
     const cpu = { id: 'system_resource:cpu', type: 'system_resource', severity: 'high', title: 'High CPU', detail: 'cpu', link: '/apps' };
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [memory, cpu] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([memory, cpu]);
     const first = await buildQueue();
     expect(first.items.map(i => i.id).sort()).toEqual(['health:system_resource:cpu', 'health:system_resource:memory']);
 
     __resetAlertsCache();
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([
       cpu, { ...memory, title: 'Memory pressure', severity: 'critical' },
       { id: 'goal_stall:example', type: 'goal_stall', severity: 'high', title: 'Check goal' }
-    ] });
+    ]);
     const next = await buildQueue();
     expect(next.items.find(i => i.title === 'Memory pressure')).toMatchObject({
       id: 'health:system_resource:memory', severity: 'critical'
@@ -485,17 +629,17 @@ describe('reviewQueue.buildQueue', () => {
     expect(next.items.find(i => i.title === 'High CPU').id).toBe('health:system_resource:cpu');
 
     __resetAlertsCache();
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [cpu] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([cpu]);
     expect((await buildQueue()).items.map(i => i.id)).toEqual(['health:system_resource:cpu']);
   });
 
   it('deduplicates before caps and counts while retaining severity escalation', async () => {
     const memory = { id: 'system_resource:memory', type: 'system_resource', severity: 'high' };
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([
       ...Array.from({ length: 30 }, () => memory),
       { ...memory, severity: 'critical' },
       { id: 'system_resource:cpu', type: 'system_resource', severity: 'high' }
-    ] });
+    ]);
     const queue = await buildQueue();
     expect(queue.items.map(i => i.id)).toEqual(['health:system_resource:memory', 'health:system_resource:cpu']);
     expect(queue.sources.health).toMatchObject({ total: 2, shown: 2, error: null });
@@ -503,7 +647,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('reports missing health identity without hiding healthy sources', async () => {
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ type: 'system_resource', severity: 'critical' }] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ type: 'system_resource', severity: 'critical' }]);
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify' }]);
     const queue = await buildQueue();
     expect(queue.sources.health.error).toBe('Health alert identity is unavailable');
@@ -512,7 +656,7 @@ describe('reviewQueue.buildQueue', () => {
 
   it('sorts required work by severity, then due time, priority, and stable ID', async () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'normal', capturedAt: '2026-06-03T12:00:00.000Z' }]);
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps', timestamp: '2026-06-03T01:00:00.000Z' }] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps', timestamp: '2026-06-03T01:00:00.000Z' }]);
     const queue = await buildQueue();
     // critical alert sorts ahead of the normal brain item.
     expect(queue.items[0].severity).toBe('critical');
@@ -520,7 +664,7 @@ describe('reviewQueue.buildQueue', () => {
 
     const past = new Date(Date.now() - 60_000).toISOString();
     const future = new Date(Date.now() + 60_000).toISOString();
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
     brain.getInboxLog.mockResolvedValue([
       { id: 'optional', capturedText: 'optional', required: false, dueAt: past },
       { id: 'required-low', capturedText: 'low', required: true, dueAt: future, priority: 'LOW' },
@@ -644,7 +788,7 @@ describe('reviewQueue.buildQueue', () => {
     brain.getInboxLog.mockResolvedValue([{ id: 'b1', capturedText: 'classify', capturedAt: '2026-06-03T10:00:00.000Z' }]);
     cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'HIGH', createdAt: '2026-06-03T09:00:00.000Z' }] });
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 1, assistantTurnCount: 1 }]);
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps' }] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ id: 'disk:primary', type: 'disk', severity: 'critical', title: 'crit', detail: 'full', link: '/apps' }]);
     backup.getState.mockResolvedValue({ status: 'error', error: 'disk full' });
     const queue = await buildQueue();
     expect(queue.items.find(i => i.source === 'brain').action).toBe('Done');
@@ -662,7 +806,7 @@ describe('reviewQueue.buildQueue', () => {
     askConversations.listConversations.mockResolvedValue([{ id: 'a1', title: 'promote me', promoted: false, turnCount: 4, assistantTurnCount: 2 }]);
     cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [{ id: 'sys-1', description: 'approve me', priority: 'MEDIUM', createdAt: '2026-06-03T09:00:00.000Z' }] });
     messageDrafts.listDrafts.mockResolvedValue([{ id: 'd1', status: 'draft', subject: 's', to: ['boss@example.com'], sendVia: 'gmail', updatedAt: '2026-06-03T08:00:00.000Z' }]);
-    proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [{ id: 'system_resource:memory', type: 'system_resource', severity: 'critical', title: 'mem', detail: 'high', link: '/apps' }] });
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{ id: 'system_resource:memory', type: 'system_resource', severity: 'critical', title: 'mem', detail: 'high', link: '/apps' }]);
     const queue = await buildQueue();
     expect(queue.items.find(i => i.source === 'brain').meta).toEqual({ captureSource: 'voice' });
     expect(queue.items.find(i => i.source === 'ask').meta).toEqual({ turnCount: 4 });
