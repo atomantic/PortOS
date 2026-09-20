@@ -269,7 +269,7 @@ export function buildGoalFidelityFollowUpTask({ task, review, fingerprint, issue
     `## Named as missing\n${bulletList(review?.missing, '_Nothing specific._')}`,
     `## Named as unrequested\n${bulletList(review?.unrequested, '_Nothing specific._')}`,
     falsePositiveBlock,
-    `## If the original work is already correct\nDo not manufacture a code change or re-run the original task. Report the concrete evidence that the objective was delivered and use the supplied calibration-report instructions to record what the fidelity checker misunderstood, so the checker can be fixed without weakening unrelated safeguards.`,
+    `## If the original work is already correct\nDo not manufacture a code change or re-run the original task. Report the concrete evidence that the objective was delivered${falsePositiveBlock ? ' and use the supplied calibration-report instructions to record what the fidelity checker misunderstood, so the checker can be fixed without weakening unrelated safeguards' : '; if calibration-report instructions are supplied separately, use them to record what the fidelity checker misunderstood'}.`,
     claim,
   ].filter(Boolean).join('\n\n');
 }
