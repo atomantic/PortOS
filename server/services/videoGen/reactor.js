@@ -306,7 +306,10 @@ async function runReactorVideo(job, jobId, {
         throw new Error(`Reactor streamed ${result.frames ?? Math.round(result.seconds * 24)} frames but every sampled frame was blank`);
       }
     } finally {
-      await Promise.all(samples.map((name) => rm(join(PATHS.videoThumbnails, name), { force: true }).catch(() => {})));
+      await Promise.all(samples.map((name) => {
+        const p = join(PATHS.videoThumbnails, name);
+        return rm(p, { force: true }).catch((err) => { console.log(`⚠️ Reactor cleanup: could not remove sample frame ${p} (${err.code})`); });
+      }));
     }
     if (entry.aborted) return finalizeCanceled(job, jobId);
     // Durable publication owns the output from this point until it settles.
@@ -315,7 +318,7 @@ async function runReactorVideo(job, jobId, {
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, aspect: frame.aspect, width: frame.canvas.width, height: frame.canvas.height, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
-    await rm(outputPath, { force: true }).catch(() => {});
+    await rm(outputPath, { force: true }).catch((cleanupError) => { console.log(`⚠️ Reactor cleanup: could not remove failed output ${outputPath} (${cleanupError.code})`); });
     // A continuation names a clip reactor rendered in an EARLIER session, and
     // reactor decides whether it still holds it. Say so on the failure rather
     // than leaving the user re-reading a prompt that was never the problem.
@@ -324,9 +327,9 @@ async function runReactorVideo(job, jobId, {
       : '';
     finalizeJobFailure(job, jobId, null, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
   } finally {
-    await rm(`${outputPath}.capture`, { recursive: true, force: true }).catch(() => {});
-    if (frame.fittedPath) await rm(frame.fittedPath, { force: true }).catch(() => {});
-    if (entry.aborted) await rm(outputPath, { force: true }).catch(() => {});
+    await rm(`${outputPath}.capture`, { recursive: true, force: true }).catch((err) => { console.log(`⚠️ Reactor cleanup: could not remove capture dir ${outputPath}.capture (${err.code})`); });
+    if (frame.fittedPath) await rm(frame.fittedPath, { force: true }).catch((err) => { console.log(`⚠️ Reactor cleanup: could not remove fitted frame ${frame.fittedPath} (${err.code})`); });
+    if (entry.aborted) await rm(outputPath, { force: true }).catch((err) => { console.log(`⚠️ Reactor cleanup: could not remove aborted output ${outputPath} (${err.code})`); });
     activeRequests.delete(jobId);
     activeJobs.delete(jobId);
   }
