@@ -7,7 +7,7 @@ import { filterSelectableModels, selectableModelsForProvider, antigravityModelEf
 // handed the user — is exactly the drift a second copy would reintroduce.
 import { REVIEWER_PROVIDER_MATCHERS, providersForReviewer } from '../../../server/lib/reviewerProviderMatchers.js';
 import { MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
-import { reviewerEffortLevels, normalizeReviewerSlug } from '../lib/reviewerPins';
+import { reviewerEffortLevels, normalizeReviewerSlug, LOCAL_LLM_REVIEWERS } from '../lib/reviewerPins';
 import { LOCAL_LLM_BACKENDS } from '../lib/localLlmBackends';
 
 // Local backends whose installed-model list `/api/local-llm/status` actually
@@ -53,7 +53,9 @@ const PROBED_LOCAL_BACKENDS = LOCAL_LLM_BACKENDS.map((b) => b.id);
  * `ReviewerPicker` uses to drop it from the Add row, so a machine that never
  * enabled Kimi or Cursor isn't offered them. Only ever true from a landed fetch:
  * a null/failed `/api/providers` matches no record, which reads as "nothing
- * known", never as "switched off".
+ * known", never as "switched off". Always false for a LOCAL_LLM_REVIEWERS
+ * backend, whose review never reads a provider record at all — see the exemption
+ * at the return site.
  *
  * `loaded` flips once both fetches settle, so a consumer can tell "no options
  * yet" from "genuinely no options" (an empty list is a real answer, not a
@@ -249,9 +251,17 @@ export default function useReviewerModelOptions() {
       // reads a record with no `enabled` key as ON — the opposite of
       // `providerCardState`'s stricter test, because this answer HIDES a control
       // and incomplete data must never do that.
+      //
+      // A LOCAL-LLM reviewer is exempt: `lmstudio`/`ollama`/`mtplx` reviews go
+      // straight to the daemon's own base URL (`BACKEND_BASE_URLS` in
+      // server/services/codeReview.js), so a switched-off AI-provider record
+      // named after the same backend does not stop the review from running. Left
+      // in, it reported a reachable LM Studio serving models as unusable and
+      // hid the row behind "show hidden reviewers". The live probe below
+      // (`unavailable`) is the authoritative signal for these three.
       providerDisabled: Object.fromEntries(
         Object.entries(providersByReviewer).map(([reviewer, matched]) =>
-          [reviewer, matched.length > 0 && matched.every((p) => p.enabled === false)]
+          [reviewer, !LOCAL_LLM_REVIEWERS.includes(reviewer) && matched.length > 0 && matched.every((p) => p.enabled === false)]
         )
       ),
       loaded,

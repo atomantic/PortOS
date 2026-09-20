@@ -210,6 +210,22 @@ describe('useReviewerModelOptions', () => {
         expect(result.current.providerDisabled[reviewer], reviewer).toBe(false);
       }
     });
+
+    // A `lmstudio`/`ollama`/`mtplx` review is sent to the daemon's own base URL
+    // (BACKEND_BASE_URLS in server/services/codeReview.js) and never reads a
+    // provider record, so a switched-off record of the same name does not stop
+    // it. Counting it did: a reachable LM Studio serving models reported as
+    // unusable and the row was hidden behind "show hidden reviewers".
+    it('exempts a local backend, whose review never reads a provider record', async () => {
+      getProviders.mockResolvedValue({ providers: [
+        { id: 'lmstudio', type: 'api', enabled: false, models: [] },
+        { id: 'ollama', type: 'api', enabled: false, models: [] },
+      ] });
+      const { result } = renderHook(() => useReviewerModelOptions());
+      await waitFor(() => expect(result.current.loaded).toBe(true));
+      expect(result.current.providerDisabled.lmstudio).toBe(false);
+      expect(result.current.providerDisabled.ollama).toBe(false);
+    });
   });
 
   // #3733: `agy` validates the model/effort PAIR, so the Effort cell's ladder has

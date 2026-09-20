@@ -61,6 +61,27 @@ describe('ReviewerPicker', () => {
     });
   });
 
+  // A local backend answers from its own daemon, so the live probe is the only
+  // thing that can say whether it will review — a same-named AI-provider record
+  // being switched off says nothing about it (see the hook's exemption).
+  describe('local-backend reachability badge', () => {
+    it('flags a local backend whose probe reports it down', () => {
+      render(<ReviewerPicker reviewers={['lmstudio']} modelOptions={{ loaded: true, unavailable: { lmstudio: true } }} onChange={() => {}} />);
+      expect(screen.getByText('not running')).toBeInTheDocument();
+    });
+
+    it('leaves a reachable local backend unbadged', () => {
+      render(<ReviewerPicker reviewers={['lmstudio']} modelOptions={{ loaded: true, unavailable: { lmstudio: false } }} onChange={() => {}} />);
+      expect(screen.queryByText('not running')).not.toBeInTheDocument();
+      expect(screen.queryByText('disabled')).not.toBeInTheDocument();
+    });
+
+    it('says nothing before the probe has landed', () => {
+      render(<ReviewerPicker reviewers={['lmstudio']} modelOptions={{ loaded: false }} onChange={() => {}} />);
+      expect(screen.queryByText('not running')).not.toBeInTheDocument();
+    });
+  });
+
   // #7660: an enabled, present provider that still has no enforceable tool-free
   // review transport is the one case nothing used to say out loud — the user
   // found out only when every PR it gated sat unmergeable forever.

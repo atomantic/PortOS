@@ -7,6 +7,18 @@ const execFileAsync = promisify(execFile);
  * Run a bounded capability probe and return its trimmed stdout, or `null` when
  * the command could not run or exited non-zero.
  *
+ * The command is routed through `prepareCliSpawn` first. On Windows an
+ * npm-installed CLI is a `.cmd` shim, and `execFile`'s default `shell: false`
+ * neither applies a PATHEXT search to a bare name (`codex` → `spawn ENOENT`)
+ * nor will it launch a `.cmd` target at all post-CVE-2024-27980 (`spawn
+ * EINVAL`). Both failures land in the same `.catch(() => null)` as a genuinely
+ * missing binary, so EVERY npm-shimmed CLI probed through here reported as
+ * "not installed" on Windows while `codex --version` worked fine in a terminal
+ * — the reviewer-CLI install probe behind the Code Review picker being the
+ * visible case. `prepareCliSpawn` resolves the bare name to its
+ * explicit-extension path and wraps a batch target as `cmd.exe /c <path>
+ * <args>`; every branch of it is a no-op off Windows.
+ *
  * The child's stdin is closed immediately. `agy models` blocks on an open stdin
  * and prints NOTHING until it closes — with execFile's default pipe that is a
  * full timeout's hang ending in SIGTERM and empty output. (execFile ignores an
@@ -22,13 +34,20 @@ function probe(cmd, args, { timeoutMs, env, cwd, maxBuffer }) {
     ...(cwd === undefined ? {} : { cwd }),
     ...(maxBuffer === undefined ? {} : { maxBuffer }),
   };
-  // Some spawn failures (notably ENOEXEC for a broken text shim on macOS)
-  // are thrown synchronously by the child-process wrapper before it can
-  // return a promise. Start the call in a microtask so those failures follow
-  // the same null result as an ordinary rejected execFile promise.
-  return Promise.resolve()
-    .then(() => {
-      const pending = execFileAsync(cmd, args, options);
+  // `bufferedSpawn.js` is imported lazily, not at module load: this module is
+  // reached by a very large share of the server suite, and an eager edge into
+  // that subtree pushed the tree-wide instantiation budget over (see "Import
+  // scoping" in server/AGENTS.md). The import also supplies the microtask
+  // boundary the `Promise.resolve()` used to — some spawn failures (notably
+  // ENOEXEC for a broken text shim on macOS) are thrown synchronously by the
+  // child-process wrapper, and this keeps them on the same rejected-promise path
+  // as an ordinary failure.
+  return import('./bufferedSpawn.js')
+    .then(({ prepareCliSpawn }) => {
+      // Resolution reads the env the CHILD will run under, so a caller that
+      // overrides PATH probes its own binary, not one off the server's PATH.
+      const launch = prepareCliSpawn(cmd, args, env || process.env);
+      const pending = execFileAsync(launch.command, launch.args, options);
       pending.child?.stdin?.end();
       return pending;
     })
