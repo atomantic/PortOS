@@ -719,4 +719,4 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `openchamber.js` | OpenChamber control-CLI identity, `session create` headless argv, `provider/model` gate, and `--dir`/`--prompt` spawn-time delivery. |
 | `layaMlx.js` | Pinned Laya-MLX experiment model, request validation and probability normalization; entropy confidence stays distinct from entailment. |
 
-| `persistentMindMaintainer.js` | Machine-local opt-in development maintainer intent, schema, normalization and additive wake charter; never grants authority. |
+| `persistentMindMaintainer.js` | Machine-local maintainer intent, inference allowance schema, normalization and additive wake charter; never grants authority. |

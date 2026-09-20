@@ -597,7 +597,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout }) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens }) {
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -694,7 +694,7 @@ export function createRunnerService(config = {}) {
       // never reaches the fetch is still bounded, and the failure is classified
       // as a timeout instead of the AbortError's UNKNOWN/HTTP-0).
       const stallTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
-      const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout);
+      const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout, absoluteTimeoutMs);
       let settled = false;
       let stallTimeoutHandle = null;
       let absoluteTimeoutHandle = null;
@@ -847,6 +847,7 @@ export function createRunnerService(config = {}) {
               messages: [{ role: 'user', content: messageContent }],
               stream: true,
               ...apiGenerationOptions(provider),
+              ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
               // Ollama's OpenAI-compatible endpoint defaults to a ~4K context
               // window and silently truncates longer prompts. A top-level
               // num_ctx lifts it (honored by Ollama, ignored by other

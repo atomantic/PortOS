@@ -19,6 +19,7 @@
  * deadlock a turn against its own admission. This boundary only ever refuses.
  */
 
+import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { normalizePersistentMindState } from '../lib/persistentMind.js';
@@ -75,6 +76,8 @@ export async function evaluatePersistentMindCallAdmission({
   selfThinkingRequest = null,
   capabilityFingerprint = null,
   signal,
+  maintainerFingerprint = null,
+  promptChars, promptBytes,
 } = {}) {
   if (signal?.aborted) {
     return denial(String(signal.reason || 'Persistent mind turn interrupted'), DENIAL_STATUS.interrupted);
@@ -94,6 +97,11 @@ export async function evaluatePersistentMindCallAdmission({
   if (capabilityFingerprint !== null
       && persistentMindCapabilityGrantFingerprint(root?.config?.persistentMindCapabilities) !== capabilityFingerprint) {
     return denial('Persistent mind capability grants changed during the turn', DENIAL_STATUS.authorization);
+  }
+
+  const maintainer = normalizePersistentMindMaintainer(root?.config?.persistentMindMaintainer);
+  if (maintainerFingerprint !== null && canonicalStringify(maintainer) !== maintainerFingerprint) {
+    return denial('Maintainer inference policy changed during the turn', DENIAL_STATUS.authorization);
   }
 
   // Provider availability/authorization and preset lifecycle both resolve here:
@@ -123,6 +131,13 @@ export async function evaluatePersistentMindCallAdmission({
     return denial(`CoS ${budget.exceeded || 'daily'} budget exhausted`, DENIAL_STATUS.budget);
   }
 
+  if (maintainer.enabled) {
+    const { inspectMaintainerInferenceRoute } = await import('./persistentMindMaintainerInference.js');
+    const checked = await inspectMaintainerInferenceRoute({ role: maintainer, provider: resolved.provider,
+      model: resolved.model, thinkingPresetId, thinkingSelection, selfThinkingRequest, promptChars, promptBytes });
+    if (!checked.ok) return denial(checked.reason, DENIAL_STATUS.authorization);
+    return { ok: true, maintainer: checked };
+  }
   return { ok: true };
 }
 
@@ -146,10 +161,12 @@ export function createPersistentMindCallBoundary({
   selfThinkingRequest = null,
   capabilityFingerprint = null,
   signal,
+  maintainerFingerprint = null,
   now = () => Date.now(),
   evaluate = evaluatePersistentMindCallAdmission,
   appendEvent = appendMindEvent,
   recordUsage = recordDomainUsage,
+  reserveInference = async args => (await import('./persistentMindMaintainerInference.js')).reserveMaintainerInference(args),
 } = {}) {
   let receiptIndex = 0;
   let accountedCalls = 0;
@@ -175,17 +192,29 @@ export function createPersistentMindCallBoundary({
     });
   };
 
-  const call = async ({ purpose, round = null } = {}, run) => {
-    const admission = await evaluate({ turnId, route, thinkingPresetId, thinkingSelection, selfThinkingRequest, capabilityFingerprint, signal });
+  const call = async ({ purpose, round = null, promptChars, promptBytes } = {}, run) => {
+    const admission = await evaluate({ turnId, route, thinkingPresetId, thinkingSelection, selfThinkingRequest, capabilityFingerprint, signal, maintainerFingerprint, promptChars, promptBytes });
     if (!admission.ok) {
       await writeReceipt({ purpose, round, outcome: 'denied', reason: admission.reason });
       throw buildPersistentMindCallDenial(admission);
+    }
+    let reservation = null;
+    if (admission.maintainer?.enforced) {
+      const reserved = await reserveInference({ turnId, lane: admission.maintainer.lane,
+        policy: admission.maintainer.policy, now }).catch(() => ({ ok: false, reason: 'Maintainer inference budget is unreadable; restore or repair its ledger before retrying.' }));
+      if (!reserved.ok) {
+        await writeReceipt({ purpose, round, outcome: 'denied', reason: reserved.reason });
+        throw buildPersistentMindCallDenial({ reason: reserved.reason, status: 'waiting' });
+      }
+      reservation = reserved.reservation;
+      await appendEvent({ kind: 'mind.maintainer.reservation', mindId, turnId,
+        eventId: `maintainer-reservation:${turnId}:${reservation.turnCall}`, data: reservation });
     }
     let runId = null;
     const reportRunId = (id) => { if (typeof id === 'string' && id) runId = id; };
     const startedAt = now();
     try {
-      const result = await run({ reportRunId });
+      const result = await run({ reportRunId, timeoutMs: reservation?.timeoutMs });
       const elapsedMs = Math.max(0, now() - startedAt);
       reportRunId(result?.runId);
       await account(elapsedMs);

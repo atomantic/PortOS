@@ -3,6 +3,7 @@ import { describePersistentMindMaintainerSetup } from './persistentMindMaintaine
 import { composeMaintainerInstructions, mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 const mocks = vi.hoisted(() => ({ root: {}, apps: [] }));
 vi.mock('./persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({ ok: mocks.root.routeAvailable !== false }) }));
+vi.mock('./persistentMindMaintainerInference.js', () => ({ inspectMaintainerInferenceRoute: async () => ({ ok: true }), readMaintainerInferenceBudget: async () => ({}) }));
 vi.mock('./cosState.js', () => ({ loadState: async () => mocks.root }));
 vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => mocks.apps }));
 beforeEach(() => {
@@ -13,7 +14,7 @@ beforeEach(() => {
 });
 it('keeps legacy installs off and preserves custom instructions during role composition', async () => {
   const preview = await describePersistentMindMaintainerSetup();
-  expect(preview.role).toEqual({ schemaVersion: 1, enabled: false, appIds: [], intervalMinutes: 60 });
+  expect(preview.role).toMatchObject({ schemaVersion: 1, enabled: false, appIds: [], intervalMinutes: 60 });
   expect(preview.ready).toBe(false);
   expect(composeMaintainerInstructions('Custom voice', undefined)).toBe('Custom voice');
   const role = mergePersistentMindMaintainer({ appIds: ['example-app'] }, { enabled: true });

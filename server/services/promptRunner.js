@@ -1381,6 +1381,8 @@ async function executeProviderRunOnce({
   onRunReady,
   onRunSettled,
   timeout: timeoutOverride,
+  absoluteTimeoutMs,
+  maxTokens,
   cwd: cwdOverride,
   screenshots = [],
   outputReserveTokens,
@@ -1672,7 +1674,7 @@ async function executeProviderRunOnce({
       // healthy, productive run silently produced nothing. Sixteen NVIDIA NIM
       // nemotron persistent-mind runs died this way at exactly 302s in the two
       // days after #7560 merged, and none before it (#7665).
-      const backstopTimeout = apiRunAbsoluteTimeoutMs(effectiveTimeout);
+      const backstopTimeout = apiRunAbsoluteTimeoutMs(effectiveTimeout, absoluteTimeoutMs);
       apiTimeoutHandle = setTimeout(() => {
         stopRun(runId).catch(() => { /* best-effort cancel */ });
         safeReject(new Error(`API execution timed out after ${backstopTimeout}ms`));
@@ -1681,7 +1683,7 @@ async function executeProviderRunOnce({
       // a per-call override (e.g. the importer's long stage timeout) governs the
       // ceiling instead of the runner's provider/default fallback — same
       // caller-override precedence CLI/TUI runs already get.
-      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.

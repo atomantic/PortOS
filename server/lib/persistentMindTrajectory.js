@@ -27,6 +27,7 @@ export const PERSISTENT_MIND_EVENT_KINDS = Object.freeze([
   // overall answer. Older builds fold this kind as a no-op, so adding it is not
   // an envelope change.
   'mind.model.call',
+  'mind.maintainer.reservation',
   'mind.model.result',
   'mind.thought',
   'mind.reply',

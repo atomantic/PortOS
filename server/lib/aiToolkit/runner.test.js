@@ -1474,6 +1474,25 @@ describe('AI Toolkit runner service', () => {
     expect(await runner.isRunActive('run-trickle')).toBe(false);
   });
 
+  it('enforces an explicit short absolute cap while forwarding the API output ceiling', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-budget-'));
+    tempDirs.push(dataDir);
+    vi.useFakeTimers();
+    const request = vi.fn(async (_url, opts) => ({ ok: true,
+      body: { getReader: () => clockDrivenReader({ intervalMs: 1000, signal: opts.signal }) } }));
+    vi.stubGlobal('fetch', request);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+    await runner.executeApiRun({ runId: 'run-budget', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 120000, absoluteTimeoutMs: 5000, maxTokens: 8192,
+      onComplete: complete });
+    expect(JSON.parse(request.mock.calls[0][1].body).max_tokens).toBe(8192);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await completed).toMatchObject({ success: false, timeoutBound: 'absolute' });
+    expect(await runner.isRunActive('run-budget')).toBe(false);
+  });
+
   // `Math.max` against the default cap: an install that deliberately raised
   // `provider.timeout` past 30 minutes keeps running exactly as long as it
   // asked to, rather than being silently clamped DOWN by the new ceiling.

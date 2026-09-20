@@ -44,3 +44,42 @@ The configuration lives in the existing machine-local CoS config document. It is
 not part of portable mind bundles or peer sync. Importing a mind cannot arm this
 role on the destination. No shipped seed or data migration is needed: absence
 normalizes to disabled. Do not put local configuration or private reports in Git.
+
+## Local curation inference limits
+
+When the maintainer role is enabled, every mind provider call (including context
+summary, journal extraction and tool continuation) passes through the same local
+route check and durable allowance. The home profile must name an enabled local
+API provider with an installed model and known context window. Context fit uses a conservative UTF-8 byte bound plus
+8,192 output tokens and 1,024 tokens for transport framing. A failed catalog,
+missing model, oversized prompt or exhausted allowance defers the turn; there is
+no fallback, model download or global provider-default change.
+
+`persistentMindMaintainer.inference` accepts partial updates through the existing
+CoS config endpoint. Defaults are `maxCallsPerTurn: 6`, `maxCallsPerDay: 48`,
+`maxPromptChars: 96000`, `maxCallMs: 120000`, and
+`maxReservedMsPerDay: 5760000`. Every admitted attempt reserves its full timeout
+before inference, even if interrupted or failed. The API transport enforces an
+8,192-token output ceiling and the explicit absolute runtime cap; this reserved
+time is separate from provider-call receipts of observed duration. The daily allowance resets at
+UTC midnight; a turn's allowance survives midnight and restart. This is a
+conservative time/call allowance, not a dollar or token-spend estimate. Report
+batch review uses the same mind call boundary, not a fresh budget.
+
+Remote escalation defaults off: `paidPresetIds: []`, `maxPaidCallsPerDay: 0`.
+To permit it, configure a saved API thinking preset, explicitly allow its ID and a
+positive daily call cap, then select that preset in a human message. Automatic
+self-thinking requests cannot use paid escalation. Existing accepted-preset
+snapshot and revocation checks still apply. Coding tasks retain their independent
+provider grants and CoS domain budgets.
+
+`GET /api/cos/mind/maintainer` returns `inference` readiness and budget status.
+`mind.maintainer.reservation` events distinguish `local-curation` from
+`authorized-escalation`; ordinary model-call receipts retain reported usage and
+unknown cost as unknown. Deterministic watchdog operations do not invoke this
+boundary or spend an inference allowance. Enabling/disabling or changing limits
+mid-turn invalidates that turn's remaining calls.
+
+After configuring this instance, inspect setup and runtime status, then explicitly
+request one `/api/cos/mind/wake` for a bounded smoke run. Do not change another
+install, fetch weights, or silently choose a remote model to make readiness green.

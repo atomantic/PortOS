@@ -9,6 +9,8 @@
  * makes zero provider calls.
  */
 
+import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
+import { canonicalStringify as maintainerCanonicalStringify } from '../lib/objects.js';
 import { randomUUID } from 'crypto';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { isPersistentMindCallDenial } from '../lib/persistentMindTrajectory.js';
@@ -877,6 +879,7 @@ async function runClaimedPersistentMindTurn(turn, mind) {
       thinkingSelection,
       selfThinkingRequest,
       capabilityFingerprint: persistentMindCapabilityGrantFingerprint(admissionRoot.config?.persistentMindCapabilities),
+      maintainerFingerprint: maintainerCanonicalStringify(normalizePersistentMindMaintainer(admissionRoot.config?.persistentMindMaintainer)),
       signal: controller.signal,
     });
     // Context/memory orchestration is only needed once admission succeeds.
