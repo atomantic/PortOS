@@ -237,9 +237,9 @@ describe('buildGoalFidelityFollowUpTask', () => {
   const fingerprint = 'goal-fidelity:user:comics/add-retry-caps';
   const task = { id: 'task-7', description: 'Add retry caps' };
 
-  // With an issue the agent runs the project's normal claim flow, where the
-  // tracker's own conventions live; without one it must work the finding from
-  // this body, which is why the finding is restated in both shapes.
+  // With an issue the investigator uses the project's normal PR flow, where
+  // the tracker's own conventions live; without one it must work the finding
+  // from this body, which is why the finding is restated in both shapes.
   it('points the agent at the filed issue when there is one', () => {
     const body = buildGoalFidelityFollowUpTask({
       task, review: review(), fingerprint, issue: { number: 42, url: 'https://example.com/issues/42' },
