@@ -61,7 +61,6 @@ import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import UniverseStylePicker from '../components/media/UniverseStylePicker';
 import PromptEnhancer from '../components/media/PromptEnhancer';
-import PromptFromMedia from '../components/media/PromptFromMedia';
 import { normalizeVideo } from '../components/media/normalize';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
@@ -1842,17 +1841,6 @@ export default function VideoGen() {
           </details>
         </div>
 
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-          <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Prompt from media</h2>
-          <PromptFromMedia
-            kindDefault="both"
-            applyKind="video"
-            setPrompt={setPrompt}
-            setNegativePrompt={negativePromptSupported ? setNegativePrompt : undefined}
-            maxVideoPromptLength={enhancePromptBudget}
-            alwaysOpen
-          />
-        </div>
       </form>
 
       <RenderStatusCard

@@ -42,7 +42,7 @@ describe('<MediaGen>', () => {
 describe('MediaGen TABS ↔ nav manifest', () => {
   it('renders the media tabGroup in page order with a presentation entry each', () => {
     expectPageNavTabs(TABS, [
-      'image:Image', 'video:Video', 'threejs:Three.js', 'annotate:Annotate',
+      'image:Image', 'video:Video', 'prompt:Prompt', 'threejs:Three.js', 'annotate:Annotate',
       'timeline:Timeline', 'history:History', 'collections:Collections',
     ]);
   });

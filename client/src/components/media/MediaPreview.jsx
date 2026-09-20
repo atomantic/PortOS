@@ -108,6 +108,10 @@ export default function MediaPreview({
     onPromptSaved?.(item, nextPrompt);
     return result;
   }, [onPromptSaved]);
+  const handlePromptAnalysis = useCallback((item, result) => {
+    const prompt = item.kind === 'video' ? result?.videoPrompt : result?.imagePrompt;
+    if (prompt) savePrompt(item, prompt).catch(() => {});
+  }, [savePrompt]);
   return (
     <MediaLightbox
       item={displayedPreview}
@@ -117,6 +121,7 @@ export default function MediaPreview({
       onPromptChange={savePrompt}
       variantGroup={variantGroup}
       onSelectVariant={onSelectVariant}
+      onPromptAnalysis={handlePromptAnalysis}
       {...handlers}
       {...navProps}
     />
