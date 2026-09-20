@@ -916,7 +916,7 @@ export const WIN_TORCH_CUDA_INDEX = 'https://download.pytorch.org/whl/cu126';
 export const FLUX2_PIP_SPECS = [
   ...FLUX2_TORCH_SPECS,
   'accelerate',
-  'transformers>=4.51',
+  'transformers>=5.17',
   'sentencepiece',
   'protobuf',
   'safetensors',
@@ -1067,9 +1067,9 @@ export function installFlux2Venv(onLog) {
     }
     if (killed) return { ok: false, stage: 'install', cancelled: true };
 
-    stage('verify', 'Verifying Flux2KleinPipeline import…');
-    if (!await runPython([venvPython, '-c', 'from diffusers import Flux2KleinPipeline; print("ok")'])) {
-      onLog({ type: 'error', message: 'Verification failed: Flux2KleinPipeline did not import. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh' });
+    stage('verify', 'Verifying FLUX.2 and Qwen 2.1 pipeline imports…');
+    if (!await runPython([venvPython, '-c', 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline; print("ok")'])) {
+      onLog({ type: 'error', message: 'Verification failed: FLUX.2 or Qwen 2.1 pipeline did not import. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh' });
       return { ok: false, stage: 'verify' };
     }
 

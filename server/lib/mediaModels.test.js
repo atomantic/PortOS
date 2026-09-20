@@ -46,6 +46,22 @@ describe('data.reference seed file', () => {
     expect(reloadMediaModels().video.mlx.some((entry) => entry.id === v2.id)).toBe(false);
   });
 
+  it('adds Qwen 2.1 to an existing registry without changing the selected legacy model', async () => {
+    const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+    registry.image = registry.image.filter((m) => m.id !== 'qwen-image-2.1');
+    registry._shippedDefaults.image.list = registry._shippedDefaults.image.list.filter((id) => id !== 'qwen-image-2.1');
+    const legacy = registry.image.find((m) => m.id === 'qwen-image');
+    legacy.steps = 23;
+    writeFileSync(registryFile, JSON.stringify(registry));
+    const upgraded = reloadMediaModels();
+    expect(upgraded.image.find((m) => m.id === 'qwen-image-2.1')).toMatchObject({
+      repo: 'Qwen/Qwen-Image-2.1', runner: 'qwen', pipelineClass: 'QwenImage21Pipeline',
+      steps: 40, guidance: 1, cfgDisabled: true,
+    });
+    expect(upgraded.image.find((m) => m.id === 'qwen-image')).toEqual(legacy);
+  });
+
   it('matches the runtime-seeded DEFAULT_REGISTRY', async () => {
     const sample = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'));
     const { loadMediaModels } = await import('./mediaModels.js');

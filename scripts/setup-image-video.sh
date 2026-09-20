@@ -1083,10 +1083,10 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
   fi
   FLUX2_PY="$(venv_python "$FLUX2_VENV")"
 
-  # Skip the (slow, network-heavy) pip path when Flux2KleinPipeline already
-  # imports — diffusers-from-git is a git clone every run otherwise. Use
+  # Skip the (slow, network-heavy) pip path when both FLUX.2 and Qwen 2.1 already
+  # import — diffusers-from-git is a git clone every run otherwise. Use
   # FLUX2_FORCE_REINSTALL=1 to bypass.
-  if [[ "${FLUX2_FORCE_REINSTALL:-}" != "1" ]] && "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline" 2>/dev/null; then
+  if [[ "${FLUX2_FORCE_REINSTALL:-}" != "1" ]] && "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline" 2>/dev/null; then
     echo "✅ FLUX.2 venv already ready: $FLUX2_PY"
   else
     echo "📦 Installing FLUX.2 packages into $FLUX2_VENV..."
@@ -1099,7 +1099,7 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
       "torch>=2.5" \
       torchvision \
       accelerate \
-      "transformers>=4.51" \
+      "transformers>=5.17" \
       sentencepiece \
       protobuf \
       safetensors \
@@ -1110,9 +1110,9 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
       "optimum-quanto>=0.2.7" \
       pillow
     probe_or_fail \
-      "flux2 venv built but 'from diffusers import Flux2KleinPipeline' failed." \
+      "flux2 venv built but 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' failed." \
       "Try: $FLUX2_PY -m pip install --upgrade --force-reinstall 'diffusers @ git+https://github.com/huggingface/diffusers'" \
-      "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline"
+      "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline"
     echo "✅ FLUX.2 venv ready: $FLUX2_PY"
   fi
 fi
