@@ -15,9 +15,11 @@ vi.mock('fs', () => ({
   realpathSync: vi.fn((p) => p),
 }));
 vi.mock('fs/promises', () => ({
+  lstat: vi.fn().mockResolvedValue({}),
   readdir: vi.fn().mockResolvedValue([]),
   rm: vi.fn().mockResolvedValue(undefined),
   stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
+  symlink: vi.fn().mockResolvedValue(undefined),
   // adoptWorktree ensures the worktrees root exists before moving a tree into it.
   mkdir: vi.fn().mockResolvedValue(undefined),
 }));
@@ -47,6 +49,7 @@ const {
   findAdoptableWorktreeForBranch,
   createWorktree,
   createPersistentWorktree,
+  linkWorktreeDependencies,
   listWorktrees,
   WORKTREE_ADD_TIMEOUT_MS,
 } = await import('./worktreeManager.js');
@@ -54,6 +57,7 @@ const { isPathInsideDir } = await import('../lib/fileUtils.js');
 const { worktreeOwnershipReason } = await import('../lib/worktreeOwnership.js');
 const { win32 } = await import('path');
 const { existsSync } = await import('fs');
+const { lstat, symlink } = await import('fs/promises');
 const { PATHS } = await import('../lib/fileUtils.js');
 
 /**
@@ -107,6 +111,36 @@ describe('Worktree Path Construction', () => {
   it('should use agent ID as directory name', () => {
     const path = buildWorktreePath('/data/cos/worktrees', 'agent-abcdef12');
     expect(path.endsWith('agent-abcdef12')).toBe(true);
+  });
+});
+
+describe('Worktree dependency preparation', () => {
+  beforeEach(() => {
+    lstat.mockReset();
+    symlink.mockClear();
+  });
+
+  it('links installed root, client, and server dependencies when targets are absent', async () => {
+    lstat.mockImplementation((path) => path.startsWith('/repo/')
+      ? Promise.resolve({})
+      : Promise.reject(new Error('missing')));
+
+    await linkWorktreeDependencies('/repo', '/worktree');
+
+    expect(symlink).toHaveBeenCalledTimes(3);
+    expect(symlink).toHaveBeenCalledWith('/repo/node_modules', '/worktree/node_modules', 'dir');
+    expect(symlink).toHaveBeenCalledWith('/repo/client/node_modules', '/worktree/client/node_modules', 'dir');
+    expect(symlink).toHaveBeenCalledWith('/repo/server/node_modules', '/worktree/server/node_modules', 'dir');
+  });
+
+  it('skips missing sources and preserves existing targets', async () => {
+    lstat.mockImplementation((path) => path === '/repo/node_modules' || path === '/worktree/node_modules'
+      ? Promise.resolve({})
+      : Promise.reject(new Error('missing')));
+
+    await linkWorktreeDependencies('/repo', '/worktree');
+
+    expect(symlink).not.toHaveBeenCalled();
   });
 });
 
