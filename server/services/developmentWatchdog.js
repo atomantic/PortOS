@@ -53,7 +53,7 @@ async function participatingPeerTasks() {
 async function inspectApp(app, tasks) {
   const { resolveAppForgeTarget } = await import('../lib/workTracker.js');
   const { listAppPullRequests } = await import('./appPullRequests.js');
-  const { detectActionableWork, listConfiguredForgeIssues } = await import('./perpetualWork.js');
+  const { detectActionableWork, listConfiguredForgeIssues, issueNumberFromRef } = await import('./perpetualWork.js');
   const { resolveClaimWorkMetadata } = await import('./cosTaskGenerator.js');
   const { execGh } = await import('./github.js');
   const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
@@ -92,8 +92,7 @@ async function inspectApp(app, tasks) {
     else if (pr.checks.some(check => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED', 'WAITING'].includes(check.status))) disposition = 'waiting-for-ci-review';
     // A live external claim branch is not proof of an orphan. Leave its owner
     // accountable until the existing claim/reconcile flow establishes otherwise.
-    else if (/^claim\//.test(pr.headBranch)) {
-      const { issueNumberFromRef } = await import('./perpetualWork.js');
+    else if (issueNumberFromRef(pr.headBranch) || /^claim\//.test(pr.headBranch)) {
       const number = issueNumberFromRef(pr.headBranch);
       if (!number) disposition = 'unknown';
       else {
@@ -105,6 +104,10 @@ async function inspectApp(app, tasks) {
       reason: owner?.metadata?.blockedCategory || (disposition === 'unknown' ? 'external-claim-owner-unverified' : null), url: pr.url, headBranch: pr.headBranch, forkHead: pr.forkHead });
   }
   row.eligibleCount = backlog.count || 0;
+  const externalClaims = new Set([
+    ...branches.stdout.split('\n').map(line => line.trim().split(/\s+/).at(-1)?.replace(/^refs\/heads\//, '')),
+    ...prs.pullRequests.map(pr => pr.headBranch),
+  ].map(issueNumberFromRef).filter(Number.isInteger));
   const candidates = new Set((backlog.items || []).map(item => item.ref));
   row.candidateSelectionLimited = (backlog.count || 0) > candidates.size;
   for (const issue of issues.issues) {
@@ -112,7 +115,7 @@ async function inspectApp(app, tasks) {
     const labels = issue.labels.map(label => typeof label === 'string' ? label : label.name);
     const candidate = { metadata: { app: app.id, claimFlow: true, claimTarget: item.ref } };
     const owner = active.find(task => sameDevelopmentWork(task, candidate));
-    const hasBranch = branches.stdout.split('\n').some(line => new RegExp(`refs/heads/claim/(?:issue-)?${item.ref}(?:-|$)`).test(line));
+    const hasBranch = externalClaims.has(issue.number);
     row.issues.push({ number: Number(item.ref), disposition: owner ? 'actively-owned' : hasBranch || labels.includes('in-progress') ? 'external-claim' : labels.includes('blocked') ? 'blocked' : candidates.has(item.ref) ? 'eligible' : 'excluded-or-unselected', taskId: owner?.id || null });
   }
   row.complete = true;

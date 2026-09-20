@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], save: vi.fn(), branch: '', account: 'atomantic', nextPrs: null, prReads: 0, dependencies: [], dependencyOpen: false }));
+const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], save: vi.fn(), branch: '', account: 'atomantic', nextPrs: null, prReads: 0, dependencies: [], dependencyOpen: false, issueTruncated: false }));
 vi.mock('./cosState.js', () => ({ loadState: async () => m.state, saveState: m.save, withStateLock: async fn => fn() }));
 vi.mock('./apps.js', () => ({ getActiveApps: async () => [{ id: 'app', name: 'Example', repoPath: '/example' }] }));
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: m.tasks } }), addTask: async task => { const result = { ...task, id: 'queued', status: 'pending' }; m.tasks.push(result); m.adds.push(result); return result; } }));
 vi.mock('./instances.js', () => ({ getPeers: async () => m.peers }));
 vi.mock('../lib/workTracker.js', () => ({ resolveAppForgeTarget: async () => ({ tracker: 'github', target: { fullName: 'atomantic/example', repoSpec: 'github.com/atomantic/example', apiHost: 'github.com' } }) }));
 vi.mock('./appPullRequests.js', () => ({ listAppPullRequests: async () => ({ pullRequests: ++m.prReads > 1 && m.nextPrs ? m.nextPrs : m.prs, transient: false }) }));
-vi.mock('./perpetualWork.js', () => ({ detectActionableWork: async () => ({ count: m.backlog.length, items: m.backlog }), listConfiguredForgeIssues: async () => ({ ok: true, truncated: false, issues: m.backlog.map(i => ({ number: Number(i.ref), labels: [], assignees: [] })) }), issueNumberFromRef: ref => Number(ref.match(/issue-(\d+)/)?.[1]) || null }));
+vi.mock('./perpetualWork.js', async importOriginal => ({ ...(await importOriginal()), detectActionableWork: async () => ({ count: m.backlog.length, items: m.backlog }), listConfiguredForgeIssues: async () => ({ ok: true, truncated: m.issueTruncated, issues: m.backlog.map(i => ({ number: Number(i.ref), labels: [], assignees: [] })) }) }));
 vi.mock('./cosTaskGenerator.js', () => ({ resolveClaimWorkMetadata: async () => ({ metadata: {} }), resolveAutonomyBudget: async () => ({ cosAutonomyMode: 'execute', autonomousActionsRemaining: 10 }), buildClaimWorkTask: async () => ({ prompt: 'Claim', taskMetadata: { claimFlow: true } }) }));
 vi.mock('./github.js', () => ({ execGh: async args => args[0] === 'api' ? m.account : JSON.stringify({ body: '', state: m.dependencyOpen ? 'OPEN' : 'CLOSED', labels: m.dependencyOpen ? [{ name: 'in-progress' }] : [] }) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
@@ -21,7 +21,7 @@ import { runDevelopmentWatchdog, readDevelopmentWatchdogSnapshot } from './devel
 
 beforeEach(() => {
   m.state = { config: { persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };
-  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.branch = ''; m.account = 'atomantic'; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.dependencies = []; m.dependencyOpen = false;
+  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.branch = ''; m.account = 'atomantic'; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.dependencies = []; m.dependencyOpen = false; m.issueTruncated = false;
 });
 describe('development watchdog scan to dispatch', () => {
   it('records empty scans without an agent or inference', async () => {
@@ -41,7 +41,7 @@ describe('development watchdog scan to dispatch', () => {
     m.backlog = [{ ref: '42' }];
     const preview = await runDevelopmentWatchdog({ dryRun: true });
     expect(preview.decisions[0].outcome).toBe('would-queue'); expect(m.save).not.toHaveBeenCalled();
-    m.branch = 'abcdef\trefs/heads/claim/issue-42-fix';
+    m.branch = 'abcdef\trefs/heads/claim/issue-42';
     const receipt = await runDevelopmentWatchdog({ force: true });
     expect(receipt.apps[0].issues[0].disposition).toBe('external-claim'); expect(m.adds).toEqual([]);
   });
@@ -99,4 +99,19 @@ it('reconsiders completed resolution only when review evidence changes', async (
   m.prs = [{ ...orphan, reviewDecision: 'APPROVED' }];
   expect((await runDevelopmentWatchdog({ force: true })).counts.dispatched).toBe(1);
   expect(m.adds).toHaveLength(2);
+});
+
+it('uses complete PR and remote branch ownership rather than the legacy first page', async () => {
+  m.backlog = [{ ref: '42' }];
+  m.prs = [{ ...orphan, number: 99, headBranch: 'cos/work/issue-42/agent', isDraft: true }];
+  expect((await runDevelopmentWatchdog({ force: true })).apps[0].issues[0].disposition).toBe('external-claim');
+  m.prs = []; m.branch = 'abcdef\trefs/heads/cos/work/issue-42/agent';
+  expect((await runDevelopmentWatchdog({ force: true })).apps[0].issues[0].disposition).toBe('external-claim');
+  expect(m.adds).toEqual([]);
+});
+it('partial issue pagination remains unknown and cannot dispatch', async () => {
+  m.backlog = [{ ref: '42' }]; m.issueTruncated = true;
+  const receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.complete).toBe(false); expect(receipt.apps[0].blockers).toContain('issue-source-incomplete');
+  expect(m.adds).toEqual([]);
 });
