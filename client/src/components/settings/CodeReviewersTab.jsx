@@ -40,6 +40,7 @@ export default function CodeReviewersTab() {
   const [installed, setInstalled] = useState({});
   const [providerReviewUnsupported, setProviderReviewUnsupported] = useState({});
   const [reviewerHealth, setReviewerHealth] = useState({});
+  const [reviewerConfigFaults, setReviewerConfigFaults] = useState({});
   const [reviewerFallbackGroups, setReviewerFallbackGroups] = useState([]);
   const modelOptions = useReviewerModelOptions();
 
@@ -78,6 +79,7 @@ export default function CodeReviewersTab() {
           setInstalled(defaults.installed && typeof defaults.installed === 'object' && !Array.isArray(defaults.installed) ? defaults.installed : {});
           setProviderReviewUnsupported(defaults.providerReviewUnsupported && typeof defaults.providerReviewUnsupported === 'object' && !Array.isArray(defaults.providerReviewUnsupported) ? defaults.providerReviewUnsupported : {});
           setReviewerHealth(defaults.reviewerHealth && typeof defaults.reviewerHealth === 'object' && !Array.isArray(defaults.reviewerHealth) ? defaults.reviewerHealth : {});
+          setReviewerConfigFaults(defaults.reviewerConfigFaults && typeof defaults.reviewerConfigFaults === 'object' && !Array.isArray(defaults.reviewerConfigFaults) ? defaults.reviewerConfigFaults : {});
           setReviewerFallbackGroups(Array.isArray(defaults.reviewerFallbackGroups) ? defaults.reviewerFallbackGroups : []);
         } else {
           setLoadError(true);
@@ -171,6 +173,15 @@ export default function CodeReviewersTab() {
           {Object.entries(reviewerHealth).filter(([, health]) => Number(health?.pausedUntil) > Date.now()).map(([reviewer, health]) => (
             <Banner key={reviewer} tone="warning" size="sm" align="left">
               {reviewer} is temporarily paused after a quota or usage-limit failure until {formatDateTime(health.pausedUntil)}.
+            </Banner>
+          ))}
+          {Object.entries(reviewerConfigFaults).map(([reviewer, fault]) => (
+            <Banner key={`config-${reviewer}`} tone="warning" size="sm" align="left">
+              {reviewer} cannot review on this install ({fault.code}). The review loop is currently a no-op for this reviewer. {fault.code === 'NO_MODEL'
+                ? 'Select a model in this tab.'
+                : fault.code === 'REVIEWER_UNSUPPORTED'
+                  ? 'Switch the provider to API mode or choose a supported tool-free review harness.'
+                  : 'Enable or configure the reviewer in Settings → Code Reviewers.'}
             </Banner>
           ))}
           <div className="space-y-1">

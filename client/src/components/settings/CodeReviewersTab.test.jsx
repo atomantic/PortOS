@@ -80,6 +80,19 @@ describe('CodeReviewersTab', () => {
     expect(api.getCodeReviewDefaults).toHaveBeenCalledWith({ silent: true });
   });
 
+  it('shows a configuration-fault reviewer as a no-op with the settings fix', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['ollama'],
+      reviewerConfigFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
+    });
+
+    render(<CodeReviewersTab />);
+
+    expect(await screen.findByText(/ollama cannot review on this install \(NO_MODEL\)/)).toBeInTheDocument();
+    expect(screen.getByText(/review loop is currently a no-op for this reviewer/)).toBeInTheDocument();
+    expect(screen.getByText(/Select a model in this tab/)).toBeInTheDocument();
+  });
+
   it('renders error banner with Retry button and disables Save button when fetch rejects', async () => {
     api.getCodeReviewDefaults.mockRejectedValue(new Error('Network error'));
 
