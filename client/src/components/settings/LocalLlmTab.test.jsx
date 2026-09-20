@@ -74,7 +74,7 @@ describe('LocalLlmTab view dispatch', () => {
   it('no longer advertises Runtimes as one of its pills', () => {
     renderTab();
 
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard', 'jev']);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard']);
   });
 
   it('navigates between the focused panels with a shareable URL', () => {
@@ -84,22 +84,6 @@ describe('LocalLlmTab view dispatch', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/library');
     fireEvent.click(screen.getByRole('tab', { name: 'Abuse Guard' }));
     expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/abuse');
-    fireEvent.click(screen.getByRole('tab', { name: 'jev' }));
-    expect(screen.getByTestId('location')).toHaveTextContent('/models/llms/jev');
-  });
-
-  it('keeps the Jev install and management page discoverable while disabled', () => {
-    disabledFeatures.add('jev');
-    renderTab();
-    expect(screen.getAllByRole('tab').map(t => t.textContent)).toEqual(['Model Library', 'Abuse Guard', 'jev']);
-  });
-
-  it('still mounts jev from a direct URL while the feature is disabled', () => {
-    disabledFeatures.add('jev');
-    renderTab('jev');
-
-    expect(screen.getByTestId('jev-view')).toBeInTheDocument();
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Model Library', 'Abuse Guard', 'jev']);
   });
 
   it('describes the selected panel under the pills', () => {

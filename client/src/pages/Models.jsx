@@ -31,6 +31,7 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  *
  *   - **3D** — image-to-3D runtime install/repair (TRELLIS.2, Pixal3D).
  *   - **Code Reviewers** — the review-loop chain and its model/effort pins.
+ *   - **Decision Classifiers** — Jev integrations and local Laya-MLX experiments.
  *   - **Embeddings** — the embedding model backing pgvector search.
  *   - **LLMs** — the model-library and abuse-guard sub-routes (the weights).
  *   - **Runtimes** — the local model servers, their lifecycle and downloads.
@@ -56,6 +57,7 @@ const TAB_CONTENT = {
   comparison: lazyWithReload(() => import('../components/models/ModelComparison')),
   '3d': Image3dRuntimes,
   'code-reviewers': CodeReviewersTab,
+  'decision-classifiers': lazyWithReload(() => import('../components/models/DecisionClassifiers')),
   embeddings: EmbeddingsTab,
   llms: LocalLlmTab,
   'llms-runtimes': LocalLlmRuntimesView,
@@ -83,6 +85,7 @@ const TAB_DETAIL = {
 
 export default function Models() {
   const { tab, recordId } = useParams();
+  if (tab === 'llms' && recordId === 'jev') return <Navigate to="/models/decision-classifiers/jev" replace />;
   // An unknown slug lands on LLMs rather than rendering a blank page, matching
   // the section's default destination in App and the primary navigation.
   //

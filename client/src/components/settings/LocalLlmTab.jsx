@@ -1,15 +1,13 @@
 import { useNavigate } from 'react-router';
-import { Download, Scale, ShieldCheck } from 'lucide-react';
+import { Download, ShieldCheck } from 'lucide-react';
 import TabPills from '../ui/TabPills.jsx';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
-import JevPanel from '../models/JevPanel.jsx';
 import ModelAbuseGuardPanel from '../models/ModelAbuseGuardPanel.jsx';
 import LocalLlmLibraryView from './LocalLlmLibraryView.jsx';
 
 export const LLM_VIEWS = [
   { id: 'library', label: 'Model Library', icon: Download },
   { id: 'abuse', label: 'Abuse Guard', icon: ShieldCheck },
-  { id: 'jev', label: 'jev', icon: Scale },
 ];
 
 // Palettable LLM drill-downs. Model Library stays a focused view of
@@ -20,7 +18,6 @@ export const LLM_VIEWS = [
 // Scraped by server/lib/navManifest.test.js.
 export const LLM_NAV_SUBROUTES = [
   { id: 'abuse' },
-  { id: 'jev' },
 ];
 
 // Dispatcher only. The two working surfaces are entirely disjoint — different
@@ -50,13 +47,10 @@ export function LocalLlmTab({ view }) {
         <p className="text-xs text-gray-500">
           {activeView === 'abuse'
             ? 'Install and verify each stage of the pinned Prompt Guard classifier used to screen external content.'
-            : activeView === 'jev'
-              ? 'Install and try the pinned entailment scorer that answers closed-set questions locally — and abstains when the options are too close to call.'
-              : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
+            : 'Find, install, compare, and remove the model weights available to Ollama and LM Studio.'}
         </p>
       </div>
       {activeView === 'abuse' && <ModelAbuseGuardPanel />}
-      {activeView === 'jev' && <JevPanel />}
       {activeView === 'library' && <LocalLlmLibraryView />}
     </div>
   );

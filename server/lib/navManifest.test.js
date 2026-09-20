@@ -37,6 +37,7 @@ const TABBED_PAGES = [
   { prefix: '/settings', section: 'Settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'section', constName: 'TABS' },
   { prefix: '/models', section: 'Models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'section', constName: 'TABS',
     nestedIdSources: [
+      { parent: 'decision-classifiers', file: 'client/src/components/models/DecisionClassifiers.jsx', constName: 'CLASSIFIERS' },
       { parent: 'llms', file: 'client/src/components/settings/LocalLlmTab.jsx', constName: 'LLM_NAV_SUBROUTES' },
     ] },
   // POST's morse tab has routed `:mode` sub-pages (/post/morse/copy|send) and the

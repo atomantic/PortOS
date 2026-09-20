@@ -717,3 +717,4 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `deckValidation.js` | Zod schemas + limits for the `/api/decks` routes (create/update deck, card patch, sample analysis, prompt generation, render). |
 | `kilo.js` | Kilo Code command identity (`kilo`/`kilocode`), `run` headless argv, `--auto` approval posture, and TUI arguments. |
 | `openchamber.js` | OpenChamber control-CLI identity, `session create` headless argv, `provider/model` gate, and `--dir`/`--prompt` spawn-time delivery. |
+| `layaMlx.js` | Pinned Laya-MLX experiment model, request validation and probability normalization; entropy confidence stays distinct from entailment. |

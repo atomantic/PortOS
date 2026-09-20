@@ -38,6 +38,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/backup.js', 'services/socket.js',
+    'loads socket/auth listeners only when a failed scheduled DB dump needs the global socket'],
   ['services/eidoverseWorld.js', 'services/eidoverseWorldSources.js',
     'uses pure Eidoverse signals without eagerly loading source readers'],
   ['services/eidoverseTravel.js', 'services/eidoverseWorldSources.js',
