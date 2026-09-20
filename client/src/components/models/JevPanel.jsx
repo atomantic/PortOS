@@ -209,7 +209,7 @@ export default function JevPanel() {
     <section
       id="llm-management-panel-jev"
       role="tabpanel"
-      aria-labelledby="tab-jev"
+      aria-labelledby="jev-heading"
       data-testid="jev-card"
       className="max-w-6xl bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5"
     >
@@ -217,7 +217,7 @@ export default function JevPanel() {
         <div className="flex items-start gap-2">
           <Scale size={18} className="text-port-accent mt-0.5" aria-hidden="true" />
           <div>
-            <h2 className="text-lg font-semibold text-white">jev decision scorer</h2>
+            <h2 id="jev-heading" className="text-lg font-semibold text-white">jev decision scorer</h2>
             <p className="text-xs text-port-accent mt-0.5">Optional · local entailment model · no provider quota</p>
           </div>
         </div>

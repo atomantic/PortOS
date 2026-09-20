@@ -1,6 +1,6 @@
 // Single source of truth for PortOS navigation. Consumed by the sidebar,
 // server/services/voice/tools.js#ui_navigate, and the Cmd+K palette.
-// Entry: { id, path, label, section, tabId?, tabGroup?, tabLabel?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
+// Entry: { id, path, label, section, tabId?, tabGroup?, navGroup?, tabLabel?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
 // See AGENTS.md "Command Palette & Voice Nav" for the contract.
 //
 // `previousPaths` lists every path this page has ANSWERED TO BEFORE — including
@@ -96,9 +96,9 @@ const RAW_NAV_COMMANDS = [
   // (instances of a service definition: plan, credential, catalog). Each is its
   // own URL so a card can be linked and reached from ⌘K and voice; the retired
   // Backend Connections drawer (#6369) redirects onto Services.
-  { id: 'nav.settings.providers', path: '/ai/presets', label: 'Providers', section: 'Models', tabId: 'providers', previousPaths: ['/ai'], aliases: ['providers', 'ai-providers', 'presets', 'ai-presets', 'provider-presets'], keywords: ['preset', 'harness', 'service', 'model', 'effort', 'compose', 'compatibility matrix', 'default provider'] },
-  { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'Harnesses', section: 'Models', previousPaths: ['/models/harnesses'], aliases: ['harnesses', 'harness', 'ai-harnesses', 'agent-harnesses', 'coding-clis', 'cli-harnesses', 'provider-harnesses', 'harness-enablement', 'credential-bootstraps', 'bootstraps'], keywords: ['enable harness', 'disable harness', 'claude code', 'codex', 'opencode', 'pi', 'direct api', 'cli', 'tui', 'bootstrap', 'launch wrapper', 'sign in', 'quota', 'antigravity', 'agy', 'grok', 'kimi', 'cursor', 'install cli', 'update cli', 'upgrade', 'version', 'refresh models'] },
-  { id: 'nav.ai.services', path: '/ai/services', label: 'AI Services', section: 'Models', previousPaths: ['/ai/connections', '/ai/connections/:connectionId'], aliases: ['ai-services', 'services', 'provider-services', 'backends', 'connections', 'backend-connections', 'provider-connections', 'harness-connections'], keywords: ['endpoint', 'api key', 'plan', 'free', 'paid', 'subscription', 'model catalog', 'refresh catalog', 'ollama', 'nvidia', 'openrouter', 'add service'] },
+  { id: 'nav.settings.providers', path: '/ai/presets', label: 'Providers', section: 'Models', tabId: 'providers', navGroup: 'Connect', previousPaths: ['/ai'], aliases: ['providers', 'ai-providers', 'presets', 'ai-presets', 'provider-presets'], keywords: ['preset', 'harness', 'service', 'model', 'effort', 'compose', 'compatibility matrix', 'default provider'] },
+  { id: 'nav.ai.harnesses', path: '/ai/harnesses', label: 'Harnesses', section: 'Models', tabId: 'harnesses', navGroup: 'Connect', previousPaths: ['/models/harnesses'], aliases: ['harnesses', 'harness', 'ai-harnesses', 'agent-harnesses', 'coding-clis', 'cli-harnesses', 'provider-harnesses', 'harness-enablement', 'credential-bootstraps', 'bootstraps'], keywords: ['enable harness', 'disable harness', 'claude code', 'codex', 'opencode', 'pi', 'direct api', 'cli', 'tui', 'bootstrap', 'launch wrapper', 'sign in', 'quota', 'antigravity', 'agy', 'grok', 'kimi', 'cursor', 'install cli', 'update cli', 'upgrade', 'version', 'refresh models'] },
+  { id: 'nav.ai.services', path: '/ai/services', label: 'AI Services', section: 'Models', tabId: 'services', navGroup: 'Connect', previousPaths: ['/ai/connections', '/ai/connections/:connectionId'], aliases: ['ai-services', 'services', 'provider-services', 'backends', 'connections', 'backend-connections', 'provider-connections', 'harness-connections'], keywords: ['endpoint', 'api key', 'plan', 'free', 'paid', 'subscription', 'model catalog', 'refresh catalog', 'ollama', 'nvidia', 'openrouter', 'add service'] },
   { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings', aliases: ['fleet-llm', 'gpu-host', 'remote-ai-provider'], keywords: ['3090', 'tailscale', 'vllm', 'qwen', 'coding model', 'dedicated host'] },
 
   { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', tabGroup: 'brain', tabId: 'inbox', aliases: ['brain', 'brain-inbox', 'inbox'] },
@@ -205,9 +205,9 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.devtools.image-clean', path: '/devtools/image-clean', label: 'Image Cleaner', section: 'Dev Tools', aliases: ['image-clean', 'image-cleaner'], keywords: ['metadata', 'c2pa', 'content-credentials', 'sharp', 'denoise'] },
   { id: 'nav.devtools.jira', path: '/devtools/jira', label: 'JIRA', section: 'Dev Tools', feature: 'jira', previousPaths: ['/jira'], aliases: ['jira', 'devtools-jira'] },
   { id: 'nav.devtools.jira-reports', path: '/devtools/jira/reports', label: 'JIRA Reports', section: 'Dev Tools', feature: 'jira', aliases: ['jira-reports'] },
-  { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Models', aliases: ['quota-burn', 'burn-quota', 'quota'], keywords: ['subscription', 'usage', 'reset window', 'spend quota', 'claude', 'codex', 'grok', 'agy', 'burn'] },
+  { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Models', tabId: 'quota-burn', navGroup: 'Operate', aliases: ['quota-burn', 'burn-quota', 'quota'], keywords: ['subscription', 'usage', 'reset window', 'spend quota', 'claude', 'codex', 'grok', 'agy', 'burn'] },
   { id: 'nav.shell', path: '/shell', label: 'Shell', section: 'Dev Tools', aliases: ['shell', 'terminal'] },
-  { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Models', tabId: 'usage', aliases: ['devtools-usage'] },
+  { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Models', tabId: 'usage', navGroup: 'Operate', aliases: ['devtools-usage'] },
   { id: 'nav.devtools.video-download', path: '/devtools/video-download', label: 'Video Downloader', section: 'Dev Tools', aliases: ['video-download', 'video-downloader', 'download-video'], keywords: ['youtube', 'x.com', 'twitter', 'yt-dlp', 'download', 'clip'] },
   { id: 'nav.workspace-contexts', path: '/workspace-contexts', label: 'Workspaces', section: 'Dev Tools', aliases: ['workspaces', 'workspace-contexts', 'project-contexts', 'project-switcher'], keywords: ['project', 'context', 'switch project', 'branch', 'shell', 'tasks', 'restore', 'working context'] },
 
@@ -318,32 +318,32 @@ const RAW_NAV_COMMANDS = [
   // image-to-3D runtimes. Several ids keep a `nav.settings.*` / `nav.media.*`
   // prefix: they are opaque and stored in palette history, so renaming them
   // would orphan those entries — only the path, label and section move.
-  { id: 'nav.models.comparison', path: '/models/comparison', label: 'Comparison', section: 'Models', tabId: 'comparison', aliases: ['model-comparison', 'model-cost', 'model-intelligence'], keywords: ['benchmark', 'effort', 'cost', 'quota', 'compare', 'intelligence'] },
-  { id: 'nav.models.3d', path: '/models/3d', label: '3D', section: 'Models', tabId: '3d', aliases: ['3d-runtimes', 'image-to-3d-runtimes', 'trellis-install', 'pixal3d-install'], keywords: ['trellis', 'pixal3d', 'install', 'repair', 'runtime', 'mesh', 'image to 3d', 'on-device'] },
-  { id: 'nav.models.code-reviewers', path: '/models/code-reviewers', label: 'Code Reviewers', section: 'Models', tabId: 'code-reviewers', previousPaths: ['/settings/code-reviewers'], aliases: ['code-reviewers', 'settings-code-reviewers', 'code-review', 'review-defaults', 'reviewers'], keywords: ['review loop', 'reviewer chain', 'codex', 'copilot', 'ollama', 'stop mode', 'max rounds', 'defaults'] },
-  { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', previousPaths: ['/settings/embeddings'], aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
-  { id: 'nav.settings.local-llm', path: '/models/llms', label: 'LLMs', section: 'Models', tabId: 'llms', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
-  { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', aliases: ['abuse-guard', 'model-abuse', 'model-abuse-guard', 'prompt-guard', 'prompt guard'], keywords: ['classifier', 'prompt injection', 'security scan', 'llama prompt guard', 'install guard'] },
-  { id: 'nav.models.decision-classifiers', path: '/models/decision-classifiers', label: 'Decision Classifiers', section: 'Models', tabId: 'decision-classifiers', aliases: ['decision-classifiers', 'classifiers'], keywords: ['jev', 'laya', 'mlx', 'decision systems', 'experiments'] },
+  { id: 'nav.models.comparison', path: '/models/comparison', label: 'Comparison', section: 'Models', tabId: 'comparison', navGroup: 'Evaluate', aliases: ['model-comparison', 'model-cost', 'model-intelligence'], keywords: ['benchmark', 'effort', 'cost', 'quota', 'compare', 'intelligence'] },
+  { id: 'nav.models.3d', path: '/models/3d', label: '3D', section: 'Models', tabId: '3d', navGroup: 'Library', aliases: ['3d-runtimes', 'image-to-3d-runtimes', 'trellis-install', 'pixal3d-install'], keywords: ['trellis', 'pixal3d', 'install', 'repair', 'runtime', 'mesh', 'image to 3d', 'on-device'] },
+  { id: 'nav.models.decision-classifiers', path: '/models/decision-classifiers', label: 'Decision Classifiers', section: 'Models', tabId: 'decision-classifiers', navGroup: 'Policies', aliases: ['decision-classifiers', 'classifiers'], keywords: ['jev', 'laya', 'mlx', 'decision systems', 'experiments'] },
   { id: 'nav.models.laya-mlx', path: '/models/decision-classifiers/laya-mlx', label: 'Laya-MLX', section: 'Models', aliases: ['laya', 'laya-mlx', 'layla'], keywords: ['classifier', 'apple silicon', 'typed decisions'] },
-  { id: 'nav.models.llms.jev', path: '/models/decision-classifiers/jev', previousPaths: ['/models/llms/jev'], label: 'Jev', section: 'Models', aliases: ['jev', 'openjev', 'entailment', 'nli', 'decision-scorer'], keywords: ['entailment', 'nli', 'closed set', 'abstain', 'margin', 'scorer', 'decision', 'install jev'] },
+  { id: 'nav.models.code-reviewers', path: '/models/code-reviewers', label: 'Code Reviewers', section: 'Models', tabId: 'code-reviewers', navGroup: 'Policies', previousPaths: ['/settings/code-reviewers'], aliases: ['code-reviewers', 'settings-code-reviewers', 'code-review', 'review-defaults', 'reviewers'], keywords: ['review loop', 'reviewer chain', 'codex', 'copilot', 'ollama', 'stop mode', 'max rounds', 'defaults'] },
+  { id: 'nav.settings.embeddings', path: '/models/embeddings', label: 'Embeddings', section: 'Models', tabId: 'embeddings', navGroup: 'Library', previousPaths: ['/settings/embeddings'], aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
+  { id: 'nav.settings.local-llm', path: '/models/llms', label: 'Model Library', section: 'Models', tabId: 'llms', navGroup: 'Library', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
+  { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', tabId: 'abuse', navGroup: 'Policies', aliases: ['abuse-guard', 'model-abuse', 'model-abuse-guard', 'prompt-guard', 'prompt guard'], keywords: ['classifier', 'prompt injection', 'security scan', 'llama prompt guard', 'install guard'] },
+  { id: 'nav.models.llms.jev', path: '/models/decision-classifiers/jev', label: 'Jev', section: 'Models', previousPaths: ['/models/llms/jev'], aliases: ['jev', 'openjev', 'entailment', 'nli', 'decision-scorer'], keywords: ['entailment', 'nli', 'closed set', 'abstain', 'margin', 'scorer', 'decision', 'install jev'] },
   // Split out of the LLMs page (#7414): managing the SERVERS that run models is
   // a different job from browsing the weights they serve, and it was the LLMs
   // default view, not a drill-down — so it gets a sibling tab rather than a
   // pill. Declared AFTER `nav.settings.local-llm` on purpose: alias collisions
   // resolve first-declared-wins, so "ollama"/"llms" keep landing on the
   // catalog page even though this page starts those servers too.
-  { id: 'nav.models.llms-runtimes', path: '/models/llms-runtimes', label: 'Runtimes', section: 'Models', tabId: 'llms-runtimes', previousPaths: ['/models/llms/runtimes'], aliases: ['runtimes', 'llm-runtimes', 'local-runtimes', 'model-runtimes', 'llama-server', 'llama-cpp', 'slotstream', 'mtplx'], keywords: ['llama.cpp', 'llama-server', 'mtplx', 'slotstream', 'start server', 'stop server', 'local server', 'model server', 'speculative decoding', 'draft model', 'checkpoint', 'idle release'] },
-  { id: 'nav.media.loras', path: '/models/loras', label: 'LoRAs', section: 'Models', tabId: 'loras', previousPaths: ['/media/loras'], aliases: ['loras', 'lora', 'lora-manager', 'civitai'], keywords: ['lora', 'civitai', 'fine-tune', 'style adapter', 'realstagram', 'photoreal', 'flux lora'] },
-  { id: 'nav.media.training', path: '/models/training', label: 'Training', section: 'Models', tabId: 'training', previousPaths: ['/media/training', '/media/training/:datasetId'], aliases: ['training', 'lora-training', 'train-lora', 'datasets', 'character-lora'], keywords: ['fine-tune', 'dataset', 'caption', 'dreambooth', 'character consistency', 'train', 'flux lora'] },
-  { id: 'nav.media.models', path: '/models/media', label: 'Media', section: 'Models', tabId: 'media', previousPaths: ['/media/models', '/media-models'], aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk', 'add model', 'install model', 'custom model'] },
-  { id: 'nav.models.performance', path: '/models/performance', label: 'Performance', section: 'Models', tabId: 'performance', aliases: ['model-performance', 'performance', 'assessments', 'model-assessments', 'benchmark-models', 'tuning'], keywords: ['measure', 'assessment', 'benchmark', 'throughput', 'chars per second', 'ttft', 'context', 'tuning', 'llama.cpp', 'mtplx', 'vllm', 'which model', 'fastest model'] },
+  { id: 'nav.models.llms-runtimes', path: '/models/llms-runtimes', label: 'Runtimes', section: 'Models', tabId: 'llms-runtimes', navGroup: 'Connect', previousPaths: ['/models/llms/runtimes'], aliases: ['runtimes', 'llm-runtimes', 'local-runtimes', 'model-runtimes', 'llama-server', 'llama-cpp', 'slotstream', 'mtplx'], keywords: ['llama.cpp', 'llama-server', 'mtplx', 'slotstream', 'start server', 'stop server', 'local server', 'model server', 'speculative decoding', 'draft model', 'checkpoint', 'idle release'] },
+  { id: 'nav.media.loras', path: '/models/loras', label: 'LoRAs', section: 'Models', tabId: 'loras', navGroup: 'Library', previousPaths: ['/media/loras'], aliases: ['loras', 'lora', 'lora-manager', 'civitai'], keywords: ['lora', 'civitai', 'fine-tune', 'style adapter', 'realstagram', 'photoreal', 'flux lora'] },
+  { id: 'nav.media.training', path: '/models/training', label: 'Training', section: 'Models', tabId: 'training', navGroup: 'Library', previousPaths: ['/media/training', '/media/training/:datasetId'], aliases: ['training', 'lora-training', 'train-lora', 'datasets', 'character-lora'], keywords: ['fine-tune', 'dataset', 'caption', 'dreambooth', 'character consistency', 'train', 'flux lora'] },
+  { id: 'nav.media.models', path: '/models/media', label: 'Media', section: 'Models', tabId: 'media', navGroup: 'Library', previousPaths: ['/media/models', '/media-models'], aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk', 'add model', 'install model', 'custom model'] },
+  { id: 'nav.models.performance', path: '/models/performance', label: 'Performance', section: 'Models', tabId: 'performance', navGroup: 'Evaluate', aliases: ['model-performance', 'performance', 'assessments', 'model-assessments', 'benchmark-models', 'tuning'], keywords: ['measure', 'assessment', 'benchmark', 'throughput', 'chars per second', 'ttft', 'context', 'tuning', 'llama.cpp', 'mtplx', 'vllm', 'which model', 'fastest model'] },
   // Absorbed the Dev Tools 'Model Resources' page (#4728), so its aliases and
   // keywords live here — 'model resources' and 'downloaded models' must keep
   // resolving after the fold.
-  { id: 'nav.models.status', path: '/models/status', label: 'Status', section: 'Models', tabId: 'status', previousPaths: ['/system-resources/models'], aliases: ['model-status', 'models-status', 'memory-management', 'resident-models', 'model-resources', 'loaded-models', 'downloaded-models', 'model-memory'], keywords: ['memory', 'resident', 'loaded', 'unload', 'ram', 'vram', 'free memory', 'what is loaded', 'ollama', 'lm studio', 'hugging face', 'lora', 'delete model', 'disk'] },
-  { id: 'nav.models.subscriptions', path: '/models/subscriptions', label: 'Subscriptions', section: 'Models', tabId: 'subscriptions', aliases: ['subscriptions', 'subscription', 'plans', 'ai-subscriptions', 'my-plans', 'model-subscriptions', 'billing', 'ai-billing'], keywords: ['plan', 'price', 'spend', 'cost', 'billing', 'enable', 'disable', 'claude max', 'chatgpt plus', 'pro', 'tier', 'savings', 'quota', 'usage', 'quotas'] },
-  { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Playground', section: 'Models', tabId: 'playground', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
+  { id: 'nav.models.status', path: '/models/status', label: 'Status', section: 'Models', tabId: 'status', navGroup: 'Operate', previousPaths: ['/system-resources/models'], aliases: ['model-status', 'models-status', 'memory-management', 'resident-models', 'model-resources', 'loaded-models', 'downloaded-models', 'model-memory'], keywords: ['memory', 'resident', 'loaded', 'unload', 'ram', 'vram', 'free memory', 'what is loaded', 'ollama', 'lm studio', 'hugging face', 'lora', 'delete model', 'disk'] },
+  { id: 'nav.models.subscriptions', path: '/models/subscriptions', label: 'Subscriptions', section: 'Models', tabId: 'subscriptions', navGroup: 'Operate', aliases: ['subscriptions', 'subscription', 'plans', 'ai-subscriptions', 'my-plans', 'model-subscriptions', 'billing', 'ai-billing'], keywords: ['plan', 'price', 'spend', 'cost', 'billing', 'enable', 'disable', 'claude max', 'chatgpt plus', 'pro', 'tier', 'savings', 'quota', 'usage', 'quotas'] },
+  { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Playground', section: 'Models', tabId: 'playground', navGroup: 'Evaluate', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
   { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', tabId: 'mortalloom', feature: 'health', aliases: ['settings-mortalloom', 'mortalloom'] },
   { id: 'nav.settings.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Settings', tabId: 'openclaw', feature: 'openclaw', aliases: ['openclaw', 'settings-openclaw'], keywords: ['operator', 'chat', 'agent', 'runtime', 'sessions', 'streaming'] },
   { id: 'nav.settings.orchestration', path: '/settings/orchestration', label: 'Orchestration Profiles', section: 'Settings', tabId: 'orchestration', aliases: ['orchestration', 'orchestration-profiles', 'cos-orchestration', 'agent-roles'], keywords: ['orchestration', 'roles', 'architect', 'implementer', 'reviewer', 'profiles', 'cos', 'reasoning'] },
@@ -399,13 +399,31 @@ export const NAV_COMMANDS = RAW_NAV_COMMANDS.map((cmd) => {
 // or workflow overlays rather than section-level tabs.
 export const getSectionNavTabs = (section) => NAV_COMMANDS
   .filter((command) => command.section === section && command.tabId && !command.tabGroup)
-  .sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path))
-  .map(({ tabId, label, path, feature }) => ({
+  .sort((a, b) => (a.navGroup || '').localeCompare(b.navGroup || '') || a.label.localeCompare(b.label) || a.path.localeCompare(b.path))
+  .map(({ tabId, label, path, feature, navGroup }) => ({
     id: tabId,
     label,
     to: path,
     ...(feature ? { feature } : {}),
+    ...(navGroup ? { navGroup } : {}),
   }));
+
+// Grouped section navigation is derived from the same tab records as the flat
+// section bar. A group is presentation metadata, never a route or a second
+// destination list. Groups and their destinations are alphabetized so the
+// desktop navigator, expanded sidebar, and mobile row share one stable order.
+export const getSectionNavGroups = (section) => {
+  const groups = new Map();
+  getSectionNavTabs(section).forEach((tab) => {
+    if (!tab.navGroup) return;
+    const groupTabs = groups.get(tab.navGroup) || [];
+    groupTabs.push(tab);
+    groups.set(tab.navGroup, groupTabs);
+  });
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([label, tabs]) => ({ label, tabs }));
+};
 
 // `tabGroup` marks the destinations that make up ONE page's own local tab bar
 // (Brain, Calendar, CoS, Digital Twin, Goals, Insights, Media Gen, MeatSpace,
@@ -427,6 +445,15 @@ export const getPageNavTabs = (group) => NAV_COMMANDS
     to: path,
     ...(feature ? { feature } : {}),
   }));
+
+export const getSectionNavTabForPath = (section, pathname) => {
+  const normalizedPath = normalizedNavPath(pathname);
+  const tabs = getSectionNavTabs(section);
+  return tabs.find((tab) => normalizedNavPath(tab.to) === normalizedPath)
+    || [...tabs]
+      .sort((a, b) => normalizedNavPath(b.to).length - normalizedNavPath(a.to).length)
+      .find((tab) => pathContainsNavRoute(normalizedPath, normalizedNavPath(tab.to)));
+};
 
 const normalizedNavPath = (pathname) => {
   const barePath = String(pathname || '').split(/[?#]/)[0];
@@ -458,6 +485,8 @@ const navCommandForPath = (pathname, predicate) => {
     .find(({ command, routePath }) => predicate(command) && pathContainsNavRoute(normalizedPath, routePath))
     ?.command;
 };
+
+export const getNavCommandForPath = (pathname) => navCommandForPath(pathname, () => true);
 
 // Find the section whose tab owns a routed page, intentionally ignoring workflow
 // commands such as `/ai/fleet` that do not carry a `tabId`.
@@ -517,6 +546,9 @@ for (const cmd of NAV_COMMANDS) {
   }
   if (cmd.tabGroup !== undefined && !cmd.tabId) {
     throw new Error(`navManifest: tabGroup requires tabId — ${cmd.id} declares tabGroup "${cmd.tabGroup}" with no tabId`);
+  }
+  if (cmd.navGroup !== undefined && (typeof cmd.navGroup !== 'string' || !cmd.navGroup.trim())) {
+    throw new Error(`navManifest: navGroup must be a non-empty string — got "${cmd.navGroup}" for ${cmd.id}`);
   }
   if (cmd.tabLabel !== undefined && (typeof cmd.tabLabel !== 'string' || !cmd.tabLabel.trim())) {
     throw new Error(`navManifest: tabLabel must be a non-empty string — got "${cmd.tabLabel}" for ${cmd.id}`);

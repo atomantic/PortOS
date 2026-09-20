@@ -78,7 +78,9 @@ const headRow = (overrides = {}) => ({
 
 const renderPanel = async () => {
   render(<JevPanel />);
-  expect(await screen.findByRole('heading', { name: 'jev decision scorer' })).toBeInTheDocument();
+  const heading = await screen.findByRole('heading', { name: 'jev decision scorer' });
+  expect(heading).toBeInTheDocument();
+  expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', heading.id);
 };
 
 describe('JevPanel install', () => {
