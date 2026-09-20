@@ -111,13 +111,34 @@ describe('UNCOVERED_SUITES', () => {
 });
 
 describe('the gate end to end', () => {
+  // `--base HEAD` rather than the default remote branch: CI clones at depth 2
+  // with no `origin/main` ref, so the default would abort here on a fetch the
+  // gate is right to demand of a human and wrong to demand of this test. HEAD
+  // is its own merge base in any checkout, and the run still exercises every
+  // stage — argument parsing, merge-base resolution, spawning the real planner,
+  // mapping its plan to stages — on an empty diff.
   it('plans this checkout and names its stages without running them', () => {
     const output = execFileSync(
       process.execPath,
-      [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only'],
+      [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only', '--base', 'HEAD'],
       { cwd: REPO_ROOT, encoding: 'utf8' },
     );
-    expect(output).toMatch(/Planning against /);
-    expect(output).toMatch(/changed file\(s\)/);
+    expect(output).toMatch(/Planning against HEAD/);
+    expect(output).toMatch(/changed file/);
+    // An empty diff still selects the always-run guards, so the gate must name
+    // real work rather than reporting there is nothing to do.
+    expect(output).toMatch(/server tests/);
+  });
+
+  it('refuses a base this checkout cannot resolve instead of planning against nothing', () => {
+    const run = () => execFileSync(
+      process.execPath,
+      [join(REPO_ROOT, 'scripts', 'pregate.js'), '--plan-only', '--base', 'origin/no-such-branch-for-tests'],
+      { cwd: REPO_ROOT, encoding: 'utf8', stdio: 'pipe' },
+    );
+    // Exit 2, not 0: an unresolvable base is a broken invocation. Planning an
+    // empty diff instead would report a green gate that checked nothing —
+    // exactly the false green this whole script exists to prevent.
+    expect(run).toThrow(/Cannot resolve a merge base/);
   });
 });
