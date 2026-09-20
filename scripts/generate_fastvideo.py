@@ -5,12 +5,13 @@ Spawns the pinned FastVideo inference script from the ~/.portos/fastvideo
 checkout. Generation is cache-only: PortOS downloads model weights through
 the Video Gen UI before launching this helper.
 
-Two model families share this helper because they share one venv, one repo
+Three model families share this helper because they share one venv, one repo
 checkout and one progress protocol -- but NOT one entry script or one argv
 shape:
 
   fastmetal - the DMD2-distilled Wan exports, via mlx_wan_prompt_to_video.py.
-  fasth3    - FastH3 Preview v1 Dense/Data-Free, via mlx_fasth3.py, which
+  fastmetal5b - Wan 2.2 through mlx_wan22_generate.py.
+  fasth3    - FastH3 Preview and V2, via mlx_fasth3.py, which
               takes a pre-quantized MLX DiT and emits muxed video+audio.
 
 `--family` is what selects between them. It is explicit rather than sniffed
@@ -251,12 +252,15 @@ def is_converted(checkpoint_dir: Path) -> bool:
 
 
 def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
-                          base: Path | None = None, *, vsa: bool = False) -> Path:
+                          base: Path | None = None, *, vsa: bool = False, steps: int = 4) -> Path:
     """Return the converted MLX DiT for `fmt`, converting it if it is missing."""
     out_base = mlx_checkpoint_root(model_root, base)
     # Dense conversions drop routing tensors; never reuse one for VSA.
     if vsa:
-        out_base = out_base / "vsa"
+        schedule = b"".join((model_root / name / "scheduler_config.json").read_bytes()
+                            for name in ("scheduler", "audio_scheduler"))
+        schedule_key = hashlib.sha256(schedule).hexdigest()[:12]
+        out_base = out_base / f"vsa-schedule-v1-{steps}-{schedule_key}"
     out_dir = out_base / fmt
     if is_converted(out_dir):
         return out_dir
@@ -271,13 +275,13 @@ def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
     print(f"STATUS:converting the FastH3 DiT to MLX {fmt} — one time, into {out_dir}",
           file=sys.stderr, flush=True)
     out_base.mkdir(parents=True, exist_ok=True)
-    code = run_child(
-        [sys.executable, str(converter),
-         "--model-root", str(transformer),
-         "--out", str(out_base),
-         "--formats", fmt] + (["--include-vsa"] if vsa else []),
-        env, repo_dir, lambda line: translate_line(line, conversion=True),
-    )
+    command = [sys.executable, str(converter),
+               "--model-root", str(transformer), "--out", str(out_base), "--formats", fmt]
+    if vsa:
+        command = [sys.executable, str(Path(__file__).with_name("fastvideo_h3_entry.py")),
+                   "--entry-script", str(converter), "--scheduler-root", str(model_root),
+                   "--schedule-steps", str(steps), "--convert"] + command[2:] + ["--include-vsa"]
+    code = run_child(command, env, repo_dir, lambda line: translate_line(line, conversion=True))
     if code != 0:
         raise RuntimeError(f"FastH3 MLX conversion exited with code {code}")
     if not is_converted(out_dir):
@@ -412,6 +416,9 @@ def build_command(args, entry_script: Path, model_root: Path, mlx_checkpoint: Pa
     cmd = common + ["--steps", str(args.steps),
                     "--prompt-cache-dir", str(resolve_prompt_cache_dir(args))] + tail
     if getattr(args, "vsa", False):
+        cmd = [sys.executable, str(Path(__file__).with_name("fastvideo_h3_entry.py")),
+               "--entry-script", str(entry_script), "--scheduler-root", str(model_root),
+               "--schedule-steps", str(args.steps)] + cmd[2:]
         cmd.extend(["--vsa", "--vsa-sparsity", "0.8", "--vsa-tile-size", "64", "--vsa-impl", "reference"])
     if args.fast:
         cmd.append("--fast")
@@ -462,7 +469,7 @@ def main() -> int:
             mlx_checkpoint = ensure_mlx_checkpoint(
                 repo_dir, model_root, args.mlx_format, env,
                 Path(args.mlx_checkpoint_cache_dir) if args.mlx_checkpoint_cache_dir else None,
-                vsa=args.vsa)
+                vsa=args.vsa, steps=args.steps)
         except (FileNotFoundError, RuntimeError) as err:
             print(f"❌ {err}", file=sys.stderr)
             return 1

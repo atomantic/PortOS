@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -264,13 +265,20 @@ class MlxCheckpointTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "model"
             root.mkdir()
+            for name, shift in (("scheduler", 10), ("audio_scheduler", 3)):
+                (root / name).mkdir()
+                (root / name / "scheduler_config.json").write_text(json.dumps({"shift": shift}))
             base = Path(tmp) / "cache"
             dense = self.helper.mlx_checkpoint_root(root, base) / "int6"
             dense.mkdir(parents=True)
             for name in ("mlx_h3_dit.safetensors", "mlx_h3_dit.json"):
                 (dense / name).write_text("")
-            with self.assertRaises(FileNotFoundError):
-                self.helper.ensure_mlx_checkpoint(Path(tmp), root, "int6", {}, base, vsa=True)
+            legacy_vsa = self.helper.mlx_checkpoint_root(root, base) / "vsa" / "int6"
+            legacy_vsa.mkdir(parents=True)
+            for name in ("mlx_h3_dit.safetensors", "mlx_h3_dit.json"):
+                (legacy_vsa / name).write_text("")
+            with self.assertRaisesRegex(FileNotFoundError, "transformer"):
+                self.helper.ensure_mlx_checkpoint(Path(tmp), root, "int6", {}, base, vsa=True, steps=8)
 
 
 if __name__ == "__main__":

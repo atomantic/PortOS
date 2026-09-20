@@ -21,6 +21,12 @@ before conversion. FastVideo is pinned to commit
 upgrade in Media Gen Settings. Repair / Upgrade checks out that revision and
 prepares the small FastMetal preview decoders, without downloading the large
 model snapshots or calling an AI provider. Update FastVideo there before using V2.
+A process-local adapter reads video and audio scheduler shifts from the
+checkpoint before inference, including V2’s video shift of 10; the denoising
+ladder and converted AdaLN cache use the same shifts and eight-step schedule.
+The adapter corrects the upstream converter’s four-step cache default before
+it strips the original projections. Conversion caches include the schedule
+version, step count and scheduler-config digest.
 SIMD attention remains opt-in upstream; these choices use the reference path.
 
 The Preview INT4 community repack is a preconverted package from MrMofer;
