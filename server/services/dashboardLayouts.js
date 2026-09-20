@@ -222,7 +222,21 @@ const DEFAULT_LAYOUTS = [
     ],
   },
   ...INTENT_LAYOUTS.map((l) => ({ ...l, builtIn: true })),
-].map(seedDailyActions);
+].map(seedDailyActions).map((layout) => {
+  // Only first-read defaults change. Saved ids, placement and custom layouts
+  // continue to render through compatible filtered wrappers.
+  const previews = new Set(['daily-actions', 'review-hub', 'proactive-alerts']);
+  if (!layout.widgets.some((id) => previews.has(id))) return layout;
+  return {
+    ...layout,
+    widgets: ['actions', ...layout.widgets.filter((id) => !previews.has(id))],
+    grid: [
+      { id: 'actions', x: 0, w: 12, order: 0, h: 4 },
+      ...layout.grid.filter((item) => !previews.has(item.id))
+        .map((item, index) => ({ ...item, order: index + 1 })),
+    ],
+  };
+});
 
 const DEFAULT_STATE = {
   activeLayoutId: 'default',

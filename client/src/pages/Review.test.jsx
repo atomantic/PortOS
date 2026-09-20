@@ -89,7 +89,7 @@ vi.mock('../services/api', () => ({
   getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
   getReviewCounts: vi.fn(),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
-  getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {} })),
+  getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {}, partial: false })),
   createThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action' })),
   getThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'New action', status: 'open' })),
   updateThread: vi.fn(() => Promise.resolve({ id: 'thread-1', title: 'Updated action', status: 'open' })),
@@ -124,6 +124,7 @@ vi.mock('react-router', () => ({
 import Review from './Review';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import { __resetActionQueue } from '../hooks/useActionQueue';
 
 const SUMMARY_COUNTS = { total: 8, alert: 3, todo: 1, briefing: 0, cos: 4 };
 
@@ -141,6 +142,7 @@ const forceOverflow = () =>
 afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
+  __resetActionQueue();
   vi.clearAllMocks();
   routerState.actionId = undefined;
   routerState.searchParams = new URLSearchParams();
@@ -203,6 +205,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
 
   it('forwards an explicit source operation for source-owned queue actions', async () => {
     api.getReviewQueue.mockResolvedValueOnce({
+      partial: false,
       items: [{
         id: 'memory:memory-1',
         source: 'review',
@@ -230,7 +233,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
   });
 
   it('shows durable snooze and recommendation-dismiss controls', async () => {
-    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {} });
+    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {}, partial: false });
 
     render(<Review />);
     const snooze = await screen.findByRole('combobox', { name: 'Snooze Optional answer ready' });
@@ -245,7 +248,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
   });
 
   it('persists dismissal only for an optional recommendation', async () => {
-    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {} });
+    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {}, partial: false });
 
     render(<Review />);
     fireEvent.click(await screen.findByRole('button', { name: 'Dismiss this recommendation' }));
@@ -257,7 +260,7 @@ describe('Review Hub queue-card triage (#3282)', () => {
   });
 
   it('requires a rating before sending the source-owned feedback action', async () => {
-    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {} });
+    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
 
     render(<Review />);
     const rate = await screen.findByRole('button', { name: 'Rate' });
@@ -354,7 +357,7 @@ describe('Review Hub bulk status updates (#6853)', () => {
     await waitFor(() => expect(actionQueueBody()).toBeTruthy());
     await waitFor(() => expect(document.getElementById(`review-item-body-action-queue-${SHORT_ITEM.id}`)).toBeTruthy());
 
-    const handler = socket.on.mock.calls.find(([name]) => name === 'review:items:bulk-updated')?.[1];
+    const handler = socket.on.mock.calls.findLast(([name]) => name === 'review:items:bulk-updated')?.[1];
     expect(handler).toBeTypeOf('function');
 
     act(() => {
@@ -388,7 +391,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
     await waitFor(() => expect(screen.getAllByText(ITEM.title).length).toBeGreaterThan(0));
 
     const handler = socket.on.mock.calls
-      .find(([name]) => name === 'review:item:updated')?.[1];
+      .findLast(([name]) => name === 'review:item:updated')?.[1];
     expect(handler).toBeTypeOf('function');
 
     act(() => {
@@ -409,7 +412,7 @@ describe('Review Hub status-filtered socket items (#6925)', () => {
     await waitFor(() => expect(screen.getByText(COMPLETED_ITEM.title)).toBeInTheDocument());
 
     const handler = socket.on.mock.calls
-      .find(([name]) => name === 'review:item:created')?.[1];
+      .findLast(([name]) => name === 'review:item:created')?.[1];
     expect(handler).toBeTypeOf('function');
 
     act(() => {
@@ -449,7 +452,7 @@ describe('Review Hub triage summary (#6926)', () => {
     render(<Review />);
     await waitFor(() => expect(summaryValue('Pending')).toBe('8'));
 
-    const handler = socket.on.mock.calls.find(([name]) => name === 'review:item:updated')?.[1];
+    const handler = socket.on.mock.calls.findLast(([name]) => name === 'review:item:updated')?.[1];
     expect(handler).toBeTypeOf('function');
 
     await act(async () => {
@@ -473,7 +476,7 @@ describe('Review Hub triage summary (#6926)', () => {
     render(<Review />);
     await waitFor(() => expect(resolveInitial).toBeTypeOf('function'));
 
-    const handler = socket.on.mock.calls.find(([name]) => name === 'review:item:updated')?.[1];
+    const handler = socket.on.mock.calls.findLast(([name]) => name === 'review:item:updated')?.[1];
     expect(handler).toBeTypeOf('function');
     act(() => handler({ ...ITEM, status: 'completed' }));
     await waitFor(() => expect(resolveRefresh).toBeTypeOf('function'));

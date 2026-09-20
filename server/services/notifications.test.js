@@ -38,6 +38,7 @@ import {
   notificationEvents
 } from './notifications.js'
 import { readJSONFile } from '../lib/fileUtils.js'
+import { adaptNotification } from './reviewActionAdapters.js'
 
 describe('notifications', () => {
   const baseNotifications = {
@@ -83,6 +84,20 @@ describe('notifications', () => {
     vi.clearAllMocks()
     invalidateCache()
     readJSONFile.mockResolvedValue(JSON.parse(JSON.stringify(baseNotifications)))
+  })
+
+  it('keeps a canonical obligation through read and clear, but removes it on domain completion', async () => {
+    expect(adaptNotification((await getNotifications()).find(n => n.id === 'n1')).id).toBe('memory:mem-1')
+    await markAllAsRead()
+    expect(await getUnreadCount()).toBe(0)
+    expect(adaptNotification((await getNotifications()).find(n => n.id === 'n1')).id).toBe('memory:mem-1')
+    await clearAll()
+    expect(await getNotifications()).toEqual([])
+    const retained = await getNotifications({ includeHidden: true })
+    expect(retained.map(adaptNotification).filter(Boolean).map(item => item.id)).toEqual(['memory:mem-1', 'content:42'])
+    expect(await exists(NOTIFICATION_TYPES.MEMORY_APPROVAL, { memoryId: 'mem-1' })).toBe(true)
+    await removeByMetadata('memoryId', 'mem-1')
+    expect((await getNotifications({ includeHidden: true })).map(n => n.id)).toEqual(['n2'])
   })
 
   describe('NOTIFICATION_TYPES', () => {

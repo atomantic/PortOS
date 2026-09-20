@@ -36,6 +36,28 @@ describe('dashboardLayouts service', () => {
 
   afterEach(() => {});
 
+  it('seeds one Actions preview while preserving saved legacy widget IDs and geometry', async () => {
+    const fresh = await svc.getState();
+    for (const layout of fresh.layouts) {
+      expect(layout.widgets.some(id => ['daily-actions', 'review-hub', 'proactive-alerts'].includes(id))).toBe(false);
+      expect(layout.widgets.filter(id => id === 'actions').length).toBeLessThanOrEqual(1);
+    }
+    expect(fresh.layouts.find(layout => layout.id === 'default').widgets).toContain('actions');
+    const layout = {
+      id: 'custom', name: 'My layout', builtIn: false,
+      widgets: ['daily-actions', 'review-hub', 'proactive-alerts'],
+      grid: [
+        { id: 'review-hub', x: 0, w: 6, h: 2, order: 0 },
+        { id: 'daily-actions', x: 6, w: 6, h: 3, order: 1 },
+        { id: 'proactive-alerts', x: 0, w: 12, h: 4, order: 2 },
+      ],
+    };
+    writeJson(STATE_FILE, { activeLayoutId: 'custom', layouts: [layout] });
+    const saved = (await svc.getState()).layouts.find(item => item.id === 'custom');
+    expect(saved.widgets).toEqual(layout.widgets);
+    expect(saved.grid).toEqual(layout.grid);
+  });
+
   describe('saveLayout — activateWindow merge behavior', () => {
     const stateFile = () => STATE_FILE;
 

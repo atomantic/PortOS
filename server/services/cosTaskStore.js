@@ -1111,6 +1111,9 @@ export async function approveTask(taskId, { now = Date.now() } = {}) {
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'approved', task: tasks[taskIndex] });
 
+  const { removeByMetadata } = await import('./notifications.js');
+  await removeByMetadata('taskId', taskId);
+
   return tasks[taskIndex];
   });
 }

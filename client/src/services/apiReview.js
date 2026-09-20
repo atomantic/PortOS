@@ -1,4 +1,13 @@
 import { request, queryString } from './apiCore.js';
+import { ACTION_QUEUE_CHANGED } from '../constants/events.js';
+
+const actionChanged = (result) => {
+  window.dispatchEvent(new Event(ACTION_QUEUE_CHANGED));
+  return result;
+};
+export const claimReviewQueueDelivery = (id, options = {}) => request('/review/queue/delivery', {
+  method: 'POST', body: JSON.stringify({ id }), ...options,
+});
 
 // Review Hub
 export const getReviewItems = (params) => {
@@ -30,7 +39,7 @@ export const resolveReviewQueueItem = (id, { operation, rating, comment, ...opti
     ...(comment !== undefined ? { comment } : {}),
   }),
   ...options
-});
+}).then(actionChanged);
 // Persist a presentation-only queue decision. The server re-reads the source
 // row, so the client supplies only the row id and the selected operation/time.
 export const triageReviewQueueItem = (id, { operation, snoozedUntil, ...options } = {}) => request('/review/queue/triage', {
@@ -41,7 +50,7 @@ export const triageReviewQueueItem = (id, { operation, snoozedUntil, ...options 
     ...(snoozedUntil ? { snoozedUntil } : {}),
   }),
   ...options
-});
+}).then(actionChanged);
 // Promote an Ask row's latest assistant answer into Brain, a CoS task, or a
 // Goal's progress in place (id is `ask:<conversationId>`, target is
 // 'brain' | 'task' | 'goal'; goalId is required for the 'goal' target).
@@ -49,7 +58,7 @@ export const promoteAskReviewQueueItem = (id, target, { goalId, ...options } = {
   method: 'POST',
   body: JSON.stringify({ id, target, ...(goalId ? { goalId } : {}) }),
   ...options
-});
+}).then(actionChanged);
 export const updateReviewItem = (id, data, options = {}) => request(`/review/items/${id}`, {
   method: 'PATCH',
   body: JSON.stringify(data),

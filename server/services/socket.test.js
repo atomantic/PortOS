@@ -84,6 +84,7 @@ import { spawnPm2 } from './pm2.js';
 import { getAppById, notifyAppsChanged, resolvePm2HomeForProcess } from './apps.js';
 import { logAction } from './history.js';
 import { cosEvents } from './cosEvents.js';
+import { reviewEvents } from './review.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
@@ -277,6 +278,16 @@ describe('socket.js — initSocket', () => {
     listener(payload);
 
     expect(socket.emitted).toContainEqual(['cos:tasks:changed', payload]);
+  });
+
+  it('invalidates Actions globally without exposing domain payloads or requiring a CoS subscription', () => {
+    for (const [event, listener] of cosEvents.on.mock.calls) {
+      if (event === 'tasks:changed') listener({ type: 'user', task: { id: 'example', description: 'Private source text' } });
+    }
+    expect(io.emitted).toContainEqual(['review:queue:changed']);
+    io.emitted.length = 0;
+    reviewEvents.on.mock.calls.find(([event]) => event === 'queue:changed')[1]({ private: 'not forwarded' });
+    expect(io.emitted).toEqual([['review:queue:changed']]);
   });
 
   // The three agent-record events leave through the same listing projection as

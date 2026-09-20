@@ -19,13 +19,14 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
+| `useActionQueue` | Shared canonical Actions snapshot, socket invalidation, visible-tab polling and explicit stale/error state. | Bell, dashboard previews and Actions. |
 | `useNotifications` | Generic toast dispatch + socket-subscribed notification list. | You need to read / dispatch the global notification stream. |
 | `useErrorNotifications` | Subscribes to server error events and shows toasts. | Wire once high in the tree to surface server errors. |
 | `useAIStatusNotifications` | Subscribes to AI operation status events. | Wire once to surface AI run lifecycle as toasts. |
 | `useFableLoomAiRun` | Tracks one FableLoom AI operation, including the attachable shell handoff for TUI providers. | FableLoom series or episode AI actions. |
 | `useAgentFeedbackToast` | Agent completion toast with thumbs-up/down UI. | Show actionable agent-run completion feedback. |
 | `useOnDemandTaskToast` | Toasts when a user-triggered on-demand task run found no work (parked). | Wire once high in the tree so an explicit "Run" that parks isn't a silent no-op. |
-| `useEngagementReminderToast` | Polls deterministic POST/creative-feedback actions and shows each reminder once per browser tab/day with a deep link. | Wire once high in the tree so daily actions remain visible outside the dashboard. |
+| `useEngagementReminderToast` | Shows explicitly opted-in POST reminders only after a durable server delivery claim. | Wire once high in the tree; reloads and tabs share the same occurrence/generation marker. |
 | `useSharingNotifications` | Subscriber for share-bucket notifications. | Wire once to surface federation/sync events. |
 | `useHealthWarningDismiss` | Dismisses a system-health dashboard warning as resolved, with an Undo toast. | The dashboard widget and the Live health overview page both dismiss/undo warnings. |
 

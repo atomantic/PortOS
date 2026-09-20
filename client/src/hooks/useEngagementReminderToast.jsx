@@ -1,13 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
-import { safeReadJsonSession, safeWriteJsonSession } from '../lib/safeStorage';
-import { useAutoRefetch } from './useAutoRefetch';
+import { useActionQueue } from './useActionQueue';
+import { actionSelectionLink } from '../components/ActionQueuePreview';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
-
-const SESSION_KEY = 'portos:engagement-reminders:v1';
-const MAX_REMINDER_KEYS = 100;
 
 function ReminderToast({ t, action }) {
   const [disabling, setDisabling] = useState(false);
@@ -37,10 +34,10 @@ function ReminderToast({ t, action }) {
         <span className="text-port-warning" aria-hidden="true">⚠️</span>
         <span className="font-medium text-port-text text-sm flex-1">{action.title}</span>
       </div>
-      <p className="text-xs text-port-text-muted">{action.detail}</p>
+      <p className="text-xs text-port-text-muted">{action.reason || action.summary}</p>
       <div className="flex items-center gap-2 pt-1 border-t border-port-border/30">
         <Link
-          to={action.link || '/'}
+          to={actionSelectionLink(action.id)}
           onClick={() => toast.dismiss(t.id)}
           className="inline-flex items-center justify-center min-h-[44px] px-3 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 text-xs font-medium"
         >
@@ -68,40 +65,23 @@ function ReminderToast({ t, action }) {
   );
 }
 
-/**
- * Poll the deterministic daily-action projection and show each actionable
- * reminder once per browser tab/day. The session guard keeps a route reload
- * from repeatedly interrupting the user while still allowing a new day's POST
- * prompt or the next unrated commission run to surface.
- */
+/** Delivery requires an explicit scheduled reminder and a durable server claim. */
 export function useEngagementReminderToast() {
-  const shownRef = useRef(null);
-  if (shownRef.current === null) {
-    const stored = safeReadJsonSession(SESSION_KEY, {});
-    shownRef.current = new Set(stored && typeof stored === 'object' ? Object.keys(stored) : []);
-  }
-
-  const showReminder = useCallback((today, action) => {
-    if (!action?.id) return;
-    const key = `${today || 'unknown'}:${action.id}`;
-    if (shownRef.current.has(key)) return;
-    shownRef.current.add(key);
-    const recent = [...shownRef.current].slice(-MAX_REMINDER_KEYS);
-    shownRef.current = new Set(recent);
-    safeWriteJsonSession(SESSION_KEY, Object.fromEntries(recent.map((item) => [item, true])));
-    toast((t) => <ReminderToast t={t} action={action} />, {
-      id: `engagement-reminder-${key}`,
-      duration: 12000,
-      icon: null,
-      label: action.title,
-    });
-  }, []);
-
-  const fetchActions = useCallback(async () => {
-    const data = await api.getDailyActions({ silent: true });
-    for (const action of data?.actions || []) showReminder(data.today, action);
-    return data;
-  }, [showReminder]);
-
-  useAutoRefetch(fetchActions, 300000, { pollOnly: true });
+  const { data, error } = useActionQueue();
+  useEffect(() => {
+    let active = true;
+    if (!error && document.visibilityState !== 'hidden') {
+      for (const action of data?.items || []) {
+        if (action.id !== 'product:daily-post') continue;
+        api.claimReviewQueueDelivery(action.id, { silent: true }).then((result) => {
+          if (!active || !result.claimed) return;
+          toast((t) => <ReminderToast t={t} action={action} />, {
+            id: `engagement-reminder-${action.id}:${action.occurrence}:${result.generation}`,
+            duration: 12000, icon: null, label: action.title,
+          });
+        }).catch(() => {});
+      }
+    }
+    return () => { active = false; };
+  }, [data, error]);
 }

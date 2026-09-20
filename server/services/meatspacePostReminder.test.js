@@ -45,6 +45,7 @@ vi.mock('./notifications.js', () => ({
   PRIORITY_LEVELS: { LOW: 'low' }
 }));
 vi.mock('./settings.js', () => ({ settingsEvents: settingsEventEmitter }));
+vi.mock('./reviewQueueDelivery.js', () => ({ claimQueueDelivery: vi.fn().mockResolvedValue({ claimed: true, generation: 0 }) }));
 
 const { schedule, cancel } = await import('./eventScheduler.js');
 const { getUserTimezone } = await import('./userTimezone.js');

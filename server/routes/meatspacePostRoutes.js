@@ -29,6 +29,7 @@ import {
   postProgressQuerySchema,
 } from '../lib/postValidation.js';
 import * as postService from '../services/meatspacePost.js';
+import { reviewEvents } from '../services/review.js';
 // Named at their declaring modules, not through a re-export off meatspacePost.js
 // (that convenience re-export closed a static import cycle — issue #5690).
 import { getPostStats } from '../services/meatspacePostStats.js';
@@ -114,6 +115,7 @@ router.get('/post/sessions/:id', asyncHandler(async (req, res) => {
 router.post('/post/sessions', asyncHandler(async (req, res) => {
   const data = validateRequest(postSessionSubmitSchema, req.body);
   const session = await postService.submitPostSession(data);
+  reviewEvents.emit('queue:changed');
   res.status(201).json(session);
 }));
 
@@ -340,6 +342,7 @@ router.post('/post/drill-cache/fill', asyncHandler(async (req, res) => {
 router.post('/post/training', asyncHandler(async (req, res) => {
   const data = validateRequest(trainingEntrySchema, req.body);
   const entry = await trainingService.submitTrainingEntry(data);
+  reviewEvents.emit('queue:changed');
   res.status(201).json(entry);
 }));
 
@@ -350,6 +353,7 @@ router.post('/post/training', asyncHandler(async (req, res) => {
 router.post('/post/training/runs', asyncHandler(async (req, res) => {
   const data = validateRequest(trainingRunSubmitSchema, req.body);
   const run = await trainingService.submitTrainingRun(data);
+  reviewEvents.emit('queue:changed');
   res.status(201).json(run);
 }));
 

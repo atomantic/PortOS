@@ -17,6 +17,7 @@ import { createDailyReminderScheduler } from './dailyReminderScheduler.js';
 import { isLocalDay } from '../lib/timezone.js';
 import { getPostConfig, getPostSessions, postConfigEvents } from './meatspacePost.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
+import { claimQueueDelivery } from './reviewQueueDelivery.js';
 
 export const POST_REMINDER_EVENT_ID = 'post-daily-reminder';
 
@@ -36,13 +37,16 @@ const scheduler = createDailyReminderScheduler({
     const sessions = await getPostSessions();
     return sessions.some(s => isLocalDay(s?.startedAt, timezone, todayStr));
   },
-  notify: async () => {
+  notify: async ({ todayStr }) => {
+    const delivery = await claimQueueDelivery('product:daily-post', 'scheduled', todayStr);
+    if (!delivery.claimed) return;
     await addNotification({
       type: NOTIFICATION_TYPES.DAILY_POST_REMINDER,
       title: "Today's POST is still open",
       description: "You haven't completed a Power On Self Test session today — a quick one keeps your streak alive.",
       priority: PRIORITY_LEVELS.LOW,
-      link: '/post/launcher'
+      link: '/post/launcher',
+      metadata: { actionId: 'product:daily-post', occurrence: todayStr },
     });
     console.log(`🔔 POST reminder: nudge sent (today's session incomplete)`);
   },

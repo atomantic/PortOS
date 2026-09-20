@@ -534,6 +534,16 @@ let reviewForwardingSetup = false;
 function setupReviewEventForwarding() {
   if (reviewForwardingSetup) return;
   reviewForwardingSetup = true;
+  // Global invalidations reach the bell/dashboard even without a CoS room
+  // subscription. They carry no record payload and are never peer-forwarded.
+  for (const event of ['tasks:changed', 'tasks:user:changed', 'tasks:cos:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected']) {
+    cosEvents.on(event, () => {
+      if (ioInstance) ioInstance.emit('review:queue:changed');
+    });
+  }
+  reviewEvents.on('queue:changed', () => {
+    if (ioInstance) ioInstance.emit('review:queue:changed');
+  });
   reviewEvents.on('item:created', (data) => {
     if (ioInstance) ioInstance.emit('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });

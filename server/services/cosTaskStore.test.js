@@ -13,6 +13,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync as realReadFileSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { removeByMetadata } from './notifications.js';
+
+vi.mock('./notifications.js', () => ({ removeByMetadata: vi.fn().mockResolvedValue(1) }));
 
 const mock = vi.hoisted(() => ({
   files: new Map(),
@@ -1739,6 +1742,7 @@ describe('cosTaskStore.approveTask', () => {
     await addTask({ description: 'need approve', id: 'sys-ap2', approvalRequired: true }, 'internal', { now: T0 });
     const approved = await approveTask('sys-ap2', { now: T1 });
     expect(approved.metadata.updatedAt).toBe(new Date(T1).toISOString());
+    expect(removeByMetadata).toHaveBeenCalledWith('taskId', 'sys-ap2');
   });
 
   it('rejects a task that does not require approval', async () => {

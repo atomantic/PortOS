@@ -4,6 +4,9 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 import NotificationDropdown from './NotificationDropdown';
+vi.mock('../hooks/useActionQueue', () => ({
+  useActionQueue: () => ({ data: { items: [], partial: false }, loading: false, error: null, refetch: vi.fn() }),
+}));
 
 const makeNotifications = (count) =>
   Array.from({ length: count }, (_, i) => ({
@@ -152,7 +155,7 @@ describe('NotificationDropdown', () => {
       const close = screen.getByRole('button', { name: 'Close notifications' });
       expect(close).toHaveFocus();
       await user.tab();
-      expect(close).toHaveFocus();
+      expect(screen.getByRole('link', { name: 'Open Actions' })).toHaveFocus();
       await user.tab({ shift: true });
       expect(close).toHaveFocus();
       await user.keyboard('{Enter}');
@@ -191,7 +194,7 @@ describe('NotificationDropdown', () => {
     await user.click(screen.getByRole('button', { name: 'Clear all notifications' }));
     expect(close).toHaveFocus();
     await user.tab();
-    expect(close).toHaveFocus();
+    expect(screen.getByRole('link', { name: 'Open Actions' })).toHaveFocus();
     await user.tab({ shift: true });
     expect(close).toHaveFocus();
   });

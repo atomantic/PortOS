@@ -119,7 +119,7 @@ export function createDailyReminderScheduler({
       return;
     }
 
-    await notify();
+    await notify({ timezone, todayStr });
   }
 
   /**

@@ -111,3 +111,45 @@ compatibility projections. Optional Ask promotion is still available from Ask
 and its API, but it is not required action admission. Routine task-ready/success
 attention generation is not a queue producer; execution history and private
 reports remain separate.
+
+## Bell, previews, and delivery
+
+The bell, Actions card, and Actions page share the same per-view queue snapshot.
+The bell badge counts only unsnoozed required rows, never unread history or
+optional recommendations. Partial source reads show lower-bound counts; failed
+refreshes retain explicitly stale rows with Retry, never an inbox-zero claim.
+Optional recommendations remain separately visible. Preview links select the
+canonical row at `/review/<encoded-id>?view=today`.
+
+Fresh dashboard layouts use one `actions` card. Saved widget IDs and geometry
+are unchanged: `review-hub` wraps the queue, `daily-actions` filters product
+recommendations, and `proactive-alerts` filters health, backup, and product rows.
+
+Notification read/clear APIs affect event history only. Clearing a proven
+notification-backed obligation hides its history record without deleting the
+source marker; domain completion removes it through `removeByMetadata`.
+Uncorrelated legacy records remain ordinary history with their existing clear
+behavior. Producers attach canonical `metadata.actionId` only when the adapter
+proves the source reference; title matching is never correlation.
+
+Delivery claims live in the existing machine-local triage store, under a
+`delivery:<canonical-id>` key plus occurrence, independent of text revision.
+One marker stores a severity high-water mark, generation, and last delivered
+generation per channel (toast, Telegram, scheduled reminder). Escalation
+advances the generation without creating another action. Read, clear, snooze,
+dismiss, reload, and additional tabs never reset that marker. An unavailable
+queue/store cannot grant a delivery claim.
+
+`POST /api/review/queue/delivery` accepts only the canonical ID. The server
+re-reads the current unsnoozed queue, checks POST reminder opt-in and a matching
+scheduled occurrence, then durably claims the toast. Daily recommendations do
+not interrupt by default. Existing scheduling, feature, forwarding-type,
+autonomy, and daily-budget gates still apply. Both Telegram transports share
+the canonical claim; uncorrelated legacy forwards retain their old behavior.
+Claims precede delivery: a lost response or failed transport can suppress a
+nudge, but retrying cannot duplicate an interruption for that generation.
+
+Completion and triage emit payload-free `review:queue:changed` invalidations,
+alongside existing domain events. All subscribed surfaces refetch locally and
+discard stale in-flight responses. POST completion, creative feedback, and CoS
+approval therefore update other tabs without federating source payloads.
