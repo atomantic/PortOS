@@ -18,11 +18,17 @@ export const getReviewQueue = ({ view, limit, cursor, ...options } = {}) => {
   return request(`/review/queue${query}`, options);
 };
 // Resolve a single queue row in place (id is `<source>:<rawId>`). Source-owned
-// approvals may pass `operation` (approve/reject); transport options stay out
-// of the JSON body.
-export const resolveReviewQueueItem = (id, { operation, ...options } = {}) => request('/review/queue/resolve', {
+// approvals may pass `operation` (approve/reject); feedback's `rate` operation
+// additionally carries the required rating and optional comment. Transport
+// options stay out of the JSON body.
+export const resolveReviewQueueItem = (id, { operation, rating, comment, ...options } = {}) => request('/review/queue/resolve', {
   method: 'POST',
-  body: JSON.stringify({ id, ...(operation ? { operation } : {}) }),
+  body: JSON.stringify({
+    id,
+    ...(operation ? { operation } : {}),
+    ...(rating ? { rating } : {}),
+    ...(comment !== undefined ? { comment } : {}),
+  }),
   ...options
 });
 // Promote an Ask row's latest assistant answer into Brain, a CoS task, or a

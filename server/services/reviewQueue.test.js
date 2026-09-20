@@ -6,6 +6,7 @@ const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
 const brainStorage = { getThreads: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
 const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn() };
+const cosAgentFeedback = { getPendingAgentFeedback: vi.fn(), submitAgentFeedback: vi.fn() };
 const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateAlerts: vi.fn() };
 const backup = { getState: vi.fn() };
@@ -26,6 +27,7 @@ vi.mock('./brain.js', () => brain);
 vi.mock('./brainStorage.js', () => brainStorage);
 vi.mock('./askConversations.js', () => askConversations);
 vi.mock('./cosTaskStore.js', () => cosTaskStore);
+vi.mock('./cosAgentFeedback.js', () => cosAgentFeedback);
 vi.mock('./messageDrafts.js', () => messageDrafts);
 vi.mock('./proactiveAlerts.js', () => proactiveAlerts);
 vi.mock('./backup.js', () => backup);
@@ -54,6 +56,8 @@ function resetEmpty() {
   brainStorage.updateWith.mockResolvedValue(null);
   askConversations.listConversations.mockResolvedValue([]);
   cosTaskStore.getCosTasks.mockResolvedValue({ awaitingApproval: [] });
+  cosAgentFeedback.getPendingAgentFeedback.mockResolvedValue({ agents: [], unavailable: [], count: 0 });
+  cosAgentFeedback.submitAgentFeedback.mockResolvedValue({ success: true });
   messageDrafts.listDrafts.mockResolvedValue([]);
   proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
@@ -115,6 +119,55 @@ describe('reviewQueue.buildQueue', () => {
       availability: 'available',
       available: true,
     });
+  });
+
+  it('surfaces pending CoS feedback with a required source-owned Rate operation', async () => {
+    cosAgentFeedback.getPendingAgentFeedback.mockResolvedValue({
+      count: 1,
+      agents: [{
+        id: 'agent-feedback-1',
+        status: 'completed',
+        completedAt: '2026-09-20T10:00:00.000Z',
+        metadata: { taskDescription: 'Review the example change', taskType: 'user' },
+      }],
+      unavailable: [],
+    });
+
+    const queue = await buildQueue({ query: { view: 'all' } });
+    expect(queue.items.find((item) => item.id === 'feedback:agent-feedback-1')).toMatchObject({
+      source: 'feedback',
+      actionKind: 'cos.feedback',
+      drillTo: '/cos/agents/agent-feedback-1?feedback=needs-feedback',
+      required: true,
+      operations: [{
+        id: 'rate',
+        label: 'Rate',
+        available: true,
+        input: { type: 'rating', required: true, options: ['positive', 'negative', 'neutral'] },
+      }],
+    });
+  });
+
+  it('keeps unavailable feedback history rows non-actionable', async () => {
+    cosAgentFeedback.getPendingAgentFeedback.mockResolvedValue({
+      count: 0,
+      agents: [],
+      unavailable: [{
+        id: 'agent-deleted',
+        agentId: 'agent-deleted',
+        availability: 'unavailable',
+        unavailableReason: 'deleted',
+      }],
+    });
+
+    const queue = await buildQueue({ query: { view: 'history' } });
+    expect(queue.items.find((item) => item.id === 'feedback:agent-deleted')).toMatchObject({
+      availability: 'unavailable',
+      available: false,
+      nextAction: 'Unavailable',
+      operations: [],
+    });
+    expect(queue.items.find((item) => item.id === 'feedback:agent-deleted')).not.toHaveProperty('drillTo');
   });
 
   it('projects active Brain commitments and manual todos into the all view', async () => {
@@ -714,6 +767,13 @@ describe('reviewQueue.resolveQueueItem', () => {
     expect(cosTaskStore.approveTask).toHaveBeenCalledWith('sys-1');
     expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('sys-1');
     expect(result).toMatchObject({ source: 'cos', id: 'cos:sys-1', operation: 'approve', resolved: true });
+  });
+
+  it('rates feedback rows through the source service and has no generic resolve', async () => {
+    await expect(resolveQueueItem('feedback:agent-1', 'rate', { rating: 'positive' }))
+      .resolves.toMatchObject({ source: 'feedback', operation: 'rate', resolved: true });
+    expect(cosAgentFeedback.submitAgentFeedback).toHaveBeenCalledWith('agent-1', { rating: 'positive' });
+    await expect(resolveQueueItem('feedback:agent-1')).rejects.toMatchObject({ status: 400 });
   });
 
   it('keeps a successful CoS approval successful when legacy cleanup fails', async () => {

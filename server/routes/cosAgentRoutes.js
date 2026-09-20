@@ -86,6 +86,18 @@ router.get('/agents/history/:date', asyncHandler(async (req, res) => {
   res.json(toAgentListItems(agents));
 }));
 
+// GET /api/cos/agents/feedback/pending - Reconciled durable feedback actions.
+// The queue owns the action mutation; this endpoint feeds the Agents tab with
+// the same live/archive predicate and count without loading every date bucket.
+router.get('/agents/feedback/pending', asyncHandler(async (req, res) => {
+  const pending = await cos.getPendingAgentFeedback({ includeUnavailable: true });
+  res.json({
+    count: pending.count,
+    agents: toAgentListItems(pending.agents),
+    unavailable: pending.unavailable,
+  });
+}));
+
 // GET /api/cos/agents/:id - Get agent by ID (transcript hydrated as a capped tail)
 router.get('/agents/:id', asyncHandler(async (req, res) => {
   const { lines } = validateRequest(agentQuerySchema, req.query);

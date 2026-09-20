@@ -34,6 +34,7 @@ const api = vi.hoisted(() => ({
   // AgentsTab, reached by the mobile-select navigation test below.
   getCosAgentDates: vi.fn(),
   getCosAgentsByDate: vi.fn(),
+  getCosPendingAgentFeedback: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 const socketStub = vi.hoisted(() => ({ connected: false, on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
@@ -122,6 +123,7 @@ beforeEach(() => {
   api.getRiggedAvatars.mockResolvedValue({ records: [] });
   api.getCosAgentDates.mockResolvedValue({ dates: [] });
   api.getCosAgentsByDate.mockResolvedValue([]);
+  api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
   localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
   localLlm.getToolUseModels.mockResolvedValue({ models: [] });
 });
@@ -1038,4 +1040,3 @@ describe('avatar-style registry coverage', () => {
     }
   });
 });
-

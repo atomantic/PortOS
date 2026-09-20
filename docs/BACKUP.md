@@ -7,6 +7,8 @@ PortOS backs up two things together, into a single timestamped snapshot:
 
 Now that PostgreSQL is a **required** dependency (it owns the creative catalog, memory, and a growing set of app-native records — see [Storage Classification Contract](./STORAGE.md)), **the database dump is part of required system state, not an optional extra.** A snapshot that captured `data/` but failed to capture the DB is incomplete, and PortOS surfaces that explicitly.
 
+The dump includes the machine-local `cos_pending_agent_feedback` reference index. Its source agent archive and metadata remain in the filesystem half of the same snapshot, so restoring both halves preserves pending feedback without exporting it through federation.
+
 Implementation: `server/services/backup.js` (snapshot/dump/restore), `server/services/backupScheduler.js` (cron), `server/routes/backup.js` (API), and `server/routes/database.js` (DB export/sync).
 
 ## What gets backed up

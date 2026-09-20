@@ -57,6 +57,22 @@ const CREATED_PENDING_ITEM = {
   description: 'Created after the completed view loaded.'
 };
 
+const FEEDBACK_ITEM = {
+  id: 'feedback:agent-example',
+  source: 'feedback',
+  sourceLabel: 'CoS run feedback',
+  title: 'Rate completed CoS run',
+  summary: 'Review an example change',
+  timestamp: '2026-08-01T12:00:00.000Z',
+  drillTo: '/cos/agents/agent-example?feedback=needs-feedback',
+  operations: [{
+    id: 'rate',
+    label: 'Rate',
+    available: true,
+    input: { type: 'rating', required: true, options: ['positive', 'negative', 'neutral'] },
+  }],
+};
+
 vi.mock('../services/api', () => ({
   getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
   getReviewCounts: vi.fn(),
@@ -197,6 +213,23 @@ describe('Review Hub queue-card triage (#3282)', () => {
     await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(
       'memory:memory-1',
       { operation: 'approve' },
+    ));
+  });
+
+  it('requires a rating before sending the source-owned feedback action', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {} });
+
+    render(<Review />);
+    const rate = await screen.findByRole('button', { name: 'Rate' });
+    expect(rate).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Rating (required)'), { target: { value: 'negative' } });
+    fireEvent.change(screen.getByLabelText('Comment (optional)'), { target: { value: 'Needs a clearer result.' } });
+    fireEvent.click(rate);
+
+    await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(
+      FEEDBACK_ITEM.id,
+      { operation: 'rate', rating: 'negative', comment: 'Needs a clearer result.' },
     ));
   });
 

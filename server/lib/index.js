@@ -322,6 +322,7 @@ export * from './zipWriter.js';
 // === Process execution ===
 export * from './agentGuard/index.js';
 export * from './agentOutcome.js';
+export * from './cosAgentFeedback.js';
 export * from './agentOutputMarkers.js';
 export * from './agentRunEvents.js';
 export * from './agentRunReconcile.js';

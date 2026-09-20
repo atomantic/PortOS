@@ -39,13 +39,26 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: ledgerRoot });
 });
 
-import { getFeedbackStats, getPendingAgentFeedbackCount, submitAgentFeedback } from './cosAgentFeedback.js';
+import {
+  getFeedbackStats,
+  getPendingAgentFeedback,
+  getPendingAgentFeedbackCount,
+  initializeAgentFeedback,
+  submitAgentFeedback,
+} from './cosAgentFeedback.js';
+import { cosEvents } from './cosEvents.js';
+import {
+  listPendingAgentFeedbackRefs,
+  resetPendingAgentFeedbackStore,
+} from './cosAgentFeedbackStore.js';
 import { listUserActions } from './userActions.js';
 
 describe('getPendingAgentFeedbackCount', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     mockCosState.state = { agents: {} };
     mockAgentIndex.entries = new Map();
+    resetPendingAgentFeedbackStore();
+    await rm(join(ledgerRoot, 'cos-pending-agent-feedback.json'), { force: true });
   });
 
   afterAll(async () => {
@@ -99,6 +112,101 @@ describe('getPendingAgentFeedbackCount', () => {
   });
 
   it('returns 0 when nothing is awaiting a rating', async () => {
+    await expect(getPendingAgentFeedbackCount()).resolves.toBe(0);
+  });
+
+  it('enrolls a future completion without reading historical archives', async () => {
+    initializeAgentFeedback();
+    cosEvents.emit('agent:completed', {
+      id: 'agent-future',
+      status: 'completed',
+      completedAt: '2026-08-02T10:00:00.000Z',
+      metadata: { taskType: 'user' },
+    });
+
+    await expect.poll(() => listPendingAgentFeedbackRefs()).toEqual([
+      { agentId: 'agent-future', archiveDate: '2026-08-02' },
+    ]);
+  });
+
+  it('keeps an eligible run actionable after live state is evicted', async () => {
+    const agent = {
+      id: 'agent-archived-pending',
+      status: 'completed',
+      completedAt: '2026-08-03T10:00:00.000Z',
+      metadata: { taskType: 'user', taskDescription: 'Review an example change' },
+    };
+    mockCosState.state.agents = { [agent.id]: agent };
+    await expect(getPendingAgentFeedback()).resolves.toMatchObject({ count: 1, agents: [agent] });
+
+    const dir = join(mockCosState.agentsDir, '2026-08-03', agent.id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'metadata.json'), JSON.stringify(agent));
+    mockCosState.state = { agents: {} };
+    mockAgentIndex.entries.set(agent.id, '2026-08-03');
+
+    await expect(getPendingAgentFeedback()).resolves.toMatchObject({ count: 1, agents: [agent] });
+  });
+
+  it('retains a deleted reference as unavailable history instead of claiming completion', async () => {
+    const agent = {
+      id: 'agent-deleted',
+      status: 'completed',
+      completedAt: '2026-08-04T10:00:00.000Z',
+      metadata: { taskType: 'user' },
+    };
+    mockCosState.state.agents = { [agent.id]: agent };
+    await getPendingAgentFeedback();
+    mockCosState.state = { agents: {} };
+
+    await expect(getPendingAgentFeedback({ includeUnavailable: true })).resolves.toMatchObject({
+      count: 0,
+      unavailable: [{ agentId: agent.id, unavailableReason: 'deleted' }],
+    });
+    await expect(listPendingAgentFeedbackRefs()).resolves.toEqual([
+      { agentId: agent.id, archiveDate: '2026-08-04' },
+    ]);
+  });
+
+  it('retains a reference when the indexed archive cannot be read', async () => {
+    const agent = {
+      id: 'agent-unreadable',
+      status: 'completed',
+      completedAt: '2026-08-05T10:00:00.000Z',
+      metadata: { taskType: 'user' },
+    };
+    mockCosState.state.agents = { [agent.id]: agent };
+    await getPendingAgentFeedback();
+    mockCosState.state = { agents: {} };
+    mockAgentIndex.entries.set(agent.id, '2026-08-05');
+    await mkdir(join(mockCosState.agentsDir, '2026-08-05', agent.id, 'metadata.json'), { recursive: true });
+
+    await expect(getPendingAgentFeedback({ includeUnavailable: true })).resolves.toMatchObject({
+      count: 0,
+      unavailable: [{ agentId: agent.id, unavailableReason: 'read-failed' }],
+    });
+    await expect(listPendingAgentFeedbackRefs()).resolves.toEqual([
+      { agentId: agent.id, archiveDate: '2026-08-05' },
+    ]);
+  });
+
+  it('clears the reference only after rating the source archive', async () => {
+    const agent = {
+      id: 'agent-source-owned',
+      status: 'completed',
+      completedAt: '2026-08-06T10:00:00.000Z',
+      metadata: { taskType: 'user', taskDescription: 'Fix an example regression' },
+    };
+    const dir = join(mockCosState.agentsDir, '2026-08-06', agent.id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'metadata.json'), JSON.stringify(agent));
+    mockCosState.state = { agents: {} };
+    mockAgentIndex.entries.set(agent.id, '2026-08-06');
+    await getPendingAgentFeedback();
+
+    await submitAgentFeedback(agent.id, { rating: 'positive' });
+
+    await expect(listPendingAgentFeedbackRefs()).resolves.toEqual([]);
     await expect(getPendingAgentFeedbackCount()).resolves.toBe(0);
   });
 
@@ -177,6 +285,7 @@ describe('submitAgentFeedback records the rating (#5594)', () => {
       },
     };
     mockAgentIndex.entries = new Map();
+    resetPendingAgentFeedbackStore();
     await rm(join(ledgerRoot, 'user-action-events.json'), { force: true });
   });
 

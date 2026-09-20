@@ -85,4 +85,23 @@ describe('POST /api/review/queue/resolve', () => {
     expect(response.status).toBe(400);
     expect(resolveQueueItem).not.toHaveBeenCalled();
   });
+
+  it('requires a rating and forwards it for feedback actions', async () => {
+    const missing = await request(makeApp())
+      .post('/api/review/queue/resolve')
+      .send({ id: 'feedback:agent-1', operation: 'rate' });
+
+    expect(missing.status).toBe(400);
+    expect(resolveQueueItem).not.toHaveBeenCalled();
+
+    resolveQueueItem.mockResolvedValue({ source: 'feedback', id: 'feedback:agent-1', operation: 'rate', resolved: true });
+    const response = await request(makeApp())
+      .post('/api/review/queue/resolve')
+      .send({ id: 'feedback:agent-1', operation: 'rate', rating: 'positive', comment: 'Useful result' });
+
+    expect(response.status).toBe(200);
+    expect(resolveQueueItem).toHaveBeenCalledWith(
+      'feedback:agent-1', 'rate', { rating: 'positive', comment: 'Useful result' },
+    );
+  });
 });

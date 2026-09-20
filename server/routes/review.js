@@ -52,15 +52,27 @@ router.get('/queue', asyncHandler(async (req, res) => {
 
 const resolveQueueSchema = z.object({
   id: z.string().min(1).max(500),
-  operation: z.enum(['resolve', 'approve', 'reject', 'complete', 'reopen']).optional(),
+  operation: z.enum(['resolve', 'approve', 'reject', 'complete', 'reopen', 'rate']).optional(),
+  rating: z.enum(['positive', 'negative', 'neutral']).optional(),
+  comment: z.string().max(5000).optional(),
+}).superRefine((value, context) => {
+  if (value.operation === 'rate' && !value.rating) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['rating'], message: 'rating is required for the rate operation' });
+  }
+  if (value.operation !== 'rate' && (value.rating !== undefined || value.comment !== undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['operation'], message: 'rating and comment are only valid for the rate operation' });
+  }
 });
 
 // POST /api/review/queue/resolve — accept a single cross-domain queue row in
 // place. Source-owned approvals carry an explicit operation so the mutation
 // revalidates the owning domain instead of using generic Review completion.
 router.post('/queue/resolve', asyncHandler(async (req, res) => {
-  const { id, operation } = validateRequest(resolveQueueSchema, req.body);
-  const result = operation ? await resolveQueueItem(id, operation) : await resolveQueueItem(id);
+  const { id, operation, rating, comment } = validateRequest(resolveQueueSchema, req.body);
+  const input = { ...(rating ? { rating } : {}), ...(comment !== undefined ? { comment } : {}) };
+  const result = operation
+    ? (Object.keys(input).length ? await resolveQueueItem(id, operation, input) : await resolveQueueItem(id, operation))
+    : await resolveQueueItem(id);
   res.json(result);
 }));
 

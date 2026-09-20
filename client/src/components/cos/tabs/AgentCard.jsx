@@ -31,7 +31,7 @@ import CollapsibleText from '../../ui/CollapsibleText';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { extractCosTaskType } from '../../../lib/cosTaskType';
-import { isAgentHandoff } from '../../../lib/agentOutcome';
+import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
 import AgentResultLine from '../AgentResultLine';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
 import { formatBytes, formatCount, formatDurationMs, formatDateTime, formatTimeOfDay } from '../../../utils/formatters';
@@ -327,14 +327,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   const [showFeedbackComment, setShowFeedbackComment] = useState(false);
   const [feedbackComment, setFeedbackComment] = useState(agent.feedback?.comment || '');
 
-  // Determine if this is a system agent (health check, etc.)
-  const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
-  // Only agents from a manually-filled task form ask for a rating —
-  // scheduled/autopilot runs are already auto-evaluated by task-learning.
-  const isManualUserAgent = agent.metadata?.taskType === 'user';
   // Retired by Resume/Relaunch: this run handed its task to a continuation
   // instead of reaching a verdict, so it is neither a success nor a failure.
-  const handoff = isAgentHandoff(agent);
+  const isSystemAgent = isSystemAgentRecord(agent);
   const inactive = completed || paused;
 
   // Handle feedback submission
@@ -1075,7 +1070,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             the rating that covers this work — so it is excluded UNLESS a rating is
             already on the record: pre-upgrade handoffs were ratable, and hiding the
             block outright would swallow a verdict the user did give. */}
-        {completed && !isSystemAgent && isManualUserAgent && !remote && (!handoff || !!feedbackState) && (
+        {isAgentFeedbackUpdateTarget(agent) && !remote && (
           <div className="mt-2 pt-1 border-t border-port-border/50">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs text-gray-500">Was this helpful?</span>

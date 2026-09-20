@@ -9,6 +9,7 @@ vi.mock('../../../services/api', () => ({
   getCosAgent: vi.fn(),
   getCosAgentDates: vi.fn(),
   getCosAgentsByDate: vi.fn(),
+  getCosPendingAgentFeedback: vi.fn(),
   hydrateCosAgentDescription: vi.fn(async (agent) => agent),
   clearCompletedCosAgents: vi.fn(),
   resumeCosAgent: vi.fn(),
@@ -107,6 +108,7 @@ beforeEach(() => {
   api.getCosLearningDurations.mockResolvedValue({});
   api.getCosAgentDates.mockResolvedValue({ dates: [], latest: null });
   api.getCosAgentsByDate.mockResolvedValue([]);
+  api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
   api.hydrateCosAgentDescription.mockImplementation(async (agent) => agent);
 });
 
@@ -274,6 +276,22 @@ describe('AgentsTab resume routing', () => {
 });
 
 describe('AgentsTab feedback review queue', () => {
+  it('renders an older durable pending run and uses its server count', async () => {
+    const archived = completedAgent('agent-archived', 'An older pending run');
+    api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [archived], count: 1 });
+
+    renderTab([]);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Needs feedback: 1' })).toBeInTheDocument());
+    expect(screen.getByText('An older pending run')).toBeInTheDocument();
+  });
+
+  it('does not hide a live completion that arrives after the index snapshot', async () => {
+    api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: 0 });
+    renderTab([completedAgent('just-finished', 'A just-finished run')]);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Needs feedback: 1' })).toBeInTheDocument());
+  });
+
   it('filters loaded completed agents to unrated non-system runs', async () => {
     const user = userEvent.setup();
     renderTab([
