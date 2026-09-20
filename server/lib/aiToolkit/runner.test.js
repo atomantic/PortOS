@@ -22,6 +22,7 @@ vi.mock('child_process', async (importOriginal) => {
 
 const { spawn } = await import('child_process');
 const { createRunnerService } = await import('./runner.js');
+const { streamTransportDispatcher } = await import('./internal/streamTransport.js');
 
 describe('AI Toolkit runner service', () => {
   const tempDirs = [];
@@ -637,6 +638,46 @@ describe('AI Toolkit runner service', () => {
     // so the host's classifier must be able to tell them apart without prose.
     expect(metadata.timeoutBound).toBe('stall');
     expect(metadata.error).toMatch(/no stream progress/i);
+  });
+
+  // Those two bounds are only authoritative if nothing UNDERNEATH them expires
+  // first. undici arms its own `headersTimeout`/`bodyTimeout` on every fetch —
+  // both 300000ms, the same number as the default stall bound — one layer
+  // closer to the socket, so it won every race: a provider that went quiet
+  // finalized as `network-error` with no `timeoutBound` stamped for the bench
+  // decision, and a `provider.timeout` raised past five minutes was silently
+  // capped. The streaming request has to go out on the dispatcher that
+  // disables them (./internal/streamTransport.js).
+  it('sends the streaming request through the ceiling-free transport dispatcher', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    const fetch = vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }
+    }));
+    vi.stubGlobal('fetch', fetch);
+
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }) }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    await runner.executeApiRun({
+      runId: 'run-dispatcher',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      onData: undefined,
+      onComplete: (m) => done(m)
+    });
+    await completed;
+
+    expect(fetch.mock.calls[0][1].dispatcher).toBe(streamTransportDispatcher());
   });
 
   it('bounds a run whose provider-readiness hook never resolves (fetch never reached)', async () => {
