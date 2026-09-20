@@ -233,7 +233,12 @@ describe('Reactor SDK adapter', () => {
       meta: expect.objectContaining({ aspect: '9:16', width: 768, height: 1344 }),
     })));
     // The fitted copy is scratch, not a render output left beside the clip.
-    await expect(stat(input.sourceImagePath)).rejects.toBeTruthy();
+    // Polled, not asserted once: finalize is awaited inside the try, while the
+    // fitted frame is removed in the finally that runs after it — so the call
+    // above can land a tick before the cleanup does. On Linux the rm usually
+    // wins that tick and a bare assertion passes; on Windows it does not, and
+    // this failed the whole matrix from a shard that changed nothing (#7786).
+    await vi.waitFor(async () => { await expect(stat(input.sourceImagePath)).rejects.toBeTruthy(); });
   });
 
   it('opens the canvas the request named, over the one the frame implies', async () => {
