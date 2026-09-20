@@ -86,6 +86,10 @@ vi.mock('./cosState.js', () => ({
   getDomainAutonomyMode: vi.fn(async () => 'execute'),
 }));
 
+// These fixtures are uncorrelated notifications; queue-backed delivery is
+// covered by telegramForward.test.js. Avoid importing its unrelated app graph.
+vi.mock('./reviewActionAdapters.js', () => ({ adaptNotification: vi.fn(() => null) }));
+
 vi.mock('./domainUsage.js', () => ({
   getDomainBudgetStatus: vi.fn(async () => ({ withinBudget: true, exceeded: null })),
   recordDomainUsage: vi.fn(async () => {}),
@@ -153,7 +157,12 @@ describe('telegram service', () => {
   });
 
   afterEach(async () => {
-    if (active) await active.cleanup();
+    if (active) {
+      await active.cleanup();
+      // Each isolated import registers its own shutdown handlers.
+      process.removeListener('SIGTERM', active.cleanup);
+      process.removeListener('SIGINT', active.cleanup);
+    }
     logSpy.mockRestore();
     errorSpy.mockRestore();
     vi.useRealTimers();
@@ -312,8 +321,9 @@ describe('telegram service', () => {
       await telegram.init(false);
       h.sendMessage.mockClear();
       notifEmitter.emit('added', notification);
-      // Let the async forward chain (gates -> peekMemory -> send) settle.
-      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+      // Wait for observable delivery: lazy adapter imports can take more than
+      // a fixed number of event-loop turns on a cold or contended CI worker.
+      await vi.waitFor(() => expect(h.sendMessage).toHaveBeenCalled());
       return h.sendMessage.mock.calls[0];
     }
 

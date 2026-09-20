@@ -1,0 +1,41 @@
+import { beforeEach, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+const mocks = vi.hoisted(() => ({ status: vi.fn(), install: vi.fn(), score: vi.fn(), toggle: vi.fn(), publish: vi.fn(), enabled: true }));
+vi.mock('../../services/api', () => ({ getLayaStatus: mocks.status, installLaya: mocks.install, scoreLaya: mocks.score, updateInstanceFeature: mocks.toggle }));
+vi.mock('../../hooks/useInstanceFeatures', () => ({ publishInstanceFeatures: mocks.publish, useInstanceFeatures: () => ({ features: [{ id: 'laya-mlx', enabled: mocks.enabled }] }) }));
+import LayaMlxPanel from './LayaMlxPanel';
+beforeEach(() => {
+  vi.clearAllMocks(); mocks.enabled = true;
+  mocks.status.mockResolvedValue({ supported: true, ready: true });
+  mocks.score.mockResolvedValue({ ok: true, choice: 'billing', margin: 0.8, entropyConfidence: 0.53, elapsedMs: 1200, scores: [{ option: 'billing', probability: 0.9 }, { option: 'sales', probability: 0.1 }] });
+});
+it('scores only on explicit action and clears stale results when input changes', async () => {
+  render(<LayaMlxPanel />);
+  await screen.findByText(/Runtime: installed/);
+  expect(mocks.score).not.toHaveBeenCalled(); expect(mocks.install).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('Premise'), { target: { value: 'Duplicate invoice' } });
+  fireEvent.change(screen.getByLabelText(/Options/), { target: { value: 'billing\nsales' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Run experiment' }));
+  expect(await screen.findByText('Choice: billing')).toBeInTheDocument();
+  expect(mocks.score).toHaveBeenCalledWith(expect.objectContaining({ premise: 'Duplicate invoice', options: ['billing', 'sales'] }), { silent: true });
+  fireEvent.change(screen.getByLabelText('Premise'), { target: { value: 'Another input' } });
+  expect(screen.queryByText('Choice: billing')).not.toBeInTheDocument();
+});
+it('keeps setup discoverable while disabled and publishes confirmed enablement', async () => {
+  mocks.enabled = false;
+  mocks.toggle.mockResolvedValue({ features: [{ id: 'laya-mlx', enabled: true }], groups: [] });
+  render(<LayaMlxPanel />);
+  await screen.findByText(/Runtime: installed/);
+  expect(screen.getByRole('button', { name: 'Run experiment' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Enable experiments' }));
+  await waitFor(() => expect(mocks.publish).toHaveBeenCalled());
+  expect(mocks.toggle).toHaveBeenCalledWith('laya-mlx', true, { silent: true });
+});
+it('explains unsupported hardware without offering installation or scoring', async () => {
+  mocks.enabled = false;
+  mocks.status.mockResolvedValue({ supported: false, ready: false });
+  render(<LayaMlxPanel />);
+  await screen.findByText(/Jev remains available on other platforms/);
+  expect(screen.getByRole('button', { name: 'Install Laya-MLX' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Enable experiments' })).toBeDisabled();
+});

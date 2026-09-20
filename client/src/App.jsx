@@ -394,6 +394,7 @@ export default function App() {
               its own tab. A literal segment outranks `models/:tab/:recordId`, so
               a bookmark on the old pill lands on the new page instead of LLMs
               rendering an unknown sub-view. */}
+          <Route path="models/llms/jev" element={<Navigate to="/models/decision-classifiers/jev" replace />} />
           <Route path="models/llms/runtimes" element={<Navigate to="/models/llms-runtimes" replace />} />
           {/* Harnesses folded into the AI Providers harnesses view (/ai/harnesses);
               retires the duplicate /models/harnesses page while keeping bookmarks working. */}

@@ -131,7 +131,7 @@ export default function UntrustedContentPolicyPanel() {
                 </div>
               </div>
               {effectiveValue('jevMode') === 'only' && <p className="text-xs text-port-warning">Only skips an item the scorer cannot separate instead of calling a provider. Skipped items are reported, never treated as &ldquo;no action needed&rdquo;.</p>}
-              <p className="text-xs text-gray-500">The margin raises the bar for every decision on this source; it cannot lower a decision&rsquo;s own floor, so a destructive recommendation keeps deferring to the provider. <a href="/models/llms/jev" className="text-port-accent hover:underline">Install and measure jev</a></p>
+              <p className="text-xs text-gray-500">The margin raises the bar for every decision on this source; it cannot lower a decision&rsquo;s own floor, so a destructive recommendation keeps deferring to the provider. <a href="/models/decision-classifiers/jev" className="text-port-accent hover:underline">Install and measure jev</a></p>
             </div>
             <div className="border-t border-port-border pt-4 space-y-3">
               <h4 className="text-sm font-medium text-white">Analysis provider</h4>

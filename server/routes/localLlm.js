@@ -116,6 +116,19 @@ const jevHeadStore = () => import('../services/jevHeads.js')
 const jevTrainer = () => import('../services/jevTraining.js')
 
 const router = Router()
+const layaService = () => import('../services/layaMlx.js')
+
+router.get('/laya-mlx/status', asyncHandler(async (_req, res) => {
+  res.json(await (await layaService()).getLayaStatus())
+}))
+router.post('/laya-mlx/install', asyncHandler(async (_req, res) => {
+  res.status(202).json(await (await layaService()).installLaya())
+}))
+router.post('/laya-mlx/score', asyncHandler(async (req, res) => {
+  const { layaScoreRequestSchema } = await import('../lib/layaMlx.js')
+  const input = validateRequest(layaScoreRequestSchema, req.body)
+  res.json(await (await layaService()).scoreLaya(input, abortSignalFromResponse(res)))
+}))
 
 const emitter = (req) => {
   const io = req.app.get('io')
@@ -326,7 +339,7 @@ router.post('/jev/install', asyncHandler(async (req, res) => {
     const message = code === 'jev-python-unavailable'
       ? 'Install Python 3.10 or newer on this machine, restart PortOS if needed to detect it, then refresh jev status.'
       : code === 'jev-runtime-install-failed'
-        ? 'Scorer package installation failed. Check internet access and Python compatibility, then retry from Models > LLMs > jev.'
+        ? 'Scorer package installation failed. Check internet access and Python compatibility, then retry from Models > Decision Classifiers > Jev.'
         : code === 'jev-model-download-failed'
           ? 'The pinned jev model snapshot could not be downloaded. Check internet access and free disk space, then retry.'
           : code

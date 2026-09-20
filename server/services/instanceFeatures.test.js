@@ -310,6 +310,7 @@ describe('instance features', () => {
       post: true, autobiography: true, datadog: true, jira: false, eidoverse: false, gsd: false, openclaw: false, health: true,
       rigging: false, facetime: false, imessage: true, signal: true, x: true, 'stacker-news': true, beeper: false,
       jev: false,
+      'laya-mlx': false,
     });
   });
 

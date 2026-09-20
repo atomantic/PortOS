@@ -23,6 +23,7 @@ vi.mock('../components/models/ModelStatusTab', () => ({ default: () => <div>stat
 vi.mock('../components/models/SubscriptionsTab', () => ({ default: () => <div>subscriptions panel</div> }));
 vi.mock('../components/settings/CodeReviewersTab', () => ({ default: () => <div>code reviewers panel</div> }));
 vi.mock('../components/models/ModelComparison', () => ({ default: () => <div>comparison panel</div> }));
+vi.mock('../components/models/DecisionClassifiers', () => ({ default: ({ view }) => <div>classifiers panel {view}</div> }));
 vi.mock('./Loras', () => ({ default: () => <div>loras panel</div> }));
 vi.mock('./LoraTraining', () => ({ default: () => <div>training panel</div> }));
 vi.mock('./MediaModels', () => ({ default: () => <div>media models panel</div> }));
@@ -38,6 +39,7 @@ const PANEL_MARKER = {
   comparison: 'comparison panel',
   '3d': '3d runtimes panel',
   'code-reviewers': 'code reviewers panel',
+  'decision-classifiers': 'classifiers panel',
   embeddings: 'embeddings panel',
   llms: 'llms panel',
   'llms-runtimes': 'runtimes panel',
@@ -174,4 +176,10 @@ describe('Models — tab drill-downs', () => {
     renderAt('/models/loras/some-id');
     expect(await screen.findByText('loras panel')).toBeInTheDocument();
   });
+});
+
+it('redirects the old Jev URL into Decision Classifiers', async () => {
+    renderAt('/models/llms/jev');
+    expect(await screen.findByText('classifiers panel jev')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Decision Classifiers' })).toHaveAttribute('aria-selected', 'true');
 });

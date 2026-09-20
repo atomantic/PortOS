@@ -227,6 +227,7 @@ export const NAV_PRESENTATION = {
   '/meatspace/overview': { icon: Activity },
   '/meatspace/settings': { icon: Settings },
   '/models/3d': { icon: Boxes },
+  '/models/decision-classifiers': { icon: Scale },
   '/models/embeddings': { icon: Braces },
   '/models/llms': { icon: Cpu },
   '/models/llms-runtimes': { icon: Server },
