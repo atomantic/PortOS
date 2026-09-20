@@ -64,6 +64,7 @@ import {
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   PASTE_COMMIT_PATIENCE_MS,
+  CODEX_COMPOSER_READY_PATTERN,
   POST_PASTE_BUFFER_CAP,
   scheduleSubmitEnters,
   PASTE_DEADLINE_MS,
@@ -926,6 +927,10 @@ export async function spawnTuiAgent({
   // not `spawnCommand` — a credential-bootstrap wrap makes the latter the
   // bootstrap CLI.
   const isCodexSession = isCodexCommand(tuiConfig.command);
+  // Latches once codex's composer placeholder paints — the positive "the input
+  // box exists" signal the idle heuristic lacks. See
+  // CODEX_COMPOSER_READY_PATTERN; consumed by the idle paste branch below.
+  let codexComposerReady = false;
   const mcpBoot = createMcpBootTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
@@ -1483,6 +1488,10 @@ export async function spawnTuiAgent({
       // CONFIRMED paste) means a banner that arrives AFTER an early swallowed paste
       // still latches — the swallowed paste never sets promptSubmittedAt.
       if (isCodexSession && !promptSubmittedAt && stripped && !mcpBoot.active) mcpBoot.observe(stripped);
+      // Same window as the MCP-boot latch, and for the same reason: only codex's
+      // own startup chrome (never the echoed prompt) may trip it.
+      if (isCodexSession && !codexComposerReady && !promptSentAt && commandInjected && stripped
+        && CODEX_COMPOSER_READY_PATTERN.test(stripped)) codexComposerReady = true;
       const now = Date.now();
       // Startup-idle detection (the promptTimer's non-inputReady branch below)
       // reads lastOutputAt/firstOutputAt to decide the TUI has gone quiet and is
@@ -2016,6 +2025,12 @@ export async function spawnTuiAgent({
     if (elapsed < tuiConfig.promptDelayMs) return;
     if (firstOutputAt === null) return;
     if (now - lastOutputAt < READY_IDLE_THRESHOLD_MS) return;
+    // Codex goes quiet for seconds mid-boot with no composer painted, and the
+    // idle heuristic alone reads that lull as ready — pasting into nothing.
+    // Hold the idle path until its composer placeholder has actually rendered;
+    // the PASTE_DEADLINE_MS fallback above still delivers if it never does, so
+    // this can only delay a paste, never cancel one.
+    if (isCodexSession && !codexComposerReady) return;
     safeSendPrompt('ready');
     clearInterval(promptTimer);
   }, READY_POLL_INTERVAL_MS);

@@ -111,6 +111,27 @@ export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 // would simply wait the full window for nothing.
 export const PASTE_COMMIT_PATIENCE_MS = 45000;
 
+// Codex's composer placeholder — the ONLY positive evidence its input box is
+// live and will accept a paste. Codex is not on the requireInputReady path
+// (that would fail a run hard the first time a wording change outran us), so
+// this is a SOFT gate: the idle heuristic waits for it, and PASTE_DEADLINE_MS
+// still backstops delivery if it never paints.
+//
+// It is what the idle heuristic was missing. On a cold Windows start
+// (`cmd.exe /c codex.cmd` -> node -> the native binary) codex paints its
+// header, then goes quiet for seconds while the binary boots — output-idle
+// alone reads that lull as "ready" and pastes into a composer that does not
+// exist yet, which swallows the paste (2026-09-20: six codex-tui agents dead
+// in ~24s, each with an empty composer in the transcript). Waiting for the
+// placeholder orders the two correctly; PASTE_COMMIT_PATIENCE_MS above stays
+// as the rescue for a paste that still goes out early.
+//
+// Matched against ANSI-STRIPPED output, and deliberately shorter than the full
+// "Ask Codex to do anything" sentence: the stripped stream collapses the
+// cursor-positioned gaps between glyphs, so the pattern tolerates arbitrary
+// (including zero) whitespace and matches only the stable leading words.
+export const CODEX_COMPOSER_READY_PATTERN = /Ask\s*Codex/i;
+
 /**
  * Extract a verifiable prefix from a prompt for paste verification. The prefix
  * is a unique-enough substring from the prompt's first "content" line (skipping

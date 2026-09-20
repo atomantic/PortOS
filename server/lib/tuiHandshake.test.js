@@ -61,6 +61,7 @@ import {
   TOOL_PERMISSION_REPAINT_COOLDOWN_MS,
   TOOL_PERMISSION_DECLINE_MAX,
   TOOL_PERMISSION_NUDGE_TEXT,
+  CODEX_COMPOSER_READY_PATTERN,
 } from './tuiHandshake.js';
 import { detectImmediateFallbackSignal } from './aiToolkit/errorDetection.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
@@ -2112,5 +2113,19 @@ describe('isPasteCommitted', () => {
     expect(isPasteCommitted('[Pasted Content 900 chars]', { verifiablePrefix: 'never rendered' })).toBe(true);
     expect(isPasteCommitted('> audit the provider list', { verifiablePrefix: 'audit the provider list' })).toBe(true);
     expect(isPasteCommitted('> Ask Codex to do anything', { verifiablePrefix: 'audit the provider list' })).toBe(false);
+  });
+});
+
+describe('CODEX_COMPOSER_READY_PATTERN', () => {
+  it('matches the composer placeholder, including the whitespace-collapsed stripped form', () => {
+    expect(CODEX_COMPOSER_READY_PATTERN.test('› Ask Codex to do anything')).toBe(true);
+    // ANSI stripping can drop the cursor-positioned gaps between glyphs.
+    expect(CODEX_COMPOSER_READY_PATTERN.test('AskCodextodoanything')).toBe(true);
+  });
+
+  it('does not match codex startup chrome painted before the composer exists', () => {
+    // The header/border repaint the six 2026-09-20 agents died against.
+    expect(CODEX_COMPOSER_READY_PATTERN.test('╭╭╭╭╭╭gpt-6-astra default · /repo ╭───────╮')).toBe(false);
+    expect(CODEX_COMPOSER_READY_PATTERN.test('Loading MCP servers…')).toBe(false);
   });
 });
