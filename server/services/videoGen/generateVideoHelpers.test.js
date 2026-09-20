@@ -635,9 +635,21 @@ describe('bufferChildExit', () => {
 
   it('holds a close emitted before the real listeners were attached', () => {
     const proc = new EventEmitter();
-    const take = bufferChildExit(proc);
+    const take = bufferChildExit(proc, { bufferOutput: true });
     proc.emit('close', 3, null);
     expect(take()).toEqual({ type: 'close', code: 3, signal: null });
+  });
+
+  it('retains output emitted before the real readers were attached', () => {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    const take = bufferChildExit(proc, { bufferOutput: true });
+    proc.stderr.emit('data', Buffer.from('RuntimeError: shader compilation failed\\n'));
+    proc.emit('close', 1, null);
+    const early = take();
+    expect(early).toMatchObject({ type: 'close', code: 1, signal: null });
+    expect(early.output).toEqual([{ stream: 'stderr', chunk: expect.any(Buffer) }]);
   });
 
   it('absorbs an error that would otherwise throw out of the emitter', () => {

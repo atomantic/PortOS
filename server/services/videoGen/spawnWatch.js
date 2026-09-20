@@ -540,9 +540,10 @@ export async function spawnAndWatchVideo({
         : null);
     const replayEarlyExit = async () => {
       if (!earlyExit) return;
+      for (const { stream, chunk } of earlyExit.output || []) proc[stream].emit('data', chunk);
       console.log(`⚠️ video render child exited before it was wired [${jobId.slice(0, 8)}]`);
       if (earlyExit.type === 'error') handleChildError(earlyExit.error);
-      else await handleChildClose(earlyExit.code, earlyExit.signal);
+      else if (earlyExit.type === 'close') await handleChildClose(earlyExit.code, earlyExit.signal);
     };
     return replayEarlyExit;
   };
@@ -630,7 +631,7 @@ export async function spawnAndWatchVideo({
       // Catch the replacement's terminal event in the same tick the spawn
       // resolved — the handoff below yields to the event loop, and a child that
       // dies in that window would otherwise emit into the void.
-      const takeRetryEarlyExit = bufferChildExit(retryProc);
+      const takeRetryEarlyExit = bufferChildExit(retryProc, { bufferOutput: true });
       if (canceledDuringRelaunch(cancelEpochAtClose, retryProc)) return false;
       // Both awaits finish BEFORE the shared active process starts pointing at the
       // replacement, and the statements that follow them are synchronous.
@@ -770,7 +771,7 @@ export async function spawnAndWatchVideo({
     // forever, still holding the accelerator claim, and a lost 'error' is worse
     // — an EventEmitter with no 'error' listener THROWS and takes the server
     // with it.
-    takeEarlyExit = bufferChildExit(firstProc);
+    takeEarlyExit = bufferChildExit(firstProc, { bufferOutput: true });
     videoJobState.activeProcess = firstProc;
     await heavyClaim.handoffTo?.(firstProc.pid);
   } catch (err) {
