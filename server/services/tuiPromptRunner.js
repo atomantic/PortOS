@@ -54,6 +54,7 @@ import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   PASTE_MARKER_POLL_MS,
   countPasteMarkers,
+  isPasteCommitted,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
   scheduleSubmitEnters,
@@ -824,7 +825,10 @@ ${prompt}`;
       pasteEnterTimer = setInterval(() => {
         if (finalized) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; postPasteStripped = null; return; }
         const elapsed = Date.now() - pasteSentAt;
-        const markerSeen = countPasteMarkers(postPasteStripped) > promptMarkerCount;
+        // Shared with the agent spawner's poll so the two can't drift on what
+        // counts as a commit — without a verifiable prefix this is the marker
+        // count plus Claude's/OpenCode's collapsed-chip shape.
+        const markerSeen = isPasteCommitted(postPasteStripped || '', { promptMarkerCount });
         if ((markerSeen && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
           || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
           clearInterval(pasteEnterTimer);

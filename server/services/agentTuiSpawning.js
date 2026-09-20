@@ -63,6 +63,8 @@ import {
   AGY_INPUT_READY_PATTERN,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
+  PASTE_COMMIT_PATIENCE_MS,
+  POST_PASTE_BUFFER_CAP,
   scheduleSubmitEnters,
   PASTE_DEADLINE_MS,
   TUI_INPUT_READY_DEADLINE_MS,
@@ -74,6 +76,7 @@ import {
   PASTE_RETRY_BASE_DELAY_MS,
   extractVerifiablePromptPrefix,
   isPasteConfirmed,
+  isPasteCommitted,
   SUBMIT_KEY,
   detectMissingTuiBinary,
 } from '../lib/tuiHandshake.js';
@@ -394,6 +397,7 @@ function createPasteRetryController({
   prompt,
   tuiConfig,
   mcpBoot,
+  isCodexSession,
   appendLine,
   isFinalized,
   markPromptSent,
@@ -414,6 +418,25 @@ function createPasteRetryController({
   const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
   const pasteConfirmed = (buffer) =>
     isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
+  // Same evidence, minus isPasteConfirmed's "nothing to verify against" pass —
+  // the commit-wait below must keep WAITING while a prompt too short to carry a
+  // verifiable prefix has not visibly landed, not treat it as already committed.
+  //
+  // Memoized on buffer identity because the marker poll re-asks every
+  // PASTE_MARKER_POLL_MS for up to PASTE_COMMIT_PATIENCE_MS — ~300 ticks — while
+  // a booting codex is silent, and the predicate is three full-buffer regex
+  // scans plus two whitespace-stripped copies of it. `postPasteBuffer` is only
+  // ever rebound when output actually arrives, so an idle tick is a pointer
+  // compare.
+  let lastCommitBuffer = null;
+  let lastCommitVerdict = false;
+  const pasteCommitted = (buffer) => {
+    if (buffer !== lastCommitBuffer) {
+      lastCommitBuffer = buffer;
+      lastCommitVerdict = isPasteCommitted(buffer, { verifiablePrefix, promptMarkerCount });
+    }
+    return lastCommitVerdict;
+  };
 
   // Bounded post-paste accumulator. Lives from an attempt through its marker /
   // verification windows and any bounded retry backoff, so delayed TUI output
@@ -593,6 +616,14 @@ function createPasteRetryController({
     };
 
     const pasteSentAt = Date.now();
+    // How long THIS attempt waits for the TUI to commit the paste before
+    // handing over to the verify/retry budget. Read live rather than captured:
+    // codex's MCP-boot banner can latch after the paste went out, and a
+    // swallowing codex must not spend the patient window — see
+    // PASTE_COMMIT_PATIENCE_MS.
+    const commitWaitMs = () => (isCodexSession && attemptNum <= 1 && !mcpBoot.active
+      ? PASTE_COMMIT_PATIENCE_MS
+      : PASTE_TO_ENTER_FALLBACK_MS);
     pasteEnterTimer = setInterval(() => {
       if (isFinalized()) {
         clearInterval(pasteEnterTimer);
@@ -601,12 +632,13 @@ function createPasteRetryController({
         return;
       }
       const elapsed = Date.now() - pasteSentAt;
-      const markerSeen = countPasteMarkers(postPasteBuffer) > promptMarkerCount;
-      // Submit when EITHER the paste-commit marker appears (preferred) or
-      // the fallback window elapses (covers small prompts that don't render
-      // the marker).
-      if ((markerSeen && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
-        || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
+      // Submit when EITHER the TUI's paste commit shows up (preferred) or the
+      // commit-wait window elapses (covers small prompts that don't render the
+      // marker). Waiting on the full commit evidence rather than the marker
+      // alone is what lets codex's patient first attempt (PASTE_COMMIT_PATIENCE_MS)
+      // exit in ~200ms when the composer was live all along.
+      if ((pasteCommitted(postPasteBuffer || '') && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
+        || elapsed >= commitWaitMs()) {
         clearInterval(pasteEnterTimer);
         pasteEnterTimer = null;
         // Capture the buffer before clearing, then confirm the paste (issue #2192).
@@ -615,6 +647,8 @@ function createPasteRetryController({
         // Marker present (or text already visible, or nothing to verify) → the
         // paste landed; submit now. Trusting the marker here is what fixes the
         // multi-line-collapse false negative — Claude hides the pasted body text.
+        // pasteConfirmed is a superset of the pasteCommitted exit above, so only
+        // the commitWaitMs timeout can fall through to the verification window.
         if (pasteConfirmed(commitBuffer)) {
           submitPaste();
           return;
@@ -659,7 +693,9 @@ function createPasteRetryController({
   // above). A no-op the rest of the time.
   const ingestChunk = (stripped) => {
     if (postPasteBuffer === null || !stripped) return;
-    postPasteBuffer += stripped;
+    // Tail-bounded: see POST_PASTE_BUFFER_CAP for why a few screens is all the
+    // commit predicates can use.
+    postPasteBuffer = (postPasteBuffer + stripped).slice(-POST_PASTE_BUFFER_CAP);
     // The retry backoff used to be a blind spot: output was discarded after
     // verification failed and before the next attempt began. A late marker or
     // prompt echo still proves the existing paste landed, so submit it now and
@@ -883,7 +919,13 @@ export async function spawnTuiAgent({
   // TUI whose startup text happened to contain "starting mcp servers" inherit
   // codex's 150s budget and its misleading codex-config guidance, breaking the
   // "non-codex TUIs are unchanged" contract (codex review [P2]).
-  const isCodexSession = commandName.toLowerCase().includes('codex');
+  //
+  // One verdict for the session, through the shared predicate: it also gates the
+  // patient first paste (PASTE_COMMIT_PATIENCE_MS), and the two codex-only paste
+  // mechanisms must agree on what codex is. It keys on `command` (the harness),
+  // not `spawnCommand` — a credential-bootstrap wrap makes the latter the
+  // bootstrap CLI.
+  const isCodexSession = isCodexCommand(tuiConfig.command);
   const mcpBoot = createMcpBootTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
@@ -1836,6 +1878,7 @@ export async function spawnTuiAgent({
     prompt,
     tuiConfig,
     mcpBoot,
+    isCodexSession,
     appendLine,
     isFinalized: isTerminal,
     markPromptSent: () => { promptSentAt = Date.now(); },
