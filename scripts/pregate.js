@@ -114,6 +114,37 @@ export function downgradeFullPlan(plan, trackedFiles) {
 
 const git = (args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
 
+const gitPaths = (args, cwd = REPO_ROOT) => execFileSync('git', args, { cwd, encoding: 'utf8' })
+  .split('\0')
+  .filter(Boolean);
+
+/** Paths represented by NUL-delimited `git status --porcelain=v1` output. */
+export function statusPaths(output) {
+  const entries = output.split('\0').filter(Boolean);
+  const paths = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const status = entry.slice(0, 2);
+    paths.push(entry.slice(3));
+    if (/[RC]/.test(status)) index += 1;
+  }
+  return paths;
+}
+
+/** The committed diff plus every staged, unstaged, deleted, or untracked path. */
+export function collectPregateChangedFiles(baseSha, { cwd = REPO_ROOT } = {}) {
+  const committed = gitPaths(['diff', '-z', '--name-only', '--diff-filter=ACMRD', `${baseSha}...HEAD`], cwd);
+  const status = execFileSync(
+    'git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    { cwd, encoding: 'utf8' },
+  );
+  const workingTree = statusPaths(status);
+  return {
+    changedFiles: [...new Set([...committed, ...workingTree])].sort(),
+    workingTreeFiles: [...new Set(workingTree)].sort(),
+  };
+}
+
 /** The remote default branch (`origin/main` unless this fork says otherwise). */
 function defaultBaseRef() {
   const head = spawnSync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
@@ -146,13 +177,9 @@ function main() {
   const baseSha = mergeBase.stdout.trim();
   console.log(`🔎 Planning against ${baseRef} (${baseSha.slice(0, 9)}).`);
 
-  // Uncommitted work is invisible to a `<base>...HEAD` diff, so it is invisible
-  // to the plan. Saying so is the difference between "pregate passed" and
-  // "pregate passed on what you have committed".
-  const dirty = git(['status', '--porcelain']).split('\n').filter(Boolean);
-  if (dirty.length > 0) {
-    console.log(`⚠️ ${dirty.length} uncommitted change(s) are NOT in this plan — the plan only sees committed work.`);
-    console.log('⚠️ Commit first and re-run, or a green pregate says nothing about the edits still in your tree.');
+  const { changedFiles, workingTreeFiles } = collectPregateChangedFiles(baseSha);
+  if (workingTreeFiles.length > 0) {
+    console.log(`📝 Included ${workingTreeFiles.length} uncommitted changed file(s) in this plan.`);
   }
 
   const planned = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts', 'ci-test-plan.js')], {
@@ -160,7 +187,15 @@ function main() {
     encoding: 'utf8',
     // The planner writes step outputs when Actions' env is present; stripping
     // it keeps a local run from appending to a stale $GITHUB_OUTPUT file.
-    env: { ...process.env, CI_BASE_SHA: baseSha, CI_FORCE_FULL: 'false', CI_BASE_REF: '', GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+    env: {
+      ...process.env,
+      CI_BASE_SHA: baseSha,
+      CI_CHANGED_FILES: JSON.stringify(changedFiles),
+      CI_FORCE_FULL: 'false',
+      CI_BASE_REF: '',
+      GITHUB_OUTPUT: '',
+      GITHUB_STEP_SUMMARY: '',
+    },
   });
   if (planned.status !== 0) {
     console.error(`❌ ci-test-plan.js failed: ${planned.stderr || planned.error?.message || 'unknown error'}`);

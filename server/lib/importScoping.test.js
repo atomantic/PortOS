@@ -790,6 +790,9 @@ describe('deferred imports stay deferred (#6156)', () => {
 // reaches `jevRouter.js`, `untrustedContent.js` and `jev.js` only through
 // `await import()`. Measured before 115,283, after 115,479; restores the ~400
 // of headroom the recent entries carry — main had eroded to 17.
+// 116,500 → 116,900 (post-fleet host import growth): the current server suite
+// measures 116,547 static instantiations. This restores the established ~400
+// headroom while the import graph remains unchanged by this PR.
 // 116,100 → 116,500 (fleet host inbound usage): one new lib leaf,
 // `fleetHostUsage.js`, one new service (`fleetLlmUsage.js`) and their two
 // suites. The leaf's only edge is `openAiChatStream.js` for `normalizeUsage`,
@@ -806,7 +809,7 @@ describe('deferred imports stay deferred (#6156)', () => {
 // 116,500 -> 116,600 (reviewer configuration health): the health route's
 // code-review mock adds 47 measured static instantiations across the suite;
 // the production route keeps the service import dynamic to avoid that graph.
-const MAX_STATIC_INSTANTIATIONS = 116600;
+const MAX_STATIC_INSTANTIATIONS = 116900;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ALWAYS_RUN_TESTS,
   buildCiTestPlan,
+  collectPlanInputs,
   forceFullReasonFor,
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
@@ -107,6 +108,50 @@ it('preserves Git-quoted source and contract paths through the planner CLI', () 
     expect(unicodePlan.changed_files).toEqual([unicodeSource, source]);
     expect(JSON.parse(unicodePlan.server_sources)).toContain(unicodeSource);
     expect(JSON.parse(unicodePlan.server_files)).toContain(contract);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('builds the same plan from an explicit working-tree override as from the equivalent commit', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-override-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const source = 'client/src/App.jsx';
+  const test = 'client/src/App.test.jsx';
+  const write = (path, body) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  };
+  const commit = () => {
+    git('add', '--all');
+    git('-c', 'user.name=Example Contributor', '-c', 'user.email=contributor@example.com',
+      '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
+  };
+  const build = (inputs) => buildCiTestPlan(inputs.changedFiles, {
+    trackedFiles: inputs.trackedFiles,
+    appRouteOnly: isRouteOnlyAppDiff(inputs.appDiff),
+    pathContractTests: inputs.pathContractTests,
+  });
+
+  try {
+    git('init', '-q');
+    git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+    write(source, 'export const app = (\n  <Routes>\n    <Route path="old" />\n  </Routes>\n);\n');
+    write(test, "import './App.jsx';\n");
+    commit();
+    const base = git('rev-parse', 'HEAD');
+
+    write(source, 'export const app = (\n  <Routes>\n    <Route path="new" />\n  </Routes>\n);\n');
+    const overridden = build(collectPlanInputs({
+      baseSha: base,
+      changedFiles: [source],
+      cwd: root,
+    }));
+
+    commit();
+    const committed = build(collectPlanInputs({ baseSha: base, cwd: root }));
+    expect(overridden.full).toBe(false);
+    expect(overridden).toEqual(committed);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
