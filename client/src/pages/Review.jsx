@@ -256,11 +256,14 @@ export default function Review() {
     if (item.drillTo) navigate(item.drillTo);
   };
 
-  const handleQueueResolve = async (item) => {
+  const handleQueueResolve = async (item, operation) => {
     if (resolvingQueueIds.has(item.id)) return;
     setResolvingQueueIds(prev => new Set(prev).add(item.id));
     // The helper toasts on failure (default), so don't add a custom catch toast.
-    const ok = await api.resolveReviewQueueItem(item.id).then(() => true).catch(() => false);
+    const ok = await api.resolveReviewQueueItem(
+      item.id,
+      operation ? { operation } : {},
+    ).then(() => true).catch(() => false);
     setResolvingQueueIds(prev => {
       const next = new Set(prev);
       next.delete(item.id);
@@ -641,6 +644,12 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
   // one-click button — split it out from the simple brain/task targets.
   const simpleTargets = promoteTargets.filter(t => t !== 'goal');
   const showGoalPicker = promoteTargets.includes('goal') && goalOptions.length > 0;
+  const sourceOperations = !promoteTargets.length && Array.isArray(item.operations)
+    ? item.operations.filter(operation => operation && operation.available !== false)
+    : [];
+  const inlineActions = item.action
+    ? [{ id: 'resolve', label: item.action }]
+    : sourceOperations;
 
   return (
     <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
@@ -666,17 +675,18 @@ function QueueRow({ item, onDrill, onDismiss, onResolve, onPromoteAsk, resolving
         )}
       </div>
       <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-        {item.action && onResolve && (
+        {onResolve && inlineActions.map(action => (
           <button
-            onClick={() => onResolve(item)}
+            key={action.id}
+            onClick={() => onResolve(item, action.id === 'resolve' ? undefined : action.id)}
             disabled={resolving}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-port-success bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title={`${item.action} this item in place`}
+            title={`${action.label} this item in place`}
           >
             <Check size={14} />
-            {item.action}
+            {action.label}
           </button>
-        )}
+        ))}
         {onPromoteAsk && simpleTargets.map(target => (
           <button
             key={target}
@@ -893,13 +903,15 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
           >
             <X size={16} />
           </button>
-          <button
-            onClick={() => onDelete(item.id)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
-            title="Delete" aria-label="Delete"
-          >
-            <Trash2 size={14} />
-          </button>
+          {isGenericCompletableItem(item) && (
+            <button
+              onClick={() => onDelete(item.id)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-error transition-colors"
+              title="Delete" aria-label="Delete"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
         </div>
       )}
     </div>

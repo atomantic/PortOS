@@ -133,8 +133,8 @@ export function adaptStoredReviewItem(item) {
   if (category === 'autopilot-paused') {
     const seriesId = toReference(metadata.autopilotPauseSeriesId) || toReference(metadata.seriesId);
     const runId = toReference(metadata.runId);
+    if (!seriesId) return null;
     const sourceRef = [seriesId, runId].filter(Boolean).join(':');
-    if (!sourceRef) return null;
     return reviewItemBase(item, {
       id: canonicalActionId('autopilot', sourceRef),
       sourceRef,
@@ -149,7 +149,7 @@ export function adaptStoredReviewItem(item) {
 
   if (CONTEXT_ONLY_REVIEW_CATEGORIES.has(category)) return null;
 
-  if (category === 'content-review' || metadata.contentReview === true || link) {
+  if (category === 'content-review' || metadata.contentReview === true) {
     if (!referenceId) return null;
     return reviewItemBase(item, {
       id: canonicalActionId('content', referenceId),

@@ -48,6 +48,32 @@ describe('review action adapters', () => {
     });
   });
 
+  it('keeps a link-only legacy alert as triage with its drill-down', () => {
+    const item = adaptStoredReviewItem({
+      id: 'legacy-linked',
+      type: 'alert',
+      title: 'Legacy scan alert',
+      status: 'pending',
+      metadata: { link: '/review/legacy-linked' },
+    });
+
+    expect(item).toMatchObject({
+      id: 'review:legacy-linked',
+      actionKind: 'review.triage',
+      drillTo: '/review/legacy-linked',
+    });
+  });
+
+  it('does not admit a paused automation without its series identity', () => {
+    expect(adaptStoredReviewItem({
+      id: 'paused-run-only',
+      type: 'alert',
+      title: 'Paused automation',
+      status: 'pending',
+      metadata: { category: 'autopilot-paused', runId: 'run-1' },
+    })).toBeNull();
+  });
+
   it('leaves generic client-error alerts in history/context', () => {
     expect(adaptStoredReviewItem({
       id: 'error-1',

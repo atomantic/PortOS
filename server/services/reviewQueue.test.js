@@ -51,6 +51,7 @@ function resetEmpty() {
   proactiveAlerts.generateAlerts.mockResolvedValue({ alerts: [] });
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
   reviewService.getItems.mockResolvedValue([]);
+  reviewService.dismissByReferenceId.mockResolvedValue(undefined);
   notifications.getNotifications.mockResolvedValue([]);
   identity.getGoals.mockResolvedValue({ goals: [] });
   stackerNews.listPendingReviewActions.mockResolvedValue([]);
@@ -597,6 +598,17 @@ describe('reviewQueue.resolveQueueItem', () => {
     expect(cosTaskStore.approveTask).toHaveBeenCalledWith('sys-1');
     expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('sys-1');
     expect(result).toMatchObject({ source: 'cos', id: 'cos:sys-1', operation: 'approve', resolved: true });
+  });
+
+  it('keeps a successful CoS approval successful when legacy cleanup fails', async () => {
+    cosTaskStore.approveTask.mockResolvedValue({ id: 'sys-1', approvalRequired: false });
+    reviewService.dismissByReferenceId.mockRejectedValueOnce(new Error('review store down'));
+
+    await expect(resolveQueueItem('cos:sys-1', 'approve')).resolves.toMatchObject({
+      source: 'cos',
+      operation: 'approve',
+      resolved: true,
+    });
   });
 
   it('preserves colons in the raw id (splits on the first only)', async () => {

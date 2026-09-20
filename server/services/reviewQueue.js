@@ -638,7 +638,9 @@ async function resolveCosApproval(id) {
   // task:ready bridge. The owning approval succeeded, so retire that legacy
   // projection by reference without allowing generic Review completion to
   // mutate the obligation directly.
-  await reviewService.dismissByReferenceId(id);
+  await reviewService.dismissByReferenceId(id).catch((err) => {
+    console.error(`⚠️ Review queue: legacy CoS projection cleanup failed: ${err.message}`);
+  });
   return result;
 }
 
