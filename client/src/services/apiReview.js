@@ -1,4 +1,4 @@
-import { request } from './apiCore.js';
+import { request, queryString } from './apiCore.js';
 
 // Review Hub
 export const getReviewItems = (params) => {
@@ -10,8 +10,13 @@ export const getReviewItems = (params) => {
 };
 export const getReviewCounts = (options = {}) => request('/review/counts', options);
 export const getReviewBriefing = () => request('/review/briefing');
-// Cross-domain live queue (brain inbox, ask, CoS approvals, drafts, health, backups)
-export const getReviewQueue = (options = {}) => request('/review/queue', options);
+// Cross-domain live queue (brain inbox, ask, CoS approvals, drafts, health, backups).
+// Keep transport options (silent, headers, abort signal) separate from the
+// pagination query so callers can continue using the old options-only shape.
+export const getReviewQueue = ({ limit, cursor, ...options } = {}) => {
+  const query = queryString({ limit, cursor });
+  return request(`/review/queue${query}`, options);
+};
 // Accept/promote a single queue row in place (id is `<source>:<rawId>`)
 export const resolveReviewQueueItem = (id, options = {}) => request('/review/queue/resolve', {
   method: 'POST',
