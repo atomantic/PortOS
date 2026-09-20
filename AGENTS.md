@@ -19,7 +19,13 @@ cd client && npm test            # Vitest (happy-dom) — component/unit tests
 # because PortOS runs under PM2 with NODE_ENV=development and a suite that
 # inherits it aims at the real Postgres.
 npm run test:db                  # DB-backed suites → portos_test ONLY (see Security Model)
+
+npm run pregate                  # BEFORE EVERY PUSH — runs what CI will run on this branch
 ```
+
+**`npm run pregate` is the pre-push gate.** It asks CI's own planner (`scripts/ci-test-plan.js`) what this branch's diff selects, then runs that plan through CI's own runners — so a green pregate means the Linux lint and test jobs are green for the same reasons, not a second opinion that can drift. It takes seconds on a scoped diff, and it is the only local command that reaches the tree-wide guards nothing imports: the import budget (`server/lib/importScoping.test.js`), server→client import purity, union-merged catalog rows, generated-manifest drift. Those are the failures that otherwise cost a push and a CI round to discover — and the ones that reproduce only *after* a rebase, so **run it again after every rebase onto a moved `main`**, not just once before the first push.
+
+It plans from **committed** work only and says so when the tree is dirty; commit, then re-run. A diff big enough to force CI's full suite runs the always-run guards here instead (`--full` opts into everything). It never runs the DB suites, the Windows job, the client build, or the boot smoke — it names the ones your diff implicated and leaves them to CI, which is the only honest answer for a check this machine cannot perform.
 
 ## Test Strategy: Value Over Assertion Count
 
@@ -203,7 +209,7 @@ This complements the Security Model (the deployed product) — this section gove
 ## Git Workflow
 
 - **main**: active development. **release**: push `main` to `release` to trigger the GitHub Release workflow.
-- **Push pattern**: `git pull --rebase --autostash && git push`
+- **Push pattern**: `npm run pregate && git pull --rebase --autostash && npm run pregate && git push` — the gate runs CI's own plan locally (see Commands). Run it **again after the rebase**: the import budget and the tree-wide guards are properties of your branch *merged with* the new `main`, so a rebase is exactly when a clean branch starts failing, and the first run cannot have seen it.
 - **No per-branch changelog entries.** PRs do not write a changelog file or fragment — commit messages are the record, and `/do:release` synthesizes the release notes from the commit log since the last tag into `.changelog/v{version}.md`. **Write commit subjects/bodies for a human release-note reader** (see "Git commits and PRs" in the global instructions). Rationale: `.changelog/README.md`.
 - **Release quality snapshot**: before a release, run `npm run quality:snapshot` on the install holding PortOS audit evidence. It publishes numeric local assessments only (no provider calls, no private run prose) into the repo-root `.quality.json`; with no local evidence it commits nothing and says so.
 - **Versioning**: `package.json` reflects the last release. Do not bump during development — `/do:release` handles it.
