@@ -198,7 +198,7 @@ Phase 4 — Report:
     category: 'autobiography-prompt',
     interval: 'daily',
     intervalMs: DAY,
-    enabled: false,
+    enabled: true,
     priority: 'LOW',
     type: 'script',
     scriptHandler: 'autobiography-prompt',
