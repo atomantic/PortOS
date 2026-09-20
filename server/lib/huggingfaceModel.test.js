@@ -151,6 +151,15 @@ describe('classifyHfMediaModel — happy paths', () => {
     })).toEqual({ kind: 'video', runtime: 'ltx25', format: 'safetensors' });
   });
 
+  it('adds Qwen 2.1 with its unified pipeline even when tagged for editing', () => {
+    const repo = 'Qwen/Qwen-Image-2.1';
+    const model = hf({ files: ['model.safetensors'], tags: ['edit'], pipeline: 'image-to-image' });
+    const classification = classifyHfMediaModel({ repo, model });
+    const entry = buildCustomModelEntry({ repo, model, classification });
+    expect(entry).toMatchObject({ runner: 'qwen', pipelineClass: 'QwenImage21Pipeline', steps: 40, guidance: 1, cfgDisabled: true });
+    expect(entry.editOnly).toBeUndefined();
+  });
+
   it('detects a Qwen-Image-Edit repo and stamps the edit pipeline + editOnly', () => {
     const c = classifyHfMediaModel({
       repo: 'Qwen/Qwen-Image-Edit',

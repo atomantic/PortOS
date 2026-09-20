@@ -1899,6 +1899,17 @@
       "editOnly": true
     },
     {
+      "id": "qwen-image-2.1",
+      "name": "Qwen-Image 2.1 (7B DiT, generation + editing, research license)",
+      "runner": "qwen",
+      "repo": "Qwen/Qwen-Image-2.1",
+      "pipelineClass": "QwenImage21Pipeline",
+      "steps": 40,
+      "guidance": 1,
+      "cfgDisabled": true,
+      "licenseUrl": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE"
+    },
+    {
       "id": "z-image-turbo-bf16",
       "name": "Z-Image-Turbo (bf16, ~13 GB)",
       "runner": "z-image",

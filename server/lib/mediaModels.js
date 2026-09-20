@@ -1074,6 +1074,19 @@ const DEFAULT_REGISTRY = {
       // reject (and the UI gate) a render with no init image up-front.
       editOnly: true,
     },
+    // Qwen 2.1 unifies generation/editing in a new RGBA pipeline. Its
+    // research license differs from the original Apache-licensed Qwen models.
+    {
+      id: 'qwen-image-2.1',
+      name: 'Qwen-Image 2.1 (7B DiT, generation + editing, research license)',
+      runner: 'qwen',
+      repo: 'Qwen/Qwen-Image-2.1',
+      pipelineClass: 'QwenImage21Pipeline',
+      steps: 40,
+      guidance: 1.0,
+      cfgDisabled: true,
+      licenseUrl: 'https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE',
+    },
     // z-image runner — Apache 2.0, ungated, reuses the FLUX.2 venv. Turbo
     // distillation runs ~8 steps with CFG disabled (guidance 1.0).
     {
