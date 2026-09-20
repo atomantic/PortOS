@@ -138,6 +138,7 @@ class RunIcLoraBoundsTest(unittest.TestCase):
             steps=30,
             stage2_steps=None,
             fps=24,
+            streaming_mode="auto",
         )
 
     def test_accepts_every_count_inside_the_2_8_range(self):

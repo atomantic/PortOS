@@ -376,7 +376,7 @@ class GenerateLtx2TeaCacheTest(unittest.TestCase):
             model="m", gemma="g", extend_from_video="in.mp4", prompt="p",
             extend_frames=2, extend_direction="after", seed=0, steps=None,
             cfg_scale=None, no_teacache=False, teacache_thresh=None,
-            user_lora_specs=[],
+            user_lora_specs=[], streaming_mode="auto",
         )
         try:
             self.helper._EXTEND_TC_CONFIG = None
