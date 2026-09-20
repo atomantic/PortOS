@@ -362,11 +362,11 @@
       "endpoint": "http://127.0.0.1:18020/v1",
       "apiKey": "",
       "vllmBacked": true,
-      "thinking": false,
       "models": [
         "qwen3.8-27b"
       ],
       "defaultModel": "qwen3.8-27b",
+      "thinking": false,
       "timeout": 600000,
       "enabled": false,
       "envVars": {
@@ -384,11 +384,11 @@
       "endpoint": "http://127.0.0.1:18020/v1",
       "apiKey": "",
       "vllmBacked": true,
-      "thinking": false,
       "models": [
         "qwen3.8-27b"
       ],
       "defaultModel": "qwen3.8-27b",
+      "thinking": false,
       "timeout": 600000,
       "enabled": false,
       "envVars": {
