@@ -51,6 +51,7 @@ import IcLoraPanel from '../components/videoGen/IcLoraPanel';
 import AdvancedParamsPanel from '../components/videoGen/AdvancedParamsPanel';
 import RuntimeFingerprint from '../components/videoGen/RuntimeFingerprint';
 import ModelDisclosure from '../components/videoGen/ModelDisclosure';
+import ModelWorkflowHelp from '../components/videoGen/ModelWorkflowHelp';
 import ModelRepairBanner from '../components/videoGen/ModelRepairBanner';
 import RenderStatusCard from '../components/videoGen/RenderStatusCard';
 import VideoGenGallery from '../components/videoGen/VideoGenGallery';
@@ -1648,6 +1649,7 @@ export default function VideoGen() {
                   onChange={(e) => handleModelChange(e.target.value)}
                   loading={modelsLoading}
                 />
+                <ModelWorkflowHelp model={currentModel} models={visibleModels} onResolutionChange={handleResolutionChange} />
                 {remixModelFallback && (
                   <p className="mt-1 text-[11px] text-port-accent leading-snug" role="status">
                     {remixModelFallback.sourceName} {remixModelFallback.samplerLocked && remixModelFallback.negativePromptUnsupported
@@ -1771,7 +1773,7 @@ export default function VideoGen() {
               snapOnBlur
               note={isMiniMaxH3Runtime(currentModel?.runtime)
                 ? 'H3 quality presets follow its trained 768px short-edge, area-capped canvas. Smaller custom sizes are off-distribution but useful for faster wiring tests; each edge snaps to 32px.'
-                : 'Each edge 64–2048px; the server rounds each down to the nearest multiple of 64.'}
+                : `Each edge 64–2048px; the server rounds each down to the nearest multiple of ${localResolutionBounds.step}px.`}
             />
 
           </div>

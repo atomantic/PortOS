@@ -268,6 +268,7 @@ class MlxCheckpointTest(unittest.TestCase):
             for name, shift in (("scheduler", 10), ("audio_scheduler", 3)):
                 (root / name).mkdir()
                 (root / name / "scheduler_config.json").write_text(json.dumps({"shift": shift}))
+            (root / "fastvideo_inference.json").write_text("{}")
             base = Path(tmp) / "cache"
             dense = self.helper.mlx_checkpoint_root(root, base) / "int6"
             dense.mkdir(parents=True)

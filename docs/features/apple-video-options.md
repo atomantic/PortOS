@@ -26,7 +26,10 @@ checkpoint before inference, including V2’s video shift of 10; the denoising
 ladder and converted AdaLN cache use the same shifts and eight-step schedule.
 The adapter corrects the upstream converter’s four-step cache default before
 it strips the original projections. Conversion caches include the schedule
-version, step count and scheduler-config digest.
+version, step count, scheduler configs and inference-sidecar digest.
+The adapter reads the exact trained DMD rungs from `fastvideo_inference.json`
+for both conversion and inference rather than using MLX’s uniform ladder.
+Missing, mismatched or unsupported contracts fail before rendering.
 SIMD attention remains opt-in upstream; these choices use the reference path.
 
 The Preview INT4 community repack is a preconverted package from MrMofer;
@@ -55,3 +58,17 @@ not run an Unreal renderer or perform literal tracing of source footage.
 Upstream timings vary with resolution, frame count, decoder and hardware.
 PortOS does not treat a published benchmark as a local ETA or promise real-time
 generation.
+
+## Preview to final in the UI
+
+The model picker’s **Choosing a model: preview → final** help distinguishes
+small draft renders, a new generation on a quality model, declared **Finish**
+pairs, and the gallery’s **Upscale** action. Cross-model seeds do not promise
+the same composition. LTX-2.5 generative upscaling can change details and needs
+its model pack; resizing preserves content without generating detail.
+
+General presets include 384×256 and 256×384 small previews. FastH3 retains its
+832×480 quality-check preset and offers a 512×288 test-size button in the help.
+The latter is experimental, not a validated quality preset. Use the shortest
+available duration and keep the trained four/eight-step schedule. Smaller
+canvases reduce denoising work, not download, conversion, or model-load costs.
