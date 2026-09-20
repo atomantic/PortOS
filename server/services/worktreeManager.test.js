@@ -121,7 +121,7 @@ describe('Worktree dependency preparation', () => {
   });
 
   it('links installed root, client, and server dependencies when targets are absent', async () => {
-    lstat.mockImplementation((path) => path.replaceAll('\\\\', '/').startsWith('/repo/')
+    lstat.mockImplementation((path) => path.replaceAll('\\', '/').startsWith('/repo/')
       ? Promise.resolve({})
       : Promise.reject(new Error('missing')));
 
@@ -129,7 +129,7 @@ describe('Worktree dependency preparation', () => {
 
     expect(symlink).toHaveBeenCalledTimes(3);
     const linkedPaths = symlink.mock.calls.map(([source, target]) => [
-      source.replaceAll('\\\\', '/'), target.replaceAll('\\\\', '/'),
+      source.replaceAll('\\', '/'), target.replaceAll('\\', '/'),
     ]);
     expect(linkedPaths).toEqual(expect.arrayContaining([
       ['/repo/node_modules', '/worktree/node_modules'],
@@ -139,7 +139,7 @@ describe('Worktree dependency preparation', () => {
   });
 
   it('skips missing sources and preserves existing targets', async () => {
-    lstat.mockImplementation((path) => ['/repo/node_modules', '/worktree/node_modules'].includes(path.replaceAll('\\\\', '/'))
+    lstat.mockImplementation((path) => ['/repo/node_modules', '/worktree/node_modules'].includes(path.replaceAll('\\', '/'))
       ? Promise.resolve({})
       : Promise.reject(new Error('missing')));
 
