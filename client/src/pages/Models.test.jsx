@@ -153,8 +153,8 @@ describe('Models', () => {
     expect(within(nav).getByRole('link', { name: 'Model Library' })).not.toHaveAttribute('aria-current');
     expect(within(nav).getAllByRole('link').every((link) => link.getAttribute('class').includes('min-h-[44px]'))).toBe(true);
 
-    fireEvent.click(within(nav).getByRole('link', { name: 'Jev decision scorer' }));
-    expect(within(nav).getByRole('link', { name: 'Jev decision scorer' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(within(nav).getByRole('link', { name: 'Decision Classifiers' }));
+    expect(within(nav).getByRole('link', { name: 'Decision Classifiers' })).toHaveAttribute('aria-current', 'page');
   });
 
   // A tab listed in the header but missing from TAB_CONTENT falls through to the
@@ -182,10 +182,10 @@ describe('Models — tab drill-downs', () => {
     expect(screen.queryByTestId('llms-view')).not.toBeInTheDocument();
   });
 
-  it.each(['library', 'abuse', 'jev'])('passes the LLM %s sub-route through to the focused LLM view', async (view) => {
+  it.each(['library', 'abuse'])('passes the LLM %s sub-route through to the focused LLM view', async (view) => {
     renderAt(`/models/llms/${view}`);
     expect(await screen.findByTestId('llms-view')).toHaveAttribute('data-view', view);
-    expect(screen.getByRole('tab', { name: view === 'library' ? 'Model Library' : view === 'abuse' ? 'Abuse Guard' : 'Jev decision scorer' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: view === 'library' ? 'Model Library' : 'Abuse Guard' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('renders a tab detail view INSIDE the section shell, not as a bare page', async () => {

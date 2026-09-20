@@ -7,6 +7,7 @@ import {
   NAV_FEATURE_IDS,
   SECTION_FEATURE,
   getNavAliasMap,
+  getNavCommandForPath,
   getNavPageForPath,
   getNavSectionForPath,
   getSectionNavGroups,
@@ -168,13 +169,13 @@ describe('nav contract — generated section child navigation', () => {
       ['Evaluate', ['Comparison', 'Performance', 'Playground']],
       ['Library', ['3D', 'Embeddings', 'LoRAs', 'Media', 'Model Library', 'Training']],
       ['Operate', ['Quota Burn', 'Status', 'Subscriptions', 'Usage']],
-      ['Policies', ['Abuse Guard', 'Code Reviewers', 'Jev decision scorer']],
+      ['Policies', ['Abuse Guard', 'Code Reviewers', 'Decision Classifiers']],
     ]);
   });
 
   it('resolves a promoted drill-down as itself instead of its LLM parent', () => {
     expect(getSectionNavTabForPath('Models', '/models/llms/abuse')).toMatchObject({ id: 'abuse', label: 'Abuse Guard' });
-    expect(getSectionNavTabForPath('Models', '/models/llms/jev')).toMatchObject({ id: 'jev', label: 'Jev decision scorer' });
+    expect(getNavCommandForPath('/models/decision-classifiers/jev')).toMatchObject({ path: '/models/decision-classifiers/jev', label: 'Jev' });
     expect(getSectionNavTabForPath('Models', '/models/training/dataset-abc')).toMatchObject({ id: 'training' });
   });
 
