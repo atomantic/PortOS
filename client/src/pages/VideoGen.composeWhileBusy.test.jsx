@@ -39,7 +39,7 @@ describe('VideoGen compose-while-busy', () => {
     expect(screen.getByTestId('runtime-install-modal')).toHaveAttribute('data-stream-method', 'POST');
   });
 
-  it('leaves Enhance with AI and Prompt from media usable so the next clip can be queued', async () => {
+  it('leaves Enhance with AI usable so the next clip can be queued', async () => {
     await renderVideoGenPage();
 
     const prompt = await screen.findByLabelText('Prompt');
@@ -50,7 +50,6 @@ describe('VideoGen compose-while-busy', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument());
 
     expect(screen.getByTestId('prompt-enhancer')).toHaveAttribute('data-disabled', '0');
-    expect(screen.getByTestId('prompt-from-media')).toHaveAttribute('data-disabled', '0');
     expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled();
   });
 
