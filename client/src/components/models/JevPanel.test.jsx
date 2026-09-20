@@ -13,6 +13,7 @@ vi.mock('../../services/api', () => ({
   adoptJevHead: vi.fn(),
   discardJevHead: vi.fn(),
 }));
+vi.mock('./JevIntegrations', () => ({ default: () => <div>Integration controls</div> }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
@@ -221,7 +222,7 @@ describe('JevPanel decision agreement', () => {
   it('keeps the panel usable when the counters cannot be read', async () => {
     getJevDecisionStats.mockRejectedValue(new Error('unavailable'));
     await renderPanel();
-    expect(await screen.findByText('No decisions measured yet on this machine.')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Decision metrics unavailable');
   });
 });
 

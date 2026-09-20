@@ -92,6 +92,18 @@ describe('jev rung of the untrusted-content ladder', () => {
     }));
   });
 
+  it('disabled source uses chat without shadow scoring in both analysis paths', async () => {
+    withPolicy({ jevMode: 'disabled' });
+    expect(await runUntrustedContentAnalysis({ ...args, jev: jevPlan })).toMatchObject({ ok: true });
+    const gate = await jevBatchGate({ content: args.content, source: args.source,
+      items: [{ key: 'a', premise: 'x', decisionIds: ['issue-comment-reply'] }],
+    });
+    await gate.measure?.({ a: { 'issue-comment-reply': 'none' } });
+    expect(gate.pending).toHaveLength(1);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.decide).not.toHaveBeenCalled();
+  });
+
   it('never consults the scorer for content phase 1 blocked', async () => {
     withPolicy({ jevMode: 'prefer' });
     mocks.scan.mockResolvedValue({ ok: true, safe: false, code: 'model-abuse-detected' });

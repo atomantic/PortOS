@@ -11,7 +11,7 @@ import { startSweep, getSweepStatus, cancelSweep } from '../services/localModelA
 import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.js';
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
-import { getSettings } from '../services/settings.js';
+import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
 import { localLlmCompareSchema, localLlmTestSchema } from '../lib/validation.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
@@ -129,6 +129,8 @@ vi.mock('../services/specDecodeModels.js', () => ({
 // so mock it (defaults to no backends disabled; the disabled-case test flips it).
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
+  readSettingsStrict: vi.fn(),
+  updateSettingsWith: vi.fn(),
   // localPersistentMindSetup → cos → cosTaskStore → codeReview listens on boot.
   settingsEvents: { on: vi.fn(), emit: vi.fn(), setMaxListeners: vi.fn() },
 }));
@@ -913,5 +915,33 @@ describe('llama-server routes', () => {
       'localLlm:progress',
       { event: 'complete', message: 'llama.cpp updated — updated and restarted' },
     );
+  });
+});
+
+
+describe('Jev integration policies', () => {
+  it('resolves inherited modes and changes only scorer fields, preserving other policies', async () => {
+    let persisted = { unrelated: true, untrustedContent: {
+      defaults: { jevMode: 'prefer', classifierMode: 'required' },
+      sources: { messages: { jevMode: 'only' }, email: { model: 'example-model' },
+        'github-issue': { providerId: 'example-provider', jevMinMargin: 0.4 } },
+    } };
+    readSettingsStrict.mockImplementation(async () => ({ corrupt: false, settings: persisted }));
+    updateSettingsWith.mockImplementation(async mutate => (persisted = mutate(persisted)));
+    const app = makeApp();
+    const before = await request(app).get('/api/local-llm/jev/policy');
+    expect(before.body.sources.email.jevMode).toBe('only');
+    expect(before.body.sources['github-issue']).toEqual({ jevMode: 'prefer', jevMinMargin: 0.4 });
+    const changed = await request(app).put('/api/local-llm/jev/policy').send({
+      sources: { email: { jevMode: 'disabled' } }, scopeAdherenceEnabled: false,
+    });
+    expect(changed.status).toBe(200);
+    expect(changed.body.scopeAdherenceEnabled).toBe(false);
+    expect(changed.body.sources.email.jevMode).toBe('disabled');
+    expect(persisted.untrustedContent.sources.email.model).toBe('example-model');
+    expect(persisted.untrustedContent.sources['github-issue'].providerId).toBe('example-provider');
+    expect(persisted.unrelated).toBe(true);
+    const invalid = await request(app).put('/api/local-llm/jev/policy').send({ sources: { email: { classifierMode: 'optional' } } });
+    expect(invalid.status).toBe(400);
   });
 });

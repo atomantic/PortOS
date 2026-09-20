@@ -9,6 +9,8 @@
  */
 
 import os from 'os'
+import { jevPolicyPatchSchema, resolveUntrustedContentPolicy } from '../lib/untrustedContent.js'
+import { readSettingsStrict, updateSettingsWith } from '../services/settings.js'
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
 import {
@@ -281,6 +283,37 @@ router.get('/jev/status', asyncHandler(async (_req, res) => {
 // premise, a choice tied to one, or anything about what was analyzed.
 router.get('/jev/decisions', asyncHandler(async (_req, res) => {
   res.json(await readJevDecisionStats())
+}))
+
+// Resolve inheritance on the server, and expose only the scorer's own settings.
+const presentJevPolicy = (settings) => ({
+  scopeAdherenceEnabled: settings.untrustedContent?.scopeAdherenceEnabled !== false,
+  sources: Object.fromEntries(['github-issue', 'email', 'stacker-news'].map(source => {
+    const policy = resolveUntrustedContentPolicy(settings.untrustedContent, source)
+    return [source, policy ? { jevMode: policy.jevMode, jevMinMargin: policy.jevMinMargin } : null]
+  })),
+})
+
+router.get('/jev/policy', asyncHandler(async (_req, res) => {
+  const state = await readSettingsStrict()
+  if (state.corrupt) throw new ServerError('Scorer settings could not be read.', { status: 503 })
+  res.json(presentJevPolicy(state.settings))
+}))
+
+router.put('/jev/policy', asyncHandler(async (req, res) => {
+  const patch = validateRequest(jevPolicyPatchSchema, req.body)
+  const updated = await updateSettingsWith(current => {
+    const policy = current.untrustedContent || {}
+    const sources = { ...policy.sources }
+    for (const [source, fields] of Object.entries(patch.sources || {})) {
+      sources[source] = { ...sources[source], ...fields }
+    }
+    return { ...current, untrustedContent: { ...policy,
+      ...(patch.scopeAdherenceEnabled === undefined ? {} : { scopeAdherenceEnabled: patch.scopeAdherenceEnabled }),
+      sources,
+    } }
+  }, { actor: 'user' })
+  res.json(presentJevPolicy(updated))
 }))
 
 router.post('/jev/install', asyncHandler(async (req, res) => {

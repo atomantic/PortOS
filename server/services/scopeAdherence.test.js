@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+vi.mock('./settings.js', () => ({ readSettingsStrict: vi.fn() }));
 vi.mock('./jevRouter.js', () => ({
   isJevFeatureEnabled: vi.fn(),
   runJevDecision: vi.fn(),
@@ -10,6 +11,7 @@ vi.mock('./jevRouter.js', () => ({
 }));
 vi.mock('./untrustedContent.js', () => ({ screenUntrustedContent: vi.fn() }));
 
+const { readSettingsStrict } = await import('./settings.js');
 const { isJevFeatureEnabled, runJevDecision, recordJevObservations } = await import('./jevRouter.js');
 const { screenUntrustedContent } = await import('./untrustedContent.js');
 const { scoreAdherence, loadClauseCorpus, resetClauseCorpusCache } = await import('./scopeAdherence.js');
@@ -53,6 +55,7 @@ beforeEach(async () => {
   // queue would fire in the next test and score a change nobody asked about.
   vi.resetAllMocks();
   resetClauseCorpusCache();
+  readSettingsStrict.mockResolvedValue({ corrupt: false, settings: {} });
   repoPath = await mkdtemp(join(tmpdir(), 'portos-scope-'));
   await writeFile(join(repoPath, 'PRD.md'), PRD);
   await writeFile(join(repoPath, 'GOALS.md'), GOALS);
@@ -73,6 +76,13 @@ const score = (overrides = {}) => scoreAdherence({
 });
 
 describe('scoreAdherence', () => {
+  it('does not screen or score when scope adherence alone is disabled', async () => {
+    readSettingsStrict.mockResolvedValue({ corrupt: false, settings: { untrustedContent: { scopeAdherenceEnabled: false } } });
+    expect(await score()).toEqual({ ok: false, code: 'scope-adherence-disabled' });
+    expect(screenUntrustedContent).not.toHaveBeenCalled();
+    expect(runJevDecision).not.toHaveBeenCalled();
+  });
+
   it('declines before touching the scorer when the jev feature is off', async () => {
     isJevFeatureEnabled.mockResolvedValue(false);
     expect(await score()).toEqual({ ok: false, code: 'scope-adherence-disabled' });
