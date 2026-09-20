@@ -1,12 +1,20 @@
 // Advice uses runtime capabilities and declared Finish edges, never a guessed
 // cross-model seed relationship. Changing size does not start a generation.
-export default function ModelWorkflowHelp({ model, models = [], onResolutionChange }) {
+export default function ModelWorkflowHelp({ model, mode, models = [], onResolutionChange }) {
   if (!model) return null;
   const fastH3 = model.runtime === 'fastvideo' && model.fastvideoFamily === 'fasth3';
   const fastMetal = model.runtime === 'fastvideo' && !fastH3;
   const finish = models.find((entry) => entry.id === model.finishModelId);
 
   return (
+    <>
+      {mode === 'image' && models.some((entry) => entry.runtime === 'fastvideo' && !entry.supportedModes?.includes('image')) && (
+        <p className="mt-2 text-xs text-gray-400" role="note">
+          Image mode lists models with image conditioning in their installed runtime. The shipped FastMetal
+          and FastH3 MLX runners support text-to-video only, so they are available in Text mode.
+          For image-to-video, choose a compatible LTX, Wan, or MiniMax H3 model listed above.
+        </p>
+      )}
     <details className="mt-2 rounded-lg border border-port-border px-3 py-2 text-xs text-gray-400">
       <summary className="cursor-pointer text-gray-300">Choosing a model: preview → final</summary>
       <div className="mt-2 space-y-2 leading-relaxed">
@@ -45,5 +53,6 @@ export default function ModelWorkflowHelp({ model, models = [], onResolutionChan
         </p>
       </div>
     </details>
+    </>
   );
 }
