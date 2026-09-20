@@ -10,17 +10,19 @@ export const getReviewItems = (params) => {
 };
 export const getReviewCounts = (options = {}) => request('/review/counts', options);
 export const getReviewBriefing = () => request('/review/briefing');
-// Cross-domain live queue (brain inbox, ask, CoS approvals, drafts, health, backups).
+// Cross-domain live queue (source-owned obligations plus domain projections).
 // Keep transport options (silent, headers, abort signal) separate from the
 // pagination query so callers can continue using the old options-only shape.
 export const getReviewQueue = ({ limit, cursor, ...options } = {}) => {
   const query = queryString({ limit, cursor });
   return request(`/review/queue${query}`, options);
 };
-// Accept/promote a single queue row in place (id is `<source>:<rawId>`)
-export const resolveReviewQueueItem = (id, options = {}) => request('/review/queue/resolve', {
+// Resolve a single queue row in place (id is `<source>:<rawId>`). Source-owned
+// approvals may pass `operation` (approve/reject); transport options stay out
+// of the JSON body.
+export const resolveReviewQueueItem = (id, { operation, ...options } = {}) => request('/review/queue/resolve', {
   method: 'POST',
-  body: JSON.stringify({ id }),
+  body: JSON.stringify({ id, ...(operation ? { operation } : {}) }),
   ...options
 });
 // Promote an Ask row's latest assistant answer into Brain, a CoS task, or a

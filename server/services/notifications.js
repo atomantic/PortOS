@@ -135,7 +135,9 @@ export async function addNotification(notification) {
       id: uuidv4(),
       type: notification.type,
       title: notification.title,
-      description: notification.description || '',
+      // Some legacy producers call this field `message`. Preserve it at the
+      // store boundary so the action adapter can retain the user's remedy.
+      description: notification.description || notification.message || '',
       priority: notification.priority || PRIORITY_LEVELS.MEDIUM,
       timestamp: new Date().toISOString(),
       link: notification.link || null,

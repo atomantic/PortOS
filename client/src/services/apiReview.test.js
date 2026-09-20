@@ -14,11 +14,12 @@ vi.mock('./apiCore.js', () => ({
 
 let request;
 let getReviewQueue;
+let resolveReviewQueueItem;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ request } = await import('./apiCore.js'));
-  ({ getReviewQueue } = await import('./apiReview.js'));
+  ({ getReviewQueue, resolveReviewQueueItem } = await import('./apiReview.js'));
   request.mockReset();
 });
 
@@ -37,5 +38,19 @@ describe('getReviewQueue', () => {
     await getReviewQueue({ silent: true });
 
     expect(request).toHaveBeenCalledWith('/review/queue', { silent: true });
+  });
+});
+
+describe('resolveReviewQueueItem', () => {
+  it('keeps source operations in the body and transport options separate', async () => {
+    request.mockResolvedValue({ resolved: true });
+
+    await resolveReviewQueueItem('memory:memory-1', { operation: 'approve', silent: true });
+
+    expect(request).toHaveBeenCalledWith('/review/queue/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ id: 'memory:memory-1', operation: 'approve' }),
+      silent: true,
+    });
   });
 });

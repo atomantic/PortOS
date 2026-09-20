@@ -308,7 +308,13 @@ export async function notifyPause(record, sId, { reason, pauseKind = null, curre
     description: reason || 'The run paused and needs human review before it can continue.',
     priority: PRIORITY_LEVELS.HIGH,
     link: `/pipeline/series/${sId}`,
-    metadata: { autopilotPauseSeriesId: sId, runId: record.runId, pauseKind, currentStep },
+    metadata: {
+      autopilotPauseSeriesId: sId,
+      runId: record.runId,
+      category: 'autopilot-paused',
+      pauseKind,
+      currentStep,
+    },
   }).catch((err) => { console.log(`⚠️ autopilot: pause notification failed for ${sId.slice(0, 12)}: ${err.message}`); });
 }
 

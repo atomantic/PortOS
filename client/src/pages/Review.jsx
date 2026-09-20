@@ -78,6 +78,29 @@ const TYPE_CONFIG = {
 
 const TYPE_PRIORITY = { alert: 0, cos: 1, todo: 2, briefing: 3 };
 
+const SOURCE_OWNED_REVIEW_CATEGORIES = new Set([
+  'content-review',
+  'goal-fidelity',
+  'memory-approval',
+  'plan-question',
+  'task-approval',
+  'autopilot-paused',
+]);
+
+function isSourceOwnedReviewItem(item) {
+  const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  const hasReference = (value) => (typeof value === 'string' && value.trim())
+    || (typeof value === 'number' && Number.isFinite(value));
+  if (metadata.sourceOwned === true || metadata.triageOnly === true) return true;
+  if (SOURCE_OWNED_REVIEW_CATEGORIES.has(metadata.category)) return true;
+  if (item?.type === 'cos' && (hasReference(metadata.taskId) || hasReference(metadata.referenceId))) return true;
+  return item?.type === 'alert';
+}
+
+function isGenericCompletableItem(item) {
+  return !isSourceOwnedReviewItem(item);
+}
+
 function isActionableItem(item) {
   if (item.type === 'alert' || item.type === 'todo') return true;
   if (item.type === 'cos') {
@@ -287,6 +310,7 @@ export default function Review() {
     [queue]);
 
   const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
+  const genericCompletableCount = pendingItems.filter(isGenericCompletableItem).length;
 
   const actionableItems = useMemo(() => pendingItems
     .filter(isActionableItem)
@@ -339,13 +363,15 @@ export default function Review() {
             </select>
             {pendingCount > 0 && (
               <>
-                <button
-                  onClick={handleCompleteAll}
-                  className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
-                  title="Mark all pending items as completed"
-                >
-                  Complete All
-                </button>
+                {genericCompletableCount > 0 && (
+                  <button
+                    onClick={handleCompleteAll}
+                    className="px-3 py-2 text-sm bg-port-success/10 hover:bg-port-success/20 border border-port-success/30 rounded-lg text-port-success transition-colors"
+                    title="Mark all general pending items as completed"
+                  >
+                    Complete All
+                  </button>
+                )}
                 <button
                   onClick={handleMarkAllRead}
                   className="px-3 py-2 text-sm bg-port-border/50 hover:bg-port-border rounded-lg text-gray-300 transition-colors"
@@ -851,13 +877,15 @@ function ReviewItem({ item, config, idScope, isEditing, onComplete, onDismiss, o
               <Pencil size={14} />
             </button>
           )}
-          <button
-            onClick={() => onComplete(item.id)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-success transition-colors"
-            title={item.type === 'alert' ? 'Accept' : 'Complete'} aria-label={item.type === 'alert' ? 'Accept' : 'Complete'}
-          >
-            <CheckCircle2 size={16} />
-          </button>
+          {isGenericCompletableItem(item) && (
+            <button
+              onClick={() => onComplete(item.id)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-success transition-colors"
+              title="Complete" aria-label="Complete"
+            >
+              <CheckCircle2 size={16} />
+            </button>
+          )}
           <button
             onClick={() => onDismiss(item.id)}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-warning transition-colors"

@@ -152,8 +152,9 @@ describe('Review Hub queue-card triage (#3282)', () => {
     render(<Review />);
     await waitFor(() => expect(actionQueueBody()).toBeTruthy());
 
-    // Accept / Reject / Delete are all reachable on the collapsed card.
-    expect(screen.getAllByTitle('Accept').length).toBeGreaterThan(0);
+    // Source-owned alerts cannot be silently accepted or deleted. Dismissal
+    // remains available as the explicit triage action.
+    expect(screen.queryByTitle('Accept')).not.toBeInTheDocument();
     expect(screen.getAllByTitle('Reject').length).toBeGreaterThan(0);
     expect(screen.getAllByTitle('Delete').length).toBeGreaterThan(0);
   });
