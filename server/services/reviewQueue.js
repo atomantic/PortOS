@@ -4,8 +4,8 @@
  * Where review.js manages *stored* review items (todos/alerts/briefing/cos that
  * producers push in via cosEvents), this module *live-pulls* the things across
  * PortOS that are currently waiting on the user and normalizes them into one
- * list. It reads each producer's existing service on demand — nothing is
- * persisted here — so the queue always reflects live state.
+ * list. It reads each producer's existing service on demand; only separate
+ * presentation markers are persisted, so source payloads remain live state.
  *
  * Each producer is gathered independently and defensively: a single producer
  * throwing (or its data file being absent) degrades that one source to an
@@ -23,7 +23,8 @@
  * accept/promote it in place without leaving the Review Hub (issue #709 follow-up
  * to the v1 read-only aggregator). Sources with no clean local resolve (health
  * alerts are live-computed and clear when the condition does; a failed backup
- * retries by re-running with settings) stay drill-down + session-dismiss only.
+ * retries by re-running with settings) stay drill-down plus capability-aware
+ * presentation triage.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -45,6 +46,7 @@ import { adaptNotification, adaptStoredReviewItem } from './reviewActionAdapters
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from './userTimezone.js';
+import * as reviewQueueTriageStore from './reviewQueueTriageStore.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { isTerminalThreadStatus, threadNextLine } from '../lib/brainThreads.js';
 
@@ -741,6 +743,72 @@ function normalizeQueueItem(producer, raw, mapped) {
 }
 
 /**
+ * The queue row id is a projection identity. Triage needs the source's
+ * canonical action kind/reference plus occurrence and revision so a later
+ * occurrence of the same source record is not hidden by an older decision.
+ */
+export function queueActionIdentity(item) {
+  const actionKind = firstText(item?.actionKind, item?.source) || 'review';
+  const sourceRef = firstText(item?.sourceRef, item?.id) || '';
+  return {
+    actionKey: `${actionKind}:${sourceRef}`,
+    occurrence: item?.occurrence ?? null,
+    revision: item?.revision ?? null,
+  };
+}
+
+const emptyTriageState = Object.freeze({
+  snoozedUntil: null,
+  dismissed: false,
+  deliveryGeneration: 0,
+});
+
+function triageOperationsFor(item) {
+  return [
+    { id: 'snooze', label: 'Snooze', available: true },
+    ...(item.isRecommendation === true
+      ? [{ id: 'dismiss', label: 'Dismiss', available: true }]
+      : []),
+  ];
+}
+
+/**
+ * Apply durable presentation markers without changing the source-owned row.
+ * This is exported as a pure boundary so expiry and occurrence rollover can
+ * be tested with an injected clock.
+ */
+export function applyQueueTriage(items, entries = [], now = new Date()) {
+  const byIdentity = new Map(
+    entries
+      .map((entry) => {
+        const normalized = reviewQueueTriageStore.normalizeReviewQueueTriage(entry);
+        return normalized ? [reviewQueueTriageStore.triageIdentityKey(normalized), normalized] : null;
+      })
+      .filter(Boolean),
+  );
+  const nowMs = now instanceof Date ? now.getTime() : Date.parse(now);
+  const currentTime = Number.isFinite(nowMs) ? nowMs : Date.now();
+
+  return items.flatMap((item) => {
+    const identity = queueActionIdentity(item);
+    const state = byIdentity.get(reviewQueueTriageStore.triageIdentityKey(identity)) || emptyTriageState;
+    const snoozedUntilMs = state.snoozedUntil ? Date.parse(state.snoozedUntil) : NaN;
+    const snoozed = Number.isFinite(snoozedUntilMs) && snoozedUntilMs > currentTime;
+    const dismissed = state.dismissed && item.isRecommendation === true;
+    if (snoozed || dismissed) return [];
+    return [{
+      ...item,
+      triage: {
+        snoozedUntil: state.snoozedUntil,
+        dismissed: state.dismissed,
+        deliveryGeneration: state.deliveryGeneration,
+      },
+      triageOperations: triageOperationsFor(item),
+    }];
+  });
+}
+
+/**
  * Gather one producer into normalized rows. A producer may return either an
  * array or `{ items, truncated }` when it filtered a bounded upstream read.
  * Totals are nullable whenever the read filled its bound: the collected rows
@@ -924,6 +992,105 @@ export async function resolveQueueItem(queueItemId, operation = 'resolve', input
   return { source, id: queueItemId, resolved: true };
 }
 
+const REVIEW_QUEUE_TRIAGE_OPERATIONS = new Set(['snooze', 'unsnooze', 'dismiss']);
+
+function queueSourceAndRawId(queueItemId) {
+  const value = String(queueItemId || '');
+  const sep = value.indexOf(':');
+  return {
+    source: sep === -1 ? value : value.slice(0, sep),
+    rawId: sep === -1 ? '' : value.slice(sep + 1),
+  };
+}
+
+/**
+ * Apply a presentation-only queue decision after re-reading the live source.
+ * The mutation never accepts source identity, occurrence, or capability from
+ * the client; those values come from the fresh normalized queue row.
+ */
+export async function triageQueueItem(queueItemId, operation, input = {}, { now: injectedNow } = {}) {
+  if (!REVIEW_QUEUE_TRIAGE_OPERATIONS.has(operation)) {
+    throw new ServerError(`Unsupported review queue triage operation "${operation}"`, {
+      status: 400,
+      code: 'BAD_REQUEST',
+    });
+  }
+
+  const now = injectedNow instanceof Date && Number.isFinite(injectedNow.getTime())
+    ? injectedNow
+    : new Date();
+  let snoozedUntil = null;
+  if (operation === 'snooze') {
+    const parsed = new Date(input?.snoozedUntil || '');
+    if (Number.isNaN(parsed.getTime()) || parsed.getTime() <= now.getTime()) {
+      throw new ServerError('snoozedUntil must be a future ISO timestamp', {
+        status: 400,
+        code: 'VALIDATION_ERROR',
+      });
+    }
+    snoozedUntil = parsed.toISOString();
+  } else if (input?.snoozedUntil !== undefined) {
+    throw new ServerError('snoozedUntil is only valid for the snooze operation', {
+      status: 400,
+      code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const { source } = queueSourceAndRawId(queueItemId);
+  const queue = await gatherFullQueue({}, { applyTriageState: false, now });
+  const sourceDescriptor = queue.sources[source];
+  if (sourceDescriptor?.error) {
+    throw new ServerError(`Cannot triage ${source} while its source is unavailable`, {
+      status: 503,
+      code: 'SOURCE_UNAVAILABLE',
+    });
+  }
+  const item = queue.items.find((candidate) => candidate.id === queueItemId);
+  if (!item) {
+    throw new ServerError(`Review queue item not found: ${queueItemId}`, { status: 404, code: 'NOT_FOUND' });
+  }
+  if (operation === 'dismiss' && item.isRecommendation !== true) {
+    throw new ServerError('Only optional recommendations can be dismissed from the queue', {
+      status: 400,
+      code: 'CAPABILITY_UNAVAILABLE',
+    });
+  }
+
+  const identity = queueActionIdentity(item);
+  const existingEntries = await reviewQueueTriageStore.listReviewQueueTriage();
+  const identityKey = reviewQueueTriageStore.triageIdentityKey(identity);
+  const existing = existingEntries.find((entry) => (
+    reviewQueueTriageStore.triageIdentityKey(entry) === identityKey
+  ));
+  const next = {
+    ...identity,
+    snoozedUntil: existing?.snoozedUntil || null,
+    dismissed: existing?.dismissed === true,
+    deliveryGeneration: existing?.deliveryGeneration || 0,
+  };
+
+  if (operation === 'snooze') next.snoozedUntil = snoozedUntil;
+  if (operation === 'unsnooze') next.snoozedUntil = null;
+  if (operation === 'dismiss') next.dismissed = true;
+
+  if (!next.snoozedUntil && !next.dismissed && next.deliveryGeneration === 0) {
+    await reviewQueueTriageStore.removeReviewQueueTriage(next);
+  } else {
+    await reviewQueueTriageStore.upsertReviewQueueTriage(next);
+  }
+
+  return {
+    id: queueItemId,
+    operation,
+    triaged: true,
+    triage: {
+      snoozedUntil: next.snoozedUntil,
+      dismissed: next.dismissed,
+      deliveryGeneration: next.deliveryGeneration,
+    },
+  };
+}
+
 // Targets the queue can promote an Ask answer into directly. brain/task pick
 // the latest assistant turn with no extra input; goal additionally needs a
 // goalId (the row carries `goalOptions` so the UI can supply it). Goal is in
@@ -1009,7 +1176,12 @@ function sourceShownCounts(items) {
   return shown;
 }
 
-async function gatherFullQueue(query = {}) {
+async function readQueueTriageForProjection() {
+  const entries = await reviewQueueTriageStore.listReviewQueueTriage();
+  return Array.isArray(entries) ? entries : [];
+}
+
+async function gatherFullQueue(query = {}, { applyTriageState = true, now = new Date() } = {}) {
   // Fetch active goals once (not per Ask row) so the goal picker on Ask rows
   // has targets. A failure here degrades to no goal targets, not a sunk queue.
   const goalOptions = await getActiveGoalOptions();
@@ -1020,7 +1192,8 @@ async function gatherFullQueue(query = {}) {
       return 'UTC';
     })
     : 'UTC';
-  const ctx = { goalOptions, view, timezone, now: new Date() };
+  const clock = now instanceof Date && Number.isFinite(now.getTime()) ? now : new Date();
+  const ctx = { goalOptions, view, timezone, now: clock };
   const visibleProducers = PRODUCERS.filter((producer) => visibleInLiveViews(producer, view));
 
   const results = await Promise.all(visibleProducers.map(async (producer) => {
@@ -1041,8 +1214,9 @@ async function gatherFullQueue(query = {}) {
       });
   }));
 
-  const items = deduplicateItems(results.flatMap((result) => result.items));
-  items.sort((a, b) => compareQueueItems(a, b));
+  let items = deduplicateItems(results.flatMap((result) => result.items));
+  if (applyTriageState) items = applyQueueTriage(items, await readQueueTriageForProjection(), clock);
+  items.sort((a, b) => compareQueueItems(a, b, clock.getTime()));
   const shownCounts = sourceShownCounts(items);
   const sources = {};
   const totalsBySource = {};
@@ -1074,7 +1248,7 @@ async function gatherFullQueue(query = {}) {
     nextCursor: null,
     partial,
     counts: queueCounts(items),
-    generatedAt: new Date().toISOString(),
+    generatedAt: clock.toISOString(),
   };
 }
 
@@ -1135,7 +1309,7 @@ function saveQueueSnapshot(queue, queryKey, pageSize) {
  * retains the original full-list response. Passing `limit` opts into a
  * short-lived process-local snapshot with an opaque offset cursor.
  */
-export async function buildQueue({ limit, cursor, query = {} } = {}) {
+export async function buildQueue({ limit, cursor, query = {}, now } = {}) {
   const requestedLimit = validatePageSize(limit);
   const queryKey = queryKeyFor(query);
 
@@ -1165,7 +1339,7 @@ export async function buildQueue({ limit, cursor, query = {} } = {}) {
     return pageFromSnapshot(snapshot, payload.offset);
   }
 
-  const queue = await gatherFullQueue(query);
+  const queue = await gatherFullQueue(query, { now });
   if (requestedLimit === null) return queue;
 
   const snapshot = saveQueueSnapshot(queue, queryKey, requestedLimit);

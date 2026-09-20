@@ -73,6 +73,18 @@ const FEEDBACK_ITEM = {
   }],
 };
 
+const TRIAGE_RECOMMENDATION = {
+  id: 'ask:conversation-example',
+  source: 'ask',
+  sourceLabel: 'Ask answers',
+  title: 'Optional answer ready',
+  summary: 'A recommendation to triage',
+  triageOperations: [
+    { id: 'snooze', label: 'Snooze', available: true },
+    { id: 'dismiss', label: 'Dismiss', available: true },
+  ],
+};
+
 vi.mock('../services/api', () => ({
   getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
   getReviewCounts: vi.fn(),
@@ -87,6 +99,7 @@ vi.mock('../services/api', () => ({
   updateReviewItem: vi.fn(() => Promise.resolve({})),
   bulkUpdateReviewStatus: vi.fn(() => Promise.resolve({})),
   resolveReviewQueueItem: vi.fn(() => Promise.resolve({})),
+  triageReviewQueueItem: vi.fn(() => Promise.resolve({})),
   promoteAskReviewQueueItem: vi.fn(() => Promise.resolve({})),
   normalizeBrainScanReportPath: vi.fn((p) => p)
 }));
@@ -213,6 +226,33 @@ describe('Review Hub queue-card triage (#3282)', () => {
     await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(
       'memory:memory-1',
       { operation: 'approve' },
+    ));
+  });
+
+  it('shows durable snooze and recommendation-dismiss controls', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {} });
+
+    render(<Review />);
+    const snooze = await screen.findByRole('combobox', { name: 'Snooze Optional answer ready' });
+    expect(screen.getByRole('button', { name: 'Dismiss this recommendation' })).toBeInTheDocument();
+
+    fireEvent.change(snooze, { target: { value: String(60 * 60 * 1000) } });
+
+    await waitFor(() => expect(api.triageReviewQueueItem).toHaveBeenCalledWith(
+      TRIAGE_RECOMMENDATION.id,
+      { operation: 'snooze', snoozedUntil: expect.any(String) },
+    ));
+  });
+
+  it('persists dismissal only for an optional recommendation', async () => {
+    api.getReviewQueue.mockResolvedValueOnce({ items: [TRIAGE_RECOMMENDATION], sources: {} });
+
+    render(<Review />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss this recommendation' }));
+
+    await waitFor(() => expect(api.triageReviewQueueItem).toHaveBeenCalledWith(
+      TRIAGE_RECOMMENDATION.id,
+      { operation: 'dismiss' },
     ));
   });
 

@@ -31,6 +31,17 @@ export const resolveReviewQueueItem = (id, { operation, rating, comment, ...opti
   }),
   ...options
 });
+// Persist a presentation-only queue decision. The server re-reads the source
+// row, so the client supplies only the row id and the selected operation/time.
+export const triageReviewQueueItem = (id, { operation, snoozedUntil, ...options } = {}) => request('/review/queue/triage', {
+  method: 'POST',
+  body: JSON.stringify({
+    id,
+    operation,
+    ...(snoozedUntil ? { snoozedUntil } : {}),
+  }),
+  ...options
+});
 // Promote an Ask row's latest assistant answer into Brain, a CoS task, or a
 // Goal's progress in place (id is `ask:<conversationId>`, target is
 // 'brain' | 'task' | 'goal'; goalId is required for the 'goal' target).

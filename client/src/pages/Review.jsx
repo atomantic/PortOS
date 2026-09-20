@@ -108,6 +108,19 @@ const ACTION_VIEWS = [
 ];
 const ACTION_VIEW_IDS = new Set(ACTION_VIEWS.map(({ id }) => id));
 
+const QUEUE_SNOOZE_OPTIONS = [
+  { value: 60 * 60 * 1000, label: '1 hour' },
+  { value: 24 * 60 * 60 * 1000, label: '1 day' },
+  { value: 7 * 24 * 60 * 60 * 1000, label: '1 week' },
+];
+
+const queueItemKey = (itemOrId) => {
+  if (itemOrId && typeof itemOrId === 'object') {
+    return JSON.stringify([itemOrId.id || '', itemOrId.occurrence ?? '', itemOrId.revision ?? '']);
+  }
+  return JSON.stringify([itemOrId || '', '', '']);
+};
+
 const SOURCE_OWNED_REVIEW_CATEGORIES = new Set([
   'content-review',
   'goal-fidelity',
@@ -155,10 +168,9 @@ export default function Review() {
   const [counts, setCounts] = useState(null);
   const countsRequestId = useRef(0);
 
-  // Cross-domain live queue (M42 P5). These rows are derived live from each
-  // producer, not stored, so "dismiss" is a per-session client-side hide rather
-  // than a server mutation. Rows whose producer declares an inline action also
-  // get a server-backed accept/promote that resolves the underlying record.
+  // Cross-domain live queue (M42 P5). Source payloads remain live projections;
+  // presentation decisions are durable server-side markers keyed by the row's
+  // canonical action identity, occurrence, and revision.
   const [queue, setQueue] = useState(null);
   const [dismissedQueueIds, setDismissedQueueIds] = useState(() => new Set());
   // Rows with an inline accept/promote in flight — disables the button so a
@@ -282,10 +294,11 @@ export default function Review() {
   const handleMarkAllRead = () => api.bulkUpdateReviewStatus({ status: 'dismissed' }).catch(() => null);
   const handleCompleteAll = () => api.bulkUpdateReviewStatus({ status: 'completed' }).catch(() => null);
 
-  const handleQueueDismiss = (id) => {
+  const handleQueueDismiss = (itemOrId) => {
+    const key = queueItemKey(itemOrId);
     setDismissedQueueIds(prev => {
       const next = new Set(prev);
-      next.add(id);
+      next.add(key);
       return next;
     });
   };
@@ -315,7 +328,26 @@ export default function Review() {
     // matters for status views: a completed commitment must disappear from
     // Today but remain reachable in History.
     if (ok) {
-      handleQueueDismiss(item.id);
+      handleQueueDismiss(item);
+      await fetchQueue();
+      if (actionId === item.id) navigate(`/review?view=${actionView}`, { replace: true });
+    }
+    return ok;
+  };
+
+  const handleQueueTriage = async (item, operation, input = {}) => {
+    if (resolvingQueueIds.has(item.id)) return false;
+    setResolvingQueueIds(prev => new Set(prev).add(item.id));
+    const ok = await api.triageReviewQueueItem(item.id, { operation, ...input })
+      .then(() => true)
+      .catch(() => false);
+    setResolvingQueueIds(prev => {
+      const next = new Set(prev);
+      next.delete(item.id);
+      return next;
+    });
+    if (ok) {
+      handleQueueDismiss(item);
       await fetchQueue();
       if (actionId === item.id) navigate(`/review?view=${actionView}`, { replace: true });
     }
@@ -335,7 +367,7 @@ export default function Review() {
     // Reactive removal — drop the promoted row in place, then refresh the
     // source-backed queue so counts and partial-source metadata stay truthful.
     if (ok) {
-      handleQueueDismiss(item.id);
+      handleQueueDismiss(item);
       await fetchQueue();
     }
   };
@@ -364,7 +396,7 @@ export default function Review() {
   }, {}), [visibleItems]);
 
   const queueItems = useMemo(
-    () => (queue?.items || []).filter(i => !dismissedQueueIds.has(i.id)),
+    () => (queue?.items || []).filter(i => !dismissedQueueIds.has(queueItemKey(i))),
     [queue, dismissedQueueIds]);
   const queueSourceErrors = useMemo(
     () => Object.entries(queue?.sources || {}).filter(([, s]) => s.error),
@@ -495,9 +527,9 @@ export default function Review() {
                     item={item}
                     onSelect={handleQueueSelect}
                     onDrill={handleQueueDrill}
-                    onDismiss={handleQueueDismiss}
                     onResolve={handleQueueResolve}
                     onPromoteAsk={handleQueuePromoteAsk}
+                    onTriage={handleQueueTriage}
                     resolving={resolvingQueueIds.has(item.id)}
                   />
                 ))}
@@ -654,6 +686,8 @@ export default function Review() {
         item={selectedAction}
         onClose={() => navigate(`/review?view=${actionView}`, { replace: true })}
         onResolve={handleQueueResolve}
+        onTriage={handleQueueTriage}
+        triagePending={Boolean(actionId && resolvingQueueIds.has(actionId))}
         onSaved={fetchQueue}
         onDrill={handleQueueDrill}
       />
@@ -790,7 +824,69 @@ function FeedbackRatingControls({ id, onSubmit, disabled = false, options = ['po
   );
 }
 
-function QueueRow({ item, onSelect, onDrill, onDismiss, onResolve, onPromoteAsk, resolving = false }) {
+function QueueTriageControls({ item, onTriage, disabled = false }) {
+  const operations = Array.isArray(item?.triageOperations)
+    ? item.triageOperations.filter((operation) => operation?.available !== false)
+    : [];
+  if (!onTriage || operations.length === 0) return null;
+
+  const hasOperation = (id) => operations.some((operation) => operation.id === id);
+  const snooze = (event) => {
+    const duration = Number(event.target.value);
+    event.target.value = '';
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    onTriage(item, 'snooze', { snoozedUntil: new Date(Date.now() + duration).toISOString() });
+  };
+
+  return (
+    <div className="inline-flex items-center gap-2 flex-wrap">
+      {hasOperation('snooze') && (
+        <label className="inline-flex items-center">
+          <span className="sr-only">Snooze {item.title}</span>
+          <select
+            defaultValue=""
+            aria-label={`Snooze ${item.title}`}
+            onChange={snooze}
+            disabled={disabled}
+            className="min-h-[36px] rounded-md border border-port-warning/30 bg-port-warning/10 px-2 py-1 text-xs font-medium text-port-warning transition-colors hover:bg-port-warning/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:cursor-not-allowed disabled:opacity-40"
+            title="Snooze this action"
+          >
+            <option value="">Snooze…</option>
+            {QUEUE_SNOOZE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {hasOperation('unsnooze') && (
+        <button
+          type="button"
+          onClick={() => onTriage(item, 'unsnooze')}
+          disabled={disabled}
+          className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-port-warning/30 bg-port-warning/10 px-2 py-1 text-xs font-medium text-port-warning transition-colors hover:bg-port-warning/20 disabled:cursor-not-allowed disabled:opacity-40"
+          title="Show this action again"
+        >
+          <Clock3 size={13} />
+          Unsnooze
+        </button>
+      )}
+      {hasOperation('dismiss') && (
+        <button
+          type="button"
+          onClick={() => onTriage(item, 'dismiss')}
+          disabled={disabled}
+          className="min-h-[36px] min-w-[36px] inline-flex items-center justify-center rounded-md border border-port-border px-2 py-1 text-gray-500 transition-colors hover:border-port-warning/40 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-40"
+          title="Dismiss this recommendation"
+          aria-label="Dismiss this recommendation"
+        >
+          <X size={15} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, resolving = false }) {
   const config = QUEUE_SOURCE_CONFIG[item.source] || { icon: Inbox, color: 'text-gray-400' };
   const Icon = config.icon;
   const borderTone = QUEUE_SEVERITY_STYLE[item.severity] || QUEUE_SEVERITY_STYLE.normal;
@@ -893,19 +989,14 @@ function QueueRow({ item, onSelect, onDrill, onDismiss, onResolve, onPromoteAsk,
             </select>
           </label>
         )}
+        <QueueTriageControls item={item} onTriage={onTriage} disabled={resolving} />
         <button
+          type="button"
           onClick={() => onDrill(item)}
           className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-accent transition-colors"
           title="Open" aria-label="Open"
         >
           <ArrowRight size={16} />
-        </button>
-        <button
-          onClick={() => onDismiss(item.id)}
-          className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-500 hover:text-port-warning transition-colors"
-          title="Dismiss from queue (this session)" aria-label="Dismiss from queue (this session)"
-        >
-          <X size={16} />
         </button>
       </div>
     </div>
@@ -1099,7 +1190,7 @@ const threadDraft = (record) => ({
   notes: record?.notes || '',
 });
 
-function ActionDetail({ item, onClose, onResolve, onSaved, onDrill }) {
+function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = false, onSaved, onDrill }) {
   const isThread = item?.source === 'threads';
   const isTodo = item?.source === 'todo';
   const [record, setRecord] = useState(item);
@@ -1262,6 +1353,16 @@ function ActionDetail({ item, onClose, onResolve, onSaved, onDrill }) {
             ))}
           </section>
         )}
+
+        <QueueTriageControls
+          item={item}
+          onTriage={async (...args) => {
+            const ok = await onTriage?.(...args);
+            if (ok) onClose();
+            return ok;
+          }}
+          disabled={triagePending}
+        />
 
         {item.drillTo && (
           <button type="button" onClick={() => { onClose(); onDrill(item); }} className="inline-flex items-center gap-2 text-sm text-port-accent hover:underline">

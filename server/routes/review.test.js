@@ -5,12 +5,14 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 const buildQueue = vi.fn();
 const resolveQueueItem = vi.fn();
+const triageQueueItem = vi.fn();
 const promoteAskQueueItem = vi.fn();
 
 vi.mock('../services/review.js', () => ({}));
 vi.mock('../services/reviewQueue.js', () => ({
   buildQueue,
   resolveQueueItem,
+  triageQueueItem,
   promoteAskQueueItem,
 }));
 
@@ -103,5 +105,33 @@ describe('POST /api/review/queue/resolve', () => {
     expect(resolveQueueItem).toHaveBeenCalledWith(
       'feedback:agent-1', 'rate', { rating: 'positive', comment: 'Useful result' },
     );
+  });
+});
+
+describe('POST /api/review/queue/triage', () => {
+  it('validates the snooze timestamp and forwards it to the queue service', async () => {
+    const snoozedUntil = '2099-01-01T00:00:00.000Z';
+    triageQueueItem.mockResolvedValue({ id: 'brain:b1', operation: 'snooze', triaged: true });
+
+    const response = await request(makeApp())
+      .post('/api/review/queue/triage')
+      .send({ id: 'brain:b1', operation: 'snooze', snoozedUntil });
+
+    expect(response.status).toBe(200);
+    expect(triageQueueItem).toHaveBeenCalledWith('brain:b1', 'snooze', { snoozedUntil });
+  });
+
+  it('requires a timestamp for snooze and rejects timestamps on other operations', async () => {
+    const missing = await request(makeApp())
+      .post('/api/review/queue/triage')
+      .send({ id: 'brain:b1', operation: 'snooze' });
+    expect(missing.status).toBe(400);
+    expect(triageQueueItem).not.toHaveBeenCalled();
+
+    const extra = await request(makeApp())
+      .post('/api/review/queue/triage')
+      .send({ id: 'ask:a1', operation: 'dismiss', snoozedUntil: '2099-01-01T00:00:00.000Z' });
+    expect(extra.status).toBe(400);
+    expect(triageQueueItem).not.toHaveBeenCalled();
   });
 });

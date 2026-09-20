@@ -45,6 +45,14 @@ the additive fields `sourceRef`, `actionKind`, `reason`, `nextAction`,
 producer URL or arbitrary command. The existing route-specific mutation
 consumers remain the authority for executing those operations.
 
+The queue may also include `triage` and `triageOperations`. `triage` contains
+only `snoozedUntil`, `dismissed`, and `deliveryGeneration`; the latter is kept
+separate from notification-read state for the delivery layer. `snooze` and
+`unsnooze` change presentation only, while `dismiss` is advertised only for
+`isRecommendation` rows. A triage mutation re-reads the source and rejects
+unavailable sources or unsupported capabilities before writing the local
+marker.
+
 Source-owned rows may also carry `sourceOwned: true` and `triageOnly: true`.
 Generic Review completion rejects those rows; an explicit source operation
 must revalidate the owning record at mutation time. A row with
