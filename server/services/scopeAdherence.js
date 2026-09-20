@@ -136,6 +136,11 @@ export async function scoreAdherence({
   // (`server/lib/importScoping.test.js`).
   const { isJevFeatureEnabled, recordJevObservations, runJevDecision } = await import('./jevRouter.js');
   if (!await isJevFeatureEnabled()) return failure('scope-adherence-disabled');
+  const { readSettingsStrict } = await import('./settings.js');
+  const settingsState = await readSettingsStrict();
+  if (settingsState.corrupt || settingsState.settings.untrustedContent?.scopeAdherenceEnabled === false) {
+    return failure('scope-adherence-disabled');
+  }
 
   // Normalized ONCE, here. The route's schema has already trimmed what it
   // validates, but this is also the entry point for a direct service caller.

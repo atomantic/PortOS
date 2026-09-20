@@ -9,7 +9,7 @@ import LocalLlmLibraryView from './LocalLlmLibraryView.jsx';
 export const LLM_VIEWS = [
   { id: 'library', label: 'Model Library', icon: Download },
   { id: 'abuse', label: 'Abuse Guard', icon: ShieldCheck },
-  { id: 'jev', label: 'jev', icon: Scale, feature: 'jev' },
+  { id: 'jev', label: 'jev', icon: Scale },
 ];
 
 // Palettable LLM drill-downs. Model Library stays a focused view of
@@ -31,14 +31,7 @@ export const LLM_NAV_SUBROUTES = [
 export function LocalLlmTab({ view }) {
   const navigate = useNavigate();
   const { isFeatureEnabled } = useInstanceFeatures();
-  // Resolved against the FULL list, never the visible one: a disabled feature
-  // hides the pill but leaves the route live, so a bookmark, a shared link, or
-  // voice `ui_navigate` still lands on the panel (client/src/lib/navFeatures.js)
-  // — and the pill stays visible while that panel is the one on screen.
   const activeView = LLM_VIEWS.some(({ id }) => id === view) ? view : 'library';
-  // The same gate the sidebar and ⌘K apply to the manifest. Without it a
-  // default-off feature still advertises itself here — for jev, a ~9 GB
-  // download the install has not opted into.
   const visibleViews = LLM_VIEWS.filter((tab) => tab.id === activeView || isFeatureEnabled(tab.feature));
 
   return (

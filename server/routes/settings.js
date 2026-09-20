@@ -47,7 +47,7 @@ const eidoverseRepoSchema = z.object({
 // the bounds describe lives.
 const decorateBounds = (settings) => ({
   ...settings,
-  untrustedContent: { defaults: { ...DEFAULT_UNTRUSTED_CONTENT_POLICY, ...settings.untrustedContent?.defaults }, sources: settings.untrustedContent?.sources || {} },
+  untrustedContent: { scopeAdherenceEnabled: settings.untrustedContent?.scopeAdherenceEnabled !== false, defaults: { ...DEFAULT_UNTRUSTED_CONTENT_POLICY, ...settings.untrustedContent?.defaults }, sources: settings.untrustedContent?.sources || {} },
   imageGen: {
     ...(settings.imageGen || {}),
     codex: {

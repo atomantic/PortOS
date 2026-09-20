@@ -16,7 +16,7 @@
 
 import { join } from 'path';
 import { createCachedStore, PATHS } from '../lib/fileUtils.js';
-import { getJevDecision, jevHypotheses, jevMinMarginFor, jevValueForHypothesis } from '../lib/jevDecisions.js';
+import { JEV_DECISIONS, getJevDecision, jevHypotheses, jevMinMarginFor, jevValueForHypothesis } from '../lib/jevDecisions.js';
 
 const SHADOW_SCHEMA_VERSION = 1;
 const emptyShadow = () => ({ schemaVersion: SHADOW_SCHEMA_VERSION, decisions: {}, updatedAt: null });
@@ -71,10 +71,12 @@ export async function isJevFeatureEnabled() {
  * Two independent gates, both of which must be open: the per-install feature
  * toggle (an operator saying this machine runs the scorer at all) and the
  * per-source `jevMode` (an operator saying this CHANNEL may be answered
- * locally). `shadow` is not a mode an operator sets — it is what `off` means on
+ * locally). `disabled` suppresses even shadow scoring. `shadow` is the
+ * UI label for the legacy stored `off` value on
  * a machine where the feature is on, and it changes no behavior at all.
  */
 export async function resolveJevMode(policy) {
+  if (policy?.jevMode === 'disabled') return 'disabled';
   const configured = policy?.jevMode === 'prefer' || policy?.jevMode === 'only' ? policy.jevMode : 'off';
   if (!await isJevFeatureEnabled()) return 'disabled';
   return configured === 'off' ? 'shadow' : configured;
@@ -187,6 +189,7 @@ export async function readJevDecisionStats() {
   const rate = (numerator, denominator) => (denominator > 0 ? numerator / denominator : null);
   return {
     updatedAt: stored?.updatedAt || null,
+    registry: JEV_DECISIONS,
     decisions: Object.entries(decisions).filter(([id]) => getJevDecision(id)).map(([id, raw]) => {
       const counters = { ...emptyCounters(), ...raw };
       return {

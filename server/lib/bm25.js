@@ -63,9 +63,10 @@ function calculateIDF(N, n) {
  * @returns {Object} - Inverted index structure
  */
 function buildInvertedIndex(documents) {
+  // Text tokens and caller-owned IDs must never resolve Object.prototype keys.
   const index = {
-    terms: {},           // term -> { docFreq, postings: { docId -> termFreq } }
-    docLengths: {},      // docId -> number of terms
+    terms: Object.create(null),           // term -> { docFreq, postings: { docId -> termFreq } }
+    docLengths: Object.create(null),      // docId -> number of terms
     avgDocLength: 0,     // Average document length
     totalDocs: 0,        // Total number of documents
     docIds: new Set()    // Set of all document IDs
@@ -84,7 +85,7 @@ function buildInvertedIndex(documents) {
     totalTerms += terms.length
 
     // Count term frequencies in this document
-    const termFreqs = {}
+    const termFreqs = Object.create(null)
     for (const term of terms) {
       termFreqs[term] = (termFreqs[term] || 0) + 1
     }
@@ -92,7 +93,7 @@ function buildInvertedIndex(documents) {
     // Update inverted index
     for (const [term, freq] of Object.entries(termFreqs)) {
       if (!index.terms[term]) {
-        index.terms[term] = { docFreq: 0, postings: {} }
+        index.terms[term] = { docFreq: 0, postings: Object.create(null) }
       }
 
       if (!index.terms[term].postings[docId]) {
@@ -135,7 +136,7 @@ function addDocument(index, docId, text) {
   index.avgDocLength = (oldTotal + terms.length) / index.totalDocs
 
   // Count term frequencies
-  const termFreqs = {}
+  const termFreqs = Object.create(null)
   for (const term of terms) {
     termFreqs[term] = (termFreqs[term] || 0) + 1
   }
@@ -143,7 +144,7 @@ function addDocument(index, docId, text) {
   // Update inverted index
   for (const [term, freq] of Object.entries(termFreqs)) {
     if (!index.terms[term]) {
-      index.terms[term] = { docFreq: 0, postings: {} }
+      index.terms[term] = { docFreq: 0, postings: Object.create(null) }
     }
 
     if (!index.terms[term].postings[docId]) {
@@ -286,8 +287,8 @@ function search(query, index, options = {}) {
  */
 function createEmptyIndex() {
   return {
-    terms: {},
-    docLengths: {},
+    terms: Object.create(null),
+    docLengths: Object.create(null),
     avgDocLength: 0,
     totalDocs: 0,
     docIds: new Set()
@@ -315,8 +316,15 @@ function deserializeIndex(data) {
   if (!data) return createEmptyIndex()
 
   return {
-    terms: data.terms || {},
-    docLengths: data.docLengths || {},
+    // JSON restores ordinary objects. Rebuild dictionaries without inherited
+    // keys so terms and document IDs such as constructor stay ordinary data.
+    terms: Object.assign(Object.create(null), Object.fromEntries(
+      Object.entries(data.terms || {}).map(([term, entry]) => [term, {
+        ...entry,
+        postings: Object.assign(Object.create(null), entry.postings),
+      }])
+    )),
+    docLengths: Object.assign(Object.create(null), data.docLengths),
     avgDocLength: data.avgDocLength || 0,
     totalDocs: data.totalDocs || 0,
     docIds: new Set(data.docIds || [])

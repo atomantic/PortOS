@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Circle, Download, ExternalLink, GraduationCap, RefreshCw, Scale } from 'lucide-react';
 import toast from '../ui/Toast';
+import JevIntegrations from './JevIntegrations';
+import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes, formatCount, formatPercent } from '../../utils/formatters';
 import {
@@ -56,7 +58,9 @@ export default function JevPanel() {
   const [scoring, setScoring] = useState(false);
   const [decision, setDecision] = useState(null);
   const [decisionStats, setDecisionStats] = useState(null);
+  const [statsError, setStatsError] = useState(false);
   const [headState, setHeadState] = useState(null);
+  const [headStatusError, setHeadStatusError] = useState(false);
   const [training, setTraining] = useState(false);
   const [headError, setHeadError] = useState('');
   // `linear` is the honest default: a 3-way logistic regression over a frozen
@@ -75,13 +79,19 @@ export default function JevPanel() {
       .catch(() => { setStatusError(true); return null; })
   ), []);
 
+  const loadStats = useCallback(() => getJevDecisionStats({ silent: true })
+    .then(res => { setDecisionStats(res); setStatsError(false); })
+    .catch(() => setStatsError(true)), []);
+
   // Metrics and adoption state only — no corpus row, premise, or path crosses
   // this boundary, so it is as safe to load on mount as the counters are.
   const loadHeads = useCallback(() => (
     getJevHeads({ silent: true })
-      .then((res) => { setHeadState(res); return res; })
-      .catch(() => { setHeadState(null); return null; })
+      .then((res) => { setHeadState(res); setHeadStatusError(false); return res; })
+      .catch(() => { setHeadStatusError(true); return null; })
   ), []);
+
+  useAutoRefetch(() => Promise.all([loadStatus(), loadStats(), loadHeads()]), 30000, { pollOnly: true, immediate: false });
 
   useEffect(() => {
     let active = true;
@@ -89,7 +99,7 @@ export default function JevPanel() {
     // Counters only, so this is safe to load beside status on every mount.
     getJevDecisionStats({ silent: true })
       .then((res) => { if (active) setDecisionStats(res); })
-      .catch(() => { if (active) setDecisionStats(null); });
+      .catch(() => { if (active) setStatsError(true); });
     loadHeads();
     return () => { active = false; };
   }, [loadStatus, loadHeads]);
@@ -193,6 +203,7 @@ export default function JevPanel() {
   const currentStageId = installingStage || (installing ? stages.find((stage) => !stage.ready)?.id : null);
   const ready = status?.ready === true;
   const incomplete = status?.setupState === 'incomplete';
+  const trainingActive = training || headState?.training === true;
 
   return (
     <section
@@ -220,6 +231,8 @@ export default function JevPanel() {
           <span className="text-xs text-gray-500">Checking status…</span>
         )}
       </div>
+
+      <JevIntegrations registry={decisionStats?.registry} status={statusError ? null : status} />
 
       <p className="text-sm text-gray-300 max-w-2xl leading-relaxed">
         Answers closed-set questions — &ldquo;which of these options does this text entail?&rdquo; — without generating text
@@ -288,7 +301,7 @@ export default function JevPanel() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <button type="button" onClick={loadStatus} disabled={installing} className="px-2.5 py-1 text-xs border border-port-border text-gray-300 rounded flex items-center gap-1 disabled:opacity-50">
+          <button type="button" onClick={() => { loadStatus(); loadStats(); loadHeads(); }} disabled={installing} className="px-2.5 py-1 text-xs border border-port-border text-gray-300 rounded flex items-center gap-1 disabled:opacity-50">
             <RefreshCw size={12} /> Refresh status
           </button>
           {ready ? (
@@ -333,12 +346,13 @@ export default function JevPanel() {
       <div className="space-y-3 border-t border-port-border pt-4">
         <h3 className="text-sm font-semibold text-white">Agreement with the chat model</h3>
         <p className="text-xs text-gray-400 max-w-2xl">
-          While a source is set to <strong>Off</strong>, PortOS still asks the scorer each closed-set question and compares
+          When the global feature is enabled and a source is set to <strong>Shadow</strong>, PortOS still asks the scorer each closed-set question and compares
           its answer to the one the chat model gave — without changing anything. Use these rates to decide whether a source
           is ready for <strong>Prefer</strong>. Counts only: no message, comment, or diff text is recorded.
         </p>
+        {statsError && <p role="alert" className="text-xs text-port-warning">Decision metrics unavailable; any displayed counts may be stale.</p>}
         {!decisionStats?.decisions?.length ? (
-          <p className="text-xs text-gray-500">No decisions measured yet on this machine.</p>
+          <p className="text-xs text-gray-500">{statsError ? 'Refresh status to retry.' : decisionStats ? 'No decisions measured yet on this machine.' : 'Loading decision metrics…'}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs" data-testid="jev-decision-stats">
@@ -347,6 +361,7 @@ export default function JevPanel() {
                   <th scope="col" className="py-1 pr-3 font-medium">Decision</th>
                   <th scope="col" className="py-1 pr-3 font-medium">Observed</th>
                   <th scope="col" className="py-1 pr-3 font-medium">Abstained</th>
+                  <th scope="col" className="py-1 pr-3 font-medium">Unavailable</th>
                   <th scope="col" className="py-1 pr-3 font-medium">Agreed</th>
                 </tr>
               </thead>
@@ -356,6 +371,7 @@ export default function JevPanel() {
                     <th scope="row" className="py-1.5 pr-3 font-normal text-white">{row.label}</th>
                     <td className="py-1.5 pr-3">{formatCount(row.observed, { fallback: '0' })}</td>
                     <td className="py-1.5 pr-3">{formatRate(row.abstentionRate)}</td>
+                    <td className="py-1.5 pr-3">{formatCount(row.unavailable, { fallback: '0' })}</td>
                     <td className="py-1.5 pr-3">
                       {formatRate(row.agreementRate)}
                       <span className="text-gray-500"> of {formatCount(row.compared, { fallback: '0' })}</span>
@@ -366,7 +382,7 @@ export default function JevPanel() {
             </table>
           </div>
         )}
-        <a href="/models/llms/abuse" className="text-xs text-port-accent hover:underline">Set a source to Prefer in Content safety policies</a>
+        <a href="/models/llms/abuse" className="text-xs text-port-accent hover:underline">Configure advanced content safety policies</a>
       </div>
 
       <div className="space-y-3 border-t border-port-border pt-4">
@@ -383,8 +399,9 @@ export default function JevPanel() {
           discarded, which is an ordinary result rather than a failure.
         </p>
 
+        {headStatusError && <p role="alert" className="text-xs text-port-warning">Head status unavailable; refresh status to retry. Displayed head data may be stale.</p>}
         {(headState?.heads || []).length === 0 ? (
-          <p className="text-xs text-gray-500">No project head trained on this machine. Scope adherence answers zero-shot.</p>
+          <p className="text-xs text-gray-500">{headStatusError ? 'Training and adoption state could not be verified.' : headState ? 'No project head trained on this machine. Scope adherence answers zero-shot.' : 'Loading project heads…'}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs" data-testid="jev-head-table">
@@ -457,24 +474,24 @@ export default function JevPanel() {
           <button
             type="button"
             onClick={runTraining}
-            disabled={!ready || training || headState?.training === true}
+            disabled={!ready || trainingActive || !headState || headStatusError}
             className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
           >
-            <GraduationCap size={12} /> {training ? 'Training…' : 'Train a project head'}
+            <GraduationCap size={12} /> {trainingActive ? 'Training…' : 'Train a project head'}
           </button>
           <label htmlFor="jev-head-architecture" className="text-xs text-gray-400">Head</label>
           <select
             id="jev-head-architecture"
             value={architecture}
             onChange={(event) => setArchitecture(event.target.value)}
-            disabled={training}
+            disabled={trainingActive}
             className="text-xs bg-port-bg border border-port-border rounded px-2 py-1 text-gray-200 disabled:opacity-50"
           >
             <option value="linear">Linear</option>
             <option value="mlp1">One hidden layer</option>
           </select>
           {!ready && <span className="text-xs text-gray-500">Install jev first.</span>}
-          {training && (
+          {trainingActive && (
             <span className="flex items-center gap-1.5 text-xs text-gray-300">
               <BrailleSpinner /> Reading this repository&rsquo;s history and encoding it once — minutes on a cold cache, seconds after.
             </span>

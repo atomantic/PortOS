@@ -442,3 +442,6 @@ export const applyLocalPersistentMindSetup = (body = {}, options = {}) =>
     body: JSON.stringify(body),
     ...options,
   });
+
+export const getJevPolicy = (options) => request('/local-llm/jev/policy', options);
+export const updateJevPolicy = (body, options) => request('/local-llm/jev/policy', { method: 'PUT', body: JSON.stringify(body), ...options });
