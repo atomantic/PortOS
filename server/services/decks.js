@@ -2,8 +2,9 @@
  * Decks — db-primary card-deck design projects (playing cards and tarot).
  *
  * A deck row holds the style guide (notes + embrace/avoid influences), the
- * shared layout clause, sample references (gallery images the vision step
- * analyzed), per-record render/LLM pins and an optional universe link. Each
+ * shared layout clause and face-orientation rule, sample references (gallery
+ * images the vision step analyzed), per-record render/LLM pins and an optional
+ * universe link. Each
  * card is its own `deck_cards` row so a completed render attaches to exactly
  * one card, serialized by the completion hook per deck. Rendered bytes stay in
  * the shared gallery (`data/images/`) and are referenced by filename, the same
@@ -26,7 +27,10 @@ import { ServerError } from '../lib/errorHandler.js';
 import { trimTo, isNonBlankStr } from '../lib/textUtils.js';
 import { sanitizeLlmRoutePin } from '../lib/llmRoutePin.js';
 import { universeVisualStyleTokens } from '../lib/universeVisualStyle.js';
-import { DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DEFAULT_LAYOUT_PROMPT, deckCardRoster, deckCompletion } from '../lib/deckTemplates.js';
+import {
+  DECK_CARD_SIZE, DECK_CARD_SIZE_BY_KIND, DEFAULT_DECK_CARD_ORIENTATION, DEFAULT_LAYOUT_PROMPT,
+  deckCardOrientation, deckCardRoster, deckCompletion,
+} from '../lib/deckTemplates.js';
 import { DECK_CARD_IMAGE_REFS_MAX, DECK_SAMPLES_MAX } from '../lib/deckValidation.js';
 import { recordRenderPin } from '../lib/renderTargets.js';
 import { createRecordWriteQueue } from '../lib/fileWriteQueue.js';
@@ -72,6 +76,8 @@ const projectDeck = (row) => {
     styleNotes: trimTo(d.styleNotes),
     influences: universeVisualStyleTokens(d),
     layoutPrompt: trimTo(d.layoutPrompt) || DEFAULT_LAYOUT_PROMPT[row.kind] || '',
+    cardOrientation: deckCardOrientation({ kind: row.kind, cardOrientation: d.cardOrientation }),
+    cardOrientationPrompt: trimTo(d.cardOrientationPrompt) || null,
     samples: Array.isArray(d.samples) ? d.samples : [],
     imageMode: pin.mode,
     imageModelId: pin.modelId,
@@ -232,6 +238,7 @@ export async function createDeck({ name, kind, description = '', universeId = nu
     description: trimTo(description),
     ...seeded,
     layoutPrompt: DEFAULT_LAYOUT_PROMPT[kind],
+    cardOrientation: DEFAULT_DECK_CARD_ORIENTATION[kind] || null,
     samples: [],
     cardSize: { ...(DECK_CARD_SIZE_BY_KIND[kind] || DECK_CARD_SIZE) },
   };
@@ -279,6 +286,8 @@ function applyDefinitionPatch(d, patch) {
   if (patch.styleNotes !== undefined) d.styleNotes = trimTo(patch.styleNotes);
   if (patch.influences !== undefined) d.influences = universeVisualStyleTokens({ influences: patch.influences });
   if (patch.layoutPrompt !== undefined) d.layoutPrompt = trimTo(patch.layoutPrompt);
+  if (patch.cardOrientation !== undefined) d.cardOrientation = patch.cardOrientation;
+  if (patch.cardOrientationPrompt !== undefined) d.cardOrientationPrompt = trimTo(patch.cardOrientationPrompt) || null;
   if (patch.samples !== undefined) d.samples = Array.isArray(patch.samples) ? patch.samples.slice(0, DECK_SAMPLES_MAX) : [];
   if (patch.cardSize !== undefined) d.cardSize = { width: patch.cardSize.width, height: patch.cardSize.height };
 }
@@ -512,6 +521,15 @@ const definitionFromRemote = (remote, local) => ({
   styleNotes: trimTo(remote?.styleNotes),
   influences: universeVisualStyleTokens(remote),
   layoutPrompt: trimTo(remote?.layoutPrompt),
+  // A pre-v2 peer has no keys to send. Preserve a receiver's authored choice
+  // in that sender-behind case; a current peer's explicit null still clears a
+  // prompt override as intended.
+  cardOrientation: Object.hasOwn(remote || {}, 'cardOrientation')
+    ? deckCardOrientation({ kind: remote?.kind, cardOrientation: remote?.cardOrientation })
+    : (local?.cardOrientation || DEFAULT_DECK_CARD_ORIENTATION[remote?.kind] || null),
+  cardOrientationPrompt: Object.hasOwn(remote || {}, 'cardOrientationPrompt')
+    ? (trimTo(remote?.cardOrientationPrompt) || null)
+    : (local?.cardOrientationPrompt || null),
   samples: Array.isArray(remote?.samples) ? remote.samples.slice(0, DECK_SAMPLES_MAX) : [],
   cardSize: remote?.cardSize?.width && remote?.cardSize?.height
     ? { width: remote.cardSize.width, height: remote.cardSize.height }
@@ -536,7 +554,11 @@ const remoteWinsOver = (remoteAt, localAt) => {
  */
 async function writeRemoteDeck(id, remote, local) {
   const localDefinition = local ? {
-    imageMode: local.imageMode, imageModelId: local.imageModelId, promptLlm: local.promptLlm,
+    imageMode: local.imageMode,
+    imageModelId: local.imageModelId,
+    promptLlm: local.promptLlm,
+    cardOrientation: local.cardOrientation,
+    cardOrientationPrompt: local.cardOrientationPrompt,
   } : null;
   await withTransaction(async (client) => {
     const definition = definitionFromRemote(remote, localDefinition);

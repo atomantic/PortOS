@@ -711,7 +711,7 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `auditQuality.js` | Category discovery strategies, assessment prompt and strict schema, sentinel parsing, and freshness-aware app quality aggregation with deterministic latest-per-category selection across peers. |
 
 | `mindToolRecipes.js` | Closed recipe schemas, current semantic-contract validation, and safe JSON field binding resolution. |
-| `deckTemplates.js` | Decks (playing cards / tarot): kind alphabet, per-kind card roster (`deckCardRoster`), shared layout clause, render prompt composition (`composeCardRenderPrompt`), per-card status and `deckCompletion`, plus `deckCardSize` / `deckCardAspectStyle` (persisted trim → thumbnail box). Pure — re-exported by `client/src/lib/decks.js`. |
+| `deckTemplates.js` | Decks (playing cards / tarot): kind alphabet, per-kind card roster (`deckCardRoster`), shared layout and face-orientation prompts (`deckCardOrientationPrompt`), render prompt composition (`composeCardRenderPrompt`), per-card status and `deckCompletion`, plus `deckCardSize` / `deckCardAspectStyle` (persisted trim → thumbnail box). Pure — re-exported by `client/src/lib/decks.js`. |
 | `deckValidation.js` | Zod schemas + limits for the `/api/decks` routes (create/update deck, card patch, sample analysis, prompt generation, render). |
 | `kilo.js` | Kilo Code command identity (`kilo`/`kilocode`), `run` headless argv, `--auto` approval posture, and TUI arguments. |
 | `openchamber.js` | OpenChamber control-CLI identity, `session create` headless argv, `provider/model` gate, and `--dir`/`--prompt` spawn-time delivery. |

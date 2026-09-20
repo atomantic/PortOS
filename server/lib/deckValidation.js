@@ -5,7 +5,9 @@
  */
 
 import { z } from 'zod';
-import { DECK_CARD_SIZE_MAX, DECK_CARD_SIZE_MIN, DECK_KINDS } from './deckTemplates.js';
+import {
+  DECK_CARD_ORIENTATIONS, DECK_CARD_SIZE_MAX, DECK_CARD_SIZE_MIN, DECK_KINDS,
+} from './deckTemplates.js';
 import { llmRoutePinSchema } from './llmRoutePin.js';
 import { INFLUENCE_ENTRY_MAX, INFLUENCES_PER_LIST_MAX, STYLE_NOTES_MAX } from './universeBibleLimits.js';
 
@@ -52,6 +54,10 @@ export const deckUpdateSchema = z.object({
   styleNotes: z.string().trim().max(STYLE_NOTES_MAX).optional(),
   influences: influencesSchema.optional(),
   layoutPrompt: z.string().trim().max(DECK_LAYOUT_PROMPT_MAX).optional(),
+  cardOrientation: z.enum(DECK_CARD_ORIENTATIONS).optional(),
+  // Null clears the authored override and returns to the built-in prompt for
+  // the selected orientation.
+  cardOrientationPrompt: z.string().trim().max(DECK_LAYOUT_PROMPT_MAX).nullable().optional(),
   universeId: idField.nullable().optional(),
   // Per-record render pin (#3231 Phase 3 shape): null clears.
   imageMode: z.string().trim().max(40).nullable().optional(),

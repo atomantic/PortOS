@@ -75,6 +75,8 @@ describe.skipIf(!ready)('deck federation', () => {
     await updateDeck(deck.id, {
       imageMode: 'grok', imageModelId: 'grok-image-1',
       promptLlm: { providerId: 'claude-cli', model: 'claude-opus-5' },
+      cardOrientation: 'one-way',
+      cardOrientationPrompt: 'Keep both indices upright in this custom deck',
     });
     const pinned = await getDeck(deck.id);
     expect(pinned.promptLlm).toMatchObject({ providerId: 'claude-cli', model: 'claude-opus-5' });
@@ -87,6 +89,8 @@ describe.skipIf(!ready)('deck federation', () => {
     expect(merged.imageMode).toBe('grok');
     expect(merged.imageModelId).toBe('grok-image-1');
     expect(merged.promptLlm).toEqual(pinned.promptLlm);
+    expect(merged.cardOrientation).toBe('one-way');
+    expect(merged.cardOrientationPrompt).toBe('Keep both indices upright in this custom deck');
   });
 
   it('keeps a card\'s local render history when the remote carries none for it', async () => {
