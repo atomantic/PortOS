@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom/vitest';
-import { afterEach } from 'vitest';
+import { afterEach, expect } from 'vitest';
 import { cleanup, configure } from '@testing-library/react';
 import { installTestStorage } from './storagePolyfill.js';
 import { installFormValidityFix } from './formValidityPolyfill.js';
 import { ASYNC_UTIL_TIMEOUT_MS } from './timeouts.js';
+import { actWarningEntry, formatActWarningError } from './actWarnings.js';
 
 // The suite-wide Testing Library async budget. The value, and why the per-test
 // and hook budgets in vitest.config.js are derived from it rather than written
@@ -79,12 +80,17 @@ if (typeof HTMLCanvasElement !== 'undefined') {
 //   await act(async () => {});
 // (see renderConfig in src/components/meatspace/post/PostDrillConfig.test.jsx).
 // Tests that assert an in-flight pending state should settle at the END instead.
+// Each entry records BOTH the component React named and the test that was
+// running when the warning fired. A leaked setState lands after its own test
+// has ended, so the afterEach that throws is routinely a different — innocent —
+// test; naming only the component sends you bisecting the wrong file.
 const actWarnings = [];
 const originalConsoleError = console.error;
 console.error = (...args) => {
   originalConsoleError(...args);
   if (typeof args[0] === 'string' && args[0].includes('not wrapped in act')) {
-    actWarnings.push(String(args[1] ?? 'unknown component'));
+    // Null between tests; formatActWarningError renders that case too.
+    actWarnings.push(actWarningEntry(args[1], expect.getState().currentTestName));
   }
 };
 
@@ -95,12 +101,8 @@ afterEach(() => {
   globalThis.localStorage?.clear();
   globalThis.sessionStorage?.clear();
   if (actWarnings.length > 0) {
-    const components = [...new Set(actWarnings)].join(', ');
+    const message = formatActWarningError(actWarnings, expect.getState().currentTestName);
     actWarnings.length = 0;
-    throw new Error(
-      `React state updated outside act(...) in: ${components}. ` +
-      'Settle pending mount/interaction promises inside the test — e.g. ' +
-      '`await act(async () => {})` after render — see src/test/setup.js for the idiom.'
-    );
+    throw new Error(message);
   }
 });
