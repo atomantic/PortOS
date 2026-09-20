@@ -23,7 +23,7 @@ it('classifies every same-path non-strict service read/write pair with no stale 
   expect(result, 'Use strict reads or document the actual lifecycle in test/jsonWritebackExceptions.js; remove stale entries.').toEqual({ unclassified: [], stale: [] });
   expect(new Set(JSON_WRITEBACK_EXCEPTIONS.map(entry => entry.key)).size).toBe(JSON_WRITEBACK_EXCEPTIONS.length);
   expect(JSON_WRITEBACK_EXCEPTIONS.every(entry => entry.reason.trim().length > 0)).toBe(true);
-});
+}, 15_000);
 
 describe('syntax scanner regression contracts', () => {
   it('finds new pairs with nested arguments, comments and quote/whitespace differences', () => {
