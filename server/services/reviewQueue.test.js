@@ -129,6 +129,7 @@ describe('reviewQueue.buildQueue', () => {
         source: 'github',
         updatedAt: '2026-09-20T10:00:00.000Z',
       },
+      { id: 'thread-local', title: 'Local commitment', status: 'open' },
       { id: 'thread-done', title: 'Finished loop', status: 'done' },
     ]);
     reviewService.getItems.mockResolvedValue([
@@ -150,6 +151,8 @@ describe('reviewQueue.buildQueue', () => {
       actionKind: 'review.todo',
       operations: [{ id: 'complete', label: 'Complete', available: true }],
     });
+    expect(queue.items.find((item) => item.id === 'threads:thread-local').meta)
+      .not.toHaveProperty('externalState');
     expect(queue.items.some((item) => item.id === 'threads:thread-done')).toBe(false);
   });
 

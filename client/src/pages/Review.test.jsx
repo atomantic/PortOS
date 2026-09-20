@@ -80,10 +80,17 @@ vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() }
 }));
 
+const routerState = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  setSearchParams: vi.fn(),
+  actionId: undefined,
+  searchParams: new URLSearchParams(),
+}));
+
 vi.mock('react-router', () => ({
-  useNavigate: () => vi.fn(),
-  useParams: () => ({}),
-  useSearchParams: () => [new URLSearchParams(), vi.fn()]
+  useNavigate: () => routerState.navigate,
+  useParams: () => ({ actionId: routerState.actionId }),
+  useSearchParams: () => [routerState.searchParams, routerState.setSearchParams]
 }));
 
 import Review from './Review';
@@ -107,6 +114,8 @@ afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
   vi.clearAllMocks();
+  routerState.actionId = undefined;
+  routerState.searchParams = new URLSearchParams();
   api.getReviewCounts.mockResolvedValue(SUMMARY_COUNTS);
 });
 
@@ -253,6 +262,18 @@ describe('Actions commitments workspace (#7739)', () => {
       { silent: true },
     ));
     expect(api.createReviewTodo).not.toHaveBeenCalled();
+  });
+
+  it('opens a newly added thread in a view where an open commitment is visible', async () => {
+    routerState.searchParams = new URLSearchParams('view=waiting');
+    render(<Review />);
+    const input = await screen.findByLabelText('Quick add action');
+    fireEvent.change(input, { target: { value: 'Track the example follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(routerState.navigate).toHaveBeenCalledWith(
+      '/review/threads%3Athread-1?view=today',
+    ));
   });
 });
 

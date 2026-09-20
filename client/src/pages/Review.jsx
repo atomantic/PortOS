@@ -255,7 +255,8 @@ export default function Review() {
     setNewTodo('');
     await fetchQueue();
     if (thread?.id) {
-      navigate(`/review/${encodeURIComponent(`threads:${thread.id}`)}?view=${actionView}`);
+      const threadView = actionView === 'all' || actionView === 'today' ? actionView : 'today';
+      navigate(`/review/${encodeURIComponent(`threads:${thread.id}`)}?view=${threadView}`);
     }
   };
 
@@ -1045,6 +1046,7 @@ function ActionDetail({ item, onClose, onResolve, onSaved, onDrill }) {
 
   useEffect(() => {
     if (!item) return;
+    let cancelled = false;
     setRecord(item);
     setDraft(isThread ? threadDraft(item) : {
       title: item.title || '',
@@ -1053,11 +1055,13 @@ function ActionDetail({ item, onClose, onResolve, onSaved, onDrill }) {
     if (isThread && item.sourceRef) {
       api.getThread(item.sourceRef, { silent: true })
         .then((full) => {
+          if (cancelled) return;
           setRecord(full);
           setDraft(threadDraft(full));
         })
         .catch(() => null);
     }
+    return () => { cancelled = true; };
   }, [item?.id, item?.sourceRef, isThread]);
 
   const [save, saving] = useAsyncAction(async () => {

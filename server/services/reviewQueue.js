@@ -168,9 +168,9 @@ const threadAction = (thread) => {
 
 const threadMeta = (thread) => ({
   localStatus: thread.status,
-  externalState: typeof thread.externalState === 'string' && thread.externalState
-    ? thread.externalState
-    : 'unknown',
+  ...(typeof thread.externalState === 'string' && thread.externalState.trim()
+    ? { externalState: thread.externalState.trim() }
+    : {}),
   ...(typeof thread.source === 'string' && thread.source.trim()
     ? { externalSource: thread.source.trim() }
     : {}),
