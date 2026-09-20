@@ -47,6 +47,7 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 // caller.
 export const REVIEW_QUEUE_SOURCE_READ_LIMIT = 100;
 export const REVIEW_QUEUE_MAX_PAGE_SIZE = 100;
+const REVIEW_QUEUE_SOURCE_PROBE_LIMIT = REVIEW_QUEUE_SOURCE_READ_LIMIT + 1;
 const REVIEW_QUEUE_SNAPSHOT_TTL_MS = 30_000;
 const REVIEW_QUEUE_MAX_SNAPSHOTS = 100;
 
@@ -212,10 +213,10 @@ const PRODUCERS = [
       if (result && result.error) throw new ServerError(result.error, { status: 409, code: 'CONFLICT' });
       return result;
     },
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Internal CoS tasks parked awaiting the user's approval before they run.
       const { awaitingApproval = [] } = await cosTaskStore.getCosTasks();
-      return awaitingApproval;
+      return (Array.isArray(awaitingApproval) ? awaitingApproval : []).slice(0, limit);
     },
     map(task) {
       // Surface the task priority as a triage badge. Only HIGH/MEDIUM/LOW are
@@ -242,13 +243,14 @@ const PRODUCERS = [
     async resolve(id) {
       return messageDrafts.approveDraft(id);
     },
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Drafts the user (or an AI) prepared that haven't been sent yet. Today
       // messageDrafts only emits 'draft' (vs 'approved'); 'pending_review' is
       // matched ahead of the producer adding it. The multi-status filter is
       // pushed down to listDrafts so the whole store isn't loaded + filtered
       // in memory on every Review Hub load.
-      return messageDrafts.listDrafts({ status: ['draft', 'pending_review'] });
+      const drafts = await messageDrafts.listDrafts({ status: ['draft', 'pending_review'] });
+      return (Array.isArray(drafts) ? drafts : []).slice(0, limit);
     },
     map(draft) {
       // Show who/where the draft is headed so the user can triage without
@@ -318,7 +320,7 @@ const PRODUCERS = [
     source: 'health',
     label: 'Health anomalies',
     drillTo: '/system-resources/overview',
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // System/health alerts; only surface the ones worth interrupting for.
       const { alerts = [] } = await getAlertsCached();
       const byId = new Map();
@@ -334,7 +336,7 @@ const PRODUCERS = [
           byId.set(alert.id, alert);
         }
       }
-      return [...byId.values()];
+      return [...byId.values()].slice(0, limit);
     },
     // The collector owns semantic identity; the queue only namespaces it.
     map(alert) {
@@ -360,14 +362,14 @@ const PRODUCERS = [
     source: 'backup',
     label: 'Failed backups',
     drillTo: '/settings/backup',
-    async gather() {
+    async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // A backup needing acknowledgement is either a full failure (status
       // 'error') or a degraded run (status 'degraded' — file rsync succeeded but
       // the DB dump failed; it also carries an `error` string). Both warrant a
       // queue item, but they map to different severities below.
       const state = await backup.getState();
       const needsAttention = state && (state.status === 'error' || state.status === 'degraded' || state.error);
-      return needsAttention ? [state] : [];
+      return needsAttention ? [state].slice(0, limit) : [];
     },
     map(state) {
       // Degraded = files saved, DB dump failed → a warning, not a full failure.
@@ -466,10 +468,10 @@ function normalizeQueueItem(producer, raw, mapped) {
  * are a lower bound, not evidence that the source is exhausted.
  */
 async function gatherProducer(producer, ctx = {}) {
-  const gathered = await producer.gather(REVIEW_QUEUE_SOURCE_READ_LIMIT);
+  const gathered = await producer.gather(REVIEW_QUEUE_SOURCE_PROBE_LIMIT);
   const descriptor = Array.isArray(gathered) ? { items: gathered } : gathered;
   const rawItems = Array.isArray(descriptor?.items) ? descriptor.items : [];
-  const truncated = descriptor?.truncated === true || rawItems.length >= REVIEW_QUEUE_SOURCE_READ_LIMIT;
+  const truncated = descriptor?.truncated === true || rawItems.length > REVIEW_QUEUE_SOURCE_READ_LIMIT;
   const list = rawItems.slice(0, REVIEW_QUEUE_SOURCE_READ_LIMIT);
   const items = list.map((item, index) => {
     const mapped = {
@@ -726,7 +728,7 @@ function pageFromSnapshot(snapshot, offset) {
     sources: pageSources(snapshot.sources, items),
     nextCursor: nextOffset < snapshot.items.length ? encodeQueueCursor(snapshot.id, nextOffset) : null,
     partial: snapshot.partial,
-    counts: queueCounts(items),
+    counts: snapshot.counts,
     generatedAt: snapshot.generatedAt,
   };
 }

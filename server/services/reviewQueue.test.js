@@ -29,7 +29,14 @@ vi.mock('./askPromote.js', () => askPromote);
 vi.mock('./stackerNews.js', () => stackerNews);
 vi.mock('./x.js', () => x);
 
-const { buildQueue, resolveQueueItem, promoteAskQueueItem, __resetAlertsCache, __resetQueueSnapshots } = await import('./reviewQueue.js');
+const {
+  buildQueue,
+  resolveQueueItem,
+  promoteAskQueueItem,
+  __resetAlertsCache,
+  __resetQueueSnapshots,
+  REVIEW_QUEUE_SOURCE_READ_LIMIT,
+} = await import('./reviewQueue.js');
 
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
@@ -292,11 +299,13 @@ describe('reviewQueue.buildQueue', () => {
     const first = await buildQueue({ limit: 2 });
     expect(first.items.map((item) => item.id)).toEqual(['brain:b0', 'brain:b1']);
     expect(first.total).toBe(5);
+    expect(first.counts.total).toBe(5);
     expect(first.nextCursor).toBeTruthy();
 
     brain.getInboxLog.mockResolvedValue([{ id: 'new', capturedText: 'changed source' }]);
     const second = await buildQueue({ limit: 2, cursor: first.nextCursor });
     expect(second.items.map((item) => item.id)).toEqual(['brain:b2', 'brain:b3']);
+    expect(second.counts.total).toBe(5);
     expect(brain.getInboxLog).toHaveBeenCalledTimes(1);
 
     const third = await buildQueue({ cursor: second.nextCursor });
@@ -331,10 +340,10 @@ describe('reviewQueue.buildQueue', () => {
 
   it('marks a bounded source as partial instead of claiming inbox zero', async () => {
     brain.getInboxLog.mockResolvedValue(
-      Array.from({ length: 100 }, (_, i) => ({ id: `b${i}`, capturedText: `t${i}` }))
+      Array.from({ length: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 }, (_, i) => ({ id: `b${i}`, capturedText: `t${i}` }))
     );
     const queue = await buildQueue({ limit: 10 });
-    expect(brain.getInboxLog).toHaveBeenCalledWith({ status: 'needs_review', limit: 100 });
+    expect(brain.getInboxLog).toHaveBeenCalledWith({ status: 'needs_review', limit: REVIEW_QUEUE_SOURCE_READ_LIMIT + 1 });
     expect(queue.partial).toBe(true);
     expect(queue.total).toBeNull();
     expect(queue.totalsBySource.brain).toBeNull();
