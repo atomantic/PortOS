@@ -3688,6 +3688,13 @@ describe('resolveVideoModel — live registry lookup (#2124 no-restart add)', ()
     expect(resolveVideoModel('ltx23_distilled_q4')?.id).toBe('ltx23_distilled_q4');
   });
 
+  it('does not revive a disabled or removed model from the boot snapshot', async () => {
+    const mediaModels = await import('../../lib/mediaModels.js');
+    const { resolveVideoModel } = await import('./local.js');
+    mediaModels.getVideoModels.mockReturnValueOnce([]);
+    expect(resolveVideoModel('ltx23_distilled_q4')).toBeNull();
+  });
+
   it('returns null for an unknown id', async () => {
     const { resolveVideoModel } = await import('./local.js');
     expect(resolveVideoModel('does-not-exist')).toBeNull();

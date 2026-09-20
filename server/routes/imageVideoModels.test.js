@@ -16,6 +16,7 @@ const IMAGE_LIST = [
 ];
 vi.mock('../lib/mediaModels.js', () => ({
   loadMediaModels: vi.fn(() => ({ video: { macos: VIDEO_LIST, windows: [] }, image: IMAGE_LIST })),
+  setMediaModelEnabled: vi.fn((id, enabled) => ({ id, enabled })),
   getVideoModels: vi.fn(() => VIDEO_LIST),
   getImageModels: vi.fn(() => IMAGE_LIST),
   isUserModelEntry: (e) => e?.source === 'user',
@@ -28,6 +29,8 @@ vi.mock('../lib/huggingfaceModel.js', () => ({
   ADDABLE_IMAGE_RUNNERS: ['flux2', 'z-image', 'ernie', 'hidream', 'qwen'],
   searchHuggingfaceModels: vi.fn(async (query) => [{ id: `org/${query}`, likes: 1, downloads: 2, pipeline_tag: 'text-to-image' }]),
 }));
+
+vi.mock('../services/cos.js', () => ({ addTask: vi.fn(async () => ({ id: 'task-support', status: 'pending' })) }));
 
 vi.mock('../services/mediaModelInstall.js', () => ({
   addModelFromHuggingface: vi.fn(async (input) => ({
@@ -160,5 +163,22 @@ describe('DELETE /custom/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, id: 'hf-mine' });
     expect(removeUserModelEntry).toHaveBeenCalledWith('hf-mine');
+  });
+});
+
+describe('catalog availability and support requests', () => {
+  it('validates availability and queues explicit implementation work', async () => {
+    const { addTask } = await import('../services/cos.js');
+    const invalid = await request(makeApp()).patch('/api/image-video/models/registry/dev/availability').send({ enabled: 'false' });
+    expect(invalid.status).toBe(400);
+    const saved = await request(makeApp()).patch('/api/image-video/models/registry/dev/availability').send({ enabled: false });
+    expect(saved.body).toEqual({ id: 'dev', enabled: false });
+    const queued = await request(makeApp()).post('/api/image-video/models/support-request').send({ kind: 'video', request: 'Example model https://example.com/model' });
+    expect(queued.status).toBe(201);
+    expect(queued.body.id).toBe('task-support');
+    expect(addTask).toHaveBeenCalledWith(expect.objectContaining({ useWorktree: true, openPR: true, prompt: expect.stringContaining('Example model https://example.com/model') }), 'user');
+    addTask.mockClear();
+    expect((await request(makeApp()).post('/api/image-video/models/support-request').send({ kind: 'audio', request: 'Example' })).status).toBe(400);
+    expect(addTask).not.toHaveBeenCalled();
   });
 });

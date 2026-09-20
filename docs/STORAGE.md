@@ -483,3 +483,16 @@ an initial conversational choice; it does not grant semantic write authority.
 ### Managed-app visitor credentials
 
 `data/managed-visitor-credentials.json` is `file-primary`, intentionally machine-local and never federated: bounded app credential digests, exact individual/world allowlists and expiries configure this install's loopback visitor broker. There are no cross-record queries, sync cursors or tombstones. No plaintext credential or neural/private history is stored. The empty schema-1 seed initializes new installs; this new standalone document changes no existing record format. Backups retain the credential configuration with other local data. Ephemeral visitor admissions are memory-only, expire independently at the host, and never resume on startup. Adapter: `server/services/managedVisitorBroker.js`; protocol: [managed visitors](features/managed-visitors.md).
+
+### Media model availability
+
+The existing `data/media-models.json` catalog remains file-primary install
+configuration. An optional per-entry `enabled` boolean defaults to true when
+absent; changing it preserves the entry, downloaded weights, and shipped-default
+tracking. No backfill or seed change is needed for this additive field. Older
+versions ignore it, so availability requires an updated server. Synchronous
+catalog mutations publish by rename before replacing the process cache. The
+management endpoint includes disabled rows; generation lookups exclude them.
+Model-support requests use the existing CoS user-task store and explicitly
+request an isolated worktree and PR; no new store or background provider job is
+introduced.
