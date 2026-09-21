@@ -230,6 +230,35 @@ describe('codeReview helpers', () => {
   })
 
   describe('getCodeReviewDefaults', () => {
+    it('reselects cached tiers at pause expiry without changing saved priority', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      mockedSettings.current = { codeReview: {
+        reviewers: ['codex', 'ollama'],
+        reviewerFallbackGroups: [['codex', 'ollama'], ['lmstudio'], ['claude']],
+        reviewerHealth: { codex: { pausedUntil: 2000 }, lmstudio: { pausedUntil: 1500 } },
+      } };
+      try {
+        // Partially paused primary and wholly paused fallback both skip.
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['claude']);
+        vi.setSystemTime(1499);
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['claude']);
+        vi.setSystemTime(1500);
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['lmstudio']);
+        vi.setSystemTime(2000);
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['codex', 'ollama']);
+        expect(mockedSettings.current.codeReview.reviewerFallbackGroups).toEqual([['codex', 'ollama'], ['lmstudio'], ['claude']]);
+        mockedSettings.current.codeReview.reviewerHealth = { codex: { pausedUntil: 3000 }, lmstudio: { pausedUntil: 3000 }, claude: { pausedUntil: 3000 } };
+        __resetCodeReviewDefaultsCache();
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['codex', 'ollama']);
+        mockedSettings.current.codeReview.reviewerFallbackGroups = [];
+        __resetCodeReviewDefaultsCache();
+        expect((await getCodeReviewDefaults()).reviewers).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('reads from the settings store and runs the same pick logic', async () => {
       mockedSettings.current = {
         codeReview: { reviewers: ['ollama'], ollamaModel: 'codellama' },

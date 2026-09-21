@@ -34,6 +34,18 @@ describe('configured provider reviewers', () => {
     expect(pickAvailableReviewerGroups({ reviewerFallbackGroups: [['ollama'], ['codex']], reviewerHealth: { ollama: { pausedUntil: 50 } } }, 100)).toEqual(['ollama']);
   });
 
+  it('persists repeated tier memberships and explicit disable without adding task-local fallback schemas', () => {
+    const raw = { reviewers: ['codex'], reviewerFallbackGroups: [[backend, 'codex'], [backend]], usernames: ['example-bot'] };
+    const settings = codeReviewSettingsSchema.parse(raw);
+    expect(pickCodeReviewDefaults({ codeReview: settings })).toMatchObject({
+      reviewers: [backend, 'codex'], reviewerFallbackGroups: [[backend, 'codex'], [backend]], usernames: ['example-bot'],
+    });
+    const cleared = codeReviewSettingsSchema.parse({ ...raw, reviewerFallbackGroups: [] });
+    expect(pickCodeReviewDefaults({ codeReview: cleared })).toMatchObject({ reviewers: [], reviewerFallbackGroups: [], usernames: ['example-bot'] });
+    expect(codeReviewSettingsSchema.safeParse({ reviewerFallbackGroups: [[]] }).success).toBe(false);
+    expect(sanitizeTaskMetadata({ reviewerFallbackGroups: [[backend]], reviewers: ['codex'] })).not.toHaveProperty('reviewerFallbackGroups');
+  });
+
   it('recognizes quota and usage allowance failures without classifying ordinary review failures', () => {
     expect(isReviewerQuotaFailure('429 rate limit exceeded')).toBe(true);
     expect(isReviewerQuotaFailure('monthly usage allowance exhausted')).toBe(true);

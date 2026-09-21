@@ -33,7 +33,7 @@ const apiSystem = vi.hoisted(() => ({ getAssignableInstances: vi.fn() }));
 // Resolved to empty here (not just in the top describe's beforeEach) so every
 // describe below that clears mocks without re-seeding it still renders without
 // unhandled fetch, since `vi.clearAllMocks()` clears calls but keeps this default.
-const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn().mockResolvedValue({ models: [] }) }));
+const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn().mockResolvedValue({ models: [] }), getVisionModels: vi.fn().mockResolvedValue({ models: [] }) }));
 const featureGate = vi.hoisted(() => ({ quickTemplatesEnabled: true }));
 const toast = vi.hoisted(() => {
   const toastFn = vi.fn();

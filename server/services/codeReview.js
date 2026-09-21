@@ -51,7 +51,7 @@ import {
   resolveGoalFidelityConfig,
 } from '../lib/goalFidelity.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
-import { isReviewerConfigFault } from '../lib/reviewerHealth.js'
+import { activeReviewerGroupIndex, isReviewerConfigFault } from '../lib/reviewerHealth.js'
 import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
@@ -65,7 +65,8 @@ const normalizeFallbackGroups = (groups) => Array.isArray(groups)
 export function pickAvailableReviewerGroups(raw, now = Date.now()) {
   const groups = normalizeFallbackGroups(raw?.reviewerFallbackGroups)
   const health = raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? raw.reviewerHealth : {}
-  return groups.find(group => group.length && group.every(reviewer => !(Number(health[reviewer]?.pausedUntil) > now))) || groups[0] || null
+  return groups[activeReviewerGroupIndex(groups, health, now)]
+    ?? (Array.isArray(raw?.reviewerFallbackGroups) ? [] : null)
 }
 
 export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
@@ -273,15 +274,20 @@ export function pickCodeReviewDefaults(settings) {
  */
 let cachedSettings = null
 let cachedDefaults = null
+let cachedDefaultsExpiresAt = Infinity
 settingsEvents.on('settings:updated', () => { cachedSettings = null; cachedDefaults = null })
 
 /** Test-only: reset the memoized defaults cache to its uninitialized sentinel. */
 export function __resetCodeReviewDefaultsCache() { cachedSettings = null; cachedDefaults = null }
 
 export async function getCodeReviewDefaults() {
-  if (cachedDefaults) return cachedDefaults
+  const now = Date.now()
+  if (cachedDefaults && now < cachedDefaultsExpiresAt) return cachedDefaults
   if (!cachedSettings) cachedSettings = await getSettings()
   cachedDefaults = pickCodeReviewDefaults(cachedSettings)
+  // Keep the I/O cache, but recompute health-dependent selection at expiry.
+  cachedDefaultsExpiresAt = Math.min(Infinity, ...Object.values(cachedDefaults.reviewerHealth || {})
+    .map(entry => Number(entry?.pausedUntil)).filter(expiry => expiry > now))
   return cachedDefaults
 }
 

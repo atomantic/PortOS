@@ -73,6 +73,7 @@ export default function useReviewerModelOptions() {
   const [localStatus, setLocalStatus] = useState(null);
   const [providers, setProviders] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,6 +86,7 @@ export default function useReviewerModelOptions() {
       if (cancelled) return;
       setLocalStatus(status || null);
       setProviders(providerData?.providers || []);
+      setProvidersLoaded(Array.isArray(providerData?.providers));
       setLoaded(true);
     });
     return () => { cancelled = true; };
@@ -221,6 +223,7 @@ export default function useReviewerModelOptions() {
 
     return {
       providers: providers || [],
+      providersLoaded,
       optionsByReviewer,
       defaultModels,
       modelEffortLevels,
@@ -268,5 +271,5 @@ export default function useReviewerModelOptions() {
       // Exposed so a consumer can assert it covers every model-taking reviewer.
       reviewers: MODEL_SELECTABLE_REVIEWERS,
     };
-  }, [localStatus, providers, loaded]);
+  }, [localStatus, providers, loaded, providersLoaded]);
 }

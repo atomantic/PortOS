@@ -278,5 +278,6 @@ describe('useReviewerModelOptions', () => {
     await waitFor(() => expect(result.current.loaded).toBe(true));
     expect(result.current.optionsByReviewer.antigravity).toEqual([]);
     expect(result.current.optionsByReviewer.codex).toEqual([]);
+    expect(result.current.providersLoaded).toBe(false);
   });
 });

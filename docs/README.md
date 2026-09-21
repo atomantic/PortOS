@@ -29,7 +29,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
-| [CLI_REVIEW_OUTCOMES.md](./CLI_REVIEW_OUTCOMES.md) | Bounded, authenticated CLI reviewer health reports for orchestrating agents |
+| [CLI_REVIEW_OUTCOMES.md](./CLI_REVIEW_OUTCOMES.md) | Reviewer tiers, provider pins and bounded, authenticated CLI health reports |
 | [UX_DESIGN_GUIDE.md](./UX_DESIGN_GUIDE.md) | Admin workspace design specification: icon navigation, responsive layouts, disclosure, visual hierarchy, and redesign acceptance |
 | [UX_DESIGN_AUDIT.md](./UX_DESIGN_AUDIT.md) | Representative UX audit and Jev/Performance pilot content maps |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |

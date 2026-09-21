@@ -59,6 +59,9 @@ export function CodeReviewDefaultsProvider({ children }) {
           stopMode: d.stopMode || DEFAULT_REVIEW_STOP_MODE,
           reviewerApplies: d.reviewerApplies === true,
           ...pinScalars(d),
+          ...(d.providerModels !== undefined ? { providerModels: d.providerModels } : {}),
+          ...(d.providerEfforts !== undefined ? { providerEfforts: d.providerEfforts } : {}),
+          ...(d.providerReviewUnsupported !== undefined ? { providerReviewUnsupported: d.providerReviewUnsupported } : {}),
           installed: d.installed && typeof d.installed === 'object' && !Array.isArray(d.installed) ? d.installed : {},
         });
       })
