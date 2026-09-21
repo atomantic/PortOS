@@ -296,11 +296,11 @@ describe('ReviewerPicker', () => {
     expect(screen.getByText(/Reviewer applies fixes/)).toBeInTheDocument();
   });
 
-  it('adds a GitHub reviewer username (strips @) via the Add button', async () => {
+  it('adds a GitHub/GitLab reviewer username (strips @) via the Add button', async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
-    await typeSettled(user, screen.getByLabelText('Add a GitHub reviewer username'), '@CodeReviewbot');
+    await typeSettled(user, screen.getByLabelText('Add a GitHub/GitLab reviewer username'), '@CodeReviewbot');
     await user.click(screen.getByRole('button', { name: 'Add reviewer username' }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['CodeReviewbot'] }));
   });
@@ -311,7 +311,7 @@ describe('ReviewerPicker', () => {
     render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
     // Enter is pressed separately so the draft can be pinned first: the keydown
     // handler adds whatever `usernameInput` state holds at that moment.
-    await typeSettled(user, screen.getByLabelText('Add a GitHub reviewer username'), 'reviewer-bot');
+    await typeSettled(user, screen.getByLabelText('Add a GitHub/GitLab reviewer username'), 'reviewer-bot');
     await user.keyboard('{Enter}');
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['reviewer-bot'] }));
   });
@@ -322,10 +322,10 @@ describe('ReviewerPicker', () => {
     render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
     // Same pin: a partially-typed `bad` is a *valid* username, so an Enter that
     // beat the last keystrokes would emit and make this assertion lie.
-    await typeSettled(user, screen.getByLabelText('Add a GitHub reviewer username'), 'bad token!');
+    await typeSettled(user, screen.getByLabelText('Add a GitHub/GitLab reviewer username'), 'bad token!');
     await user.keyboard('{Enter}');
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getByText(/valid GitHub username/)).toBeInTheDocument();
+    expect(screen.getByText(/valid GitHub or GitLab username/)).toBeInTheDocument();
   });
 
   it('renders existing username pills and removes one', async () => {
@@ -353,7 +353,7 @@ describe('ReviewerPicker', () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ optionalReviewers: [] }));
   });
 
-  it('marks a GitHub reviewer username non-blocking with the @-form token', async () => {
+  it('marks a GitHub/GitLab reviewer username non-blocking with the @-form token', async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<ReviewerPicker reviewers={['copilot']} usernames={['flaky-bot']} onChange={onChange} />);

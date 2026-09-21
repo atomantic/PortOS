@@ -695,7 +695,7 @@ export default function ReviewerPicker({
   const addUsername = () => {
     const clean = cleanReviewUsername(usernameInput);
     if (!clean) {
-      setUsernameError('Enter a valid GitHub username (letters, numbers, hyphens; optional org/team).');
+      setUsernameError('Enter a valid GitHub or GitLab username (letters, numbers, hyphens, underscores, dots; optional org/team).');
       return;
     }
     if (selectedUsernames.some(u => u.toLowerCase() === clean.toLowerCase())) {
@@ -893,14 +893,14 @@ export default function ReviewerPicker({
           grid as the keyed reviewers so the columns line up, minus reorder (their
           order is fixed after the keyed list) and minus a Model cell. */}
       <div className="flex flex-col gap-1.5 pt-1 border-t border-port-border/50">
-        <span className="text-xs text-gray-500">GitHub reviewers (gate merge):</span>
+        <span className="text-xs text-gray-500">GitHub/GitLab reviewers (gate merge):</span>
         {selectedUsernames.length > 0 ? (
           <div className="flex flex-col gap-1.5 @xl:gap-0.5">
             {selectedUsernames.map((value) => (
               <div
                 key={value}
                 className={ROW_CLASS}
-                title="GitHub username requested as a PR reviewer to gate the merge"
+                title="GitHub/GitLab username requested as a PR/MR reviewer to gate the merge"
               >
                 <span className="text-port-accent font-mono text-xs col-span-2 @xl:col-span-1">@</span>
                 <span className="text-xs text-gray-300 col-span-2 @xl:col-span-1 truncate">{value}</span>
@@ -941,7 +941,7 @@ export default function ReviewerPicker({
             value={usernameInput}
             disabled={disabled || atMaxUsernames}
             placeholder="CodeReviewbot"
-            aria-label="Add a GitHub reviewer username"
+            aria-label="Add a GitHub/GitLab reviewer username"
             onChange={(e) => { setUsernameInput(e.target.value); if (usernameError) setUsernameError(''); }}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addUsername(); } }}
             className="flex-1 min-w-0 max-w-[200px] px-2 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 min-h-[28px] focus:border-port-accent focus:outline-none disabled:opacity-50"
