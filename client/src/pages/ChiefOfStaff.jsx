@@ -135,7 +135,7 @@ export default function ChiefOfStaff() {
   const [statusMessage, setStatusMessage] = useState("Idle - waiting for tasks...");
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
-  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
+  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(() => activeTab === 'tasks');
   const [desktopPanelCollapsed, setDesktopPanelCollapsed] = useLocalStorageBool(
     'cos-panel-collapsed',
     false,
@@ -911,18 +911,6 @@ export default function ChiefOfStaff() {
 
   return (
     <div className={`relative flex flex-col lg:grid ${desktopPanelCollapsed ? 'lg:grid-cols-[0px_1fr]' : 'lg:grid-cols-[320px_1fr]'} h-full overflow-hidden transition-[grid-template-columns] duration-200`}>
-      {/* Floating expand button - flush with nav edge when panel is collapsed */}
-      {desktopPanelCollapsed && (
-        <button
-          onClick={toggleDesktopPanel}
-          className="min-h-[44px] min-w-[44px] items-center justify-center hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-port-text-muted hover:text-port-text transition-colors rounded-r-md hover:bg-port-border/80 bg-port-card/60 border border-l-0 border-port-accent-2/20"
-          aria-label="Expand CoS panel"
-          title="Expand CoS panel"
-        >
-          <PanelLeftOpen size={16} />
-        </button>
-      )}
-
       {/* Agent Panel */}
       {avatarStyle === 'ascii' ? (
         <>
@@ -951,8 +939,15 @@ export default function ChiefOfStaff() {
               />
             </div>
           )}
-          {/* Mobile: always show the terminal panel (it has its own compact layout) */}
+          {/* Keep the mobile queue reachable while retaining terminal identity. */}
           <div className="lg:hidden">
+            <button onClick={() => setAgentPanelCollapsed(value => !value)}
+              className="flex items-center justify-between gap-2 w-full px-3 py-2 min-h-[44px]"
+              aria-expanded={!agentPanelCollapsed} aria-controls="cos-terminal-mobile">
+              <span>CoS <StatusIndicator running={status?.running} paused={status?.paused} /></span>
+              {agentPanelCollapsed ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+            </button>
+            <div id="cos-terminal-mobile" hidden={agentPanelCollapsed}>
             <TerminalCoSPanel
               state={agentState}
               speaking={speaking}
@@ -963,6 +958,7 @@ export default function ChiefOfStaff() {
               onStop={handleStop}
               stats={status?.stats}
             />
+            </div>
           </div>
         </>
       ) : desktopPanelCollapsed ? (
@@ -1132,6 +1128,16 @@ export default function ChiefOfStaff() {
           on desktop (its chat pane owns the internal scroll); other tabs still
           grow this region and scroll here as before. */}
       <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-3 lg:p-4">
+        {desktopPanelCollapsed && (
+          <div className="hidden lg:flex items-center flex-wrap gap-3 mb-3">
+            <button onClick={toggleDesktopPanel} aria-label="Expand CoS panel"
+              className="min-h-[44px] flex items-center gap-2 px-2 text-sm text-port-text">
+              <PanelLeftOpen size={16} aria-hidden="true" /> CoS
+            </button>
+            <StatusIndicator running={status?.running} paused={status?.paused} />
+            <StateLabel state={agentState} compact />
+          </div>
+        )}
         {/* Stats Bar - hidden for SVG/canvas modes (now integrated into CoS sidebar);
             ascii/terminal mode keeps it because TerminalCoSPanel doesn't host the cards. */}
         <div className={`grid shrink-0 grid-cols-3 gap-1.5 sm:grid-cols-5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden' : ''}`}>

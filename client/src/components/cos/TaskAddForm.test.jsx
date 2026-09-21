@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import TaskAddForm from './TaskAddForm';
 import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
 import { findEnabledByLabelText } from '../../test/enabledBarrier.js';
@@ -71,6 +72,48 @@ describe('TaskAddForm responsive layout', () => {
     apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
     // Nothing authoritative by default, so the id regex alone decides.
     apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
+  });
+
+  // #7796: hiding configuration must not reset the draft or silently change
+  // app completion defaults, and a failed submission must remain retryable.
+  it('retains configured queue drafts across drawer tabs, close, and a failed submit', async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    const added = vi.fn();
+    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'] });
+    api.addCosTask.mockRejectedValueOnce(new Error('Queue unavailable'))
+      .mockResolvedValueOnce({ id: 'example-task', status: 'pending' });
+    render(<MemoryRouter><TaskAddForm queueFirst providers={[]} defaultApp="example-app"
+      apps={[{ id: 'example-app', name: 'Example App', defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: 'review-then-merge' }]}
+      onTaskAdded={added} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Review: codex'));
+    expect(screen.queryByLabelText('AI provider')).not.toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect synthetic queue');
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    await user.click(screen.getByRole('tab', { name: 'Completion & review' }));
+    expect(openPrToggle()).toBeChecked();
+    expect(worktreeToggle()).toBeChecked();
+    await user.click(worktreeToggle());
+    await user.selectOptions(screen.getByLabelText('When done'), 'commit-push');
+    await user.click(screen.getByRole('tab', { name: 'Templates & attachments' }));
+    await user.click(screen.getByRole('tab', { name: 'Completion & review' }));
+    expect(screen.getByLabelText('When done')).toHaveValue('commit-push');
+    await user.click(screen.getByRole('button', { name: 'Close task configuration' }));
+    expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Direct checkout · Commit and push to default branch');
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Queue unavailable'));
+    expect(screen.getByRole('textbox', { name: /Task description/ })).toHaveValue('Inspect synthetic queue');
+    expect(added).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    expect(screen.getByLabelText('When done')).toHaveValue('commit-push');
+    await user.click(screen.getByRole('button', { name: 'Close task configuration' }));
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    await waitFor(() => expect(added).toHaveBeenCalledWith({ id: 'example-task', status: 'pending' }, { position: 'bottom' }));
+    expect(api.addCosTask).toHaveBeenLastCalledWith(expect.objectContaining({
+      app: 'example-app', description: 'Inspect synthetic queue', useWorktree: false,
+      openPR: false, whenDone: 'commit-push',
+    }), { silent: true });
+    expect(screen.getByRole('textbox', { name: /Task description/ })).toHaveValue('');
   });
 
   it('keeps PR completion controls full-width on mobile', async () => {

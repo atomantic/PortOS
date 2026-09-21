@@ -5,6 +5,7 @@ import { MemoryRouter, Routes, Route } from 'react-router';
 // Regression coverage for #2519 — the page-level Force Evaluate handler must
 // only toast success after the request resolves, and must toast the error
 // (not a success) when it rejects.
+vi.mock('../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
 const api = vi.hoisted(() => ({
   getCosStatus: vi.fn(),
   getCosTasks: vi.fn(),
@@ -991,6 +992,18 @@ describe('Rigged avatar style', () => {
     expect(avatar).toHaveAttribute('data-variant', 'rigged-image3d-gone');
     expect(avatar).toHaveAttribute('data-covered', '');
   });
+});
+
+it('retains the saved persona collapse preference and exposes operational identity', async () => {
+  localStorage.setItem('cos-panel-collapsed', 'true');
+  await renderSettledAt('tasks');
+  fireEvent.click(screen.getByRole('button', { name: 'Expand CoS panel' }));
+  expect(localStorage.getItem('cos-panel-collapsed')).toBe('false');
+  expect(screen.getByRole('button', { name: 'Collapse CoS panel' })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Collapse CoS panel' }));
+  expect(localStorage.getItem('cos-panel-collapsed')).toBe('true');
+  expect(screen.getByRole('button', { name: 'Expand CoS panel' })).toHaveTextContent('CoS');
+  localStorage.removeItem('cos-panel-collapsed');
 });
 
 describe('CoS agent panel layout sizing', () => {
