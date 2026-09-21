@@ -86,6 +86,8 @@ describe('BackupTab', () => {
       expect(content.indexOf('Backup health')).toBeLessThan(content.indexOf('Run Backup Now'));
       expect(content.indexOf('Run Backup Now')).toBeLessThan(content.indexOf('Exclusions'));
       expect(content.indexOf('Exclusions')).toBeLessThan(content.indexOf('Snapshot history'));
+      expect(screen.getByRole('button', { name: /^Save$/i }).parentElement).toHaveClass('sticky', 'top-0');
+      expect(screen.getByRole('button', { name: /^Save$/i }).parentElement).not.toHaveClass('bottom-0');
 
       fireEvent.click(exclusions);
       expect(screen.getByLabelText(/Additional Exclude Paths/i)).toBeInTheDocument();
@@ -780,6 +782,39 @@ describe('BackupTab', () => {
       render(<BackupTab />);
       await waitFor(() => expect(screen.getByText(/Failed to load backup settings/i)).toBeTruthy());
       expect(screen.queryByRole('button', { name: /^Save$/i })).toBeNull();
+    });
+
+    it('refuses to render the form when cron is not a string', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/example-backups', enabled: true, cronExpression: 2 },
+      });
+      render(<BackupTab />);
+      await waitFor(() => expect(screen.getByText(/Failed to load backup settings/i)).toBeTruthy());
+      expect(screen.queryByRole('button', { name: /^Save$/i })).toBeNull();
+    });
+  });
+
+  describe('status and snapshot load failures', () => {
+    it('shows unavailable backup status instead of an empty exclusion state', async () => {
+      getBackupStatus.mockRejectedValue(new Error('offline'));
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      expect(screen.getByText(/Backup status unavailable — reload to retry/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Exclusions/i })).toHaveTextContent('Unavailable');
+
+      fireEvent.click(screen.getByRole('button', { name: /^Exclusions/i }));
+      expect(screen.getByText(/Backup exclusion details are unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByText(/0 active patterns/i)).not.toBeInTheDocument();
+    });
+
+    it('shows unavailable snapshot history instead of an empty list', async () => {
+      getBackupSnapshots.mockRejectedValue(new Error('offline'));
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      expect(screen.getByRole('button', { name: /^Snapshot history/i })).toHaveTextContent('Unavailable');
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      expect(screen.getByText(/Snapshot history is unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByText(/No snapshots yet/i)).not.toBeInTheDocument();
     });
   });
 });

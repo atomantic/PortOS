@@ -46,6 +46,8 @@ export function BackupTab() {
   // fields stay null and the form is replaced by an error panel, so an unreachable
   // API can't be saved back as invented values (#6632).
   const [loadFailed, setLoadFailed] = useState(false);
+  const [statusLoadFailed, setStatusLoadFailed] = useState(false);
+  const [snapshotsLoadFailed, setSnapshotsLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [destPath, setDestPath] = useState('');
   const [savedDestPath, setSavedDestPath] = useState('');
@@ -81,22 +83,32 @@ export function BackupTab() {
   const [showEffectiveExcludes, setShowEffectiveExcludes] = useState(false);
 
   useEffect(() => {
-    Promise.all([
+    Promise.allSettled([
       getSettings({ silent: true }),
-      getBackupStatus({ silent: true }).catch(() => null),
-      getBackupSnapshots({ silent: true }).catch(() => []),
+      getBackupStatus({ silent: true }),
+      getBackupSnapshots({ silent: true }),
     ])
-      .then(([settings, status, snaps]) => {
+      .then(([settingsResult, statusResult, snapshotsResult]) => {
+        if (settingsResult.status === 'rejected') throw settingsResult.reason;
+        const statusLoadError = statusResult.status === 'rejected';
+        const snapshotsLoadError = snapshotsResult.status === 'rejected';
+        const settings = settingsResult.value;
+        const status = statusLoadError ? null : statusResult.value;
+        const snaps = snapshotsLoadError ? null : snapshotsResult.value;
         const backup = settings?.backup || {};
         const saved = backup.destPath || '';
         const savedExcludes = asExcludeArray(backup.excludePaths);
         const savedDisabled = asArray(backup.disabledDefaultExcludes);
+        setStatusLoadFailed(statusLoadError);
+        setSnapshotsLoadFailed(snapshotsLoadError);
         setDestPath(saved);
         setSavedDestPath(saved);
         // The GET projects the effective schedule, so these are always present.
         // Anything else is an unresolved response and is treated as a load failure
         // rather than being papered over with a locally invented default.
-        if (typeof backup.enabled !== 'boolean' || !backup.cronExpression) {
+        if (typeof backup.enabled !== 'boolean'
+          || typeof backup.cronExpression !== 'string'
+          || !backup.cronExpression.trim()) {
           throw new Error('Settings response did not include a resolved backup schedule');
         }
         const savedEnabledValue = backup.enabled;
@@ -215,14 +227,19 @@ export function BackupTab() {
   const scheduleSummary = savedEnabled
     ? (describeCron(savedCronExpression) || savedCronExpression)
     : 'Scheduled backups are off';
-  const snapshotSummary = snapshots.length > 0
+  const snapshotSummary = snapshotsLoadFailed
+    ? 'Unavailable — reload to retry'
+    : snapshots.length > 0
     ? `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'}`
     : 'No snapshots yet';
-  const exclusionsSummary = excludePaths.length > 0
+  const exclusionsSummary = statusLoadFailed
+    ? 'Unavailable — reload to retry'
+    : excludePaths.length > 0
     ? `${excludePaths.length} custom · ${effectiveExcludes.length} active patterns`
     : `${effectiveExcludes.length} active patterns`;
 
   const renderPgStatus = () => {
+    if (statusLoadFailed) return <span className="text-port-warning">Backup status unavailable — reload to retry</span>;
     if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
     if (pgBackup.status === 'ok') {
       return <span className="text-port-success">✅ {formatBytes(pgBackup.sizeBytes || 0)} · {pgBackup.tableCount} tables</span>;
@@ -376,7 +393,7 @@ export function BackupTab() {
 
       {/* Keep saved-state actions before the detail disclosures. The bar remains
           sticky while the longer exclusion and snapshot regions are open. */}
-      <div className="sticky bottom-0 z-20 flex flex-wrap items-center gap-2 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-port-card/95 sm:backdrop-blur border-y border-port-border">
+      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-port-card/95 sm:backdrop-blur border-y border-port-border">
         <button
           onClick={handleSave}
           disabled={saving}
@@ -416,7 +433,11 @@ export function BackupTab() {
           className="space-y-3"
           bodyClassName="space-y-4 pt-2"
         >
-          <p className="text-sm text-gray-400">Review what stays out of snapshots. Detailed rules are one click away so the recovery actions remain easy to find.</p>
+          {statusLoadFailed ? (
+            <p className="text-sm text-port-warning">Backup exclusion details are unavailable — reload to retry before editing these rules.</p>
+          ) : (
+            <>
+              <p className="text-sm text-gray-400">Review what stays out of snapshots. Detailed rules are one click away so the recovery actions remain easy to find.</p>
 
           {defaultExcludeRows.length > 0 && (
             <div className="space-y-2">
@@ -524,7 +545,9 @@ export function BackupTab() {
                 )}
               </div>
             )}
-          </div>
+              </div>
+            </>
+          )}
         </CollapsibleSection>
       </div>
 
@@ -540,7 +563,9 @@ export function BackupTab() {
           className="space-y-3"
           bodyClassName="space-y-2 pt-2"
         >
-          {snapshots.length === 0 ? (
+          {snapshotsLoadFailed ? (
+            <p className="text-sm text-port-warning">Snapshot history is unavailable — reload to retry.</p>
+          ) : snapshots.length === 0 ? (
             <p className="text-sm text-gray-500">No snapshots have been recorded on this machine yet.</p>
           ) : (
             <>
