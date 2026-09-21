@@ -1,13 +1,16 @@
 import { useState, useEffect, useId, useRef } from 'react';
-import { Save, Plus, X, Play, ShieldOff, ChevronDown, ChevronRight } from 'lucide-react';
+import { AlertTriangle, Archive, CalendarClock, CheckCircle2, Database, Play, Plus, Save, ShieldOff, X, ChevronDown, ChevronRight } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import FolderPicker from '../FolderPicker';
 import { useBackupRun } from '../../hooks/useBackupRun';
 import Modal from '../ui/Modal';
+import Banner from '../ui/Banner';
+import CollapsibleSection from '../ui/CollapsibleSection';
 import { getSettings, updateSettings, getBackupStatus, getBackupSnapshots, restoreDatabase } from '../../services/api';
 import { formatBytes } from '../../utils/formatters';
+import { describeCron } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
 import { anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../../lib/backupExcludes';
 
@@ -36,11 +39,15 @@ export function BackupTab() {
   const additionalExcludeId = useId();
   const defaultExcludesPanelId = useId();
   const effectiveExcludesPanelId = useId();
+  const exclusionsPanelId = useId();
+  const snapshotsPanelId = useId();
   const [loading, setLoading] = useState(true);
   // A settings response that never resolved is NOT 'the defaults' — the schedule
   // fields stay null and the form is replaced by an error panel, so an unreachable
   // API can't be saved back as invented values (#6632).
   const [loadFailed, setLoadFailed] = useState(false);
+  const [statusLoadFailed, setStatusLoadFailed] = useState(false);
+  const [snapshotsLoadFailed, setSnapshotsLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [destPath, setDestPath] = useState('');
   const [savedDestPath, setSavedDestPath] = useState('');
@@ -62,6 +69,8 @@ export function BackupTab() {
   const [backupStatus, setBackupStatus] = useState('never');
   const [snapshots, setSnapshots] = useState([]);
   const [showAllSnapshots, setShowAllSnapshots] = useState(false);
+  const [showExclusions, setShowExclusions] = useState(false);
+  const [showSnapshots, setShowSnapshots] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState(null); // source-bound request pending confirm
   const [restorePreview, setRestorePreview] = useState(null); // dry-run result
   const restorePreviewGenerationRef = useRef(0);
@@ -74,22 +83,32 @@ export function BackupTab() {
   const [showEffectiveExcludes, setShowEffectiveExcludes] = useState(false);
 
   useEffect(() => {
-    Promise.all([
+    Promise.allSettled([
       getSettings({ silent: true }),
-      getBackupStatus({ silent: true }).catch(() => null),
-      getBackupSnapshots({ silent: true }).catch(() => []),
+      getBackupStatus({ silent: true }),
+      getBackupSnapshots({ silent: true }),
     ])
-      .then(([settings, status, snaps]) => {
+      .then(([settingsResult, statusResult, snapshotsResult]) => {
+        if (settingsResult.status === 'rejected') throw settingsResult.reason;
+        const statusLoadError = statusResult.status === 'rejected';
+        const snapshotsLoadError = snapshotsResult.status === 'rejected';
+        const settings = settingsResult.value;
+        const status = statusLoadError ? null : statusResult.value;
+        const snaps = snapshotsLoadError ? null : snapshotsResult.value;
         const backup = settings?.backup || {};
         const saved = backup.destPath || '';
         const savedExcludes = asExcludeArray(backup.excludePaths);
         const savedDisabled = asArray(backup.disabledDefaultExcludes);
+        setStatusLoadFailed(statusLoadError);
+        setSnapshotsLoadFailed(snapshotsLoadError);
         setDestPath(saved);
         setSavedDestPath(saved);
         // The GET projects the effective schedule, so these are always present.
         // Anything else is an unresolved response and is treated as a load failure
         // rather than being papered over with a locally invented default.
-        if (typeof backup.enabled !== 'boolean' || !backup.cronExpression) {
+        if (typeof backup.enabled !== 'boolean'
+          || typeof backup.cronExpression !== 'string'
+          || !backup.cronExpression.trim()) {
           throw new Error('Settings response did not include a resolved backup schedule');
         }
         const savedEnabledValue = backup.enabled;
@@ -205,8 +224,22 @@ export function BackupTab() {
     ...defaultExcludeRows.filter(d => d.defaultActive).map(d => d.path),
     ...anchorUserExcludes(excludePaths),
   ])];
+  const scheduleSummary = savedEnabled
+    ? (describeCron(savedCronExpression) || savedCronExpression)
+    : 'Scheduled backups are off';
+  const snapshotSummary = snapshotsLoadFailed
+    ? 'Unavailable — reload to retry'
+    : snapshots.length > 0
+    ? `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'}`
+    : 'No snapshots yet';
+  const exclusionsSummary = statusLoadFailed
+    ? 'Unavailable — reload to retry'
+    : excludePaths.length > 0
+    ? `${excludePaths.length} custom · ${effectiveExcludes.length} active patterns`
+    : `${effectiveExcludes.length} active patterns`;
 
   const renderPgStatus = () => {
+    if (statusLoadFailed) return <span className="text-port-warning">Backup status unavailable — reload to retry</span>;
     if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
     if (pgBackup.status === 'ok') {
       return <span className="text-port-success">✅ {formatBytes(pgBackup.sizeBytes || 0)} · {pgBackup.tableCount} tables</span>;
@@ -268,233 +301,99 @@ export function BackupTab() {
   };
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
+    <section
+      aria-labelledby="backup-settings-heading"
+      data-testid="backup-settings-workspace"
+      className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5"
+    >
+      <h2 id="backup-settings-heading" className="sr-only">Backup operations and configuration</h2>
       {backupStatus === 'degraded' && (
-        <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg px-3 py-2 text-sm text-port-warning">
-          ⚠️ Last backup degraded — files were saved but the database dump failed.{' '}
+        <Banner tone="warning" icon={AlertTriangle} title="Last backup degraded" size="md">
+          Files were saved but the database dump failed.{' '}
           {pgBackup?.reason === 'version_mismatch' ? (
-            <>Your <code>pg_dump</code> is older than the running PostgreSQL server. Install/point at a <code>pg_dump</code> at least as new as the server (e.g. <code>brew install postgresql@17</code>), or set <code>PORTOS_PGDUMP</code> to its path.</>
+            <>Your <code>pg_dump</code> is older than the running PostgreSQL server. Install/point at a <code>pg_dump</code> at least as new as the server (for example, <code>brew install postgresql@17</code>), or set <code>PORTOS_PGDUMP</code> to its path.</>
           ) : (
             <>Check that <code>pg_dump</code> is installed and PostgreSQL is reachable.</>
           )}
-        </div>
+        </Banner>
       )}
 
-      <div className="space-y-1">
-        <p className="block text-sm text-gray-400">Database Backup (last run)</p>
-        <div className="text-sm">{renderPgStatus()}</div>
-      </div>
-
-      <div className="space-y-1">
-        <label htmlFor={destPathId} className="block text-sm text-gray-400">Destination Path</label>
-        <div className="flex gap-2 items-stretch">
-          <input
-            id={destPathId}
-            type="text"
-            value={destPath}
-            onChange={e => setDestPath(e.target.value)}
-            className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-            placeholder="/path/to/backups"
-          />
-          <FolderPicker value={destPath} onChange={setDestPath} />
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <span className="text-sm text-gray-400">Enabled</span>
-        <button
-          type="button"
-          role="switch"
-          onClick={() => setEnabled(!enabled)}
-          aria-label="Scheduled backups"
-          aria-checked={enabled}
-          className={`relative w-10 h-5 rounded-full transition-colors ${enabled ? 'bg-port-accent' : 'bg-port-border'}`}
-        >
-          <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : ''}`} />
-        </button>
-      </div>
-
-      <div className="space-y-1">
-        <span className="block text-sm text-gray-400">Schedule</span>
-        <CronSchedulePicker value={cronExpression} onChange={setCronExpression} cronAriaLabel="Schedule (cron)" />
-        <p className="text-xs text-gray-500">Default: 2:00 AM daily. Times use the configured timezone.</p>
-      </div>
-
-      {defaultExcludeRows.length > 0 && (
-        <div className="space-y-2">
-          <button
-            type="button"
-            onClick={() => setShowDefaultExcludes(v => !v)}
-            aria-expanded={showDefaultExcludes}
-            aria-controls={defaultExcludesPanelId}
-            className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors"
-          >
-            {showDefaultExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-            <ShieldOff size={14} className="text-gray-500 shrink-0" />
-            <span>Default exclusions — {enabledDefaultCount} enabled, {disabledDefaultCount} disabled</span>
-          </button>
-          {showDefaultExcludes && (
-            <div id={defaultExcludesPanelId} className="space-y-2">
-              <p className="text-xs text-gray-500">Built-in exclusion rules keep snapshots small. Switch on to disable an overridable default rule; fixed rules remain enabled.</p>
-              <ul className="space-y-1.5 mt-1">
-                {defaultExcludeRows.map((d, i) => (
-                  <li key={i} className="flex items-start gap-2 text-xs">
-                    {d.overridable ? (
-                      <ToggleSwitch
-                        enabled={!d.defaultActive}
-                        onChange={() => toggleDefaultExclude(d.path)}
-                        size="sm"
-                        ariaLabel={`Disable default exclusion ${d.path}`}
-                        className="mt-0.5"
-                      />
-                    ) : (
-                      <span className="inline-flex items-center justify-center w-12 h-7 shrink-0 text-gray-600" title="Fixed default exclusion — always enabled">
-                        <ShieldOff size={14} />
-                      </span>
-                    )}
-                    <code className="px-1.5 py-0.5 bg-port-bg border rounded shrink-0 text-gray-300 border-port-border">{d.path}</code>
-                    <span className="text-gray-500">
-                      {d.reason}
-                      {!d.defaultActive && <span className="text-gray-400 ml-1">(Default exclusion disabled)</span>}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="space-y-2">
-        <label htmlFor={additionalExcludeId} className="block text-sm text-gray-400">Additional Exclude Paths</label>
-        <p className="text-xs text-gray-500">Custom directories/patterns to skip during backup (relative to data/). Patterns are anchored to the data root, so <code>repos/</code> is stored as <code>/repos/</code> and skips only <code>data/repos/</code>. Start a pattern with <code>**/</code> to match at any depth instead. Additional rules still apply when a default exclusion is disabled. Disabling a default does not guarantee matching files will be backed up.</p>
-        <div className="flex gap-2">
-          <input
-            id={additionalExcludeId}
-            type="text"
-            value={newExclude}
-            onChange={e => setNewExclude(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addExclude()}
-            className="flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-            placeholder="/repos/"
-          />
-          <button
-            onClick={addExclude}
-            disabled={!anchorUserExclude(newExclude)}
-            aria-label="Add exclude path"
-            className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors disabled:opacity-50 shrink-0"
-          >
-            <Plus size={16} />
-          </button>
-        </div>
-        {excludePaths.length > 0 && (
-          <div className="flex flex-wrap gap-2 mt-2">
-            {excludePaths.map((path, i) => (
-              <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-port-bg border border-port-border rounded-lg text-sm text-gray-300">
-                <code className="text-xs">{path}</code>
-                <button onClick={() => removeExclude(i)} aria-label="Dismiss" className="text-gray-500 hover:text-port-error transition-colors">
-                  <X size={14} />
-                </button>
-              </span>
-            ))}
+      <div className="grid grid-cols-1 @min-[52rem]:grid-cols-2 gap-4 items-start">
+        <div className="min-w-0 rounded-xl border border-port-border/70 bg-port-bg/30 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="flex items-center gap-2 text-base font-semibold text-white">
+              <Database size={17} className="text-port-accent shrink-0" aria-hidden="true" />
+              Backup health
+            </h3>
+            {backupStatus === 'ok' && <CheckCircle2 size={17} className="text-port-success shrink-0" aria-label="Healthy" />}
           </div>
-        )}
-
-        {effectiveExcludes.length > 0 && (
-          <div className="space-y-2 pt-1">
-            <button
-              type="button"
-              onClick={() => setShowEffectiveExcludes(v => !v)}
-              aria-expanded={showEffectiveExcludes}
-              aria-controls={effectiveExcludesPanelId}
-              className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors"
-            >
-              {showEffectiveExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
-              <span>Effective exclude list — {effectiveExcludes.length} rsync {effectiveExcludes.length === 1 ? 'pattern' : 'patterns'}</span>
-            </button>
-            {showEffectiveExcludes && (
-              <div id={effectiveExcludesPanelId} className="space-y-2">
-                <p className="text-xs text-gray-500">The exact <code>--exclude</code> filters the next snapshot will use: enabled default rules plus your anchored patterns. Saved changes above are reflected here.</p>
-                <ul className="flex flex-wrap gap-1.5">
-                  {effectiveExcludes.map((pattern) => (
-                    <li key={pattern}>
-                      <code className="inline-block px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 break-all">{pattern}</code>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+          <p className="mt-1 text-sm text-gray-400">The latest file and database result before you change the next run.</p>
+          <div className="mt-4 space-y-1">
+            <p className="text-xs uppercase tracking-wide text-gray-500">Database backup</p>
+            <div className="text-sm">{renderPgStatus()}</div>
           </div>
-        )}
-      </div>
-
-      {snapshots.length > 0 && (
-        <div className="space-y-2">
-          <p className="block text-sm text-gray-400">Snapshots</p>
-          <ul className="space-y-1.5">
-            {(showAllSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => (
-              <li key={snapshotIdentity(snap)} className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
-                <span className="min-w-0">
-                  <span className="block text-gray-300 truncate">{snap.id}</span>
-                  <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
-                  {snap.failed && (
-                    <span className="block text-port-error">Backup failed — download only</span>
-                  )}
-                  {snap.incomplete && (
-                    <span className="block text-gray-500">Still being written…</span>
-                  )}
-                </span>
-                <button
-                  onClick={() => handleRestoreDb(snap)}
-                  disabled={snap.failed || snap.incomplete}
-                  title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
-                  className="shrink-0 px-2 py-1 bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Restore DB
-                </button>
-              </li>
-            ))}
-          </ul>
-          {snapshots.length > 10 && (
-            <button
-              type="button"
-              onClick={() => setShowAllSnapshots(value => !value)}
-              aria-expanded={showAllSnapshots}
-              className="text-xs text-port-accent hover:text-port-accent/80 transition-colors min-h-[32px]"
-            >
-              {showAllSnapshots ? 'Show newest 10 snapshots' : `Show all ${snapshots.length} snapshots`}
-            </button>
-          )}
         </div>
-      )}
 
-      <Modal
-        open={!!restoreTarget}
-        onClose={() => { setRestoreTarget(null); setRestorePreview(null); }}
-        size="sm"
-        usePortal
-        ariaLabel="Restore database"
-      >
-        <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
-          <h3 className="text-white text-sm font-medium">Restore database?</h3>
-          <p className="text-sm text-gray-400">
-            This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget?.request.snapshotId}</code>
-            {' '}on <span className="text-gray-300">{restoreTarget?.sourceLabel}</span>
-            {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {restorePreview.tableCount} tables)</>}
-            {' '}into the live PostgreSQL database. Existing rows may be overwritten.
+        <div className="min-w-0 rounded-xl border border-port-border/70 bg-port-bg/30 p-4">
+          <h3 className="flex items-center gap-2 text-base font-semibold text-white">
+            <CalendarClock size={17} className="text-port-accent shrink-0" aria-hidden="true" />
+            Saved schedule
+          </h3>
+          <p className="mt-1 text-sm text-gray-300 break-words">{scheduleSummary}</p>
+          <p className="mt-2 text-xs text-gray-500 break-all">
+            {savedDestPath ? `Destination: ${savedDestPath}` : 'No saved destination — scheduled and manual runs are unavailable.'}
           </p>
-          <div className="flex justify-end gap-2">
-            <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
-            <button onClick={confirmRestoreDb} className="px-3 py-2 text-sm bg-port-warning hover:bg-port-warning/80 text-black font-medium rounded-lg transition-colors">Restore</button>
+          <p className="mt-2 text-xs text-gray-500">Run Backup Now uses these saved values, not an unsaved draft.</p>
+        </div>
+      </div>
+
+      <div className="border-t border-port-border pt-5 space-y-4">
+        <div>
+          <h3 className="flex items-center gap-2 text-base font-semibold text-white">Destination and schedule</h3>
+          <p className="mt-1 text-sm text-gray-400">Choose where snapshots go and when scheduled backups run.</p>
+        </div>
+        <div className="grid grid-cols-1 @min-[52rem]:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] gap-4 items-start">
+          <div className="space-y-1 min-w-0">
+            <label htmlFor={destPathId} className="block text-sm text-gray-400">Destination Path</label>
+            <div className="flex flex-wrap gap-2 items-stretch">
+              <input
+                id={destPathId}
+                type="text"
+                value={destPath}
+                onChange={e => setDestPath(e.target.value)}
+                className="flex-1 min-w-[12rem] bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                placeholder="/path/to/backups"
+              />
+              <FolderPicker value={destPath} onChange={setDestPath} />
+            </div>
+          </div>
+
+          <div className="space-y-4 min-w-0">
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-gray-400">Enabled</span>
+              <button
+                type="button"
+                role="switch"
+                onClick={() => setEnabled(!enabled)}
+                aria-label="Scheduled backups"
+                aria-checked={enabled}
+                className={`relative w-10 h-5 rounded-full transition-colors ${enabled ? 'bg-port-accent' : 'bg-port-border'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : ''}`} />
+              </button>
+            </div>
+            <div className="space-y-1">
+              <span className="block text-sm text-gray-400">Schedule</span>
+              <CronSchedulePicker value={cronExpression} onChange={setCronExpression} cronAriaLabel="Schedule (cron)" />
+              <p className="text-xs text-gray-500">Default: 2:00 AM daily. Times use the configured timezone.</p>
+            </div>
           </div>
         </div>
-      </Modal>
+      </div>
 
-      {/* Sticky action bar — Save and Run Backup Now stay reachable no matter how
-          far the exclusions/snapshot lists push the page, and the bar carries the
-          unsaved-changes state so an edit at the top of the tab is never
-          committed blind. Negative margins bleed it to the card edges. */}
-      <div className="sticky bottom-0 z-20 flex flex-wrap items-center gap-2 -mx-4 sm:-mx-6 -mb-4 sm:-mb-6 px-4 sm:px-6 py-3 bg-port-card/95 sm:backdrop-blur border-t border-port-border rounded-b-xl">
+      {/* Keep saved-state actions before the detail disclosures. The bar remains
+          sticky while the longer exclusion and snapshot regions are open. */}
+      <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-port-card/95 sm:backdrop-blur border-y border-port-border">
         <button
           onClick={handleSave}
           disabled={saving}
@@ -521,7 +420,217 @@ export function BackupTab() {
           {runDisabledReason || formStatus}
         </span>
       </div>
-    </div>
+
+      <div className="border-t border-port-border pt-5">
+        <CollapsibleSection
+          label="Exclusions"
+          icon={ShieldOff}
+          summary={exclusionsSummary}
+          id={exclusionsPanelId}
+          open={showExclusions}
+          onOpenChange={setShowExclusions}
+          size="bar"
+          className="space-y-3"
+          bodyClassName="space-y-4 pt-2"
+        >
+          {statusLoadFailed ? (
+            <p className="text-sm text-port-warning">Backup exclusion details are unavailable — reload to retry before editing these rules.</p>
+          ) : (
+            <>
+              <p className="text-sm text-gray-400">Review what stays out of snapshots. Detailed rules are one click away so the recovery actions remain easy to find.</p>
+
+          {defaultExcludeRows.length > 0 && (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowDefaultExcludes(v => !v)}
+                aria-expanded={showDefaultExcludes}
+                aria-controls={defaultExcludesPanelId}
+                className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors min-h-[44px]"
+              >
+                {showDefaultExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+                <ShieldOff size={14} className="text-gray-500 shrink-0" />
+                <span>Default exclusions — {enabledDefaultCount} enabled, {disabledDefaultCount} disabled</span>
+              </button>
+              {showDefaultExcludes && (
+                <div id={defaultExcludesPanelId} className="space-y-2">
+                  <p className="text-xs text-gray-500">Built-in exclusion rules keep snapshots small. Switch on to disable an overridable default rule; fixed rules remain enabled.</p>
+                  <ul className="space-y-1.5 mt-1">
+                    {defaultExcludeRows.map((d, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs">
+                        {d.overridable ? (
+                          <ToggleSwitch
+                            enabled={!d.defaultActive}
+                            onChange={() => toggleDefaultExclude(d.path)}
+                            size="sm"
+                            ariaLabel={`Disable default exclusion ${d.path}`}
+                            className="mt-0.5"
+                          />
+                        ) : (
+                          <span className="inline-flex items-center justify-center w-12 h-7 shrink-0 text-gray-600" title="Fixed default exclusion — always enabled">
+                            <ShieldOff size={14} />
+                          </span>
+                        )}
+                        <code className="px-1.5 py-0.5 bg-port-bg border rounded shrink-0 text-gray-300 border-port-border">{d.path}</code>
+                        <span className="text-gray-500">
+                          {d.reason}
+                          {!d.defaultActive && <span className="text-gray-400 ml-1">(Default exclusion disabled)</span>}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <label htmlFor={additionalExcludeId} className="block text-sm text-gray-400">Additional Exclude Paths</label>
+            <p className="text-xs text-gray-500">Custom directories/patterns to skip during backup (relative to data/). Patterns are anchored to the data root, so <code>repos/</code> is stored as <code>/repos/</code> and skips only <code>data/repos/</code>. Start a pattern with <code>**/</code> to match at any depth instead. Additional rules still apply when a default exclusion is disabled. Disabling a default does not guarantee matching files will be backed up.</p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                id={additionalExcludeId}
+                type="text"
+                value={newExclude}
+                onChange={e => setNewExclude(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addExclude()}
+                className="flex-1 min-w-[12rem] bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                placeholder="/repos/"
+              />
+              <button
+                onClick={addExclude}
+                disabled={!anchorUserExclude(newExclude)}
+                aria-label="Add exclude path"
+                className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] px-3 py-2 bg-port-border hover:bg-port-border/70 text-white rounded-lg transition-colors disabled:opacity-50 shrink-0"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            {excludePaths.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {excludePaths.map((path, i) => (
+                  <span key={i} className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-port-bg border border-port-border rounded-lg text-sm text-gray-300">
+                    <code className="text-xs break-all">{path}</code>
+                    <button onClick={() => removeExclude(i)} aria-label="Dismiss" className="text-gray-500 hover:text-port-error transition-colors">
+                      <X size={14} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {effectiveExcludes.length > 0 && (
+              <div className="space-y-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowEffectiveExcludes(v => !v)}
+                  aria-expanded={showEffectiveExcludes}
+                  aria-controls={effectiveExcludesPanelId}
+                  className="flex items-center gap-2 w-full text-left text-sm text-gray-400 hover:text-white transition-colors min-h-[44px]"
+                >
+                  {showEffectiveExcludes ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
+                  <span>Effective exclude list — {effectiveExcludes.length} rsync {effectiveExcludes.length === 1 ? 'pattern' : 'patterns'}</span>
+                </button>
+                {showEffectiveExcludes && (
+                  <div id={effectiveExcludesPanelId} className="space-y-2">
+                    <p className="text-xs text-gray-500">The exact <code>--exclude</code> filters the next snapshot will use: enabled default rules plus your anchored patterns. Saved changes above are reflected here.</p>
+                    <ul className="flex flex-wrap gap-1.5">
+                      {effectiveExcludes.map((pattern) => (
+                        <li key={pattern}>
+                          <code className="inline-block px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 break-all">{pattern}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+              </div>
+            </>
+          )}
+        </CollapsibleSection>
+      </div>
+
+      <div className="border-t border-port-border pt-5">
+        <CollapsibleSection
+          label="Snapshot history"
+          icon={Archive}
+          summary={snapshotSummary}
+          id={snapshotsPanelId}
+          open={showSnapshots}
+          onOpenChange={setShowSnapshots}
+          size="bar"
+          className="space-y-3"
+          bodyClassName="space-y-2 pt-2"
+        >
+          {snapshotsLoadFailed ? (
+            <p className="text-sm text-port-warning">Snapshot history is unavailable — reload to retry.</p>
+          ) : snapshots.length === 0 ? (
+            <p className="text-sm text-gray-500">No snapshots have been recorded on this machine yet.</p>
+          ) : (
+            <>
+              <ul className="space-y-1.5">
+                {(showAllSnapshots ? snapshots : snapshots.slice(0, 10)).map((snap) => (
+                  <li key={snapshotIdentity(snap)} className="flex items-center justify-between gap-2 text-xs bg-port-bg border border-port-border rounded-lg px-2.5 py-1.5">
+                    <span className="min-w-0">
+                      <span className="block text-gray-300 truncate">{snap.id}</span>
+                      <span className="block text-gray-500 truncate">Source: {snapshotSourceLabel(snap)}</span>
+                      {snap.failed && (
+                        <span className="block text-port-error">Backup failed — download only</span>
+                      )}
+                      {snap.incomplete && (
+                        <span className="block text-gray-500">Still being written…</span>
+                      )}
+                    </span>
+                    <button
+                      onClick={() => handleRestoreDb(snap)}
+                      disabled={snap.failed || snap.incomplete}
+                      title={snap.failed ? 'Failed backup snapshots can only be downloaded for salvage' : undefined}
+                      className="shrink-0 px-2 py-2 min-h-[40px] bg-port-border hover:bg-port-border/70 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Restore DB
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {snapshots.length > 10 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllSnapshots(value => !value)}
+                  aria-expanded={showAllSnapshots}
+                  className="text-xs text-port-accent hover:text-port-accent/80 transition-colors min-h-[32px]"
+                >
+                  {showAllSnapshots ? 'Show newest 10 snapshots' : `Show all ${snapshots.length} snapshots`}
+                </button>
+              )}
+            </>
+          )}
+        </CollapsibleSection>
+      </div>
+
+      <Modal
+        open={!!restoreTarget}
+        onClose={() => { setRestoreTarget(null); setRestorePreview(null); }}
+        size="sm"
+        usePortal
+        ariaLabel="Restore database"
+      >
+        <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
+          <h3 className="text-white text-sm font-medium">Restore database?</h3>
+          <p className="text-sm text-gray-400">
+            This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget?.request.snapshotId}</code>
+            {' '}on <span className="text-gray-300">{restoreTarget?.sourceLabel}</span>
+            {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {restorePreview.tableCount} tables)</>}
+            {' '}into the live PostgreSQL database. Existing rows may be overwritten.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => { setRestoreTarget(null); setRestorePreview(null); }} className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancel</button>
+            <button onClick={confirmRestoreDb} className="px-3 py-2 text-sm bg-port-warning hover:bg-port-warning/80 text-black font-medium rounded-lg transition-colors">Restore</button>
+          </div>
+        </div>
+      </Modal>
+
+    </section>
   );
 }
 
