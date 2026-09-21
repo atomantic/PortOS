@@ -681,21 +681,29 @@ export default function ReviewerPicker({
   };
 
   const addUsername = () => {
-    const clean = cleanReviewUsername(usernameInput);
-    if (!clean) {
-      setUsernameError('Enter a valid GitHub or GitLab username (letters, numbers, hyphens, underscores, dots; optional org/team).');
+    const entries = usernameInput.split(/[,\n]+/).map(value => value.trim()).filter(Boolean);
+    const invalid = entries.filter(value => !cleanReviewUsername(value));
+    if (!entries.length || invalid.length) {
+      setUsernameError(invalid.length
+        ? `Invalid reviewer names: ${invalid.join(', ')}. No names were added.`
+        : 'Enter a valid GitHub or GitLab username (letters, numbers, hyphens, underscores, dots; optional org/team).');
       return;
     }
-    if (selectedUsernames.some(u => u.toLowerCase() === clean.toLowerCase())) {
+    // Validate the whole batch before normalizing: the normalizer deliberately
+    // drops invalid values and caps the roster, which would hide a partial add.
+    const incoming = entries.map(cleanReviewUsername);
+    const uniqueCount = new Set([...selectedUsernames, ...incoming].map(value => value.toLowerCase())).size;
+    if (uniqueCount > MAX_REVIEW_USERNAMES) {
+      setUsernameError(`At most ${MAX_REVIEW_USERNAMES} reviewer usernames. No names were added.`);
+      return;
+    }
+    const next = normalizeReviewUsernames([...selectedUsernames, ...incoming]);
+    if (next.length === selectedUsernames.length) {
       setUsernameInput('');
       setUsernameError('Already added.');
       return;
     }
-    if (atMaxUsernames) {
-      setUsernameError(`At most ${MAX_REVIEW_USERNAMES} reviewer usernames.`);
-      return;
-    }
-    emit({ usernames: [...selectedUsernames, clean] });
+    emit({ usernames: next });
     setUsernameInput('');
     setUsernameError('');
   };
@@ -907,15 +915,15 @@ export default function ReviewerPicker({
         )}
         <div className="flex items-center gap-1.5">
           <span className="text-xs text-gray-400 font-mono">@</span>
-          <input
+          <textarea
             id={`${id}-username`}
-            type="text"
+            rows={2}
             value={usernameInput}
             disabled={disabled || atMaxUsernames}
-            placeholder="CodeReviewbot"
+            placeholder="alice, bob.team"
             aria-label="Add a GitHub/GitLab reviewer username"
             onChange={(e) => { setUsernameInput(e.target.value); if (usernameError) setUsernameError(''); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addUsername(); } }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addUsername(); } }}
             className="flex-1 min-w-0 max-w-[200px] px-2 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 min-h-[28px] focus:border-port-accent focus:outline-none disabled:opacity-50"
           />
           <button
@@ -929,6 +937,7 @@ export default function ReviewerPicker({
             Add
           </button>
         </div>
+        <p className="text-xs text-gray-400">Separate names with commas or newlines (Shift+Enter). Enter adds the list; an invalid name or a full roster leaves the whole draft for correction.</p>
         {usernameError && <span role="alert" className="text-xs text-port-error">{usernameError}</span>}
       </div>}
 

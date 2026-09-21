@@ -84,7 +84,10 @@ Space, arrow keys, then Space to drop or Escape to cancel. Earlier/later buttons
 and Move to tier selectors offer the same operations without dragging.
 Tool-free reviewers always precede CLI and Copilot reviewers within a tier;
 moves across that boundary are normalized to the execution order. Forge usernames
-remain in a final separate section and never belong to a fallback tier.
+remain in a final separate section and never belong to a fallback tier. Add names
+individually or separated by commas/newlines (Shift+Enter); Enter adds the batch.
+Invalid names or an exceeded roster cap leave the whole draft for correction
+without adding a partial list. Names are deduplicated case-insensitively.
 
 The runtime selects the first nonempty tier with **every** reviewer unpaused.
 A partially paused tier is skipped too. If no tier qualifies, it selects the

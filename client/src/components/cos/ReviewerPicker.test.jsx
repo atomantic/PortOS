@@ -328,7 +328,7 @@ describe('ReviewerPicker', () => {
     await typeSettled(user, screen.getByLabelText('Add a GitHub/GitLab reviewer username'), 'bad token!');
     await user.keyboard('{Enter}');
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getByText(/valid GitHub or GitLab username/)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Invalid reviewer names: bad token!');
   });
 
   it('renders existing username pills and removes one', async () => {
@@ -338,6 +338,25 @@ describe('ReviewerPicker', () => {
     expect(screen.getByText('CodeReviewbot')).toBeInTheDocument();
     await user.click(screen.getByLabelText('Remove @CodeReviewbot'));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['other-bot'] }));
+  });
+
+  it('adds comma/newline forge usernames as one validated, deduplicated batch', () => {
+    const onChange = vi.fn();
+    render(<ReviewerPicker usernames={['Alice']} onChange={onChange} />);
+    const input = screen.getByLabelText('Add a GitHub/GitLab reviewer username');
+    fireEvent.change(input, { target: { value: '@alice, bob.team\ncarol_dev' } });
+    fireEvent.click(screen.getByLabelText('Add reviewer username'));
+    expect(onChange.mock.lastCall[0].usernames).toEqual(['Alice', 'bob.team', 'carol_dev']);
+    onChange.mockClear();
+    fireEvent.change(input, { target: { value: 'valid-user, not valid!' } });
+    fireEvent.click(screen.getByLabelText('Add reviewer username'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Invalid reviewer names: not valid!');
+    expect(input).toHaveValue('valid-user, not valid!');
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: Array.from({ length: 20 }, (_, index) => `reviewer-${index}`).join(',') } });
+    fireEvent.click(screen.getByLabelText('Add reviewer username'));
+    expect(screen.getByRole('alert')).toHaveTextContent('At most 20 reviewer usernames');
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('toggles a keyed reviewer non-blocking (adds its slug to optionalReviewers)', async () => {

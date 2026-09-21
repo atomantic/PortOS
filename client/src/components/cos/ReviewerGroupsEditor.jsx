@@ -145,7 +145,7 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
 
   return (
     <div className="space-y-3 min-w-0">
-      <p className="text-xs text-gray-400">The first tier with every member unpaused is selected. Even one paused member skips that tier. If all tiers contain a paused member, the first configured tier is selected; its paused reviewers still report unavailable. Empty tiers are drafts and disappear on save.</p>
+      <p className="text-xs text-gray-400">The first tier with every member unpaused is selected. Even one paused member skips that tier. If all tiers contain a paused member, the first configured tier is selected; its paused reviewers still report unavailable. Empty tiers are drafts and disappear on save. Status previews this draft; changes apply when saved.</p>
       <p className="text-xs text-gray-500">Drag a handle with a pointer or touch, or press Space, use arrow keys, then Space to drop (Escape cancels). Move controls also work without dragging. Tool-free reviewers always run first within each tier; pins are shared wherever the same identity appears.</p>
       <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragEnd={drop}
         accessibility={{
