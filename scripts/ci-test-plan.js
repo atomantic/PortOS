@@ -263,6 +263,18 @@ const DOCUMENTATION_RULES = [
   /\.(?:md|mdx|png|jpe?g|gif|webp|svg|ico)$/i,
 ];
 
+// Text snapshots are executable test inputs, but their extension is deliberately
+// outside EXECUTABLE_RE. Keep this mapping explicit rather than treating every
+// `.txt` file as a test fixture: an unmapped text artifact must still widen CI.
+const FIXTURE_OWNERS = [
+  {
+    re: /^server\/services\/promptSections\/__snapshots__\/reviewLoopMatrix\/[^/]+\.txt$/,
+    tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
+  },
+];
+
+const fixtureOwnerFor = (path) => FIXTURE_OWNERS.find(({ re }) => re.test(path));
+
 // The bundled slashdo submodule (see AGENTS.md "Slashdo Commands") ships no
 // source into the tree the planner scans — `git diff` reports only the gitlink
 // pointer at this path, never the files inside it — so it can't be detected the
@@ -623,9 +635,27 @@ export function buildCiTestPlan(changedFiles, {
   }
 
   const executable = relevant.filter(isExecutable);
-  const unknown = relevant.filter((path) => !isExecutable(path));
+  const fixtureTests = [];
+  const unknown = [];
+  const missingFixtureOwners = [];
+  for (const path of relevant) {
+    if (isExecutable(path)) continue;
+    const owner = fixtureOwnerFor(path);
+    if (!owner) {
+      unknown.push(path);
+      continue;
+    }
+    if (owner.tests.some((test) => !trackedSet.has(test) || !runnerForTest(test))) {
+      missingFixtureOwners.push(path);
+      continue;
+    }
+    fixtureTests.push(...owner.tests);
+  }
   if (unknown.length > 0) {
     return fullPlan(changed, `unclassified changed file: ${unknown[0]}`, { appRouteOnly, trackedSet });
+  }
+  if (missingFixtureOwners.length > 0) {
+    return fullPlan(changed, `fixture owner not tracked: ${missingFixtureOwners[0]}`, { appRouteOnly, trackedSet });
   }
   if (executable.length > MAX_CHANGED_CODE_FILES) {
     return fullPlan(changed, `wide change (${executable.length} executable files)`, { appRouteOnly, trackedSet, windowsEscalates: false });
@@ -658,6 +688,7 @@ export function buildCiTestPlan(changedFiles, {
   const unscopedSources = jsSources.filter((path) => !featureDirectory(path));
   const selectedTests = [
     ...directTests,
+    ...fixtureTests,
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
   ];
