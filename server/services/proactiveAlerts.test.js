@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mock = vi.hoisted(() => ({
+  resolutions: [],
   goals: [],
   memory: { used: 1, total: 100 },
   processes: [],
@@ -9,6 +10,10 @@ const mock = vi.hoisted(() => ({
   performance: { needsAttention: [], skipped: [] }
 }));
 
+vi.mock('./reviewQueueTriageStore.js', () => ({
+  listReviewQueueTriage: vi.fn(async () => mock.resolutions),
+  upsertReviewQueueTriage: vi.fn(async value => { mock.resolutions.push(value); return value; }),
+}));
 vi.mock('./identity.js', () => ({ getGoals: vi.fn(async () => ({ goals: mock.goals })) }));
 vi.mock('./taskLearning.js', () => ({
   getPerformanceSummary: vi.fn(async () => mock.performance)
@@ -22,10 +27,10 @@ vi.mock('./apps.js', () => ({
     return processes.map(p => ({ ...p, expectedExit: names.has(p?.name) }));
   })
 }));
-vi.mock('./usage.js', () => ({ getUsage: vi.fn(async () => ({ daily: [] })) }));
+vi.mock('./usage.js', () => ({ getUsage: vi.fn(() => ({ dailyActivity: {} })) }));
 vi.mock('./tribe.js', () => ({ getCareSummary: vi.fn(async () => ({ overdueCount: 0, overdue: [] })) }));
 vi.mock('./tribeOutreach.js', () => ({ findUnansweredTribeThreads: vi.fn(async () => []) }));
-// Keep memory/CPU below their warning thresholds so only process alerts surface.
+// Saturated resources remain telemetry, not an alert.
 vi.mock('../lib/memoryStats.js', () => ({
   getMemoryStats: vi.fn(async () => mock.memory)
 }));
@@ -33,8 +38,11 @@ vi.mock('./portosProductMetrics.js', () => ({
   getProductEngagement: vi.fn(async () => ({ actions: [] }))
 }));
 
-vi.mock('os', () => ({ default: { loadavg: () => [0], cpus: () => [{}] } }));
+vi.mock('os', () => ({ default: { loadavg: () => [100], cpus: () => [{}] } }));
 
+import { resolveHealthAlert } from './proactiveAlertSources.js';
+import { getPerformanceSummary } from './taskLearning.js';
+import { getUsage } from './usage.js';
 import { generateAlerts } from './proactiveAlerts.js';
 
 const processAlerts = async () => {
@@ -183,13 +191,72 @@ describe('proactiveAlerts — resource identities', () => {
     mock.memory = { used: 90, total: 100 };
     const first = await generateAlerts();
     expect(first.alerts.map(a => a.id).sort()).toEqual([
-      'goal_stall:example%253Aone', 'goal_stall:example%3Aone', 'system_resource:memory'
+      'goal_stall:example%253Aone', 'goal_stall:example%3Aone'
     ]);
     mock.goals.reverse();
     mock.goals[0].title = 'Renamed goal';
     mock.memory = { used: 99, total: 100 };
     const next = await generateAlerts();
     expect(next.alerts.map(a => a.id).sort()).toEqual(first.alerts.map(a => a.id).sort());
-    expect(next.alerts.find(a => a.id === 'system_resource:memory').severity).toBe('critical');
+    expect(next.alerts.some(a => a.type === 'system_resource')).toBe(false);
+  });
+});
+
+
+describe('proactiveAlerts — activity is not spending evidence', () => {
+  it('does not turn a busy day into a cost warning', async () => {
+    const dailyActivity = {};
+    for (let offset = 0; offset < 5; offset++) {
+      const date = new Date();
+      date.setDate(date.getDate() - offset);
+      dailyActivity[date.toISOString().slice(0, 10)] = {
+        tokens: offset === 0 ? 1_000_000 : 100,
+        sessions: offset === 0 ? 1000 : 1,
+      };
+    }
+    getUsage.mockReturnValue({ dailyActivity });
+    const { alerts } = await generateAlerts();
+    expect(alerts.filter(alert => alert.type === 'cost_spike')).toEqual([]);
+  });
+});
+
+
+describe('health alert resolution', () => {
+  beforeEach(() => {
+    mock.resolutions = [];
+    mock.goals = [];
+    mock.performance = { needsAttention: [], skipped: [] };
+    mock.desktopProcessNames = new Set();
+    mock.desktopLookupError = null;
+    mock.processes = [{ pm_id: 7, name: 'example-service', status: 'errored', restarts: 3 }];
+  });
+
+  it('keeps corrected evidence quiet and permits a new failure', async () => {
+    expect(await resolveHealthAlert('process_errored:7')).toEqual({ resolved: true });
+    expect(await processAlerts()).toEqual([]);
+    expect(mock.resolutions[0]).toMatchObject({ actionKey: 'health.resolved:process_errored:7', dismissed: true });
+    expect(mock.resolutions[0].revision).toMatch(/^[a-f0-9]{64}$/);
+    mock.processes[0].restarts++;
+    expect(await processAlerts()).toHaveLength(1);
+  });
+
+  it('passes the correction time into both run-based alert detectors', async () => {
+    mock.performance = { needsAttention: [{ taskType: 'example:task', rateSource: 'windowed', successRate: 3, windowedCompleted: 30 }], skipped: [] };
+    await resolveHealthAlert('success_drop:example%3Atask');
+    const regenerated = await generateAlerts();
+    expect(regenerated.alerts.find(alert => alert.id === 'success_drop:example%3Atask').occurrence)
+      .toBe(mock.resolutions[0].occurrence);
+    expect(getPerformanceSummary).toHaveBeenLastCalledWith({
+      sinceByTaskType: { 'example:task': mock.resolutions[0].occurrence }, since: null,
+    });
+  });
+
+  it('does not resurrect a stalled goal merely because another day passed', async () => {
+    mock.goals = [{ id: 'example', title: 'Example goal', status: 'active', createdAt: '2020-01-01' }];
+    await resolveHealthAlert('goal_stall:example');
+    mock.goals[0].title = 'Renamed goal';
+    const { alerts } = await generateAlerts();
+    expect(alerts.some(alert => alert.type === 'goal_stall')).toBe(false);
+    expect(await resolveHealthAlert('goal_stall:missing')).toBeNull();
   });
 });

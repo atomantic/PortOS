@@ -9,7 +9,6 @@
 import { execPm2 } from './pm2.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
-import { isModelServerProcess } from '../lib/managedDaemon.js';
 import { loadState, saveState, withStateLock, isDaemonRunning } from './cosState.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { annotateExpectedExit } from './apps.js';
@@ -107,37 +106,9 @@ export async function runHealthCheck() {
         message: `${failedRestarts.length} errored PM2 process(es) failed to auto-restart: ${failedRestarts.map(r => r.name).join(', ')}`
       });
     }
-
-    const succeededRestarts = restartResults.filter(r => r.success);
-    if (succeededRestarts.length > 0) {
-      issues.push({
-        type: 'warning',
-        category: 'processes',
-        message: `Auto-restarted ${succeededRestarts.length} errored PM2 process(es): ${succeededRestarts.map(r => r.name).join(', ')}`
-      });
-    }
   }
 
-  // Check memory usage per process. The local model servers are exempt: their
-  // resident size is the checkpoint they loaded, so a healthy llama-server or
-  // MTPLX sits tens of GB over any generic cap from the moment it starts, and
-  // the warning it raises can never be cleared. Host-wide pressure — where an
-  // oversized model actually matters — is reported by proactiveAlerts.js.
-  // Releasing that memory while nothing is using it is issue #4863.
-  const highMemoryProcesses = pm2Processes.filter(p => {
-    if (isModelServerProcess(p?.name)) return false;
-    const memMb = (p.monit?.memory || 0) / (1024 * 1024);
-    return memMb > state.config.maxProcessMemoryMb;
-  });
-
-  if (highMemoryProcesses.length > 0) {
-    issues.push({
-      type: 'warning',
-      category: 'memory',
-      message: `High memory usage in: ${highMemoryProcesses.map(p => `${p.name} (${Math.round((p.monit?.memory || 0) / (1024 * 1024))}MB)`).join(', ')}`
-    });
-  }
-
+  // Keep memory telemetry without treating expected occupancy as a failure.
   metrics.memory = await getMemoryStats();
 
   // Store health check result with lock to prevent race conditions
@@ -165,6 +136,8 @@ export async function getHealthStatus() {
   const state = await loadState();
   return {
     lastCheck: state.stats.lastHealthCheck,
-    issues: state.stats.healthIssues || []
+    // Older snapshots can survive until the next daemon poll.
+    issues: (state.stats.healthIssues || []).filter(issue => issue.category !== 'memory'
+      && !(issue.category === 'processes' && issue.message?.startsWith('Auto-restarted ')))
   };
 }

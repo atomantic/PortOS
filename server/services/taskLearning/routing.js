@@ -483,7 +483,7 @@ export async function getRoutingAccuracy() {
  * Get a performance summary for logging during task evaluation
  * Provides insights about how different task types are performing
  */
-export async function getPerformanceSummary() {
+export async function getPerformanceSummary({ sinceByTaskType = {}, since = null } = {}) {
   const data = await loadLearningData();
 
   const summary = {
@@ -504,7 +504,13 @@ export async function getPerformanceSummary() {
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
     if (metrics.completed < 3) continue;
 
-    const { successRate, source: rateSource, windowedCompleted } = computeEffectiveSuccessRate(metrics);
+    // Alert acknowledgements reset only the evidence window, never learning
+    // history or scheduler decisions. Undated samples cannot prove a new issue.
+    const cutoff = Math.max(Date.parse(since) || 0, Date.parse(sinceByTaskType[taskType]) || 0);
+    const alertMetrics = cutoff ? { ...metrics, recentOutcomes: (metrics.recentOutcomes || [])
+      .filter(outcome => Date.parse(outcome.t) > cutoff) } : metrics;
+    const { successRate, source: rateSource, windowedCompleted } = computeEffectiveSuccessRate(alertMetrics);
+    if (cutoff && rateSource !== 'windowed') continue;
     const entry = {
       taskType,
       successRate,
@@ -522,7 +528,7 @@ export async function getPerformanceSummary() {
     } else if (successRate !== null && successRate < 50 && metrics.completed >= 5) {
       summary.needsAttention.push(entry);
       // Also mark as skipped if very low (same predicate as getSkippedTaskTypes)
-      if (isSkipCandidate(metrics)) {
+      if (isSkipCandidate(alertMetrics)) {
         summary.skipped.push(entry);
       }
     }

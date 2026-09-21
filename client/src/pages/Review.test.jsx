@@ -203,6 +203,19 @@ describe('Review Hub queue-card triage (#3282)', () => {
     expect(screen.getAllByTitle('Delete')).toHaveLength(2);
   });
 
+  it('lets a corrected health issue be resolved from its card', async () => {
+    const item = {
+      id: 'health:success_drop:example', source: 'health', sourceLabel: 'Health anomalies',
+      title: 'Low success rate: example', summary: '3% success across the last 30 runs',
+      operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+    };
+    api.getReviewQueue.mockResolvedValueOnce({ partial: false, items: [item], sources: {} });
+    render(<Review />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark resolved' }));
+    await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(item.id, { operation: 'complete' }));
+    await waitFor(() => expect(screen.queryByText(item.title)).not.toBeInTheDocument());
+  });
+
   it('forwards an explicit source operation for source-owned queue actions', async () => {
     api.getReviewQueue.mockResolvedValueOnce({
       partial: false,

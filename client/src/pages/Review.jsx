@@ -1301,6 +1301,7 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
           </section>
         )}
 
+        {item.source === 'health' && <p className="text-sm text-gray-400">Mark resolved after correcting the issue. Earlier runs will no longer count toward run-based alerts; new evidence can raise another alert.</p>}
         {operations.length > 0 && (
           <section className="flex flex-wrap gap-2">
             {operations.map((operation) => (

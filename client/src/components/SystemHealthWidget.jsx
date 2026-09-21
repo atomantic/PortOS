@@ -154,7 +154,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             <HardDrive size={14} className="text-purple-400" />
             <span className="text-xs text-gray-500">Memory</span>
           </div>
-          <div className={`text-lg sm:text-xl font-bold ${pctTone(system.memory.usagePercent, thresholds.memoryWarn, thresholds.memoryCritical)}`}>
+          <div className="text-lg sm:text-xl font-bold text-port-accent">
             {system.memory.usagePercent}%
           </div>
           <div className="text-xs text-gray-500">
@@ -162,7 +162,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
           </div>
           <div className="mt-2 h-1.5 bg-port-border rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${barTone(system.memory.usagePercent, thresholds.memoryWarn, thresholds.memoryCritical)}`}
+              className="h-full rounded-full transition-all bg-port-accent"
               style={{ width: `${system.memory.usagePercent}%` }}
             />
           </div>
@@ -174,7 +174,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             <Cpu size={14} className="text-blue-400" />
             <span className="text-xs text-gray-500">CPU</span>
           </div>
-          <div className={`text-lg sm:text-xl font-bold ${pctTone(system.cpu.usagePercent, thresholds.cpuWarn, thresholds.cpuCritical)}`}>
+          <div className="text-lg sm:text-xl font-bold text-port-accent">
             {system.cpu.usagePercent}%
           </div>
           <div className="text-xs text-gray-500">
@@ -182,7 +182,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
           </div>
           <div className="mt-2 h-1.5 bg-port-border rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${barTone(Math.min(100, system.cpu.usagePercent), thresholds.cpuWarn, thresholds.cpuCritical)}`}
+              className="h-full rounded-full transition-all bg-port-accent"
               style={{ width: `${Math.min(100, system.cpu.usagePercent)}%` }}
             />
           </div>

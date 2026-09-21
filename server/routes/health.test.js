@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import os from 'os';
+import { checkHealth } from '../lib/db.js';
+import { getMemoryStats } from '../lib/memoryStats.js';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
@@ -192,6 +194,22 @@ describe('System Health Routes', () => {
     );
   });
 
+
+  it('reports saturated memory and CPU without degrading health', async () => {
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+    getMemoryStats.mockResolvedValueOnce({ total: 100, used: 99, free: 1 });
+    const load = vi.spyOn(os, 'loadavg').mockReturnValue([1000, 1000, 1000]);
+    try {
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.status).toBe(200);
+      expect(response.body.system.memory.usagePercent).toBe(99);
+      expect(response.body.system.cpu.usagePercent).toBeGreaterThan(100);
+      expect(response.body.warnings).toEqual([]);
+      expect(response.body.overallHealth).toBe('healthy');
+    } finally {
+      load.mockRestore();
+    }
+  });
 
   it('does not warn on cumulative restart_time (developer-driven restarts)', async () => {
     listProcesses.mockResolvedValueOnce([
