@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 
+const mockNavigate = vi.hoisted(() => vi.fn());
+vi.mock('react-router', () => ({
+  useNavigate: () => mockNavigate,
+}));
+
 // Mock the API surface GitTab calls on mount + when opening the diff modal.
 vi.mock('../../../services/api', () => ({
   getGitInfo: vi.fn(),
@@ -312,5 +317,24 @@ describe('GitTab reset to origin', () => {
     await waitFor(() => expect(api.resetToDefaultBranch).toHaveBeenCalledWith('/repo', { silent: true }));
     // The tab re-reads git state rather than trusting its pre-reset snapshot.
     await waitFor(() => expect(api.getGitInfo.mock.calls.length).toBeGreaterThan(beforeConfirm));
+  });
+});
+
+describe('GitTab shell terminal integration', () => {
+  it('renders an Open terminal button next to git action buttons', async () => {
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
+
+    const button = await screen.findByRole('button', { name: /open terminal/i });
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveAttribute('title', 'Open shell terminal in this app directory');
+  });
+
+  it('navigates to shell terminal with encoded repoPath when Open terminal is clicked', async () => {
+    render(<GitTab appId="app-example" appName="Example App" repoPath="/srv/example-app" />);
+
+    const button = await screen.findByRole('button', { name: /open terminal/i });
+    fireEvent.click(button);
+
+    expect(mockNavigate).toHaveBeenCalledWith('/shell?cwd=%2Fsrv%2Fexample-app');
   });
 });

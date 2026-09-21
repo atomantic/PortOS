@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { GitBranch, Plus, Minus, FileText, RefreshCw, Download, Rocket, Upload, ArrowUpDown, Check, Trash2, GitMerge, Globe, RotateCcw } from 'lucide-react';
+import { useNavigate } from 'react-router';
+import { GitBranch, Plus, Minus, FileText, RefreshCw, Download, Rocket, Upload, ArrowUpDown, Check, Trash2, GitMerge, Globe, RotateCcw, Terminal } from 'lucide-react';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -132,6 +133,7 @@ function ConfirmModal({ open, onClose, titleId, icon, title, tone = 'accent', co
 }
 
 export default function GitTab({ appId, appName, repoPath }) {
+  const navigate = useNavigate();
   const [gitInfo, setGitInfo] = useState(null);
   const [diff, setDiff] = useState('');
   const [showDiff, setShowDiff] = useState(false);
@@ -256,6 +258,11 @@ export default function GitTab({ appId, appName, repoPath }) {
     }
     await loadGitData({ includeRemote: true });
     setSourceRefreshKey((key) => key + 1);
+  };
+
+  const handleOpenTerminal = () => {
+    if (!repoPath) return;
+    navigate(`/shell?cwd=${encodeURIComponent(repoPath)}`);
   };
 
   const handleReleasePR = async () => {
@@ -567,6 +574,15 @@ export default function GitTab({ appId, appName, repoPath }) {
           >
             <Download size={16} className={updating ? 'animate-bounce' : ''} />
             {updating ? 'Fetching...' : 'Fetch branches'}
+          </button>
+          <button
+            onClick={handleOpenTerminal}
+            disabled={!repoPath}
+            title="Open shell terminal in this app directory"
+            className="flex items-center gap-1.5 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-50"
+          >
+            <Terminal size={16} />
+            Open terminal
           </button>
           <button
             onClick={() => {
