@@ -114,6 +114,27 @@ export const withToolUseOptionLabel = (id, label, provider, toolUseIdsByProvider
 };
 
 /**
+ * Annotate a native model option with the capabilities the picker knows about.
+ * Keep the decoration here so model selectors do not each invent their own
+ * capability wording or combine tool and image-analysis signals differently.
+ */
+export const withModelCapabilityOptionLabel = (
+  id,
+  label,
+  provider,
+  { toolUseIdsByProvider = null, visionIdsByProvider = null, includeToolUse = true, includeVision = true } = {},
+) => {
+  const badges = [];
+  const toolHint = localToolUseHint(id, provider, toolUseIdsByProvider);
+  if (includeToolUse && toolHint) badges.push(toolHint.toolCapable ? '🔧 tool use' : '⚠ no known tool use');
+  const visionCapable = isVisionCapableCliProvider(provider)
+    || (localBackendForProvider(provider)
+      && (visionIdsByProvider?.[provider?.id]?.has(id) === true || isVisionModel(id)));
+  if (includeVision && visionCapable) badges.push('🖼 image analysis');
+  return badges.length ? `${label} · ${badges.join(' · ')}` : label;
+};
+
+/**
  * Selectable models for a generation/chat picker: drops internal sentinels AND
  * embedding-only models. Use anywhere the user picks a model that will run a
  * prompt (provider editor model lists, fallback model, manuscript review).

@@ -121,11 +121,12 @@ import {
   providerModelList,
   selectableProviders,
   localToolUseHint,
-  withToolUseOptionLabel,
+  withModelCapabilityOptionLabel,
 } from '../utils/providers.js';
 import { groupProvidersByHarness } from '../utils/providerHarnesses.js';
 import { isCompositeProviderId } from '../utils/providerRef.js';
 import useToolUseModelIds from '../hooks/useToolUseModelIds.js';
+import useVisionModelIds from '../hooks/useVisionModelIds.js';
 import useProviderCatalog from '../hooks/useProviderCatalog.js';
 import EffortSelect from './cos/EffortSelect.jsx';
 import ProviderComposePopover from './providers/ProviderComposePopover.jsx';
@@ -165,6 +166,7 @@ export default function ProviderModelSelector({
   includeDefaultModel = false,
   layout = 'row',
   highlightToolUse = false,
+  highlightVision = false,
   effort,
   onEffortChange,
   selectionPolicy,
@@ -221,12 +223,14 @@ export default function ProviderModelSelector({
   // capability scan; the fetch is module-shared, so a list page rendering one
   // selector per row still issues a single request.
   const { idsByProvider: toolUseIdsByProvider, loaded: toolUseLoaded } = useToolUseModelIds(highlightToolUse);
+  const { idsByProvider: visionIdsByProvider, loaded: visionLoaded } = useVisionModelIds(highlightVision);
   // Nothing is asserted until the scan settles (success OR failure). Annotating
   // mid-fetch would show the exact false "⚠ no known tool use" this union exists
   // to remove, only for it to vanish a beat later; a failed fetch settles too, so
   // an unreachable backend degrades to the regex-only labels rather than muting
   // the annotation forever.
   const annotateToolUse = highlightToolUse && toolUseLoaded;
+  const annotateVision = highlightVision && visionLoaded;
   const toolHint = annotateToolUse ? localToolUseHint(effectiveModel, selectedProvider, toolUseIdsByProvider) : null;
   const toolIncapable = toolHint?.toolCapable === false;
   // Only offer enabled, hardware-compatible, policy-allowed providers; the
@@ -421,8 +425,13 @@ export default function ProviderModelSelector({
               const hardwareUnavailable = !isProviderModelHardwareCompatible(selectedProvider, opt.value);
               const policyDisallowed = Boolean(modelAllowed && !modelAllowed(m, selectedProvider));
               const unavailable = hardwareUnavailable || policyDisallowed;
-              const label = annotateToolUse
-                ? withToolUseOptionLabel(opt.value, opt.label, selectedProvider, toolUseIdsByProvider)
+              const label = annotateToolUse || annotateVision
+                ? withModelCapabilityOptionLabel(opt.value, opt.label, selectedProvider, {
+                  toolUseIdsByProvider: annotateToolUse ? toolUseIdsByProvider : null,
+                  visionIdsByProvider: annotateVision ? visionIdsByProvider : null,
+                  includeToolUse: annotateToolUse,
+                  includeVision: annotateVision,
+                })
                 : opt.label;
               return (
                 <option key={opt.value} value={opt.value} disabled={unavailable}>
