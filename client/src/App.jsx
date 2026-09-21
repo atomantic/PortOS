@@ -404,6 +404,8 @@ export default function App() {
               TAB_DETAIL there. */}
           <Route path="models/:tab" element={<Models />} />
           <Route path="models/:tab/:recordId" element={<Models />} />
+          <Route path="models/decision-classifiers/jev/:taskView" element={<Models fixedTab="decision-classifiers" fixedRecordId="jev" />} />
+          <Route path="models/llms/jev/:taskView" element={<Models fixedTab="llms" fixedRecordId="jev" />} />
           <Route path="local-llm/playground" element={<LocalLlmPlayground />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />

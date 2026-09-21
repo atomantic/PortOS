@@ -58,3 +58,28 @@ Each slice needs a behavior inventory, a content map, responsive review, and a s
 | New task views could collide with generic `recordId` routes or reset active work. | Specify explicit Jev/Performance route matrices, legacy defaults, invalid-route recovery, measurement identity, drawer compatibility, and state/subscription ownership. |
 
 The review also confirmed missing Jev and Abuse Guard entries in `client/src/lib/navPresentation.js`; promotion must add distinct icon mappings. Navigation changes must preserve the shared registry, not copy icons into a second list. The earlier conversation mockup is exploratory; its text-only navigation and menu-only mobile shell do not override the reviewed icon requirements.
+
+## Jev pilot (#7793)
+
+The pilot retains the newer Decision Classifiers home introduced after the
+specification: `/models/decision-classifiers/jev/:taskView`. The proposed
+`/models/llms/jev/:taskView` links redirect there. Try a decision is the default;
+unknown views recover to Try. Integrations, Results, Training and Setup are
+named destinations with desktop labels and compact mobile icons. Mutable state
+and subscriptions remain mounted across local view changes; hidden panels are
+excluded from keyboard and accessibility navigation. No new draft store exists.
+
+Synthetic, isolated-component Chromium checks compared the previous panel with
+the pilot at 1920, 1440, 1024, 390 and 320px widths. The Score button's bottom
+moved from approximately 1861 to 569 document pixels at desktop widths, and from
+3211 to 677 at 320px. No page-level horizontal overflow appeared in those checks.
+Input and decision evidence share columns at wide widths and stack on phones.
+Browser Back retained the synthetic draft; switching to Integrations exposed
+source controls. These are component geometry and interaction observations,
+not human task timings or certification of the complete application shell.
+
+Rendered regressions cover scoring success, abstention and failure; setup and
+training gates; source-save failure; legacy host routing; invalid task recovery;
+and a scoring result arriving while another task is selected without duplicate
+subscriptions. The same explicit API actions and adoption criteria remain in
+place. The pilot provides a composition example, not a new universal component.

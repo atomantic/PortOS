@@ -12,6 +12,13 @@ switches, per-source policies and agreement counters. Its stored feature ID,
 API endpoints and defaults are unchanged. Disabling Jev integrations does not
 disable its explicit manual experiments. No migration is necessary.
 
+Jev opens **Try a decision**, with input and evidence alongside each other on
+wide screens. **Integrations**, **Results**, **Training**, and **Setup** have
+shareable URLs under `/models/decision-classifiers/jev/`. Local view switches
+retain drafts, the last score and active work; reloading does not persist text
+drafts. Legacy `/models/llms/jev/:taskView` links redirect to the corresponding
+view. Installation, scoring, training and adoption still require explicit actions.
+
 ## Laya-MLX
 
 `/models/decision-classifiers/laya-mlx` offers native Apple Silicon experiments

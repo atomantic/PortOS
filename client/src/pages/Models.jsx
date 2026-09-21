@@ -83,9 +83,12 @@ const TAB_DETAIL = {
   training: LoraDatasetDetail,
 };
 
-export default function Models() {
-  const { tab, recordId } = useParams();
-  if (tab === 'llms' && recordId === 'jev') return <Navigate to="/models/decision-classifiers/jev" replace />;
+export default function Models({ fixedTab, fixedRecordId } = {}) {
+  const params = useParams();
+  const tab = fixedTab || params.tab;
+  const recordId = fixedRecordId || params.recordId;
+  const { taskView } = params;
+  if (tab === 'llms' && recordId === 'jev') return <Navigate to={`/models/decision-classifiers/jev${taskView ? '/' + taskView : ''}`} replace />;
   // An unknown slug lands on LLMs rather than rendering a blank page, matching
   // the section's default destination in App and the primary navigation.
   //
