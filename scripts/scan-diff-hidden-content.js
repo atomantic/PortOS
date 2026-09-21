@@ -18,12 +18,13 @@
  * Usage:
  *   node scripts/scan-diff-hidden-content.js              # vs CI_BASE_SHA, else origin/main
  *   node scripts/scan-diff-hidden-content.js --base <ref>
+ *   node scripts/scan-diff-hidden-content.js --base <ref> --worktree
  *   git diff | node scripts/scan-diff-hidden-content.js --stdin
  *
  * Exit codes: 0 clean, 1 findings, 2 the diff could not be read.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { gitRevParse } from './ci-base-sha.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import {
@@ -35,6 +36,42 @@ import {
 // A diff this size is already past every other limit in CI; the bound exists
 // so a runaway input fails loudly instead of exhausting the box.
 const MAX_DIFF_BYTES = 256 * 1024 * 1024;
+
+// Keep the patch visible even when local diff drivers are configured, and do
+// not let Git refresh the caller's index as a side effect of a read.
+const DIFF_ARGS = [
+  '--no-optional-locks', '-c', 'core.quotepath=false', 'diff',
+  '--no-ext-diff', '--no-textconv', '--unified=0', '--no-color',
+];
+
+/** Read each Git state independently: a later removal must not hide an addition. */
+function* readDiffs(base, includeWorktree) {
+  const readDiff = (args) => execFileSync('git', [...DIFF_ARGS, ...args], {
+    encoding: 'utf8', maxBuffer: MAX_DIFF_BYTES,
+  });
+  // Three-dot matches CI: only this branch's additions since the merge base.
+  yield readDiff([`${base}...HEAD`]);
+  if (!includeWorktree) return;
+  yield readDiff(['--cached', 'HEAD']);
+  yield readDiff([]);
+
+  const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
+    encoding: 'utf8', maxBuffer: MAX_DIFF_BYTES,
+  }).split('\0').filter(Boolean);
+  for (const path of untracked) {
+    // --no-index preserves Git's binary/file-mode/filename presentation without
+    // staging the file (including empty files and symlinks). Exit 1 means a
+    // difference, not a read error; every other nonzero result fails closed.
+    const result = spawnSync('git', [...DIFF_ARGS, '--no-index', '--', '/dev/null', path], {
+      encoding: 'utf8', maxBuffer: MAX_DIFF_BYTES,
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0 && result.status !== 1) {
+      throw new Error(`Cannot read untracked diff for ${path}: ${result.stderr.trim() || result.signal || result.status}`);
+    }
+    yield result.stdout;
+  }
+}
 
 const readStdin = async (stream) => {
   const chunks = [];
@@ -72,10 +109,10 @@ export async function runHiddenContentScan({
 } = {}) {
   const baseFlag = argv.indexOf('--base');
   const explicit = baseFlag === -1 ? null : argv[baseFlag + 1];
-  let diff;
+  let diffs;
 
   if (argv.includes('--stdin')) {
-    diff = typeof stdin === 'string' ? stdin : await readStdin(stdin || process.stdin);
+    diffs = [typeof stdin === 'string' ? stdin : await readStdin(stdin || process.stdin)];
   } else {
     const base = resolveDiffBase(explicit);
     if (!base) {
@@ -91,16 +128,11 @@ export async function runHiddenContentScan({
           : '⏭️  Hidden-content scan skipped: this run has no pull-request diff base'],
       };
     }
-    // Three-dot: only what this branch added, not what the base moved on to.
-    // quotepath=false so a filename carrying invisible Unicode arrives as those
-    // code points rather than as octal escapes the detector would miss.
-    diff = execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--unified=0', '--no-color', `${base}...HEAD`], {
-      encoding: 'utf8',
-      maxBuffer: MAX_DIFF_BYTES,
-    });
+    diffs = readDiffs(base, argv.includes('--worktree'));
   }
 
-  const findings = scanDiffForHiddenContent(diff);
+  const findings = [];
+  for (const diff of diffs) findings.push(...scanDiffForHiddenContent(diff));
   if (findings.length === 0) {
     return { code: 0, lines: ['✅ Hidden-content scan clean: no invisible Unicode or encoded payloads in the added lines'] };
   }

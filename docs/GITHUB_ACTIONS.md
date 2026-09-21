@@ -42,6 +42,12 @@ is the single gate a release ships behind.
 
 ### Hidden-content gate
 
+`npm run pregate` runs this same scanner before lint or tests, using its resolved
+merge base. It checks committed, staged, and unstaged diffs separately, plus
+untracked files, without changing the index or file contents. The scan remains
+active with `--skip-lint` or an empty test plan; `--plan-only` lists it without
+executing it. A diff read failure fails the gate.
+
 The `impact` job runs `node scripts/scan-diff-hidden-content.js` before it
 plans anything, and every other job needs `impact` — so a finding stops the
 whole run, before a reviewer (human, `/do:pr` reviewer, or PR bot) ever reads
