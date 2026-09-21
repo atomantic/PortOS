@@ -1233,17 +1233,6 @@ export default function AIProviders() {
           onSave={() => { closeForm(); loadData(); }}
         />
       )}
-      <RuntimeInstallModal
-        open={Boolean(installingRuntime)}
-        runtime={installingRuntime?.id}
-        label={installingRuntime?.label}
-        onClose={() => setInstallingRuntime(null)}
-        onComplete={handleRuntimeInstallComplete}
-        installUrlBase="/api/providers/runtimes/install"
-        streamMethod="POST"
-        flushMs={250}
-        description={`Installing ${installingRuntime?.label} from ${installingRuntime?.method === 'script' ? "the vendor's official install script" : 'its global npm package'}.`}
-      />
       <ProviderComposePopover
         open={composeInitial !== null}
         initial={composeInitial}
@@ -1266,10 +1255,25 @@ export default function AIProviders() {
           onConfigured={loadData}
         />
       )}
-      {/* The readiness checklist's one-click fix. Same streaming modal as the
-          CLI installer, pointed at the local-daemon setup endpoint — which
-          re-derives the runtime and its endpoint from the provider record, so
-          `provider` is the only thing that travels. */}
+      </>
+      )}
+      </div>
+
+      {/* These streams can be opened from the Harnesses and Services tabs as
+          well as Presets, so their renderers must outlive the tab fragment. */}
+      <RuntimeInstallModal
+        open={Boolean(installingRuntime)}
+        runtime={installingRuntime?.id}
+        label={installingRuntime?.label}
+        onClose={() => setInstallingRuntime(null)}
+        onComplete={handleRuntimeInstallComplete}
+        installUrlBase="/api/providers/runtimes/install"
+        streamMethod="POST"
+        flushMs={250}
+        description={`Installing ${installingRuntime?.label} from ${installingRuntime?.method === 'script' ? "the vendor's official install script" : 'its global npm package'}.`}
+      />
+      {/* The readiness checklist's one-click fix uses the same streaming modal
+          and re-derives the daemon endpoint from the provider record. */}
       <RuntimeInstallModal
         open={Boolean(settingUpRuntime)}
         runtime={settingUpRuntime?.runtime}
@@ -1285,9 +1289,6 @@ export default function AIProviders() {
           ? `${settingUpRuntime.actionLabel} — model weights are a multi-gigabyte download, so this can run for a long time.`
           : `${settingUpRuntime?.actionLabel || 'Setting up'} — this can take several minutes on a first install.`}
       />
-      </>
-      )}
-      </div>
     </div>
   );
 }
