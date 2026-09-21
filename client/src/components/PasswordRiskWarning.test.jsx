@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter } from 'react-router';
 import PasswordRiskWarning from './PasswordRiskWarning.jsx';
-import { getPasswordRiskStatus } from '../services/apiAuth.js';
+import { getAuthStatus, getPasswordRiskStatus } from '../services/apiAuth.js';
 
-vi.mock('../services/apiAuth.js', () => ({ getPasswordRiskStatus: vi.fn() }));
-const renderWarning = () => render(<MemoryRouter><PasswordRiskWarning /><Link to="/">Home</Link></MemoryRouter>);
+vi.mock('../services/apiAuth.js', () => ({ getAuthStatus: vi.fn(), getPasswordRiskStatus: vi.fn() }));
+const renderWarning = () => render(<MemoryRouter><PasswordRiskWarning /><Link to="/">Home</Link><Link to="/apps">Apps</Link></MemoryRouter>);
 beforeEach(() => {
   vi.resetAllMocks();
   localStorage.clear();
+  getAuthStatus.mockResolvedValue({ enabled: false });
   getPasswordRiskStatus.mockResolvedValue({ enabled: false, revision: 'initial' });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -73,6 +74,32 @@ describe('password risk warning', () => {
     renderWarning();
     await waitFor(() => expect(getPasswordRiskStatus).toHaveBeenCalled());
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('uses public auth status when the risk endpoint is unavailable on a protected instance', async () => {
+    getPasswordRiskStatus.mockRejectedValue(new Error('unavailable'));
+    getAuthStatus.mockResolvedValue({ enabled: true });
+    renderWarning();
+    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledWith({ silent: true }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('persists check-error dismissal across focus, navigation and remount without accepting known risk', async () => {
+    getPasswordRiskStatus.mockResolvedValue({ unexpected: true });
+    renderWarning();
+    fireEvent.click(await screen.findByRole('button', { name: 'Dismiss and don’t show again' }));
+    fireEvent(window, new Event('focus'));
+    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('link', { name: 'Apps' }));
+    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    cleanup();
+    renderWarning();
+    await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(4));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    getPasswordRiskStatus.mockResolvedValue({ enabled: false, revision: 'initial' });
+    fireEvent(window, new Event('portos:auth-changed'));
+    expect(await screen.findByRole('checkbox')).toBeInTheDocument();
   });
 
   it('shows a recoverable status error without offering risk acceptance on an unknown status', async () => {
