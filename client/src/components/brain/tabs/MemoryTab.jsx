@@ -273,6 +273,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
 
     if (!failed) {
       toast.success('Deleted');
+      if (recordId === id) closeReader();
       fetchRecords();
       onRefresh?.();
     }
@@ -561,8 +562,16 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       );
     }
 
+    const isSelected = recordId === record.id;
     return (
-      <div key={record.id} className="p-4 bg-port-card border border-port-border rounded-lg hover:border-port-border/80 transition-colors">
+      <div
+        key={record.id}
+        className={`p-4 bg-port-card rounded-lg transition-colors ${
+          isSelected
+            ? 'border-2 border-port-accent ring-1 ring-port-accent/30 bg-port-card/90 shadow-sm'
+            : 'border border-port-border hover:border-port-border/80'
+        }`}
+      >
         <div className="flex flex-col sm:flex-row items-start justify-between gap-2">
           {/* min-w-0: without it a flex child won't shrink below its content's
               intrinsic width, so a long unbreakable code block in an imported
@@ -629,11 +638,16 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
 
             {activeType === 'memories' && (
               <>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="font-medium text-white"><button className="text-left hover:text-port-accent" onClick={() => navigate(`${basePath}/memories/${encodeURIComponent(record.id)}${location.search}`)}>{record.title}</button></h3>
                   {record.mood && (
                     <span className="px-2 py-0.5 text-xs rounded border bg-pink-500/20 text-pink-400 border-pink-500/30">
                       {record.mood}
+                    </span>
+                  )}
+                  {isSelected && (
+                    <span className="px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase rounded bg-port-accent/20 text-port-accent border border-port-accent/30">
+                      Viewing
                     </span>
                   )}
                 </div>
@@ -811,86 +825,109 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         )}
       </div>
 
-      {/* Search filter */}
-      <div className="relative">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-        <input
-          type="text"
-          placeholder={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}...`}
-          aria-label={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}`}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-9 pr-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white placeholder-gray-500"
-        />
-        {searchQuery && (
-          <button
-            onClick={() => setSearchQuery('')}
-            aria-label="Clear search"
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
-          >
-            <X size={14} />
-          </button>
-        )}
-      </div>
-
-      {/* Add form */}
-      {showAdd && (
-        <div className="p-4 bg-port-card border border-port-accent/50 rounded-lg">
-          <h3 className="font-medium text-white mb-3">Add {DESTINATIONS[activeType].label}</h3>
-          {renderForm(addForm, setAddForm)}
-          <div className="flex items-center gap-2 mt-3">
-            <button
-              onClick={handleAdd}
-              className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
-            >
-              <Plus size={14} />
-              Create
-            </button>
-            <button
-              onClick={() => { setShowAdd(false); setAddForm({}); }}
-              className="px-3 py-1.5 text-gray-400 hover:text-white"
-            >
-              Cancel
-            </button>
+      {/* Main content area: split into list + sidebar preview when an entry is active */}
+      <div className="flex flex-col lg:flex-row items-start gap-4">
+        {/* Left column: search, add form, records list */}
+        <div className={`flex-1 min-w-0 w-full space-y-4 ${recordId && !loading ? 'hidden lg:block' : 'block'}`}>
+          {/* Search filter */}
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+            <input
+              type="text"
+              placeholder={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}...`}
+              aria-label={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}`}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white placeholder-gray-500"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
-        </div>
-      )}
 
-      {/* Records list */}
-      {loading ? (
-        <div className="flex items-center justify-center h-32">
-          <BrailleSpinner text="Loading" />
-        </div>
-      ) : filteredRecords.length === 0 ? (
-        <p className="text-gray-500 text-center py-8">
-          {searchQuery
-            ? `No matches for "${searchQuery}"`
-            : `No ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'} yet. Add one or capture thoughts in the Inbox.`}
-        </p>
-      ) : (
-        <div className="space-y-2">
-          {filteredRecords.slice(0, visibleCount).map(record => renderRecord(record))}
-          {filteredRecords.length > visibleCount && (
-            <button
-              type="button"
-              onClick={() => setVisibleCount((n) => n + LOAD_MORE)}
-              className="w-full py-2.5 text-xs text-port-accent hover:text-white bg-port-border/30 hover:bg-port-border/50 rounded-lg transition-colors min-h-[44px]"
-            >
-              Show more ({filteredRecords.length - visibleCount} remaining)
-            </button>
+          {/* Add form */}
+          {showAdd && (
+            <div className="p-4 bg-port-card border border-port-accent/50 rounded-lg">
+              <h3 className="font-medium text-white mb-3">Add {DESTINATIONS[activeType].label}</h3>
+              {renderForm(addForm, setAddForm)}
+              <div className="flex items-center gap-2 mt-3">
+                <button
+                  onClick={handleAdd}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
+                >
+                  <Plus size={14} />
+                  Create
+                </button>
+                <button
+                  onClick={() => { setShowAdd(false); setAddForm({}); }}
+                  className="px-3 py-1.5 text-gray-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Records list */}
+          {loading ? (
+            <div className="flex items-center justify-center h-32">
+              <BrailleSpinner text="Loading" />
+            </div>
+          ) : filteredRecords.length === 0 ? (
+            <p className="text-gray-500 text-center py-8">
+              {searchQuery
+                ? `No matches for "${searchQuery}"`
+                : `No ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'} yet. Add one or capture thoughts in the Inbox.`}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {filteredRecords.slice(0, visibleCount).map(record => renderRecord(record))}
+              {filteredRecords.length > visibleCount && (
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((n) => n + LOAD_MORE)}
+                  className="w-full py-2.5 text-xs text-port-accent hover:text-white bg-port-border/30 hover:bg-port-border/50 rounded-lg transition-colors min-h-[44px]"
+                >
+                  Show more ({filteredRecords.length - visibleCount} remaining)
+                </button>
+              )}
+            </div>
           )}
         </div>
-      )}
 
-      {recordId && !loading && !viewerRecord && (
-        <Banner tone="warning" title="Entry not found">
-          This entry may have been deleted or archived.
-          <button onClick={closeReader} className="block min-h-[44px] text-port-accent">Back to entries</button>
-        </Banner>
-      )}
-      {viewerRecord && !loading && (
-        <ConversationViewer key={viewerRecord.id} record={viewerRecord} onClose={closeReader} />
-      )}
+        {/* Right column: Sidebar preview for full content */}
+        {recordId && !loading && (
+          <div className="w-full lg:w-[480px] xl:w-[560px] 2xl:w-[640px] shrink-0">
+            {viewerRecord ? (
+              <ConversationViewer
+                key={viewerRecord.id}
+                record={viewerRecord}
+                onClose={closeReader}
+                onEdit={startEdit}
+                onSendToCatalog={handleSendToCatalog}
+              />
+            ) : (
+              <aside
+                aria-label="Preview not found"
+                className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col w-full shadow-lg lg:sticky lg:top-4"
+              >
+                <Banner tone="warning" title="Entry not found">
+                  This entry may have been deleted or archived.
+                  <button onClick={closeReader} className="block min-h-[44px] text-port-accent hover:underline">
+                    Back to entries
+                  </button>
+                </Banner>
+              </aside>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

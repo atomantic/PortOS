@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import MemoryTab from './MemoryTab';
 
@@ -56,5 +56,42 @@ describe('Brain memory reader', () => {
     view.unmount();
     mount('/brain/memory/memories/deleted');
     expect(await screen.findByText('Entry not found')).toBeTruthy();
+  });
+
+  it('renders preview in a sidebar aside area without popping a modal dialog', async () => {
+    api.getBrainMemories.mockResolvedValue([
+      { id: 'mem-1', title: 'First memory', content: 'First memory full content', mood: 'reflective' },
+      { id: 'mem-2', title: 'Second memory', content: 'Second memory full content', mood: 'energetic' },
+    ]);
+    mount('/brain/memory');
+    expect(await screen.findByText('First memory')).toBeTruthy();
+    expect(screen.getByText('Second memory')).toBeTruthy();
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Click to read full entry
+    fireEvent.click(screen.getByRole('button', { name: 'Read First memory' }));
+    expect(screen.getByTestId('location').textContent).toBe('/brain/memory/memories/mem-1');
+
+    // Sidebar aside preview appears, NO modal dialog
+    const sidebar = await screen.findByRole('complementary', { name: 'Preview: First memory' });
+    expect(sidebar).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(sidebar).getByText('First memory full content')).toBeTruthy();
+    expect(screen.getByText('Viewing')).toBeTruthy();
+
+    // Switch selection to second memory directly
+    fireEvent.click(screen.getByRole('button', { name: 'Read Second memory' }));
+    expect(screen.getByTestId('location').textContent).toBe('/brain/memory/memories/mem-2');
+    const secondSidebar = await screen.findByRole('complementary', { name: 'Preview: Second memory' });
+    expect(secondSidebar).toBeTruthy();
+    expect(within(secondSidebar).getByText('Second memory full content')).toBeTruthy();
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    // Close preview
+    fireEvent.click(screen.getByRole('button', { name: 'Close entry reader' }));
+    expect(screen.getByTestId('location').textContent).toBe('/brain/memory');
+    expect(screen.queryByRole('complementary')).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });
