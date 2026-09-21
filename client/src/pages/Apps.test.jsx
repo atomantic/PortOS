@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
-import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 const APPS = [
   {
@@ -37,14 +36,6 @@ vi.mock('../services/api', () => ({
   stopApp: vi.fn(() => Promise.resolve({})),
   restartApp: vi.fn(() => Promise.resolve({})),
   launchNativeApp: vi.fn(() => Promise.resolve({})),
-  buildApp: vi.fn(() => Promise.resolve({})),
-  refreshAppConfig: vi.fn(() => Promise.resolve({})),
-  getMySprintTickets: vi.fn(() => Promise.resolve([])),
-  getJiraBoardColumns: vi.fn(() => Promise.resolve({ columns: [] })),
-  updateJiraTicketStatus: vi.fn(() => Promise.resolve({})),
-  openAppInEditor: vi.fn(() => Promise.resolve({})),
-  openAppFolder: vi.fn(() => Promise.resolve({})),
-  openAppInXcode: vi.fn(() => Promise.resolve({ success: true, path: '/srv/example-ios/ExampleIos.xcodeproj' })),
   handleSelfRestart: vi.fn(),
 }));
 
@@ -94,6 +85,39 @@ describe('Apps row action hierarchy', () => {
     expect(nameLink.getAttribute('href')).toBe('/apps/app-alpha');
     // Underlined so the name reads as a link, not plain text.
     expect(nameLink.className).toContain('underline');
+  });
+
+  it('keeps deep diagnostics out of collection rows and routes management to detail', async () => {
+    api.getApps.mockResolvedValue([{
+      ...APPS[0],
+      startCommands: ['npm run start'],
+      pm2Status: { 'example-server': { name: 'example-server', status: 'online' } },
+      jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX' },
+    }]);
+    await renderApps();
+
+    expect(screen.queryByRole('button', { name: /Expand .* details/ })).toBeNull();
+    expect(screen.queryByText('Repository Path')).toBeNull();
+    expect(screen.queryByText('PM2 Processes')).toBeNull();
+    expect(screen.queryByText('My Sprint Tickets')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Manage Example App' })).toHaveAttribute('href', '/apps/app-alpha/overview');
+  });
+
+  it('keeps a long non-PM2 repository path wrapping within its collection row', async () => {
+    api.getApps.mockResolvedValue([{
+      ...APPS[0],
+      id: 'app-longpath',
+      name: 'Example Long Path App',
+      type: 'ios-native',
+      repoPath: '/srv/thisisaverylongsingledirectorysegmentwithnobreakpoints/example-ios',
+      pm2ProcessNames: [],
+      processes: [],
+    }]);
+    render(<MemoryRouter><Apps /></MemoryRouter>);
+    await screen.findByRole('link', { name: 'Example Long Path App' });
+
+    const repoPathSpan = screen.getByText('/srv/thisisaverylongsingledirectorysegmentwithnobreakpoints/example-ios');
+    expect(repoPathSpan.className).toContain('break-all');
   });
 
   it('exposes Archive and PortOS removal only through the overflow menu', async () => {
@@ -150,87 +174,64 @@ describe('Apps row action hierarchy', () => {
     await waitFor(() => expect(api.archiveApp).toHaveBeenCalledWith('app-alpha'));
   });
 
-  it('asks the server to resolve and open the Xcode project instead of guessing the filename', async () => {
-    // Display name deliberately differs from the on-disk project name — the old
-    // client-side `<name>.xcodeproj` guess was a silent no-op for exactly this app.
-    api.getApps.mockResolvedValue([{
-      ...APPS[0],
-      id: 'app-ios',
-      name: 'Example iOS App',
-      type: 'ios-native',
-      repoPath: '/srv/example-ios',
-      pm2ProcessNames: [],
-      processes: [],
-    }]);
-    const user = userEvent.setup();
-    render(<MemoryRouter><Apps /></MemoryRouter>);
-    await screen.findByRole('link', { name: 'Example iOS App' });
+});
 
-    await user.click(screen.getByRole('button', { name: 'Expand Example iOS App details' }));
-    await user.click(screen.getByRole('button', { name: 'Open Example iOS App in Xcode' }));
-
-    await waitFor(() => expect(api.openAppInXcode).toHaveBeenCalledWith('app-ios'));
+describe('Apps collection load states', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
-  it('keeps a long non-PM2 repository path wrapping within its column instead of overflowing', async () => {
-    // A single unbroken directory segment can't rely on slash-based line
-    // breaking, so the fix must allow mid-word wrapping (break-all) — which
-    // also drops the flex item's min-content width enough for it to shrink
-    // to the available column instead of forcing the row wider.
-    api.getApps.mockResolvedValue([{
-      ...APPS[0],
-      id: 'app-longpath',
-      name: 'Example Long Path App',
-      type: 'ios-native',
-      repoPath: '/srv/thisisaverylongsingledirectorysegmentwithnobreakpoints/example-ios',
-      pm2ProcessNames: [],
-      processes: [],
-    }]);
-    render(<MemoryRouter><Apps /></MemoryRouter>);
-    await screen.findByRole('link', { name: 'Example Long Path App' });
-
-    const repoPathSpan = screen.getByText('/srv/thisisaverylongsingledirectorysegmentwithnobreakpoints/example-ios');
-    expect(repoPathSpan.className).toEqual(expect.stringContaining('break-all'));
-  });
-
-  it('withholds the overflow menu for the PortOS baseline app', async () => {
-    api.getApps.mockResolvedValue([{ ...APPS[0], id: 'portos-default', name: 'PortOS' }]);
-    render(<MemoryRouter><Apps /></MemoryRouter>);
-    await screen.findByRole('link', { name: 'Manage PortOS' });
-
-    expect(screen.queryByRole('button', { name: /More actions/ })).toBeNull();
-  });
-
-  it('labels the build action as in progress while the build is running', async () => {
-    let resolveBuild;
-    api.getApps.mockResolvedValue([{ ...APPS[0], buildCommand: 'npm run build' }]);
-    api.buildApp.mockImplementation(() => new Promise(resolve => { resolveBuild = resolve; }));
+  it('distinguishes an unavailable collection from empty and retries in place', async () => {
+    api.getApps
+      .mockRejectedValueOnce(new Error('Server unreachable'))
+      .mockResolvedValueOnce(APPS);
     const user = userEvent.setup();
     render(<MemoryRouter><Apps /></MemoryRouter>);
 
-    await user.click(await screen.findByRole('button', { name: 'Expand Example App details' }));
-    await user.click(await screen.findByRole('button', { name: 'Build production UI: npm run build' }));
+    const unavailable = await screen.findByRole('alert');
+    expect(unavailable).toHaveTextContent('Apps unavailable');
+    expect(screen.queryByText('No apps registered')).toBeNull();
 
-    const buildingButton = screen.getByRole('button', { name: 'Building production UI: npm run build' });
-    expect(buildingButton).toBeDisabled();
-    expect(buildingButton).toHaveAttribute('aria-busy', 'true');
-    expect(screen.getByText('Building…')).toBeTruthy();
-
-    await act(async () => { resolveBuild({ success: true }); });
-    await findEnabledByRole('button', { name: 'Build production UI: npm run build' });
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByRole('link', { name: 'Example App' });
+    expect(api.getApps).toHaveBeenLastCalledWith({ includeQuality: true, silent: true });
   });
 
-  it('opens a plain-HTTP managed app without inheriting PortOS HTTPS', async () => {
-    api.getApps.mockResolvedValue([{ ...APPS[0], uiPort: 8940 }]);
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
-    const user = userEvent.setup();
+  it('keeps a real empty collection distinct from an unavailable collection', async () => {
+    api.getApps.mockResolvedValue([]);
+    render(<MemoryRouter><Apps /></MemoryRouter>);
 
-    await renderApps();
-    await user.click(screen.getByRole('button', { name: 'Launch Example App UI' }));
+    expect(await screen.findByText('No apps registered')).toBeTruthy();
+    expect(screen.queryByText('Apps unavailable')).toBeNull();
+  });
 
-    expect(open).toHaveBeenCalledWith('http://host-alpha.example-tailnet.ts.net:8940', '_blank');
-    expect(launchUrlMock.getLaunchUrls).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-alpha', uiPort: 8940 }));
-    open.mockRestore();
+  it('keeps the last loaded collection visible when a refresh fails', async () => {
+    api.getApps
+      .mockResolvedValueOnce(APPS)
+      .mockRejectedValueOnce(new Error('Server unreachable'));
+    render(<MemoryRouter><Apps /></MemoryRouter>);
+    await screen.findByRole('link', { name: 'Example App' });
+
+    const [, handleAppsChanged] = socket.on.mock.calls.find(([event]) => event === 'apps:changed');
+    await act(async () => { await handleAppsChanged(); });
+
+    expect(screen.getByRole('link', { name: 'Example App' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('showing the last loaded collection');
+  });
+
+  it('keeps an in-flight operation visible while the initial collection is unavailable', async () => {
+    api.getApps.mockRejectedValueOnce(new Error('Server unreachable'));
+    render(<MemoryRouter><Apps /></MemoryRouter>);
+    await screen.findByRole('alert');
+
+    const [, handleOperations] = socket.on.mock.calls.find(([event]) => event === 'app:operations:active');
+    await act(async () => {
+      await handleOperations({
+        operations: [{ appId: 'app-alpha', appName: 'Example App', type: 'update', steps: [] }],
+      });
+    });
+
+    expect(screen.getByRole('status', { name: 'App operation status' })).toHaveTextContent('Updating Example App');
   });
 });
 
@@ -321,29 +322,6 @@ describe('Apps in-flight operation banner (#3435)', () => {
     await emitSocket('app:update:step', { appId: 'app-alpha', step: 'install', status: 'running', message: 'Installing deps…' });
 
     expect(screen.getByRole('status', { name: 'App operation status' }).textContent).toContain('Installing deps…');
-  });
-
-  it('states why another app’s Update is unavailable instead of silently greying it out', async () => {
-    await renderApps();
-    await emitSocket('app:operations:active', activeUpdate());
-
-    await act(async () => {
-      screen.getByRole('button', { name: 'Expand Second App details' }).click();
-    });
-
-    const busy = screen.getByRole('button', { name: /Update unavailable/ });
-    expect(busy.textContent).toContain('Update (busy)');
-    expect(busy.disabled).toBe(true);
-  });
-
-  it('keeps the completion visible when the server reports nothing in flight', async () => {
-    await renderApps();
-    await emitSocket('app:operations:active', activeUpdate());
-    await emitSocket('app:update:complete', { appId: 'app-alpha', success: true, steps: [] });
-    // The server clears its in-flight set right after the completion broadcast.
-    await emitSocket('app:operations:active', { operations: [] });
-
-    expect(screen.getByRole('status', { name: 'App operation status' }).textContent).toContain('Updated Example App');
   });
 
   it('clears a stale banner when the server reports no operation and none finished', async () => {
@@ -466,172 +444,5 @@ describe('Apps archive result reporting (#3436)', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('archived')));
     // Local state moved the row into the archived list — no refetch needed.
     expect(await screen.findByRole('button', { name: /Archived \(1\)/ })).toBeTruthy();
-  });
-});
-
-describe('Apps sprint-ticket fetch failures (#3437)', () => {
-  const JIRA_APP = {
-    ...APPS[0],
-    jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX', issueType: 'Task' }
-  };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.getApps.mockResolvedValue([JIRA_APP]);
-  });
-
-  // The toggle relabels itself once open, so match either direction.
-  const toggleRow = async (user) => {
-    await user.click(screen.getByRole('button', { name: /(Expand|Collapse) Example App details/ }));
-  };
-
-  it('reports a failed fetch instead of claiming the sprint is empty, and retries on demand', async () => {
-    api.getMySprintTickets.mockRejectedValue(new Error('JIRA instance unreachable'));
-    const user = userEvent.setup();
-    await renderApps();
-
-    await toggleRow(user);
-    await screen.findByText(/Couldn't load sprint tickets/);
-    expect(screen.getByText(/JIRA instance unreachable/)).toBeTruthy();
-    expect(screen.queryByText('No tickets assigned to you in the current sprint')).toBeNull();
-
-    // Retry re-issues the request, and a now-healthy JIRA renders the board.
-    api.getMySprintTickets.mockResolvedValue([
-      { key: 'EX-1', summary: 'Example ticket', status: 'To Do' }
-    ]);
-    await user.click(screen.getByRole('button', { name: 'Retry loading sprint tickets for Example App' }));
-
-    await waitFor(() => expect(api.getMySprintTickets).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByText(/Couldn't load sprint tickets/)).toBeNull());
-  });
-
-  it('re-issues the request on the next expand after a failure instead of caching it', async () => {
-    api.getMySprintTickets.mockRejectedValue(new Error('JIRA instance unreachable'));
-    const user = userEvent.setup();
-    await renderApps();
-
-    await toggleRow(user);
-    await screen.findByText(/Couldn't load sprint tickets/);
-
-    await toggleRow(user);   // collapse
-    await toggleRow(user);   // re-expand
-    await waitFor(() => expect(api.getMySprintTickets).toHaveBeenCalledTimes(2));
-  });
-
-  it('still reports a genuinely empty sprint as empty, and caches it', async () => {
-    api.getMySprintTickets.mockResolvedValue([]);
-    const user = userEvent.setup();
-    await renderApps();
-
-    await toggleRow(user);
-    expect(await screen.findByText('No tickets assigned to you in the current sprint')).toBeTruthy();
-
-    await toggleRow(user);   // collapse
-    await toggleRow(user);   // re-expand — the cached [] is authoritative
-    expect(api.getMySprintTickets).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders its own error UI, so the request stays silent', async () => {
-    api.getMySprintTickets.mockRejectedValue(new Error('JIRA instance unreachable'));
-    const user = userEvent.setup();
-    await renderApps();
-
-    await toggleRow(user);
-    await screen.findByText(/Couldn't load sprint tickets/);
-    expect(api.getMySprintTickets).toHaveBeenCalledWith('jira-1', 'EX', { silent: true });
-  });
-});
-
-describe('Apps sprint-ticket request races (#3437)', () => {
-  const JIRA_APP = {
-    ...APPS[0],
-    jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX', issueType: 'Task' }
-  };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.getApps.mockResolvedValue([JIRA_APP]);
-  });
-
-  it('does not start a second fetch while one is still in flight, and the in-flight result still lands', async () => {
-    let resolveFirst;
-    api.getMySprintTickets.mockImplementation(() => new Promise(resolve => { resolveFirst = resolve; }));
-
-    const user = userEvent.setup();
-    await renderApps();
-    const toggle = () => user.click(screen.getByRole('button', { name: /(Expand|Collapse) Example App details/ }));
-
-    await toggle();   // first fetch — hangs
-    await toggle();   // collapse
-    await toggle();   // re-expand while the first request is still open
-
-    // One request, not two — so no older response can land after a newer one
-    // and overwrite it.
-    expect(api.getMySprintTickets).toHaveBeenCalledTimes(1);
-
-    await act(async () => { resolveFirst([]); });
-    expect(await screen.findByText('No tickets assigned to you in the current sprint')).toBeTruthy();
-  });
-});
-
-describe('Apps sprint-ticket cache keying (#3437)', () => {
-  const JIRA_APP = {
-    ...APPS[0],
-    jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX', issueType: 'Task' }
-  };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.getApps.mockResolvedValue([JIRA_APP]);
-  });
-
-  it('refetches when the app is repointed at a different JIRA project', async () => {
-    api.getMySprintTickets.mockResolvedValue([]);
-    const user = userEvent.setup();
-    await renderApps();
-    const toggle = () => user.click(screen.getByRole('button', { name: /(Expand|Collapse) Example App details/ }));
-
-    await toggle();
-    await waitFor(() => expect(api.getMySprintTickets).toHaveBeenCalledTimes(1));
-    await toggle();   // collapse
-
-    // The app is edited elsewhere and the list refreshes with a new project key.
-    api.getApps.mockResolvedValue([{ ...JIRA_APP, jira: { ...JIRA_APP.jira, projectKey: 'OTHER' } }]);
-    const [, handleAppsChanged] = socket.on.mock.calls.find(([evt]) => evt === 'apps:changed');
-    await act(async () => { await handleAppsChanged(); });
-
-    await toggle();   // re-expand — the previous project's cache must not answer
-    await waitFor(() => expect(api.getMySprintTickets).toHaveBeenCalledTimes(2));
-    expect(api.getMySprintTickets).toHaveBeenLastCalledWith('jira-1', 'OTHER', { silent: true });
-  });
-});
-
-// The Kanban board is a ~120px-tall region that loads after the row expands, so
-// the one-line spinner it used to show let everything below the expansion jump
-// once the tickets landed (#4147).
-describe('Apps sprint-ticket loading state (#4147)', () => {
-  const JIRA_APP = {
-    ...APPS[0],
-    jira: { enabled: true, instanceId: 'jira-1', projectKey: 'EX', issueType: 'Task' }
-  };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.getApps.mockResolvedValue([JIRA_APP]);
-  });
-
-  it('reserves the board columns instead of a one-line spinner', async () => {
-    // Never resolves — hold the expansion on its ticket-loading branch.
-    api.getMySprintTickets.mockReturnValue(new Promise(() => {}));
-    const user = userEvent.setup();
-    await renderApps();
-
-    await user.click(screen.getByRole('button', { name: /Expand Example App details/ }));
-
-    const region = await screen.findByRole('status', { name: 'Loading sprint tickets for Example App' });
-    expect(region).toHaveAttribute('aria-busy', 'true');
-    // Three columns, each reserving a heading plus two ticket cards.
-    expect(region.querySelectorAll('.animate-pulse')).toHaveLength(9);
-    expect(region.querySelectorAll('.min-h-\\[120px\\]')).toHaveLength(3);
   });
 });
