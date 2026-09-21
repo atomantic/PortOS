@@ -287,7 +287,7 @@ function NextUp({ occurrences, nodeMap, hours, timezone, onSelect }) {
                 <span className="mt-0.5 block max-w-44 truncate text-xs text-gray-200">{occurrence.kind === 'recheck' ? '↻ ' : ''}{node.label}</span>
                 {scopedApps && <span className="mt-0.5 block max-w-44 truncate text-[10px] text-gray-500">for {scopedApps}</span>}
               </button>
-              {index < next.length - 1 && <ArrowRight className="h-3.5 w-3.5 text-gray-700" />}
+              {index < next.length - 1 && <ArrowRight key={`arrow-${occurrence.id}`} className="h-3.5 w-3.5 text-gray-700" />}
             </div>
           );
         })}

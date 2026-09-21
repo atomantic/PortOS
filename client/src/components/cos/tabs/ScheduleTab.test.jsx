@@ -1,22 +1,33 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
+import { __resetToolUseModelIdsCache } from '../../../hooks/useToolUseModelIds.js';
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 const api = vi.hoisted(() => ({
   getCodeReviewDefaults: vi.fn(),
   getCosSchedule: vi.fn(),
+  getMaintenanceRuns: vi.fn().mockResolvedValue({ runs: [] }),
   triggerCosOnDemandTask: vi.fn(),
   updateCosTaskInterval: vi.fn(),
   getLocalLlmStatus: vi.fn().mockResolvedValue(null),
   getProviders: vi.fn().mockResolvedValue({ providers: [] }),
 }));
+const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
+vi.mock('../../../services/socket', () => ({ default: socket }));
+const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn() }));
+vi.mock('../../../services/apiLocalLlm', () => apiLocalLlm);
 
 vi.mock('../../ui/Toast', () => ({ default: toast }));
 vi.mock('../../../services/api', () => api);
 
 const { default: ScheduleTab, mergeUpdatedTaskInterval } = await import('./ScheduleTab');
+
+beforeEach(() => {
+  __resetToolUseModelIdsCache();
+  apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
+});
 
 describe('mergeUpdatedTaskInterval', () => {
   it('applies the persisted interval while retaining derived schedule status', () => {

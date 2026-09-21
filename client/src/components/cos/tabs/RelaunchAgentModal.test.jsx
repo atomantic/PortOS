@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { __resetToolUseModelIdsCache } from '../../../hooks/useToolUseModelIds.js';
 
 vi.mock('../../../services/api', () => ({
   relaunchCosAgent: vi.fn(),
 }));
+const apiLocalLlm = vi.hoisted(() => ({
+  getToolUseModels: vi.fn(),
+}));
+vi.mock('../../../services/apiLocalLlm', () => apiLocalLlm);
 vi.mock('../../ui/Toast', () => ({
   default: { success: vi.fn(), error: vi.fn() },
 }));
@@ -40,6 +45,8 @@ const renderModal = (props = {}) => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetToolUseModelIdsCache();
+  apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
   api.relaunchCosAgent.mockResolvedValue({ success: true, taskId: 'task-abc', mode: 'requeued' });
 });
 

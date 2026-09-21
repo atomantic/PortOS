@@ -1,7 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
 import AgentJobProviderFields from './AgentJobProviderFields';
 import { filterRunnableProviders } from '../../utils/providers.js';
+
+const apiLocalLlm = vi.hoisted(() => ({
+  getToolUseModels: vi.fn(),
+}));
+
+vi.mock('../../services/apiLocalLlm', () => apiLocalLlm);
 
 const PROVIDERS = [
   {
@@ -31,6 +38,12 @@ const PROVIDERS = [
 ];
 
 describe('AgentJobProviderFields', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetToolUseModelIdsCache();
+    apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
+  });
+
   it('resolves inherited controls against the active provider and clears incompatible pins on provider change', async () => {
     const onChange = vi.fn();
     render(
