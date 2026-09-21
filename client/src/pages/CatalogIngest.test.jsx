@@ -2,12 +2,12 @@ import { it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import CatalogIngest from './CatalogIngest';
-import { createCatalogScrap, pruneCatalogScrap, commitCatalogScrapDraft, ingestCatalogBrain } from '../services/apiCatalog';
+import { createCatalogScrap, extractFromCatalogScrap, pruneCatalogScrap, commitCatalogScrapDraft, ingestCatalogBrain } from '../services/apiCatalog';
 import { listUniverseNames } from '../services/apiUniverseBuilder';
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../hooks/useProviderModels', () => ({ default: () => ({ providers: [], selectedProviderId: 'example-provider', selectedModel: 'example-model', availableModels: [], loading: false }) }));
 vi.mock('../components/ProviderModelSelector', () => ({ default: ({ onEffortChange }) => <button type="button" onClick={() => onEffortChange('high')}>High effort</button> }));
-vi.mock('../services/apiCatalog', () => ({ createCatalogScrap: vi.fn(), pruneCatalogScrap: vi.fn(), commitCatalogScrapDraft: vi.fn(), ingestCatalogBrain: vi.fn() }));
+vi.mock('../services/apiCatalog', () => ({ createCatalogScrap: vi.fn(), extractFromCatalogScrap: vi.fn(), pruneCatalogScrap: vi.fn(), commitCatalogScrapDraft: vi.fn(), ingestCatalogBrain: vi.fn() }));
 vi.mock('../services/apiUniverseBuilder', () => ({ listUniverseNames: vi.fn().mockResolvedValue([]) }));
 it('prunes only on request, keeps the brainstorm, and saves edited selected suggestions', async () => {
   createCatalogScrap.mockResolvedValue({ scrap: { id: 'example-scrap' } });
@@ -26,6 +26,39 @@ it('prunes only on request, keeps the brainstorm, and saves edited selected sugg
   fireEvent.click(screen.getByRole('checkbox', { name: 'Include Argument' }));
   fireEvent.click(screen.getByRole('button', { name: /Commit/ }));
   await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith('example-scrap', [expect.objectContaining({ name: 'The lost moon', type: 'idea' })], expect.anything()));
+});
+
+it('carries the Brain-selected provider and model into a creative inbox handoff', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'brain-notes-scrap' } });
+  extractFromCatalogScrap.mockResolvedValue({
+    scrap: { id: 'brain-notes-scrap' },
+    draft: { ideas: [{ name: 'A captured idea', summary: 'A useful fragment.' }] },
+  });
+
+  render(
+    <MemoryRouter initialEntries={[{
+      pathname: '/catalog/ingest',
+      state: {
+        prefill: {
+          title: 'Creative notes from Brain',
+          rawText: 'A captured idea.',
+          providerOverride: 'ollama',
+          modelOverride: 'example-model',
+        },
+      },
+    }]}>
+      <CatalogIngest />
+    </MemoryRouter>,
+  );
+
+  await screen.findByDisplayValue('A captured idea.');
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+
+  await waitFor(() => expect(extractFromCatalogScrap).toHaveBeenCalledWith(
+    'brain-notes-scrap',
+    { providerOverride: 'ollama', modelOverride: 'example-model' },
+    expect.anything(),
+  ));
 });
 
 // Regression (#7615): the brain-bridge handoff runs from the mount effect, so

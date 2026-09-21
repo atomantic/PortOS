@@ -293,7 +293,14 @@ export default function InboxTab({ onRefresh, settings }) {
       .filter(Boolean)
       .join('\n\n---\n\n');
     const creativeNoteIds = creativeEntries.map(e => e.id);
-    navigate('/catalog/ingest', { state: { prefill: { title: 'Creative notes from Brain', rawText, creativeNoteIds } } });
+    const prefill = {
+      title: 'Creative notes from Brain',
+      rawText,
+      creativeNoteIds,
+      ...(settings?.defaultProvider ? { providerOverride: settings.defaultProvider } : {}),
+      ...(settings?.defaultModel ? { modelOverride: settings.defaultModel } : {}),
+    };
+    navigate('/catalog/ingest', { state: { prefill } });
   };
 
   if (loading) {

@@ -139,6 +139,11 @@ export default function CatalogIngest() {
   // scrap, so switching to URL/File/Voice (a different scrap) and committing that
   // never marks the original Brain notes consumed.
   const creativeNoteScrapIdRef = useRef(null);
+  // A Brain inbox handoff carries the Brain-selected route explicitly. The
+  // normal Catalog flow remains stage-configured; this route only exists to
+  // keep a Brain-selected provider/model from being replaced by a stale
+  // catalog stage pin.
+  const brainRouteRef = useRef(null);
 
   // Stop the mic if the page unmounts mid-recording (navigating away), so the
   // MediaRecorder stream isn't left live with no UI to stop it.
@@ -217,6 +222,7 @@ export default function CatalogIngest() {
     // a later commit of unrelated text must NOT mark the original notes consumed.
     creativeNoteIdsRef.current = [];
     creativeNoteScrapIdRef.current = null;
+    brainRouteRef.current = null;
     recorderRef.current?.cancel?.();
     recorderRef.current = null;
     setRecording(false);
@@ -281,7 +287,7 @@ export default function CatalogIngest() {
     if (creativeNoteIdsRef.current.length) creativeNoteScrapIdRef.current = created.scrap.id;
     const result = await (babble
       ? pruneCatalogScrap(created.scrap.id, { providerId: picker.selectedProviderId, model: picker.selectedModel, ...(effort ? { effort } : {}) }, { silent: true })
-      : extractFromCatalogScrap(created.scrap.id, {}, { silent: true }))
+      : extractFromCatalogScrap(created.scrap.id, brainRouteRef.current || {}, { silent: true }))
       .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
     setSubmitting(false);
     enterReviewFromResult(result, babble ? 'babble' : 'paste');
@@ -315,9 +321,9 @@ export default function CatalogIngest() {
 
   // Handle inbound router-state handoffs once on mount:
   //  - brainIngest { brainType, brainId } → run the brain-bridge extract→review.
-  //  - prefill { title, rawText }        → drop the text into the paste box so
-  //    the user reviews/edits it, then clicks Extract (the creative-notes batch
-  //    send from the brain inbox uses this).
+  //  - prefill { title, rawText, providerOverride?, modelOverride? } → drop the
+  //    text into the paste box and retain an explicit Brain route for the
+  //    eventual extraction (the creative-notes batch send uses this).
   // Either way we clear the history state afterwards so a refresh/back doesn't
   // re-trigger the handoff (and, for brainIngest, a second LLM-billed run).
   useEffect(() => {
@@ -333,6 +339,10 @@ export default function CatalogIngest() {
       setSourceMode('paste');
       setTitle(prefill.title || '');
       setRawText(prefill.rawText);
+      brainRouteRef.current = {
+        ...(prefill.providerOverride ? { providerOverride: prefill.providerOverride } : {}),
+        ...(prefill.modelOverride ? { modelOverride: prefill.modelOverride } : {}),
+      };
       if (Array.isArray(prefill.creativeNoteIds)) {
         creativeNoteIdsRef.current = prefill.creativeNoteIds.filter(Boolean);
       }

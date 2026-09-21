@@ -114,6 +114,7 @@ router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
   const draft = await extractIngredientsForScrap({
     scrapId: scrap.id,
     providerOverride: body.providerOverride,
+    modelOverride: body.modelOverride,
   });
   res.json({ scrap, draft });
 }));
