@@ -9,7 +9,8 @@
  * Two tiers, in the same shape branchReconcile.js uses:
  *
  *   Tier 1 (this module) — everything PROVABLE. Fetch, push branches that are
- *     strictly ahead of their upstream, fast-forward the default branch, return
+ *     strictly ahead of their upstream, rebase clean diverged checkouts,
+ *     fast-forward the default branch, return
  *     the checkout to the default branch when the branch it is on is already
  *     merged, delete merged branches/worktrees (delegated to
  *     `branchReconcile.reconcile`), and drop stash entries whose content is
@@ -18,14 +19,16 @@
  *   Tier 2 (the caller) — everything that needs JUDGMENT is returned as an
  *     `escalations` list for a coordinator CoS agent: a half-finished
  *     merge/rebase, uncommitted work of unknown provenance, a branch that has
- *     diverged from its upstream, unpushed commits with no PR, a stash that
+ *     cannot be rebased automatically, unpushed commits with no PR, a stash that
  *     is NOT provably redundant. This module never spawns an agent, so it stays
  *     pure enough to unit-test.
  *
  * NOTHING here can lose work. Every mutating step is gated on a property that
  * makes it recoverable or a no-op:
  *   - push never uses `--force` and never runs on a branch that is behind.
- *   - the default branch only ever fast-forwards (`--ff-only`, or a
+ *   - clean, idle diverged checkouts first try pull --rebase without autostash;
+ *     conflicts stop the pass and are preserved for the repair agent.
+ *   - otherwise the default branch only ever fast-forwards (`--ff-only`, or a
  *     `fetch origin <b>:<b>` refspec, which git itself refuses to non-FF).
  *   - the checkout only switches off a branch that is CLEAN and already merged.
  *   - branch/worktree deletion runs through branchReconcile's existing gates.
@@ -434,6 +437,7 @@ async function collectRepoState(repoPath) {
     currentBranch,
     operationInProgress,
     dirtyTracked,
+    porcelain,
     branches: branchesWithLocalAhead,
     defaultDivergence,
     stashes,
@@ -759,7 +763,7 @@ export async function syncRepo(repo, { activeAgentIds = new Set() } = {}) {
     return { ...base, missing: true, escalations: [{ kind: ESCALATION_KINDS.SCAN_FAILED, detail: `repo path does not exist: ${repoPath || '(unset)'}` }] };
   }
 
-  const state = await collectRepoState(repoPath).catch((err) => ({ repoPath, isRepo: true, scanError: err.message }));
+  let state = await collectRepoState(repoPath).catch((err) => ({ repoPath, isRepo: true, scanError: err.message }));
   if (state.scanError) {
     return { ...base, escalations: [{ kind: ESCALATION_KINDS.SCAN_FAILED, detail: state.scanError }] };
   }
@@ -771,8 +775,39 @@ export async function syncRepo(repo, { activeAgentIds = new Set() } = {}) {
     };
   }
 
-  const { steps, escalations } = planRepoSync(state, actions);
   const performed = [];
+  const current = state.branches.find((branch) => branch.name === state.currentBranch);
+  const upstream = parseUpstream(current?.tracking, state.remotes);
+  // Only rebase the checkout we inspected, never another worktree's branch.
+  // Explicitly disable autostash even when the operator configured it globally.
+  if (actionOn(actions, 'syncPull') && upstream && current.ahead > 0 && current.behind > 0
+    && state.hasOrigin && !state.fetchError && !state.readFailures.length
+    && !state.operationInProgress && !state.activeAgentId && !state.porcelain.trim()) {
+    const result = await execGitSafe(
+      ['pull', '--rebase', '--no-autostash', upstream.remote, upstream.ref],
+      repoPath, { ignoreExitCode: true }
+    );
+    if (result.exitCode !== 0) {
+      // Preserve conflict state for the repair agent and stop all later writes,
+      // including cleanup. A transport failure is also unresolved, not success.
+      return {
+        ...base, defaultBranch: state.defaultBranch, currentBranch: state.currentBranch,
+        escalations: [{
+          kind: ESCALATION_KINDS.ACTION_FAILED,
+          detail: `pull --rebase for ${state.currentBranch} failed; inspect and resolve before syncing: ${(result.stderr + result.stdout).trim()}`
+        }]
+      };
+    }
+    performed.push(`rebased ${state.currentBranch} onto ${current.tracking}`);
+    // Patch-equivalent commits may have disappeared. Plan from the new state,
+    // so stale divergence cannot dispatch a repair agent or drive a stale push.
+    state = await collectRepoState(repoPath).catch((err) => ({ scanError: err.message }));
+    if (state.scanError) {
+      return { ...base, performed, escalations: [{ kind: ESCALATION_KINDS.SCAN_FAILED, detail: state.scanError }] };
+    }
+  }
+
+  const { steps, escalations } = planRepoSync(state, actions);
   for (const step of steps) {
     const result = await runStep(repoPath, step);
     if (result.ok) {

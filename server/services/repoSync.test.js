@@ -523,6 +523,48 @@ describe('syncRepo — the argv it issues is the non-destructive form', () => {
     expect(execGitMock.mock.calls.some(([args]) => args.includes('--force') || args.includes('-f'))).toBe(false);
   });
 
+  it('rebases duplicate local commits before deciding whether repair is needed', async () => {
+    arrange({ branches: [branch('main', { current: true, ahead: 1, behind: 1 })] });
+    gitMocks.getBranches
+      .mockResolvedValueOnce([branch('main', { current: true, ahead: 1, behind: 1 })])
+      .mockResolvedValue([branch('main', { current: true })]);
+    const result = await syncRepo({ repoPath: process.cwd() });
+    expect(execGitMock).toHaveBeenCalledWith(
+      ['pull', '--rebase', '--no-autostash', 'origin', 'main'],
+      process.cwd(), { ignoreExitCode: true }
+    );
+    expect(result.escalations).toEqual([]);
+    expect(result.performed).toContain('rebased main onto origin/main');
+    expect(shouldDispatchVerifier(summarizeSync([result]), 'never').dispatch).toBe(false);
+  });
+
+  it('preserves a failed rebase for the agent and skips all cleanup', async () => {
+    arrange({ branches: [branch('main', { current: true, ahead: 1, behind: 1 })] });
+    const reads = execGitMock.getMockImplementation();
+    execGitMock.mockImplementation((args, ...rest) => args[0] === 'pull'
+      ? { stdout: '', stderr: 'CONFLICT: resolve the rebase', exitCode: 1 }
+      : reads(args, ...rest));
+    const result = await syncRepo({ repoPath: process.cwd() });
+    expect(result.escalations).toEqual([expect.objectContaining({
+      kind: ESCALATION_KINDS.ACTION_FAILED,
+      detail: expect.stringContaining('CONFLICT')
+    })]);
+    expect(reconcileMock).not.toHaveBeenCalled();
+    expect(writeCalls()).toEqual([]);
+  });
+
+  it.each([
+    { porcelain: ' M example.txt' },
+    { porcelain: '?? example.txt' },
+    { actions: { syncPull: false } },
+    { active: true }
+  ])('does not rebase an ineligible checkout: %j', async ({ porcelain, actions, active }) => {
+    arrange({ porcelain, branches: [branch('main', { current: true, ahead: 1, behind: 1 })] });
+    gitMocks.findActiveAgentInWorkspace.mockResolvedValueOnce(active ? 'example-agent' : null);
+    await syncRepo({ repoPath: process.cwd(), actions });
+    expect(execGitMock.mock.calls.some(([args]) => args[0] === 'pull')).toBe(false);
+  });
+
   it('updates a non-checked-out default branch with a refspec fetch git itself refuses to non-FF', async () => {
     gitMocks.hasBranchMergeEvidence.mockResolvedValue(false);
     arrange({
