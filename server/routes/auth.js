@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
-  acknowledgePasswordRisk,
   getPasswordRiskStatus,
   buildClearCookie,
   buildSessionCookie,
@@ -32,7 +31,6 @@ const setPasswordSchema = z.object({
 }).strict();
 const clearPasswordSchema = z.object({ currentPassword: z.string().min(1).max(256) }).strict();
 const sessionIdParamSchema = z.object({ id: z.string().min(1).max(64).regex(/^[a-f0-9]+$/) }).strict();
-const passwordRiskSchema = z.object({ acceptRisk: z.literal(true) }).strict();
 
 // Whether the request reached us over HTTPS (so the cookie should carry the
 // Secure flag). `req.secure` reflects the actual socket; we don't trust
@@ -48,11 +46,6 @@ router.get('/status', asyncHandler(async (_req, res) => {
 
 router.get('/password-risk', asyncHandler(async (_req, res) => {
   res.json(await getPasswordRiskStatus());
-}));
-
-router.post('/password-risk', asyncHandler(async (req, res) => {
-  validateRequest(passwordRiskSchema, req.body || {});
-  res.json(await acknowledgePasswordRisk());
 }));
 
 // GET /api/auth/whoami — confirm the current cookie/header is still valid.

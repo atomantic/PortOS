@@ -519,4 +519,6 @@ before manually retiring history.
 
 ### Password-free access acknowledgement
 
-`passwordRiskAcknowledgement` is an optional, versioned machine-local setting in the existing file-primary `data/settings.json` store, alongside instance authentication configuration. It contains only the accepted policy version, has no record relationships or search needs, and never federates. Absence means the warning is required, so existing installs enroll on upgrade without a seed or data rewrite. Password changes clear it. Existing settings backup and serialized writes apply.
+Password-risk acceptance is browser-local, stored for this origin under the versioned `portos-password-risk-v1` key. No API can acknowledge the warning for another browser. Missing or unreadable storage requires consent again; acceptance is not federated or included in instance backups. This is a browser preference, not an app-native record.
+
+`passwordRiskRevision` is an optional, opaque machine-local setting in the existing file-primary `data/settings.json` store, alongside authentication configuration. Password changes rotate it so old browser acknowledgements become invalid even if that browser was offline. Its absence means the initial revision, enrolling existing installs without a seed or migration. Generic settings updates cannot replace it; the read-only password-risk endpoint exposes only the revision and whether password protection is enabled.

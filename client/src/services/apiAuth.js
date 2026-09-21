@@ -5,11 +5,6 @@ import { request } from './apiCore.js';
 export const getAuthStatus = (options) => request('/auth/status', options);
 
 export const getPasswordRiskStatus = (options) => request('/auth/password-risk', options);
-export const acknowledgePasswordRisk = (options) => request('/auth/password-risk', {
-  ...options,
-  method: 'POST',
-  body: JSON.stringify({ acceptRisk: true }),
-});
 
 export const loginWithPassword = (password) => request('/auth/login', {
   method: 'POST',

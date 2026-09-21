@@ -14,7 +14,7 @@ import {
   hashToken,
   parseCookieToken,
 } from '../../lib/portosAuthCore.js';
-import { getSettings, readSettingsStrict, settingsEvents, updateSettings, updateSettingsWith } from './settings.js';
+import { getSettings, readSettingsStrict, settingsEvents, updateSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Auth gates the PortOS UI + API behind a single user-set password. PortOS is
@@ -167,26 +167,15 @@ export const getAuthStatus = async () => {
   return { enabled };
 };
 
-// Additive, machine-local settings: absence enrolls existing installs on their
-// first visit after updating, without a seed or a boot-time background job.
-const PASSWORD_RISK_VERSION = 1;
+// The server only reports password posture. Risk acceptance lives in each
+// browser, so an unauthenticated peer cannot dismiss another browser's warning.
+// Password changes rotate the revision, invalidating even an offline browser's
+// old acknowledgement. Absence enrolls existing installs without a migration.
 export const getPasswordRiskStatus = async () => {
   const { corrupt, settings } = await readSettingsStrict();
   if (corrupt) throw new ServerError('Security settings could not be read', { status: 503, code: 'AUTH_SETTINGS_UNREADABLE' });
   const enabled = await isAuthEnabled();
-  return { enabled, acknowledgementRequired: !enabled && settings.passwordRiskAcknowledgement?.version !== PASSWORD_RISK_VERSION };
-};
-
-export const acknowledgePasswordRisk = async () => {
-  await updateSettingsWith(async (settings) => {
-    // Check inside the write queue: corrupt auth settings must never be
-    // replaced with a password-free acknowledgement.
-    if ((await readSettingsStrict()).corrupt) {
-      throw new ServerError('Security settings could not be read', { status: 503, code: 'AUTH_SETTINGS_UNREADABLE' });
-    }
-    return { ...settings, passwordRiskAcknowledgement: settings.secrets?.auth?.enabled ? null : { version: PASSWORD_RISK_VERSION } };
-  }, { actor: 'user' });
-  return getPasswordRiskStatus();
+  return { enabled, revision: settings.passwordRiskRevision || 'initial' };
 };
 
 // Set or replace the password. When `currentPassword` is provided we verify it
@@ -220,7 +209,7 @@ export const setPassword = async ({ newPassword, currentPassword = null }) => {
     salt,
     updatedAt: new Date().toISOString(),
   };
-  await updateSettings({ secrets, passwordRiskAcknowledgement: null });
+  await updateSettings({ secrets, passwordRiskRevision: randomBytes(16).toString('hex') });
   // Existing sessions are invalidated on password change — the user (or anyone
   // holding a stolen token) starts over.
   await revokeAllSessions();
@@ -242,7 +231,7 @@ export const clearPassword = async ({ currentPassword }) => {
   const settings = await getSettings();
   const secrets = { ...(settings.secrets || {}) };
   delete secrets.auth;
-  await updateSettings({ secrets, passwordRiskAcknowledgement: null });
+  await updateSettings({ secrets, passwordRiskRevision: randomBytes(16).toString('hex') });
   await revokeAllSessions();
   return { enabled: false };
 };
