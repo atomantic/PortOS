@@ -2,7 +2,7 @@
  * Review-loop, CI-gate, and merge prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isOptionalReviewer, isToolFreeReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isOptionalReviewer, isToolFreeReviewer, isProviderReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { oversizedBodyPointer } from '../../lib/slashdoInvocation.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
 import { shellQuote } from '../../lib/shellQuote.js';
@@ -352,6 +352,17 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
   const backendToken = localLlmBackends.length === 1
     ? localLlmBackends[0]
     : `<${localLlmBackends.join('|')}>`;
+  // Each configured provider is an exact account/model/effort identity. Emit
+  // executable requests for each one instead of asking an agent to substitute
+  // a backend and then reconstruct its pins from prose.
+  if (localLlmBackends.length > 1 && localLlmBackends.some(isProviderReviewer)) {
+    return {
+      backendToken,
+      invocation: localLlmBackends.map(backend => `\n\n### ${backend}\n\n${buildLocalLlmInvocation({
+        localLlmBackends: [backend], reviewerModelMap, reviewerEffortMap, diffCommand,
+      }).invocation}`).join(''),
+    };
+  }
   const backendNote = localLlmBackends.length === 1
     ? ''
     : ` Substitute the active reviewer name for \`${backendToken}\`.`;
@@ -359,6 +370,18 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
   const pins = localLlmBackends
     .map(r => ({ reviewer: r, model: pinnedString(reviewerModelMap, r), effort: pinnedString(reviewerEffortMap, r) }))
     .filter(p => p.model || p.effort);
+  const providerRequest = isProviderReviewer(backendToken) ? {
+    backend: backendToken,
+    // The maps already resolved task/default precedence, including explicit
+    // clears; never let the bridge restore a global provider pin.
+    inheritDefaults: false,
+    ...(pinnedString(reviewerModelMap, backendToken) ? { model: reviewerModelMap[backendToken] } : {}),
+    ...(pinnedString(reviewerEffortMap, backendToken) ? { effort: reviewerEffortMap[backendToken] } : {}),
+    timeoutMs: LOCAL_LLM_REVIEW_TIMEOUT_MS,
+  } : null;
+  const reviewInput = providerRequest
+    ? `${JSON.stringify(providerRequest)} + { diff: . }`
+    : `{ backend: "${backendToken}", timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}, diff: . }`;
   const pinNote = pins.map(({ reviewer, model, effort }) => {
     const keys = [
       ...(model ? [`"model": "${model}"`] : []),
@@ -384,7 +407,7 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
   const invocation = `Pipe the diff into PortOS's local-review bridge and extract its review text before evaluating it.${backendNote}
 \`\`\`bash
 REVIEW_RESPONSE=$(mktemp)
-${diffCommand} | jq -Rs '{ backend: "${backendToken}", timeoutMs: ${LOCAL_LLM_REVIEW_TIMEOUT_MS}, diff: . }' | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"
+${diffCommand} | jq -Rs ${shellQuote(reviewInput)} | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"
 if ! jq -er '.findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
   exit 1 # Never treat an absent or malformed response as clean.
@@ -392,7 +415,7 @@ else
   cat "\${REVIEW_RESPONSE}.findings"
 fi
 \`\`\`
-Only a successfully extracted \`.findings\` value is the review text; treat it like any other reviewer's findings.${pinNote.length
+Only a successfully extracted \`.findings\` value is the review text; treat it like any other reviewer's findings.${pinNote.length && !providerRequest
   ? ` This run pins settings for ${pinNote.join(', ')} — add those keys to the JSON object (\`jq -Rs '{ ${pinJq} }'\`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk.`
   : ''}`;
   return { backendToken, invocation };

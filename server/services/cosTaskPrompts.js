@@ -8,7 +8,7 @@
 import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../lib/localReviewBridge.js';
-import { ZERO_REVIEWER_COVERAGE_NOTE } from '../lib/reviewerConfig.js';
+import { ZERO_REVIEWER_COVERAGE_NOTE, isProviderReviewer } from '../lib/reviewerConfig.js';
 import { buildCliReviewerOutcomeInstructions } from './promptSections/reviewerOutcome.js';
 
 export function normalizeWorkItemRef(ref) {
@@ -129,7 +129,10 @@ export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, r
   const ingressJqArgs = Object.entries(ingressPinned)
     .map(([key, value]) => `--arg ${key} ${shellQuote(value)}`)
     .join(' ');
-  const ingressJqObject = Object.keys(ingressPinned).map((key) => `${key}: $${key}`).join(', ');
+  const ingressJqObject = [
+    ...Object.keys(ingressPinned).map((key) => `${key}: $${key}`),
+    ...(isProviderReviewer(ingressReviewer) ? ['inheritDefaults: false'] : []),
+  ].join(', ');
   const claimCommentGateBlock = claimCommentGate ? `
 
 ## Tool-Free Public Comment Gate
@@ -166,7 +169,12 @@ fi
     const jqArgs = Object.entries(pinned)
       .map(([key, value]) => `--arg ${key} ${shellQuote(value)}`)
       .join(' ');
-    const jqObject = Object.keys(pinned).map((key) => `${key}: $${key}`).join(', ');
+    // These maps already resolved task/default precedence; an absent provider
+    // pin is a deliberate clear, not permission to re-read the global pin.
+    const jqObject = [
+      ...Object.keys(pinned).map((key) => `${key}: $${key}`),
+      ...(isProviderReviewer(reviewer) ? ['inheritDefaults: false'] : []),
+    ].join(', ');
     return `### ${reviewer}\n\n\`\`\`bash\nREVIEW_DIFF=$(mktemp)\nREVIEW_RESPONSE=$(mktemp)\ntrap 'rm -f "$REVIEW_DIFF" "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT\nif ! { ${diffCommand}; } > "$REVIEW_DIFF"; then\n  echo "Unable to resolve the current branch's review diff" >&2\n  exit 1\nfi\njq -Rs ${jqArgs} '{ ${jqObject}, diff: . }' < "$REVIEW_DIFF" | node ${reviewScript} > "$REVIEW_RESPONSE"\nif ! jq -er '.findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then\n  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2\n  exit 1\nfi\ncat "\${REVIEW_RESPONSE}.findings"\n\`\`\``;
   }).join('\n\n');
 

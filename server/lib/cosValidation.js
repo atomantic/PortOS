@@ -692,6 +692,7 @@ export const codeReviewSettingsSchema = z.object({
     lastFailureAt: z.number().int().positive().optional(),
   })).optional(),
   providerModels: z.preprocess(normalizeReviewerModels, z.record(z.string()).optional()),
+  providerEfforts: z.preprocess(normalizeReviewerEfforts, z.record(z.string()).optional()),
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
     z.array(reviewerSchema).optional()

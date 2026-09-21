@@ -52,3 +52,19 @@ reviewer list and optional-review policy; a later valid verdict clears the
 warning. If reporting fails, note it in the run summary and continue the existing
 review gate. Do not retry the provider because reporting failed, and do not post
 PR/MR comments announcing unavailable reviews.
+
+## Configured provider pins
+
+Settings → Code Reviewers keeps configured providers as exact `provider:<id>`
+identities, including their account and transport. Their model and effort
+overrides persist in `providerModels` and `providerEfforts`; standalone builtin
+reviewers keep their existing scalar settings. Clearing an override restores
+the provider's own default. Changing a provider model clears an incompatible
+effort and announces the change; an incompatible saved effort remains visible
+and clearable until the operator edits it. Execution rejects unsupported pairs.
+
+Task pin maps override global defaults, including explicitly empty maps. Native
+claim and follow-up procedures resolve these maps before issuing provider
+reviews and send `inheritDefaults: false` to the local-review bridge, preventing
+a cleared task pin from being replaced by a global pin. Direct bridge/API
+requests that omit this flag continue to inherit the saved defaults.

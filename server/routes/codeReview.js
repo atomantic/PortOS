@@ -12,7 +12,9 @@ const router = Router()
 // when omitted (or empty) we fall back to the model / reasoning effort configured
 // on the Code Review Defaults panel, and with no configured model either, to the
 // model the backend itself reports serving when that is unambiguous (see
-// `resolveServedModel`). The diff is sent as-is; agents can pipe
+// `resolveServedModel`). Resolved task requests set `inheritDefaults: false` to
+// preserve explicit clears and use the backend's own defaults instead.
+// The diff is sent as-is; agents can pipe
 // `gh pr diff <N>` straight into it without preprocessing.
 // `effort` is checked against the ladder for the REQUESTED backend rather than a
 // flat union of every local level: the two backends are separate identities in
@@ -24,6 +26,7 @@ const localReviewRequestSchema = z.object({
   backend: z.string().refine(isToolFreeReviewer),
   model: z.string().optional(),
   effort: z.string().optional(),
+  inheritDefaults: z.boolean().optional(),
   diff: z.string().min(1, 'diff must be non-empty'),
   timeoutMs: z.number().int().positive().max(600000).optional(),
 }).strict().superRefine((body, ctx) => {
@@ -65,7 +68,7 @@ router.get('/defaults', asyncHandler(async (_req, res) => {
 // simple — one request, one body back.
 router.post('/local', asyncHandler(async (req, res) => {
   const body = validateRequest(localReviewRequestSchema, req.body)
-  const settings = await getSettings()
+  const settings = body.inheritDefaults === false ? {} : await getSettings()
   // Keyed off the roster's `<reviewer>Model` scalar rather than a per-backend
   // branch, so a backend added to LOCAL_LLM_REVIEWERS reads its own configured
   // model instead of silently inheriting another backend's.
