@@ -57,6 +57,7 @@ router.post('/learning/reset/:taskType', asyncHandler(async (req, res) => {
   if (!result.reset) {
     throw new ServerError(`Task type "${taskType}" not found in learning data`, { status: 404, code: 'NOT_FOUND' });
   }
+  import('../services/reviewQueue.js').then(m => m.__resetAlertsCache?.()).catch(() => {});
   res.json(result);
 }));
 

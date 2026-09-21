@@ -145,29 +145,45 @@ async function checkLearningHealth(perf) {
 
   const alerts = [];
   const recentAttention = (perf.needsAttention || []).filter(hasCurrentPerformanceEvidence);
-  const skipped = (perf.skipped || []).filter(hasCurrentPerformanceEvidence).length;
-  const critical = recentAttention.filter(item => item.successRate < 40).length;
+  const skippedList = (perf.skipped || []).filter(hasCurrentPerformanceEvidence);
+  const skipped = skippedList.length;
+  const criticalList = recentAttention.filter(item => item.successRate < 40);
+  const critical = criticalList.length;
   const warning = recentAttention.length - critical;
 
   if (skipped > 0) {
+    const names = skippedList.map(item => item.taskType).filter(Boolean);
+    const namesFormatted = names.slice(0, 3).join(', ') + (names.length > 3 ? `, +${names.length - 3} more` : '');
     alerts.push({
       id: alertId('learning_skipped', 'all'),
       type: 'learning_health',
       severity: 'high',
-      title: `${skipped} task type${skipped > 1 ? 's' : ''} being skipped`,
-      detail: 'Very low success rates caused automatic skip — review task configuration',
+      title: namesFormatted
+        ? `${skipped} task type${skipped > 1 ? 's' : ''} being skipped: ${namesFormatted}`
+        : `${skipped} task type${skipped > 1 ? 's' : ''} being skipped`,
+      detail: namesFormatted
+        ? `Very low success rates caused automatic skip (${namesFormatted}) — review task configuration`
+        : 'Very low success rates caused automatic skip — review task configuration',
       link: '/cos/learning',
-      metadata: { skipped, critical },
+      metadata: { skipped, critical, ...(names.length > 0 ? { taskTypes: names } : {}) },
+      evidence: { skipped, taskTypes: [...names].sort() },
     });
   } else if (critical > 0) {
+    const names = criticalList.map(item => item.taskType).filter(Boolean);
+    const namesFormatted = names.slice(0, 3).join(', ') + (names.length > 3 ? `, +${names.length - 3} more` : '');
     alerts.push({
       id: alertId('learning_critical', 'all'),
       type: 'learning_health',
       severity: 'medium',
-      title: `${critical} task type${critical > 1 ? 's' : ''} need attention`,
-      detail: `Success rates below ${SUCCESS_RATE_WARNING}% — may need provider or prompt adjustments`,
+      title: namesFormatted
+        ? `${critical} task type${critical > 1 ? 's' : ''} need attention: ${namesFormatted}`
+        : `${critical} task type${critical > 1 ? 's' : ''} need attention`,
+      detail: namesFormatted
+        ? `Success rates below ${SUCCESS_RATE_WARNING}% (${namesFormatted}) — may need provider or prompt adjustments`
+        : `Success rates below ${SUCCESS_RATE_WARNING}% — may need provider or prompt adjustments`,
       link: '/cos/learning',
-      metadata: { critical, warning },
+      metadata: { critical, warning, ...(names.length > 0 ? { taskTypes: names } : {}) },
+      evidence: { critical, taskTypes: [...names].sort() },
     });
   }
 

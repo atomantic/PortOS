@@ -592,8 +592,20 @@ describe('reviewQueue.buildQueue', () => {
     const queue = await buildQueue();
     const healthRows = queue.items.filter(i => i.source === 'health');
     expect(healthRows).toHaveLength(1);
-    expect(healthRows[0]).toMatchObject({ severity: 'critical', summary: '95% used', drillTo: '/system-resources/overview' });
+    expect(healthRows[0]).toMatchObject({ severity: 'critical', summary: '95% used', drillTo: '/system-resources/overview', drillLabel: 'Open system resources' });
     expect(queue.items.find(i => i.source === 'backup')).toMatchObject({ title: 'Backup failed', summary: 'disk full' });
+  });
+
+  it('supplies drillLabel Open Learning when health alert links to /cos/learning', async () => {
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([
+      { id: 'learning_skipped:all', type: 'learning_health', severity: 'high', title: '1 task type being skipped: internal-task', detail: 'Very low success rates', link: '/cos/learning' }
+    ]);
+    const queue = await buildQueue();
+    const row = queue.items.find(i => i.id === 'health:learning_skipped:all');
+    expect(row).toMatchObject({
+      drillTo: '/cos/learning',
+      drillLabel: 'Open Learning',
+    });
   });
 
   it('offers a process investigation in the registered owning app with full evidence', async () => {
