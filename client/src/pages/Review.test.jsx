@@ -60,6 +60,7 @@ const CREATED_PENDING_ITEM = {
 const FEEDBACK_ITEM = {
   id: 'feedback:agent-example',
   source: 'feedback',
+  sourceRef: 'agent-example',
   sourceLabel: 'CoS run feedback',
   title: 'Rate completed CoS run',
   summary: 'Review an example change',
@@ -102,6 +103,8 @@ vi.mock('../services/api', () => ({
   resolveReviewQueueItem: vi.fn(() => Promise.resolve({})),
   triageReviewQueueItem: vi.fn(() => Promise.resolve({})),
   promoteAskReviewQueueItem: vi.fn(() => Promise.resolve({})),
+  getCosAgent: vi.fn(),
+  submitCosAgentFeedback: vi.fn(),
   normalizeBrainScanReportPath: vi.fn((p) => p)
 }));
 
@@ -117,6 +120,7 @@ const routerState = vi.hoisted(() => ({
 }));
 
 vi.mock('react-router', () => ({
+  Link: ({ children, to }) => <a href={to}>{children}</a>,
   useNavigate: () => routerState.navigate,
   useParams: () => ({ actionId: routerState.actionId }),
   useSearchParams: () => [routerState.searchParams, routerState.setSearchParams]
@@ -288,21 +292,43 @@ describe('Review Hub queue-card triage (#3282)', () => {
     ));
   });
 
-  it('requires a rating before sending the source-owned feedback action', async () => {
+  it('opens feedback review from the queue instead of a separate rating form', async () => {
     api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
-
     render(<Review />);
-    const rate = await screen.findByRole('button', { name: 'Rate' });
-    expect(rate).toBeDisabled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Review run and give feedback' }));
+    expect(routerState.navigate).toHaveBeenCalledWith('/review/feedback%3Aagent-example?view=today');
+    expect(screen.queryByLabelText('Rating (required)')).not.toBeInTheDocument();
+  });
 
-    fireEvent.change(screen.getByLabelText('Rating (required)'), { target: { value: 'negative' } });
-    fireEvent.change(screen.getByLabelText('Comment (optional)'), { target: { value: 'Needs a clearer result.' } });
-    fireEvent.click(rate);
+  it.each([['positive', 'Mark as helpful'], ['negative', 'Mark as not helpful']])('reviews the completed run and submits %s feedback using the shared agent card', async (rating, label) => {
+    routerState.actionId = FEEDBACK_ITEM.id;
+    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
+    api.getCosAgent.mockResolvedValue({
+      id: 'agent-example', status: 'completed', taskId: 'user-example',
+      startedAt: '2026-08-01T11:00:00Z', completedAt: '2026-08-01T12:00:00Z',
+      metadata: { taskDescription: 'Full example task context', taskType: 'user' },
+      output: [{ line: 'Example diagnostic output', timestamp: '2026-08-01T12:00:00Z' }],
+    });
+    api.submitCosAgentFeedback.mockResolvedValue({ success: true, agent: { id: 'agent-example', feedback: { rating } } });
+    render(<Review />);
+    expect(await screen.findByText('Full example task context')).toBeInTheDocument();
+    expect(await screen.findByText('Example diagnostic output')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: label }));
+    await waitFor(() => expect(api.submitCosAgentFeedback).toHaveBeenCalledWith('agent-example', { rating, comment: undefined }, { silent: true }));
+    await waitFor(() => expect(routerState.navigate).toHaveBeenCalledWith('/review?view=today', { replace: true }));
+    expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
+  });
 
-    await waitFor(() => expect(api.resolveReviewQueueItem).toHaveBeenCalledWith(
-      FEEDBACK_ITEM.id,
-      { operation: 'rate', rating: 'negative', comment: 'Needs a clearer result.' },
-    ));
+  it('keeps failed run loads retryable without exposing a separate rating form', async () => {
+    routerState.actionId = FEEDBACK_ITEM.id;
+    api.getReviewQueue.mockResolvedValueOnce({ items: [FEEDBACK_ITEM], sources: {}, partial: false });
+    api.getCosAgent.mockRejectedValueOnce(new Error('Unavailable'));
+    render(<Review />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load this agent run');
+    expect(screen.queryByRole('button', { name: 'Mark as helpful' })).not.toBeInTheDocument();
+    api.getCosAgent.mockResolvedValue({ id: 'agent-example', status: 'completed', metadata: { taskType: 'user' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'Mark as helpful' })).toBeInTheDocument();
   });
 
   it('renders the full markdown behind Show more, height-capped', async () => {
