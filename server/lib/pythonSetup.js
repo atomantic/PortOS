@@ -393,9 +393,16 @@ async function probeFlux2Venv(pipelineClass) {
       .catch(() => false)
     : false;
 }
-// Pipeline classes the installer's verify stage guarantees, newest first-class
-// family last. The readiness GATE in front of the installer must require all of
-// them: gating on the base `Flux2KleinPipeline` alone let a venv built before a
+// Pipeline classes the installer's verify stage guarantees. Membership rule:
+// the base FLUX.2 pipeline, plus the NEWEST diffusers pipeline PortOS ships a
+// model for — together they date the venv's diffusers snapshot, which is the
+// only thing the verify stage can assert without a model download. Per-model
+// classes are not listed here; the gate takes the selected model's own
+// `pipelineClass` as an argument instead, so the registry stays the one place
+// a new family is declared.
+//
+// The readiness GATE in front of the installer must require all of them:
+// gating on the base `Flux2KleinPipeline` alone let a venv built before a
 // newer pipeline landed report "already installed" while the per-model verdict
 // (which probes that model's own `pipelineClass`) said unavailable — the user
 // saw an Install button that answered "nothing to do".

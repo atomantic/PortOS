@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Loader2, AlertCircle, Download, X } from 'lucide-react';
 import { useInstallStream } from '../../hooks/useInstallStream';
+import { queryString } from '../../services/apiCore';
 import InstallErrorFooter from '../install/InstallErrorFooter';
 import Modal from '../ui/Modal';
 
@@ -34,14 +35,12 @@ const STAGE_INDEX = Object.fromEntries(STAGES.map((s, i) => [s.id, i]));
  */
 export default function Flux2InstallModal({ open, onClose, onComplete, modelId = null }) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const installUrl = `/api/image-gen/setup/flux2-install${queryString({ modelId })}`;
   // The shared install-stream hook owns the fetch-stream lifecycle, log
   // accumulation, stage tracking, connection-lost handling and auto-scroll.
   // onComplete is ref-stashed inside the hook so ImageGen's frequent state
   // churn (gallery, generating, localProgress) can't kill the install
   // mid-stream by re-running the effect.
-  const installUrl = modelId
-    ? `/api/image-gen/setup/flux2-install?modelId=${encodeURIComponent(modelId)}`
-    : '/api/image-gen/setup/flux2-install';
   const { logs, currentStage, done, error, logsEndRef, close } = useInstallStream(
     installUrl,
     { enabled: open, onComplete, method: 'POST' },

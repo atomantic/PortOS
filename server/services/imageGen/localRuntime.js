@@ -92,9 +92,7 @@ export async function diagnoseLocalRuntime({ modelId: requestedModelId, settings
       // model's pipeline" — both need the same installer run, but the second
       // read as a contradiction ("install" → "already installed") while the
       // copy claimed nothing was installed.
-      const baseHealthy = model.pipelineClass
-        ? await isFlux2VenvHealthy().then((value) => value).catch(() => false)
-        : false;
+      const baseHealthy = !!model.pipelineClass && await isFlux2VenvHealthy().catch(() => false);
       return verdict({
         readiness: UNAVAILABLE,
         reason: baseHealthy
