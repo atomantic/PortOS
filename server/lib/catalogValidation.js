@@ -18,6 +18,7 @@ import {
   MEDIA_KIND_IDS,
   USER_TYPE_FIELD_KINDS,
   isActiveType,
+  getActiveCatalogType,
 } from './catalogTypes.js';
 import { csvIdsParam } from './sharedSchemas.js';
 import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
@@ -409,12 +410,73 @@ export const catalogMediaVoiceMemoSchema = z.object({
 // today's behavior exactly: source link only, no homing ref.
 export const catalogScrapCommitSchema = z.object({
   accepted: z.array(catalogIngredientCreateSchema.extend({
+    // Extraction-local identity, never an ingredient ID or payload field.
+    draftId: z.string().trim().min(1).max(120).optional(),
     // Optional source-span hint (server forwards as-is to linkIngredientToSource).
     span: z.record(z.string(), z.unknown()).optional(),
   })).min(0).max(200),
+  // Omitted preserves legacy clustering; [] explicitly means no edges.
+  relationships: z.array(z.object({
+    fromDraftId: z.string().trim().min(1).max(120),
+    toDraftId: z.string().trim().min(1).max(120),
+    kind: z.enum(RELATION_KINDS),
+    evidence: z.string().trim().min(1).max(400),
+  }).strict()).max(1000).optional(),
   universeRef: z.string().trim().min(1).max(120).optional(),
   role: z.string().trim().min(1).max(64).optional(),
-}).strict();
+}).strict().superRefine((body, ctx) => {
+  if (body.relationships === undefined) return;
+  const ids = new Set();
+  body.accepted.forEach((entry, index) => {
+    if (!entry.draftId || ids.has(entry.draftId)) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'draftId'], message: 'Explicit graphs require unique draft IDs on every accepted entry' });
+    }
+    ids.add(entry.draftId);
+  });
+  body.relationships.forEach((edge, index) => {
+    if (!ids.has(edge.fromDraftId) || !ids.has(edge.toDraftId)) {
+      ctx.addIssue({ code: 'custom', path: ['relationships', index], message: 'Relationship endpoints must be accepted draft IDs' });
+    }
+    if (edge.fromDraftId === edge.toDraftId) {
+      ctx.addIssue({ code: 'custom', path: ['relationships', index], message: 'Self relationships are not allowed' });
+    }
+  });
+}).transform((body, ctx) => {
+  if (body.relationships === undefined) return body;
+  // One database edge per directed tuple, retaining each distinct evidence
+  // passage in the source payload's EXISTING evidence field. No draft IDs or
+  // new payload shape travel to older peers.
+  const entries = new Map(body.accepted.map(entry => [entry.draftId, entry]));
+  const edges = new Map();
+  const evidenceById = new Map();
+  for (const edge of body.relationships) {
+    const key = JSON.stringify([edge.fromDraftId, edge.toDraftId, edge.kind]);
+    if (!edges.has(key)) edges.set(key, edge);
+    const line = `${edge.kind} → ${entries.get(edge.toDraftId).name}: ${edge.evidence}`.replace(/\s+/g, ' ');
+    if (!evidenceById.has(edge.fromDraftId)) evidenceById.set(edge.fromDraftId, new Set());
+    evidenceById.get(edge.fromDraftId).add(line);
+  }
+  const accepted = body.accepted.map((entry, index) => {
+    const added = evidenceById.get(entry.draftId);
+    if (!added) return entry;
+    const original = entry.payload?.evidence;
+    const bible = getActiveCatalogType(entry.type)?.extractionShape === 'bible';
+    const existing = Array.isArray(original) ? original : typeof original === 'string' && original ? (bible ? [original] : original.split('\n')) : [];
+    const evidence = [...new Set([...existing, ...added])];
+    if (bible && (evidence.length > BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX ||
+        evidence.some(line => typeof line !== 'string' || line.length > BIBLE_LIMITS.EVIDENCE_ITEM_MAX))) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'payload', 'evidence'], message: 'Grounded evidence exceeds the bible evidence capacity; shorten evidence or accept fewer links' });
+      return z.NEVER;
+    }
+    const enriched = { ...entry.payload, evidence: bible || Array.isArray(original) ? evidence : evidence.join('\n') };
+    if (JSON.stringify(enriched).length > 200_000) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'payload'], message: 'Grounded payload exceeds 200KB JSON size cap' });
+      return z.NEVER;
+    }
+    return { ...entry, payload: enriched };
+  });
+  return { ...body, accepted, relationships: [...edges.values()] };
+});
 
 // /scraps/:id/extract — optional provider/model override (e.g., a Brain
 // handoff carrying the user's selected local route). Empty body is valid.

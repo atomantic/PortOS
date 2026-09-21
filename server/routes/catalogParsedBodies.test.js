@@ -50,7 +50,7 @@ const router = (await import('./catalog.js')).default;
 
 function makeApp() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '4mb' }));
   app.use('/api/catalog', router);
   app.use(errorMiddleware);
   return app;
@@ -68,6 +68,52 @@ beforeEach(() => {
   mocks.embedIngredient.mockResolvedValue({});
   mocks.embedBatch.mockResolvedValue([]);
   mocks.updateUniverse.mockResolvedValue(null);
+});
+
+describe('Catalog explicit draft graphs', () => {
+  const accepted = [
+    { draftId: 'owner', type: 'character', name: 'Example Owner' },
+    { draftId: 'object', type: 'object', name: 'Inherited Pistol' },
+  ];
+  const edge = { fromDraftId: 'object', toDraftId: 'owner', kind: 'owned-by', evidence: 'The owner inherited the pistol.' };
+
+  it('normalizes repeated edges without losing evidence before embedding and committing', async () => {
+    const response = await request(makeApp()).post('/api/catalog/scraps/scrap-1/commit').send({
+      accepted,
+      relationships: [edge, { ...edge, evidence: 'The inscription names the owner.' }, edge],
+    });
+    expect(response.status).toBe(201);
+    const body = mocks.commitScrap.mock.calls[0][0];
+    expect(body.relationships).toEqual([edge]);
+    expect(body.accepted[1].payload.evidence).toEqual([
+      'owned-by → Example Owner: The owner inherited the pistol.',
+      'owned-by → Example Owner: The inscription names the owner.',
+    ]);
+    expect(mocks.ingredientEmbedSeed).toHaveBeenNthCalledWith(2, body.accepted[1]);
+  });
+
+  it('forwards explicit empty graphs without reverting to omitted legacy behavior', async () => {
+    const response = await request(makeApp()).post('/api/catalog/scraps/scrap-1/commit')
+      .send({ accepted, relationships: [] });
+    expect(response.status).toBe(201);
+    expect(mocks.commitScrap.mock.calls[0][0]).toMatchObject({ accepted, relationships: [] });
+  });
+
+  it.each([
+    ['dangling endpoint', { accepted, relationships: [{ ...edge, toDraftId: 'absent' }] }],
+    ['duplicate ID', { accepted: [accepted[0], { ...accepted[1], draftId: 'owner' }], relationships: [] }],
+    ['missing ID', { accepted: [{ type: 'idea', name: 'Example' }], relationships: [] }],
+    ['self edge', { accepted, relationships: [{ ...edge, toDraftId: 'object' }] }],
+    ['unknown kind', { accepted, relationships: [{ ...edge, kind: 'imaginary-kind' }] }],
+    ['entry overflow', { accepted: Array.from({ length: 201 }, (_, i) => ({ ...accepted[0], draftId: String(i) })), relationships: [] }],
+    ['edge overflow', { accepted, relationships: Array.from({ length: 1001 }, () => edge) }],
+    ['evidence overflow', { accepted, relationships: Array.from({ length: 21 }, (_, i) => ({ ...edge, evidence: 'Passage ' + i })) }],
+  ])('rejects %s before embeddings or writes', async (_name, body) => {
+    const response = await request(makeApp()).post('/api/catalog/scraps/scrap-1/commit').send(body);
+    expect(response.status).toBe(400);
+    expect(mocks.embedBatch).not.toHaveBeenCalled();
+    expect(mocks.commitScrap).not.toHaveBeenCalled();
+  });
 });
 
 describe('Catalog parsed write bodies', () => {
