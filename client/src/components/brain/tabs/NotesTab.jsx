@@ -129,7 +129,7 @@ export default function NotesTab() {
     cancelDelete();
   };
 
-  const selectVault = vaultId => {
+  const selectVault = (vaultId, options = {}) => {
     vaultScopeRef.current += 1;
     scanSeqRef.current += 1;
     searchSeqRef.current += 1;
@@ -149,7 +149,7 @@ export default function NotesTab() {
     setCreating(false);
     setScanning(false);
     setScanError(false);
-    updateParams({ vault: vaultId, folder: null, q: null, note: null });
+    updateParams({ vault: vaultId, folder: null, q: null, note: null }, options);
   };
 
   // Load vaults on mount
@@ -191,7 +191,7 @@ export default function NotesTab() {
         ? requestedVaultId
         : data[0].id;
       if (nextVaultId !== selectedVaultId) {
-        updateParams({ vault: nextVaultId, folder: null, q: null, note: null }, { replace: true });
+        selectVault(nextVaultId, { replace: true });
       }
     }
     if (data.length === 0) {
@@ -303,7 +303,7 @@ export default function NotesTab() {
     if (result) {
       toast.success(`Added vault: ${result.name}`);
       setShowVaultSetup(false);
-      updateParams({ vault: result.id, folder: null, q: null, note: null });
+      selectVault(result.id);
       await loadVaults(result.id);
     }
   };
@@ -399,7 +399,7 @@ export default function NotesTab() {
         <UnavailableState
           title="Notes vaults are unavailable"
           message="The vault list could not be read, so PortOS cannot tell whether this install has any notes."
-          onRetry={loadVaults}
+          onRetry={() => loadVaults()}
         />
       </div>
     );
@@ -535,7 +535,7 @@ export default function NotesTab() {
           <UnavailableState
             title="Vault list refresh failed"
             message="Showing the last successful vault list. Retry when the server is reachable."
-            onRetry={loadVaults}
+            onRetry={() => loadVaults()}
           />
         )}
 

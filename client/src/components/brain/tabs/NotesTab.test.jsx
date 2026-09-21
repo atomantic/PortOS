@@ -479,6 +479,48 @@ describe('NotesTab URL state and unavailable reads', () => {
     expect(await screen.findByRole('combobox', { name: 'Vault' })).toHaveValue('vault-1');
   });
 
+  it('keeps the selected vault when retrying a failed vault list', async () => {
+    api.getNotesVaults.mockRejectedValueOnce(new Error('temporary outage'));
+    await renderTab('/brain/notes?vault=vault-2');
+
+    expect(await screen.findByText('Notes vaults are unavailable')).toBeInTheDocument();
+
+    api.getNotesVaults.mockResolvedValueOnce([
+      ...vaults,
+      { id: 'vault-2', name: 'Second Vault', path: '/second/vault' },
+    ]);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByRole('combobox', { name: 'Vault' })).toHaveValue('vault-2');
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('vault')).toBe('vault-2');
+  });
+
+  it('clears the previous vault list before loading a newly added vault', async () => {
+    const oldNote = { ...note, path: 'old.md', name: 'old', folder: '' };
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [oldNote], total: 1 });
+    await renderTab('/brain/notes?vault=vault-1');
+    expect(await screen.findByText('old')).toBeInTheDocument();
+
+    let resolveScan;
+    const newScan = new Promise(resolve => { resolveScan = resolve; });
+    api.scanNotesVault.mockReturnValue(newScan);
+    api.addNotesVault.mockResolvedValueOnce({ id: 'vault-2', name: 'Second Vault' });
+    api.getNotesVaults.mockResolvedValueOnce([
+      ...vaults,
+      { id: 'vault-2', name: 'Second Vault', path: '/second/vault' },
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage vaults' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Custom vault path' }), {
+      target: { value: '/second/vault' },
+    });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })); });
+
+    expect(screen.getByRole('combobox', { name: 'Vault' })).toHaveValue('vault-2');
+    expect(screen.queryByText('old')).toBeNull();
+    resolveScan({ notes: [], total: 0 });
+  });
+
   it('keeps scan failure distinct from an empty list and retries the failed region', async () => {
     api.scanNotesVault.mockRejectedValueOnce(new Error('temporary outage'));
     await renderTab();
