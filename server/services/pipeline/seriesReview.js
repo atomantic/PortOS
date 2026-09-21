@@ -40,6 +40,7 @@
 
 import { join } from 'path';
 import { unlink } from 'fs/promises';
+import { assertValidSeriesId } from '../../lib/pipelineIds.js';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse, sha256Text } from '../../lib/fileUtils.js';
 import { canonicalStringify } from '../../lib/objects.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
@@ -68,15 +69,6 @@ const FEEDBACK_STAGE = 'pipeline-arc-overview';
 const FEEDBACK_MAX = 4000;
 
 const nowIso = () => new Date().toISOString();
-
-// Defense-in-depth: refuse path-traversal-shaped ids before interpolating into
-// the on-disk snapshot path (series ids are `ser-<uuid>`). Mirrors the sibling
-// pipeline services.
-function assertValidSeriesId(id) {
-  if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid series id: ${id}`);
-  }
-}
 
 const reviewDir = () => join(PATHS.data, 'pipeline-series-review');
 const snapshotPath = (seriesId) => join(reviewDir(), `${seriesId}.json`);

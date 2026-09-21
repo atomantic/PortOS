@@ -29,6 +29,7 @@
 
 import { join } from 'path';
 import { contentHash } from './contentHash.js';
+import { assertValidIssueId } from '../../lib/pipelineIds.js';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM, resolveStageContext, resolveJudgeForStage } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
@@ -81,14 +82,6 @@ const MAX_REVISIONS = 3;
 const JUDGE_OUTPUT_RESERVE_TOKENS = 2_500;
 
 const nowIso = () => new Date().toISOString();
-
-// Defense-in-depth: refuse path-traversal-shaped ids before interpolating into
-// the on-disk snapshot path (issue ids are `iss-<uuid>`).
-function assertValidIssueId(id) {
-  if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid issue id: ${id}`);
-  }
-}
 
 const judgeDir = () => join(PATHS.data, 'pipeline-judge');
 const snapshotPath = (issueId) => join(judgeDir(), `${issueId}.json`);
