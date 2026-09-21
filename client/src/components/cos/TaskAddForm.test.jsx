@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import TaskAddForm from './TaskAddForm';
@@ -97,6 +97,57 @@ describe('TaskAddForm responsive layout', () => {
     expect(screen.queryByText('Quick Templates')).toBeNull();
     expect(screen.queryByRole('button', { name: /Save Template/i })).toBeNull();
     expect(api.getCosPopularTemplates).not.toHaveBeenCalled();
+  });
+
+  it('can submit the full form with Quick Templates disabled', async () => {
+    localStorage.clear();
+    featureGate.quickTemplatesEnabled = false;
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect the example app');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ description: 'Inspect the example app' }), { silent: true });
+    expect(screen.getByRole('textbox', { name: /Task description/ })).toHaveValue('');
+  });
+
+  it.each([
+    ['full', {}], ['compact', { compact: true }], ['queue', { queueFirst: true }],
+  ])('does not launch from an IME confirmation in the %s form', async (_variant, props) => {
+    localStorage.clear();
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    render(<TaskAddForm {...props} providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: /Task description/ });
+    fireEvent.change(input, { target: { value: 'Inspect the example app' } });
+
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter', isComposing: true }); });
+    expect(api.addCosTask).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 }); });
+    expect(api.addCosTask).not.toHaveBeenCalled();
+
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); });
+    expect(api.addCosTask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('keeps a new app selection after restoring a draft (deferred apps: %s)', async (deferred) => {
+    localStorage.clear();
+    localStorage.setItem('portos-cos-task-description-draft', JSON.stringify({ description: 'Inspect the selected app', app: 'draft-app' }));
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    const user = userEvent.setup();
+    const apps = [{ id: 'draft-app', name: 'Draft App' }, { id: 'chosen-app', name: 'Chosen App' }];
+    const props = { providers: [], defaultApp: 'chosen-app', onTaskAdded: vi.fn() };
+    const { rerender } = render(<TaskAddForm {...props} apps={deferred ? [] : apps} />);
+    if (deferred) rerender(<TaskAddForm {...props} apps={apps} />);
+    await waitFor(() => expect(screen.getByLabelText('Target application')).toHaveValue('draft-app'));
+
+    await user.selectOptions(screen.getByLabelText('Target application'), 'chosen-app');
+    expect(screen.getByLabelText('Target application')).toHaveValue('chosen-app');
+    rerender(<TaskAddForm {...props} apps={[...apps]} />);
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'chosen-app' }), { silent: true });
   });
 
   // #7796: hiding configuration must not reset the draft or silently change

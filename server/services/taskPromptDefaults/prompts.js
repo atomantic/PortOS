@@ -54,8 +54,12 @@ const VOLUNTEER_CLAIM_GH = formatVolunteerClaimCommands('"${CANDIDATE}"').join('
 const ISSUE_BLOCKER_RECONCILIATION_GH = `**Reconcile stale \`blocked\` labels before selecting work.** For every open issue that
 has the \`blocked\` label, inspect its referenced blockers in the body, comments,
 and native blocked-by relationships. Re-read each blocker live; a blocker is
-satisfied only when it is closed (or its linked PR/MR is merged). If every
-referenced blocker is satisfied, remove the stale label and verify the readback
+satisfied only when it is closed (or its linked PR/MR is merged). Remove the label
+only when at least one explicit issue/PR/MR dependency is identified, every
+referenced dependency is verified satisfied, and no other blocking reason remains.
+Preserve the label when no dependency is identifiable, or when a manual blocker
+such as missing hardware, credentials, or a pending human decision is unresolved.
+For an issue meeting all removal conditions, remove the stale label and verify the readback
 (\`gh issue edit "<num>" --remove-label blocked\`), then treat the issue as
 eligible in this same run. If a blocker is still open, leave the label in place.
 If dependency lookup fails, preserve the label and report the uncertainty; never

@@ -700,6 +700,23 @@ async function runAgentSpawn(task) {
         : resolveRepoForgeTarget(workspacePath),
       sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
     ]);
+    // Task-level OpenCode/Ollama generation controls override provider defaults
+    // for this one run. The child-environment composer turns these into the
+    // dynamic `agent.build` config instead of mutating saved provider state.
+    const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
+    // Ollama 400s the whole request when a model that never implements thinking
+    // is asked to think, so a non-reasoning local model dispatched at any effort
+    // level dies on its first turn with exit 1 and no output. Resolved here,
+    // once, on the provider EVERY spawn path shares — so the two carriers of the
+    // level (the `--effort` argv and OpenCode's `agent.*.reasoningEffort` config)
+    // drop it together. Resolve task-over-provider defaults before recording the
+    // run so the registered effort and every launch path use the same value.
+    // The argv builders no-op it for providers without an effort control.
+    const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
+      requestedProvider,
+      selectedModel,
+      requestedProvider.effort || null,
+    );
     await registerAgent(agentId, task.id, buildAgentRegistration({
       task,
       provider,
@@ -720,6 +737,7 @@ async function runAgentSpawn(task) {
       prOpenedBy,
       claimFlowTask,
       selectedModel,
+      effort: taskEffort,
       modelSelection,
       runId,
       dispatchUseRunner,
@@ -789,23 +807,6 @@ async function runAgentSpawn(task) {
     const cliSettingsEnv = !publicReview && isClaudeCliProvider(provider)
       ? await getClaudeSettingsEnv()
       : {};
-    // Task-level OpenCode/Ollama generation controls override provider defaults
-    // for this one run. The child-environment composer turns these into the
-    // dynamic `agent.build` config instead of mutating saved provider state.
-    const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
-    // Ollama 400s the whole request when a model that never implements thinking
-    // is asked to think, so a non-reasoning local model dispatched at any effort
-    // level dies on its first turn with exit 1 and no output. Resolved here,
-    // once, on the provider EVERY spawn path shares — so the two carriers of the
-    // level (the `--effort` argv and OpenCode's `agent.*.reasoningEffort` config)
-    // drop it together. `taskEffort` is the per-task reasoning-effort override
-    // (task form / schedule config); the builders no-op it for providers without
-    // an effort control.
-    const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
-      requestedProvider,
-      selectedModel,
-      task.metadata?.effort || null,
-    );
     // Codex counts the root orchestrator against its per-session thread cap.
     // Lift that cap to root + configured workers for cloud swarms so a six-way
     // claim run can actually fan out six issue agents. Never lift it for a

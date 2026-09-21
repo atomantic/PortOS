@@ -584,7 +584,7 @@ be "unclassified changed files" and forced the complete matrix on every edit.
 Vitest's import graph cannot reach into them, but ~45 suites pin their
 contracts by reading the `.py` source as text (argparse flags, MLX pins, model
 paths). The planner now resolves the suites naming each changed script with
-`git grep` (`pythonReferencePattern`) and runs exactly them in `files` mode,
+`git grep` (`sourceReferencePattern`) and runs exactly them in `files` mode,
 failing closed to the full suite for a script nothing names. A `.py` outside
 `scripts/` is still unclassified.
 
@@ -876,7 +876,10 @@ full CI automatically when its impact cannot be classified safely.
 Since CI may auto-commit changelog archives, always rebase before pushing:
 
 ```bash
-git pull --rebase --autostash && git push
+git fetch origin main
+git rebase origin/main
+npm run pregate
+git push
 ```
 
 ## Adapting for Sub-Projects

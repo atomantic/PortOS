@@ -113,6 +113,7 @@ export default function NotesTab() {
 
   // Invalidate work at the interaction boundary, including A → B → A switches.
   const vaultScopeRef = useRef(0);
+  const scopedVaultRef = useRef(selectedVaultId);
   const selectSeqRef = useRef(0);
   const scanSeqRef = useRef(0);
   const searchSeqRef = useRef(0);
@@ -130,7 +131,8 @@ export default function NotesTab() {
     cancelDelete();
   };
 
-  const selectVault = (vaultId, options = {}) => {
+  const resetVaultScope = vaultId => {
+    scopedVaultRef.current = vaultId;
     vaultScopeRef.current += 1;
     scanSeqRef.current += 1;
     searchSeqRef.current += 1;
@@ -151,8 +153,18 @@ export default function NotesTab() {
     setCreating(false);
     setScanning(false);
     setScanError(false);
+  };
+
+  const selectVault = (vaultId, options = {}) => {
+    resetVaultScope(vaultId);
     updateParams({ vault: vaultId, folder: null, q: null, note: null }, options);
   };
+
+  // History navigation changes the URL without going through the selector.
+  // Invalidate the old vault before starting any reads for the restored URL.
+  useEffect(() => {
+    if (scopedVaultRef.current !== selectedVaultId) resetVaultScope(selectedVaultId);
+  }, [selectedVaultId]);
 
   // Load vaults on mount
   useEffect(() => {
@@ -661,15 +673,6 @@ export default function NotesTab() {
                   onClick={() => handleSelectNote(note.path)}
                 />
               ))}
-              {/* Notes in filtered folder */}
-              {folderFilter && currentNotes.filter(n => n.folder).map(note => (
-                <NoteListItem
-                  key={note.path}
-                  note={note}
-                  selected={selectedNotePath === note.path}
-                  onClick={() => handleSelectNote(note.path)}
-                />
-              ))}
             </div>
           )}
         </div>
@@ -683,7 +686,14 @@ export default function NotesTab() {
             <BrailleSpinner text="Loading" />
           </div>
         ) : noteError ? (
-          <div className="flex items-center justify-center h-full p-4">
+          <div className="flex flex-col items-center justify-center gap-3 h-full p-4">
+            <button
+              type="button"
+              onClick={closeNote}
+              className="inline-flex min-h-[44px] items-center gap-2 rounded px-3 text-sm text-port-accent hover:text-white"
+            >
+              <ArrowLeft size={16} aria-hidden="true" /> Back to notes
+            </button>
             <UnavailableState
               title="Note is unavailable"
               message="This note could not be read, so its contents were not replaced with an empty view."

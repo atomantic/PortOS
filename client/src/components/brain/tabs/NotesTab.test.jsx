@@ -368,6 +368,30 @@ describe('NotesTab request lifetimes', () => {
     expect(mockToast.success).not.toHaveBeenCalledWith('Note saved');
   });
 
+  it('does not remove the previous vault row when a delete finishes after browser back', async () => {
+    const deleted = deferred();
+    api.deleteNote.mockReturnValueOnce(deleted.promise);
+    await act(async () => {
+      render(
+        <MemoryRouter initialEntries={['/brain/notes?vault=a', '/brain/notes?vault=b&note=first.md']} initialIndex={1}>
+          <NotesTab />
+          <Location />
+          <HistoryControls />
+        </MemoryRouter>,
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));
+    expect(api.deleteNote).toHaveBeenCalledWith('b', 'first.md', { silent: true });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Browser back' })); });
+    expect(screen.getByRole('combobox', { name: 'Vault' })).toHaveValue('a');
+    expect(screen.getByText('first')).toBeInTheDocument();
+    await act(async () => { deleted.resolve(); });
+    expect(screen.getByText('first')).toBeInTheDocument();
+    expect(mockToast.success).not.toHaveBeenCalledWith('Note deleted');
+  });
+
   it('does not start follow-up work when the initial vault request finishes after unmount', async () => {
     const vaults = deferred();
     api.getNotesVaults.mockReturnValueOnce(vaults.promise);
@@ -437,7 +461,7 @@ describe('NotesTab URL state and unavailable reads', () => {
     await screen.findByRole('button', { name: 'Show all 21 notes...' });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show all 21 notes...' })); });
     expect(new URLSearchParams(screen.getByTestId('location').textContent).get('folder')).toBe('Projects');
-    expect((await screen.findAllByText('first')).length).toBeGreaterThan(0);
+    expect(await screen.findAllByText('first')).toHaveLength(1);
 
     await act(async () => {
       fireEvent.change(screen.getByRole('textbox', { name: 'Search notes' }), { target: { value: 'needle' } });
@@ -592,7 +616,7 @@ describe('NotesTab URL state and unavailable reads', () => {
 
   it('keeps a failed note deep link open for retry instead of showing blank content', async () => {
     api.getNote.mockRejectedValueOnce(new Error('temporary outage'));
-    await renderTab('/brain/notes?vault=vault-1&note=Projects%2Ffirst.md');
+    await renderTab('/brain/notes?vault=vault-1&note=Projects%2Ffirst.md&context=keep');
 
     expect(await screen.findByText('Note is unavailable')).toBeInTheDocument();
     expect(screen.queryByText('Select a note to view')).toBeNull();
@@ -601,6 +625,21 @@ describe('NotesTab URL state and unavailable reads', () => {
     api.getNote.mockResolvedValueOnce(note);
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
     expect(await screen.findByRole('heading', { name: 'first' })).toBeInTheDocument();
+  });
+
+  it('lets a failed note deep link return to the mobile list without retrying', async () => {
+    api.getNote.mockRejectedValueOnce(new Error('note no longer exists'));
+    await renderTab('/brain/notes?vault=vault-1&note=Projects%2Ffirst.md&context=keep');
+    expect(await screen.findByText('Note is unavailable')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to notes' }));
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('note')).toBeNull();
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('context')).toBe('keep');
+    expect(screen.queryByText('Note is unavailable')).toBeNull();
+    const listPanel = screen.getByRole('combobox', { name: 'Vault' }).closest('.border-r');
+    expect(listPanel.className.split(/\s+/)).toContain('flex');
+    expect(listPanel.className.split(/\s+/)).not.toContain('hidden');
+    expect(api.getNote).toHaveBeenCalledTimes(1);
   });
 
   it('keeps search failure distinct from a successful no-match result and retries it', async () => {

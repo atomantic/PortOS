@@ -533,7 +533,7 @@ const TUPLES = [
   {
     id: 'grok-cli', harnessId: 'grok', method: 'cli', service: 'grok-build',
     overrides: {
-      name: 'Grok Build CLI', models: ['grok-4.6'], defaultModel: 'grok-4.6', lightModel: 'grok-4.6', mediumModel: 'grok-4.6', heavyModel: 'grok-4.6',
+      name: 'Grok Build CLI', models: ['grok-4.7', 'grok-4.6', 'grok-4.5'], defaultModel: 'grok-4.7', lightModel: 'grok-4.7', mediumModel: 'grok-4.7', heavyModel: 'grok-4.7',
       contextWindow: 256000, timeout: 300000, enabled: false,
       headlessArgs: OMIT,
     },
@@ -541,7 +541,7 @@ const TUPLES = [
   {
     id: 'grok-tui', harnessId: 'grok', method: 'tui', service: 'grok-build',
     overrides: {
-      name: 'Grok Build TUI', models: ['grok-4.6'], defaultModel: 'grok-4.6', lightModel: 'grok-4.6', mediumModel: 'grok-4.6', heavyModel: 'grok-4.6',
+      name: 'Grok Build TUI', models: ['grok-4.7', 'grok-4.6', 'grok-4.5'], defaultModel: 'grok-4.7', lightModel: 'grok-4.7', mediumModel: 'grok-4.7', heavyModel: 'grok-4.7',
       contextWindow: 256000, enabled: false,
     },
   },
@@ -615,7 +615,8 @@ const TUPLES = [
     id: 'grok', harnessId: 'direct', method: 'api', service: { definitionId: 'xai', slug: 'grok', credentials: { apiKey: '' } },
     overrides: {
       name: 'xAI Grok', enabled: false,
-      models: ['grok-4', 'grok-3', 'grok-3-mini', 'grok-code-fast-1'], defaultModel: 'grok-4', lightModel: 'grok-3-mini', mediumModel: 'grok-3', heavyModel: 'grok-4',
+      models: ['grok-4.7', 'grok-4', 'grok-3', 'grok-3-mini', 'grok-code-fast-1'], defaultModel: 'grok-4.7', lightModel: 'grok-3-mini', mediumModel: 'grok-3', heavyModel: 'grok-4.7',
+      contextWindow: 500000,
       fallbackProvider: null, timeout: 300000, envVars: {}, apiKey: '',
     },
   },

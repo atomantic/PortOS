@@ -94,10 +94,35 @@ describe('notifications', () => {
     await clearAll()
     expect(await getNotifications()).toEqual([])
     const retained = await getNotifications({ includeHidden: true })
-    expect(retained.map(adaptNotification).filter(Boolean).map(item => item.id)).toEqual([])
-    expect(await exists(NOTIFICATION_TYPES.MEMORY_APPROVAL, { memoryId: 'mem-1' })).toBe(true)
+    expect(retained.map(adaptNotification).filter(Boolean).map(item => item.id)).toEqual(['memory:mem-1', 'content:42'])
+    expect(await exists(NOTIFICATION_TYPES.MEMORY_APPROVAL, 'memoryId', 'mem-1')).toBe(true)
     await removeByMetadata('memoryId', 'mem-1')
     expect((await getNotifications({ includeHidden: true })).map(n => n.id)).toEqual(['n2'])
+  })
+
+  it('preserves a notification-only plan question through history pruning and repeated clears until its source resolves', async () => {
+    const question = {
+      id: 'plan-question', type: NOTIFICATION_TYPES.PLAN_QUESTION,
+      title: 'Choose an example direction', description: 'An outstanding plan decision',
+      timestamp: '2026-09-01T00:00:00.000Z', metadata: { agentId: 'agent-example' }
+    }
+    readJSONFile.mockResolvedValue({ version: 1, notifications: [question,
+      ...Array.from({ length: 500 }, (_, index) => ({
+        id: `history-${index}`, type: NOTIFICATION_TYPES.BRIEFING_READY,
+        timestamp: '2026-09-02T00:00:00.000Z', metadata: {}
+      }))
+    ] })
+    await addNotification({ type: NOTIFICATION_TYPES.BRIEFING_READY, title: 'New history event' })
+    expect((await getNotifications()).some(item => item.id === question.id)).toBe(false)
+    const actions = async () => (await getNotifications({ includeHidden: true })).map(adaptNotification).filter(Boolean)
+    expect(await actions()).toEqual([expect.objectContaining({ id: 'plan:agent-example', summary: question.description })])
+    await clearAll()
+    await clearAll()
+    await removeNotification(question.id)
+    expect(await getNotifications()).toEqual([])
+    expect(await actions()).toEqual([expect.objectContaining({ id: 'plan:agent-example' })])
+    await removeByMetadata('agentId', 'agent-example')
+    expect(await actions()).toEqual([])
   })
 
   describe('NOTIFICATION_TYPES', () => {

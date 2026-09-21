@@ -98,9 +98,15 @@ export async function nextProcessAuditBatch(raw, context = {}) {
     if ((store.turnBytes[turnKey] || 0) >= 18000) throw new Error('Process audit excerpt budget exhausted for this turn');
     if (Object.keys(store.turns).length >= LIMITS.records && !store.turns[turnKey]) throw new Error('Process audit turn ledger at capacity; retain history and request maintenance');
     const page = await candidates(args.appId, args.cursor);
-    const chosen = page.records.filter(record => !Object.values(store.receipts).some(receipt => receipt.agentId === record.id && receipt.outcome))
-      .filter(record => !reserved.some(id => store.receipts[id]?.agentId === record.id))
-      .slice(0, Math.max(0, LIMITS.jobsPerTurn - reserved.length));
+    const available = page.records.filter(record => !Object.values(store.receipts).some(receipt => receipt.agentId === record.id && receipt.outcome))
+      .filter(record => !reserved.some(id => store.receipts[id]?.agentId === record.id));
+    const chosen = available.slice(0, Math.max(0, LIMITS.jobsPerTurn - reserved.length));
+    // A scan can inspect 100 records but expose only three jobs. Advance past
+    // returned jobs, never past eligible jobs the turn budget left unread.
+    // Pages containing only ineligible/already-reviewed records still advance.
+    const nextCursor = chosen.length < available.length
+      ? chosen.at(-1)?.auditKey ?? args.cursor ?? ''
+      : page.nextCursor;
     const ids = [...reserved];
     for (const record of chosen) {
       const receiptId = processAuditFingerprint([args.appId, record.id, record.completedAt]);
@@ -123,7 +129,7 @@ export async function nextProcessAuditBatch(raw, context = {}) {
       const record = await getAgentRecord(receipt.agentId);
       jobs.push(record ? project(record, await transcript(record), receipt) : { receiptId, evidence: { state: 'retained-away' } });
     }
-    return { ok: true, jobs, nextCursor: page.nextCursor, remainingJobsThisTurn: LIMITS.jobsPerTurn - ids.length,
+    return { ok: true, jobs, nextCursor, remainingJobsThisTurn: LIMITS.jobsPerTurn - ids.length,
       metrics: processAuditMetrics(page.records), missingMetadata: page.missingMetadata, unattributedJobs: page.unknownApp, windowDays: LIMITS.windowDays, limited: true };
   });
 }

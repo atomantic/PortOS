@@ -17,12 +17,14 @@ An older runtime missing `QwenImage21Pipeline` reports the repair command
 before loading weights. Setup does not download model weights; those load
 when a render is requested.
 
-Text-to-image and editing through the existing single **Init Image** input
-are supported. Editing preserves the reference's aspect ratio and alpha
-channel; this unified pipeline does not use denoising strength. PNG output
-retains generated transparency. For transparent output, explicitly describe
-an RGBA image with an alpha channel and a transparent background in the prompt.
-PortOS does not expose Qwen's multi-reference or separate-mask interfaces yet.
+Text-to-image and editing through **Init Image** and reference-image uploads
+are supported, with up to ten image inputs in total. An Init Image uses one
+slot, leaving nine reference-image slots. Editing preserves the reference's
+aspect ratio and alpha channel; this unified pipeline does not use denoising
+strength or per-reference strength controls. PNG output retains generated
+transparency. For transparent output, explicitly describe an RGBA image with
+an alpha channel and a transparent background in the prompt. PortOS does not
+expose Qwen's separate-mask interface.
 
 The model ships under the **Qwen Research License**, unlike the earlier
 Apache-licensed Qwen image models. See the

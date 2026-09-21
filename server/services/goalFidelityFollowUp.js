@@ -283,6 +283,18 @@ async function fileFollowUpIssue({ task, review, fingerprint, context }) {
   const refusal = trackerRefusal({ app, target, tracker });
   if (refusal) return { issue: null, error: refusal };
 
+  // A local task can quote journals, media records, or other personal prose.
+  // Scrubbing token/email shapes cannot authorize publishing that content.
+  // Finalization grants this provenance only to a complete fetched claim
+  // objective, and it may return only to that same tracker and repository.
+  const publication = context?.publication;
+  if (publication?.source !== 'tracker-issue'
+      || publication.tracker !== tracker
+      || !publication.webHost || publication.webHost !== target?.webHost
+      || !publication.fullName || publication.fullName !== target?.fullName) {
+    return { issue: null, error: 'the reviewed objective has no verified provenance for this tracker; nothing was filed' };
+  }
+
   const exec = tracker === 'jira' ? null : await resolveForgeContext(app, tracker);
   // The reachability probe runs before anything is read or created: on an
   // unreachable forge this is one failing call instead of a list and a label
@@ -419,4 +431,3 @@ export async function runGoalFidelityFollowUp({ agentId, task, review, context =
 
   return result;
 }
-

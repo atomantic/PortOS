@@ -80,10 +80,9 @@ if (typeof HTMLCanvasElement !== 'undefined') {
 //   await act(async () => {});
 // (see renderConfig in src/components/meatspace/post/PostDrillConfig.test.jsx).
 // Tests that assert an in-flight pending state should settle at the END instead.
-// Each entry records BOTH the component React named and the test that was
-// running when the warning fired. A leaked setState lands after its own test
-// has ended, so the afterEach that throws is routinely a different — innocent —
-// test; naming only the component sends you bisecting the wrong file.
+// Each entry records the component and the test running when the warning fired.
+// This is observation context only: a late setState may come from asynchronous
+// work started in an earlier test, whose identity cannot be recovered here.
 const actWarnings = [];
 const originalConsoleError = console.error;
 console.error = (...args) => {

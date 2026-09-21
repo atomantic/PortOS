@@ -87,8 +87,9 @@ export const PROMPT_VERSIONS = {
 };
 
 // Claim prompts enforce host-control security eligibility before any claim or handoff.
-PROMPT_VERSIONS['claim-issue'] = 33;
-PROMPT_VERSIONS['claim-issue-gitlab'] = 30;
+// Dependency reconciliation requires positive completion evidence and preserves manual blockers.
+PROMPT_VERSIONS['claim-issue'] = 34;
+PROMPT_VERSIONS['claim-issue-gitlab'] = 31;
 PROMPT_VERSIONS['claim-issue-jira'] = 20;
 
 // Audit anchor for reference-watch's read/write coupling.

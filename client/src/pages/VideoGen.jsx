@@ -435,7 +435,10 @@ export default function VideoGen() {
 
   const handleDeleteHistory = useCallback(async (item) => {
     const raw = item?.raw || item;
-    await deleteVideoHistoryItem(raw.id, { silent: true }).catch((err) => toast.error(err.message || 'Delete failed'));
+    const deleted = await deleteVideoHistoryItem(raw.id, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err.message || 'Delete failed'); return false; });
+    if (!deleted) return;
     setHistory((h) => h.filter((v) => v.id !== raw.id));
   }, []);
   const handlePromptSaved = useCallback((item, prompt) => {

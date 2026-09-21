@@ -182,7 +182,7 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
     const { args } = buildArgs({
       ...baseInput,
-      loraPaths: ['/data/loras/lora-trained-adam-eivy-768ef285.safetensors'],
+      loraPaths: ['/data/loras/example-style.safetensors'],
       loraScales: [1.0],
       model: {
         id: 'flux2-klein-4b',
@@ -199,7 +199,7 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args).not.toContain('--tokenizer-repo');
     // The LoRA still threads through to the runner.
     expect(args).toContain('--lora-paths');
-    expect(args[args.indexOf('--lora-paths') + 1]).toBe('/data/loras/lora-trained-adam-eivy-768ef285.safetensors');
+    expect(args[args.indexOf('--lora-paths') + 1]).toBe('/data/loras/example-style.safetensors');
   });
 
   it('drops reference images when a LoRA forces the bf16 route (no kv pipeline)', () => {

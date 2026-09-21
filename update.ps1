@@ -279,6 +279,12 @@ if ($originUrl) {
     # lines, so Write-SafeHost above doesn't reach update.log on its own.
     Add-Content -Path $UpdateLog -Value "🌐 Pulling from origin: $originUrlSafe"
 }
+# Clear locks a PREVIOUS killed update left behind, before anything tries to
+# take them again — see the matching comment in update.sh. The rule for
+# "abandoned" lives in the Node helper so neither shell carries a second copy
+# of it. Never fatal: a failed sweep must not block the update.
+node -e "import('./server/lib/gitStaleLock.js').then(m => m.clearStaleGitLocksIn('.git')).catch(() => {})" 2>$null
+$global:LASTEXITCODE = 0
 $headRef = git symbolic-ref -q HEAD 2>$null
 $currentBranch = if ($headRef) { $headRef -replace "refs/heads/", "" } else { "" }
 if (-not (Repair-StaleSubmodules)) {
@@ -323,12 +329,6 @@ if (-not (Repair-StaleSubmodules)) {
 # post-pull HEAD yields exactly the pull's delta on main, so a manifest change
 # the update brings is detected even when launched from another branch.
 $prePullSha = git rev-parse HEAD 2>$null
-# Clear locks a PREVIOUS killed update left behind, before anything tries to
-# take them again — see the matching comment in update.sh. The rule for
-# "abandoned" lives in the Node helper so neither shell carries a second copy
-# of it. Never fatal: a failed sweep must not block the update.
-node -e "import('./server/lib/gitStaleLock.js').then(m => m.clearStaleGitLocksIn('.git')).catch(() => {})" 2>$null
-$global:LASTEXITCODE = 0
 Invoke-Logged git pull --rebase
 if ($LASTEXITCODE -ne 0) { Stop-UpdateScript $LASTEXITCODE }
 Step "git-pull" "done" "Latest changes pulled"

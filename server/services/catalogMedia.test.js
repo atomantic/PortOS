@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { catalogSyncEnvelopeSchema } from '../lib/catalogValidation.js';
+import { GENERATION_METADATA_LIMITS } from '../lib/pngMetadata.js';
 import {
   classifyUploadMime,
   readImageGenerationMetadata,
@@ -60,6 +62,32 @@ describe('uploadIngredientMediaFile', () => {
     expect(attachMediaFn).toHaveBeenCalledWith(
       'ing-1', 'upload-provenance.png', 'reference', { role: null, caption: null, metadata },
     );
+  });
+
+  it('bounds uploaded provenance to the peer contract, including escaped JSON size', async () => {
+    const metadata = {
+      format: 'format'.repeat(30), parameters: '\u0001'.repeat(65_536),
+      prompt: 'p'.repeat(16_001), negativePrompt: 'n'.repeat(16_001),
+      sampler: 's'.repeat(300), modelHash: 'h'.repeat(300), model: 'm'.repeat(600),
+      seed: 'seed'.repeat(40), steps: 100_001, cfgScale: 1_001,
+      width: 100_001, height: false,
+    };
+    const media = await uploadIngredientMediaFile(
+      { ingredientId: 'ing-1', dataBase64: b64('img'), mimeType: 'image/png' },
+      {
+        getIngredientFn: okIngredient,
+        saveImageFn: async () => ({ filename: 'upload-provenance.png', metadata }),
+        attachMediaFn: async (ingredientId, mediaKey, kind, options) => ({
+          ingredientId, mediaKey, kind, ...options, createdAt: '2026-01-01T00:00:00Z',
+        }),
+      },
+    );
+    expect(catalogSyncEnvelopeSchema.parse({ media: [media] }).media[0]).toEqual(media);
+    expect(media.metadata.prompt).toBe('p'.repeat(GENERATION_METADATA_LIMITS.prompt));
+    expect(media.metadata.negativePrompt).toBe('n'.repeat(GENERATION_METADATA_LIMITS.negativePrompt));
+    expect(media.metadata.parameters).toBeTruthy();
+    expect(JSON.stringify(media.metadata).length).toBeLessThanOrEqual(GENERATION_METADATA_LIMITS.jsonChars);
+    for (const field of ['steps', 'cfgScale', 'width', 'height']) expect(media.metadata).not.toHaveProperty(field);
   });
 
   it('persists audio bytes to the library dir and attaches as audio', async () => {

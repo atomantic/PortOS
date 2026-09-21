@@ -48,7 +48,10 @@ git pull
 # release-note source — no changelog file or fragment to write)
 git add [changed files]
 git commit -m "fix: daily log no longer double-saves on blur"
-git pull --rebase --autostash && git push
+git fetch origin main
+git rebase origin/main
+npm run pregate
+git push
 ```
 
 See [`.changelog/README.md`](../.changelog/README.md) — release notes are

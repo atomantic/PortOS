@@ -178,7 +178,14 @@ describe('issueMatchesGoalFidelityMarker', () => {
   });
 });
 
-const CONTEXT = { base: 'a'.repeat(40), head: 'b'.repeat(40) };
+const CONTEXT = {
+  base: 'a'.repeat(40), head: 'b'.repeat(40),
+  objective: 'Add retry caps to the queue\nplus detail\n\nVerify persisted retries.',
+  publication: {
+    source: 'tracker-issue', title: 'Add retry caps to the queue',
+    tracker: 'github', webHost: 'github.com', fullName: 'example/project', number: 42,
+  },
+};
 
 describe('buildGoalFidelityIssue', () => {
   const fingerprint = 'goal-fidelity:user:comics/add-retry-caps';
@@ -186,7 +193,7 @@ describe('buildGoalFidelityIssue', () => {
   it('names the verdict, the objective, and both item lists', () => {
     const { title, body } = buildGoalFidelityIssue({
       context: CONTEXT,
-      task: { description: 'Add retry caps to the queue\nplus detail', metadata: { prompt: 'Verify persisted retries.' } },
+      task: { description: 'Private local task title', metadata: { prompt: 'Private local task content.' } },
       review: review({ unrequested: ['a new settings page'] }),
       fingerprint,
     });
@@ -197,6 +204,25 @@ describe('buildGoalFidelityIssue', () => {
     expect(body).toContain('`ollama`');
     expect(body).toContain('plus detail');
     expect(body).toContain('Verify persisted retries.');
+    expect(`${title}\n${body}`).not.toContain('Private local task');
+  });
+
+  it('refuses a local objective without tracker provenance and keeps it available to the local investigator', () => {
+    const task = { description: 'Private record title\nPrivate record content.' };
+    const context = { base: CONTEXT.base, head: CONTEXT.head, objective: task.description };
+    const result = buildGoalFidelityIssue({ task, review: review(), fingerprint, context });
+    expect(result).toEqual({ title: '', body: '', error: expect.stringContaining('tracker provenance') });
+    expect(buildGoalFidelityFollowUpTask({ task, review: review(), fingerprint, context }))
+      .toContain(task.description);
+  });
+
+  it('never falls back to a local task when the fetched tracker objective is unavailable', () => {
+    const result = buildGoalFidelityIssue({
+      task: { description: 'Private local fallback' }, review: review(), fingerprint,
+      context: { ...CONTEXT, objective: undefined },
+    });
+    expect(result.body).toBe('');
+    expect(result.error).toContain('complete reviewed objective is unavailable');
   });
 
   // A marker parked at the bottom drops out of exactly the long issues most
@@ -222,7 +248,7 @@ describe('buildGoalFidelityIssue', () => {
 
   it('bounds the title and the body', () => {
     const { title, body } = buildGoalFidelityIssue({
-      context: CONTEXT,
+      context: { ...CONTEXT, publication: { ...CONTEXT.publication, title: 'x'.repeat(5_000) } },
       task: { description: 'x'.repeat(5_000) },
       review: review({ missing: Array.from({ length: 40 }, () => 'y'.repeat(400)) }),
       fingerprint,

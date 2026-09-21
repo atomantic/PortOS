@@ -332,6 +332,37 @@ describe('System Health Routes', () => {
     expect(response.body.overallHealth).toBe('warning');
   });
 
+  it('dismisses and restores a reviewer warning without clearing its configuration fault', async () => {
+    const reviewerHealth = { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } };
+    const health = { status: 'warning', configFaults: reviewerHealth };
+    let settings = { codeReview: { reviewerHealth } };
+    await codeReviewMock.getReviewerConfigHealth.withImplementation(async () => health, async () => {
+      await getSettings.withImplementation(async () => settings, async () => {
+        await updateSettingsWith.withImplementation(async (mutate) => (settings = await mutate(settings)), async () => {
+          const original = await request(app).get('/api/system/health/details');
+          const warning = original.body.warnings.find((item) => item.type === 'code-review');
+          expect(warning).toBeDefined();
+          const dismissed = await request(app)
+            .post('/api/system/health/warnings/code-review/dismiss')
+            .send({ message: warning.message });
+          expect(dismissed.status).toBe(200);
+
+          const hidden = await request(app).get('/api/system/health/details');
+          expect(hidden.body.warnings.some((item) => item.type === 'code-review')).toBe(false);
+          expect(hidden.body.codeReview).toEqual(health);
+          expect(settings.codeReview.reviewerHealth).toEqual(reviewerHealth);
+
+          const undone = await request(app).delete('/api/system/health/warnings/code-review/dismiss');
+          expect(undone.status).toBe(200);
+          const restored = await request(app).get('/api/system/health/details');
+          expect(restored.body.warnings).toContainEqual(warning);
+          expect(restored.body.codeReview).toEqual(health);
+          expect(settings.codeReview.reviewerHealth).toEqual(reviewerHealth);
+        });
+      });
+    });
+  });
+
   describe('PUT /health/thresholds', () => {
     it('rejects invalid numbers', async () => {
       const response = await request(app)
