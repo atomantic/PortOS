@@ -85,7 +85,7 @@ export async function diagnoseLocalRuntime({ modelId: requestedModelId, settings
     // binary, and treating that as ready is how a deck render ended up reporting
     // a bare `Exit code 1`. Memoized in pythonSetup so ordinary status polls do
     // not repeatedly import torch.
-    const healthy = await isFlux2VenvHealthy().then((value) => value).catch(() => null);
+    const healthy = await isFlux2VenvHealthy(model.pipelineClass).then((value) => value).catch(() => null);
     if (healthy === true) return verdict({ readiness: READY });
     if (healthy === false) {
       return verdict({
