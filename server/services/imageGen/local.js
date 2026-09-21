@@ -116,6 +116,12 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
       '--seed', String(seed),
       '--output', outputPath,
     ];
+    if (model.pipelineClass === 'QwenImage21Pipeline') {
+      if (referenceImagePaths.length + (initImagePath ? 1 : 0) > 10) {
+        throw new ServerError('Qwen Image 2.1 accepts at most 10 input images', { status: 400, code: 'TOO_MANY_INPUT_IMAGES' });
+      }
+      if (referenceImagePaths.length) args.push('--reference-images', ...referenceImagePaths);
+    }
     if (negativePrompt) args.push('--negative-prompt', negativePrompt);
     if (initImagePath) args.push('--image-path', initImagePath);
     if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));

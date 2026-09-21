@@ -208,10 +208,12 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;
   const inputImageCount = (initUpload || data.initImageFile ? 1 : 0) + referenceImageCount;
 
-  if (referenceImageCount > referenceImageFields.length) {
+  const localModel = mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId) : null;
+  const referenceCap = localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : 4;
+  if (referenceImageCount > referenceCap) {
     cleanupReqFilesTemp();
     throw new ServerError(
-      `Image generation accepts at most ${referenceImageFields.length} reference images; received ${referenceImageCount}`,
+      `Image generation accepts at most ${referenceCap} reference images; received ${referenceImageCount}`,
       { status: 400, code: 'TOO_MANY_REFERENCE_IMAGES' },
     );
   }
@@ -244,18 +246,18 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
 
   // Reference images reach every backend that can consume them: local via
   // local.js's buildArgs (--reference-images/--reference-strengths, emitted
-  // only inside the isFlux2 branch) and each cloud CLI via its own tool's
+  // for FLUX.2, and --reference-images for Qwen 2.1) and each cloud CLI via its tool's
   // reference array (codex `referenced_image_paths`, grok `image_edit.image`,
   // agy `ImagePaths`). The two that CAN'T are rejected up-front rather than
   // copying the uploads to PATHS.imageRefs and silently dropping them
   // downstream — that would orphan files on disk and produce metadata sidecars
   // that lie about how the render was conditioned.
   if (referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
-    const candidate = selectLocalImageModelFromSettings(settings, data.modelId);
-    if (!isFlux2(candidate)) {
+    const candidate = localModel;
+    if (!isFlux2(candidate) && candidate?.pipelineClass !== 'QwenImage21Pipeline') {
       cleanupReqFilesTemp();
       throw new ServerError(
-        'Reference images are only supported for FLUX.2 models on the local backend',
+        'Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend',
         { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
       );
     }
@@ -269,7 +271,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   // so this only fires for direct API callers — but a silent drop is exactly
   // the failure the sidecar-honesty rule exists to prevent. `resolveInputImages`
   // keeps its own cap as the backstop for in-process callers that skip the route.
-  const inputImageCap = maxInputImages(mode);
+  const inputImageCap = localModel?.pipelineClass === 'QwenImage21Pipeline' ? 10 : maxInputImages(mode);
   if (inputImageCap != null && inputImageCount > inputImageCap) {
     cleanupReqFilesTemp();
     throw new ServerError(

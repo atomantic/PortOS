@@ -483,6 +483,26 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     expect(refDirContents.filter((f) => f.startsWith('ref-'))).toHaveLength(0);
   });
 
+  it.each([false, true])('packs ten Qwen inputs and rejects an eleventh (init: %s)', async (withInit) => {
+    const fields = [
+      { name: 'prompt', value: 'Combine the references' },
+      { name: 'modelId', value: 'qwen-image-2.1' },
+      ...Array.from({ length: withInit ? 9 : 10 }, (_, i) => ({
+        name: `referenceImage${i + 1}`, filename: `ref-${i}.png`, contentType: 'image/png', value: PNG_FIXTURE,
+      })),
+      ...(withInit ? [{ name: 'initImage', filename: 'init.png', contentType: 'image/png', value: PNG_FIXTURE }] : []),
+    ];
+    const res = await postMultipart(app, '/api/image-gen/generate', fields);
+    expect(res.status).toBe(200);
+    expect(enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths).toHaveLength(withInit ? 9 : 10);
+    enqueueJob.mockClear();
+    fields.push({ name: withInit ? 'referenceImage10' : 'initImage', filename: 'extra.png', contentType: 'image/png', value: PNG_FIXTURE });
+    const rejected = await postMultipart(app, '/api/image-gen/generate', fields);
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.code).toBe('TOO_MANY_INPUT_IMAGES');
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('accepts exactly the backend cap — 3 references on agy with no init image', async () => {
     // The boundary the gate above must NOT reject.
     mockedSettings = { imageGen: { mode: 'agy', agy: { enabled: true } } };

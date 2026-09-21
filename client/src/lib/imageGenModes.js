@@ -321,11 +321,14 @@ export function pickI2iMode(backends) {
  * leads" rule `resolveInputImages` applies server-side, predicted here so the
  * form never offers a slot the backend would drop. A backend that declares no
  * cap gets the form's full slot count. Local FLUX.2 takes all of them (its
- * references ride a separate runner flag from the init image); a non-FLUX.2
- * local model and external take none.
+ * references ride a separate runner flag from the init image). Qwen 2.1 shares
+ * its ten-input cap with the init image. Unsupported models take none.
  */
-export function referenceSlotsFor(mode, { hasInitImage = false, maxSlots = 4, localSupportsReferences = false } = {}) {
-  if (mode === IMAGE_GEN_MODE.LOCAL) return localSupportsReferences ? maxSlots : 0;
+export function referenceSlotsFor(mode, { hasInitImage = false, maxSlots = 4, localSupportsReferences = false, localInputCap = null } = {}) {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
+    if (!localSupportsReferences) return 0;
+    return Math.min(maxSlots, (localInputCap ?? Infinity) - (hasInitImage ? 1 : 0));
+  }
   if (!isCloudCliMode(mode)) return 0;
   const cap = maxInputImages(mode) ?? Infinity;
   return Math.min(maxSlots, cap - (hasInitImage ? 1 : 0));

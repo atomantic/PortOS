@@ -115,6 +115,15 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     initImageStrength: null,
   };
 
+  it('passes Qwen references in order and enforces the combined ten-image cap', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const input = { ...baseInput, model: { id: 'qwen-image-2.1', runner: 'qwen', repo: 'Qwen/Qwen-Image-2.1', pipelineClass: 'QwenImage21Pipeline' },
+      referenceImagePaths: Array.from({ length: 10 }, (_, i) => `/tmp/ref-${i}.png`) };
+    const { args } = buildArgs(input);
+    expect(args.slice(args.indexOf('--reference-images') + 1, args.indexOf('--reference-images') + 11)).toEqual(input.referenceImagePaths);
+    expect(() => buildArgs({ ...input, initImagePath: '/tmp/init.png' })).toThrow('at most 10');
+  });
+
   it('routes SDNQ flux2 models to the flux2 venv + flux2_macos.py', () => {
     mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
     const { bin, args } = buildArgs({
