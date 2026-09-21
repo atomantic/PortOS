@@ -44,6 +44,10 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     expect(PORTOS_SCHEMA_VERSIONS.mediaCollections).toBe(1);
   });
 
+  it('version-gates catalog media generation provenance', () => {
+    expect(PORTOS_SCHEMA_VERSIONS.catalog).toBe(9);
+  });
+
   it('version-gates the persisted FableLoom shot and reference shape', () => {
     // v7 adds timed shots and draft character image anchors; v8 adds the
     // optional per-character five-stage evolution lens on the series plan; v9

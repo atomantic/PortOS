@@ -10,6 +10,32 @@ import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const isPng = (buf) => buf.subarray(0, 8).equals(PNG_SIGNATURE);
 
+const crc32 = (value) => {
+  let crc = 0xffffffff;
+  for (const byte of value) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+
+const pngChunk = (type, data) => {
+  const typeBytes = Buffer.from(type, 'ascii');
+  const body = Buffer.concat([typeBytes, data]);
+  const chunk = Buffer.alloc(data.length + 12);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBytes.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(body), data.length + 8);
+  return chunk;
+};
+
+const addPngText = (png, keyword, text) => Buffer.concat([
+  png.subarray(0, -12),
+  pngChunk('tEXt', Buffer.concat([Buffer.from(keyword, 'latin1'), Buffer.from([0]), Buffer.from(text)])),
+  png.subarray(-12),
+]);
+
 // Redirect PATHS.images at a per-test temp dir so saving an uploaded image
 // writes into the temp gallery, not the repo's real data/images.
 let imagesDir;
@@ -70,6 +96,22 @@ describe('saveUploadedGalleryImage', () => {
       expect(filename.endsWith('.png')).toBe(true);
       expect(isPng(readFileSync(join(imagesDir, filename)))).toBe(true);
     }
+  });
+
+  it('extracts Stable Diffusion parameters before normalization and writes a sidecar', async () => {
+    const source = addPngText(realPng, 'parameters', [
+      'a paper boat on a moonlit lake',
+      'Negative prompt: blurry, text',
+      'Steps: 24, Sampler: DPM++ 2M, CFG scale: 7.5, Seed: 42, Size: 768x512, Model hash: abc123, Model: example-model',
+    ].join('\n'));
+    const { filename, metadata } = await saveUploadedGalleryImage(source.toString('base64'));
+    expect(metadata).toMatchObject({
+      format: 'a1111', prompt: 'a paper boat on a moonlit lake', negativePrompt: 'blurry, text',
+      steps: 24, sampler: 'DPM++ 2M', cfgScale: 7.5, seed: 42, width: 768, height: 512,
+      modelHash: 'abc123', model: 'example-model',
+    });
+    const sidecar = join(imagesDir, filename.replace('.png', '.metadata.json'));
+    expect(JSON.parse(readFileSync(sidecar, 'utf8'))).toMatchObject(metadata);
   });
 
   it('rejects an empty upload with a 400', async () => {
