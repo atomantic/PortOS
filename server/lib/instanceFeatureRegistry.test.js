@@ -32,6 +32,13 @@ describe('instance feature registry', () => {
       defaultEnabled: true,
     });
   });
+
+  it('keeps CoS task templates opt-in by default', () => {
+    expect(INSTANCE_FEATURES.find((feature) => feature.id === 'cos-task-templates')).toMatchObject({
+      label: 'CoS task templates',
+      defaultEnabled: false,
+    });
+  });
 });
 
 describe('instance feature groups (#40)', () => {

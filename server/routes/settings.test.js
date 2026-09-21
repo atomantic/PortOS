@@ -209,6 +209,7 @@ describe('Settings routes — instance feature participation', () => {
     }));
     // GSD and OpenClaw ship disabled by default; the install opts in.
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: false }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'cos-task-templates', enabled: false, source: 'default' }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'openclaw', enabled: false }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'health', enabled: true }));
     // #40 — iMessage and Signal join the comms group, defaulting to enabled
