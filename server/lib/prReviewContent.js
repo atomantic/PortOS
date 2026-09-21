@@ -27,7 +27,7 @@
 
 import { modelAbuseContentFingerprint } from './modelAbuseGuard.js';
 
-const MAX_COMMIT_LOG_CHARS = 100_000;
+const LEGACY_MAX_COMMIT_LOG_CHARS = 100_000;
 
 const text = (value) => (typeof value === 'string' ? value : '');
 
@@ -36,13 +36,13 @@ const text = (value) => (typeof value === 'string' ? value : '');
  * commit exactly as a reader of `git log` would see them, so an instruction
  * hidden in a commit body is scored as the text it is.
  */
-function formatCommitLog(commits) {
+function formatCommitLog(commits, maxChars = Infinity) {
   if (!Array.isArray(commits) || commits.length === 0) return '';
   const log = commits
     .map((commit) => [text(commit?.messageHeadline), text(commit?.messageBody)].filter(Boolean).join('\n'))
     .filter(Boolean)
     .join('\n\n');
-  return log.length > MAX_COMMIT_LOG_CHARS ? log.slice(0, MAX_COMMIT_LOG_CHARS) : log;
+  return log.slice(0, maxChars);
 }
 
 /**
@@ -57,7 +57,10 @@ function formatCommitLog(commits) {
  * the row.
  */
 export function screenedPullRequestContent(pr, diff, commits = pr?.commits) {
-  const commitLog = formatCommitLog(commits);
+  return pullRequestContent(pr, diff, formatCommitLog(commits));
+}
+
+function pullRequestContent(pr, diff, commitLog) {
   return [
     'Pull request title:',
     text(pr?.title),
@@ -90,7 +93,7 @@ export function screenedPullRequestContent(pr, diff, commits = pr?.commits) {
  * Changing `screenedPullRequestContent` means bumping this AND adding the
  * outgoing recipe to `FINGERPRINT_RECIPES`, in the same commit.
  */
-export const SCREENED_PR_FINGERPRINT_VERSION = 2;
+export const SCREENED_PR_FINGERPRINT_VERSION = 3;
 
 /**
  * Every recipe PortOS has ever stamped with, by version. A stamp names its own
@@ -111,7 +114,10 @@ const FINGERPRINT_RECIPES = Object.freeze({
   1: (pr, diff) => screenedPullRequestContent(pr, diff, []),
   // v2 (#7323): + the commit log, so an instruction hidden in a commit body is
   // both screened and watched for change.
-  2: (pr, diff, commits) => (Array.isArray(commits) ? screenedPullRequestContent(pr, diff, commits) : null),
+  2: (pr, diff, commits) => (Array.isArray(commits)
+    ? pullRequestContent(pr, diff, formatCommitLog(commits, LEGACY_MAX_COMMIT_LOG_CHARS)) : null),
+  // v3: complete commit messages; oversized evidence is refused by the screen.
+  3: (pr, diff, commits) => (Array.isArray(commits) ? screenedPullRequestContent(pr, diff, commits) : null),
 });
 
 // A version with no recipe could only stamp fingerprints nothing can ever

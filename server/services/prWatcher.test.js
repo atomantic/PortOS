@@ -21,6 +21,10 @@ vi.mock('./forgeExecOptions.js', () => ({
   resolveForgeExecOptions: (...args) => resolveForgeExecOptionsMock(...args),
 }));
 
+const screenMock = vi.fn();
+vi.mock('./untrustedContent.js', () => ({
+  screenUntrustedContent: (...args) => screenMock(...args),
+}));
 const mergePrMock = vi.fn();
 vi.mock('./git.js', () => ({
   mergePR: (...args) => mergePrMock(...args),
@@ -85,6 +89,7 @@ const pr = (number, login, extra = {}) => ({
 
 beforeEach(() => {
   execGhMock.mockReset();
+  screenMock.mockReset().mockResolvedValue({ ok: true, screening: { safe: true } });
   ensureForgeReachableMock.mockReset();
   ensureForgeReachableMock.mockResolvedValue({ ok: true, status: 'ok', detail: null, remedy: null });
   mergePrMock.mockReset();
@@ -188,6 +193,26 @@ const pendingApp = (entries = [pendingMerge()]) => ({
   pendingMergePrs: entries
 });
 
+
+function installPendingEvidence() {
+  const evidence = {
+    pr: {
+      number: 88, title: 'Fix example', body: 'Closes #101', headRefOid: 'a'.repeat(40),
+      author: { login: 'contributor' }, commits: [{ messageHeadline: 'Complete commit', messageBody: '' }],
+      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }],
+    },
+    issue: { number: 101, state: 'open', title: 'Example requirement', body: 'Preserve private access.', assignees: [] },
+    diff: 'diff --git a/example.js b/example.js\n+const safe = true;',
+  };
+  execGhMock.mockImplementation(async (args) => {
+    if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify({ ...evidence.pr, number: Number(args[2]) });
+    if (args[0] === 'pr' && args[1] === 'diff') return evidence.diff;
+    if (args[0] === 'api' && args.includes('repos/o/r/issues/101')) return JSON.stringify(evidence.issue);
+    throw new Error('Unexpected forge read');
+  });
+  return evidence;
+}
+
 describe('merge-only PR watcher', () => {
   beforeEach(() => {
     getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
@@ -218,21 +243,92 @@ describe('merge-only PR watcher', () => {
   it('merges a green pending PR without spawning a follow-up agent', async () => {
     const app = pendingApp();
     mockApps.set(app.id, app);
-    execGhMock.mockResolvedValueOnce(JSON.stringify({
-      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }]
-    }));
+    installPendingEvidence();
     mergePrMock.mockResolvedValue({ success: true });
 
     const result = await processPendingMergePrs(app);
 
     expect(result).toMatchObject({ ok: true, checked: 1, merged: 1, escalated: 0 });
-    expect(mergePrMock).toHaveBeenCalledWith('/repos/app1', 88, { forgeAccount: 'other-account' });
+    expect(mergePrMock).toHaveBeenCalledWith('/repos/app1', 88, { forgeAccount: 'other-account', expectedHeadSha: 'a'.repeat(40) });
     expect(spawnReviewLoopFollowUpMock).not.toHaveBeenCalled();
     expect(readPendingMergePrs(mockApps.get('app1'))).toEqual([]);
     expect(execGhMock).toHaveBeenCalledWith([
       'pr', 'view', '88', '--repo', 'github.com/o/r',
-      '--json', 'state,mergeStateStatus,statusCheckRollup'
+      '--json', 'number,title,body,commits,headRefOid,author,state,isDraft,baseRefName,baseRefOid,mergeable,mergeStateStatus,statusCheckRollup'
     ], undefined, { cwd: '/repos/app1', env: PINNED_ENV, backoffKey: 'github.com/o/r' });
+  });
+
+  it.each([
+    ['unavailable', { ok: false }],
+    ['malformed', {}],
+    ['uncertain', { ok: false, screening: { safe: false, layers: { securityModel: 'uncertain' } } }],
+    ['incompatible', { ok: false, screening: { safe: false, layers: { securityModel: 'incompatible' } } }],
+  ])('retains a ready PR when the contribution assessment is %s', async (_name, response) => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    installPendingEvidence();
+    screenMock.mockResolvedValue(response);
+    expect(await processPendingMergePrs(app)).toMatchObject({ merged: 0 });
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(readPendingMergePrs(mockApps.get(app.id))[0].ticks).toBe(1);
+  });
+
+  it.each([
+    ['head', (e) => { e.pr.headRefOid = 'b'.repeat(40); }],
+    ['title', (e) => { e.pr.title = 'Rewritten title'; }],
+    ['body', (e) => { e.pr.body = 'Rewritten description'; }],
+    ['intent', (e) => { e.issue.body = 'Changed requirement'; }],
+    ['CI', (e) => { e.pr.statusCheckRollup = [{ status: 'IN_PROGRESS' }]; }],
+  ])('withholds a queued merge when %s changes during inference', async (_name, mutate) => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    const evidence = installPendingEvidence();
+    screenMock.mockImplementation(async () => {
+      mutate(evidence);
+      return { ok: true, screening: { safe: true } };
+    });
+    expect(await processPendingMergePrs(app)).toMatchObject({ merged: 0 });
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(readPendingMergePrs(mockApps.get(app.id))).toHaveLength(1);
+  });
+
+  it('screens complete commit tails and linked intent using the owning forge account', async () => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    const evidence = installPendingEvidence();
+    evidence.pr.commits[0].messageBody = 'x'.repeat(100_001) + 'TAIL';
+    mergePrMock.mockResolvedValue({ success: true });
+    expect(await processPendingMergePrs(app)).toMatchObject({ merged: 1 });
+    expect(screenMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('TAIL'),
+    }));
+    expect(screenMock.mock.calls[0][0].content).toContain('Preserve private access.');
+    for (const [, , options] of execGhMock.mock.calls) {
+      expect(options).toMatchObject({ cwd: app.repoPath, env: PINNED_ENV });
+    }
+  });
+
+  it.each(['commits', 'linked issues'])('refuses oversized complete %s before inference', async (surface) => {
+    const app = pendingApp();
+    mockApps.set(app.id, app);
+    const evidence = installPendingEvidence();
+    if (surface === 'commits') evidence.pr.commits[0].messageBody = 'x'.repeat(2_000_001);
+    else evidence.issue.body = 'x'.repeat(65_537);
+    expect(await processPendingMergePrs(app)).toMatchObject({ merged: 0 });
+    expect(screenMock).not.toHaveBeenCalled();
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it('notifies and retires an unavailable assessment at the queue deadline', async () => {
+    const app = pendingApp([pendingMerge({ ticks: MAX_PENDING_MERGE_TICKS - 1 })]);
+    mockApps.set(app.id, app);
+    installPendingEvidence();
+    screenMock.mockRejectedValue(new Error('Provider unavailable'));
+    expect(await processPendingMergePrs(app)).toMatchObject({ merged: 0, timedOut: 1 });
+    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
+      description: expect.stringContaining('assessment was unavailable or withheld'),
+    }));
+    expect(readPendingMergePrs(mockApps.get(app.id))).toEqual([]);
   });
 
   it.each([
@@ -318,9 +414,7 @@ describe('sweepPendingMergePrs', () => {
   // The sweep must not consult the task schedule at all.
   it('drains a pending merge for an app with no pr-watcher config', async () => {
     mockApps.set('app1', { ...pendingApp(), name: 'App One', prWatcherState: undefined });
-    execGhMock.mockResolvedValueOnce(JSON.stringify({
-      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }]
-    }));
+    installPendingEvidence();
     mergePrMock.mockResolvedValue({ success: true });
 
     const totals = await sweepPendingMergePrs();
@@ -348,9 +442,7 @@ describe('sweepPendingMergePrs', () => {
     });
     // app1 fails the forge check; app2 proceeds and merges.
     ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable' });
-    execGhMock.mockResolvedValueOnce(JSON.stringify({
-      state: 'OPEN', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }]
-    }));
+    installPendingEvidence();
     mergePrMock.mockResolvedValue({ success: true });
 
     const totals = await sweepPendingMergePrs();
