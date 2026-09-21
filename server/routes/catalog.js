@@ -177,6 +177,7 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
   const created = await catalogDB.commitScrap({
     scrapId: scrap.id,
     accepted: body.accepted,
+    ...(body.relationships !== undefined ? { relationships: body.relationships } : {}),
     embeds,
     universeRef: body.universeRef,
     role: body.role,

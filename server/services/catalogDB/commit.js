@@ -5,11 +5,12 @@
  * cannot accidentally persist only part of a scrap's accepted extraction.
  */
 
+import { catalogScrapCommitSchema } from '../../lib/catalogValidation.js';
 import { withTransaction } from '../../lib/db.js';
 import { createIngredient } from './ingredients.js';
 import { linkIngredientToSource, linkIngredientToRef, linkIngredientRelation, universeRefRoleForType } from './refs.js';
 
-// Same-batch `related-to` edges connect a single scrap's extractions into one
+// Legacy same-batch `related-to` edges connect a single scrap's extractions into one
 // cluster instead of N isolated nodes (#7615). Bounded: a batch above this
 // size mints none — the schema allows up to 200 accepted rows, which would be
 // 19,900 edges for every unordered pair at the cap.
@@ -24,9 +25,14 @@ const RELATION_BATCH_LIMIT = 25;
  * mid-batch failure rolls back ingredients, refs, and relations together.
  * Omitting it reproduces prior behavior exactly (source link only).
  */
-export async function commitScrap({ scrapId, accepted = [], embeds = [], universeRef = null, role = null } = {}) {
+export async function commitScrap({ scrapId, accepted = [], embeds = [], universeRef = null, role = null, relationships } = {}) {
+  // Service callers receive the same pre-write guarantees as HTTP callers.
+  if (relationships !== undefined) {
+    ({ accepted, relationships } = catalogScrapCommitSchema.parse({ accepted, relationships }));
+  }
   return withTransaction(async (client) => {
     const created = [];
+    const ids = new Map();
     for (let i = 0; i < accepted.length; i++) {
       const draft = accepted[i];
       const embedding = embeds[i];
@@ -49,6 +55,7 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
         );
       }
       created.push(ingredient);
+      if (draft.draftId) ids.set(draft.draftId, ingredient.id);
     }
 
     // Mint one `related-to` edge per unordered pair among this batch's
@@ -56,7 +63,11 @@ export async function commitScrap({ scrapId, accepted = [], embeds = [], univers
     // Deterministic direction: from_id = the lexicographically smaller id —
     // the PK is (from_id, to_id, kind), so an arbitrary direction would let a
     // re-commit create a reciprocal duplicate instead of reviving the same row.
-    if (created.length >= 2 && created.length <= RELATION_BATCH_LIMIT) {
+    if (relationships !== undefined) {
+      for (const edge of relationships) {
+        await linkIngredientRelation(ids.get(edge.fromDraftId), ids.get(edge.toDraftId), edge.kind, { client });
+      }
+    } else if (created.length >= 2 && created.length <= RELATION_BATCH_LIMIT) {
       for (let i = 0; i < created.length; i++) {
         for (let j = i + 1; j < created.length; j++) {
           const [fromId, toId] = created[i].id < created[j].id
