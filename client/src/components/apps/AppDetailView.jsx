@@ -70,6 +70,7 @@ function AppDetail() {
   const [app, setApp] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   // PM2 process whose live output the desktop launch panel is tailing (null = hidden).
   const [launchProcess, setLaunchProcess] = useState(null);
@@ -85,16 +86,27 @@ function AppDetail() {
   const { features: instanceFeatures, error: instanceFeaturesError } = useInstanceFeatures();
 
   const fetchSeqRef = useRef(0);
+  const appRef = useRef(null);
   const fetchApp = useCallback(async () => {
     const seq = ++fetchSeqRef.current;
-    const data = await api.getApp(appId, { includeQuality: true, silent: true }).catch(() => null);
+    if (!appRef.current) setLoading(true);
+    const result = await api.getApp(appId, { includeQuality: true, silent: true })
+      .then(data => ({ data }))
+      .catch(error => ({ error }));
     if (seq !== fetchSeqRef.current) return;
-    setNotFound(!data);
-    if (!data) {
+    if (result.error) {
+      const missing = result.error.status === 404;
+      appRef.current = null;
+      setApp(null);
+      setNotFound(missing);
+      setLoadError(missing ? null : result.error);
       setLoading(false);
       return;
     }
-    setApp(data);
+    appRef.current = result.data;
+    setNotFound(!result.data);
+    setLoadError(null);
+    setApp(result.data);
     setLoading(false);
   }, [appId]);
 
@@ -269,9 +281,37 @@ function AppDetail() {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="p-4 sm:p-6">
+        <div role="alert" className="mx-auto max-w-2xl rounded-xl border border-port-error/40 bg-port-card p-6">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={20} aria-hidden="true" className="mt-0.5 shrink-0 text-port-error" />
+            <div className="min-w-0">
+              <h1 className="text-xl font-semibold text-white">App unavailable</h1>
+              <p className="mt-2 text-sm text-gray-400">
+                This app could not be loaded. {loadError.message || 'Check the connection and try again.'}
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  onClick={fetchApp}
+                  className="inline-flex min-h-[40px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:bg-port-accent/80"
+                >
+                  <RefreshCw size={16} aria-hidden="true" />
+                  Retry
+                </button>
+                <Link to="/apps" className="text-sm text-port-accent hover:underline">Back to Apps</Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (notFound) {
     return (
-      <div className="p-6 text-center">
+      <div role="status" className="p-6 text-center">
         <p className="text-lg text-gray-400 mb-4">App not found</p>
         <Link to="/apps" className="text-port-accent hover:underline">Back to Apps</Link>
       </div>

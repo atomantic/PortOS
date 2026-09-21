@@ -13,6 +13,7 @@ vi.mock('../../../services/api', () => ({
   unarchiveApp: vi.fn(() => Promise.resolve({})),
   openAppInEditor: vi.fn(() => Promise.resolve({})),
   openAppFolder: vi.fn(() => Promise.resolve({})),
+  openAppInXcode: vi.fn(() => Promise.resolve({ success: true })),
   refreshAppConfig: vi.fn(() => Promise.resolve({})),
   detectAppIcon: vi.fn(() => Promise.resolve({ detected: false })),
   installXcodeScripts: vi.fn(() => Promise.resolve({})),
@@ -92,5 +93,23 @@ describe('OverviewTab PortOS registration removal', () => {
 
     expect(screen.queryByRole('button', { name: 'Remove from PortOS' })).toBeNull();
     await waitFor(() => expect(api.getAppSpriteBindings).toHaveBeenCalledWith('portos-default'));
+  });
+});
+
+describe('OverviewTab native app actions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getAppSpriteBindings.mockResolvedValue({ bindings: [] });
+    api.openAppInXcode.mockResolvedValue({ success: true });
+  });
+
+  it('keeps the Xcode action available from the native app detail workspace', async () => {
+    const user = userEvent.setup();
+    renderOverview({ ...APP, id: 'app-ios', name: 'Example iOS App', type: 'ios-native' });
+
+    await user.click(screen.getByRole('button', { name: 'Open Example iOS App in Xcode' }));
+
+    expect(api.openAppInXcode).toHaveBeenCalledWith('app-ios', { silent: true });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Opening Example iOS App in Xcode'));
   });
 });

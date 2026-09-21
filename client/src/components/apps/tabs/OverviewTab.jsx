@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2 } from 'lucide-react';
+import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2, Smartphone } from 'lucide-react';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
-import { isStandardizable } from '../constants';
+import { isStandardizable, NON_PM2_TYPES } from '../constants';
 import ActivityLog from '../ActivityLog';
 import SlashDoPanel from '../SlashDoPanel';
 import Banner from '../../ui/Banner';
@@ -55,6 +55,12 @@ export default function OverviewTab({ app, onRefresh }) {
   };
 
   const handleStandardize = () => startStandardize(app.id, app.name);
+
+  const handleOpenXcode = () => api.openAppInXcode(app.id, { silent: true })
+    .then(result => {
+      if (result?.success) toast.success(`Opening ${app.name} in Xcode`);
+    })
+    .catch(() => null);
 
   const handleDetectIcon = async () => {
     setDetectingIcon(true);
@@ -304,6 +310,15 @@ export default function OverviewTab({ app, onRefresh }) {
         >
           <FolderOpen size={14} /> Open Folder
         </button>
+        {NON_PM2_TYPES.has(app.type) && (
+          <button
+            onClick={handleOpenXcode}
+            className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded-lg text-xs flex items-center gap-1"
+            aria-label={`Open ${app.name} in Xcode`}
+          >
+            <Smartphone size={14} /> Open in Xcode
+          </button>
+        )}
         <button
           onClick={handleUpdate}
           disabled={isOperating || restarting}

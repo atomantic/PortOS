@@ -17,8 +17,8 @@ This record captures the bounded follow-up audit named by [#7797](https://github
 | Settings Backup | `client/src/components/settings/BackupTab.test.jsx` | Destination saves, restore dry-run/confirmation, integrity/schema failures, saved-state Run Now gates, degraded status, and resolved schedules have explicit contracts. | Validate status/action priority, sticky action-bar geometry, and keyboard/error visibility. |
 | Brain Threads | `client/src/components/brain/tabs/ThreadsTab.test.jsx`, `client/src/pages/Brain.test.jsx` | Status/tag/search filters and selected thread are URL-backed; drawer selection, in-place completion, race handling, and icon navigation are covered. | Add an unavailable/retry state that cannot be mistaken for “Nothing tracked yet,” then validate the collection at narrow widths. |
 | Brain Notes | `client/src/components/brain/tabs/NotesTab.test.jsx`, `client/src/pages/Brain.test.jsx` | Touch targets, force-save escalation, request lifetimes, stale selection protection, and Brain icon navigation are covered. | Add URL-backed vault/note selection and truthful vault/scan/read/delete failures without weakening force-save or draft behavior. |
-| Apps list | `client/src/pages/Apps.test.jsx` | Row action hierarchy, Manage routing, archive query state, lifecycle feedback, operation banners, wrapping paths, and sprint-ticket failure/retry behavior are covered. | Keep the collection row-first, route deep diagnostics to detail, and distinguish unavailable from genuinely empty. |
-| App detail | `client/src/components/apps/AppDetailView.test.jsx`, `client/src/pages/Apps.test.jsx` | Detail route lifecycle handling, old/current request races, feature-tab visibility, direct disabled-feature URLs, unique tab icons, and identity/action placement are covered. | Distinguish a failed detail request from a confirmed missing app and validate detail tab/Drawer geometry across widths. |
+| Apps list | `client/src/pages/Apps.test.jsx` | Row action hierarchy, Manage routing, archive query state, lifecycle feedback, operation banners, wrapping paths, collection-first composition, and unavailable-versus-empty/retry behavior are covered. | Validate the collection hierarchy, stale-refresh warning, and action geometry across the matrix widths. |
+| App detail | `client/src/components/apps/AppDetailView.test.jsx`, `client/src/pages/Apps.test.jsx` | Detail route lifecycle handling, old/current request races, feature-tab visibility, direct disabled-feature URLs, unique tab icons, identity/action placement, and unavailable-versus-404/retry behavior are covered. | Validate detail tab/Drawer geometry across widths. |
 
 ## Surface contracts
 
@@ -51,6 +51,12 @@ Across each width, test light and dark themes, keyboard focus, copied canonical 
 
 1. **Settings General and Backup** — `GeneralTab` and `BackupTab` have valuable persistence and recovery contracts, but the audit needs a task-first composition and responsive evidence. Implement in [#7858](https://github.com/atomantic/PortOS/issues/7858).
 2. **Brain Threads and Notes** — Threads list failure currently lands on empty copy, and Notes selection/error handling is not consistently shareable or truthful. Implement in [#7859](https://github.com/atomantic/PortOS/issues/7859). The follow-up also covers the observed note-delete failure path that can show success after a failed request.
-3. **Apps list and detail** — the collection mixes deep diagnostics into rows, the list request failure looks empty, and detail failure looks missing. Implement in [#7860](https://github.com/atomantic/PortOS/issues/7860).
+3. **Apps list and detail** — the collection mixed deep diagnostics into rows, the list request failure looked empty, and detail failure looked missing. Implemented in [#7860](https://github.com/atomantic/PortOS/issues/7860); the source and rendered tests now cover the collection-first hierarchy and truthful unavailable/empty/missing states.
+
+### Apps follow-up result (#7860)
+
+The shipped slice keeps `/apps` focused on collection identity, health, primary lifecycle/launch actions, Manage, archive, and removal. Deep repository, configuration, PM2, and JIRA diagnostics remain available from the route-backed detail workspace. A failed collection read is no longer presented as an empty collection, a failed refresh preserves the last loaded rows with an explicit warning, and detail transport/server failures are distinct from confirmed 404s.
+
+The evidence is limited to source and synthetic rendered tests. The required 1,920/1,440/1,024/390/320 viewport matrix remains a browser-validation task and is not claimed by this record.
 
 These are independently shippable slices. They preserve the adopted icon navigation, route contracts, optional-feature behavior, privacy boundary, explicit save/run/restore gates, and synthetic-only validation while narrowing each later change to a concrete surface.
