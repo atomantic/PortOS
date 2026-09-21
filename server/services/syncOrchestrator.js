@@ -10,6 +10,7 @@ import { access } from 'fs/promises';
 import { join } from 'path';
 import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite, writeFileGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { logFailureWithStack } from '../lib/failureLogging.js';
 import { instanceEvents } from './instanceEvents.js';
 import { getPeers, resolveEffectiveCategories, updatePeer } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
@@ -181,9 +182,20 @@ export async function getSyncStatus({ includeChecksums = false, forPeer = null }
   // us, so the requesting peer can render an outbound "N to push" count without
   // us tracking its local max. Null when we've never synced that peer.
   if (isNonBlankStr(forPeer)) {
-    result.cursorForYou = cursors[forPeer] ?? null;
+    result.cursorForYou = redactLocalCursorState(cursors[forPeer] ?? null);
   }
   return result;
+}
+
+// Our own last-failure string is LOCAL diagnostics: it carries whatever an
+// exception on this machine happened to say (paths, hostnames, DB errors), and
+// `/api/instances/sync-status` is reachable by any tailnet machine, not just a
+// peer in our list. The self-view (`cursors`, served to our own browser) keeps
+// it; the peer-facing `cursorForYou` projection drops it.
+function redactLocalCursorState(cursor) {
+  if (!cursor || typeof cursor !== 'object') return cursor;
+  const { lastSyncError, lastSyncSucceeded, ...rest } = cursor;
+  return rest;
 }
 
 // --- Sync logic ---
@@ -365,7 +377,7 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
         const ahead = Array.isArray(err.diff?.ahead) ? err.diff.ahead : [];
         await recordPeerSchemaGap(peerId, 'catalog', {
           ahead, behind: [], senderPortosVersion: data?.portosMeta?.portosVersion ?? null,
-        }).catch((e) => console.log(`⚠️ syncOrchestrator: persist catalog schema gap failed: ${e.message}`));
+        }).catch((e) => logFailureWithStack('⚠️ syncOrchestrator: persist catalog schema gap failed', e));
         break;
       }
       throw err;
@@ -404,7 +416,7 @@ async function syncCatalogFromPeer(peer, peerId, cursor) {
   // block this cycle.
   if (!blockedBySchema) {
     await clearPeerSchemaGap(peerId, 'catalog')
-      .catch((err) => console.log(`⚠️ syncOrchestrator: clear catalog schema gap failed: ${err.message}`));
+      .catch((err) => logFailureWithStack('⚠️ syncOrchestrator: clear catalog schema gap failed', err));
   }
 
   return { catalogSeqs, totalApplied, blockedBySchema };
@@ -532,7 +544,7 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   });
   if (result.blockedBySchema) {
     await recordPeerSchemaGap(peerId, category, result.blockedBySchema)
-      .catch((err) => console.log(`⚠️ syncOrchestrator: persist schema gap failed: ${err.message}`));
+      .catch((err) => logFailureWithStack('⚠️ syncOrchestrator: persist schema gap failed', err));
     // Don't advance the cached checksum — when the user upgrades, the
     // category will look "changed" again and we'll re-try the apply.
     return { totalApplied: 0, checksum: null, blockedBySchema: result.blockedBySchema };
@@ -547,7 +559,7 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   // either upgraded or the older check was transient. Best-effort; failures
   // don't fail the apply (we already merged successfully).
   await clearPeerSchemaGap(peerId, category)
-    .catch((err) => console.log(`⚠️ syncOrchestrator: clear schema gap failed: ${err.message}`));
+    .catch((err) => logFailureWithStack('⚠️ syncOrchestrator: clear schema gap failed', err));
 
   // Cache the MANIFEST's checksum when we took the per-slot path: it is the
   // state we actually diffed against and converged to. The snapshot's own
@@ -731,6 +743,29 @@ export async function syncWithPeer(peer) {
   // Track whether the normal `complete` emit fired, so the `finally` can settle
   // a card whose sync threw mid-flight instead of leaving it spinning forever.
   let completed = false;
+  // Set when the cycle is known to have failed outright, so the `finally`'s
+  // fallback `complete` emit carries the reason instead of a silent zero.
+  let lastSyncErrorEmit = null;
+
+  // Per-cycle failure ledger (#7943). A snapshot category that throws is caught
+  // per-category so one bad category can't abort the rest — which used to make
+  // a fully-broken peer indistinguishable from a healthy one, because the
+  // consolidated cursor write stamped `lastSyncAt` unconditionally afterwards.
+  // We now count what we ATTEMPTED against what FAILED: only a cycle in which
+  // every attempted category failed withholds the timestamp and records the
+  // error. A cycle that attempted nothing (all categories off, or a non-Postgres
+  // install whose enabled categories all need Postgres) is a healthy no-op, not
+  // a failure.
+  let attemptedCategories = 0;
+  const categoryFailures = [];
+  const recordCategoryFailure = (category, err) => {
+    categoryFailures.push(`${category}: ${err?.message ?? String(err)}`);
+  };
+  // Null unless EVERY attempted category failed — the cursor write and the
+  // terminal `complete` emit must agree on that verdict.
+  const cycleFailure = () => (attemptedCategories > 0 && categoryFailures.length === attemptedCategories
+    ? summarizeSyncFailure(categoryFailures)
+    : null);
 
   // Everything after acquiring the lock runs inside the try so the `finally`
   // ALWAYS releases `syncingPeers` and emits a terminal `complete` — even if
@@ -762,6 +797,7 @@ export async function syncWithPeer(peer) {
     // --- Brain sync (delta-based) ---
     let brainResult = { brainSeq: cursor.brainSeq ?? 0, totalApplied: 0 };
     if (categories.brain) {
+      attemptedCategories += 1;
       brainResult = await syncBrainFromPeer(peer, cursor);
       reportApplied('brain', brainResult.totalApplied);
     }
@@ -771,6 +807,7 @@ export async function syncWithPeer(peer) {
     if (categories.memory) {
       const isPostgres = getBackendName() === 'postgres';
       if (isPostgres) {
+        attemptedCategories += 1;
         memoryResult = await syncMemoryFromPeer(peer, cursor);
         reportApplied('memory', memoryResult.totalApplied);
       }
@@ -781,6 +818,7 @@ export async function syncWithPeer(peer) {
     if (categories.catalog) {
       const isPostgres = getBackendName() === 'postgres';
       if (isPostgres) {
+        attemptedCategories += 1;
         catalogResult = await syncCatalogFromPeer(peer, peerId, cursor);
         reportApplied('catalog', catalogResult.totalApplied);
       }
@@ -808,11 +846,13 @@ export async function syncWithPeer(peer) {
     const cachedChecksums = cursor.checksums || {};
 
     if (enabledDataCats.length > 0) {
+      attemptedCategories += enabledDataCats.length;
       const settled = await Promise.allSettled(
         enabledDataCats.map(cat =>
           syncDataCategoryFromPeer(peer, peerId, cat, cachedChecksums, scopedInstanceId)
             .catch(err => {
-              console.error(`⚠️ ${cat} sync with ${peer.name} failed: ${err.message}`);
+              logFailureWithStack(`⚠️ ${cat} sync with ${peer.name} failed`, err);
+              recordCategoryFailure(cat, err);
               return { totalApplied: 0, checksum: null };
             })
         )
@@ -853,7 +893,7 @@ export async function syncWithPeer(peer) {
       for (const [cat, result] of Object.entries(dataCategoryResults)) {
         if (result.checksum) cursors[peerId].checksums[cat] = result.checksum;
       }
-      cursors[peerId].lastSyncAt = new Date().toISOString();
+      applySyncOutcome(cursors[peerId], cycleFailure());
     });
 
     // Log summary
@@ -872,15 +912,65 @@ export async function syncWithPeer(peer) {
       + catalogResult.totalApplied
       + Object.values(dataCategoryResults).reduce((sum, r) => sum + (r?.totalApplied || 0), 0);
     completed = true;
-    emitSyncProgress({ phase: 'complete', peerId, totalApplied });
+    // The card must not animate to "done" on a cycle where every category
+    // failed — `error` is what lets it render the failure instead (#7943).
+    emitSyncProgress({ phase: 'complete', peerId, totalApplied, error: cycleFailure() });
 
     return { brain: brainResult, memory: memoryResult, catalog: catalogResult, ...dataCategoryResults };
+  } catch (err) {
+    // A delta category (brain/memory/catalog) throws straight out of the body,
+    // so the consolidated cursor write above never runs and `lastSyncAt` is
+    // correctly left alone — but nothing recorded WHY. Persist the reason on
+    // the peer cursor before re-throwing, best-effort: a cursor write that
+    // itself fails must not mask the original error.
+    lastSyncErrorEmit = summarizeSyncFailure([...categoryFailures, err?.message ?? String(err)]);
+    await withCursors((cursors) => {
+      if (!cursors[peerId]) cursors[peerId] = {};
+      applySyncOutcome(cursors[peerId], lastSyncErrorEmit);
+    }).catch((writeErr) => logFailureWithStack('⚠️ syncOrchestrator: persist peer sync failure state failed', writeErr));
+    throw err;
   } finally {
     syncingPeers.delete(peerId);
     // If the sync threw before the normal complete emit, still settle the card
     // out of its "syncing" state (a stuck spinner is worse than a silent stop).
-    if (!completed) emitSyncProgress({ phase: 'complete', peerId, totalApplied: 0 });
+    if (!completed) emitSyncProgress({ phase: 'complete', peerId, totalApplied: 0, error: lastSyncErrorEmit });
   }
+}
+
+// Keep the persisted failure string bounded — cursors.json is rewritten every
+// sync cycle, and an unbounded stack-carrying message would grow it without
+// limit. The stack already went to stderr via logFailureWithStack; this is the
+// one-line version the peer card renders.
+const SYNC_ERROR_MAX_CHARS = 300;
+
+function summarizeSyncFailure(messages) {
+  const joined = messages.filter(Boolean).join('; ');
+  if (!joined) return null;
+  return joined.length > SYNC_ERROR_MAX_CHARS
+    ? `${joined.slice(0, SYNC_ERROR_MAX_CHARS - 1)}…`
+    : joined;
+}
+
+/**
+ * Stamp the success/failure half of a per-peer cursor.
+ *
+ * `lastSyncAt` is a SUCCESS marker, not a "we tried" marker — advancing it on a
+ * cycle where every category failed is exactly what made a persistently broken
+ * peer read as healthy (#7943). A failed cycle leaves the previous timestamp
+ * in place (still true: that IS when we last synced) and records the reason.
+ *
+ * @param {object} cursor - The per-peer cursor record, mutated in place
+ * @param {string|null} error - The cycle's failure summary, or null when it succeeded
+ */
+function applySyncOutcome(cursor, error) {
+  if (error) {
+    cursor.lastSyncSucceeded = false;
+    cursor.lastSyncError = error;
+    return;
+  }
+  cursor.lastSyncSucceeded = true;
+  delete cursor.lastSyncError;
+  cursor.lastSyncAt = new Date().toISOString();
 }
 
 /**
@@ -969,7 +1059,7 @@ export function initSyncOrchestrator() {
   peerOnlineHandler = (peer) => {
     if (!hasAnySyncEnabled(peer)) return;
     syncWithPeer(peer).catch(err => {
-      console.error(`❌ Sync with ${peer.name} failed: ${err.message}`);
+      logFailureWithStack(`❌ Sync with ${peer.name} failed`, err);
     });
   };
   instanceEvents.on('peer:online', peerOnlineHandler);
@@ -980,20 +1070,20 @@ export function initSyncOrchestrator() {
   // sharing a tick keeps the wake-up cost flat.
   syncTimer = setInterval(() => {
     syncAllPeers().catch(err => {
-      console.error(`❌ Periodic sync failed: ${err.message}`);
+      logFailureWithStack('❌ Periodic sync failed', err);
     });
     // The outer `.catch` is non-optional — runTombstoneSweep is async and
     // can reject BEFORE its inner .catch fires (e.g. if the dynamic import
     // of tombstoneGc.js itself fails). An unhandled rejection on the
     // interval tick would crash the Node process under default settings.
     runTombstoneSweep().catch(err => {
-      console.error(`❌ Tombstone sweep tick failed: ${err.message}`);
+      logFailureWithStack('❌ Tombstone sweep tick failed', err);
     });
     // Brain entity tombstones ride the same tick but are gated to their much
     // slower grace-period cadence. The outer catch owns unexpected failures
     // (such as a rejected dynamic import) so the interval never leaks one.
     runBrainTombstoneSweep().catch(err => {
-      console.error(`❌ Brain tombstone sweep tick failed: ${err.message}`);
+      logFailureWithStack('❌ Brain tombstone sweep tick failed', err);
     });
   }, SYNC_INTERVAL_MS);
 
@@ -1025,7 +1115,7 @@ async function runTombstoneSweep() {
   const result = await import('./sharing/tombstoneGc.js')
     .then(({ sweepTombstones }) => sweepTombstones())
     .catch((err) => {
-      console.error(`❌ Tombstone sweep failed: ${err.message}`);
+      logFailureWithStack('❌ Tombstone sweep failed', err);
       lastTombstoneSweepAt = 0;
       return null;
     });
@@ -1057,7 +1147,7 @@ async function runBrainTombstoneSweep() {
   const result = await import('./brainTombstoneGc.js')
     .then(({ sweepBrainTombstones }) => sweepBrainTombstones())
     .catch((err) => {
-      console.error(`❌ Brain tombstone sweep failed: ${err.message}`);
+      logFailureWithStack('❌ Brain tombstone sweep failed', err);
       return null;
     });
   if (result && result.pruned > 0) {

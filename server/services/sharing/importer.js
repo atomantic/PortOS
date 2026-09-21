@@ -28,6 +28,7 @@ import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { PATHS, copyFileGuarded, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { isSafeRecordId } from '../../lib/validation.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { getBucket, bucketBlobPath, bucketBlobSidecarPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
 import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
@@ -134,7 +135,7 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
       universeName,
       description: payload.description || '',
     }).catch((err) => {
-      console.log(`⚠️ sharing.importer: findOrCreateUniverseCollection failed: ${err.message}`);
+      logFailureWithStack('⚠️ sharing.importer: findOrCreateUniverseCollection failed', err);
       return null;
     });
   } else {
@@ -167,7 +168,7 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
         universeName: localUniverse.name,
         description: payload.description || '',
       }).catch((err) => {
-        console.log(`⚠️ sharing.importer: findOrCreateUniverseCollection (series re-route) failed: ${err.message}`);
+        logFailureWithStack('⚠️ sharing.importer: findOrCreateUniverseCollection (series re-route) failed', err);
         return null;
       });
     } else {
@@ -181,7 +182,7 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
         seriesName,
         description: payload.description || '',
       }).catch((err) => {
-        console.log(`⚠️ sharing.importer: findOrCreateSeriesCollection failed: ${err.message}`);
+        logFailureWithStack('⚠️ sharing.importer: findOrCreateSeriesCollection failed', err);
         return null;
       });
     }
@@ -197,7 +198,7 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
     }
     const result = await addCollectionItem(collection.id, item).catch((err) => {
       if (err?.code === COLLECTION_ERR_DUPLICATE) return null;
-      console.log(`⚠️ sharing.importer: addCollectionItem failed for ${item.ref}: ${err.message}`);
+      logFailureWithStack(`⚠️ sharing.importer: addCollectionItem failed for ${item.ref}`, err);
       return null;
     });
     if (result) added += 1;
@@ -236,7 +237,7 @@ function manifestAssetRefs(manifest) {
     const entry = { kind, ref: filename };
     if (raw.hash !== undefined && raw.hash !== null) {
       if (!isHexHash(raw.hash)) {
-        console.log(`⚠️ sharing.importer: dropping asset ref with invalid hash: ${kind}/${filename}`);
+        console.error(`⚠️ sharing.importer: dropping asset ref with invalid hash: ${kind}/${filename}`);
         return;
       }
       entry.hash = raw.hash;
@@ -309,7 +310,7 @@ async function copyAssetsLocally(bucketPath, assetRefs) {
       const sidecarTarget = join(targetDir, imageSidecarName(filename));
       if (!existsSync(sidecarTarget)) await copyFileGuarded(sidecarPath, sidecarTarget);
     }
-    if (kind === 'image') await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename })).catch(err => console.error(`❌ Media index imported asset refresh: ${err.message}`));
+    if (kind === 'image') await import('../mediaAssetIndex/index.js').then(m => m.indexImage({ filename })).catch(err => logFailureWithStack('❌ Media index imported asset refresh', err));
   }));
   return { copied, available, missing };
 }
@@ -543,7 +544,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
           // Unexpected failure: the record did NOT land. Record it so the
           // manifest stays pending and retries — incrementing `applied` and
           // advancing the cursor here would silently drop the record.
-          console.log(`⚠️ sharing.importer: insertWithId(${kind}=${record.id}) failed: ${err.message}`);
+          logFailureWithStack(`⚠️ sharing.importer: insertWithId(${kind}=${record.id}) failed`, err);
           failedInserts.push(`${kind}:${record.id}`);
           return false;
         });
@@ -655,7 +656,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     }
 
     const r = await applyLegacySeriesCanonToUniverse(s).catch((err) => {
-      console.log(`⚠️ sharing.importer: legacy series canon migration for ${s.id} failed: ${err.message}`);
+      logFailureWithStack(`⚠️ sharing.importer: legacy series canon migration for ${s.id} failed`, err);
       return null;
     });
     if (!r) {
@@ -668,7 +669,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       continue;
     }
     if (r.skipped === 'missing-universe') {
-      console.log(`⚠️ sharing.importer: skipping series ${s.id} merge — missing universe ${r.universeId}`);
+      console.error(`⚠️ sharing.importer: skipping series ${s.id} merge — missing universe ${r.universeId}`);
       skipSeriesMerge.add(s.id);
       if (r.universeId) legacyCanonPendingUniverses.push(r.universeId);
       continue;
@@ -720,7 +721,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     const review = await readJSONFile(bucketRecordPath(bucket.path, 'reviews', s.id), null, { logError: false });
     if (review) {
       await mergeReviewFromSync(s.id, review).catch((err) => {
-        console.log(`⚠️ sharing.importer: manuscript-review merge for ${s.id} failed: ${err.message}`);
+        logFailureWithStack(`⚠️ sharing.importer: manuscript-review merge for ${s.id} failed`, err);
         reviewMergeFailures.push(s.id);
       });
     }
@@ -741,7 +742,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     const outline = await readJSONFile(bucketRecordPath(bucket.path, 'outlines', s.id), null, { logError: false });
     if (outline) {
       await mergeOutlineFromSync(s.id, outline).catch((err) => {
-        console.log(`⚠️ sharing.importer: reverse-outline merge for ${s.id} failed: ${err.message}`);
+        logFailureWithStack(`⚠️ sharing.importer: reverse-outline merge for ${s.id} failed`, err);
         outlineMergeFailures.push(s.id);
       });
     }
@@ -789,7 +790,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       ...inboundSub,
       lastManifestId: manifest.id,
     }).catch((err) => {
-      console.log(`⚠️ sharing.importer: adopt subscription failed for ${inboundSub.recordKind}/${inboundSub.recordId}: ${err.message}`);
+      logFailureWithStack(`⚠️ sharing.importer: adopt subscription failed for ${inboundSub.recordKind}/${inboundSub.recordId}`, err);
       return null;
     });
   }
@@ -974,7 +975,7 @@ export async function processManifest(bucketId, manifestFilename) {
       producedByVersion: manifest.producedByVersion || 'unknown',
       source: manifest.source || 'unknown',
     });
-    console.log(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} schemaVersion=${remoteVersion} > local=${SHARING_SCHEMA_VERSION} — refusing import (peer producedBy=${manifest.producedByVersion || 'unknown'})`);
+    console.error(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} schemaVersion=${remoteVersion} > local=${SHARING_SCHEMA_VERSION} — refusing import (peer producedBy=${manifest.producedByVersion || 'unknown'})`);
     return { skipped: true, reason: 'incompatible-version', remoteVersion, localVersion: SHARING_SCHEMA_VERSION };
   }
   // PORTOS SCHEMA-VERSION GATE — even when the share-protocol schemaVersion
@@ -1086,7 +1087,7 @@ export async function processManifest(bucketId, manifestFilename) {
   if (collectionTombstonedUniverse) {
     await markProcessed(bucketId, manifestFilename, manifest.id);
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} collectionUniverse=${collectionTombstonedUniverse} is deleted locally — ${outcome.collectionItemsDeferred ?? 0} item(s) skipped; restore universe to import`);
+    console.error(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} collectionUniverse=${collectionTombstonedUniverse} is deleted locally — ${outcome.collectionItemsDeferred ?? 0} item(s) skipped; restore universe to import`);
     return { processed: true, manifest, outcome };
   }
   // Each row is checked once for "is this still pending?", assigned onto
@@ -1185,7 +1186,7 @@ export async function processBacklog(bucketId) {
   const bucket = await getBucket(bucketId);
   const localInstanceId = await getInstanceId().catch(() => null);
   await pruneSelfAuthoredInbox(bucket, localInstanceId).catch((err) => {
-    console.log(`⚠️ sharing.importer: pruneSelfAuthoredInbox failed: ${err.message}`);
+    logFailureWithStack('⚠️ sharing.importer: pruneSelfAuthoredInbox failed', err);
   });
   const manifestsDir = join(bucket.path, 'manifests');
   if (!existsSync(manifestsDir)) return { processed: 0 };
@@ -1195,7 +1196,7 @@ export async function processBacklog(bucketId) {
   let processed = 0;
   for (const f of filenames) {
     const res = await processManifest(bucketId, f).catch((err) => {
-      console.log(`⚠️ sharing.importer: processManifest failed for ${f}: ${err.message}`);
+      logFailureWithStack(`⚠️ sharing.importer: processManifest failed for ${f}`, err);
       return null;
     });
     if (res?.processed) processed++;

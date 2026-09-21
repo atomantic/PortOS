@@ -119,7 +119,7 @@ vi.mock('./brainTombstoneGc.js', () => ({
   sweepBrainTombstones: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
 
-import { readJSONFile } from '../lib/fileUtils.js';
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { sweepTombstones } from './sharing/tombstoneGc.js';
 import { sweepBrainTombstones } from './brainTombstoneGc.js';
 import { getPeers } from './instances.js';
@@ -687,6 +687,162 @@ describe('syncOrchestrator', () => {
     });
   });
 
+  // #7943: a persistently broken peer used to be indistinguishable from a
+  // healthy one — every failure path logged to stdout with only the message,
+  // and the consolidated cursor write stamped `lastSyncAt` whether or not
+  // anything actually synced.
+  describe('failure visibility (#7943)', () => {
+    const cursorWrites = () => atomicWrite.mock.calls
+      .filter(([path]) => String(path).includes('instances_sync_cursors'))
+      .map(([, payload]) => payload);
+    const lastCursor = () => cursorWrites().at(-1)?.['peer-inst-1'];
+    const completeEvent = () => instanceEvents.emit.mock.calls
+      .filter(([event]) => event === 'sync:progress')
+      .map(([, payload]) => payload)
+      .find((p) => p.phase === 'complete');
+
+    // Serve a category snapshot the sync will try to APPLY. A transport failure
+    // is NOT a failure for these purposes — fetchPeer degrades it to null and an
+    // unreachable peer is a legitimately quiet no-op. What must be visible is an
+    // apply that throws.
+    const serveSnapshots = () => mockFetch.mockImplementation(async (url) => {
+      if (url.includes('/checksum')) return { ok: true, json: async () => ({ checksum: 'remote' }) };
+      if (url.includes('/snapshot')) return { ok: true, json: async () => ({ data: { instances: {} }, checksum: 'remote' }) };
+      return { ok: true, json: async () => ({}) };
+    });
+
+    let dataSync;
+    let errorSpy;
+    beforeEach(async () => {
+      dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['usage']);
+      dataSync.getChecksum.mockResolvedValue({ checksum: 'local' });
+      dataSync.applyRemote.mockResolvedValue({ applied: true, count: 1 });
+      errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      serveSnapshots();
+    });
+
+    afterEach(() => errorSpy.mockRestore());
+
+    it('logs a failed category to stderr WITH a stack frame', async () => {
+      dataSync.applyRemote.mockRejectedValue(new Error('peer refused the usage snapshot'));
+
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+
+      const logged = errorSpy.mock.calls.find(([msg]) => String(msg).includes('usage sync with test-peer failed'));
+      expect(logged).toBeTruthy();
+      // The stack rides as a second argument (logFailureWithStack), so the
+      // failure names a frame instead of collapsing to one message-only line.
+      expect(String(logged[1])).toContain('Error: peer refused the usage snapshot');
+      expect(String(logged[1])).toMatch(/\n\s+at /);
+    });
+
+    it('records lastSyncError and does NOT advance lastSyncAt when every attempted category fails', async () => {
+      readJSONFile.mockImplementation(async () => ({
+        'peer-inst-1': { lastSyncAt: '2026-01-01T00:00:00.000Z' },
+      }));
+      dataSync.applyRemote.mockRejectedValue(new Error('peer DB was rebuilt'));
+
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+
+      const cursor = lastCursor();
+      expect(cursor.lastSyncSucceeded).toBe(false);
+      expect(cursor.lastSyncError).toContain('peer DB was rebuilt');
+      // The stale timestamp stays exactly as it was — it IS when we last
+      // successfully synced. Advancing it is what made the peer read healthy.
+      expect(cursor.lastSyncAt).toBe('2026-01-01T00:00:00.000Z');
+    });
+
+    it('carries the failure on the terminal sync:progress complete so the card does not animate to done', async () => {
+      dataSync.applyRemote.mockRejectedValue(new Error('inbox disk full'));
+
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+
+      expect(completeEvent().error).toContain('inbox disk full');
+    });
+
+    it('clears lastSyncError and advances lastSyncAt on a clean cycle', async () => {
+      readJSONFile.mockImplementation(async () => ({
+        'peer-inst-1': {
+          lastSyncAt: '2026-01-01T00:00:00.000Z',
+          lastSyncError: 'peer DB was rebuilt',
+          lastSyncSucceeded: false,
+        },
+      }));
+
+      await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
+
+      const cursor = lastCursor();
+      expect(cursor.lastSyncSucceeded).toBe(true);
+      expect(cursor).not.toHaveProperty('lastSyncError');
+      expect(cursor.lastSyncAt).not.toBe('2026-01-01T00:00:00.000Z');
+      expect(completeEvent().error).toBeNull();
+    });
+
+    it('treats a partial failure as a successful cycle — one live category still advances the clock', async () => {
+      dataSync.getSupportedCategories.mockReturnValue(['goals', 'usage']);
+      dataSync.applyRemote.mockImplementation(async (category) => {
+        if (category === 'goals') throw new Error('goals is broken');
+        return { applied: true, count: 1 };
+      });
+      readJSONFile.mockImplementation(async () => ({
+        'peer-inst-1': { lastSyncAt: '2026-01-01T00:00:00.000Z' },
+      }));
+
+      await syncWithPeer({ ...mockPeer, syncCategories: { goals: true, usage: true } });
+
+      const cursor = lastCursor();
+      expect(cursor.lastSyncSucceeded).toBe(true);
+      expect(cursor).not.toHaveProperty('lastSyncError');
+      expect(cursor.lastSyncAt).not.toBe('2026-01-01T00:00:00.000Z');
+    });
+
+    it('persists lastSyncError when a delta category throws straight out of the sync body', async () => {
+      // brain/memory/catalog reject out of syncWithPeer rather than being caught
+      // per-category, so the consolidated cursor write never runs — nothing used
+      // to record WHY the peer stopped syncing.
+      readJSONFile.mockImplementation(async () => ({
+        'peer-inst-1': { brainSeq: 7, lastSyncAt: '2026-01-01T00:00:00.000Z' },
+      }));
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/brain/sync')) {
+          return { ok: true, json: async () => ({ changes: [{ id: 'b1' }], maxSeq: 8, hasMore: false }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      });
+      applyBrainChanges.mockRejectedValue(new Error('brain log unreadable'));
+
+      await expect(syncWithPeer({ ...mockPeer, syncCategories: { brain: true } }))
+        .rejects.toThrow('brain log unreadable');
+
+      const cursor = lastCursor();
+      expect(cursor.lastSyncSucceeded).toBe(false);
+      expect(cursor.lastSyncError).toContain('brain log unreadable');
+      expect(cursor.lastSyncAt).toBe('2026-01-01T00:00:00.000Z');
+      // The pre-existing cursor is preserved, not clobbered by the failure write.
+      expect(cursor.brainSeq).toBe(7);
+    });
+
+    it('withholds our local failure string from the peer-facing cursorForYou projection', async () => {
+      // /api/instances/sync-status is reachable by any tailnet machine, and the
+      // stored message is whatever an exception on THIS host happened to say.
+      readJSONFile.mockImplementation(async () => ({
+        'peer-A': {
+          brainSeq: 88,
+          lastSyncAt: '2026-01-01T00:00:00.000Z',
+          lastSyncError: 'ENOENT: /Users/someone/private/path',
+          lastSyncSucceeded: false,
+        },
+      }));
+
+      const status = await getSyncStatus({ forPeer: 'peer-A' });
+
+      expect(status.cursorForYou).toEqual({ brainSeq: 88, lastSyncAt: '2026-01-01T00:00:00.000Z' });
+      // The self-view (our own browser, which renders the peer card) keeps it.
+      expect(status.cursors['peer-A'].lastSyncError).toBe('ENOENT: /Users/someone/private/path');
+    });
+  });
+
   describe('sync:progress events', () => {
     it('emits start → applied → complete around a sync that moves records', async () => {
       mockFetch
@@ -719,7 +875,7 @@ describe('syncOrchestrator', () => {
         .filter(([event]) => event === 'sync:progress')
         .map(([, payload]) => payload);
       expect(progress).toContainEqual({ phase: 'start', peerId: 'peer-inst-1' });
-      expect(progress).toContainEqual({ phase: 'complete', peerId: 'peer-inst-1', totalApplied: 0 });
+      expect(progress).toContainEqual({ phase: 'complete', peerId: 'peer-inst-1', totalApplied: 0, error: expect.any(String) });
 
       // Lock released: a subsequent sync is NOT short-circuited by syncingPeers.
       mockFetch.mockResolvedValue({ ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) });
@@ -739,7 +895,7 @@ describe('syncOrchestrator', () => {
         .map(([, payload]) => payload);
       const completes = progress.filter(p => p.phase === 'complete');
       // Exactly one complete, and no spurious second one from the finally guard.
-      expect(completes).toEqual([{ phase: 'complete', peerId: 'peer-inst-1', totalApplied: 0 }]);
+      expect(completes).toEqual([{ phase: 'complete', peerId: 'peer-inst-1', totalApplied: 0, error: null }]);
       // No `applied` events when nothing moved.
       expect(progress.some(p => p.phase === 'applied')).toBe(false);
     });

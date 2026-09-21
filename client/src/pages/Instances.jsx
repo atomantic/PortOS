@@ -868,6 +868,15 @@ function SyncStatusSection({ peer, syncStatus, syncing = false }) {
           <span className="text-[10px] text-gray-600 ml-auto">{timeAgo(cursor.lastSyncAt)}</span>
         )}
       </div>
+      {/* A cycle in which every category failed leaves lastSyncAt at its old
+          value and records why (#7943) — without this the card read "synced N
+          seconds ago" while cross-machine sync had been broken for weeks. */}
+      {cursor?.lastSyncError && (
+        <div role="status" className="flex items-start gap-1.5 mb-1.5 text-[10px] text-port-error" title={cursor.lastSyncError}>
+          <AlertCircle size={12} className="shrink-0 mt-px" />
+          <span className="truncate">Last sync failed: {cursor.lastSyncError}</span>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
         {showBrain && (
           <SyncStatusBadge
@@ -1175,7 +1184,9 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
         // (`handleSync`) does its own authoritative refetch on the awaited POST,
         // so a no-op manual sync still settles; this branch covers the
         // records-moved case for both manual and background syncs.
-        if (payload.totalApplied > 0) onRefresh();
+        // A failed cycle applies nothing, so the totalApplied gate alone would
+        // never pull the new `lastSyncError` onto the card (#7943).
+        if (payload.totalApplied > 0 || payload.error) onRefresh();
       }
       // `applied` events are informational (and drive the server-side log) —
       // the global `syncing` flag already animates every badge, so the client

@@ -15,6 +15,7 @@ import { readdir } from 'fs/promises';
 import { createHash } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, sha256File, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
@@ -112,7 +113,7 @@ export async function buildCosHistoryManifest() {
     }
   }
   if (truncated) {
-    console.log(`⚠️ peerSync: cos-history manifest hit the ${COS_HISTORY_MANIFEST_CAP}-entry cap — truncating (some archives won't federate; pagination is a follow-up)`);
+    console.error(`⚠️ peerSync: cos-history manifest hit the ${COS_HISTORY_MANIFEST_CAP}-entry cap — truncating (some archives won't federate; pagination is a follow-up)`);
   }
   // Deterministic order so the manifestHash converges across machines regardless
   // of readdir order. (date, agentId already sorted above; sort by file too.)
@@ -155,14 +156,14 @@ async function pullMissingCosArchives(senderInstanceId, missing) {
   if (!isStr(senderInstanceId) || !Array.isArray(missing) || missing.length === 0) return [];
   const peer = await findPeerById(senderInstanceId);
   if (!peer) {
-    console.log(`⚠️ peerSync: can't pull cos archives — peer ${senderInstanceId} not in registry`);
+    console.error(`⚠️ peerSync: can't pull cos archives — peer ${senderInstanceId} not in registry`);
     return [];
   }
   const base = peerBaseUrl(peer);
   const landed = [];
   for (const entry of missing) {
     const pair = await pullOneCosArchiveFile(peer, base, entry).catch((err) => {
-      console.log(`⚠️ peerSync: cos-archive pull ${entry?.agentId}/${entry?.file} from ${peer.name || senderInstanceId} failed: ${err.message}`);
+      logFailureWithStack(`⚠️ peerSync: cos-archive pull ${entry?.agentId}/${entry?.file} from ${peer.name || senderInstanceId} failed`, err);
       return null;
     });
     if (pair) landed.push(pair);
@@ -186,7 +187,7 @@ async function pullOneCosArchiveFile(peer, base, entry) {
     // Integrity: discard a corrupt/wrong download instead of writing it.
     const bufHash = createHash('sha256').update(buffer).digest('hex');
     if (bufHash !== sha256) {
-      console.log(`⚠️ peerSync: cos archive ${safeLabel} hash mismatch — discarding (got ${bufHash.slice(0, 8)}, want ${String(sha256).slice(0, 8)})`);
+      console.error(`⚠️ peerSync: cos archive ${safeLabel} hash mismatch — discarding (got ${bufHash.slice(0, 8)}, want ${String(sha256).slice(0, 8)})`);
       return null;
     }
     const destDir = join(cosAgentsDir(), date, agentId);
@@ -223,7 +224,7 @@ async function reconcileCosHistoryIndex(entries) {
   const mod = await import('../cosAgentIndex.js').catch(() => null);
   if (!mod?.addAgentArchivesToIndex) return;
   await mod.addAgentArchivesToIndex(pairs).catch((err) => {
-    console.log(`⚠️ peerSync: cos-history index merge failed: ${err.message}`);
+    logFailureWithStack('⚠️ peerSync: cos-history index merge failed', err);
   });
 }
 
@@ -249,13 +250,13 @@ export async function syncCosHistoryFromPeer(peer) {
     if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
     const declaredLen = Number(res.headers?.get?.('content-length'));
     if (Number.isFinite(declaredLen) && declaredLen > COS_HISTORY_MANIFEST_MAX_BYTES) {
-      console.log(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_HISTORY_MANIFEST_MAX_BYTES}) — skipping`);
+      console.error(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_HISTORY_MANIFEST_MAX_BYTES}) — skipping`);
       return { pulled: 0, skipped: 'too-large' };
     }
     const body = await res.json().catch(() => null);
     const parsed = peerCosHistoryManifestSchema.safeParse(body);
     if (!parsed.success) {
-      console.log(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} failed validation — skipping`);
+      console.error(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} failed validation — skipping`);
       return { pulled: 0, skipped: 'invalid' };
     }
     const manifest = parsed.data;
@@ -303,7 +304,7 @@ export async function syncCosHistoryFromPeer(peer) {
       // Partial pull — do NOT record the hash, so the next tick re-diffs and
       // retries the still-missing files; the index is reconciled once the
       // manifest is fully present (above), never from a half-pulled agent.
-      console.log(`⚠️ peerSync: cos-history sweep from ${peer.name || peer.instanceId} — pulled ${pulled}/${requested}, ${stillMissing.length} still missing; retrying next tick`);
+      console.error(`⚠️ peerSync: cos-history sweep from ${peer.name || peer.instanceId} — pulled ${pulled}/${requested}, ${stillMissing.length} still missing; retrying next tick`);
     }
     return { pulled, missing: stillMissing.length };
   } finally {
@@ -320,7 +321,7 @@ export async function syncCosHistoryWithAllPeers() {
   const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
   for (const peer of fullSyncPeers) {
     await syncCosHistoryFromPeer(peer).catch((err) => {
-      console.log(`⚠️ peerSync: cos-history sweep for ${peer.name || peer.instanceId} failed: ${err.message}`);
+      logFailureWithStack(`⚠️ peerSync: cos-history sweep for ${peer.name || peer.instanceId} failed`, err);
     });
   }
 }
@@ -393,7 +394,7 @@ export async function buildCosTasksPayload() {
     ...((cosRes?.tasks || []).filter((t) => !isMachineLocalCosTask(t)).map((t) => taskToWireEntry(t, 'internal'))),
   ];
   if (entries.length > COS_TASKS_ENTRY_CAP) {
-    console.log(`⚠️ peerSync: cos-tasks payload hit the ${COS_TASKS_ENTRY_CAP}-entry cap — truncating (some tasks won't federate this tick)`);
+    console.error(`⚠️ peerSync: cos-tasks payload hit the ${COS_TASKS_ENTRY_CAP}-entry cap — truncating (some tasks won't federate this tick)`);
     entries = entries.slice(0, COS_TASKS_ENTRY_CAP);
   }
   // Deterministic order so the listHash is stable across ticks regardless of
@@ -436,11 +437,11 @@ async function mergeCosTasksFromPayload(tasks) {
   // resolved/removed from a file converges — an empty list still merges (union
   // keeps local-only tasks, so it never wipes the local backlog).
   const userRes = await mod.mergePeerTasks('user', user).catch((err) => {
-    console.log(`⚠️ peerSync: cos-tasks user merge failed: ${err.message}`); return null;
+    logFailureWithStack('⚠️ peerSync: cos-tasks user merge failed', err); return null;
   });
   if (userRes?.changed) changed++;
   const internalRes = await mod.mergePeerTasks('internal', internal).catch((err) => {
-    console.log(`⚠️ peerSync: cos-tasks internal merge failed: ${err.message}`); return null;
+    logFailureWithStack('⚠️ peerSync: cos-tasks internal merge failed', err); return null;
   });
   if (internalRes?.changed) changed++;
   return changed;
@@ -468,13 +469,13 @@ export async function syncCosTasksFromPeer(peer) {
     if (!res || !res.ok) return { merged: 0, skipped: 'unreachable' };
     const declaredLen = Number(res.headers?.get?.('content-length'));
     if (Number.isFinite(declaredLen) && declaredLen > COS_TASKS_MAX_BYTES) {
-      console.log(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_TASKS_MAX_BYTES}) — skipping`);
+      console.error(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_TASKS_MAX_BYTES}) — skipping`);
       return { merged: 0, skipped: 'too-large' };
     }
     const body = await res.json().catch(() => null);
     const parsed = peerCosTasksSchema.safeParse(body);
     if (!parsed.success) {
-      console.log(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} failed validation — skipping`);
+      console.error(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} failed validation — skipping`);
       return { merged: 0, skipped: 'invalid' };
     }
     const payload = parsed.data;
@@ -516,7 +517,7 @@ export async function syncCosTasksWithAllPeers() {
   const fullSyncPeers = peers.filter((p) => p?.fullSync === true && p?.enabled !== false && isStr(p.instanceId));
   for (const peer of fullSyncPeers) {
     await syncCosTasksFromPeer(peer).catch((err) => {
-      console.log(`⚠️ peerSync: cos-tasks sweep for ${peer.name || peer.instanceId} failed: ${err.message}`);
+      logFailureWithStack(`⚠️ peerSync: cos-tasks sweep for ${peer.name || peer.instanceId} failed`, err);
     });
   }
 }
