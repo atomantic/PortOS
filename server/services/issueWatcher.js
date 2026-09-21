@@ -863,7 +863,12 @@ async function processPendingApprovals(app, ctx) {
       const disabled = await runGh(['pr', 'merge', String(pr.number), '--repo', ctx.repoSpec, '--disable-auto'], ctx)
         .then(() => true, () => false);
       if (!disabled) {
-        await keepPendingApproval(app, approval, remaining, 'GitHub auto-merge could not be disabled for security reassessment');
+        // An armed remote action must remain tracked even when the ordinary
+        // polling budget expires. Notify once, then keep retrying revocation.
+        if (!approval.autoMergeRevocationFailed) {
+          await notifyPendingApproval(app, approval, 'GitHub auto-merge could not be disabled for security reassessment. Disable it on the PR; PortOS will keep trying.');
+        }
+        remaining.push({ ...approval, autoMergeRevocationFailed: true });
         changed = true;
         continue;
       }

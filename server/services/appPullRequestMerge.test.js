@@ -13,7 +13,7 @@ import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { mergeAppPullRequest } from './appPullRequestMerge.js';
 
 const APP = { id: 'app-001', name: 'Widget', repoPath: '/repo' };
-const PR = { number: 17, headBranch: 'fix/save-path', baseBranch: 'main' };
+const PR = { headSha: 'a'.repeat(40), number: 17, headBranch: 'fix/save-path', baseBranch: 'main' };
 
 const githubTarget = () => ({
   tracker: 'github',
@@ -35,10 +35,18 @@ describe('mergeAppPullRequest', () => {
     // `--repo` keeps gh in remote mode, so `--delete-branch` never checks out a
     // branch in the user's working tree.
     expect(execGh).toHaveBeenCalledWith(
-      ['pr', 'merge', '17', '--repo', 'github.com/acme/widget', '--squash', '--delete-branch'],
+      ['pr', 'merge', '17', '--repo', 'github.com/acme/widget', '--squash', '--delete-branch', '--match-head-commit', PR.headSha],
       expect.any(Number),
       { cwd: '/repo', env: { GH_TOKEN: 'x' } },
     );
+  });
+
+  it('refuses an unknown GitHub head and preserves a head-mismatch failure', async () => {
+    expect(await mergeAppPullRequest(APP, { ...PR, headSha: null })).toMatchObject({ ok: false, code: 'invalid-head' });
+    expect(execGh).not.toHaveBeenCalled();
+    execGh.mockRejectedValue(new Error('Head commit changed'));
+    expect(await mergeAppPullRequest(APP, PR)).toMatchObject({ ok: false, code: 'merge-failed' });
+    expect(execGh.mock.calls[0][0]).toContain(PR.headSha);
   });
 
   // A `main → release` request's head is a long-lived branch, so an obedient
@@ -49,7 +57,7 @@ describe('mergeAppPullRequest', () => {
     ['a head equal to the base', { number: 9, headBranch: 'topic', baseBranch: 'topic' }],
     ['an unreadable head', { number: 9, headBranch: '', baseBranch: 'main' }],
   ])('merges but refuses to delete %s', async (_label, pullRequest) => {
-    const result = await mergeAppPullRequest(APP, pullRequest, { deleteBranch: true });
+    const result = await mergeAppPullRequest(APP, { headSha: PR.headSha, ...pullRequest }, { deleteBranch: true });
 
     expect(result).toMatchObject({ ok: true, deletedBranch: false });
     expect(execGh.mock.calls[0][0]).not.toContain('--delete-branch');

@@ -919,6 +919,26 @@ describe('processTaskOutput', () => {
     expect(execGhMock.mock.calls.some(([args]) => args.includes('--disable-auto'))).toBe(true);
   });
 
+  it('retains an armed legacy auto-merge when revocation fails beyond the normal polling budget', async () => {
+    installDefaultGhMock();
+    const forgeRead = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation((args, ...rest) => {
+      if (args.includes('--disable-auto')) throw new Error('Permission denied');
+      return forgeRead(args, ...rest);
+    });
+    apps.set(APP.id, { ...APP, issueWatcherState: { approvedPullRequests: [{
+      number: 7, headSha: 'a'.repeat(40), contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF),
+      ciPolicy: 'required', autoMergeEnabled: true, ticks: MAX_PENDING_APPROVAL_TICKS,
+    }] } });
+    await buildTaskInput({ app: apps.get(APP.id) });
+    expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([
+      expect.objectContaining({ number: 7, autoMergeEnabled: true, autoMergeRevocationFailed: true }),
+    ]);
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(spawnPrRemediationFollowUpMock).not.toHaveBeenCalled();
+    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining('auto-merge could not be disabled') }));
+  });
+
   it('keeps pending-CI approvals in the local queue so GitHub cannot bypass reassessment', async () => {
     installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] }) });
     const result = await processTaskOutput({ appId: APP.id, success: true, task: { metadata }, payload: {

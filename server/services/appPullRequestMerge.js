@@ -172,6 +172,7 @@ export async function mergeAppPullRequest(app, pullRequest, { method = DEFAULT_M
     number: pullRequest.number,
     method,
     deleteBranch: deleting,
+    expectedHeadSha: target.forge === 'github' ? pullRequest.headSha ?? '' : null,
     timeoutMs: MERGE_TIMEOUT_MS,
   });
   if (!result.ok) return result;
