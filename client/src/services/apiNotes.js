@@ -1,28 +1,30 @@
 import { request } from './apiCore.js';
 
 // Notes - Vault Management
-export const getNotesVaults = () => request('/notes/vaults');
-export const detectNotesVaults = () => request('/notes/detect');
-export const addNotesVault = (data) => request('/notes/vaults', {
+export const getNotesVaults = (options) => request('/notes/vaults', options);
+export const detectNotesVaults = (options) => request('/notes/detect', options);
+export const addNotesVault = (data, options = {}) => request('/notes/vaults', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 
 // Notes - Scanning & Reading
-export const scanNotesVault = (id, options = {}) => {
+export const scanNotesVault = (id, { folder, limit, offset, ...requestOptions } = {}) => {
   const params = new URLSearchParams();
-  if (options.folder) params.set('folder', options.folder);
-  if (options.limit) params.set('limit', options.limit);
-  if (options.offset) params.set('offset', options.offset);
-  return request(`/notes/vaults/${id}/scan?${params}`);
+  if (folder) params.set('folder', folder);
+  if (limit) params.set('limit', limit);
+  if (offset) params.set('offset', offset);
+  return request(`/notes/vaults/${id}/scan?${params}`, requestOptions);
 };
 
-export const getNote = (vaultId, path) =>
-  request(`/notes/vaults/${vaultId}/note?path=${encodeURIComponent(path)}`);
+export const getNote = (vaultId, path, options) =>
+  request(`/notes/vaults/${vaultId}/note?path=${encodeURIComponent(path)}`, options);
 
-export const createNote = (vaultId, path, content = '') => request(`/notes/vaults/${vaultId}/note`, {
+export const createNote = (vaultId, path, content = '', options = {}) => request(`/notes/vaults/${vaultId}/note`, {
   method: 'POST',
-  body: JSON.stringify({ path, content })
+  body: JSON.stringify({ path, content }),
+  ...options
 });
 
 // `force` bypasses the server's iCloud dataless screen (#3717). Only ever pass
@@ -35,16 +37,16 @@ export const updateNote = (vaultId, path, content, { force = false, ...options }
     ...options
   });
 
-export const deleteNote = (vaultId, path) =>
-  request(`/notes/vaults/${vaultId}/note?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+export const deleteNote = (vaultId, path, options = {}) =>
+  request(`/notes/vaults/${vaultId}/note?path=${encodeURIComponent(path)}`, { method: 'DELETE', ...options });
 
 // Notes - Search & Discovery
-export const searchNotes = (vaultId, q, limit) => {
+export const searchNotes = (vaultId, q, limit, options = {}) => {
   const params = new URLSearchParams({ q });
   if (limit) params.set('limit', limit);
-  return request(`/notes/vaults/${vaultId}/search?${params}`);
+  return request(`/notes/vaults/${vaultId}/search?${params}`, options);
 };
 
-export const getNotesVaultTags = (vaultId) => request(`/notes/vaults/${vaultId}/tags`);
-export const getNotesVaultFolders = (vaultId) => request(`/notes/vaults/${vaultId}/folders`);
-export const getNotesVaultGraph = (vaultId) => request(`/notes/vaults/${vaultId}/graph`);
+export const getNotesVaultTags = (vaultId, options) => request(`/notes/vaults/${vaultId}/tags`, options);
+export const getNotesVaultFolders = (vaultId, options) => request(`/notes/vaults/${vaultId}/folders`, options);
+export const getNotesVaultGraph = (vaultId, options) => request(`/notes/vaults/${vaultId}/graph`, options);
