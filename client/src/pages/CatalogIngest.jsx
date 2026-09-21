@@ -5,7 +5,7 @@
  * name + description). Full-width page; owns its own scroll.
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload, Link2, FileText, Mic, Square } from 'lucide-react';
 import { formatCount } from '../utils/formatters';
@@ -16,6 +16,7 @@ import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal';
 import socket from '../services/socket';
 import { startMemoRecording } from '../lib/audioRecorder';
+import { getRelationKind } from '../lib/catalogTypes';
 import {
   createCatalogScrap,
   pruneCatalogScrap,
@@ -65,14 +66,10 @@ const KIND_SECTIONS = [
 ];
 
 // Initial stage list, used until the server's `start` frame supplies the real
-// one. Mirrors server-side EXTRACTION_STAGES — three bible passes plus one
-// bundled light pass (`ideasScenesConcepts`) — so the panel never looks empty
-// between click and first frame.
+// one. Mirrors server-side EXTRACTION_STAGES — one catalog graph stage — so the
+// panel never looks empty between click and first frame.
 const INITIAL_STAGES = [
-  { id: 'characters', label: 'Characters', status: 'pending', count: 0 },
-  { id: 'places',     label: 'Places',     status: 'pending', count: 0 },
-  { id: 'objects',    label: 'Objects',    status: 'pending', count: 0 },
-  { id: 'ideasScenesConcepts', label: 'Ideas, scenes & concepts', status: 'pending', count: 0 },
+  { id: 'catalog', label: 'Catalog graph', status: 'pending', count: 0 },
 ];
 
 function StageIcon({ status }) {
@@ -101,6 +98,11 @@ export default function CatalogIngest() {
   const [committing, setCommitting] = useState(false);
   const [scrapId, setScrapId] = useState(null);
   const [stages, setStages] = useState(INITIAL_STAGES);
+  const [plan, setPlan] = useState(null);
+  const [relationships, setRelationships] = useState([]);
+  const [isStructuredDraft, setIsStructuredDraft] = useState(false);
+  const [optedOutRelationships, setOptedOutRelationships] = useState(new Set());
+  const [overflow, setOverflow] = useState(null);
   // The draft returned by extractFromCatalogScrap(): per-kind candidate arrays
   // editable inline + checkbox-gated. Defaults all to selected.
   const [draft, setDraft] = useState({ characters: [], places: [], objects: [], ideas: [], scenes: [], concepts: [] });
@@ -201,6 +203,7 @@ export default function CatalogIngest() {
           ? ev.stages.map((s) => ({ ...s, status: s.status || 'pending' }))
           : INITIAL_STAGES;
         setStages(next);
+        if (ev.plan) setPlan(ev.plan);
         return;
       }
       if (ev.runId && ev.runId !== activeRunIdRef.current) return;
@@ -229,6 +232,11 @@ export default function CatalogIngest() {
     setPhase('paste');
     setScrapId(null);
     setStages(INITIAL_STAGES);
+    setPlan(null);
+    setRelationships([]);
+    setIsStructuredDraft(false);
+    setOptedOutRelationships(new Set());
+    setOverflow(null);
     setDraft({ characters: [], places: [], objects: [], ideas: [], scenes: [], concepts: [] });
     setSelected({ characters: new Set(), places: new Set(), objects: new Set(), ideas: new Set(), scenes: new Set(), concepts: new Set() });
   };
@@ -254,16 +262,29 @@ export default function CatalogIngest() {
       Array.isArray(result.draft[s.key]) ? result.draft[s.key] : [],
     ]));
     setDraft(d);
-    setSelected(Object.fromEntries(KIND_SECTIONS.map((s) => [s.key, new Set(d[s.key].map((_, i) => i))])));
+    setSelected(Object.fromEntries(KIND_SECTIONS.map((s) => [
+      s.key,
+      new Set(d[s.key].map((c, i) => c.draftId || `legacy-${s.key}-${i}`)),
+    ])));
+    const rawRels = Array.isArray(result.draft.relationships) ? result.draft.relationships : [];
+    const hasStructuredRels = result.draft.relationships !== undefined;
+    const hasDraftIds = KIND_SECTIONS.some((s) => d[s.key].some((c) => Boolean(c.draftId)));
+    setIsStructuredDraft(hasStructuredRels || hasDraftIds);
+    setRelationships(rawRels);
+    setOptedOutRelationships(new Set());
+    setPlan(result.draft.plan || null);
+    setOverflow(result.draft.overflow || null);
     // Prefer server-supplied stage list; otherwise mark defaults completed.
     // The bundled `ideasScenesConcepts` stage has no matching `d[id]` array,
     // so its count is the sum of the three light kinds it backs.
     if (Array.isArray(result.draft.stages) && result.draft.stages.length > 0) {
       setStages(result.draft.stages.map((s) => ({ ...s, status: s.status || 'completed' })));
     } else {
-      const countForStage = (id) => id === 'ideasScenesConcepts'
-        ? d.ideas.length + d.scenes.length + d.concepts.length
-        : d[id]?.length || 0;
+      const countForStage = (id) => {
+        if (id === 'catalog') return KIND_SECTIONS.reduce((sum, s) => sum + (d[s.key]?.length || 0), 0);
+        if (id === 'ideasScenesConcepts') return (d.ideas?.length || 0) + (d.scenes?.length || 0) + (d.concepts?.length || 0);
+        return d[id]?.length || 0;
+      };
       setStages((prev) => prev.map((s) => ({ ...s, status: 'completed', count: countForStage(s.id) })));
     }
     setPhase('review');
@@ -431,10 +452,29 @@ export default function CatalogIngest() {
     navigate('/catalog');
   };
 
-  const toggle = (kind, idx) => {
+  const candidateMap = useMemo(() => {
+    const map = new Map();
+    for (const section of KIND_SECTIONS) {
+      const arr = draft[section.key] || [];
+      arr.forEach((c, idx) => {
+        const id = c.draftId || `legacy-${section.key}-${idx}`;
+        map.set(id, { ...c, draftId: id, sectionKey: section.key, sectionType: section.type });
+      });
+    }
+    return map;
+  }, [draft]);
+
+  const isEntrySelected = useCallback((draftId) => {
+    for (const section of KIND_SECTIONS) {
+      if (selected[section.key]?.has(draftId)) return true;
+    }
+    return false;
+  }, [selected]);
+
+  const toggle = (kind, id) => {
     setSelected((prev) => {
       const next = new Set(prev[kind]);
-      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return { ...prev, [kind]: next };
     });
   };
@@ -442,36 +482,82 @@ export default function CatalogIngest() {
   const selectAll = (kind, on) => {
     setSelected((prev) => ({
       ...prev,
-      [kind]: on ? new Set(draft[kind].map((_, i) => i)) : new Set(),
+      [kind]: on ? new Set(draft[kind].map((c, i) => c.draftId || `legacy-${kind}-${i}`)) : new Set(),
     }));
   };
 
-  const patchCandidate = (kind, idx, patch) => {
+  const patchCandidate = (kind, id, patch) => {
     setDraft((prev) => ({
       ...prev,
-      [kind]: prev[kind].map((c, i) => (i === idx ? { ...c, ...patch } : c)),
+      [kind]: prev[kind].map((c, i) => ((c.draftId || `legacy-${kind}-${i}`) === id ? { ...c, ...patch } : c)),
     }));
+  };
+
+  const toggleRelationship = (relId) => {
+    setOptedOutRelationships((prev) => {
+      const next = new Set(prev);
+      if (next.has(relId)) next.delete(relId); else next.add(relId);
+      return next;
+    });
+  };
+
+  const selectAllRelationships = (on) => {
+    if (on) {
+      setOptedOutRelationships(new Set());
+    } else {
+      const allIds = relationships.map((r) => r.id || `${r.fromDraftId}:${r.toDraftId}:${r.kind}`);
+      setOptedOutRelationships(new Set(allIds));
+    }
+  };
+
+  const handleRetry = async () => {
+    if (!scrapId) return;
+    setSubmitting(true);
+    setPhase('extracting');
+    setStages(INITIAL_STAGES);
+    const result = await extractFromCatalogScrap(scrapId, brainRouteRef.current || {}, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
+    setSubmitting(false);
+    enterReviewFromResult(result, 'paste');
   };
 
   const handleCommit = async () => {
     if (!scrapId) return;
-    // extractBible returns flat bible-shaped objects (role, personality,
-    // background, motivations, slugline, era, significance, …); commit must
-    // carry the whole shape minus the few keys catalog stores at the top
-    // (name, tags, id — and `type` from the section, not the candidate).
+
+    const totalSelected = KIND_SECTIONS.reduce((sum, s) => sum + (selected[s.key]?.size || 0), 0);
+    const activeRelCount = isStructuredDraft
+      ? relationships.filter((r) => {
+          const relId = r.id || `${r.fromDraftId}:${r.toDraftId}:${r.kind}`;
+          return !optedOutRelationships.has(relId) && isEntrySelected(r.fromDraftId) && isEntrySelected(r.toDraftId);
+        }).length
+      : 0;
+
+    if (totalSelected > 200 || activeRelCount > 1000) {
+      toast.error('Draft exceeds capacity limits (maximum 200 entries and 1,000 relationships). Deselect items to continue.');
+      return;
+    }
+
     const accepted = [];
     for (const section of KIND_SECTIONS) {
       const arr = draft[section.key];
       const sel = selected[section.key];
       for (let i = 0; i < arr.length; i += 1) {
-        if (!sel.has(i)) continue;
         const c = arr[i];
+        const itemId = c.draftId || `legacy-${section.key}-${i}`;
+        if (!sel.has(itemId)) continue;
         const name = (c.name || '').trim();
         if (!name) continue;
-        const { draftId: _draftId, sourceIdentity: _sourceIdentity, id: _id, type: _type, name: _name, tags: _tags, payload: nestedPayload, description, ...rest } = c;
+        const { draftId, sourceIdentity: _sourceIdentity, id: _id, type: _type, name: _name, tags: _tags, payload: nestedPayload, description, span, ...rest } = c;
         const payload = { ...rest, ...(nestedPayload && typeof nestedPayload === 'object' ? nestedPayload : {}) };
         if (description !== undefined) payload.description = description;
-        accepted.push({ type: section.type, name, payload, tags: Array.isArray(c.tags) ? c.tags : [] });
+        accepted.push({
+          type: section.type,
+          name,
+          payload,
+          tags: Array.isArray(c.tags) ? c.tags : [],
+          ...(draftId ? { draftId } : {}),
+          ...(span ? { span } : {}),
+        });
       }
     }
     if (accepted.length === 0) {
@@ -479,8 +565,26 @@ export default function CatalogIngest() {
       return;
     }
     setCommitting(true);
+
+    let relsToCommit = undefined;
+    if (isStructuredDraft) {
+      const acceptedIds = new Set(accepted.map((a) => a.draftId).filter(Boolean));
+      relsToCommit = relationships
+        .filter((r) => {
+          const relId = r.id || `${r.fromDraftId}:${r.toDraftId}:${r.kind}`;
+          return !optedOutRelationships.has(relId) && acceptedIds.has(r.fromDraftId) && acceptedIds.has(r.toDraftId);
+        })
+        .map(({ fromDraftId, toDraftId, kind, evidence }) => ({
+          fromDraftId,
+          toDraftId,
+          kind,
+          evidence,
+        }));
+    }
+
     const result = await commitCatalogScrapDraft(scrapId, accepted, {
       universeRef: universeRef === UNASSIGNED_UNIVERSE ? undefined : universeRef,
+      relationships: relsToCommit,
       silent: true,
     }).catch((err) => {
       toast.error(err?.message || 'Commit failed');
@@ -702,7 +806,11 @@ export default function CatalogIngest() {
           <div className="bg-port-card border border-port-border rounded-lg p-6 space-y-3">
             <p className="text-sm font-medium text-white flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin text-port-accent" aria-hidden="true" />
-              {babble ? 'Pruning your brainstorm — one AI pass.' : 'Extracting ingredients — one pass per source chunk.'}
+              {babble
+                ? 'Pruning your brainstorm — one AI pass.'
+                : stages.length === 1 || plan?.mode === 'whole'
+                ? 'Extracting ingredients — one AI pass.'
+                : `Extracting ingredients — one pass per source chunk (${stages.length} chunk${stages.length === 1 ? '' : 's'}).`}
             </p>
             <ul className="space-y-1.5 mt-2">
               {stages.map((s) => (
@@ -721,60 +829,103 @@ export default function CatalogIngest() {
           </div>
         )}
 
-        {phase === 'review' && (
-          <div className="space-y-5">
-            <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
-              <p className="text-sm text-gray-300">
-                Review the candidates below. Uncheck anything you don&apos;t want, edit names and descriptions inline, then commit the rest.
-              </p>
-              <div className="max-w-xs">
-                <label htmlFor="ingest-universe-ref" className="block text-sm font-medium mb-1 text-white">Catalogue into</label>
-                <select id="ingest-universe-ref" value={universeRef}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setUniverseRef(next);
-                    safeWriteStorage(LAST_UNIVERSE_STORAGE_KEY, next);
-                  }}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent">
-                  <option value={UNASSIGNED_UNIVERSE}>Unassigned</option>
-                  {universes.map((u) => (
-                    <option key={u.id} value={u.id}>{u.name}</option>
+        {phase === 'review' && (() => {
+          const totalDraftEntries = KIND_SECTIONS.reduce((sum, s) => sum + (draft[s.key]?.length || 0), 0);
+          const selectedEntriesCount = KIND_SECTIONS.reduce((sum, s) => sum + (selected[s.key]?.size || 0), 0);
+          const activeRelationshipsCount = isStructuredDraft
+            ? relationships.filter((r) => {
+                const relId = r.id || `${r.fromDraftId}:${r.toDraftId}:${r.kind}`;
+                return !optedOutRelationships.has(relId) && isEntrySelected(r.fromDraftId) && isEntrySelected(r.toDraftId);
+              }).length
+            : 0;
+          const isOverLimit = selectedEntriesCount > 200 || activeRelationshipsCount > 1000;
+          const hasExtractedOverflow = totalDraftEntries > 200 || relationships.length > 1000 || Boolean(overflow);
+
+          return (
+            <div className="space-y-5">
+              <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+                <p className="text-sm text-gray-300">
+                  Review the candidates below. Uncheck anything you don&apos;t want, edit names and descriptions inline, then commit the rest.
+                </p>
+                <div className="max-w-xs">
+                  <label htmlFor="ingest-universe-ref" className="block text-sm font-medium mb-1 text-white">Catalogue into</label>
+                  <select id="ingest-universe-ref" value={universeRef}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setUniverseRef(next);
+                      safeWriteStorage(LAST_UNIVERSE_STORAGE_KEY, next);
+                    }}
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent">
+                    <option value={UNASSIGNED_UNIVERSE}>Unassigned</option>
+                    {universes.map((u) => (
+                      <option key={u.id} value={u.id}>{u.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {(isOverLimit || hasExtractedOverflow) && (
+                <div role="alert" className="bg-port-card border border-port-error rounded-lg p-4 text-sm space-y-1 text-port-error">
+                  <p className="font-semibold">Draft exceeds capacity limits</p>
+                  <p>
+                    {isOverLimit
+                      ? `Too many items selected (${selectedEntriesCount > 200 ? `${selectedEntriesCount} entries (max 200); ` : ''}${activeRelationshipsCount > 1000 ? `${activeRelationshipsCount} relationships (max 1,000); ` : ''}). Deselect items before committing.`
+                      : `Extraction exceeded limits (${totalDraftEntries > 200 ? `${totalDraftEntries} entries (max 200); ` : ''}${relationships.length > 1000 ? `${relationships.length} relationships (max 1,000); ` : ''}). Deselect items before committing.`}
+                  </p>
+                </div>
+              )}
+              {stages.some((stage) => stage.status === 'failed') && (
+                <div role="alert" className="bg-port-card border border-port-error rounded-lg p-4 text-sm space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <p className="text-white font-medium">Extraction is incomplete. These candidates cover only the successful parts of your source. Retry ingestion to cover the failed parts.</p>
+                    <button
+                      type="button"
+                      onClick={handleRetry}
+                      disabled={submitting}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent hover:bg-port-accent/90 text-white text-xs font-medium"
+                    >
+                      <RotateCcw size={12} aria-hidden="true" /> Retry extraction
+                    </button>
+                  </div>
+                  {stages.filter((stage) => stage.status === 'failed').map((stage) => (
+                    <p key={stage.id} className="text-port-error">{stage.label}: {stage.error || 'Extraction failed'}</p>
                   ))}
-                </select>
+                </div>
+              )}
+              {KIND_SECTIONS.map((section) => (
+                <ReviewSection
+                  key={section.key}
+                  section={section}
+                  items={draft[section.key]}
+                  selected={selected[section.key]}
+                  onToggle={(id) => toggle(section.key, id)}
+                  onSelectAll={(on) => selectAll(section.key, on)}
+                  onPatch={(id, patch) => patchCandidate(section.key, id, patch)}
+                />
+              ))}
+              {isStructuredDraft && relationships.length > 0 && (
+                <RelationshipsReviewSection
+                  relationships={relationships}
+                  optedOutRelationships={optedOutRelationships}
+                  candidateMap={candidateMap}
+                  isEntrySelected={isEntrySelected}
+                  onToggleRelationship={toggleRelationship}
+                  onSelectAll={selectAllRelationships}
+                />
+              )}
+              <div className="sticky bottom-4 bg-port-card border border-port-border rounded-lg p-3 flex items-center justify-end gap-2 shadow-lg">
+                <button type="button" onClick={reset} disabled={committing}
+                  className="px-3 py-2 rounded-lg text-gray-400 hover:text-white text-sm">
+                  Cancel
+                </button>
+                <button type="button" onClick={handleCommit} disabled={committing || isOverLimit}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-port-success hover:bg-port-success/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
+                  {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                  {committing ? 'Committing…' : 'Commit Selected'}
+                </button>
               </div>
             </div>
-            {stages.some(stage => stage.status === 'failed') && (
-              <div role="alert" className="bg-port-card border border-port-error rounded-lg p-4 text-sm space-y-2">
-                <p>Extraction is incomplete. These candidates cover only the successful parts of your source. Retry ingestion to cover the failed parts.</p>
-                {stages.filter(stage => stage.status === 'failed').map(stage => (
-                  <p key={stage.id}>{stage.label}: {stage.error || 'Extraction failed'}</p>
-                ))}
-              </div>
-            )}
-            {KIND_SECTIONS.map((section) => (
-              <ReviewSection
-                key={section.key}
-                section={section}
-                items={draft[section.key]}
-                selected={selected[section.key]}
-                onToggle={(idx) => toggle(section.key, idx)}
-                onSelectAll={(on) => selectAll(section.key, on)}
-                onPatch={(idx, patch) => patchCandidate(section.key, idx, patch)}
-              />
-            ))}
-            <div className="sticky bottom-4 bg-port-card border border-port-border rounded-lg p-3 flex items-center justify-end gap-2 shadow-lg">
-              <button type="button" onClick={reset} disabled={committing}
-                className="px-3 py-2 rounded-lg text-gray-400 hover:text-white text-sm">
-                Cancel
-              </button>
-              <button type="button" onClick={handleCommit} disabled={committing}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-port-success hover:bg-port-success/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
-                {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-                {committing ? 'Committing…' : 'Commit Selected'}
-              </button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </section>
   );
@@ -782,7 +933,7 @@ export default function CatalogIngest() {
 
 function ReviewSection({ section, items, selected, onToggle, onSelectAll, onPatch }) {
   const total = items.length;
-  const count = selected.size;
+  const count = items.filter((c, idx) => selected.has(c.draftId || `legacy-${section.key}-${idx}`)).length;
   if (total === 0) {
     return (
       <section className="bg-port-card border border-port-border rounded-lg p-4">
@@ -808,6 +959,7 @@ function ReviewSection({ section, items, selected, onToggle, onSelectAll, onPatc
       </div>
       <ul className="space-y-2">
         {items.map((c, idx) => {
+          const itemId = c.draftId || `legacy-${section.key}-${idx}`;
           const baseId = `${section.key}-${idx}`;
           // Each type's primary editable field matches PRIMARY_CONTENT_KEY in
           // Catalog.jsx: character → physicalDescription (canon shape from
@@ -819,18 +971,130 @@ function ReviewSection({ section, items, selected, onToggle, onSelectAll, onPatc
           else if (section.type === 'place' || section.type === 'object') descField = 'description';
           else descField = 'summary';
           return (
-            <li key={baseId} className="border border-port-border rounded p-3 bg-port-bg/40 flex items-start gap-2">
-              <input id={`${baseId}-check`} type="checkbox" checked={selected.has(idx)} onChange={() => onToggle(idx)}
+            <li key={itemId} className="border border-port-border rounded p-3 bg-port-bg/40 flex items-start gap-2">
+              <input id={`${baseId}-check`} type="checkbox" checked={selected.has(itemId)} onChange={() => onToggle(itemId)}
                 className="accent-port-accent mt-1" aria-label={`Include ${c.name || section.label}`} />
               <div className="flex-1 min-w-0 space-y-2">
                 <label htmlFor={`${baseId}-name`} className="sr-only">Name</label>
-                <input id={`${baseId}-name`} type="text" value={c.name || ''} onChange={(e) => onPatch(idx, { name: e.target.value })}
+                <input id={`${baseId}-name`} type="text" value={c.name || ''} onChange={(e) => onPatch(itemId, { name: e.target.value })}
                   placeholder="Name" maxLength={200}
                   className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-sm text-white focus:outline-none focus:border-port-accent" />
                 <label htmlFor={`${baseId}-desc`} className="sr-only">Description</label>
                 <textarea id={`${baseId}-desc`} rows={2} value={c[descField] ?? ''}
-                  onChange={(e) => onPatch(idx, { [descField]: e.target.value })} placeholder="Short description"
+                  onChange={(e) => onPatch(itemId, { [descField]: e.target.value })} placeholder="Short description"
                   className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-200 focus:outline-none focus:border-port-accent" />
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function RelationshipsReviewSection({
+  relationships,
+  optedOutRelationships,
+  candidateMap,
+  isEntrySelected,
+  onToggleRelationship,
+  onSelectAll,
+}) {
+  const total = relationships.length;
+  if (total === 0) return null;
+
+  const activeRelationships = relationships.filter((r) => {
+    const relId = r.id || `${r.fromDraftId}:${r.toDraftId}:${r.kind}`;
+    const fromSelected = isEntrySelected(r.fromDraftId);
+    const toSelected = isEntrySelected(r.toDraftId);
+    return fromSelected && toSelected && !optedOutRelationships.has(relId);
+  });
+  const activeCount = activeRelationships.length;
+
+  return (
+    <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h2 className="text-lg font-semibold text-white">
+          Relationships <span className="text-sm font-normal text-gray-500">({activeCount} / {total} active)</span>
+        </h2>
+        <div className="flex items-center gap-1 text-xs">
+          <button
+            type="button"
+            onClick={() => onSelectAll(true)}
+            className="px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white"
+          >
+            Select All
+          </button>
+          <button
+            type="button"
+            onClick={() => onSelectAll(false)}
+            className="px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white"
+          >
+            Deselect All
+          </button>
+        </div>
+      </div>
+      <ul className="space-y-2">
+        {relationships.map((rel, idx) => {
+          const relId = rel.id || `${rel.fromDraftId}:${rel.toDraftId}:${rel.kind}`;
+          const fromItem = candidateMap.get(rel.fromDraftId);
+          const toItem = candidateMap.get(rel.toDraftId);
+          const fromName = (fromItem?.name || '').trim() || rel.fromDraftId;
+          const toName = (toItem?.name || '').trim() || rel.toDraftId;
+          const fromSelected = isEntrySelected(rel.fromDraftId);
+          const toSelected = isEntrySelected(rel.toDraftId);
+          const endpointsActive = fromSelected && toSelected;
+          const isOptedIn = !optedOutRelationships.has(relId);
+          const isChecked = endpointsActive && isOptedIn;
+          const kindObj = getRelationKind(rel.kind);
+          const kindLabel = kindObj?.label || rel.kind;
+          const inverseLabel = kindObj?.inverseLabel;
+
+          return (
+            <li
+              key={relId}
+              className={`border border-port-border rounded p-3 flex items-start gap-2 ${
+                endpointsActive ? 'bg-port-bg/40' : 'bg-port-bg/20 opacity-75'
+              }`}
+            >
+              <input
+                id={`rel-check-${idx}`}
+                type="checkbox"
+                checked={isChecked}
+                disabled={!endpointsActive}
+                onChange={() => endpointsActive && onToggleRelationship(relId)}
+                className="accent-port-accent mt-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                aria-label={`Include relationship ${fromName} ${kindLabel} ${toName}`}
+              />
+              <div className="flex-1 min-w-0 space-y-1">
+                <div className="flex items-center gap-2 flex-wrap text-sm">
+                  <span className="font-medium text-white">{fromName}</span>
+                  <span className="text-port-accent text-xs">→</span>
+                  <span className="text-xs px-2 py-0.5 rounded bg-port-bg border border-port-border text-port-accent font-medium">
+                    {kindLabel}
+                  </span>
+                  <span className="text-port-accent text-xs">→</span>
+                  <span className="font-medium text-white">{toName}</span>
+                  {inverseLabel && (
+                    <span className="text-[11px] text-gray-500">
+                      (inverse: {inverseLabel})
+                    </span>
+                  )}
+                </div>
+                {rel.evidence && (
+                  <blockquote className="text-xs text-gray-400 italic pl-2 border-l-2 border-port-border/80">
+                    “{rel.evidence}”
+                  </blockquote>
+                )}
+                {!endpointsActive && (
+                  <div role="status" className="text-xs text-port-warning font-medium">
+                    {!fromSelected && !toSelected
+                      ? `Disabled — both ${fromName} and ${toName} are deselected`
+                      : !fromSelected
+                      ? `Disabled — ${fromName} is deselected`
+                      : `Disabled — ${toName} is deselected`}
+                  </div>
+                )}
               </div>
             </li>
           );
