@@ -236,6 +236,14 @@ export const videoModeContractError = ({
   if (requestedMode === 'image' && !hasFirstImage) {
     return fail('imageRequiresFirst', `${codePrefix}_I2V_REQUIRES_IMAGE`);
   }
+  if (model?.runtime === 'fastvideo' && model?.fastvideoFamily === 'fasth3') {
+    if (requestedMode === 'image' && hasLastImage) {
+      return fail('imageLastConflict', `${codePrefix}_I2V_LAST_IMAGE_CONFLICT`);
+    }
+    if (requestedMode === 'image' && model.fastvideoVsa !== true) {
+      return fail('modeUnsupported', `${codePrefix}_MODE_UNSUPPORTED`);
+    }
+  }
   if (requestedMode === 'a2v' && a2vRequiresFirst && !hasFirstImage) {
     return fail('a2vRequiresFirst', `${codePrefix}_A2V_REQUIRES_IMAGE`);
   }

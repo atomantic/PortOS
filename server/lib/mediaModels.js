@@ -826,6 +826,7 @@ const DEFAULT_REGISTRY = {
         repo: 'FastVideo/FastVideo-FastH3-8-Step-V2',
         revision: '3da2ddfe1954d9cda4c05b643dc0f26007a655c5',
         fastvideoVsa: true,
+        supportedModes: ['text', 'image'],
         steps: 8,
         samplerNote: 'Quality option: 8 steps with 80% sparse attention, reference implementation. Requires an updated FastVideo runtime with VSA support. INT6 and INT8 share one ~147.9 GB source download; first use converts the DiT locally with routing weights retained. Not a real-time model.',
       })),

@@ -30,6 +30,7 @@ const fasth3 = {
   repo: 'example-org/example-fasth3',
   supportedModes: ['text'],
 };
+const fasth3V2 = { ...fasth3, id: 'fasth3_v2_int8', fastvideoVsa: true, supportedModes: ['text', 'image'] };
 
 // The upstream FastVideo snapshot: same family, but its DiT is bf16 under
 // transformer/, so the row names the MLX format the helper must convert to.
@@ -129,6 +130,15 @@ describe('buildFastVideoArgs', () => {
     expect(() => buildFastVideoArgs({
       ...base, model: fasth3, mode: 'image', sourceImagePath: '/fixture/first.png',
     })).toThrowError(/mode/i);
+  });
+
+  it('passes first-frame conditioning to the V2 VSA entry point', () => {
+    const { args } = buildFastVideoArgs({
+      ...base, model: fasth3V2, mode: 'image', sourceImagePath: '/fixture/first.png',
+    });
+
+    expect(args).toContain('--vsa');
+    expect(flagValue(args, '--image')).toBe('/fixture/first.png');
   });
 });
 

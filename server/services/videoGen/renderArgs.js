@@ -600,10 +600,10 @@ export const fastvideoMlxFormat = (model) =>
 // Build args for the FastVideo MLX helper on Apple Silicon.
 export const buildFastVideoArgs = ({
   model, fastvideoModelPath, prompt, negativePrompt, width, height,
-  numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath,
+  numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, mode, outputPath,
 }) => {
   assertByovRuntimeInstalled('fastvideo');
-  assertRenderModeContract({ model, mode, sourceImagePath });
+  assertRenderModeContract({ model, mode, sourceImagePath, lastImagePath });
   const family = fastvideoFamily(model);
   const modelRoot = fastvideoModelPath || model.repo;
   const args = [
@@ -1188,7 +1188,7 @@ export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, f
       : videoLoraUnsupportedError(model, modelId);
   }
   if (model.runtime === 'fastvideo') {
-    return buildFastVideoArgs({ model, fastvideoModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
+    return buildFastVideoArgs({ model, fastvideoModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, mode, outputPath });
   }
   if (model.runtime === 'wan22') {
     return buildWan22Args({ model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });

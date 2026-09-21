@@ -398,13 +398,14 @@ def build_command(args, entry_script: Path, model_root: Path, mlx_checkpoint: Pa
             cmd.extend(["--image-path", str(args.image)])
         return cmd
 
-    # FastH3: text-to-video-with-audio only. The entry script has no --fps,
-    # --guidance, --negative-prompt or --image-path, so anything the caller
-    # passed for those is surfaced as a STATUS line instead of being dropped
-    # into a flag the child would reject.
+    # FastH3: the preview entry is text-to-video-with-audio only. V2's VSA
+    # entry additionally accepts a first-frame image, so keep that supported
+    # conditioning explicit rather than silently dropping it.
+    if args.image and not getattr(args, "vsa", False):
+        raise ValueError("FastH3 Preview does not support first-frame conditioning")
     for label, unsupported in (
         ("negative prompt", args.negative_prompt),
-        ("conditioning image", args.image),
+        ("conditioning image", args.image and not getattr(args, "vsa", False)),
         ("prompt enhancer", args.enhance_prompt),
         ("refinement pass", args.refine),
     ):
@@ -421,6 +422,8 @@ def build_command(args, entry_script: Path, model_root: Path, mlx_checkpoint: Pa
                "--entry-script", str(entry_script), "--scheduler-root", str(model_root),
                "--schedule-steps", str(args.steps)] + cmd[2:]
         cmd.extend(["--vsa", "--vsa-sparsity", "0.8", "--vsa-tile-size", "64", "--vsa-impl", "reference"])
+        if args.image:
+            cmd.extend(["--image-path", str(args.image)])
     if args.fast:
         cmd.append("--fast")
     return cmd
