@@ -60,13 +60,17 @@ function* readDiffs(base, includeWorktree) {
   }).split('\0').filter(Boolean);
   for (const path of untracked) {
     // --no-index preserves Git's binary/file-mode/filename presentation without
-    // staging the file (including empty files and symlinks). Exit 1 means a
-    // difference, not a read error; every other nonzero result fails closed.
-    const result = spawnSync('git', [...DIFF_ARGS, '--no-index', '--', '/dev/null', path], {
+    // staging the file (including empty files and symlinks). Git recognizes
+    // /dev/null on every platform, but a bare "-" means stdin even after --.
+    const diffPath = path === '-' ? './-' : path;
+    const result = spawnSync('git', [...DIFF_ARGS, '--no-index', '--', '/dev/null', diffPath], {
       encoding: 'utf8', maxBuffer: MAX_DIFF_BYTES,
     });
     if (result.error) throw result.error;
-    if (result.status !== 0 && result.status !== 1) {
+    // Exit 1 means either a difference OR some read errors. A real addition
+    // always emits a patch, even for an empty file. Do not reject stderr alone:
+    // Git can warn about CRLF conversion alongside a successfully read patch.
+    if ((result.status !== 0 && result.status !== 1) || (result.status === 1 && !result.stdout)) {
       throw new Error(`Cannot read untracked diff for ${path}: ${result.stderr.trim() || result.signal || result.status}`);
     }
     yield result.stdout;

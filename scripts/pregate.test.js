@@ -158,6 +158,7 @@ describe('pregate hidden-content invocation', () => {
   );
 
   it('passes clean uncommitted changes even when the plan selects no lint or tests', () => {
+    git('config', 'core.autocrlf', 'true');
     write(trackedPath, `${clean}staged\n`);
     git('add', '--', trackedPath);
     write(trackedPath, `${clean}unstaged\n`);
@@ -180,16 +181,29 @@ describe('pregate hidden-content invocation', () => {
     expect(snapshot()).toEqual(before);
   });
 
-  it('preserves binary and empty-file path findings for untracked additions', () => {
+  it('preserves binary, empty-file, and stdin-like path findings for untracked additions', () => {
     const emptyPath = 'docs/empty\u200B.md';
     write(emptyPath, '');
     write('docs/payload.bin', Buffer.from([0, 1, 2]));
+    write('-', hidden);
     const before = snapshot();
     const result = run('--skip-lint');
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(`${emptyPath}:1 — hidden-unicode: filename`);
     expect(result.stderr).toContain('docs/payload.bin:1 — opaque-binary:');
+    expect(result.stderr).toContain('./-:2 — hidden-unicode:');
     expect(snapshot()).toEqual(before);
+  });
+
+  it('rejects a no-index read error even when Git reports the difference exit code', () => {
+    // Git lists an untracked nested repository as a directory. Comparing that
+    // path with /dev/null fails with exit 1 and no patch, rather than exit 2.
+    git('init', '-q', 'docs/nested');
+    write('docs/nested/example.md', clean);
+    const result = run('--skip-lint');
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('Cannot read untracked diff for docs/nested/');
+    expect(result.stdout).not.toContain('Pregate passed');
   });
 
   it('fails closed when Git cannot read a blob in the requested committed diff', () => {
