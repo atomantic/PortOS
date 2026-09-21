@@ -1901,8 +1901,8 @@ BEGIN
   END IF;
 
   newj := to_jsonb(NEW);
-  was_deleted := COALESCE((oldj->>'deleted')::boolean, oldj->>'deleted_at' IS NOT NULL, false);
-  now_deleted := COALESCE((newj->>'deleted')::boolean, newj->>'deleted_at' IS NOT NULL, false);
+  was_deleted := COALESCE((oldj->>'deleted')::boolean, false) OR oldj->>'deleted_at' IS NOT NULL;
+  now_deleted := COALESCE((newj->>'deleted')::boolean, false) OR newj->>'deleted_at' IS NOT NULL;
   IF now_deleted AND NOT was_deleted THEN
     v_action := 'tombstone';
   ELSIF was_deleted AND NOT now_deleted THEN
