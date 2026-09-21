@@ -12354,6 +12354,70 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "Publisher-reported agentic-coding evaluation of the released weights, not a measurement of the quantized GGUF build PortOS installs or of this machine. Scores are only comparable to another row whose scaffold, turn budget and sampling settings match — read the configuration field before ranking two models against each other. Cohere's release table mixes its own runs with public reports and Artificial Analysis values and is not one uniform evaluation; Cohere separately headlines 80.2 pass@10 on an SFT checkpoint, which is a different measurement."
+    },
+    {
+      "id": "xai-grok-4.7-pricing-2026-09-21-standard",
+      "provider": "xAI",
+      "model": "grok-4.7",
+      "effort": "unspecified",
+      "configuration": "xAI API grok-4.7; input context at most 200,000 tokens",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-21)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+        }
+      },
+      "outputPerMillion": {
+        "value": 6,
+        "source": {
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Cached input is $0.50/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
+    },
+    {
+      "id": "xai-grok-4.7-pricing-2026-09-21-long-context",
+      "provider": "xAI",
+      "model": "grok-4.7",
+      "effort": "unspecified",
+      "configuration": "xAI API grok-4.7; input context above 200,000 tokens, up to 500,000",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-09-21)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+        }
+      },
+      "outputPerMillion": {
+        "value": 12,
+        "source": {
+          "url": "https://docs.x.ai/developers/models/grok-4.7",
+          "retrievedAt": "2026-09-21T00:00:00Z",
+          "methodology": "Official xAI Grok 4.7 model documentation; published USD per million tokens for this context tier. No benchmark or runtime measurement."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Cached input is $1.00/M for this tier. Text and image input, text output; function calling and structured output supported. Reasoning efforts low, medium, high and xhigh; default high. No Grok 4.6 quality or speed measurements transferred. Grok Build subscription quota and fast-variant pricing are not represented."
     }
   ]
 }

@@ -13,6 +13,19 @@ The catalog contains comprehensive public configurations across major providers 
 - Every metric carries its own source URL, retrieval date and methodology. End-to-end response measurements must name input/output lengths, reasoning inclusion and percentile/window. They are independent of the intelligence evaluation. Unknown metrics are `null`.
 - Entries older than 30 days are visibly stale. This is a freshness cue, not a guarantee that more recent data is correct. A schema validates structure, not the source's truth.
 
+## Grok 4.7 — September 21, 2026
+
+[xAI announced Grok 4.7](https://x.ai/news/grok-4-7) for its API and Grok Build. The native `grok models` catalog lists `grok-4.7` as its default, alongside `grok-4.7-build-fast`, `grok-4.6` and `grok-4.5`. Fresh PortOS Grok CLI/TUI and xAI API presets default to 4.7; upgrades add the model without changing existing selections or custom arguments. Gateway model IDs remain specific to their own catalogs.
+
+The [official model documentation](https://docs.x.ai/developers/models/grok-4.7) specifies a 500,000-token context window, text/image input, text output, function calling and structured outputs. API reasoning effort supports `low`, `medium`, `high` and `xhigh`, defaulting to `high`. These are API capabilities; PortOS's existing CLI context budget remains unchanged.
+
+| Input context | Input USD/M | Cached input USD/M | Output USD/M |
+| --- | ---: | ---: | ---: |
+| At most 200,000 tokens | 2.00 | 0.50 | 6.00 |
+| Above 200,000 tokens | 4.00 | 1.00 | 12.00 |
+
+The comparison seed records these two pricing configurations with separate provenance. Grok 4.7 quality, measured speed, latency, cost per benchmark task and subscription quota remain unknown; historical Grok 4.6 evaluations retain their original identity. Usage estimates use the standard tier and disclose their approximation; they do not model the long-context surcharge. The fast variant is a separate offering and is not assigned these base-model prices in the comparison catalog.
+
 ## Research workflow
 
 1. Choose a browsing-capable CoS provider and model in the Comparison research panel and save. The `model-comparison-refresh` task ships **disabled and on-demand**; boot and page reads make no LLM calls.

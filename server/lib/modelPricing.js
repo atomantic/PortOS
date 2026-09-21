@@ -15,7 +15,7 @@
  * >90% of input volume, so pricing them at the standard input rate (or, as
  * PortOS did before #3124, not counting the tokens at all) is the single largest
  * source of error in the estimate. Verified against the official pricing pages
- * on PRICING_AS_OF:
+ * on PRICING_AS_OF, with newer model-specific verification noted below:
  *   - https://platform.claude.com/docs/en/about-claude/pricing
  *   - https://developers.openai.com/api/docs/pricing
  *   - https://docs.x.ai/docs/pricing
@@ -86,6 +86,10 @@ const EXACT_RATES = {
   'gpt-5.4-nano': [0.2, 1.25],
   'gpt-5.3-codex': [1.75, 14.0],
   // xAI
+  // Verified 2026-09-21: https://docs.x.ai/developers/models/grok-4.7
+  // Standard <=200k input tier; >200k uses $4/$12 and is not modeled here.
+  'grok-4.7': [2.0, 6.0],
+  'grok-4.6': [2.0, 6.0],
   'grok-4.5': [2.0, 6.0],
   'grok-4.3': [1.25, 2.5],
   'grok-build-0.1': [1.0, 2.0],
@@ -140,7 +144,7 @@ const FAMILY_RULES = [
   { test: /gpt/i, rateModel: 'gpt-5.4' },
   { test: /grok-build/i, rateModel: 'grok-build-0.1' },
   { test: /grok-4\.20/i, rateModel: 'grok-4.3' },
-  { test: /grok/i, rateModel: 'grok-4.5' },
+  { test: /grok/i, rateModel: 'grok-4.7' },
   { test: /gemini|antigravity/i, rateModel: 'gemini-3.1-pro-preview' },
 ];
 
@@ -148,7 +152,7 @@ const FAMILY_RULES = [
 const PROVIDER_DEFAULT_RULES = [
   { test: /claude/i, rateModel: 'claude-sonnet-4-5' },
   { test: /codex|openai/i, rateModel: 'gpt-5.3-codex' },
-  { test: /grok|xai/i, rateModel: 'grok-4.5' },
+  { test: /grok|xai/i, rateModel: 'grok-4.7' },
   { test: /antigravity|agy|gemini|google/i, rateModel: 'gemini-3.1-pro-preview' },
   // Cerebras hosts a small, uniformly cheap catalog; its flagship's rates are a
   // far better estimate for an unrecognized id (e.g. a preview model picked up
@@ -172,8 +176,9 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  *     Claude Code does not use — `cache_creation_input_tokens` is 5-minute).
  *   - OpenAI: 0.1x cached input; only gpt-5.6 lists a separate cache-write rate
  *     (~1.25x), and Codex reports no cache-write tokens at all.
- *   - xAI: cached prompt tokens run 0.15-0.20x depending on the model (0.15x on
- *     grok-4.5); no published cache-write surcharge.
+ *   - xAI: Grok 4.7's cached input is $0.50/M (0.25x), verified 2026-09-21;
+ *     Grok 4.5 retains its 0.15x estimate. No published cache-write surcharge
+ *     for Grok 4.7: uncached input uses its standard input rate.
  *   - Google: 0.1x cached input, plus an hourly storage fee we do not model
  *     (PortOS records no cache duration to price it against).
  *
@@ -191,6 +196,7 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  */
 const DEFAULT_CACHE_MULTIPLIERS = { read: 0.1, write: 1.25 };
 const CACHE_MULTIPLIER_RULES = [
+  { test: /^grok-4\.7$/, read: 0.25, write: 1 },
   { test: /^grok/, read: 0.15, write: 1.25 },
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
 ];
