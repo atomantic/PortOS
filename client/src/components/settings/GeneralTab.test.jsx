@@ -67,6 +67,10 @@ describe('GeneralTab unsaved changes', () => {
     const headings = screen.getAllByRole('heading').map(heading => heading.textContent);
     expect(headings).toEqual(expect.arrayContaining(['Timezone', 'Interface Theme']));
     expect(headings.indexOf('Timezone')).toBeLessThan(headings.indexOf('Interface Theme'));
+    expect(screen.getByTestId('general-timezone-card').parentElement).toHaveClass(
+      'grid-cols-1',
+      '@min-[52rem]:grid-cols-2',
+    );
   });
 
   it('guards edits made against the displayed fallback after loading fails', async () => {
@@ -279,6 +283,7 @@ describe('GeneralTab unsaved changes', () => {
     await act(async () => {
       fireEvent.click(within(timezoneCard()).getByRole('button', { name: 'Save' }));
     });
+    expect(within(timezoneCard()).getByRole('alert')).toHaveTextContent('timezone offline');
     expect(within(timezoneCard()).getByText('Unsaved changes')).toBeInTheDocument();
 
     await navigate(router, '/settings/security');
@@ -295,6 +300,7 @@ describe('GeneralTab unsaved changes', () => {
     await act(async () => {
       fireEvent.click(within(locationCard()).getByRole('button', { name: 'Save' }));
     });
+    expect(within(locationCard()).getByRole('alert')).toHaveTextContent('location offline');
     expect(within(locationCard()).getByText('Unsaved changes')).toBeInTheDocument();
 
     await navigate(router, '/settings/security');

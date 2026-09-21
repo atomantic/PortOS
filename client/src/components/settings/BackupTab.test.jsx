@@ -47,12 +47,42 @@ beforeEach(() => {
 
 // Render and wait for the loading spinner to clear (the Save button only
 // appears post-load).
-const renderTab = async () => {
+const renderTab = async ({ openExclusions = true, openSnapshots = true } = {}) => {
   render(<BackupTab />);
   await waitFor(() => expect(screen.getByRole('button', { name: /^Save$/i })).toBeTruthy());
+  if (openExclusions) {
+    fireEvent.click(screen.getByRole('button', { name: /^Exclusions/i }));
+  }
+  if (openSnapshots) {
+    fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+  }
 };
 
 describe('BackupTab', () => {
+  describe('task-first workspace', () => {
+    it('keeps exclusions and snapshot history behind named disclosures', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-hidden' }]);
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      const exclusions = screen.getByRole('button', { name: /^Exclusions/i });
+      const snapshots = screen.getByRole('button', { name: /^Snapshot history/i });
+      expect(exclusions).toHaveAttribute('aria-expanded', 'false');
+      expect(snapshots).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByLabelText(/Additional Exclude Paths/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('snap-hidden')).not.toBeInTheDocument();
+
+      const content = screen.getByTestId('backup-settings-workspace').textContent;
+      expect(content.indexOf('Backup health')).toBeLessThan(content.indexOf('Run Backup Now'));
+      expect(content.indexOf('Run Backup Now')).toBeLessThan(content.indexOf('Exclusions'));
+      expect(content.indexOf('Exclusions')).toBeLessThan(content.indexOf('Snapshot history'));
+
+      fireEvent.click(exclusions);
+      expect(screen.getByLabelText(/Additional Exclude Paths/i)).toBeInTheDocument();
+      fireEvent.click(snapshots);
+      expect(await screen.findByText('snap-hidden')).toBeInTheDocument();
+    });
+  });
+
   describe('settings save flow', () => {
     it('persists the destination path and toasts success', async () => {
       updateSettings.mockResolvedValue({});
