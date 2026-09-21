@@ -179,9 +179,11 @@ export default function CodeReviewersTab() {
             <Banner key={`config-${reviewer}`} tone="warning" size="sm" align="left">
               {reviewer} cannot review on this install ({fault.code}). The review loop is currently a no-op for this reviewer. {fault.code === 'NO_MODEL'
                 ? 'Select a model in this tab.'
-                : fault.code === 'REVIEWER_UNSUPPORTED'
-                  ? 'Switch the provider to API mode or choose a supported tool-free review harness.'
-                  : 'Enable or configure the reviewer in Settings → Code Reviewers.'}
+                : fault.code === 'REVIEWER_ACCESS_DENIED'
+                  ? 'Select an accessible service or model, or correct provider access. A successful review clears this warning.'
+                  : fault.code === 'REVIEWER_UNSUPPORTED'
+                    ? 'Switch the provider to API mode or choose a supported tool-free review harness.'
+                    : 'Enable or configure the reviewer in Settings → Code Reviewers.'}
             </Banner>
           ))}
           <div className="space-y-1">

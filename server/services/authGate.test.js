@@ -178,7 +178,7 @@ describe('authGate middleware', () => {
   // or every canned `curl` in its own prompt is a 401 it reads as a dead
   // endpoint. Minted through the real service against the real gate — the two
   // halves are wired far apart (spawn env vs. Express middleware).
-  it('accepts the loopback token PortOS mints for its own agents', async () => {
+  it.each(['/api/code-review/local', '/api/code-review/cli-outcome'])('accepts the loopback agent token for %s', async (path) => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
     const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
@@ -186,7 +186,7 @@ describe('authGate middleware', () => {
     const { authGate } = await import('./authGate.js');
 
     const result = await runGate(authGate, {
-      path: '/api/code-review/local',
+      path,
       headers: { authorization: `Bearer ${PORTOS_API_TOKEN}` },
     });
 
@@ -196,13 +196,13 @@ describe('authGate middleware', () => {
 
   // …and the `${PORTOS_API_TOKEN:-}` default in those prompts is not a bypass:
   // an agent that never received a token is still refused.
-  it('refuses the empty bearer an unprovisioned agent would send', async () => {
+  it.each(['/api/code-review/local', '/api/code-review/cli-outcome'])('refuses an empty agent bearer for %s', async (path) => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
     const { authGate } = await import('./authGate.js');
 
     const result = await runGate(authGate, {
-      path: '/api/code-review/local',
+      path,
       headers: { authorization: 'Bearer ' },
     });
 

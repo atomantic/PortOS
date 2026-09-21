@@ -17,6 +17,7 @@ vi.mock('../../lib/httpsState.js', () => ({
 
 import { getHttpsEnabledAtBoot } from '../../lib/httpsState.js';
 import { buildReviewLoopFollowUpSection, prepareSandboxedReviewLoopBody } from './reviewLifecycle.js';
+import { buildLocalReviewerInstructions } from '../cosTaskPrompts.js';
 
 const metadata = {
   reviewLoopFollowUp: true,
@@ -32,12 +33,29 @@ describe('reviewLifecycle agent-facing API origin', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    getHttpsEnabledAtBoot.mockReturnValue({ value: false, initialized: true });
     delete process.env.PORT;
     delete process.env.PORTOS_HTTP_PORT;
   });
 
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('reports CLI health from claims and review loops without giving reviewers the token', () => {
+    getHttpsEnabledAtBoot.mockReturnValue({ value: true, initialized: true });
+    const sections = [
+      buildLocalReviewerInstructions(['opencode', 'codex']),
+      buildReviewLoopFollowUpSection({ ...metadata, reviewLoopReviewers: ['opencode', 'codex'], reviewLoopOptionalReviewers: ['opencode'] }),
+    ];
+    for (const section of sections) {
+      expect(section).toContain('http://127.0.0.1:5553/api/code-review/cli-outcome');
+      expect(section).toContain('-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"');
+      expect(section).toContain('never pass it or these reporting instructions to a reviewer');
+      expect(section).toContain('A recorded failure is INCONCLUSIVE, never clean');
+      expect(section).toContain('preserve the configured reviewer list and optional-review policy');
+    }
+    expect(buildLocalReviewerInstructions(['ollama'])).not.toContain('/cli-outcome');
   });
 
   it('points the challenge-protocol curl at the loopback HTTP mirror when HTTPS is active', () => {

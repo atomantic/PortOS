@@ -11,6 +11,7 @@ import { agentApiAuthNote, agentApiCurl } from '../../lib/agentApiToken.js';
 import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../../lib/localReviewBridge.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
+import { buildCliReviewerOutcomeInstructions } from './reviewerOutcome.js';
 
 // A large model reviewing a large diff should not be cut off at the HTTP
 // route's 600000ms cap (`server/routes/codeReview.js`) — the bridge spreads
@@ -860,7 +861,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const maxRoundsNote = maxRoundsEntries.length
     ? `**Round caps (~max):** stop these reviewers after their budget even if findings remain, then advance: ${maxRoundsEntries.join(', ')}. Spending a configured budget is a SUCCESS, not a failure — do not block the merge on it. Reviewers not listed keep the default cap below.`
     : '';
-  const extraNotes = [untrustedReviewExecutionNote, reviewScopeNote, crossPhaseStopModeNote, stopModeNote, applyNote, maxRoundsNote, missingCliNote, phase.requiredReviewNote, optionalReviewNote, phase.rebaseNote, phase.statePersistenceNote].filter(Boolean);
+  const extraNotes = [untrustedReviewExecutionNote, reviewScopeNote, buildCliReviewerOutcomeInstructions(cliReviewers), crossPhaseStopModeNote, stopModeNote, applyNote, maxRoundsNote, missingCliNote, phase.requiredReviewNote, optionalReviewNote, phase.rebaseNote, phase.statePersistenceNote].filter(Boolean);
 
   // Inline slashdo's local-agent review loop when a spawnable CLI reviewer is
   // configured. This is the maintained, precise recipe — exact per-CLI headless

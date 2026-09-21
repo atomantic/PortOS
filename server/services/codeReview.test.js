@@ -3,12 +3,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // Mock the settings store before importing the SUT — the resolver reads
 // `settings.codeReview` synchronously on every call and we want test-local
 // control of that value without touching disk.
-const mockedSettings = { current: {} }
+const mockedSettings = { current: {}, writes: Promise.resolve() }
 vi.mock('./settings.js', () => ({
   getSettings: () => Promise.resolve(mockedSettings.current),
-  updateSettingsWith: vi.fn(async (mutate) => {
-    mockedSettings.current = await mutate(mockedSettings.current)
-    return mockedSettings.current
+  updateSettingsWith: vi.fn((mutate) => {
+    const write = mockedSettings.writes.then(async () => {
+      mockedSettings.current = await mutate(mockedSettings.current)
+      return mockedSettings.current
+    })
+    mockedSettings.writes = write.catch(() => {})
+    return write
   }),
   // Stub the EventEmitter shape the module subscribes to for cache
   // invalidation — only `.on()` is hit at import time; the SUT never emits.
@@ -284,6 +288,19 @@ describe('codeReview helpers', () => {
       mockedSettings.current = { codeReview: { reviewers: ['ollama'] } }
       expect(await reportReviewerFailure('ollama', { error: 'ollama timed out' }, 100)).toBe(false)
       expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
+    })
+
+    it('preserves another reviewer failure arriving while a success clears its warning', async () => {
+      mockedSettings.current = { codeReview: {
+        reviewerHealth: { opencode: { code: 'REVIEWER_ACCESS_DENIED', reason: 'configuration', lastFailureAt: 100 } },
+      } }
+      await Promise.all([
+        reportReviewerSuccess('opencode', 200),
+        reportReviewerFailure('ollama', { code: 'NO_MODEL' }, 200),
+      ])
+      expect(mockedSettings.current.codeReview.reviewerHealth).toEqual({
+        ollama: { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 200 },
+      })
     })
   })
 
