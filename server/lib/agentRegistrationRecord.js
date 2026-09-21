@@ -54,6 +54,7 @@ export function buildAgentRegistration({
   prOpenedBy,
   claimFlowTask,
   selectedModel,
+  effort = null,
   modelSelection,
   runId,
   dispatchUseRunner,
@@ -152,11 +153,10 @@ export function buildAgentRegistration({
     // straight through instead of correcting it.
     prOpenedBy,
     model: selectedModel,
-    // The reasoning-effort override this run was dispatched with (null when the
-    // task pinned none). Persisted next to the model because the Resume Agent
-    // modal seeds its own effort select from here — without it a resume of an
-    // effort-pinned run silently drops back to the provider default.
-    effort: task.metadata?.effort || null,
+    // The resolved run effort, including an inherited provider default and any
+    // capability suppression. Resume and the run card must describe the same
+    // setting handed to the launch builders.
+    effort,
     modelTier: modelSelection.tier,
     modelReason: modelSelection.reason,
     runId,
