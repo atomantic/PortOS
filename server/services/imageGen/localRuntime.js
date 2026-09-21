@@ -88,10 +88,23 @@ export async function diagnoseLocalRuntime({ modelId: requestedModelId, settings
     const healthy = await isFlux2VenvHealthy(model.pipelineClass).then((value) => value).catch(() => null);
     if (healthy === true) return verdict({ readiness: READY });
     if (healthy === false) {
+      // Distinguish "no runtime" from "runtime is there but too old for THIS
+      // model's pipeline" — both need the same installer run, but the second
+      // read as a contradiction ("install" → "already installed") while the
+      // copy claimed nothing was installed.
+      const baseHealthy = model.pipelineClass
+        ? await isFlux2VenvHealthy().then((value) => value).catch(() => false)
+        : false;
       return verdict({
         readiness: UNAVAILABLE,
-        reason: `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT})`,
-        remedy: { kind: IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV, label: 'Install runtime', venvPath: FLUX2_VENV_DEFAULT },
+        reason: baseHealthy
+          ? `The shared torch image runtime is installed but too old for ${model.pipelineClass} — it needs an update (${FLUX2_VENV_DEFAULT})`
+          : `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT})`,
+        remedy: {
+          kind: IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV,
+          label: baseHealthy ? 'Update runtime' : 'Install runtime',
+          venvPath: FLUX2_VENV_DEFAULT,
+        },
       });
     }
     return verdict({ readiness: UNKNOWN, reason: 'Could not verify the shared torch image runtime' });

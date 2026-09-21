@@ -548,6 +548,26 @@ describe('isFlux2VenvHealthy', () => {
     await expect(isFlux2VenvHealthy('QwenImage21Pipeline')).resolves.toBe(true);
   });
 
+  it('reports the install as unsatisfied when a verified pipeline class is missing', async () => {
+    // The bug this pins: the installer's readiness GATE probed only the base
+    // FLUX.2 pipeline, so a venv whose diffusers predates QwenImage21Pipeline
+    // answered the Install button with "already installed — nothing to do"
+    // while the per-model banner said the runtime was unavailable.
+    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
+    mockState.missingPipeline = 'QwenImage21Pipeline';
+    const { isFlux2InstallSatisfied, isFlux2VenvHealthy } = await loadModule();
+    await expect(isFlux2VenvHealthy()).resolves.toBe(true);
+    await expect(isFlux2InstallSatisfied()).resolves.toBe(false);
+  });
+
+  it('also requires the selected model pipeline class the verify stage does not cover', async () => {
+    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
+    mockState.missingPipeline = 'ErnieImagePipeline';
+    const { isFlux2InstallSatisfied } = await loadModule();
+    await expect(isFlux2InstallSatisfied()).resolves.toBe(true);
+    await expect(isFlux2InstallSatisfied('ErnieImagePipeline')).resolves.toBe(false);
+  });
+
   it('caches a healthy result indefinitely', async () => {
     mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
     vi.useFakeTimers();

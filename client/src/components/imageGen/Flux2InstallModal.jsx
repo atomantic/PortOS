@@ -26,15 +26,24 @@ const STAGES = [
 
 const STAGE_INDEX = Object.fromEntries(STAGES.map((s, i) => [s.id, i]));
 
-export default function Flux2InstallModal({ open, onClose, onComplete }) {
+/**
+ * `modelId` scopes the server's "already installed?" gate to the model the user
+ * is trying to render with. Omitting it gates on the base FLUX.2 pipeline only,
+ * which reports "nothing to do" for a venv whose diffusers predates a newer
+ * model's pipeline class — the install button that did nothing.
+ */
+export default function Flux2InstallModal({ open, onClose, onComplete, modelId = null }) {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   // The shared install-stream hook owns the fetch-stream lifecycle, log
   // accumulation, stage tracking, connection-lost handling and auto-scroll.
   // onComplete is ref-stashed inside the hook so ImageGen's frequent state
   // churn (gallery, generating, localProgress) can't kill the install
   // mid-stream by re-running the effect.
+  const installUrl = modelId
+    ? `/api/image-gen/setup/flux2-install?modelId=${encodeURIComponent(modelId)}`
+    : '/api/image-gen/setup/flux2-install';
   const { logs, currentStage, done, error, logsEndRef, close } = useInstallStream(
-    '/api/image-gen/setup/flux2-install',
+    installUrl,
     { enabled: open, onComplete, method: 'POST' },
   );
 

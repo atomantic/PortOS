@@ -1877,6 +1877,7 @@ export default function ImageGen() {
         open={flux2InstallOpen}
         onClose={handleFlux2ModalClose}
         onComplete={handleFlux2InstallComplete}
+        modelId={modelId}
       />
     </div>
   );

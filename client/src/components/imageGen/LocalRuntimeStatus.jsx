@@ -125,7 +125,7 @@ export default function LocalRuntimeStatus({
           </span>
         )}
       </Banner>
-      <Flux2InstallModal open={installOpen} onClose={closeInstall} onComplete={handleInstallComplete} />
+      <Flux2InstallModal open={installOpen} onClose={closeInstall} onComplete={handleInstallComplete} modelId={runtime.modelId} />
     </>
   );
 }
