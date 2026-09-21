@@ -57,7 +57,7 @@ while (attempt < MAX_ATTEMPTS) {
   }
 
   const detail = data.details ? ` (${data.details})` : '';
-  console.log(`❌ [${timestamp}] Attempt ${attempt} — ${data.error}${detail} — retrying in ${BACKOFF_MS / 1000}s`);
+  console.error(`❌ [${timestamp}] Attempt ${attempt} — ${data.error}${detail} — retrying in ${BACKOFF_MS / 1000}s`);
   await sleep(BACKOFF_MS);
 }
 

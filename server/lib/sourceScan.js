@@ -36,13 +36,41 @@ export function blankComments(src) {
   return src.split('\n').map((line) => (/^\s*(\/\/|\*|\/\*)/.test(line) ? '' : line));
 }
 
+// Keywords a regex literal may directly follow. A `/` after one of these is
+// never division, because a keyword cannot be an operand — `await /[)]/.test(s)`
+// and `return /a/` both open a regex. Reading one as division blanked nothing,
+// so the regex body's own brackets skewed the caller's bracket walk.
+const KEYWORDS_BEFORE_REGEX = new Set([
+  'await', 'case', 'delete', 'do', 'else', 'in', 'instanceof', 'new', 'of',
+  'return', 'throw', 'typeof', 'void', 'yield',
+]);
+
+/**
+ * The identifier ending at `end` (exclusive) in the character ARRAY `chars`, or
+ * '' when the preceding character is not an identifier character. Reads the
+ * PARTIALLY BLANKED output, so a keyword spelled inside an already-blanked
+ * string or comment is invisible here — which is the point.
+ */
+function wordEndingAt(chars, end) {
+  let start = end;
+  while (start > 0 && /[A-Za-z0-9_$]/.test(chars[start - 1])) start -= 1;
+  // `obj.in` / `obj.return` are property reads, not keywords.
+  if (start > 0 && chars[start - 1] === '.') return '';
+  return chars.slice(start, end).join('');
+}
+
 /**
  * True when a `/` at this position opens a regex literal rather than division.
  * A regex can only follow a position where an operand cannot: an operator, an
- * opening bracket, a statement boundary, or the start of the file.
+ * opening bracket, a statement boundary, a keyword, or the start of the file.
  */
-function regexCanStartAfter(prev) {
-  return prev === '' || '(,=:[!&|?{};+-*%~^<>'.includes(prev);
+function regexCanStartAfter(prev, chars, at) {
+  if (prev === '' || '(,=:[!&|?{};+-*%~^<>'.includes(prev)) return true;
+  if (!/[A-Za-z0-9_$]/.test(prev)) return false;
+  // Step back over the whitespace between the keyword and the `/`.
+  let end = at;
+  while (end > 0 && /\s/.test(chars[end - 1])) end -= 1;
+  return KEYWORDS_BEFORE_REGEX.has(wordEndingAt(chars, end));
 }
 
 /**
@@ -52,12 +80,18 @@ function regexCanStartAfter(prev) {
  * sees code only — and a caller that needs a literal's text (a socket event
  * name, say) can still read it out of the original string at the same offset.
  * @param {string} src
+ * @param {{keepLiteralText?: boolean}} [options] `keepLiteralText` leaves
+ *   string/template/regex CONTENT in place and blanks only comments — reach it
+ *   through `blankCommentBodies`. The lex is identical either way, so the two
+ *   modes cannot disagree about where a comment ends and a literal begins.
  * @returns {string} same length as `src`
  */
-export function blankLiterals(src) {
+export function blankLiterals(src, { keepLiteralText = false } = {}) {
   const out = src.split('');
   const n = src.length;
   const blank = (i) => { if (i < n && src[i] !== '\n') out[i] = ' '; };
+  // Blanks a character belonging to a LITERAL rather than to a comment.
+  const blankLit = keepLiteralText ? () => {} : blank;
   // Brace depths of the code regions opened by `${` inside template literals,
   // so a nested template resumes correctly at its closing `}`.
   const templateStack = [];
@@ -73,17 +107,17 @@ export function blankLiterals(src) {
     const c = src[i];
 
     if (inTemplate) {
-      if (c === '\\') { blank(i); blank(i + 1); i += 2; continue; }
-      if (c === '`') { blank(i); i += 1; inTemplate = false; prevSignificant = '`'; continue; }
+      if (c === '\\') { blankLit(i); blankLit(i + 1); i += 2; continue; }
+      if (c === '`') { blankLit(i); i += 1; inTemplate = false; prevSignificant = '`'; continue; }
       if (c === '$' && src[i + 1] === '{') {
-        blank(i); blank(i + 1); i += 2;
+        blankLit(i); blankLit(i + 1); i += 2;
         templateStack.push(braceDepth);
         braceDepth = 0;
         inTemplate = false;
         prevSignificant = '{';
         continue;
       }
-      blank(i); i += 1; continue;
+      blankLit(i); i += 1; continue;
     }
 
     if (c === '/' && src[i + 1] === '/') {
@@ -97,29 +131,29 @@ export function blankLiterals(src) {
     }
     if (c === "'" || c === '"') {
       const quote = c;
-      blank(i); i += 1;
+      blankLit(i); i += 1;
       while (i < n && src[i] !== quote) {
-        if (src[i] === '\\') { blank(i); i += 1; }
-        blank(i); i += 1;
+        if (src[i] === '\\') { blankLit(i); i += 1; }
+        blankLit(i); i += 1;
       }
-      blank(i); i += 1;
+      blankLit(i); i += 1;
       prevSignificant = quote;
       continue;
     }
-    if (c === '`') { blank(i); i += 1; inTemplate = true; continue; }
-    if (c === '/' && regexCanStartAfter(prevSignificant)) {
-      blank(i); i += 1;
+    if (c === '`') { blankLit(i); i += 1; inTemplate = true; continue; }
+    if (c === '/' && regexCanStartAfter(prevSignificant, out, i)) {
+      blankLit(i); i += 1;
       let inClass = false;
       while (i < n && src[i] !== '\n') {
-        if (src[i] === '\\') { blank(i); blank(i + 1); i += 2; continue; }
+        if (src[i] === '\\') { blankLit(i); blankLit(i + 1); i += 2; continue; }
         if (src[i] === '[') inClass = true;
         else if (src[i] === ']') inClass = false;
         else if (src[i] === '/' && !inClass) break;
-        blank(i); i += 1;
+        blankLit(i); i += 1;
       }
-      blank(i); i += 1;
+      blankLit(i); i += 1;
       // Blank the flags too so `gi` can't be read as an identifier.
-      while (i < n && /[a-z]/.test(src[i])) { blank(i); i += 1; }
+      while (i < n && /[a-z]/.test(src[i])) { blankLit(i); i += 1; }
       prevSignificant = ')';
       continue;
     }
@@ -127,7 +161,8 @@ export function blankLiterals(src) {
     if (c === '{') braceDepth += 1;
     else if (c === '}') {
       if (braceDepth === 0 && templateStack.length > 0) {
-        blank(i); i += 1;
+        // Closes a `${…}` hole, so it is part of the template literal.
+        blankLit(i); i += 1;
         braceDepth = templateStack.pop();
         inTemplate = true;
         continue;
@@ -139,6 +174,22 @@ export function blankLiterals(src) {
   }
 
   return out.join('');
+}
+
+/**
+ * Blank COMMENT bodies only, leaving string/template/regex text in place and
+ * preserving length. The complement to `blankLiterals`, for a caller that reads
+ * a construct's literal TEXT (a log message and the marker emoji in it) and
+ * must not be fooled by that same marker appearing in a comment beside it.
+ *
+ * Shares one lexer with `blankLiterals`, so the two agree by construction about
+ * where a comment ends and a literal begins — a second, independent
+ * comment-stripper is exactly how a `//` inside a string starts eating code.
+ * @param {string} src
+ * @returns {string} same length as `src`
+ */
+export function blankCommentBodies(src) {
+  return blankLiterals(src, { keepLiteralText: true });
 }
 
 /**

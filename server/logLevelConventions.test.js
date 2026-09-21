@@ -41,7 +41,8 @@
  * ## What this guard CANNOT see
  *
  * It is a lexer-assisted source scan, not a scope-aware AST pass. It reads the
- * ARGUMENT TEXT of a literal `console.log(` call, which means:
+ * ARGUMENT TEXT (comment bodies blanked) of a literal `console.log(` call,
+ * which means:
  *
  *   - A message built into a variable first (`const line = `FAILMARK …`;
  *     console.log(line);`) is invisible. That is the same shape the mixed-sink
@@ -62,7 +63,7 @@ import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { blankLiterals, matchBracket } from './lib/sourceScan.js';
+import { blankCommentBodies, blankLiterals, matchBracket } from './lib/sourceScan.js';
 
 const SERVER_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -76,14 +77,18 @@ const FAILURE_MARKERS = [CROSS_MARK, NO_ENTRY];
 const CONSOLE_LOG_OPEN = /\bconsole\s*\.\s*log\s*\(/g;
 
 /**
- * Every `console.log(…)` call in `src`, as `{ line, args }` where `args` is the
- * RAW argument text (literals intact — the markers live inside template
- * strings, which `blankLiterals` would erase). Call boundaries come from the
- * BLANKED copy so a `)` inside a string cannot end the span early and a
- * multi-line call is captured whole rather than by a fixed line window.
+ * Every `console.log(…)` call in `src`, as `{ line, args }` where `args` keeps
+ * the literal text (the markers live inside template strings, which
+ * `blankLiterals` would erase) but has COMMENT bodies blanked, so a marker
+ * written in a comment beside the message is not read as part of it.
+ *
+ * Call boundaries come from the fully BLANKED copy, so a `)` inside a string or
+ * a regex character class cannot end the span early and a multi-line call is
+ * captured whole rather than by a fixed line window.
  */
 export function consoleLogCalls(src) {
   const blanked = blankLiterals(src);
+  const codeOnly = blankCommentBodies(src);
   const calls = [];
   for (const match of blanked.matchAll(CONSOLE_LOG_OPEN)) {
     const open = blanked.indexOf('(', match.index);
@@ -91,8 +96,9 @@ export function consoleLogCalls(src) {
     if (close === -1) continue;
     calls.push({
       line: src.slice(0, match.index).split('\n').length,
-      // `close` is one past the matching `)`, so `close - 1` drops it.
-      args: src.slice(open + 1, close - 1),
+      // `close` is one past the matching `)`, so `close - 1` drops it. Both
+      // copies preserve length, so the span indexes either one.
+      args: codeOnly.slice(open + 1, close - 1),
     });
   }
   return calls;
@@ -105,7 +111,11 @@ export function findMislabeledFailureLogs(src) {
     .map(({ line, args }) => `line ${line}: ${args.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
 }
 
-const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js'], {
+// Every module extension the tree actually ships, not just `.js`: the operator
+// scripts under `server/scripts/` are `.mjs`, and one of them was logging a
+// failure through `console.log` while a `*.js`-only scan reported the tree
+// clean.
+const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
   cwd: SERVER_ROOT,
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,
@@ -116,6 +126,12 @@ describe('failure lines log at error level (#7945)', () => {
     // A broken `git ls-files` (wrong cwd, detached checkout) would otherwise let
     // every assertion below pass by scanning nothing at all.
     expect(trackedServerSources().length).toBeGreaterThan(200);
+  });
+
+  it('scans every module extension the tree ships, not only .js', () => {
+    // `server/scripts/` is `.mjs`, and a `*.js`-only glob called the tree clean
+    // while one of those scripts logged a failure through console.log.
+    expect(trackedServerSources().filter((f) => f.endsWith('.mjs')).length).toBeGreaterThan(0);
   });
 
   it('finds the console.log calls it is meant to read', () => {
@@ -212,6 +228,42 @@ describe('the failure-log recognizer', () => {
       const marker = '${CROSS_MARK}';
       console.log('fine');
     `)).toEqual([]);
+  });
+
+  it('ignores a marker in a comment INSIDE the call', () => {
+    // A comment explaining the rule sits in the argument span, so a raw-text
+    // marker search reports the message it documents as a violation.
+    expect(findMislabeledFailureLogs(
+      `console.log(/* ${CROSS_MARK} never here */ 'fine');`,
+    )).toEqual([]);
+    expect(findMislabeledFailureLogs(`
+      console.log(
+        // ${CROSS_MARK} would be wrong on this line
+        'fine',
+      );
+    `)).toEqual([]);
+    // …but a marker in the MESSAGE is still found when a comment shares the span.
+    expect(findMislabeledFailureLogs(
+      `console.log(/* explained below */ \`${CROSS_MARK} failed\`);`,
+    )).toHaveLength(1);
+  });
+
+  it('is not skewed by a regex literal that follows a keyword', () => {
+    // `await /…/` is a regex, not division. Read as division it blanks nothing,
+    // so the `)` inside the character class ends the span early and the marker
+    // after it disappears.
+    expect(findMislabeledFailureLogs(
+      `async function f() { console.log(await /[)]/.test(s), \`${CROSS_MARK} failed\`); }`,
+    )).toHaveLength(1);
+    expect(findMislabeledFailureLogs(
+      `function f() { console.log(typeof x, /[)]/.test(s), \`${CROSS_MARK} failed\`); }`,
+    )).toHaveLength(1);
+    // Division after an identifier must still read as division, or the rest of
+    // the file would be swallowed as regex body.
+    expect(findMislabeledFailureLogs(`
+      const ratio = total / count;
+      console.log(\`${CROSS_MARK} failed at \${ratio}\`);
+    `)).toHaveLength(1);
   });
 
   // Bypass probe: the scan is only worth its runtime if a reintroduced
