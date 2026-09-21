@@ -32,6 +32,7 @@ import {
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
   localToolUseHint,
   withToolUseOptionLabel,
+  withModelCapabilityOptionLabel,
   localBackendForProvider,
   knownProviderContextWindow,
   CODEX_CONTEXT_WINDOW,
@@ -1108,6 +1109,22 @@ describe('withToolUseOptionLabel', () => {
   it('leaves cloud provider labels unchanged', () => {
     const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
     expect(withToolUseOptionLabel('gpt-4o', 'GPT-4o', cloud)).toBe('GPT-4o');
+  });
+});
+
+describe('withModelCapabilityOptionLabel', () => {
+  it('combines tool-use and image-analysis badges from shared capability maps', () => {
+    const provider = { id: 'ollama', name: 'Ollama' };
+    expect(withModelCapabilityOptionLabel('example-vlm', 'Example VLM', provider, {
+      toolUseIdsByProvider: { ollama: new Set(['example-vlm']) },
+      visionIdsByProvider: { ollama: new Set(['example-vlm']) },
+    })).toBe('Example VLM · 🔧 tool use · 🖼 image analysis');
+  });
+
+  it('marks CLI providers with image analysis without model-specific metadata', () => {
+    expect(withModelCapabilityOptionLabel('example-model', 'Example model', { type: 'cli', command: 'claude' }, {
+      includeToolUse: false,
+    })).toBe('Example model · 🖼 image analysis');
   });
 });
 
@@ -2316,4 +2333,3 @@ describe('isFleetHostConfigured', () => {
     expect(isFleetHostConfigured(host, providers)).toBe(false);
   });
 });
-
