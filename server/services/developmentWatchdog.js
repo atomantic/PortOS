@@ -1,6 +1,6 @@
 /** Agent-free maintenance scans. Receipts live with the existing CoS runtime state. */
 import { randomUUID } from 'node:crypto';
-import { loadState, saveState, withStateLock } from './cosState.js';
+import { loadState, saveState, withStateLock, isImprovementEnabled } from './cosState.js';
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -70,7 +70,7 @@ async function inspectApp(app, tasks) {
   if (account === 'atomantic' && login !== 'atomantic') { row.blockers.push('required-forge-account-unavailable'); return row; }
   // Every downstream resolver receives the same explicit account pin.
   const pinned = { ...app, forgeAccount: account };
-  const { metadata: preview } = await resolveClaimWorkMetadata(pinned);
+  const { metadata: preview } = await resolveClaimWorkMetadata(pinned, 'claim-issue');
   const [prs, backlog, branches, issues] = await Promise.all([
     listAppPullRequests(pinned),
     detectActionableWork('claim-issue', pinned, { issueAuthorFilter: preview.issueAuthorFilter, issueExcludeLabels: preview.issueExcludeLabels, requireComplete: true }),
@@ -127,7 +127,7 @@ async function dispatch(app, decision) {
   // before a write. The queue's shared work-key admission is authoritative.
   const current = await loadState();
   if (!authorized(current, app.id, true) || current.paused || getDomainMode(current.config, 'cos') !== 'execute') return { reason: 'authority-changed' };
-  const { resolveAutonomyBudget, buildClaimWorkTask } = await import('./cosTaskGenerator.js');
+  const { resolveAutonomyBudget } = await import('./cosTaskGenerator.js');
   const budget = await resolveAutonomyBudget(current, Object.values(current.agents || {}).filter(a => a.status === 'running'));
   if (budget.cosAutonomyMode !== 'execute' || budget.autonomousActionsRemaining <= 0) return { reason: 'autonomy-budget' };
   const { getAllTasks, addTask } = await import('./cosTaskStore.js');
@@ -140,8 +140,40 @@ async function dispatch(app, decision) {
   if (agents.length + queued.length >= (current.config.maxConcurrentAgents || 1)
     || agents.filter(project).length + queued.filter(project).length >= (current.config.maxConcurrentAgentsPerProject || current.config.maxConcurrentAgents || 1)) return { reason: 'capacity-changed' };
   const fresh = await inspectApp(app, liveTasks);
-  const item = (decision.kind === 'pr' ? fresh.pullRequests : fresh.issues).find(row => row.number === decision.number);
+  const item = decision.kind === 'pr'
+    ? fresh.pullRequests.find(row => row.number === decision.number)
+    : fresh.issues.find(row => row.disposition === 'eligible');
   if (!fresh.complete || item?.disposition !== 'eligible' || (decision.kind === 'pr' && item.headSha !== decision.headSha)) return { reason: 'evidence-changed' };
+  if (decision.kind === 'issue') {
+    if (!isImprovementEnabled(current)) return { reason: 'improvement-disabled' };
+    const taskSchedule = await import('./taskSchedule.js');
+    // The opt-in maintainer supplies the initiation cadence, including for a
+    // manual-start perpetual drain. Reuse its continuation gate to preserve
+    // enablement, parks, failure backoff and run-after dependencies without
+    // clearing brakes or changing the operator's autoStart setting.
+    const readiness = await taskSchedule.shouldContinuePerpetualDrain('claim-issue', app.id);
+    if (!readiness.shouldRun) return { reason: readiness.reason };
+    const requests = await taskSchedule.getOnDemandRequests();
+    if (requests.some(request => request.appId === app.id && ['claim-issue', 'claim-work'].includes(request.taskType))) return { reason: 'claim-already-requested' };
+    const candidate = { metadata: { app: app.id, claimFlow: true } };
+    const owner = liveTasks.find(task => DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, candidate));
+    if (owner) return { taskId: owner.id, duplicate: true };
+    const { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } = await import('./cosTaskGenerator.js');
+    const prepared = await prepareManagedAppImprovementTask('claim-issue', app, current);
+    if (!prepared?.task) return { reason: 'claim-schedule-no-work' };
+    const finalState = await loadState();
+    if (!authorized(finalState, app.id, true) || finalState.paused || !isImprovementEnabled(finalState)
+      || getDomainMode(finalState.config, 'cos') !== 'execute') return { reason: 'authority-changed' };
+    const task = await addTask({ ...prepared.task, metadata: { ...prepared.task.metadata,
+      developmentWatchdog: true, dispatchProvenance: 'development-watchdog' } }, 'internal', { raw: true, suppressDequeue: true });
+    if (!task.duplicate) {
+      await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, taskSchedule);
+      await taskSchedule.recordExecution('task:claim-issue', app.id);
+      const { cosEvents } = await import('./cosEvents.js');
+      cosEvents.emit('cos:dequeue-requested');
+    }
+    return { taskId: task.id, duplicate: !!task.duplicate };
+  }
   const { resolveAppForgeTarget } = await import('../lib/workTracker.js');
   const { target } = await resolveAppForgeTarget(app);
   const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
@@ -155,13 +187,6 @@ async function dispatch(app, decision) {
   }
   const finalState = await loadState();
   if (!authorized(finalState, app.id, true) || finalState.paused || getDomainMode(finalState.config, 'cos') !== 'execute') return { reason: 'authority-changed' };
-  if (decision.kind === 'issue') {
-    const claim = await buildClaimWorkTask(app, { target: String(item.number) });
-    const task = await addTask({ description: `Claim issue #${item.number} for ${app.name}`, app: app.id,
-      prompt: claim.prompt, metadata: { ...claim.taskMetadata, app: app.id, claimTarget: String(item.number),
-        claimFlow: true, developmentWatchdog: true, dispatchProvenance: 'development-watchdog' } }, 'internal');
-    return { taskId: task.id, duplicate: !!task.duplicate };
-  }
   const { resolveReviewLoopOptions } = await import('./codeReview.js');
   const { normalizeReviewers, claimSafeReviewers } = await import('../lib/reviewerConfig.js');
   const { isTruthyMeta } = await import('./agentState.js');
@@ -226,7 +251,11 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
       if (!row.complete || peers.blockers.length) continue;
       const projectCount = activeAgents.filter(a => (a.metadata?.app || a.metadata?.taskApp) === id).length + queued.filter(t => t.metadata?.app === id && t.status === 'pending').length;
       let capacity = Math.min(receipt.availableSlots, Math.max(0, (state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents || 1) - projectCount));
-      for (const item of [...row.pullRequests.map(p => ({ ...p, kind: 'pr' })), ...row.issues.map(i => ({ ...i, kind: 'issue' }))]) {
+      // Issue selection belongs to the scheduled claim coordinator: one
+      // unpinned batch per repository, with its configured swarm/model routing.
+      const issueBatch = row.issues.some(issue => issue.disposition === 'eligible')
+        ? [{ kind: 'issue', number: null, disposition: 'eligible' }] : [];
+      for (const item of [...row.pullRequests.map(p => ({ ...p, kind: 'pr' })), ...issueBatch]) {
         if (item.disposition !== 'eligible') continue;
         const decision = { appId: id, kind: item.kind, number: item.number, headSha: item.headSha || null, fingerprint: item.fingerprint || null,
           outcome: capacity <= 0 ? 'capacity-full' : dryRun ? 'would-queue' : 'pending' };
@@ -236,8 +265,8 @@ async function scan({ dryRun = false, force = false, source = 'scheduled' } = {}
           Object.assign(decision, outcome, { outcome: outcome.taskId ? outcome.duplicate ? 'already-owned' : 'queued' : 'deferred' });
         }
         receipt.decisions.push(decision);
-        if (decision.taskId) {
-          const record = (item.kind === 'pr' ? row.pullRequests : row.issues).find(record => record.number === item.number);
+        if (decision.taskId && item.kind === 'pr') {
+          const record = row.pullRequests.find(record => record.number === item.number);
           record.disposition = 'queued-for-resolution'; record.taskId = decision.taskId;
         }
         if (capacity > 0 && (dryRun || decision.outcome === 'queued')) { capacity--; receipt.availableSlots--; }

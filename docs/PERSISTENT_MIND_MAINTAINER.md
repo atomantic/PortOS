@@ -45,6 +45,17 @@ not part of portable mind bundles or peer sync. Importing a mind cannot arm this
 role on the destination. No shipped seed or data migration is needed: absence
 normalizes to disabled. Do not put local configuration or private reports in Git.
 
+GitHub backlogs use the **claim-issue** scheduled task. Enable it for each managed
+app and configure its perpetual mode, batch size, provider/model, effort, filters
+and reviewers in Schedule. The maintainer hands off one unpinned coordinator per
+repository, so the existing swarm workflow selects independent issues and routes
+each worker by its model and effort labels. Successful batches continue through
+the normal perpetual drain. The maintainer cadence can initiate a manual-start
+perpetual task without changing its automatic-start setting; disabled tasks,
+parks, failure backoff, dependencies and active claims still defer dispatch.
+The master Improve switch must also be enabled. PR resolution keeps its existing
+ownership and review/merge workflow.
+
 ## Wake evidence and exploration
 
 Opted-in wakes replace the ordinary recent-action summaries with a bounded
