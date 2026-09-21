@@ -252,8 +252,11 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('Nothing has reviewed this PR yet');
     expect(section).toContain('**Cross-phase stop-mode gate:**');
     expect(section).toContain('**Required local-review merge gate:**');
+    expect(section).toContain('4. **Wait for CI to finish**');
+    expect(section).toContain('never merge on checks that were expected but never appeared');
     expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
-    expect(section).toContain(`6. ${INLINE_EXIT_STEP}`);
+    expect(section).toContain('repeat the configured review loop for `ollama`, `copilot`, `codex`, `@example-user` against the new HEAD');
+    expect(section).toContain(`8. ${INLINE_EXIT_STEP}`);
     expect(section).not.toContain('6. Exit. Do **not** run `/do:push`');
     expect(section).not.toContain('### Local Review Before Opening the PR/MR');
   });
@@ -265,10 +268,11 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     expect(section).toContain('Drive the review-and-fix loop to completion and merge.');
     expect(section).toContain('on GitHub `gh pr diff 42` also works');
     expect(section).toContain(`gh pr diff 42 | jq -Rs '{ backend:`);
+    expect(section).toContain('4. **Wait for CI to finish**');
     expect(section).toContain('gh pr merge "https://github.com/example-org/example-repo/pull/42" --merge --delete-branch');
     expect(section).toContain('(Equivalent: `gh pr merge 42 --repo example-org/example-repo --merge --delete-branch`.)');
     expect(section).toContain('`gh pr view "https://github.com/example-org/example-repo/pull/42" --json state -q .state` must return `MERGED`');
-    expect(section).toContain('6. Exit. Do **not** run `/do:push` or open a new PR — the merge handles everything.');
+    expect(section).toContain('8. Exit. Do **not** run `/do:push` or open a new PR — the merge handles everything.');
     expect(section).not.toContain('**Cross-phase stop-mode gate:**');
     expect(section).not.toContain('Do NOT push or open a PR/MR');
   });
@@ -288,8 +292,8 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
     const section = render(CELL('followUp', 'glab', false, false));
 
     expect(section).toContain(`glab mr diff 42 | jq -Rs '{ backend:`);
-    expect(section).toContain('glab mr merge "42" --yes --remove-source-branch');
-    expect(section).toContain('`glab mr view "42"` must show it merged');
+    expect(section).toContain('glab mr merge 42 --yes --remove-source-branch');
+    expect(section).toContain('`glab mr view 42` must show it merged');
     expect(section).toContain('request `@example-user` as MR reviewer using the GitLab project UI or API');
     expect(section).not.toContain('gh pr merge');
     expect(section).not.toContain('gh pr view');
@@ -354,8 +358,8 @@ describe('buildReviewLoopFollowUpSection — load-bearing lines stay with their 
 
     const merging = hostGlab({}, {});
     expect(merging).toContain(`glab mr diff 42 | jq -Rs '{ backend:`);
-    expect(merging).toContain('glab mr merge "42" --yes --remove-source-branch');
-    expect(merging).toContain('`glab mr view "42"` must show it merged');
+    expect(merging).toContain('glab mr merge 42 --yes --remove-source-branch');
+    expect(merging).toContain('`glab mr view 42` must show it merged');
     expect(merging).toContain('request `@example-user` as MR reviewer using the GitLab project UI or API');
     expect(merging).not.toContain('gh pr merge');
     expect(merging).not.toContain('gh pr view');
