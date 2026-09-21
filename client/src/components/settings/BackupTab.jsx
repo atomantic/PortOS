@@ -212,8 +212,8 @@ export function BackupTab() {
     ...defaultExcludeRows.filter(d => d.defaultActive).map(d => d.path),
     ...anchorUserExcludes(excludePaths),
   ])];
-  const scheduleSummary = enabled
-    ? (describeCron(cronExpression) || cronExpression)
+  const scheduleSummary = savedEnabled
+    ? (describeCron(savedCronExpression) || savedCronExpression)
     : 'Scheduled backups are off';
   const snapshotSummary = snapshots.length > 0
     ? `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'}`

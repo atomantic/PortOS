@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -60,6 +60,17 @@ const renderTab = async ({ openExclusions = true, openSnapshots = true } = {}) =
 
 describe('BackupTab', () => {
   describe('task-first workspace', () => {
+    it('keeps the saved schedule summary separate from an unsaved draft', async () => {
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      const savedSchedule = screen.getByRole('heading', { name: 'Saved schedule' }).parentElement;
+      expect(within(savedSchedule).getByText('Scheduled backups are off')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('switch', { name: 'Scheduled backups' }));
+
+      expect(within(savedSchedule).getByText('Scheduled backups are off')).toBeInTheDocument();
+    });
+
     it('keeps exclusions and snapshot history behind named disclosures', async () => {
       getBackupSnapshots.mockResolvedValue([{ id: 'snap-hidden' }]);
       await renderTab({ openExclusions: false, openSnapshots: false });
