@@ -17,13 +17,25 @@ vi.mock('./blockedIssueReconcile.js', () => ({ parseBlockingIssueNumbers: () => 
 vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: async () => ({ reviewers: ['codex'] }) }));
 vi.mock('./agentState.js', () => ({ isTruthyMeta: value => value === true }));
 vi.mock('./agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: async options => { m.adds.push(options); return { id: 'resolution' }; } }));
+vi.mock('./userActions.js', () => ({ listUserActions: async () => [] }));
+vi.mock('./reviewQueue.js', () => ({ buildQueue: async () => ({ sources: {}, partial: false, nextCursor: null }) }));
+vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: async () => ({}) }));
+vi.mock('./persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({}) }));
 import { runDevelopmentWatchdog, readDevelopmentWatchdogSnapshot } from './developmentWatchdog.js';
+import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanceContext.js';
 
 beforeEach(() => {
   m.state = { config: { persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };
   m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.branch = ''; m.account = 'atomantic'; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.dependencies = []; m.dependencyOpen = false; m.issueTruncated = false;
 });
 describe('development watchdog scan to dispatch', () => {
+  it('a mind refresh racing the hourly scan shares admission and does not duplicate a claim', async () => {
+    m.backlog = [{ ref: '42' }];
+    const [scheduled, wake] = await Promise.all([runDevelopmentWatchdog(), readPersistentMindMaintenanceContext()]);
+    expect(m.adds).toHaveLength(1);
+    expect(wake.sources.watchdog.receiptId).toBe(scheduled.id);
+    expect(wake.sources.watchdog.counts.dispatched).toBe(1);
+  });
   it('records empty scans without an agent or inference', async () => {
     const receipt = await runDevelopmentWatchdog({ force: true });
     expect(receipt.complete).toBe(true); expect(receipt.counts).toMatchObject({ dispatched: 0, modelCalls: 0 });

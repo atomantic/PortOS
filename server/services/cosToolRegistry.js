@@ -333,6 +333,15 @@ const userActionsQueryTool = Object.freeze({
   adapter: { kind: 'user-actions' },
 });
 
+const maintenanceRefreshTool = Object.freeze({
+  type: 'portos_tool', name: 'maintenance.refresh', version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'maintenance_refresh', aliases: ['maintenance_refresh'],
+  description: 'Read bounded maintainer evidence and refresh a stale watchdog through its shared ownership-safe dispatch path. Does not force an audit or bypass cadence, grants, budgets or active work.',
+  input_schema: zodToOpenApiSchema(z.object({}).strict()), output_schema: objectOutputSchema,
+  policy: { scopes: ['mind'], requiredCapabilities: ['readPortos'], sideEffect: 'write', idempotent: true, async: false, confirmation: 'none' },
+  adapter: { kind: 'development-maintenance' },
+});
+
 const eidoverseStatusTool = Object.freeze({
   type: 'portos_tool',
   name: 'eidoverse.status',
@@ -577,7 +586,7 @@ const reportTools = [
   policy: { scopes: ['mind'], requiredCapabilities: ['auditReports', 'readPortos'], sideEffect: 'write', idempotent: true, async: false, confirmation: 'capability-grant' },
   adapter: { kind: name },
 }));
-const staticToolCatalog = [...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, ...eidoverseTools];
+const staticToolCatalog = [...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindChooseNameTool, userActionsQueryTool, maintenanceRefreshTool, ...eidoverseTools];
 const toolCatalog = (intent) => [...staticToolCatalog, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
@@ -589,6 +598,7 @@ const toolCallFingerprints = new Map();
 // hidden behind its family until tools.activate names it.
 const CORE_TOOL_NAMES = Object.freeze(new Set(['tools.activate', 'tools.deactivate', 'user-actions.query']));
 const MIND_FAMILY_BY_TOOL_NAME = Object.freeze({
+  'maintenance.refresh': 'mind',
   'cos.create-task': 'tasks',
   'issues.list': 'issues',
   'issues.file': 'issues',
@@ -965,6 +975,10 @@ const executeAdapter = async (tool, args, context, authority) => {
       preserveTurnId: context.turnId || null,
       preserveMessageId: context.wake?.kind === 'message' ? context.wake.message?.id || null : null,
     });
+  }
+  if (tool.adapter.kind === 'development-maintenance') {
+    const { readPersistentMindMaintenanceContext } = await import('./persistentMindMaintenanceContext.js');
+    return readPersistentMindMaintenanceContext();
   }
   if (tool.adapter.kind === 'user-actions') {
     const [{ listUserActions }, { scrubSecretTokens, scrubSecretTokensDeep }] = await Promise.all([

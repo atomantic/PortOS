@@ -45,6 +45,31 @@ not part of portable mind bundles or peer sync. Importing a mind cannot arm this
 role on the destination. No shipped seed or data migration is needed: absence
 normalizes to disabled. Do not put local configuration or private reports in Git.
 
+## Wake evidence and exploration
+
+Opted-in wakes replace the ordinary recent-action summaries with a bounded
+maintenance snapshot. It combines the cadence-aware watchdog receipt, human-only
+CoS action counts, canonical action-queue counts after settled/snoozed feedback,
+bounded process-audit metrics when separately granted, and existing health
+projections. Source times, missing evidence, truncation and cursors remain explicit.
+Product engagement is separate from development toil; aggregate instance counts
+do not claim a particular repository caused an intervention.
+
+The `maintenance.refresh` semantic tool uses the same serialized watchdog as the
+hourly scan. It does not force a scan or bypass ownership admission. Generic mind
+task creation is refused for maintainer repositories: file a concrete issue with
+the granted issue/report tools, then let the watchdog claim it. Other managed-app
+tasks retain their existing permissions. This keeps model-written descriptions
+from disguising duplicate claim or PR-resolution work.
+
+Unchanged evidence is marked unchanged. Investigate new exceptions and repeated
+recovery chains; otherwise return to the existing Eidoverse playbook. A successful
+healer is not proof that the normal process is healthy. Routine lifecycle results
+do not call for a human notification. Baseline and recent bounded observations
+live in the existing CoS runtime state; actual duplicate dispatches, savings and
+unmetered usage stay unknown. Deleting runtime history loses the comparison,
+not task ownership, source records, or issue-publication deduplication.
+
 ## Local curation inference limits
 
 When the maintainer role is enabled, every mind provider call (including context
