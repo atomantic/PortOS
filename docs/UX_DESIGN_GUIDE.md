@@ -248,3 +248,7 @@ The page families, spacing, navigation grouping, and pilot choices are PortOS de
 - [NN/g: Progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) supports moving secondary detail behind explicit requests while keeping primary work clear. Disclosure does not justify hiding sibling destinations.
 - [W3C: Reflow](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html) explains narrow-width/zoom reflow and the exception for two-dimensional tables within their own scroll region.
 - [WCAG 2.2](https://www.w3.org/TR/WCAG22/) supplies the accessibility baseline, including contrast, focus, keyboard access, labels, and target-size requirements. The 44px touch target above is a PortOS design default, not a claim that every WCAG AA target must be 44px.
+
+## List deletion and reading position
+
+Deleting an item keeps the populated list and its scroll container mounted. After server success, use `CollapsibleListItem` to fade and collapse the row, including its spacing, so following content slides up; remove the record locally on exit. Preserve search, filters, pagination and unrelated selection. Refresh summary counts separately. Keep failed deletions visible and actionable, prevent duplicate pending requests, honor reduced motion, and transfer keyboard focus without scrolling. Never show a whole-list loading placeholder as deletion feedback. Brain MemoryTab is the reference implementation across Memories, People, Projects, Ideas and Admin.
