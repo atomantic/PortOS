@@ -52,7 +52,10 @@ never successful empty drafts. Truly empty arrays are valid.
 ## Chunk reconciliation
 
 Chunk IDs are remapped before edges are combined. Type/name equality alone
-never merges candidates. Only distinctive source identities or explicit,
+never merges candidates. Generic source phrases and determiner-only aliases
+never authorize a merge. A source identity needs at least two distinguishing
+words beyond the entry labels and grammatical words; otherwise it stays a
+separate candidate. Only distinctive source identities or explicit,
 unambiguous aliases can reconcile repeats; competing same-chunk candidates stay
 separate. Supported fields/evidence are unioned, and a field conflict or cap
 that would lose information leaves separate review candidates instead.

@@ -62,6 +62,18 @@ export const emptyCatalogDraft = () => ({
 });
 const normalize = value => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
 const unique = values => [...new Set(values)];
+// A determiner, generic noun or single adjective is not a source identity.
+// Require at least two distinguishing words beyond the candidate's own labels
+// (e.g. an explicit owner or origin phrase). Uncertain repeats stay separate.
+const IDENTITY_GLUE = new Set('a an the this that these those his her their its my our your of from to with at in on and by for'.split(' '));
+const words = value => normalize(value).match(/[\p{L}\p{N}]+/gu) || [];
+const aliasKey = value => normalize(value).replace(/^(?:a|an|the|this|that|his|her|their|its|my|our|your)\s+/, '');
+function sourceIdentityKey(entry) {
+  const identity = normalize(entry.sourceIdentity);
+  const labels = new Set([entry.name, ...(entry.aliases || [])].flatMap(words));
+  const distinguishing = new Set(words(identity).filter(word => !labels.has(word) && !IDENTITY_GLUE.has(word)));
+  return distinguishing.size >= 2 ? identity : '';
+}
 
 function sanitizeEntry(raw, type, factual) {
   const entry = type.extractionShape === 'bible'
@@ -122,6 +134,7 @@ export function parseCatalogDraft(content, { corpus, factual = false, finishReas
 
 function mergeEntries(first, next, type) {
   const merged = { ...first };
+  if (!merged.sourceIdentity && next.sourceIdentity) merged.sourceIdentity = next.sourceIdentity;
   for (const [key, value] of Object.entries(next)) {
     if (['draftId', 'sourceIdentity', 'name'].includes(key) || value == null || value === '') continue;
     const prev = merged[key];
@@ -158,10 +171,10 @@ export function dedupDrafts(drafts = []) {
     })));
     const buckets = new Map();
     for (const node of nodes) {
-      const identity = normalize(node.entry.sourceIdentity);
+      const identity = sourceIdentityKey(node.entry);
       const hints = [
-        ...(identity && identity !== normalize(node.entry.name) ? [`identity:${identity}`] : []),
-        ...unique([node.entry.name, ...(node.entry.aliases || [])].map(normalize)).filter(Boolean).map(value => `alias:${value}`),
+        ...(identity ? [`identity:${identity}`] : []),
+        ...unique([node.entry.name, ...(node.entry.aliases || [])].map(aliasKey)).filter(Boolean).map(value => `alias:${value}`),
       ];
       for (const hint of hints) {
         if (!buckets.has(hint)) buckets.set(hint, []);
@@ -172,7 +185,7 @@ export function dedupDrafts(drafts = []) {
     for (const [hint, bucket] of buckets) {
       // A repeated token in ONE chunk names multiple candidates: ambiguous.
       if (bucket.length < 2 || new Set(bucket.map(node => node.chunk)).size !== bucket.length) continue;
-      if (hint.startsWith('alias:') && !bucket.some(node => (node.entry.aliases || []).some(alias => `alias:${normalize(alias)}` === hint))) continue;
+      if (hint.startsWith('alias:') && !bucket.some(node => (node.entry.aliases || []).some(alias => aliasKey(alias) !== aliasKey(node.entry.name) && `alias:${aliasKey(alias)}` === hint))) continue;
       const identities = unique(bucket.map(node => normalize(node.entry.sourceIdentity)).filter(Boolean));
       if (identities.length > 1) continue;
       for (const node of bucket) {

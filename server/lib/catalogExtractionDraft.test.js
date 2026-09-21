@@ -20,20 +20,41 @@ describe('catalog chunk graph identity', () => {
     expect(nameOnly.objects).toHaveLength(4);
   });
 
+  it('does not use generic grounded identity phrases or determiner-only aliases to merge objects', () => {
+    const make = description => parsed({ objects: [{ draftId: 'pistol', name: 'Pistol', aliases: ['the pistol'],
+      sourceIdentity: 'the pistol', description, evidence: ['the pistol'] }] }, 'the pistol');
+    const out = dedupDrafts([make('A guard’s pistol.'), make('A different traveler’s pistol.')]);
+    expect(out.objects).toHaveLength(2);
+    expect(out.objects.map(entry => entry.description)).toEqual(['A guard’s pistol.', 'A different traveler’s pistol.']);
+  });
+
+  it('retains an acquired identity so a later alias cannot bridge conflicting identities', () => {
+    const make = (name, aliases, sourceIdentity) => parsed({ objects: [{ draftId: 'x', name, aliases,
+      ...(sourceIdentity ? { sourceIdentity } : {}), evidence: ['source'] }] },
+    'source. First Label. Second Label. Third Label. pistol inherited from an aunt. pistol stolen from a guard.');
+    const out = dedupDrafts([
+      make('First Label', ['Second Label', 'Third Label']),
+      make('Second Label', [], 'pistol inherited from an aunt'),
+      make('Third Label', [], 'pistol stolen from a guard'),
+    ]);
+    expect(out.objects).toHaveLength(2);
+    expect(out.objects.map(entry => entry.sourceIdentity)).toEqual(['pistol inherited from an aunt', 'pistol stolen from a guard']);
+  });
+
   it('unions supported facts/evidence and remaps repeated local IDs and duplicate edges', () => {
     const first = parsed({
       characters: [{ draftId: 'person', name: 'Example Captain', aliases: ['Rook'], evidence: ['Example Captain owns the inherited pistol'] }],
-      objects: [{ draftId: 'item', name: 'Pistol', sourceIdentity: 'inherited pistol', description: 'Inherited from an aunt.', evidence: ['inherited pistol'] }],
+      objects: [{ draftId: 'item', name: 'Pistol', sourceIdentity: 'pistol inherited from an aunt', description: 'Inherited from an aunt.', evidence: ['inherited pistol'] }],
       relationships: [{ fromDraftId: 'item', toDraftId: 'person', kind: 'owned-by', evidence: 'Example Captain owns the inherited pistol' }],
-    }, 'Example Captain owns the inherited pistol. Example Captain is called Rook.');
+    }, 'Example Captain owns the inherited pistol. Example Captain is called Rook. The pistol inherited from an aunt.');
     const second = parsed({
       characters: [{ draftId: 'person', name: 'Rook', background: 'Returns to the station.', evidence: ['Rook still owns the inherited pistol'] }],
-      objects: [{ draftId: 'item', name: 'Pistol', sourceIdentity: 'inherited pistol', description: 'Used to signal the train.', evidence: ['inherited pistol signals the train'] }],
+      objects: [{ draftId: 'item', name: 'Pistol', sourceIdentity: 'pistol inherited from an aunt', description: 'Used to signal the train.', evidence: ['inherited pistol signals the train'] }],
       relationships: [
         { fromDraftId: 'item', toDraftId: 'person', kind: 'owned-by', evidence: 'Rook still owns the inherited pistol' },
         { fromDraftId: 'item', toDraftId: 'person', kind: 'owned-by', evidence: 'Rook still owns the inherited pistol' },
       ],
-    }, 'Rook still owns the inherited pistol. The inherited pistol signals the train.');
+    }, 'Rook still owns the inherited pistol. The inherited pistol signals the train. The pistol inherited from an aunt.');
     const out = dedupDrafts([first, second]);
     expect(out.characters).toHaveLength(1);
     expect(out.characters[0].background).toBe('Returns to the station.');
@@ -48,8 +69,8 @@ describe('catalog chunk graph identity', () => {
   });
 
   it('keeps complete candidates when a merge would lose facts at a field cap', () => {
-    const make = letter => parsed({ objects: [{ draftId: 'x', name: 'Pistol', sourceIdentity: 'inherited pistol',
-      significance: letter.repeat(800), evidence: ['inherited pistol'] }] }, 'inherited pistol');
+    const make = letter => parsed({ objects: [{ draftId: 'x', name: 'Pistol', sourceIdentity: 'pistol inherited from an aunt',
+      significance: letter.repeat(800), evidence: ['inherited pistol'] }] }, 'inherited pistol. The pistol inherited from an aunt.');
     const out = dedupDrafts([make('a'), make('b')]);
     expect(out.objects).toHaveLength(2);
     expect(out.objects.map(entry => entry.significance)).toEqual(['a'.repeat(800), 'b'.repeat(800)]);
