@@ -53,14 +53,14 @@ describe('ThreadsTab', () => {
     expect(groupTitles).toEqual(['Pinned 1', 'Overdue 1', 'Open 1', 'Waiting 1']);
     expect(screen.getByText('Waiting on Acme Corp')).toBeTruthy();
     // One request for exactly the non-terminal statuses — never the archive filtered here.
-    expect(api.listThreads).toHaveBeenCalledWith({ q: '', tag: '', status: 'open,waiting,someday' });
+    expect(api.listThreads).toHaveBeenCalledWith({ q: '', tag: '', status: 'open,waiting,someday' }, { silent: true });
   });
 
   it('reads the status, tag and search filters from the URL and sends them to the server', async () => {
     api.listThreads.mockResolvedValue({ threads: [DONE_ROW], total: 1 });
     renderTab('/brain/threads?status=done&tag=ops&q=fin');
     await screen.findByText('Finished loop');
-    expect(api.listThreads).toHaveBeenCalledWith({ q: 'fin', tag: 'ops', status: 'done' });
+    expect(api.listThreads).toHaveBeenCalledWith({ q: 'fin', tag: 'ops', status: 'done' }, { silent: true });
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent.trim())).toEqual(['Done 1']);
   });
 
@@ -152,10 +152,37 @@ describe('ThreadsTab', () => {
       await act(async () => { vi.advanceTimersByTime(300); });
       expect(screen.getByTestId('location').textContent).toBe('?q=re');
       expect(api.listThreads).toHaveBeenCalledTimes(2);
-      expect(api.listThreads).toHaveBeenLastCalledWith({ q: 're', tag: '', status: 'open,waiting,someday' });
+      expect(api.listThreads).toHaveBeenLastCalledWith({ q: 're', tag: '', status: 'open,waiting,someday' }, { silent: true });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('distinguishes an unavailable list from a successful empty list and retries the failed read', async () => {
+    api.listThreads.mockRejectedValueOnce(new Error('temporary outage'));
+    renderTab();
+
+    expect(await screen.findByText('Threads are unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing tracked yet — add the first open loop above.')).toBeNull();
+
+    api.listThreads.mockResolvedValueOnce({ threads: ROWS, total: ROWS.length });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByText('Pinned loop')).toBeInTheDocument();
+    expect(screen.queryByText('Threads are unavailable')).toBeNull();
+  });
+
+  it('keeps a selected thread deep link open when the record read fails and retries it in place', async () => {
+    api.getThread.mockRejectedValueOnce(new Error('temporary outage'));
+    renderTab('/brain/threads?thread=op');
+
+    expect(await screen.findByText('Thread unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close thread' })).toBeInTheDocument();
+
+    api.getThread.mockResolvedValueOnce({ ...ROWS[2], notes: 'body', resolvedRefs: RESOLVED });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByLabelText('Title')).toHaveValue('Plain loop');
   });
 
   it('swaps the hydrated record a ref write returns into the drawer without a second read', async () => {

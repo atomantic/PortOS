@@ -9,7 +9,7 @@
 // drawer's section (`?threadTab=`), so the dashboard widget, unified search and
 // a shared link all land on the same drawer. Full-bleed: this tab owns its own
 // scroll region like the Daily Log.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Info, Link2, ListTodo, Pin, Plus, Search, Trash2, X } from 'lucide-react';
 import useUrlParams from '../../../hooks/useUrlParams';
 import useDrawerTab from '../../../hooks/useDrawerTab';
@@ -99,6 +99,22 @@ const loadRecord = (id) => api.getThread(id, { silent: true });
 
 const inputClass = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
+function UnavailableState({ title, message, onRetry }) {
+  return (
+    <div role="alert" className="rounded-lg border border-port-error/40 bg-port-error/10 p-4 text-sm text-gray-300">
+      <p className="font-medium text-port-error">{title}</p>
+      <p className="mt-1 text-gray-400">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 min-h-[44px] rounded bg-port-card px-3 text-port-accent hover:text-white"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 function ThreadRow({ thread, onOpen, onDone, onTag }) {
   const nextLine = threadNextLine(thread);
   const refCount = Array.isArray(thread.refs) ? thread.refs.length : 0;
@@ -152,9 +168,13 @@ export default function ThreadsTab() {
 
   const [threads, setThreads] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [listError, setListError] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [record, setRecord] = useState(null);
   const [draft, setDraft] = useState(null);
+  const [recordLoading, setRecordLoading] = useState(false);
+  const [recordError, setRecordError] = useState(false);
+  const [recordRetry, setRecordRetry] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [completingSource, setCompletingSource] = useState(false);
   const [newRef, setNewRef] = useState({ kind: 'url', id: '', label: '' });
@@ -170,26 +190,43 @@ export default function ThreadsTab() {
     return () => clearTimeout(timer);
   }, [searchInput, q, updateParams]);
 
-  // The list — one request for exactly the statuses the view shows.
-  useEffect(() => {
+  // The list — one request for exactly the statuses the view shows. Keep the
+  // last good list when a refresh fails: an unavailable response is not an
+  // empty working set.
+  const loadThreads = useCallback(() => {
     let active = true;
     setLoading(true);
-    api.listThreads({ q, tag, status: statusView === 'all' ? WORKING_SET : statusView })
-      .then((res) => { if (active) setThreads(Array.isArray(res?.threads) ? res.threads : []); })
-      .catch(() => { if (active) setThreads([]); })
+    setListError(false);
+    api.listThreads(
+      { q, tag, status: statusView === 'all' ? WORKING_SET : statusView },
+      { silent: true },
+    )
+      .then((res) => {
+        if (!active) return;
+        setThreads(Array.isArray(res?.threads) ? res.threads : []);
+      })
+      .catch(() => { if (active) setListError(true); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [q, tag, statusView]);
+
+  useEffect(() => loadThreads(), [loadThreads]);
 
   // Open record — keyed to the URL so a deep link and a row click share the path.
   useEffect(() => {
     if (!selectedId) {
       setRecord(null);
       setDraft(null);
+      setRecordLoading(false);
+      setRecordError(false);
       setConfirmDelete(false);
       return undefined;
     }
     let active = true;
+    setRecord(null);
+    setDraft(null);
+    setRecordLoading(true);
+    setRecordError(false);
     loadRecord(selectedId)
       .then((full) => {
         if (!active) return;
@@ -198,11 +235,13 @@ export default function ThreadsTab() {
       })
       .catch(() => {
         if (!active) return;
-        toast.error('Thread not found');
-        updateParams({ thread: null, threadTab: null }, { replace: true });
+        setRecordError(true);
+      })
+      .finally(() => {
+        if (active) setRecordLoading(false);
       });
     return () => { active = false; };
-  }, [selectedId, updateParams]);
+  }, [selectedId, recordRetry]);
 
   const groups = useMemo(
     () => (statusView === 'all'
@@ -355,12 +394,19 @@ export default function ThreadsTab() {
 
       <div id={`brain-threads-${statusView}`} role="tabpanel" aria-labelledby={`tab-${statusView}`} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
         {loading && threads.length === 0 && <p className="text-sm text-gray-500">Loading threads…</p>}
-        {!loading && threads.length === 0 && (
+        {listError && (
+          <UnavailableState
+            title="Threads are unavailable"
+            message={threads.length > 0 ? 'Showing the last successful list. Retry when the server is reachable.' : 'The thread list could not be read, so the working set is unknown.'}
+            onRetry={loadThreads}
+          />
+        )}
+        {!loading && !listError && threads.length === 0 && (
           <p className="text-sm text-gray-500">
             {q || tag ? 'No threads match.' : 'Nothing tracked yet — add the first open loop above.'}
           </p>
         )}
-        {groups.map((group) => (
+        {(!listError || threads.length > 0) && groups.map((group) => (
           <section key={group.id} aria-label={group.label}>
             <h3 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
               {group.label} <span className="text-gray-600">{formatCount(group.items.length)}</span>
@@ -387,7 +433,15 @@ export default function ThreadsTab() {
         closeOnEsc={!dirty}
         closeOnBackdrop={!dirty}
       >
-        {record && draft && (
+        {recordLoading && <p className="text-sm text-gray-500">Loading thread…</p>}
+        {recordError && (
+          <UnavailableState
+            title="Thread unavailable"
+            message="This thread could not be read, so the drawer was left open for a retry."
+            onRetry={() => setRecordRetry((value) => value + 1)}
+          />
+        )}
+        {record && draft && record.id === selectedId && (
           <fieldset disabled={completingSource} className="space-y-4 min-w-0">
             <div className="flex items-center justify-end gap-2">
               {dirty && <span className="text-xs text-port-warning">Unsaved changes</span>}
