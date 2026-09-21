@@ -136,6 +136,14 @@ export default function ChiefOfStaff() {
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(() => activeTab === 'tasks');
+  const mobilePanelPreferenceSet = useRef(false);
+  const toggleMobilePanel = () => {
+    mobilePanelPreferenceSet.current = true;
+    setAgentPanelCollapsed(value => !value);
+  };
+  useEffect(() => {
+    if (!mobilePanelPreferenceSet.current) setAgentPanelCollapsed(activeTab === 'tasks');
+  }, [activeTab]);
   const [desktopPanelCollapsed, setDesktopPanelCollapsed] = useLocalStorageBool(
     'cos-panel-collapsed',
     false,
@@ -941,7 +949,7 @@ export default function ChiefOfStaff() {
           )}
           {/* Keep the mobile queue reachable while retaining terminal identity. */}
           <div className="lg:hidden">
-            <button onClick={() => setAgentPanelCollapsed(value => !value)}
+            <button onClick={toggleMobilePanel}
               className="flex items-center justify-between gap-2 w-full px-3 py-2 min-h-[44px]"
               aria-expanded={!agentPanelCollapsed} aria-controls="cos-terminal-mobile">
               <span>CoS <StatusIndicator running={status?.running} paused={status?.paused} /></span>
@@ -968,7 +976,7 @@ export default function ChiefOfStaff() {
           {/* Mobile: still show the compact header */}
           <div className="lg:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
             <button
-              onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
+              onClick={toggleMobilePanel}
               className="flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
               aria-expanded={!agentPanelCollapsed}
               aria-controls="cos-agent-panel"
@@ -1019,7 +1027,7 @@ export default function ChiefOfStaff() {
 
           {/* Mobile Collapse Toggle Header */}
           <button
-            onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
+            onClick={toggleMobilePanel}
             className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
             aria-expanded={!agentPanelCollapsed}
             aria-controls="cos-agent-panel"
@@ -1129,7 +1137,7 @@ export default function ChiefOfStaff() {
           grow this region and scroll here as before. */}
       <div className="flex flex-1 min-h-0 min-w-0 flex-col overflow-y-auto overflow-x-hidden p-3 lg:p-4">
         {desktopPanelCollapsed && (
-          <div className="hidden lg:flex items-center flex-wrap gap-3 mb-3">
+          <div className="hidden lg:flex sticky top-0 z-20 bg-port-bg items-center flex-wrap gap-3 mb-3">
             <button onClick={toggleDesktopPanel} aria-label="Expand CoS panel"
               className="min-h-[44px] flex items-center gap-2 px-2 text-sm text-port-text">
               <PanelLeftOpen size={16} aria-hidden="true" /> CoS

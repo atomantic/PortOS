@@ -994,6 +994,18 @@ describe('Rigged avatar style', () => {
   });
 });
 
+it('compacts the mobile persona on entering Tasks until the user chooses its size', async () => {
+  await renderSettledAt('agents');
+  const toggle = () => document.querySelector('button[aria-controls="cos-agent-panel"]');
+  expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+  await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Tasks', exact: true })); });
+  await waitFor(() => expect(toggle()).toHaveAttribute('aria-expanded', 'false'));
+  fireEvent.click(toggle());
+  await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Agents', exact: true })); });
+  await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Tasks', exact: true })); });
+  expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+});
+
 it('retains the saved persona collapse preference and exposes operational identity', async () => {
   localStorage.setItem('cos-panel-collapsed', 'true');
   await renderSettledAt('tasks');
