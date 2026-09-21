@@ -179,10 +179,10 @@ export const isApplyCapableReviewer = (slug) => APPLY_CAPABLE_REVIEWERS.includes
 // a saved reviewer that never persisted. Stored WITHOUT the leading `@` (added
 // back only for display / the flag string).
 export const MAX_REVIEW_USERNAMES = 20;
-const REVIEW_USERNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9._-]{1,100})?$/;
+const REVIEW_USERNAME_RE = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]{0,254})(?:\/[A-Za-z0-9._-]{1,100})?$/;
 
 // Validate a single raw username entry (strip `@`, trim). Returns the clean
-// token or null if it isn't a shell-safe GitHub username/team slug.
+// token or null if it isn't a shell-safe GitHub/GitLab username/team slug.
 export function cleanReviewUsername(raw) {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim().replace(/^@+/, '');

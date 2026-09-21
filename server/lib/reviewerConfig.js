@@ -345,16 +345,16 @@ export function hasReviewerOverride(metadata) {
 // instructs the agent to request each as a PR reviewer and gate the merge on it.
 //
 // Stored WITHOUT the leading `@` (added back only in the flag string). The
-// charset is deliberately shell-safe — a GitHub username (1–39 chars,
+// charset is deliberately shell-safe — a GitHub/GitLab username (1–39 chars,
 // alphanumeric + single hyphens, no leading/trailing hyphen) optionally followed
 // by a `/team-slug` for org-team mentions. No shell metacharacters, so the token
 // stays inert wherever it lands in a command string.
 export const MAX_REVIEW_USERNAMES = 20;
-const REVIEW_USERNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9._-]{1,100})?$/;
+const REVIEW_USERNAME_RE = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]{0,254})(?:\/[A-Za-z0-9._-]{1,100})?$/;
 
 /**
  * Normalize a raw list of reviewer usernames: strip an optional leading `@`,
- * trim, drop anything that isn't a shell-safe GitHub username/team slug,
+ * trim, drop anything that isn't a shell-safe GitHub/GitLab username/team slug,
  * case-insensitively dedupe (GitHub logins are case-insensitive) while
  * preserving first-occurrence order, and cap at MAX_REVIEW_USERNAMES. Returns
  * a clean array of usernames WITHOUT the `@` prefix. Non-array input → [].
