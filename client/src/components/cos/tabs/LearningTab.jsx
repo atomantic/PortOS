@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link } from 'react-router';
 import {
   Brain,
   RefreshCw,
@@ -6,6 +7,7 @@ import {
   TrendingDown,
   Clock,
   AlertTriangle,
+  Check,
   CheckCircle,
   XCircle,
   SkipForward,
@@ -185,15 +187,37 @@ export default function LearningTab() {
     setBackfilling(false);
   }, [loadData]);
 
+  const [resettingAll, setResettingAll] = useState(false);
+
   const handleResetTaskType = useCallback(async (taskType) => {
     setResettingType(taskType);
     const result = await api.resetCosTaskTypeLearning(taskType).catch(() => null);
     if (result?.reset) {
-      toast.success(`Reset learning data for ${taskType}`);
+      toast.success(`Reset learning data for ${taskType} — auto-approval re-enabled`);
       await loadData();
+    } else {
+      toast.error(`Failed to reset learning data for ${taskType}`);
     }
     setResettingType(null);
   }, [loadData]);
+
+  const handleResetAllLowConfidence = useCallback(async () => {
+    const lowItems = confidence?.levels?.low || [];
+    if (lowItems.length === 0) return;
+    setResettingAll(true);
+    let successCount = 0;
+    for (const item of lowItems) {
+      const result = await api.resetCosTaskTypeLearning(item.taskType).catch(() => null);
+      if (result?.reset) successCount++;
+    }
+    if (successCount > 0) {
+      toast.success(`Marked ${successCount} task type${successCount > 1 ? 's' : ''} resolved — auto-approval re-enabled`);
+      await loadData();
+    } else {
+      toast.error('Failed to reset task types');
+    }
+    setResettingAll(false);
+  }, [confidence, loadData]);
 
   const toggleSection = useCallback((section) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
@@ -469,16 +493,36 @@ export default function LearningTab() {
                   </div>
 
                   {[
-                    { items: confidence.levels.low, borderClass: 'border-port-warning/30', bgClass: 'bg-port-warning/10', textClass: 'text-port-warning', Icon: ShieldAlert, title: 'Requires Approval', desc: 'These task types have low success rates and will require human approval before spawning' },
+                    { items: confidence.levels.low, borderClass: 'border-port-warning/30', bgClass: 'bg-port-warning/10', textClass: 'text-port-warning', Icon: ShieldAlert, title: 'Requires Approval', desc: 'These task types have low success rates and will require human approval before spawning. Reset metrics to mark resolved and re-enable auto-approval.' },
                     { items: confidence.levels.high, borderClass: 'border-port-success/30', bgClass: 'bg-port-success/10', textClass: 'text-port-success', Icon: ShieldCheck, title: 'High Confidence', desc: 'Consistently successful — auto-approved without hesitation' }
                   ].filter(g => g.items?.length > 0).map(({ items, borderClass, bgClass, textClass, Icon, title, desc }) => (
                     <div key={title} className={`bg-port-card border ${borderClass} rounded-lg overflow-hidden`}>
-                      <div className={`px-4 py-2 ${bgClass} border-b border-port-border`}>
-                        <span className={`text-sm font-medium ${textClass} flex items-center gap-2`}>
-                          <Icon size={14} />
-                          {title} ({items.length})
-                        </span>
-                        <p className="text-xs text-gray-500 mt-0.5">{desc}</p>
+                      <div className={`px-4 py-2 ${bgClass} border-b border-port-border flex flex-col sm:flex-row sm:items-center justify-between gap-2`}>
+                        <div>
+                          <span className={`text-sm font-medium ${textClass} flex items-center gap-2`}>
+                            <Icon size={14} />
+                            {title} ({items.length})
+                          </span>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {desc}
+                            {title === 'Requires Approval' && (
+                              <> &middot; Review pending tasks on the <Link to="/cos/tasks" className="text-port-accent hover:underline">Tasks tab</Link>.</>
+                            )}
+                          </p>
+                        </div>
+                        {title === 'Requires Approval' && items.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={handleResetAllLowConfidence}
+                            disabled={resettingAll || !!resettingType}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs bg-port-success/10 hover:bg-port-success/20 text-port-success border border-port-success/30 rounded transition-colors disabled:opacity-50 shrink-0 self-start sm:self-auto min-h-[32px]"
+                            title="Mark all resolved — reset learning data to re-enable auto-approval"
+                            aria-label="Mark all resolved"
+                          >
+                            <Check size={12} className={resettingAll ? 'animate-spin' : ''} />
+                            {resettingAll ? 'Resolving all…' : 'Mark all resolved'}
+                          </button>
+                        )}
                       </div>
                       <div className="divide-y divide-port-border">
                         {items.map((t) => (
@@ -487,6 +531,19 @@ export default function LearningTab() {
                             <div className="flex items-center gap-3">
                               <span className="text-xs text-gray-500">{runsLabel(t)}</span>
                               <span className={`text-sm ${textClass} font-medium`}>{t.successRate}%</span>
+                              {title === 'Requires Approval' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleResetTaskType(t.taskType)}
+                                  disabled={resettingType === t.taskType || resettingAll}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs bg-port-success/10 hover:bg-port-success/20 text-port-success border border-port-success/30 rounded transition-colors disabled:opacity-50 min-h-[32px]"
+                                  title={`Mark ${t.taskType} resolved — reset learning metrics to restore auto-approval`}
+                                  aria-label={`Mark ${t.taskType} resolved`}
+                                >
+                                  <Check size={12} className={resettingType === t.taskType ? 'animate-spin' : ''} />
+                                  {resettingType === t.taskType ? 'Resolving…' : 'Mark resolved'}
+                                </button>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -576,6 +633,17 @@ export default function LearningTab() {
                             <span className="text-sm font-mono text-port-error w-12 text-right">
                               {item.successRate}%
                             </span>
+                            <button
+                              type="button"
+                              onClick={() => handleResetTaskType(item.taskType)}
+                              disabled={resettingType === item.taskType}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors disabled:opacity-50 min-h-[32px]"
+                              title="Reset learning data to re-enable this task type"
+                              aria-label={`Reset ${item.taskType}`}
+                            >
+                              <RotateCcw size={12} className={resettingType === item.taskType ? 'animate-spin' : ''} />
+                              Reset
+                            </button>
                           </div>
                         </div>
                       ))}
