@@ -18,21 +18,10 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
-# Vite 8 (client build) requires ^20.19 || >=22.12, so an older install fails at
-# `npm run build` rather than here. This mirrors MIN_NODE in
-# scripts/checkNodeVersion.js, which owns the floor and re-checks it at the head
-# of `npm run setup` below; scripts/node-version-drift.test.js keeps the two
-# literals in sync. The duplication buys a clear message before any Node script
-# runs at all.
-# Strip the leading `v` by parameter expansion rather than `cut -d'v'`, which
-# would yield an empty field (and an "integer expression expected" error below)
-# on a build whose `node -v` omits it.
-NODE_RAW=$(node -v)
-NODE_VER=${NODE_RAW#v}
-NODE_MAJOR=$(echo "$NODE_VER" | cut -d'.' -f1)
-NODE_MINOR=$(echo "$NODE_VER" | cut -d'.' -f2)
-if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 12 ]; }; then
-    echo "Node.js 22.12+ required (found v$NODE_VER) — see .nvmrc"
+# Keep the pre-install check on the same owner as npm run setup/start/dev.
+# Running the Node script here handles excluded release lines (23/25) as well
+# as patch floors, without a second semver implementation in shell.
+if ! node scripts/checkNodeVersion.js; then
     exit 1
 fi
 
