@@ -41,6 +41,7 @@ const STAGE = 'pipeline-judge-compare';
 export const START_RATING = 1000;
 export const ELO_K = 32;
 export const SWISS_ROUNDS = 4;
+export const TOURNAMENT_STOP = 'stop';
 
 const nowIso = () => new Date().toISOString();
 
@@ -130,10 +131,12 @@ export function effectiveRounds(n, rounds = SWISS_ROUNDS) {
 
 /**
  * Run a Swiss-style Elo tournament. `entrants` is `[{ id, … }]`; `playMatch(a, b)`
- * resolves to `'a'` or `'b'` (the winner side — never a tie). Ratings start at
- * START_RATING and update by K after every match. A bye awards a standings point
+ * resolves to `'a'`, `'b'`, or `TOURNAMENT_STOP`. Ratings start at START_RATING
+ * and update by K after every completed match. A bye awards a standings point
  * (so the bye player keeps advancing) but does NOT touch Elo (no opponent to take
- * from). Returns `{ ranking, matches }` where `ranking` is best-first by rating.
+ * from). A stop outcome ends the current round before any mutation for the
+ * declined match and prevents later rounds. Returns `{ ranking, matches,
+ * stopped, roundsCompleted }` where `ranking` is best-first by rating.
  *
  * Pure aside from whatever `playMatch` does — with a deterministic playMatch the
  * whole tournament is deterministic, which is what the unit tests exercise.
@@ -145,21 +148,26 @@ export async function runSwissTournament(entrants, playMatch, { rounds = SWISS_R
   const playedPairs = new Set();
   const byesGiven = new Set();
   const matches = [];
+  let stopped = false;
+  let roundsCompleted = 0;
 
   const total = effectiveRounds(state.size, rounds);
   for (let r = 0; r < total; r += 1) {
     const { pairs, bye } = pairSwissRound([...state.values()], playedPairs, byesGiven);
-    if (bye != null) {
-      const B = state.get(bye);
-      B.score += 1;
-      B.byes += 1;
-      byesGiven.add(bye);
-    }
+    let roundStopped = false;
     for (const [a, b] of pairs) {
-      playedPairs.add(pairKey(a, b));
       // A forced pick — playMatch must return 'a' or 'b'. Anything else is
       // treated as an 'a' win by the compare-caller's tiebreak (see runMatch).
-      const winner = (await playMatch(a, b)) === 'b' ? 'b' : 'a';
+      // The explicit stop outcome is checked before touching ratings, scores,
+      // wins, losses, or the played-pair set for the declined match.
+      const outcome = await playMatch(a, b);
+      if (outcome === TOURNAMENT_STOP) {
+        stopped = true;
+        roundStopped = true;
+        break;
+      }
+      const winner = outcome === 'b' ? 'b' : 'a';
+      playedPairs.add(pairKey(a, b));
       const A = state.get(a);
       const Bp = state.get(b);
       const next = updateRatings(A.rating, Bp.rating, winner, k);
@@ -168,12 +176,20 @@ export async function runSwissTournament(entrants, playMatch, { rounds = SWISS_R
       if (winner === 'a') { A.score += 1; A.wins += 1; Bp.losses += 1; } else { Bp.score += 1; Bp.wins += 1; A.losses += 1; }
       matches.push({ round: r + 1, a, b, winner: winner === 'a' ? a : b });
     }
+    if (roundStopped) break;
+    if (bye != null) {
+      const B = state.get(bye);
+      B.score += 1;
+      B.byes += 1;
+      byesGiven.add(bye);
+    }
+    roundsCompleted += 1;
   }
 
   const ranking = [...state.values()]
     .map((s) => ({ ...s, rating: Math.round(s.rating * 100) / 100 }))
     .sort((x, y) => (y.rating - x.rating) || (y.score - x.score) || String(x.id).localeCompare(String(y.id)));
-  return { ranking, matches };
+  return { ranking, matches, stopped, roundsCompleted };
 }
 
 // ---------- compare-call winner parsing ----------
@@ -311,7 +327,8 @@ export function eligibleIssues(issues) {
  *        billed once per match (autopilot budget); return false to STOP early.
  * @param {Array} [opts.issues]        pre-loaded issue list (tests / callers)
  * @returns {Promise<object>} the stored snapshot, or `{ status:'insufficient' }`
- *          when fewer than two issues have drafted content.
+ *          when fewer than two issues have drafted content. A budget-stopped
+ *          tournament is persisted as `status:'partial'`.
  */
 export async function runComparativeRank(seriesId, opts = {}) {
   assertValidSeriesId(seriesId);
@@ -330,10 +347,10 @@ export async function runComparativeRank(seriesId, opts = {}) {
   let budgetStopped = false;
 
   const playMatch = async (aId, bId) => {
-    if (budgetStopped) return 'a';
+    if (budgetStopped) return TOURNAMENT_STOP;
     if (chargeAction) {
       const ok = await chargeAction({ a: aId, b: bId });
-      if (ok === false) { budgetStopped = true; return 'a'; }
+      if (ok === false) { budgetStopped = true; return TOURNAMENT_STOP; }
     }
     const A = byId.get(aId);
     const B = byId.get(bId);
@@ -345,7 +362,8 @@ export async function runComparativeRank(seriesId, opts = {}) {
     return winner;
   };
 
-  const { ranking } = await runSwissTournament(entrants, playMatch, { rounds });
+  const { ranking, roundsCompleted } = await runSwissTournament(entrants, playMatch, { rounds });
+  const status = budgetStopped ? 'partial' : 'complete';
 
   // Merge issue metadata onto the ranking rows for the Editorial page.
   const ranked = ranking.map((row, idx) => {
@@ -366,14 +384,15 @@ export async function runComparativeRank(seriesId, opts = {}) {
 
   const snapshot = {
     seriesId,
-    status: 'complete',
+    status,
     sourceContentHash: await computeSourceContentHash(seriesId, { issues }).catch(() => null),
     entrants: entrants.length,
     rounds: effectiveRounds(entrants.length, rounds),
+    roundsCompleted,
     k: ELO_K,
     ranking: ranked,
-    // Weakest-first slice — the revision-priority order Phase 7 consumes.
-    weakest: [...ranked].reverse().slice(0, 5),
+    // Weakest-first slice — only complete rankings are safe revision evidence.
+    weakest: status === 'complete' ? [...ranked].reverse().slice(0, 5) : [],
     matches: matchRecords,
     budgetStopped,
     providerId: providerId || null,

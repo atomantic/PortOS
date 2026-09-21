@@ -734,9 +734,10 @@ export const cancelReaderPanel = (seriesId) =>
   });
 
 // ---- Head-to-head comparative Elo ranking (#2169, CWQE Phase 5) ----
-// Stored ranking: { status:'complete', ranking:[{ rank, issueId, number, label,
-// rating, wins, losses }], weakest[], matches[], entrants, rounds, stale } or
-// { status:'none' } / { status:'insufficient' }.
+// Stored ranking: { status:'complete'|'partial', ranking:[{ rank, issueId,
+// number, label, rating, wins, losses }], weakest[], matches[], entrants,
+// rounds, roundsCompleted, stale } — partial is budget-stopped and not
+// authoritative comparative evidence — or { status:'none' } / { status:'insufficient' }.
 export const getComparativeRank = (seriesId, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/editorial/rank`, options);
 

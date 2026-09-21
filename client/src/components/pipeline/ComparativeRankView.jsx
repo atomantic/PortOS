@@ -40,7 +40,8 @@ export default function ComparativeRankView({ seriesId, hasContent }) {
 
   const status = data?.status;
   const ranking = Array.isArray(data?.ranking) ? data.ranking : [];
-  const weakestIds = new Set((data?.weakest || []).map((w) => w.issueId));
+  const isPartial = status === 'partial' || data?.budgetStopped === true;
+  const weakestIds = new Set(status === 'complete' ? (data?.weakest || []).map((w) => w.issueId) : []);
 
   return (
     <div className="space-y-3">
@@ -52,6 +53,7 @@ export default function ComparativeRankView({ seriesId, hasContent }) {
           <p className="mt-0.5 text-[11px] text-gray-600">
             Forced-pick pairwise comparison + Elo — sharper than the per-issue score band.
             {status === 'complete' ? ` ${data.entrants} issues · ${data.rounds} rounds · ${data.matches?.length ?? 0} matches` : ''}
+            {isPartial ? ` ${data.matches?.length ?? 0} completed matches — partial only` : ''}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -79,6 +81,17 @@ export default function ComparativeRankView({ seriesId, hasContent }) {
         <p className="text-xs text-gray-500 italic">
           Need at least two drafted issues to run a head-to-head ranking.
         </p>
+      ) : isPartial ? (
+        <div className="rounded-lg border border-port-warning/40 bg-port-warning/5 p-3 text-xs text-port-warning">
+          <p className="font-medium">Partial ranking — not complete comparative evidence</p>
+          <p className="mt-1 text-gray-400">
+            The budget stopped this tournament after {data?.matches?.length ?? 0} completed comparison{data?.matches?.length === 1 ? '' : 's'}.
+            These standings are not used to choose an autopilot revision priority.
+          </p>
+          {ranking.length > 0 ? (
+            <p className="mt-1 text-gray-500">Run the ranking again after the budget is available to produce a complete order.</p>
+          ) : null}
+        </div>
       ) : status === 'complete' && ranking.length ? (
         <div className="overflow-x-auto rounded-lg border border-port-border">
           <table className="w-full text-sm">
