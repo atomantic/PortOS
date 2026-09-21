@@ -16,26 +16,41 @@ const SCRIPT_COMMANDS = [
     pull: 'run git pull --rebase',
     sync: 'run git submodule sync --recursive',
     update: 'run git submodule update --init --recursive',
+    preflight: 'if ! repair_stale_submodules; then',
+    dirtyGuard: 'if has_local_changes; then',
   },
   {
     path: 'update.ps1',
     pull: 'Invoke-Logged git pull --rebase',
     sync: 'Invoke-Logged git submodule sync --recursive',
     update: 'Invoke-Logged git submodule update --init --recursive',
+    preflight: 'if (-not (Repair-StaleSubmodules)) {',
+    dirtyGuard: 'if ($hasChanges) {',
   },
 ];
 
-describe.each(SCRIPT_COMMANDS)('$path submodule update contract', ({ path, pull, sync, update }) => {
+describe.each(SCRIPT_COMMANDS)('$path submodule update contract', ({ path, pull, sync, update, preflight, dirtyGuard }) => {
   const source = readFileSync(join(REPO_ROOT, path), 'utf8');
 
   it('syncs recursive metadata and then checks out pinned commits after pulling', () => {
     const pullIndex = source.indexOf(pull);
-    const syncIndex = source.indexOf(sync);
-    const updateIndex = source.indexOf(update);
+    const syncIndex = source.lastIndexOf(sync);
+    const updateIndex = source.lastIndexOf(update);
 
     expect(pullIndex).toBeGreaterThanOrEqual(0);
     expect(syncIndex).toBeGreaterThan(pullIndex);
     expect(updateIndex).toBeGreaterThan(syncIndex);
+  });
+
+  it('repairs an interrupted submodule checkout before the dirty-tree guard', () => {
+    const preflightIndex = source.indexOf(preflight);
+    const dirtyIndex = source.indexOf(dirtyGuard);
+    const pullIndex = source.indexOf(pull);
+
+    expect(preflightIndex).toBeGreaterThanOrEqual(0);
+    expect(dirtyIndex).toBeGreaterThan(preflightIndex);
+    expect(preflightIndex).toBeLessThan(pullIndex);
+    expect(source.indexOf(preflight, preflightIndex + preflight.length)).toBeGreaterThan(dirtyIndex);
   });
 
   it('does not advance submodules past the commits reviewed by PortOS', () => {
