@@ -5,10 +5,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
 const brainStorage = { getThreads: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
-const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn() };
+const cosTaskStore = { getCosTasks: vi.fn(), approveTask: vi.fn(), getTaskById: vi.fn() };
 const cosAgentFeedback = { getPendingAgentFeedback: vi.fn(), submitAgentFeedback: vi.fn() };
 const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
-const proactiveAlerts = { generateNonProductAlerts: vi.fn() };
+const proactiveAlerts = { generateNonProductAlerts: vi.fn(), resolveHealthAlert: vi.fn() };
 const productMetrics = { getProductEngagement: vi.fn() };
 const backup = { getState: vi.fn() };
 const reviewService = { getItems: vi.fn(), dismissByReferenceId: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
@@ -74,6 +74,7 @@ const {
 
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
+  cosTaskStore.getTaskById.mockResolvedValue(null);
   brain.getInboxLog.mockResolvedValue([]);
   brainStorage.getThreads.mockResolvedValue([]);
   brainStorage.getThreadById.mockResolvedValue(null);
@@ -477,6 +478,39 @@ describe('reviewQueue.buildQueue', () => {
     expect(draftRows[0]).toMatchObject({ required: false, isRecommendation: true, nextAction: 'Open draft' });
   });
 
+  it('only surfaces task-owned commitments when automation needs user action', async () => {
+    const tasks = [
+      { id: 'running', status: 'in_progress' },
+      { id: 'queued', status: 'pending' },
+      { id: 'approval', status: 'pending', approvalRequired: true },
+      { id: 'finished', status: 'completed' },
+      { id: 'retry', status: 'blocked', metadata: { blockedCategory: 'worktree-busy' } },
+      { id: 'blocked', status: 'blocked', metadata: { blockedCategory: 'provider-config' } },
+    ];
+    cosTaskStore.getTaskById.mockImplementation(async id => tasks.find(task => task.id === id));
+    brainStorage.getThreads.mockResolvedValue([...tasks, { id: 'missing' }].map(task => ({
+      id: task.id, title: 'Example recovery', status: 'open', source: 'cos',
+      refs: [{ kind: 'cos.task', id: task.id }]
+    })).concat({ id: 'personal', title: 'My commitment', status: 'open' }));
+    const queue = await buildQueue();
+    expect(queue.items.filter(item => item.source === 'threads').map(item => item.id).sort())
+      .toEqual(['threads:approval', 'threads:blocked', 'threads:missing', 'threads:personal']);
+
+    tasks.find(task => task.id === 'blocked').status = 'completed';
+    const resolved = await buildQueue();
+    expect(resolved.items.some(item => item.id === 'threads:blocked')).toBe(false);
+  });
+
+  it('reports unavailable task state instead of hiding unverified commitments', async () => {
+    brainStorage.getThreads.mockResolvedValue([{
+      id: 'recovery', title: 'Example recovery', status: 'open', source: 'cos',
+      refs: [{ kind: 'cos.task', id: 'unreadable' }]
+    }]);
+    cosTaskStore.getTaskById.mockRejectedValue(new Error('Task store unavailable'));
+    const queue = await buildQueue();
+    expect(queue.sources.threads).toMatchObject({ availability: 'unavailable', available: false, total: null });
+  });
+
   it('adapts stored obligations and notifications, deduplicating only proven references', async () => {
     reviewService.getItems.mockResolvedValue([
       {
@@ -555,6 +589,24 @@ describe('reviewQueue.buildQueue', () => {
     expect(healthRows).toHaveLength(1);
     expect(healthRows[0]).toMatchObject({ severity: 'critical', summary: '95% used', drillTo: '/system-resources/overview' });
     expect(queue.items.find(i => i.source === 'backup')).toMatchObject({ title: 'Backup failed', summary: 'disk full' });
+  });
+
+  it('offers health resolution, clears cached alerts, and preserves durable baselines', async () => {
+    const alert = { id: 'success_drop:example', type: 'success_drop', severity: 'high', title: 'Low success rate' };
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([alert]);
+    const queue = await buildQueue();
+    expect(queue.items.find(item => item.source === 'health').operations)
+      .toContainEqual({ id: 'complete', label: 'Mark resolved', available: true });
+    const baseline = { actionKey: 'health.resolved:success_drop:example', occurrence: '2026-01-01T00:00:00.000Z', revision: 'fingerprint', dismissed: true };
+    proactiveAlerts.resolveHealthAlert.mockImplementation(async () => {
+      reviewQueueTriageStore.listReviewQueueTriage.mockResolvedValue([baseline]);
+      proactiveAlerts.generateNonProductAlerts.mockResolvedValue([]);
+      return { resolved: true };
+    });
+    await expect(resolveQueueItem('health:success_drop:example', 'complete')).resolves.toMatchObject({ resolved: true });
+    expect(proactiveAlerts.resolveHealthAlert).toHaveBeenCalledWith('success_drop:example');
+    expect((await buildQueue()).items.some(item => item.source === 'health')).toBe(false);
+    expect(reviewQueueTriageStore.removeReviewQueueTriage).not.toHaveBeenCalledWith(baseline);
   });
 
   it('surfaces a degraded backup as a normal-severity warning, not a high-severity failure', async () => {

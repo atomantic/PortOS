@@ -15,6 +15,8 @@ const {
   upsertReviewQueueTriage,
 } = await import('./reviewQueueTriageStore.js');
 
+const { getHealthAlertResolutions, recordHealthAlertResolution } = await import('./healthAlertResolutions.js');
+
 const dataRoot = lazyTempDataRoot('portos-review-queue-triage-');
 const triageFile = join(dataRoot, 'review-queue-triage.json');
 const previousBackend = process.env.MEMORY_BACKEND;
@@ -47,6 +49,16 @@ describe('reviewQueueTriageStore', () => {
     resetReviewQueueTriageStore();
 
     await expect(listReviewQueueTriage()).resolves.toEqual([marker]);
+  });
+
+  it('retains the newest health correction time across restart without storing source content', async () => {
+    const alert = { id: 'success_drop:example', metadata: { taskType: 'example' }, title: 'Private example title' };
+    await recordHealthAlertResolution(alert, new Date('2026-01-02T00:00:00.000Z'));
+    await recordHealthAlertResolution(alert, new Date('2026-01-01T00:00:00.000Z'));
+    resetReviewQueueTriageStore();
+    const resolutions = await getHealthAlertResolutions();
+    expect(resolutions.get(alert.id)).toMatchObject({ at: '2026-01-02T00:00:00.000Z' });
+    expect(JSON.stringify(await listReviewQueueTriage())).not.toContain('Private example title');
   });
 
   it('keeps rollover occurrences distinct and removes a cleared marker', async () => {

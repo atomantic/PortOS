@@ -68,12 +68,42 @@ describe('canonical action previews', () => {
     expect(screen.queryByText('All caught up!')).not.toBeInTheDocument();
     await act(async () => finish(envelope([required], true)));
     expect(screen.getByRole('button', { name: /at least 1 required actions/ })).toBeInTheDocument();
-    expect(screen.getAllByText(/Counts are lower bounds/)).toHaveLength(3);
+    expect(screen.getAllByText(/Action counts are incomplete/)).toHaveLength(3);
     mock.getReviewQueue.mockRejectedValue(new Error('offline'));
     act(() => window.dispatchEvent(new Event(ACTION_QUEUE_CHANGED)));
     await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(3));
     expect(screen.getAllByText('Disk needs attention')).toHaveLength(2);
     expect(screen.queryByText('All caught up!')).not.toBeInTheDocument();
+  });
+
+  it('treats a source preview limit as context and keeps unrelated widgets healthy', async () => {
+    mock.getReviewQueue.mockResolvedValue({ ...envelope([required], true), sources: {
+      review: { label: 'Stored review obligations', availability: 'available', truncation: true },
+      product: { label: 'Product recommendations', availability: 'available', truncation: false },
+      health: { label: 'Health anomalies', availability: 'available', truncation: false },
+    } });
+    show();
+    fireEvent.click(await screen.findByRole('button', { name: /Notifications/ }));
+    const daily = screen.getByRole('region', { name: "Today's actions" });
+    expect(within(daily).getByText('All caught up!')).toBeInTheDocument();
+    expect(within(daily).queryByText(/limited preview|unavailable|incomplete/)).not.toBeInTheDocument();
+    const notices = screen.getAllByText(/Showing a limited preview of Stored review obligations/);
+    expect(notices).toHaveLength(2);
+    for (const notice of notices) expect(notice).not.toHaveClass('text-port-warning');
+    expect(screen.queryByText(/Could not load/)).not.toBeInTheDocument();
+  });
+
+  it('names failed sources and offers recovery only in affected previews', async () => {
+    mock.getReviewQueue.mockResolvedValue({ ...envelope([], true), sources: {
+      review: { label: 'Stored review obligations', availability: 'unavailable', available: false },
+      product: { label: 'Product recommendations', availability: 'available', truncation: false },
+      health: { label: 'Health anomalies', availability: 'available', truncation: false },
+    } });
+    show();
+    const notice = await screen.findByText(/Could not load Stored review obligations/);
+    expect(within(notice).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(notice).getByRole('link', { name: 'View source details' })).toHaveAttribute('href', '/review?view=today');
+    expect(within(screen.getByRole('region', { name: "Today's actions" })).getByText('All caught up!')).toBeInTheDocument();
   });
 
   it('drops an older response when completion invalidates a pending read', async () => {
