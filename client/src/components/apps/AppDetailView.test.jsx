@@ -145,6 +145,18 @@ describe('AppDetailView header title', () => {
     const heading = await screen.findByRole('heading', { name: APP.name });
     expect(heading.parentElement).toHaveClass('flex-1', 'lg:flex-initial', 'min-w-0');
   });
+
+  it('does not display PM2 process names in the header', async () => {
+    api.getApp.mockResolvedValue({
+      ...APP,
+      pm2ProcessNames: ['example-backend', 'example-worker'],
+    });
+    renderDetail();
+
+    await screen.findByRole('heading', { name: APP.name });
+    expect(screen.queryByText(/example-backend/)).toBeNull();
+    expect(screen.queryByText(/example-worker/)).toBeNull();
+  });
 });
 
 describe('AppDetailView managed-app feature tabs', () => {
