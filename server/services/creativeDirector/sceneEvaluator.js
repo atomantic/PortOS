@@ -321,7 +321,7 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
   }
 
   await updateScene(project.id, scene.sceneId, { ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}), status: 'failed', evaluation });
-  console.log(`⛔ CD scene ${scene.sceneId} failed by vision — retries exhausted`);
+  console.error(`⛔ CD scene ${scene.sceneId} failed by vision — retries exhausted`);
   return advance();
 }
 
