@@ -1,6 +1,4 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import Drawer from '../Drawer';
-import useDrawerTab from '../../hooks/useDrawerTab';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -134,7 +132,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   const [screenshots, setScreenshots] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [templates, setTemplates] = useState([]);
-  const [showTemplates, setShowTemplates] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(queueFirst);
   // Compact-mode-only "More options" toggle. Callers that render in a
   // tall container (the dashboard Quick Task widget) pass defaultExpanded
   // so the card paints as a complete capture form on first render.
@@ -835,9 +833,12 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           {enhancePrompt && ' · Enhance prompt'}
           {addToTop && ' · Queue at top'}
         </p>
+        {renderTemplates()}
+        {renderUploadControls()}
         {renderPreviews()}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <button type="button" onClick={() => setConfigurationOpen(true)}
+          <button type="button" onClick={() => setConfigurationOpen(open => !open)}
+            aria-expanded={configurationOpen} aria-controls="task-configuration"
             className="min-h-[44px] px-3 py-2 text-sm text-port-accent border border-port-border rounded-lg">
             Task configuration
           </button>
@@ -847,8 +848,11 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             {isSubmitting ? 'Adding...' : planOnly ? 'Plan & File Issue' : enhancePrompt ? 'Enhance & Add task' : 'Add task'}
           </button>
         </div>
-        <TaskConfigurationDrawer open={configurationOpen} onClose={() => setConfigurationOpen(false)}
-          renderFields={renderFullFormFields} renderTemplates={renderTemplates} renderUploads={() => <>{renderUploadControls()}{renderPreviews()}</>} />
+        {configurationOpen && (
+          <div id="task-configuration" role="region" aria-label="Task configuration" className="space-y-3">
+            {renderFullFormFields()}
+          </div>
+        )}
       </section>
     );
   }
@@ -1567,23 +1571,4 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
       </>
     );
   }
-}
-
-
-// The form owns all drafts; changing a drawer tab only remounts its controls.
-function TaskConfigurationDrawer({ open, onClose, renderFields, renderTemplates, renderUploads }) {
-  const [tab, setTab] = useDrawerTab('taskConfig', 'execution', ['execution', 'completion', 'templates']);
-  return (
-    <Drawer open={open} onClose={onClose} title="Task configuration" size="lg"
-      closeLabel="Close task configuration"
-      tabs={[
-        { id: 'execution', label: 'Execution', icon: Zap },
-        { id: 'completion', label: 'Completion & review', icon: GitPullRequest },
-        { id: 'templates', label: 'Templates & attachments', icon: Paperclip },
-      ]}
-      activeTab={tab} onTabChange={setTab} bodyClassName="@container space-y-3">
-      {tab === 'templates' && <>{renderTemplates()}{renderUploads()}</>}
-      {renderFields(tab)}
-    </Drawer>
-  );
 }
