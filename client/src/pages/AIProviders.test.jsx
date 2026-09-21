@@ -36,6 +36,8 @@ const api = vi.hoisted(() => ({
   getProviderCatalog: vi.fn().mockResolvedValue({
     harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {}, presets: [],
   }),
+  getProviderBootstraps: vi.fn().mockResolvedValue({ bootstraps: {} }),
+  getHarnesses: vi.fn().mockResolvedValue({ harnesses: [] }),
   createProviderPreset: vi.fn(),
   // The Services view lists instances; empty by default.
   getProviderServices: vi.fn().mockResolvedValue({ services: [] }),
@@ -203,6 +205,40 @@ describe('AIProviders page load error handling', () => {
     fireEvent.click(install);
     const modal = screen.getByTestId('runtime-install-modal');
     expect(modal).toHaveAttribute('data-runtime', 'opencode');
+    expect(modal).toHaveAttribute('data-stream-method', 'POST');
+    expect(modal).toHaveAttribute('data-flush-ms', '250');
+  });
+
+  it('opens the shared installer when a Harnesses card starts a CLI install', async () => {
+    __resetProviderCatalogCache();
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getProviderRuntimes.mockResolvedValue({
+      runtimes: {
+        pi: {
+          id: 'pi',
+          label: 'Pi Coding Agent CLI',
+          vendor: 'pi',
+          installed: false,
+          installable: true,
+          method: 'npm',
+        },
+      },
+    });
+    api.getProviderCatalog.mockResolvedValue({
+      harnesses: [{ id: 'pi', label: 'Pi', modes: ['cli', 'tui'], enabled: false, source: 'setting', detected: false }],
+      services: [],
+      bootstraps: [],
+      compatibility: {},
+      effortLevels: {},
+      effortLevelsByModel: {},
+      presets: [],
+    });
+
+    await renderPage('/ai/harnesses');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Install Pi Coding Agent CLI' }));
+    const modal = await screen.findByTestId('runtime-install-modal');
+    expect(modal).toHaveAttribute('data-runtime', 'pi');
     expect(modal).toHaveAttribute('data-stream-method', 'POST');
     expect(modal).toHaveAttribute('data-flush-ms', '250');
   });
