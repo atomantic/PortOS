@@ -4,22 +4,38 @@
  * catalog_ingredient_media: typed references (portrait/reference/audio/video/
  * document) into the install's media library. `media_key` is a key into the
  * library (data/images + the history.jsonl sidecar) — never duplicated bytes.
- * Detach is a soft-delete so peers receive the tombstone.
+ * Image generation provenance lives in the bounded JSONB `metadata` projection;
+ * detach is a soft-delete so peers receive the tombstone.
  */
 
 import { query } from '../../lib/db.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { rowToMedia, groupRowsByIngredient } from './shared.js';
 
-export async function attachMedia(ingredientId, mediaKey, kind, { role = null, caption = null } = {}) {
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+const hasMeaningfulMetadata = (value) => value && typeof value === 'object'
+  && !Array.isArray(value) && Object.keys(value).length > 0;
+
+export async function attachMedia(ingredientId, mediaKey, kind, options = {}) {
+  const { role = null, caption = null } = options;
+  // Metadata is additive on the wire and optional at the call boundary. When
+  // absent, leave an existing prompt untouched; a legacy attach/re-attach must
+  // not erase provenance just because its caller predates this field.
+  const hasMetadata = hasOwn(options, 'metadata') && hasMeaningfulMetadata(options.metadata);
+  const metadataColumn = hasMetadata ? ', metadata' : '';
+  const metadataPlaceholder = hasMetadata ? ', $6' : '';
+  const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
   const result = await query(
-    `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO catalog_ingredient_media (ingredient_id, media_key, kind, role, caption${metadataColumn})
+     VALUES ($1, $2, $3, $4, $5${metadataPlaceholder})
      ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
        SET deleted = false, deleted_at = NULL,
-           role = EXCLUDED.role, caption = EXCLUDED.caption
+           role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}
      RETURNING *`,
-    [ingredientId, mediaKey, kind, role, caption],
+    [
+      ingredientId, mediaKey, kind, role, caption,
+      ...(hasMetadata ? [JSON.stringify(options.metadata || {})] : []),
+    ],
   );
   return rowToMedia(result.rows[0]);
 }
@@ -41,7 +57,8 @@ export async function detachMedia(ingredientId, mediaKey, kind) {
 // demote any other live portrait. One active portrait per ingredient — the UI
 // renders it as the ingredient's avatar. Serialized as two statements; the
 // single-user trust model means no competing writer can interleave.
-export async function setPortraitMedia(ingredientId, mediaKey, { role = null, caption = null } = {}) {
+export async function setPortraitMedia(ingredientId, mediaKey, options = {}) {
+  const { role = null, caption = null } = options;
   await query(
     `UPDATE catalog_ingredient_media
         SET deleted = true, deleted_at = NOW()
@@ -49,7 +66,9 @@ export async function setPortraitMedia(ingredientId, mediaKey, { role = null, ca
         AND media_key <> $2 AND deleted = false`,
     [ingredientId, mediaKey],
   );
-  return attachMedia(ingredientId, mediaKey, 'portrait', { role, caption });
+  const attachOptions = { role, caption };
+  if (hasOwn(options, 'metadata')) attachOptions.metadata = options.metadata;
+  return attachMedia(ingredientId, mediaKey, 'portrait', attachOptions);
 }
 
 // Live (non-tombstoned) media rows for an ingredient's detail "Media" panel,

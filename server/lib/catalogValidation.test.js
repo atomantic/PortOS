@@ -26,6 +26,7 @@ import {
   catalogMediaAttachSchema,
   catalogMediaDetachSchema,
   catalogPortraitSetSchema,
+  catalogMediaMetadataSchema,
   MEDIA_KINDS,
   catalogUrlIngestSchema,
   catalogUserTypeSchema,
@@ -619,9 +620,18 @@ describe('catalogValidation — catalogSyncEnvelopeSchema media block', () => {
       media: [
         { ingredientId: 'i1', mediaKey: 'a.png', kind: 'portrait', createdAt: '2026-01-01T00:00:00Z' },
         { ingredientId: 'i1', mediaKey: 'b.png', kind: 'reference', role: 'mood', caption: 'rainy', createdAt: '2026-01-01T00:00:00Z', deleted: true, deletedAt: '2026-01-02T00:00:00Z' },
+        { ingredientId: 'i1', mediaKey: 'c.png', kind: 'reference', metadata: { format: 'a1111', prompt: 'a lighthouse', negativePrompt: 'blur', steps: 18, seed: 9 }, createdAt: '2026-01-01T00:00:00Z' },
       ],
     });
-    expect(out.media).toHaveLength(2);
+    expect(out.media).toHaveLength(3);
+    expect(out.media[2].metadata).toMatchObject({ format: 'a1111', prompt: 'a lighthouse', negativePrompt: 'blur', steps: 18, seed: 9 });
+  });
+
+  it('bounds media provenance while allowing provider-specific additive fields', () => {
+    expect(catalogMediaMetadataSchema.parse({ prompt: 'a fox', workflow: { provider: 'example' } })).toMatchObject({
+      prompt: 'a fox', workflow: { provider: 'example' },
+    });
+    expect(() => catalogMediaMetadataSchema.parse({ parameters: 'x'.repeat(64 * 1024 + 1) })).toThrow();
   });
 
   it('tolerates a forward (unknown) media kind on the wire', () => {

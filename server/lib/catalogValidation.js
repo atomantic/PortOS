@@ -598,17 +598,37 @@ export const catalogSyncTagSchema = z.object({
   syncSequence: z.string().optional(),
 }).passthrough();
 
-// Media rows carry tombstone fields + editable metadata (role/caption).
+// Media rows carry tombstone fields + editable attachment metadata
+// (role/caption) and a bounded generation-provenance projection.
 // `kind` is freeform on the wire (not the strict enum) for the same forward-
 // compat reason as relations: a newer peer's extra media kind stores
 // harmlessly rather than 400-ing the whole envelope. `mediaKey` is a reference,
 // not bytes — the receiver matches it against its own library on apply.
+export const catalogMediaMetadataSchema = z.object({
+  format: z.string().max(64).optional(),
+  parameters: z.string().max(64 * 1024).optional(),
+  prompt: z.string().max(16_000).optional(),
+  negativePrompt: z.string().max(16_000).optional(),
+  steps: z.number().int().min(0).max(100_000).optional(),
+  sampler: z.string().max(256).optional(),
+  cfgScale: z.number().finite().min(0).max(1_000).optional(),
+  seed: z.union([z.number().int(), z.string().max(128)]).optional(),
+  width: z.number().int().positive().max(100_000).optional(),
+  height: z.number().int().positive().max(100_000).optional(),
+  modelHash: z.string().max(256).optional(),
+  model: z.string().max(512).optional(),
+}).passthrough().refine(
+  (metadata) => JSON.stringify(metadata).length <= 96 * 1024,
+  { message: 'media metadata exceeds 96KB JSON size cap' },
+);
+
 export const catalogSyncMediaSchema = z.object({
   ingredientId: z.string().max(80),
   mediaKey: z.string().max(512),
   kind: z.string().max(32),
   role: z.string().max(64).nullable().optional(),
   caption: z.string().max(2_000).nullable().optional(),
+  metadata: catalogMediaMetadataSchema.optional(),
   createdAt: isoDate,
   deleted: z.boolean().optional(),
   deletedAt: z.string().nullable().optional(),
@@ -642,7 +662,8 @@ export const catalogSyncEnvelopeSchema = z.object({
   tags: z.array(catalogSyncTagSchema).max(20_000).optional(),
   media: z.array(catalogSyncMediaSchema).max(20_000).optional(),
   // Additive catalog v8 block — user-defined type definitions. Optional so a
-  // ≤v7 peer's envelope (no `catalogTypes`) still validates.
+  // ≤v7 peer's envelope (no `catalogTypes`) still validates. Media provenance
+  // is the separate additive v9 field on each `media` row above.
   catalogTypes: z.array(catalogSyncUserTypeSchema).max(64).optional(),
   portosMeta,
 }).passthrough();

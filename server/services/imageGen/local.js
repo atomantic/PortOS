@@ -20,6 +20,7 @@ import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { extractPngGenerationMetadata } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
@@ -1168,7 +1169,7 @@ async function refreshImageIndex(filename) {
  * filename and its `/data/images/` mount path for the caller to store.
  *
  * @param {string} base64Data - Raw base64 (no data: URI prefix) image bytes
- * @returns {Promise<{ filename: string, path: string }>}
+ * @returns {Promise<{ filename: string, path: string, metadata: object }>}
  */
 export async function saveUploadedGalleryImage(base64Data) {
   const buffer = Buffer.from(base64Data, 'base64');
@@ -1182,6 +1183,9 @@ export async function saveUploadedGalleryImage(base64Data) {
   if (!detected) {
     throw new ServerError('Unsupported image format (expected PNG, JPEG, WebP, or GIF)', { status: 400, code: 'UNSUPPORTED_IMAGE' });
   }
+  // Read Stable Diffusion-compatible PNG text chunks before sharp normalizes
+  // the image. JPEG/WebP/GIF uploads simply produce an empty projection.
+  const metadata = extractPngGenerationMetadata(buffer);
   // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
   // `.rotate()` with no args bakes in EXIF orientation before the metadata is
   // dropped, so a camera-JPEG portrait isn't saved sideways/upside-down.
@@ -1189,9 +1193,15 @@ export async function saveUploadedGalleryImage(base64Data) {
   const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
   await atomicWrite(join(PATHS.images, filename), png);
+  // The normalized PNG intentionally has no source text chunks. Keep the
+  // bounded projection in the canonical gallery sidecar so gallery listings,
+  // media indexing, and later catalog attachments can still recover it.
+  if (Object.keys(metadata).length > 0) {
+    await atomicWrite(join(PATHS.images, filename.replace('.png', '.metadata.json')), metadata);
+  }
   await refreshImageIndex(filename);
   console.log(`📥 Saved uploaded gallery image: ${filename} (${(png.length / 1024).toFixed(0)}KB PNG, from ${detected.mime})`);
-  return { filename, path: `/data/images/${filename}` };
+  return { filename, path: `/data/images/${filename}`, metadata };
 }
 
 export async function listGallery() {

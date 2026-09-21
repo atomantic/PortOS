@@ -48,7 +48,7 @@ import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
-import { uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
+import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
@@ -486,9 +486,13 @@ router.post('/ingredients/:id/media', asyncHandler(async (req, res) => {
   if (IMAGE_MEDIA_KINDS.has(body.kind) && !resolveImageInputPath(body.mediaKey)) {
     throw new ServerError(`Media key "${body.mediaKey}" not found in the media library`, { status: 422 });
   }
+  const metadata = IMAGE_MEDIA_KINDS.has(body.kind)
+    ? await readImageGenerationMetadata(body.mediaKey)
+    : {};
   const media = await catalogDB.attachMedia(req.params.id, body.mediaKey, body.kind, {
     role: body.role ?? null,
     caption: body.caption ?? null,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   });
   res.status(201).json(media);
 }));
@@ -500,9 +504,11 @@ router.post('/ingredients/:id/media/portrait', asyncHandler(async (req, res) => 
   if (!resolveImageInputPath(body.mediaKey)) {
     throw new ServerError(`Media key "${body.mediaKey}" not found in the media library`, { status: 422 });
   }
+  const metadata = await readImageGenerationMetadata(body.mediaKey);
   const media = await catalogDB.setPortraitMedia(req.params.id, body.mediaKey, {
     role: body.role ?? null,
     caption: body.caption ?? null,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   });
   res.status(201).json(media);
 }));

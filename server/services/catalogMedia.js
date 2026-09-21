@@ -12,11 +12,13 @@
 // replica hashes the file when it federates.
 
 import { randomUUID } from 'crypto';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, atomicWrite, resolveImageInputPath } from '../lib/fileUtils.js';
+import { extractPngGenerationMetadata, normalizeGenerationMetadata } from '../lib/pngMetadata.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getIngredient, attachMedia } from './catalogDB.js';
-import { saveUploadedGalleryImage } from './imageGen/local.js';
+import { readImageSidecar, saveUploadedGalleryImage } from './imageGen/local.js';
 import { transcribe } from './voice/stt.js';
 
 // media_key caption cap mirrors catalogMediaAttachSchema.caption (2 000 chars).
@@ -33,6 +35,15 @@ const VIDEO_EXT = {
   'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/ogg': 'ogv',
 };
 
+const hasMetadata = (value) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+
+const mediaAttachOptions = ({ role = null, caption = null, metadata = {} } = {}) => {
+  const options = { role, caption };
+  const normalized = normalizeGenerationMetadata(metadata);
+  if (hasMetadata(normalized)) options.metadata = normalized;
+  return options;
+};
+
 /**
  * Classify a browser-reported MIME into the media library it belongs in. Pure —
  * unit-tested. Strips any `;codecs=…` parameter first. Returns
@@ -45,6 +56,31 @@ export function classifyUploadMime(mimeType) {
   if (mime.startsWith('audio/')) return { category: 'audio', kind: 'audio', ext: AUDIO_EXT[mime] || 'webm' };
   if (mime.startsWith('video/')) return { category: 'video', kind: 'video', ext: VIDEO_EXT[mime] || 'mp4' };
   return null;
+}
+
+/**
+ * Read the generation provenance for an existing gallery image. Sidecars are
+ * authoritative for normalized/generated assets; the PNG fallback covers a
+ * gallery key that arrived before its sidecar or was created by an older build.
+ * Metadata is best-effort: a corrupt sidecar must not make an otherwise valid
+ * image impossible to attach.
+ */
+export async function readImageGenerationMetadata(
+  mediaKey,
+  {
+    readSidecarFn = readImageSidecar,
+    readFileFn = readFile,
+    resolveImagePathFn = resolveImageInputPath,
+  } = {},
+) {
+  const sidecar = await Promise.resolve(readSidecarFn(mediaKey)).catch(() => null);
+  const fromSidecar = normalizeGenerationMetadata(sidecar?.metadata);
+  if (hasMetadata(fromSidecar)) return fromSidecar;
+
+  const imagePath = resolveImagePathFn(mediaKey);
+  if (!imagePath) return {};
+  const bytes = await Promise.resolve(readFileFn(imagePath)).catch(() => null);
+  return bytes ? extractPngGenerationMetadata(bytes) : {};
 }
 
 // Write raw bytes into a federating library dir under a collision-free
@@ -88,9 +124,12 @@ export async function uploadIngredientMediaFile(
 
   if (classified.category === 'image') {
     // saveUploadedGalleryImage validates size + format and 400s on a non-image.
-    const { filename: mediaKey } = await saveImageFn(dataBase64);
+    const sourceMetadata = extractPngGenerationMetadata(Buffer.from(dataBase64, 'base64'));
+    const saved = await saveImageFn(dataBase64);
+    const metadata = hasMetadata(saved?.metadata) ? saved.metadata : sourceMetadata;
+    const mediaKey = saved.filename;
     console.log(`📎 Catalog media upload: image ${mediaKey} → ingredient ${ingredientId}`);
-    return attachMediaFn(ingredientId, mediaKey, classified.kind, meta);
+    return attachMediaFn(ingredientId, mediaKey, classified.kind, mediaAttachOptions({ ...meta, metadata }));
   }
 
   const buffer = Buffer.from(dataBase64, 'base64');
@@ -98,7 +137,7 @@ export async function uploadIngredientMediaFile(
   const dir = classified.category === 'audio' ? PATHS.audio : PATHS.videos;
   const mediaKey = await persistFileFn(buffer, dir, classified.ext);
   console.log(`📎 Catalog media upload: ${classified.kind} ${mediaKey} → ingredient ${ingredientId} (${(buffer.length / 1024).toFixed(0)}KB, ${filename || 'unnamed'})`);
-  return attachMediaFn(ingredientId, mediaKey, classified.kind, meta);
+  return attachMediaFn(ingredientId, mediaKey, classified.kind, mediaAttachOptions(meta));
 }
 
 /**
@@ -128,6 +167,6 @@ export async function recordIngredientVoiceMemo(
   const ext = AUDIO_EXT[(mimeType || '').toLowerCase().split(';')[0].trim()] || 'wav';
   const mediaKey = await persistFileFn(buffer, PATHS.audio, ext);
   console.log(`🎙️ Catalog voice memo: ${mediaKey} → ingredient ${ingredientId} (${transcript.length} chars)`);
-  const media = await attachMediaFn(ingredientId, mediaKey, 'audio', { role, caption: transcript || null });
+  const media = await attachMediaFn(ingredientId, mediaKey, 'audio', mediaAttachOptions({ role, caption: transcript || null }));
   return { media, transcript };
 }

@@ -25,6 +25,7 @@
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
 import { attachMedia, setPortraitMedia, listMediaForIngredient, getIngredient } from './catalogDB.js';
+import { readImageGenerationMetadata } from './catalogMedia.js';
 import { createNewestWinsGuard } from '../lib/createNewestWinsGuard.js';
 
 // Newest-render-wins for the PORTRAIT slot only (#1791). The per-ingredient
@@ -72,11 +73,15 @@ async function attachGeneratedImage({ ingredientId, kind, filename, queuedAt }) 
   if (target === 'portrait' && portraitGuard.isStale(ingredientId, queuedAt)) {
     target = 'reference';
   }
+  const metadata = await readImageGenerationMetadata(filename);
+  const metadataOptions = Object.keys(metadata).length > 0 ? { metadata } : null;
   if (target === 'portrait') {
-    await setPortraitMedia(ingredientId, filename);
+    if (metadataOptions) await setPortraitMedia(ingredientId, filename, metadataOptions);
+    else await setPortraitMedia(ingredientId, filename);
     portraitGuard.mark(ingredientId, queuedAt);
   } else {
-    await attachMedia(ingredientId, filename, 'reference');
+    if (metadataOptions) await attachMedia(ingredientId, filename, 'reference', metadataOptions);
+    else await attachMedia(ingredientId, filename, 'reference');
   }
   return target;
 }

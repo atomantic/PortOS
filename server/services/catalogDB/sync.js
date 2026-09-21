@@ -74,36 +74,48 @@ export async function upsertMediaFromPeer(media) {
   // shape to defend against. We still treat "tombstone keys absent" as "peer
   // has no opinion" so a forked peer that omits them preserves local state on
   // conflict. On INSERT a tombstone-less row defaults to deleted=false, which
-  // is correct (brand-new locally, peer believes it active). role/caption are
-  // always adopted from the peer (LWW is implicit — last writer's envelope wins
-  // for these tuple-unique rows, same as refs).
+  // is correct (brand-new locally, peer believes it active). role/caption and
+  // metadata are adopted when the peer includes them (LWW is implicit — last
+  // writer's envelope wins for these tuple-unique rows, same as refs); an older
+  // peer's absent metadata is no opinion.
   const hasTombstoneFields =
     Object.prototype.hasOwnProperty.call(media, 'deleted') ||
     Object.prototype.hasOwnProperty.call(media, 'deletedAt');
+  // A peer that predates media provenance has no `metadata` key. Treat that as
+  // no opinion on conflict, just like the tombstone-less compatibility path,
+  // so an older peer cannot erase a prompt already stored locally.
+  const hasMetadata = Object.prototype.hasOwnProperty.call(media, 'metadata')
+    && media.metadata && typeof media.metadata === 'object'
+    && !Array.isArray(media.metadata) && Object.keys(media.metadata).length > 0;
+  const metadataColumn = hasMetadata ? ', metadata' : '';
+  const metadataPlaceholder = hasMetadata ? `, $${hasTombstoneFields ? 9 : 7}` : '';
+  const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
+  const metadataParam = hasMetadata ? [JSON.stringify(media.metadata || {})] : [];
   if (hasTombstoneFields) {
     await query(
       `INSERT INTO catalog_ingredient_media
-         (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at${metadataColumn})
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8${metadataPlaceholder})
        ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
          SET role = EXCLUDED.role,
              caption = EXCLUDED.caption,
              deleted = EXCLUDED.deleted,
-             deleted_at = EXCLUDED.deleted_at`,
+             deleted_at = EXCLUDED.deleted_at${metadataUpdate}`,
       [
         media.ingredientId, media.mediaKey, media.kind,
         media.role ?? null, media.caption ?? null, media.createdAt,
         !!media.deleted, media.deletedAt || null,
+        ...metadataParam,
       ],
     );
   } else {
     await query(
       `INSERT INTO catalog_ingredient_media
-         (ingredient_id, media_key, kind, role, caption, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (ingredient_id, media_key, kind, role, caption, created_at${metadataColumn})
+       VALUES ($1, $2, $3, $4, $5, $6${metadataPlaceholder})
        ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
-         SET role = EXCLUDED.role, caption = EXCLUDED.caption`,
-      [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt],
+         SET role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}`,
+      [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt, ...metadataParam],
     );
   }
 }
