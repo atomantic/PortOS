@@ -113,3 +113,245 @@ it('keeps partial extraction failures visible in review and excludes draft metad
   await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith('partial-scrap',
     [expect.objectContaining({ payload: { summary: 'A supported fragment.' } })], expect.anything()));
 });
+
+it('preserves rename and reorder stability and updates relationship endpoint labels', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'scrap-stable' } });
+  extractFromCatalogScrap.mockResolvedValue({
+    scrap: { id: 'scrap-stable' },
+    draft: {
+      characters: [{ draftId: 'chr-1', name: 'Ada Lovelace', payload: { role: 'Mentor' } }],
+      objects: [{ draftId: 'obj-1', name: 'Pocket Watch', payload: { description: 'Golden watch' } }],
+      relationships: [
+        { fromDraftId: 'chr-1', toDraftId: 'obj-1', kind: 'owned-by', evidence: 'Ada carries the golden watch.' },
+      ],
+    },
+  });
+  commitCatalogScrapDraft.mockResolvedValue({ ingredients: [] });
+
+  render(<MemoryRouter initialEntries={['/catalog/ingest']}><CatalogIngest /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText(/Raw text/), { target: { value: 'Ada and her watch' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+
+  await screen.findByDisplayValue('Ada Lovelace');
+  expect(screen.getByDisplayValue('Pocket Watch')).toBeTruthy();
+
+  // Check relationship card shows initial names, kind badge, and evidence
+  expect(screen.getByText('Owned by')).toBeTruthy();
+  expect(screen.getByText('(inverse: Owns)')).toBeTruthy();
+  expect(screen.getByText('“Ada carries the golden watch.”')).toBeTruthy();
+
+  // Rename Ada Lovelace inline
+  fireEvent.change(screen.getByDisplayValue('Ada Lovelace'), { target: { value: 'Countess Ada' } });
+
+  // Relationship review card updates endpoint name to "Countess Ada"
+  expect(screen.getByText('Countess Ada')).toBeTruthy();
+
+  // Both items are still checked by stable draftId
+  expect(screen.getByRole('checkbox', { name: 'Include Countess Ada' })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: 'Include Pocket Watch' })).toBeChecked();
+
+  // Commit
+  fireEvent.click(screen.getByRole('button', { name: /Commit/ }));
+  await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith(
+    'scrap-stable',
+    [
+      expect.objectContaining({ draftId: 'chr-1', name: 'Countess Ada', type: 'character' }),
+      expect.objectContaining({ draftId: 'obj-1', name: 'Pocket Watch', type: 'object' }),
+    ],
+    expect.objectContaining({
+      relationships: [
+        expect.objectContaining({
+          fromDraftId: 'chr-1',
+          toDraftId: 'obj-1',
+          kind: 'owned-by',
+          evidence: 'Ada carries the golden watch.',
+        }),
+      ],
+    }),
+  ));
+});
+
+it('supports relationship link opt-out with explicit empty commit array', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'scrap-opt-out' } });
+  extractFromCatalogScrap.mockResolvedValue({
+    scrap: { id: 'scrap-opt-out' },
+    draft: {
+      characters: [{ draftId: 'chr-1', name: 'Ada Lovelace' }],
+      objects: [{ draftId: 'obj-1', name: 'Pocket Watch' }],
+      relationships: [
+        { fromDraftId: 'chr-1', toDraftId: 'obj-1', kind: 'owned-by', evidence: 'Ada carries the watch' },
+      ],
+    },
+  });
+  commitCatalogScrapDraft.mockResolvedValue({ ingredients: [] });
+
+  render(<MemoryRouter initialEntries={['/catalog/ingest']}><CatalogIngest /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText(/Raw text/), { target: { value: 'Ada with watch' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+
+  await screen.findByDisplayValue('Ada Lovelace');
+
+  // Opt-out of the relationship by unchecking it
+  const relCheckbox = screen.getByRole('checkbox', { name: 'Include relationship Ada Lovelace Owned by Pocket Watch' });
+  expect(relCheckbox).toBeChecked();
+  fireEvent.click(relCheckbox);
+  expect(relCheckbox).not.toBeChecked();
+
+  // Commit
+  fireEvent.click(screen.getByRole('button', { name: /Commit/ }));
+  await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith(
+    'scrap-opt-out',
+    expect.any(Array),
+    expect.objectContaining({
+      relationships: [], // Explicitly empty array!
+    }),
+  ));
+});
+
+it('disables relationship and provides feedback when an endpoint is deselected without auto-selecting', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'scrap-endpoint-desel' } });
+  extractFromCatalogScrap.mockResolvedValue({
+    scrap: { id: 'scrap-endpoint-desel' },
+    draft: {
+      characters: [{ draftId: 'chr-1', name: 'Ada Lovelace' }],
+      objects: [{ draftId: 'obj-1', name: 'Pocket Watch' }],
+      relationships: [
+        { fromDraftId: 'chr-1', toDraftId: 'obj-1', kind: 'owned-by', evidence: 'Ada carries the watch' },
+      ],
+    },
+  });
+  commitCatalogScrapDraft.mockResolvedValue({ ingredients: [] });
+
+  render(<MemoryRouter initialEntries={['/catalog/ingest']}><CatalogIngest /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText(/Raw text/), { target: { value: 'Ada with watch' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+
+  await screen.findByDisplayValue('Ada Lovelace');
+
+  // Deselect Pocket Watch
+  const watchCheckbox = screen.getByRole('checkbox', { name: 'Include Pocket Watch' });
+  fireEvent.click(watchCheckbox);
+  expect(watchCheckbox).not.toBeChecked();
+
+  // Relationship checkbox is now disabled
+  const relCheckbox = screen.getByRole('checkbox', { name: 'Include relationship Ada Lovelace Owned by Pocket Watch' });
+  expect(relCheckbox).toBeDisabled();
+
+  // Visible feedback in role="status"
+  expect(screen.getByRole('status')).toHaveTextContent('Disabled — Pocket Watch is deselected');
+
+  // Interacting with disabled relationship does not re-select Pocket Watch
+  fireEvent.click(relCheckbox);
+  expect(watchCheckbox).not.toBeChecked();
+
+  // Commit sends only Ada and empty relationships list
+  fireEvent.click(screen.getByRole('button', { name: /Commit/ }));
+  await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith(
+    'scrap-endpoint-desel',
+    [expect.objectContaining({ draftId: 'chr-1', name: 'Ada Lovelace' })],
+    expect.objectContaining({ relationships: [] }),
+  ));
+});
+
+it('renders alert and disables commit when draft entries exceed 200 or relationships exceed 1,000', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'scrap-overflow' } });
+  const ideas = Array.from({ length: 201 }, (_, i) => ({
+    draftId: `idea-${i}`,
+    name: `Idea ${i}`,
+    summary: `Summary ${i}`,
+  }));
+  extractFromCatalogScrap.mockResolvedValue({
+    scrap: { id: 'scrap-overflow' },
+    draft: { ideas, relationships: [] },
+  });
+
+  render(<MemoryRouter initialEntries={['/catalog/ingest']}><CatalogIngest /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText(/Raw text/), { target: { value: 'many ideas' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+
+  await screen.findByDisplayValue('Idea 0');
+
+  // Alert is visible
+  const alert = screen.getByRole('alert');
+  expect(alert).toHaveTextContent('Draft exceeds capacity limits');
+  expect(alert).toHaveTextContent('201 entries (max 200)');
+
+  // Commit button is disabled
+  const commitBtn = screen.getByRole('button', { name: /Commit/ });
+  expect(commitBtn).toBeDisabled();
+});
+
+it('renders alert and disables commit when relationships exceed 1,000', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'scrap-rel-overflow' } });
+  const rels = Array.from({ length: 1001 }, (_, i) => ({
+    id: `rel-${i}`,
+    fromDraftId: 'chr-1',
+    toDraftId: 'obj-1',
+    kind: 'related-to',
+  }));
+  extractFromCatalogScrap.mockResolvedValue({
+    scrap: { id: 'scrap-rel-overflow' },
+    draft: {
+      characters: [{ draftId: 'chr-1', name: 'Ada' }],
+      objects: [{ draftId: 'obj-1', name: 'Watch' }],
+      relationships: rels,
+    },
+  });
+
+  render(<MemoryRouter initialEntries={['/catalog/ingest']}><CatalogIngest /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText(/Raw text/), { target: { value: 'many relations' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+
+  await screen.findByDisplayValue('Ada');
+
+  const alert = screen.getByRole('alert');
+  expect(alert).toHaveTextContent('Draft exceeds capacity limits');
+  expect(alert).toHaveTextContent('1001 relationships (max 1,000)');
+
+  const commitBtn = screen.getByRole('button', { name: /Commit/ });
+  expect(commitBtn).toBeDisabled();
+});
+
+it('renders retry button on partial failures which re-extracts without silent auto-saving', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'scrap-retry' } });
+  extractFromCatalogScrap
+    .mockResolvedValueOnce({
+      scrap: { id: 'scrap-retry' },
+      draft: {
+        ideas: [{ draftId: 'idea-1', name: 'Incomplete Idea', summary: 'Some text' }],
+        stages: [
+          { id: 'chunk-1', label: 'Chunk 1', status: 'completed' },
+          { id: 'chunk-2', label: 'Chunk 2', status: 'failed', error: 'Provider quota limit' },
+        ],
+      },
+    })
+    .mockResolvedValueOnce({
+      scrap: { id: 'scrap-retry' },
+      draft: {
+        ideas: [
+          { draftId: 'idea-1', name: 'Incomplete Idea', summary: 'Some text' },
+          { draftId: 'idea-2', name: 'Complete Idea', summary: 'All good' },
+        ],
+        stages: [
+          { id: 'chunk-1', label: 'Chunk 1', status: 'completed' },
+          { id: 'chunk-2', label: 'Chunk 2', status: 'completed' },
+        ],
+      },
+    });
+
+  render(<MemoryRouter initialEntries={['/catalog/ingest']}><CatalogIngest /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText(/Raw text/), { target: { value: 'chunk retry test' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+
+  await screen.findByDisplayValue('Incomplete Idea');
+  expect(commitCatalogScrapDraft).not.toHaveBeenCalled();
+
+  // Retry extraction button in the partial failure alert
+  const retryBtn = screen.getByRole('button', { name: 'Retry extraction' });
+  fireEvent.click(retryBtn);
+
+  await screen.findByDisplayValue('Complete Idea');
+  expect(extractFromCatalogScrap).toHaveBeenCalledTimes(2);
+  expect(commitCatalogScrapDraft).not.toHaveBeenCalled();
+});
+

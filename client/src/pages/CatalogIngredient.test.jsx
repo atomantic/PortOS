@@ -522,6 +522,54 @@ describe('CatalogIngredient — character sheet', () => {
     expect(promptBox.value).not.toMatch(/neon noir/);
     getUniverse.mockResolvedValue(null); // restore default
   });
+
+  it('renders synthetic relations with directed/inverse labels and evidence snippets', async () => {
+    const fixtureWithRelations = {
+      ...CHAR_FIXTURE,
+      payload: {
+        ...CHAR_FIXTURE.payload,
+        evidence: [
+          'owned-by → Pocket Watch: Ada carries this golden pocket watch everywhere',
+          'used-by → Analytical Engine: Ada programmed the engine with punch cards',
+        ],
+      },
+    };
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf(fixtureWithRelations),
+      relations: {
+        outbound: [
+          {
+            toId: 'cat-obj-1',
+            kind: 'owned-by',
+            other: { id: 'cat-obj-1', name: 'Pocket Watch', type: 'object' },
+          },
+        ],
+        inbound: [
+          {
+            fromId: 'cat-obj-2',
+            kind: 'used-by',
+            other: { id: 'cat-obj-2', name: 'Analytical Engine', type: 'object' },
+          },
+        ],
+      },
+    }));
+
+    await renderPage();
+
+    // Outbound uses getRelationKind('owned-by').label -> "Owned by" (appears in select option + relation list)
+    const ownedByElements = await screen.findAllByText('Owned by');
+    expect(ownedByElements.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Pocket Watch')).toBeTruthy();
+    expect(screen.getAllByText(/Ada carries this golden pocket watch everywhere/).length).toBe(2);
+
+    // Inbound uses getRelationKind('used-by').inverseLabel -> "Uses"
+    expect(screen.getByText('Uses')).toBeTruthy();
+    expect(screen.getByText('Analytical Engine')).toBeTruthy();
+    expect(screen.getAllByText(/Ada programmed the engine with punch cards/).length).toBe(2);
+
+    // SourcesPanel grounded evidence
+    expect(screen.getByText('Grounded evidence')).toBeTruthy();
+  });
 });
 
 describe('buildGenerationPromptSeed', () => {

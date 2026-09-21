@@ -572,13 +572,14 @@ export default function CatalogIngredient() {
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <SourcesPanel sources={record.sources} />
+          <SourcesPanel sources={record.sources} evidence={payload?.evidence} />
           <RefsPanel refsByKind={refsByKind} />
         </div>
 
         <RelationsPanel
           record={record}
           relations={relations}
+          evidence={payload?.evidence}
           onAdd={handleAddRelation}
           onRemove={handleRemoveRelation}
         />
@@ -880,13 +881,18 @@ function ReferenceSheetPanel({ payload, universeRef }) {
 // "Relations" panel — ingredient↔ingredient edges. Outbound edges (this
 // ingredient → other) are user-editable here; inbound edges (other → this
 // ingredient) are read-only because the owning ingredient is the other end.
-function RelationsPanel({ record, relations, onAdd, onRemove }) {
+function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [kind, setKind] = useState(RELATION_KINDS[0].id);
   const [armedRelation, setArmedRelation] = useState(null);
   const [removingRelation, setRemovingRelation] = useState(null);
   const outbound = Array.isArray(relations.outbound) ? relations.outbound : [];
   const inbound = Array.isArray(relations.inbound) ? relations.inbound : [];
+  const evidenceList = Array.isArray(evidence)
+    ? evidence.filter(Boolean)
+    : typeof evidence === 'string' && evidence.trim()
+    ? evidence.split('\n').map((s) => s.trim()).filter(Boolean)
+    : [];
 
   // Hide the current record + everything already linked outbound from the
   // picker so the user can't double-link or self-link.
@@ -927,35 +933,49 @@ function RelationsPanel({ record, relations, onAdd, onRemove }) {
           {outbound.length > 0 && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Outbound</div>
-              <ul className="space-y-1.5">
+              <ul className="space-y-2">
                 {outbound.map((r) => {
                   const relationKey = `${r.toId}-${r.kind}`;
                   const relationName = r.other?.name || r.toId;
+                  const matchedEvidence = evidenceList.find((e) =>
+                    e.startsWith(`${r.kind} → ${relationName}:`) ||
+                    (relationName && e.toLowerCase().includes(relationName.toLowerCase()))
+                  );
+                  const evidenceSnippet = matchedEvidence
+                    ? (matchedEvidence.includes(': ') ? matchedEvidence.split(': ').slice(1).join(': ') : matchedEvidence)
+                    : null;
                   return (
-                    <li key={relationKey} className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.label || r.kind}</span>
-                      {chip(r.other)}
-                      {armedRelation === relationKey ? (
-                        <ConfirmButtonPair
-                          prompt="Remove?"
-                          confirmText="Remove"
-                          busyText="Removing"
-                          busy={removingRelation === relationKey}
-                          ariaLabel={`Confirm removal of relation to ${relationName}`}
-                          onCancel={() => setArmedRelation(null)}
-                          onConfirm={async () => {
-                            setRemovingRelation(relationKey);
-                            await onRemove(r.toId, r.kind);
-                            setRemovingRelation(null);
-                            setArmedRelation(null);
-                          }}
-                        />
-                      ) : (
-                        <button type="button" onClick={() => setArmedRelation(relationKey)}
-                          aria-label={`Remove relation to ${relationName}`}
-                          className="text-gray-500 hover:text-port-error">
-                          <X size={12} aria-hidden="true" />
-                        </button>
+                    <li key={relationKey} className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.label || r.kind}</span>
+                        {chip(r.other)}
+                        {armedRelation === relationKey ? (
+                          <ConfirmButtonPair
+                            prompt="Remove?"
+                            confirmText="Remove"
+                            busyText="Removing"
+                            busy={removingRelation === relationKey}
+                            ariaLabel={`Confirm removal of relation to ${relationName}`}
+                            onCancel={() => setArmedRelation(null)}
+                            onConfirm={async () => {
+                              setRemovingRelation(relationKey);
+                              await onRemove(r.toId, r.kind);
+                              setRemovingRelation(null);
+                              setArmedRelation(null);
+                            }}
+                          />
+                        ) : (
+                          <button type="button" onClick={() => setArmedRelation(relationKey)}
+                            aria-label={`Remove relation to ${relationName}`}
+                            className="text-gray-500 hover:text-port-error">
+                            <X size={12} aria-hidden="true" />
+                          </button>
+                        )}
+                      </div>
+                      {evidenceSnippet && (
+                        <p className="text-[11px] text-gray-400 italic pl-3 border-l border-port-border">
+                          “{evidenceSnippet}”
+                        </p>
                       )}
                     </li>
                   );
@@ -966,13 +986,32 @@ function RelationsPanel({ record, relations, onAdd, onRemove }) {
           {inbound.length > 0 && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Inbound</div>
-              <ul className="space-y-1.5">
-                {inbound.map((r) => (
-                  <li key={`${r.fromId}-${r.kind}`} className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.inverseLabel || r.kind}</span>
-                    {chip(r.other)}
-                  </li>
-                ))}
+              <ul className="space-y-2">
+                {inbound.map((r) => {
+                  const inboundKey = `${r.fromId}-${r.kind}`;
+                  const inboundName = r.other?.name || r.fromId;
+                  const inboundMatched = evidenceList.find((e) =>
+                    e.startsWith(`${r.kind} → `) &&
+                    ((record.name && e.toLowerCase().includes(record.name.toLowerCase())) ||
+                     (inboundName && e.toLowerCase().includes(inboundName.toLowerCase())))
+                  );
+                  const inboundSnippet = inboundMatched
+                    ? (inboundMatched.includes(': ') ? inboundMatched.split(': ').slice(1).join(': ') : inboundMatched)
+                    : null;
+                  return (
+                    <li key={inboundKey} className="space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.inverseLabel || r.kind}</span>
+                        {chip(r.other)}
+                      </div>
+                      {inboundSnippet && (
+                        <p className="text-[11px] text-gray-400 italic pl-3 border-l border-port-border">
+                          “{inboundSnippet}”
+                        </p>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
@@ -1435,8 +1474,13 @@ function GalleryPickerModal({ onClose, onPick }) {
 // scrap whose title didn't come through (e.g. hard-deleted; `scrapTitle` is
 // null via the route's LEFT JOIN). A scrap with no OTHER live extractions
 // renders no "From the same source" stub — an empty list is not useful chrome.
-function SourcesPanel({ sources }) {
+function SourcesPanel({ sources, evidence }) {
   const list = Array.isArray(sources) ? sources : [];
+  const evidenceList = Array.isArray(evidence)
+    ? evidence.filter(Boolean)
+    : typeof evidence === 'string' && evidence.trim()
+    ? evidence.split('\n').map((s) => s.trim()).filter(Boolean)
+    : [];
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4">
       <h2 className="text-sm font-semibold text-white mb-2">Source scraps</h2>
@@ -1482,6 +1526,18 @@ function SourcesPanel({ sources }) {
             );
           })}
         </ul>
+      )}
+      {evidenceList.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-port-border">
+          <h3 className="text-xs font-semibold text-gray-300 mb-2">Grounded evidence</h3>
+          <ul className="space-y-1.5 text-xs text-gray-400">
+            {evidenceList.map((item, idx) => (
+              <li key={idx} className="italic pl-2 border-l border-port-border">
+                “{item}”
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </section>
   );

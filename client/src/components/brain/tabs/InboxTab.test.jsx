@@ -70,9 +70,9 @@ beforeEach(() => {
 describe('Brain inbox capture', () => {
   it('sends an optional note when a URL is filed to Links', async () => {
     render(<MemoryRouter><InboxTab /></MemoryRouter>);
-    await waitFor(() => expect(getBrainInbox).toHaveBeenCalled());
+    const input = await screen.findByLabelText('New inbox thought');
 
-    fireEvent.change(screen.getByLabelText('New inbox thought'), {
+    fireEvent.change(input, {
       target: { value: 'https://example.com' },
     });
     fireEvent.change(screen.getByLabelText(/Why are you saving this link/i), {
