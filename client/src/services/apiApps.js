@@ -12,11 +12,12 @@ export const getApps = ({ includeQuality = false, view, ...options } = {}) => {
 };
 export const getApp = (id, { includeQuality = false, ...options } = {}) => request(includeQuality ? `/apps/${id}?includeQuality=true` : `/apps/${id}`, options);
 export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });
-// Write the app's numeric quality scores to `.quality.json` at the repo root and
-// commit them, so other PortOS installs running this app start with the latest
-// scores. Opt-in per app (`publishQualitySnapshot`) and user-initiated from the
-// Quality tab, which toasts every outcome itself — so default to silent.
-// Response: { success, published, reason?, hash?, path }.
+// Land the app's numeric quality scores as `.quality.json` through a
+// merge-on-green pull request, so other PortOS installs running this app start
+// with the latest scores. Opt-in per app (`publishQualitySnapshot`) and
+// user-initiated from the Quality tab, which toasts every outcome itself — so
+// default to silent.
+// Response: { success, published, reason?, hash?, path, prUrl?, prNumber? }.
 export const publishAppQualitySnapshot = (id, options = {}) =>
   request(`/apps/${id}/quality-snapshot`, { method: 'POST', silent: true, ...options });
 // The Quality tab's weekly-schedule form. `get` returns the applicable checks,

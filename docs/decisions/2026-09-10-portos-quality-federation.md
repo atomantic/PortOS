@@ -127,3 +127,13 @@ The rename is a git rename of tracked, derived content — no migration, since
 `scripts/migrations/` governs `data/` paths and there is no install state to
 carry. A fork that published under the old name resolves one rename conflict;
 worst case it regenerates the file from its own database on the next publish.
+
+## September 21: land snapshots through a merge-on-green PR
+
+Committing `.quality.json` on the live checkout left the default branch ahead of
+origin, and many managed apps refuse direct pushes to `main`. Publishing now
+writes the file in a temporary worktree on `portos/quality-snapshot`, opens a
+pull request, and queues the existing merge-on-green sweep (`queuePendingMerge`
+on GitHub; GitLab auto-merge when the pipeline succeeds). No review is requested.
+The live checkout is not committed, staged, or switched. An unchanged snapshot
+still skips git entirely.
