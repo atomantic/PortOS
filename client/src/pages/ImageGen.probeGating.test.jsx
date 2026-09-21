@@ -94,6 +94,20 @@ describe('ImageGen backend-probe gating', () => {
     expect(screen.getByLabelText('Negative Prompt')).not.toBeDisabled();
   });
 
+  it('vertically centers the ready status icon with the text in the status pill', async () => {
+    await mount();
+    await act(async () => {
+      resolveStatus({ connected: true, mode: 'local', model: 'Qwen-Image 2.1' });
+    });
+
+    const badge = await screen.findByText(/Ready — Qwen-Image 2\.1/);
+    expect(badge.className).toContain('items-center');
+    expect(badge.className).not.toContain('items-start');
+    const dot = badge.querySelector('.rounded-full.bg-port-success');
+    expect(dot).toBeInTheDocument();
+    expect(dot.className).toContain('shrink-0');
+  });
+
   // A live form has a live implicit submit: Enter inside a number input fires
   // onSubmit even when the default button is disabled, so the handler carries
   // the same probe gate the button does.

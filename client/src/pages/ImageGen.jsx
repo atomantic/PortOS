@@ -1344,10 +1344,10 @@ export default function ImageGen() {
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           {statusLoading ? (
             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full border border-port-border bg-port-card text-gray-400">
-              <RefreshCw className="w-3 h-3 animate-spin" /> Checking {effectiveMode}…
+              <RefreshCw className="w-3 h-3 animate-spin shrink-0" /> Checking {effectiveMode}…
             </span>
           ) : status ? (
-            <span className={`inline-flex min-w-0 max-w-full items-start gap-1.5 px-2 py-1 rounded-full border ${
+            <span className={`inline-flex min-w-0 max-w-full items-center gap-1.5 px-2 py-1 rounded-full border ${
               statusReady
                 ? 'border-port-success/40 bg-port-success/10 text-port-success'
                 : statusUnknown
@@ -1355,10 +1355,10 @@ export default function ImageGen() {
                   : 'border-port-error/40 bg-port-error/10 text-port-error'
             }`}>
               {statusReady ? (
-                <><span className="w-2 h-2 rounded-full bg-port-success" /> Ready — {status.model || CONNECTED_MODE_LABELS[status.mode] || 'external SD API'}</>
+                <><span className="w-2 h-2 rounded-full bg-port-success shrink-0" /> Ready — {status.model || CONNECTED_MODE_LABELS[status.mode] || 'external SD API'}</>
               ) : (
                 <>
-                  <AlertTriangle className="w-3 h-3" />
+                  <AlertTriangle className="w-3 h-3 shrink-0" />
                   {statusUnknown ? 'Could not verify' : 'Unavailable'}: {status.reason || 'Not connected'} —
                   {/* The probe names the ONE action that fixes this state
                       (server/services/imageGen/localRuntime.js). Offer it here:

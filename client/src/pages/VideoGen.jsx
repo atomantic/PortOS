@@ -1095,10 +1095,10 @@ export default function VideoGen() {
             title={status.pythonPath || 'Local Python'}
           >
             {status.connected ? (
-              <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.pythonVersion ? `Python ${status.pythonVersion}` : 'Python'}</>
+              <><span className="w-2 h-2 rounded-full bg-port-success shrink-0" /> {status.pythonVersion ? `Python ${status.pythonVersion}` : 'Python'}</>
             ) : (
               <>
-                <AlertTriangle className="w-3 h-3" />
+                <AlertTriangle className="w-3 h-3 shrink-0" />
                 {status.reason || 'Local Python not configured — set one up below'}
               </>
             )}
