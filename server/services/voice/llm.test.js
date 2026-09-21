@@ -201,14 +201,14 @@ describe('resolveLlmEndpoint', () => {
 
   it('uses an API provider endpoint, apiKey, and default model', async () => {
     getProviderById.mockResolvedValue({
-      id: 'nvidia-kimi', type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1',
-      apiKey: 'secret', defaultModel: 'moonshotai/kimi-k2-5', name: 'NVIDIA Kimi',
+      id: 'nvidia-nim', type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1',
+      apiKey: 'secret', defaultModel: 'poolside/laguna-xs-2.1', name: 'NVIDIA NIM',
     });
-    const ep = await resolveLlmEndpoint('nvidia-kimi');
+    const ep = await resolveLlmEndpoint('nvidia-nim');
     expect(ep.apiBase).toBe('https://integrate.api.nvidia.com/v1');
     expect(ep.apiKey).toBe('secret');
-    expect(ep.defaultModel).toBe('moonshotai/kimi-k2-5');
-    expect(ep.providerName).toBe('NVIDIA Kimi');
+    expect(ep.defaultModel).toBe('poolside/laguna-xs-2.1');
+    expect(ep.providerName).toBe('NVIDIA NIM');
   });
 
   it('strips trailing slashes from the provider endpoint', async () => {

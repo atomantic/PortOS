@@ -181,10 +181,10 @@ describe('AI Toolkit runner service', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
     const provider = {
-      id: 'nvidia-kimi',
-      name: 'NVIDIA Kimi K2.5',
+      id: 'nvidia-nim',
+      name: 'NVIDIA NIM',
       endpoint: 'https://integrate.api.nvidia.com/v1',
-      defaultModel: 'moonshotai/kimi-k2.5',
+      defaultModel: 'poolside/laguna-xs-2.1',
     };
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
@@ -193,7 +193,7 @@ describe('AI Toolkit runner service', () => {
       hooks: {
         ensureProviderReady: async () => ({
           success: false,
-          error: 'Authentication unavailable for NVIDIA Kimi K2.5: API key is not set.',
+          error: 'Authentication unavailable for NVIDIA NIM: API key is not set.',
         }),
       },
     });

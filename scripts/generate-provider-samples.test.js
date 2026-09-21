@@ -62,10 +62,16 @@ describe('provider sample generator', () => {
       'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
       'claude-code-tui', 'claude-code-tui-bedrock',
       'antigravity-tui', 'antigravity-cli',
-      'nvidia-kimi', 'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
+      'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
       'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
     ];
     expect([...PROVIDER_ORDER].sort()).toEqual([...SHIPPED_IDS].sort());
+  });
+
+  it('does not ship the retired NVIDIA Kimi preset', () => {
+    for (const variant of ['sample', 'reference']) {
+      expect(buildProviders(variant)).not.toHaveProperty('nvidia-kimi');
+    }
   });
 
   it('deliberately leaves every structural key (harnessId/method/serviceId) off a shipped sample', () => {

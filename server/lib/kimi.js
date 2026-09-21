@@ -2,7 +2,7 @@
  * Per-CLI conventions for Moonshot AI's "Kimi Code" coding agent (binary: `kimi`).
  *
  * Kimi Code (MoonshotAI/kimi-cli, MIT-licensed) ships two PortOS process-provider
- * shapes (the plain HTTP API entry already exists separately as `nvidia-kimi`):
+ * shapes, distinct from the hosted NVIDIA NIM API gateway:
  *   - `kimi-cli`  (type `cli`) — headless one-shot via `kimi --prompt <value>`.
  *   - `kimi-tui`  (type `tui`) — the interactive Kimi Code TUI driven over a PTY.
  *

@@ -47,8 +47,8 @@ describe('provider execution readiness', () => {
 
   it('rejects a public API provider without its required key before fetch', async () => {
     const provider = {
-      id: 'nvidia-kimi',
-      name: 'NVIDIA Kimi K2.5',
+      id: 'nvidia-nim',
+      name: 'NVIDIA NIM',
       type: 'api',
       endpoint: 'https://integrate.api.nvidia.com/v1',
       apiKey: '',
@@ -56,7 +56,7 @@ describe('provider execution readiness', () => {
 
     await expect(ensureProviderReadyForExecution(provider)).resolves.toEqual({
       success: false,
-      error: 'Authentication unavailable for NVIDIA Kimi K2.5: API key is not set. Add it in Settings > AI Providers.',
+      error: 'Authentication unavailable for NVIDIA NIM: API key is not set. Add it in Settings > AI Providers.',
     });
     expect(mocks.ensureOllama).not.toHaveBeenCalled();
     expect(mocks.ensureMtplx).not.toHaveBeenCalled();

@@ -278,7 +278,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
 
   // Memoize enabled providers for the dropdown — restricted to CODING providers
   // (CLI/TUI agents with a file-writing harness). HTTP `api` providers (raw
-  // Ollama / LM Studio / nvidia-kimi) return plain text and can't write files, so
+  // Ollama / LM Studio / NVIDIA NIM) return plain text and can't write files, so
   // they're not valid task runners; a user who only has those should use a local
   // coding preset: Claude Ollama or OpenCode MTPLX for a separately running
   // MTPLX server.
