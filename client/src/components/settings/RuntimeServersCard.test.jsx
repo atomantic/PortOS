@@ -5,7 +5,7 @@ import RuntimeServersCard from './RuntimeServersCard.jsx';
 
 // Every row renders the same status/action vocabulary, so a text query alone
 // would match the wrong runtime. Scope to the row that names it.
-const row = (label) => screen.getByText(label).closest('div.flex.flex-col');
+const row = (label) => screen.getByRole('group', { name: label });
 
 const renderCard = (props = {}) => {
   const handlers = {
@@ -43,6 +43,7 @@ const renderCard = (props = {}) => {
       />
     </MemoryRouter>,
   );
+  for (const summary of screen.queryAllByText('Startup & residency')) fireEvent.click(summary);
   return handlers;
 };
 
@@ -84,7 +85,7 @@ describe('RuntimeServersCard', () => {
     const handlers = renderCard({ llamaStatus: { installed: true, running: false } });
     const llama = row('llama.cpp');
     expect(within(llama).queryByRole('button', { name: /^Start/ })).toBeNull();
-    expect(within(llama).getByText(/Pick a model in Speculative Decoding/)).toBeInTheDocument();
+    expect(within(llama).getByText(/Choose Configure to pick a model/)).toBeInTheDocument();
 
     fireEvent.click(within(llama).getByRole('button', { name: /Configure/ }));
     expect(handlers.onConfigureLlama).toHaveBeenCalled();
@@ -391,4 +392,13 @@ describe('RuntimeServersCard', () => {
       expect(within(slotstream).queryByText('released at 09:14 — host memory pressure')).toBeNull();
     });
   });
+});
+
+it('does not claim an unread runtime is uninstalled or offer installation', () => {
+  renderCard({ status: null, llamaStatus: null, mtplxStatus: null, slotstreamStatus: null });
+  for (const name of ['Ollama', 'LM Studio', 'llama.cpp', 'MTPLX', 'Slotstream']) {
+    const runtime = within(row(name));
+    expect(runtime.getByText('Status unavailable')).toBeInTheDocument();
+    expect(runtime.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument();
+  }
 });

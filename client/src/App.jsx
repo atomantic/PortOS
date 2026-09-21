@@ -402,6 +402,7 @@ export default function App() {
           {/* Performance owns task views rather than making one long page. The
               selected result route is more specific so a slash-containing model
               id stays inside the reversible assessment key segment. */}
+          <Route path="models/llms-runtimes/:recordId?" element={<Models fixedTab="llms-runtimes" />} />
           <Route path="models/performance/results/:assessmentKey" element={<Models fixedTab="performance" />} />
           <Route path="models/performance/:view" element={<Models fixedTab="performance" />} />
           {/* A tab's drill-down (today: the LoRA dataset workbench) renders through

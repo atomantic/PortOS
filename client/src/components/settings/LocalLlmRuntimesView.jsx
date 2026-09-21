@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import { Download, RefreshCw, ExternalLink, Link2, Copy, Power, PowerOff, Zap, ChevronDown, ChevronUp, Terminal, } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
@@ -73,7 +73,22 @@ function summarizeMigrate(r) {
 // Install, start, stop and configure the local servers that run language models.
 // Its own Models tab since #7414 (`/models/llms-runtimes`), so every socket
 // subscription and poll below belongs to a page the user is actually looking at.
-export default function LocalLlmRuntimesView() {
+export default function LocalLlmRuntimesView({ view } = {}) {
+  const navigate = useNavigate();
+  const { search } = useLocation();
+  const runtimeIds = ['ollama', 'lmstudio', 'llama', 'mtplx', 'slotstream', 'fleet-host'];
+  const selectedRuntime = runtimeIds.includes(view) ? view : null;
+  const selectRuntime = (id) => navigate(`/models/llms-runtimes${id ? '/' + id : ''}${search}`);
+  const detailHeading = useRef(null);
+  const rosterRef = useRef(null);
+  const previousRuntime = useRef(null);
+  useEffect(() => {
+    if (view) detailHeading.current?.focus();
+    else if (previousRuntime.current) {
+      rosterRef.current?.querySelector(`[data-runtime-id="${previousRuntime.current}"] button[aria-pressed]`)?.focus();
+    }
+    previousRuntime.current = selectedRuntime;
+  }, [view, selectedRuntime]);
   const [llamaStatus, setLlamaStatus] = useState(null);
   const [mtplxStatus, setMtplxStatus] = useState(null);
   const [slotstreamStatus, setSlotstreamStatus] = useState(null);
@@ -89,11 +104,6 @@ export default function LocalLlmRuntimesView() {
   const [slotstreamDownload, setSlotstreamDownload] = useState(null);
   const { confirm: downloadConfirm, request: requestWeightDownload, cancel: cancelDownloadConfirm, confirmRun: runDownloadConfirm } = useDownloadPreflightConfirm();
   const [llamaLoading, setLlamaLoading] = useState(false);
-  // Anchor for the unified server card's "Configure" action — llama-server needs
-  // a model path, so its Start lives in the launcher rather than in that row.
-  const llamaSectionRef = useRef(null);
-  const mtplxSectionRef = useRef(null);
-  const slotstreamSectionRef = useRef(null);
   const [llamaPresetId, setLlamaPresetId] = useState(DEFAULT_SPEC_PRESET_ID);
   const [llamaForm, setLlamaForm] = useState({
     model: '',
@@ -474,7 +484,6 @@ export default function LocalLlmRuntimesView() {
     () => saveRuntimeStartupList(),
     'Saved — the PM2 processes running now will come back after a reboot'
   ).then(() => { loadLlamaStatus(); loadMtplxStatus(); loadSlotstreamStatus(); });
-  const scrollTo = (ref) => ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   // Hand-editing a path the preset supplied means the form no longer describes
   // that preset — say Custom rather than keep claiming the preset is in effect.
   const setLlamaField = (field, value) => {
@@ -723,7 +732,20 @@ export default function LocalLlmRuntimesView() {
           because the section header already shows "Models → Runtimes". */}
       <h2 id="llm-runtimes-heading" className="sr-only">Runtimes</h2>
       {/* One start/stop/install surface for every local server PortOS can run */}
+      {(progressMsg || busy || llamaLoading || mtplxDownload || slotstreamDownload || Object.keys(llamaDownloads).length > 0) && (
+        <div role="status" className="flex flex-wrap items-center gap-3 rounded-lg border border-port-accent/30 p-3 text-sm text-port-accent">
+          <BrailleSpinner />{progressMsg || 'Runtime work in progress'}
+          {(llamaLoading || Object.keys(llamaDownloads).length > 0) && <Link className="underline" to={`/models/llms-runtimes/llama${search}`}>llama.cpp progress</Link>}
+          {mtplxDownload && <Link className="underline" to={`/models/llms-runtimes/mtplx${search}`}>MTPLX progress</Link>}
+          {slotstreamDownload && <Link className="underline" to={`/models/llms-runtimes/slotstream${search}`}>Slotstream progress</Link>}
+        </div>
+      )}
+      <div className="@container">
+      <div className="grid items-start gap-4 @min-[80rem]:grid-cols-2">
+      <div ref={rosterRef} className={view ? 'hidden @min-[80rem]:block min-w-0' : 'min-w-0 @min-[80rem]:col-span-2'}>
       <RuntimeServersCard
+        selectedRuntime={selectedRuntime}
+        onSelectRuntime={selectRuntime}
         status={status}
         llamaStatus={llamaStatus}
         mtplxStatus={mtplxStatus}
@@ -738,12 +760,12 @@ export default function LocalLlmRuntimesView() {
         onInstallLlama={runtimeInstallLlama}
         onUpgradeLlama={runtimeUpgradeLlama}
         onStopLlama={runtimeStopLlama}
-        onConfigureLlama={() => scrollTo(llamaSectionRef)}
-        onConfigureMtplx={() => scrollTo(mtplxSectionRef)}
+        onConfigureLlama={() => selectRuntime('llama')}
+        onConfigureMtplx={() => selectRuntime('mtplx')}
         onInstallMtplx={runtimeInstallMtplx}
         onStartMtplx={runtimeStartMtplx}
         onStopMtplx={runtimeStopMtplx}
-        onConfigureSlotstream={() => scrollTo(slotstreamSectionRef)}
+        onConfigureSlotstream={() => selectRuntime('slotstream')}
         onInstallSlotstream={runtimeInstallSlotstream}
         onStartSlotstream={runtimeStartSlotstream}
         onStopSlotstream={runtimeStopSlotstream}
@@ -753,11 +775,19 @@ export default function LocalLlmRuntimesView() {
         fleetHostStatus={fleetHostStatus}
         onStopFleetHost={stopFleetHost}
       />
-      <LocalPersistentMindSetupCard />
-      <HardwareLlmRecommendation />
+      </div>
+      <div hidden={!view} className="min-w-0 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <h2 ref={detailHeading} tabIndex={-1} className="text-base font-medium text-white focus:outline-none">Runtime configuration</h2>
+          <Link to={`/models/llms-runtimes${search}`} className="min-h-[44px] inline-flex items-center text-sm text-port-accent hover:underline">All runtimes</Link>
+        </div>
+        {view && !selectedRuntime && <p role="status" className="text-sm text-port-warning">Runtime not found. Return to All runtimes to select an available runtime.</p>}
+        {selectedRuntime === 'fleet-host' && <p className="text-sm text-gray-400">The dedicated host's configuration, logs and usage live in <Link to="/ai/fleet?fleetStep=host" className="text-port-accent hover:underline">Host setup &amp; usage</Link>.</p>}
+        {/* Keep the existing form owners mounted: selection never discards drafts,
+            checkpoint searches, progress subscriptions or explicit cancellation. */}
 
       {/* Backends — model catalog, default marker, cross-backend import */}
-      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
+      <div hidden={!BACKENDS.some((b) => b.id === selectedRuntime)} className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-gray-300">Local LLM Backends</h2>
           <button onClick={loadStatus} disabled={loading} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors" title="Refresh" aria-label="Refresh local LLM status">
@@ -775,22 +805,17 @@ export default function LocalLlmRuntimesView() {
           <BrailleSpinner text="Loading local LLM status" />
         ) : status ? (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-3">
               {BACKENDS.map((b) => (
+                <div key={b.id} hidden={selectedRuntime !== b.id}>
                 <LocalLlmBackendCard
-                  key={b.id} backend={b} status={status} isDefault={status.backend === b.id}
+                  backend={b} status={status} isDefault={status.backend === b.id}
                   busy={busy} actionInProgress={actionInProgress}
                   runAction={runAction} setConfirmAction={setConfirmAction}
                 />
+                </div>
               ))}
             </div>
-
-            {progressMsg && (
-              <div className="flex items-center gap-2 text-sm text-port-accent bg-port-accent/10 border border-port-accent/20 rounded-lg px-3 py-2">
-                <BrailleSpinner />
-                {progressMsg}
-              </div>
-            )}
 
             {confirmAction && (
               <div className="bg-port-bg border border-port-warning/30 rounded-lg p-4 space-y-3">
@@ -828,7 +853,7 @@ export default function LocalLlmRuntimesView() {
       </div>
 
       {/* Slotstream — PM2-managed SSD-streaming MoE runtime (Apple Silicon) */}
-      <div ref={slotstreamSectionRef}>
+      <div hidden={selectedRuntime !== 'slotstream'}>
         <SlotstreamServerCard
           status={slotstreamStatus}
           loading={loading}
@@ -846,7 +871,7 @@ export default function LocalLlmRuntimesView() {
       </div>
 
       {/* MTPLX — PM2-managed native-MTP runtime (Apple Silicon) */}
-      <div ref={mtplxSectionRef}>
+      <div hidden={selectedRuntime !== 'mtplx'}>
         <MtplxServerCard
           status={mtplxStatus}
           loading={loading}
@@ -865,7 +890,7 @@ export default function LocalLlmRuntimesView() {
       </div>
 
       {/* Speculative Decoding & Custom Runtimes (DFlash 2 / llama.cpp) */}
-      <div ref={llamaSectionRef} className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
+      <div hidden={selectedRuntime !== 'llama'} className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             <Zap size={16} className="text-port-accent" />
@@ -890,11 +915,16 @@ export default function LocalLlmRuntimesView() {
           </div>
         </div>
 
+        <details>
+          <summary className="min-h-[44px] content-center cursor-pointer text-xs text-gray-400">About speculative decoding and presets</summary>
         <p className="text-xs text-gray-400 leading-relaxed">
           Speculative decoding pairs a small drafter with your target model for 2–3× faster generation at identical output. You can launch and manage a local <code className="text-gray-300">llama-server</code> from PortOS and connect using the <strong className="text-white">OpenCode llama TUI</strong> provider. <strong className="text-white">DSpark</strong> (<code className="text-gray-300">draft-dspark</code>) works on a stock llama.cpp{llamaInstallCommand ? <> (<code className="text-gray-300">{llamaInstallCommand}</code>)</> : null}; the DFlash 2 presets need a from-source build of an unmerged llama.cpp branch. No drafter GGUF to hand? The <code className="text-gray-300">ngram-*</code> spec types under Advanced options draft from the context window alone.
         </p>
+        </details>
 
-        {llamaStatus?.running ? (
+        {!llamaStatus ? (
+          <p role="status" className="text-sm text-gray-400">llama.cpp status is unavailable. Refresh status before configuring this runtime.</p>
+        ) : llamaStatus.running ? (
           <div className="bg-port-bg border border-port-success/30 rounded-lg p-3 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div className="text-xs text-gray-300 space-y-1">
@@ -1212,9 +1242,9 @@ export default function LocalLlmRuntimesView() {
                 {showLlamaAdvanced ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                 {showLlamaAdvanced ? 'Hide options' : 'Advanced options (port, ctx, GPU layers, parallel slots, model id, spec type, performance tuning)'}
               </button>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {llamaStartBlocked && (
-                  <span className="text-[11px] text-port-warning text-right">
+                  <span className="text-[11px] text-port-warning">
                     {llamaStartBlockedReason}
                   </span>
                 )}
@@ -1273,6 +1303,16 @@ export default function LocalLlmRuntimesView() {
           </div>
         )}
       </div>
+      </div>
+      </div>
+      </div>
+      <details className="bg-port-card border border-port-border rounded-xl p-4">
+        <summary className="cursor-pointer text-sm font-medium text-gray-300">Setup guidance and recommendations</summary>
+        <div className="mt-4 space-y-4">
+          <LocalPersistentMindSetupCard />
+          <HardwareLlmRecommendation />
+        </div>
+      </details>
       <DownloadPreflightConfirm
         open={Boolean(downloadConfirm)}
         title={downloadConfirm?.title}

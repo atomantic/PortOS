@@ -27,7 +27,7 @@ vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({
 vi.mock('../components/settings/LocalLlmTab', () => ({
   LocalLlmTab: ({ view }) => <div data-testid="llms-view" data-view={view || 'none'}>llms panel</div>,
 }));
-vi.mock('../components/settings/LocalLlmRuntimesView.jsx', () => ({ default: () => <div>runtimes panel</div> }));
+vi.mock('../components/settings/LocalLlmRuntimesView.jsx', () => ({ default: ({ view }) => <div data-testid="runtime-panel" data-runtime={view || ''}>runtimes panel</div> }));
 vi.mock('../components/settings/EmbeddingsTab', () => ({ default: () => <div>embeddings panel</div> }));
 vi.mock('../components/models/Image3dRuntimes', () => ({ default: () => <div>3d runtimes panel</div> }));
 vi.mock('../components/models/ModelStatusTab', () => ({ default: () => <div>status panel</div> }));
@@ -206,6 +206,12 @@ describe('Models — tab drill-downs', () => {
     expect(await screen.findByText('runtimes panel')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Runtimes' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByTestId('llms-view')).not.toBeInTheDocument();
+  });
+
+  it('preserves the Runtimes navigation identity when selecting a runtime', async () => {
+    renderAt('/models/llms-runtimes/slotstream');
+    expect(await screen.findByTestId('runtime-panel')).toHaveAttribute('data-runtime', 'slotstream');
+    expect(screen.getByRole('tab', { name: 'Runtimes' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it.each(['library', 'abuse'])('passes the LLM %s sub-route through to the focused LLM view', async (view) => {
