@@ -38,6 +38,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import Drawer from '../components/Drawer';
+import AgentCard from '../components/cos/tabs/AgentCard';
 import TabPills from '../components/ui/TabPills';
 import useUrlParams from '../hooks/useUrlParams';
 import useAsyncAction from '../hooks/useAsyncAction';
@@ -736,57 +737,23 @@ function QueueMetaChips({ meta }) {
 // Promote-target label for the Ask picker buttons.
 const PROMOTE_TARGET_LABEL = { brain: 'Brain', task: 'Task', goal: 'Goal' };
 
-function FeedbackRatingControls({ id, onSubmit, disabled = false, options = ['positive', 'negative', 'neutral'] }) {
-  const [rating, setRating] = useState('');
-  const [comment, setComment] = useState('');
-  const safeId = String(id || 'feedback').replace(/[^a-zA-Z0-9_-]/g, '-');
-  const ratingId = `feedback-rating-${safeId}`;
-  const commentId = `feedback-comment-${safeId}`;
-  const submit = () => {
-    if (!rating) return;
-    const trimmedComment = comment.trim();
-    onSubmit({ rating, ...(trimmedComment ? { comment: trimmedComment } : {}) });
-  };
+function AgentFeedbackReview({ item, onSaved }) {
+  const [agent, setAgent] = useState(null);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setAgent(null);
+    setError(false);
+    api.getCosAgent(item.sourceRef, { lines: 1, silent: true })
+      .then((record) => { if (active) setAgent(record); })
+      .catch(() => { if (active) setError(true); });
+    return () => { active = false; };
+  }, [item.sourceRef, attempt]);
 
-  return (
-    <div className="flex items-end gap-2 flex-wrap rounded-md border border-port-border/60 bg-port-bg/40 p-2">
-      <label className="text-xs text-gray-400" htmlFor={ratingId}>
-        Rating (required)
-        <select
-          id={ratingId}
-          value={rating}
-          onChange={(event) => setRating(event.target.value)}
-          disabled={disabled}
-          className="mt-1 block min-h-[36px] rounded border border-port-border bg-port-card px-2 py-1 text-xs text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
-        >
-          <option value="">Choose…</option>
-          {options.map((option) => (
-            <option key={option} value={option}>{option[0].toUpperCase() + option.slice(1)}</option>
-          ))}
-        </select>
-      </label>
-      <label className="min-w-[12rem] flex-1 text-xs text-gray-400" htmlFor={commentId}>
-        Comment (optional)
-        <input
-          id={commentId}
-          value={comment}
-          onChange={(event) => setComment(event.target.value)}
-          maxLength={5000}
-          disabled={disabled}
-          className="mt-1 block min-h-[36px] w-full rounded border border-port-border bg-port-card px-2 py-1 text-xs text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
-        />
-      </label>
-      <button
-        type="button"
-        onClick={submit}
-        disabled={disabled || !rating}
-        className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-port-success/30 bg-port-success/10 px-2 py-1 text-xs font-medium text-port-success hover:bg-port-success/20 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        <Check size={14} />
-        Rate
-      </button>
-    </div>
-  );
+  if (error) return <p role="alert">Could not load this agent run. <button type="button" className="underline min-h-[44px]" onClick={() => setAttempt(value => value + 1)}>Retry</button></p>;
+  if (!agent) return <p role="status">Loading agent run…</p>;
+  return <AgentCard agent={agent} completed initiallyExpanded onFeedbackChange={onSaved} />;
 }
 
 function QueueTriageControls({ item, onTriage, disabled = false }) {
@@ -902,12 +869,9 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
       <div className="col-span-2 flex min-w-0 items-center gap-2 flex-wrap border-t border-port-border/50 pt-2 sm:col-start-2 sm:col-span-1 [&_button]:min-h-[44px] [&_select]:min-h-[44px]">
         <QueueInvestigation item={item} />
         {onResolve && rateOperation && (
-          <FeedbackRatingControls
-            id={item.id}
-            options={rateOperation.input.options}
-            disabled={resolving}
-            onSubmit={(input) => onResolve(item, rateOperation.id, input)}
-          />
+          <button type="button" onClick={() => onSelect?.(item)} className="inline-flex items-center gap-2 rounded border border-port-accent/30 px-3 py-2 text-sm text-port-accent">
+            <Eye size={14} /> Review run and give feedback
+          </button>
         )}
         {onResolve && inlineActions.map(action => (
           <button
@@ -1237,7 +1201,7 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
       onClose={onClose}
       title={item.title}
       subtitle={item.sourceLabel}
-      size="md"
+      size={item.source === 'feedback' ? 'lg' : 'md'}
       closeLabel="Close action"
     >
       <div className="space-y-5">
@@ -1314,19 +1278,18 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
 
         <QueueInvestigation item={item} />
         {item.source === 'health' && <p className="text-sm text-gray-400">Mark resolved after correcting the issue. Earlier runs will no longer count toward run-based alerts; new evidence can raise another alert.</p>}
-        {operations.length > 0 && (
+        {item.source === 'feedback' && item.available !== false && item.availability !== 'unavailable' && (
+          <AgentFeedbackReview key={item.sourceRef} item={item} onSaved={async () => {
+            await onSaved?.();
+            onClose();
+          }} />
+        )}
+        {item.source !== 'feedback' && operations.length > 0 && (
           <section className="flex flex-wrap gap-2">
             {operations.map((operation) => (
-              operation.input?.type === 'rating'
-                ? <FeedbackRatingControls
-                    key={operation.id}
-                    id={`detail-${item.id}`}
-                    options={operation.input.options}
-                    onSubmit={(input) => resolve(operation.id, input)}
-                  />
-                : <button key={operation.id} type="button" onClick={() => resolve(operation.id)} className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3 py-2 text-sm text-port-success hover:bg-port-success/20">
-                    <Check size={14} /> {operation.label}
-                  </button>
+              <button key={operation.id} type="button" onClick={() => resolve(operation.id)} className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3 py-2 text-sm text-port-success hover:bg-port-success/20">
+                <Check size={14} /> {operation.label}
+              </button>
             ))}
           </section>
         )}
