@@ -24,7 +24,7 @@ describe('layeredIntelligence barrel re-exports (issue #2842)', () => {
   });
 
   it.each(MODULE_FILES)('%s exports are reachable from the barrel as the same objects', async (f) => {
-    const mod = await import(`./layeredIntelligence/${f}`);
+    const mod = await import(`./layeredIntelligence/${f.slice(0, -3)}.js`);
     const keys = Object.keys(mod);
     expect(keys.length, `${f} exports nothing`).toBeGreaterThan(0);
     for (const key of keys) {
@@ -36,7 +36,7 @@ describe('layeredIntelligence barrel re-exports (issue #2842)', () => {
     const seen = new Map();
     const collisions = [];
     for (const f of MODULE_FILES) {
-      const mod = await import(`./layeredIntelligence/${f}`);
+      const mod = await import(`./layeredIntelligence/${f.slice(0, -3)}.js`);
       for (const key of Object.keys(mod)) {
         if (seen.has(key) && seen.get(key).value !== mod[key]) {
           collisions.push(`${key}: ${seen.get(key).file} vs ${f}`);
