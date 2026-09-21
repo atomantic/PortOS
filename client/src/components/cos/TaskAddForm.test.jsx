@@ -76,10 +76,11 @@ describe('TaskAddForm responsive layout', () => {
 
   // #7796: hiding configuration must not reset the draft or silently change
   // app completion defaults, and a failed submission must remain retryable.
-  it('retains configured queue drafts across drawer tabs, close, and a failed submit', async () => {
+  it('keeps queue settings inline and retains drafts across collapse and failed submission', async () => {
     localStorage.clear();
     const user = userEvent.setup();
     const added = vi.fn();
+    api.getCosPopularTemplates.mockResolvedValue({ templates: [{ id: 'example-template', name: 'Inspect example', description: 'Inspect example', isBuiltin: true }] });
     api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'] });
     api.addCosTask.mockRejectedValueOnce(new Error('Queue unavailable'))
       .mockResolvedValueOnce({ id: 'example-task', status: 'pending' });
@@ -88,17 +89,17 @@ describe('TaskAddForm responsive layout', () => {
       onTaskAdded={added} /></MemoryRouter>);
     await waitFor(() => expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Review: codex'));
     expect(screen.queryByLabelText('AI provider')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Attach screenshots')).toBeInTheDocument();
+    expect(screen.getByLabelText('Attach files')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Inspect example/ })).toBeVisible();
     await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect synthetic queue');
     await user.click(screen.getByRole('button', { name: 'Task configuration' }));
-    await user.click(screen.getByRole('tab', { name: 'Completion & review' }));
     expect(openPrToggle()).toBeChecked();
     expect(worktreeToggle()).toBeChecked();
     await user.click(worktreeToggle());
     await user.selectOptions(screen.getByLabelText('When done'), 'commit-push');
-    await user.click(screen.getByRole('tab', { name: 'Templates & attachments' }));
-    await user.click(screen.getByRole('tab', { name: 'Completion & review' }));
     expect(screen.getByLabelText('When done')).toHaveValue('commit-push');
-    await user.click(screen.getByRole('button', { name: 'Close task configuration' }));
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
     expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Direct checkout · Commit and push to default branch');
     await user.click(screen.getByRole('button', { name: 'Add task' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Queue unavailable'));
@@ -106,7 +107,7 @@ describe('TaskAddForm responsive layout', () => {
     expect(added).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Task configuration' }));
     expect(screen.getByLabelText('When done')).toHaveValue('commit-push');
-    await user.click(screen.getByRole('button', { name: 'Close task configuration' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Add task' }));
     await waitFor(() => expect(added).toHaveBeenCalledWith({ id: 'example-task', status: 'pending' }, { position: 'bottom' }));
     expect(api.addCosTask).toHaveBeenLastCalledWith(expect.objectContaining({
