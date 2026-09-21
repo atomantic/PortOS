@@ -46,6 +46,7 @@ import {
   sanitizeLoom,
 } from './records.js';
 import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
+import { isPlainObject } from '../../lib/objects.js';
 
 const REVIEW_SEVERITIES = new Set(['high', 'medium', 'low']);
 const REVIEW_CATEGORIES = new Set([
@@ -635,7 +636,6 @@ const collectionHasContent = (value) => (
   || (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0)
 );
 
-const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const isOptionalId = (value) => value === undefined
   || (typeof value === 'string' && value.trim().length > 0);
 const isPlanItem = (value) => isPlainObject(value)

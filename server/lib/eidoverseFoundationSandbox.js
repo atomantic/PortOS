@@ -49,14 +49,12 @@
  * injected so this module never imports the service layer.
  */
 
-import { canonicalStringify } from './objects.js';
+import { canonicalStringify, isPlainObject } from './objects.js';
 import { generateDistrictTemplatePlacement } from './eidoverseCreativeToolkit.js';
 // Declared beside the schemas that carry the label rather than here, so this
 // module can keep reaching the creative toolkit without closing an ESM cycle
 // back through it — see `derivedContributionId`'s own note.
 import { controllerDefinitionIdFromBody, derivedContributionId } from './eidoverseFoundations.js';
-
-const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 const refuse = (refusal) => ({ contribution: null, refusal });
 const accept = (contribution) => ({ contribution, refusal: null });

@@ -12,6 +12,7 @@
  * `server/services/loraDatasets.js`.
  */
 
+import { isPlainObject } from './objects.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const LORA_DATASET_SCHEMA_VERSION = 1;
@@ -38,7 +39,6 @@ const TRIGGER_WORD_RE = /^[a-z0-9_]{2,64}$/;
 export const isValidTriggerWord = (word) => typeof word === 'string' && TRIGGER_WORD_RE.test(word);
 
 const trim = (s) => (typeof s === 'string' ? s.trim() : '');
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const oneOf = (v, list, fallback) => (list.includes(v) ? v : fallback);
 const isoOrNull = (v) => (typeof v === 'string' && v ? v : null);
 
