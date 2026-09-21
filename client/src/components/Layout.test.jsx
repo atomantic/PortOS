@@ -393,6 +393,16 @@ describe('Layout — System Resources location state', () => {
 });
 
 describe('Layout — section destinations', () => {
+  it('keeps a Models task route and its owning sidebar destination active', async () => {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/models/performance/results']));
+    await renderLayout('/models/performance/results');
+
+    expect(screen.getByRole('button', { name: 'Models' })).toHaveClass('text-port-accent');
+    expect(screen.getByRole('link', { name: 'Performance' })).toHaveClass('text-port-accent');
+    expect(within(pinnedSection()).getByRole('link', { name: 'Performance Results' })).toHaveClass('text-port-accent');
+    expect(screen.getByRole('link', { name: 'Model Library' })).not.toHaveClass('text-port-accent');
+  });
+
   it('opens LLMs when the Models section label is clicked', async () => {
     await renderLayout();
 

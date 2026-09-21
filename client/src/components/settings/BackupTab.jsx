@@ -47,6 +47,7 @@ export function BackupTab() {
   // API can't be saved back as invented values (#6632).
   const [loadFailed, setLoadFailed] = useState(false);
   const [statusLoadFailed, setStatusLoadFailed] = useState(false);
+  const [exclusionsLoadFailed, setExclusionsLoadFailed] = useState(false);
   const [snapshotsLoadFailed, setSnapshotsLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [destPath, setDestPath] = useState('');
@@ -100,6 +101,7 @@ export function BackupTab() {
         const savedExcludes = asExcludeArray(backup.excludePaths);
         const savedDisabled = asArray(backup.disabledDefaultExcludes);
         setStatusLoadFailed(statusLoadError);
+        setExclusionsLoadFailed(statusLoadError);
         setSnapshotsLoadFailed(snapshotsLoadError);
         setDestPath(saved);
         setSavedDestPath(saved);
@@ -159,7 +161,21 @@ export function BackupTab() {
   const [handleRunNow, running] = useBackupRun((result) => {
     setPgBackup(result?.pgBackup ?? null);
     setBackupStatus(result?.status ?? 'ok');
-    getBackupSnapshots({ silent: true }).then(s => setSnapshots(Array.isArray(s) ? s : [])).catch((err) => { console.warn(`⚠️ Failed to refresh snapshots: ${err?.message || err}`); });
+    setStatusLoadFailed(false);
+    // A completed run establishes health, but does not include the exclusion
+    // catalog. Recover that separately before enabling its controls.
+    return Promise.all([
+      getBackupSnapshots({ silent: true }).then(s => {
+        setSnapshots(Array.isArray(s) ? s : []);
+        setSnapshotsLoadFailed(false);
+      }).catch((err) => { console.warn(`⚠️ Failed to refresh snapshots: ${err?.message || err}`); }),
+      exclusionsLoadFailed
+        ? getBackupStatus({ silent: true }).then(status => {
+          setDefaultExcludes(asArray(status?.defaultExcludes));
+          setExclusionsLoadFailed(false);
+        }).catch((err) => { console.warn(`⚠️ Failed to refresh backup exclusions: ${err?.message || err}`); })
+        : Promise.resolve(),
+    ]);
   });
 
   // Anchor exactly as the server does on read, so the chip the user sees IS the
@@ -232,7 +248,7 @@ export function BackupTab() {
     : snapshots.length > 0
     ? `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'}`
     : 'No snapshots yet';
-  const exclusionsSummary = statusLoadFailed
+  const exclusionsSummary = exclusionsLoadFailed
     ? 'Unavailable — reload to retry'
     : excludePaths.length > 0
     ? `${excludePaths.length} custom · ${effectiveExcludes.length} active patterns`
@@ -433,7 +449,7 @@ export function BackupTab() {
           className="space-y-3"
           bodyClassName="space-y-4 pt-2"
         >
-          {statusLoadFailed ? (
+          {exclusionsLoadFailed ? (
             <p className="text-sm text-port-warning">Backup exclusion details are unavailable — reload to retry before editing these rules.</p>
           ) : (
             <>

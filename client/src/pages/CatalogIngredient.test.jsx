@@ -72,6 +72,9 @@ vi.mock('../services/apiCatalog', () => ({
 }));
 
 vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn() }));
+vi.mock('../services/apiCatalogTypes', () => ({
+  listCatalogTypes: vi.fn(async () => ({ types: [] })),
+}));
 // The editable-prompt panel lazily fetches the linked universe to layer its
 // style preset onto the composed prompt; default to "no universe" so the seed
 // renders bare unless a test overrides it.
@@ -523,13 +526,14 @@ describe('CatalogIngredient — character sheet', () => {
     getUniverse.mockResolvedValue(null); // restore default
   });
 
-  it('renders synthetic relations with directed/inverse labels and evidence snippets', async () => {
+  it('attributes relation evidence only to the matching outbound kind and target', async () => {
     const fixtureWithRelations = {
       ...CHAR_FIXTURE,
       payload: {
         ...CHAR_FIXTURE.payload,
         evidence: [
           'owned-by → Pocket Watch: Ada carries this golden pocket watch everywhere',
+          'used-by → Pocket Watch: Ada times experiments with the watch',
           'used-by → Analytical Engine: Ada programmed the engine with punch cards',
         ],
       },
@@ -541,6 +545,11 @@ describe('CatalogIngredient — character sheet', () => {
           {
             toId: 'cat-obj-1',
             kind: 'owned-by',
+            other: { id: 'cat-obj-1', name: 'Pocket Watch', type: 'object' },
+          },
+          {
+            toId: 'cat-obj-1',
+            kind: 'used-by',
             other: { id: 'cat-obj-1', name: 'Pocket Watch', type: 'object' },
           },
         ],
@@ -559,13 +568,15 @@ describe('CatalogIngredient — character sheet', () => {
     // Outbound uses getRelationKind('owned-by').label -> "Owned by" (appears in select option + relation list)
     const ownedByElements = await screen.findAllByText('Owned by');
     expect(ownedByElements.length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('Pocket Watch')).toBeTruthy();
-    expect(screen.getAllByText(/Ada carries this golden pocket watch everywhere/).length).toBe(2);
+    expect(screen.getAllByText('Pocket Watch')).toHaveLength(2);
+    expect(screen.getAllByText(/Ada carries this golden pocket watch everywhere/)).toHaveLength(2);
+    expect(screen.getAllByText(/Ada times experiments with the watch/)).toHaveLength(2);
 
     // Inbound uses getRelationKind('used-by').inverseLabel -> "Uses"
     expect(screen.getByText('Uses')).toBeTruthy();
     expect(screen.getByText('Analytical Engine')).toBeTruthy();
-    expect(screen.getAllByText(/Ada programmed the engine with punch cards/).length).toBe(2);
+    // This ingredient's evidence cannot ground a relation owned by another ingredient.
+    expect(screen.getAllByText(/Ada programmed the engine with punch cards/)).toHaveLength(1);
 
     // SourcesPanel grounded evidence
     expect(screen.getByText('Grounded evidence')).toBeTruthy();

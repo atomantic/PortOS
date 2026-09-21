@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
@@ -103,13 +103,34 @@ describe('OverviewTab native app actions', () => {
     api.openAppInXcode.mockResolvedValue({ success: true });
   });
 
+  afterEach(() => vi.unstubAllGlobals());
+
   it('keeps the Xcode action available from the native app detail workspace', async () => {
     const user = userEvent.setup();
     renderOverview({ ...APP, id: 'app-ios', name: 'Example iOS App', type: 'ios-native' });
 
     await user.click(screen.getByRole('button', { name: 'Open Example iOS App in Xcode' }));
 
-    expect(api.openAppInXcode).toHaveBeenCalledWith('app-ios', { silent: true });
+    expect(api.openAppInXcode).toHaveBeenCalledWith('app-ios');
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Opening Example iOS App in Xcode'));
+  });
+
+  it('surfaces a failed Xcode launch through the shared request error boundary', async () => {
+    const { openAppInXcode } = await vi.importActual('../../../services/apiApps');
+    api.openAppInXcode.mockImplementation(openAppInXcode);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'No Xcode project found', code: 'XCODE_PROJECT_NOT_FOUND' }),
+    }));
+    const user = userEvent.setup();
+    renderOverview({ ...APP, id: 'app-ios', name: 'Example iOS App', type: 'ios-native' });
+
+    await user.click(screen.getByRole('button', { name: 'Open Example iOS App in Xcode' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No Xcode project found'));
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Open Example iOS App in Xcode' }).disabled).toBe(false);
   });
 });

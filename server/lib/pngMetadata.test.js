@@ -46,6 +46,17 @@ describe('parseStableDiffusionParameters', () => {
       model: 'example-model',
     });
   });
+
+  it('keeps known settings separate from unknown fields and quoted commas', () => {
+    const parsed = parseStableDiffusionParameters([
+      'a paper boat',
+      'Steps: 20, Sampler: DPM++ 2M, Schedule type: Karras, CFG scale: 7, Seed: 42, Size: 512x512, Model: "example, \\"quoted\\" model", Version: v1.10.1',
+    ].join('\n'));
+    expect(parsed).toMatchObject({
+      prompt: 'a paper boat', steps: 20, sampler: 'DPM++ 2M', cfgScale: 7,
+      seed: 42, width: 512, height: 512, model: 'example, "quoted" model',
+    });
+  });
 });
 
 describe('extractPngGenerationMetadata', () => {

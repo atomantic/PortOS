@@ -215,12 +215,23 @@ function reviewedChange(context) {
 
 /**
  * Public investigation projection: objective, compared commits, and allegation.
- * The filer scrubs prose before publication; no transcript, local run identity,
- * or unrelated task metadata is included. Incomplete context refuses filing.
+ * Only an objective fetched from the target tracker can cross this boundary:
+ * text scrubbers cannot recognize arbitrary private record content in a local
+ * task. The service verifies that the publication source matches its target.
+ * Incomplete provenance or context refuses filing, including the title.
  */
-export function buildGoalFidelityIssue({ task, review, fingerprint, context = null }) {
-  const subject = firstLine(task?.description) || 'a CoS agent task';
-  const objective = context?.objective ?? taskObjective(task);
+export function buildGoalFidelityIssue({ review, fingerprint, context = null }) {
+  const publication = context?.publication;
+  if (publication?.source !== 'tracker-issue'
+      || !['github', 'gitlab'].includes(publication.tracker)
+      || typeof publication.title !== 'string' || !publication.title.trim()
+      || typeof publication.webHost !== 'string' || !publication.webHost.trim()
+      || typeof publication.fullName !== 'string' || !publication.fullName.trim()
+      || !Number.isInteger(publication.number) || publication.number <= 0) {
+    return { title: '', body: '', error: 'the reviewed objective has no verified tracker provenance; nothing was filed' };
+  }
+  const subject = firstLine(publication.title);
+  const objective = typeof context?.objective === 'string' ? context.objective : '';
   const change = reviewedChange(context);
   const title = truncateTitle(`Goal-fidelity ${review?.verdict || 'finding'}: ${subject}`, GOAL_FIDELITY_ISSUE_LIMITS.titleChars);
   // The marker sits in the SECOND paragraph, not the last. The dedup reads it

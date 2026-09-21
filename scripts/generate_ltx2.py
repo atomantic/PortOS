@@ -1728,11 +1728,13 @@ def run_extend(args: argparse.Namespace) -> str:
     # bridge targets. configure_streaming_policy() still runs; the optional
     # constructor filter reports that drop for auto mode and rejects an explicit
     # --streaming-mode stream request before weights are constructed.
-    configure_streaming_policy(args, ExtendPipeline, "extend")
+    streaming_policy = configure_streaming_policy(args, ExtendPipeline, "extend")
+    optional_kwargs = _pipeline_optional_kwargs(ExtendPipeline, "extend", streaming_policy)
     emit_status(f"Loading Extend pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = ExtendPipeline(
         model_dir=args.model,
+        **optional_kwargs,
         **_gemma_kwargs(args),
     )
     _apply_user_loras(pipe, args.user_lora_specs)

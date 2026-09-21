@@ -25,6 +25,9 @@ vi.mock('./github.js', () => ({
 }));
 vi.mock('./gitlab.js', () => ({ findMergeRequestForBranch: vi.fn(), execGlab: vi.fn() }));
 vi.mock('./git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
+vi.mock('../lib/workTracker.js', async (importOriginal) => ({
+  ...(await importOriginal()), resolveRepoForgeTarget: vi.fn(async () => null),
+}));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 vi.mock('../lib/primaryCheckoutGuard.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -103,6 +106,7 @@ import { completeAgentRun } from './agentRunTracking.js';
 import { resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
 import { GOAL_FIDELITY_CATEGORY, GOAL_FIDELITY_HOLD_EVENT } from '../lib/goalFidelity.js';
+import { resolveRepoForgeTarget } from '../lib/workTracker.js';
 
 const verdict = (overrides = {}) => ({
   ok: true,
@@ -192,6 +196,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   execGit.mockResolvedValue({ stdout: 'claim/issue-42', exitCode: 0 });
   resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'synthetic-token' } });
+  resolveRepoForgeTarget.mockResolvedValue(null);
   execGh.mockResolvedValue(JSON.stringify({ number: 42, title: 'Retry the opening line', body: 'Retry transient synthesis failures and clear the pending opening after success.' }));
   getTaskOutputHook.mockResolvedValue(null);
   isProgrammaticIoTaskType.mockReturnValue(false);
@@ -545,13 +550,28 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       const base = 'b'.repeat(40);
       execGit.mockImplementation(async args => ({ stdout: args[0] === 'rev-parse' && args[1] === 'HEAD' ? head : 'claim/issue-42', exitCode: 0 }));
       runWindowDiffMock.mockResolvedValue({ diff: 'diff --git a/a.js b/a.js', base, truncated: false, reason: null });
-      await finalize({ task: { id: 'task-1', description: 'Claim the next issue', metadata: { claimFlow: true } } });
+      resolveRepoForgeTarget.mockResolvedValue({ forge: 'github', webHost: 'github.com', fullName: 'example/project' });
+      await finalize({ task: { id: 'task-1', description: 'PRIVATE LOCAL OUTER TASK', metadata: { claimFlow: true } } });
       expect(runWindowDiffMock).toHaveBeenCalledWith('/example/worktree', expect.any(Number), { maxChars: 60_000, head });
       const { context } = runGoalFidelityFollowUpMock.mock.calls[0][0];
-      expect(context).toEqual({ base, head, objective: runLocalGoalFidelityReviewMock.mock.calls[0][0].objective });
+      expect(context).toEqual({ base, head, objective: runLocalGoalFidelityReviewMock.mock.calls[0][0].objective,
+        publication: { source: 'tracker-issue', title: 'Retry the opening line', tracker: 'github',
+          webHost: 'github.com', fullName: 'example/project', number: 42 } });
+      expect(execGh).toHaveBeenCalledWith(['issue', 'view', '42', '--json', 'number,title,body', '--repo', 'github.com/example/project'],
+        30000, { cwd: '/example/worktree', env: { GH_TOKEN: 'synthetic-token' } });
+      expect(Object.isFrozen(context)).toBe(true);
+      expect(Object.isFrozen(context.publication)).toBe(true);
       expect(context.objective).toContain('Retry transient synthesis failures');
-      expect(context.objective).not.toContain('Claim the next issue');
+      expect(context.objective).not.toContain('PRIVATE LOCAL OUTER TASK');
       expect(completion().goalFidelity).not.toHaveProperty('context');
+    });
+
+    it('keeps local objectives local even when task metadata claims publication provenance', async () => {
+      await finalize({ task: { id: 'task-1', description: 'Fix journal search\nPRIVATE JOURNAL RECORD',
+        metadata: { publication: { source: 'tracker-issue', title: 'Pretend public' } } } });
+      const { context } = runGoalFidelityFollowUpMock.mock.calls[0][0];
+      expect(context.objective).toContain('PRIVATE JOURNAL RECORD');
+      expect(context).not.toHaveProperty('publication');
     });
 
 // The card reads these to decide what to call the task and whether to still

@@ -132,13 +132,10 @@ describe('buildFastVideoArgs', () => {
     })).toThrowError(/mode/i);
   });
 
-  it('passes first-frame conditioning to the V2 VSA entry point', () => {
-    const { args } = buildFastVideoArgs({
+  it('rejects V2 image conditioning even when a stale registry advertises it', () => {
+    expect(() => buildFastVideoArgs({
       ...base, model: fasth3V2, mode: 'image', sourceImagePath: '/fixture/first.png',
-    });
-
-    expect(args).toContain('--vsa');
-    expect(flagValue(args, '--image')).toBe('/fixture/first.png');
+    })).toThrowError(/does not support first-frame conditioning/);
   });
 });
 

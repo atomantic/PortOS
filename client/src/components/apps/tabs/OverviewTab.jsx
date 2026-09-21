@@ -56,7 +56,7 @@ export default function OverviewTab({ app, onRefresh }) {
 
   const handleStandardize = () => startStandardize(app.id, app.name);
 
-  const handleOpenXcode = () => api.openAppInXcode(app.id, { silent: true })
+  const handleOpenXcode = () => api.openAppInXcode(app.id)
     .then(result => {
       if (result?.success) toast.success(`Opening ${app.name} in Xcode`);
     })

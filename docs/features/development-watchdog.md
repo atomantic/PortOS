@@ -10,8 +10,9 @@ default), and evaluation and configuration changes reconcile the same service.
 A cadence may fire late by one health-check interval. There is no additional
 polling timer. Paused CoS, revoked grants, full capacity, unknown ownership and
 exhausted autonomy budgets defer writes. The generic Improve switch does not
-control this separately opted-in role. Agent execution retains normal provider
-budget and capacity gates.
+stop this separately opted-in role from scanning or handling pull-request
+maintenance, but it must be enabled before the watchdog queues new issue-claim
+batches. Agent execution retains normal provider budget and capacity gates.
 
 The Schedule page's **Development Watchdog** Run Now invokes the programmatic
 handler. `POST /api/cos/mind/maintainer/watchdog` with `{ "dryRun": true }` performs

@@ -788,6 +788,26 @@ describe('cosToolRegistry', () => {
 Semantic tool access is OFF. Return an empty toolCalls array. Never invent a tool name or claim that a PortOS action ran.`);
     });
 
+    it('keeps granted tools discoverable after the complete prompt exceeds its schema budget', async () => {
+      const capabilities = {
+        manageMind: true, readPortos: true, writePortos: true, createTasks: true,
+        fileIssues: true, auditReports: true, manageToolRecipes: true, manageEidoverse: true,
+        promoteEidoverseFoundations: true, installEidoverseControllers: true,
+        visitEidoversePeers: true, callUser: true, chooseThinkingPreset: true,
+        adjustLocalContext: true,
+      };
+      const granted = getCosToolCatalog({ scope: 'mind', capabilities }).tools.filter((tool) => tool.granted);
+      mocks.root.persistentMind.toolActivation = {
+        leases: Object.fromEntries(granted.map((tool) => [tool.family, 3])), lastAgedTurnId: 'turn-1',
+      };
+      const prompt = await buildPersistentMindToolPrompt(capabilities, [], { maxChars: 24_000 });
+      const schemas = JSON.parse(prompt.split('\n\n')[1]);
+      const discoveredNames = [...prompt.matchAll(/(?:^|; |: )([\w.-]+) — /gm)].map((match) => match[1]);
+      const exposedNames = [...schemas.map((tool) => tool.name), ...discoveredNames];
+      expect(prompt.length).toBeLessThanOrEqual(24_000);
+      expect(exposedNames.sort()).toEqual(granted.map((tool) => tool.name).sort());
+    });
+
     it('logs one aggregate trace line per turn with no tool name or user text', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {

@@ -795,6 +795,35 @@ describe('BackupTab', () => {
   });
 
   describe('status and snapshot load failures', () => {
+    it('recovers health and snapshots after a successful backup while waiting for the exclusion catalog', async () => {
+      let finishStatusRefresh;
+      getBackupStatus.mockRejectedValueOnce(new Error('offline'))
+        .mockImplementationOnce(() => new Promise(resolve => { finishStatusRefresh = resolve; }));
+      getBackupSnapshots.mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValueOnce([{ id: 'snap-recovered' }]);
+      triggerBackup.mockResolvedValue({ status: 'ok', filesChanged: 1, pgBackup: { status: 'ok', sizeBytes: 1024, tableCount: 7 } });
+      await renderTab();
+
+      expect(screen.getByText(/Backup status unavailable/i)).toBeInTheDocument();
+      expect(screen.getByText(/Snapshot history is unavailable/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+
+      expect(await screen.findByText('snap-recovered')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Restore DB/i })).toBeEnabled();
+      expect(screen.getByText(/7 tables/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Backup status unavailable/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Snapshot history is unavailable/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/Backup exclusion details are unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByLabelText(/Additional Exclude Paths/i)).not.toBeInTheDocument();
+
+      await act(async () => finishStatusRefresh({ defaultExcludes: [{ path: '/example-cache/', reason: 'Generated cache', overridable: true }] }));
+
+      expect(screen.queryByText(/Backup exclusion details are unavailable/i)).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/Additional Exclude Paths/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Default exclusions/i }));
+      expect(screen.getByRole('switch', { name: 'Disable default exclusion /example-cache/' })).toBeInTheDocument();
+    });
+
     it('shows unavailable backup status instead of an empty exclusion state', async () => {
       getBackupStatus.mockRejectedValue(new Error('offline'));
       await renderTab({ openExclusions: false, openSnapshots: false });

@@ -843,7 +843,6 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
   const controlTools = granted.filter((tool) => ['tools.activate', 'tools.deactivate'].includes(tool.name));
   const exposedTools = [];
   const discoverableByFamily = new Map();
-  const budgetLimitedByFamily = new Map();
   for (const tool of meaningful) {
     if (tool.family === 'core' || exposedFamilies.has(tool.family)) {
       exposedTools.push(tool);
@@ -886,23 +885,27 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
     selectedTools.push(tool);
     selectedChars += rendered.length;
   }
-  for (const tool of prioritized.filter((candidate) => !selectedTools.includes(candidate))) {
-    if (!budgetLimitedByFamily.has(tool.family)) budgetLimitedByFamily.set(tool.family, []);
-    budgetLimitedByFamily.get(tool.family).push(tool);
-  }
-  const discoverableLines = [...discoverableByFamily.entries()].map(([family, tools]) => (
-    `- ${family} (${tools.length}): ${tools.map((tool) => `${tool.name} — ${toolPurpose(tool.description)}`).join('; ')}`
-  )).concat([...budgetLimitedByFamily.entries()].map(([family, tools]) => (
-    `- ${family} (${tools.length}, budget-limited): ${tools.map((tool) => `${tool.name} — ${toolPurpose(tool.description)}`).join('; ')}`
-  )));
+  const renderSelection = () => {
+    const budgetLimitedByFamily = new Map();
+    for (const tool of prioritized.filter((candidate) => !selectedTools.includes(candidate))) {
+      if (!budgetLimitedByFamily.has(tool.family)) budgetLimitedByFamily.set(tool.family, []);
+      budgetLimitedByFamily.get(tool.family).push(tool);
+    }
+    const discoverableLines = [...discoverableByFamily.entries()].map(([family, tools]) => (
+      `- ${family} (${tools.length}): ${tools.map((tool) => `${tool.name} — ${toolPurpose(tool.description)}`).join('; ')}`
+    )).concat([...budgetLimitedByFamily.entries()].map(([family, tools]) => (
+      `- ${family} (${tools.length}, budget-limited): ${tools.map((tool) => `${tool.name} — ${toolPurpose(tool.description)}`).join('; ')}`
+    )));
+    return renderToolPrompt([...controlTools, ...selectedTools].map(fullSchemaShape), discoverableLines);
+  };
 
-  while (selectedTools.length > 0 && renderToolPrompt([...controlTools, ...selectedTools].map(fullSchemaShape), discoverableLines).length > maxChars) {
+  while (selectedTools.length > 0 && renderSelection().length > maxChars) {
     const removableIndex = [...selectedTools].reverse().findIndex((tool) => !required.has(tool.name));
     if (removableIndex < 0) break;
     selectedTools.splice(selectedTools.length - 1 - removableIndex, 1);
   }
 
-  return renderToolPrompt([...controlTools, ...selectedTools].map(fullSchemaShape), discoverableLines);
+  return renderSelection();
 };
 
 export const readPersistentMindRecipeCatalog = (capabilities) => readMindRecipeTools(capabilities, getCosToolCatalog({ scope: 'mind' }).tools);

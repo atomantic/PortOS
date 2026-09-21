@@ -138,6 +138,44 @@ it('rotates bounded summary scans beyond the first page', async () => {
   expect(second.sources[0]).toMatchObject({ pending: 1 });
   expect(JSON.stringify(second)).not.toContain('agent-100');
 });
+it('walks every pending job across bounded turns without skipping the rest of a scanned page', async () => {
+  mocks.records = {};
+  const expected = [];
+  for (let index = 0; index < 101; index++) {
+    const id = `agent-${String(index).padStart(3, '0')}`;
+    expected.push(id);
+    await addJob(id, 'Clean report');
+  }
+  const seen = [];
+  let cursor;
+  for (let index = 0; index < 40; index++) {
+    const context = { turnId: `pagination-turn-${index}` };
+    const batch = await audit.nextProcessAuditBatch({ appId: 'example', cursor }, context);
+    expect(batch.jobs.length).toBeLessThanOrEqual(3);
+    seen.push(...batch.jobs.map(job => job.agentId));
+    for (const job of batch.jobs) {
+      await audit.recordProcessAuditOutcome({ appId: 'example', receiptId: job.receiptId, outcome: 'clean' }, context);
+    }
+    if (batch.nextCursor === null) break;
+    expect(batch.nextCursor).not.toBe(cursor);
+    cursor = batch.nextCursor;
+  }
+  expect(seen).toEqual(expected);
+});
+it('advances past a full page of ineligible jobs to reach the next eligible record', async () => {
+  mocks.records = {};
+  for (let index = 0; index < 100; index++) {
+    const id = `agent-${String(index).padStart(3, '0')}`;
+    mocks.records[id] = { id, status: 'completed', completedAt: new Date().toISOString(), metadata: { taskApp: 'other-app' }, result: {} };
+  }
+  await addJob('agent-100');
+  const first = await audit.nextProcessAuditBatch({ appId: 'example' }, { turnId: 'ineligible-page' });
+  expect(first.jobs).toEqual([]);
+  expect(first.nextCursor).toEqual(expect.any(String));
+  const second = await audit.nextProcessAuditBatch({ appId: 'example', cursor: first.nextCursor }, { turnId: 'eligible-page' });
+  expect(second.jobs.map(job => job.agentId)).toEqual(['agent-100']);
+  expect(second.nextCursor).toBeNull();
+});
 it('allows one post-fix recurrence while keeping the open-issue duplicate boundary', async () => {
   const receipt = (await next()).jobs[0].receiptId;
   const request = { ...finding(receipt), targetAppId: 'example', anchors: ['server/services/example.js'] };

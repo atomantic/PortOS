@@ -889,7 +889,7 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
   const outbound = Array.isArray(relations.outbound) ? relations.outbound : [];
   const inbound = Array.isArray(relations.inbound) ? relations.inbound : [];
   const evidenceList = Array.isArray(evidence)
-    ? evidence.filter(Boolean)
+    ? evidence.filter((item) => typeof item === 'string' && item.trim())
     : typeof evidence === 'string' && evidence.trim()
     ? evidence.split('\n').map((s) => s.trim()).filter(Boolean)
     : [];
@@ -937,13 +937,11 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
                 {outbound.map((r) => {
                   const relationKey = `${r.toId}-${r.kind}`;
                   const relationName = r.other?.name || r.toId;
-                  const matchedEvidence = evidenceList.find((e) =>
-                    e.startsWith(`${r.kind} → ${relationName}:`) ||
-                    (relationName && e.toLowerCase().includes(relationName.toLowerCase()))
-                  );
-                  const evidenceSnippet = matchedEvidence
-                    ? (matchedEvidence.includes(': ') ? matchedEvidence.split(': ').slice(1).join(': ') : matchedEvidence)
-                    : null;
+                  // Extraction stores exact directed kind/target prefixes in
+                  // the source payload. A name mention cannot prove an edge.
+                  const evidencePrefix = `${r.kind} → ${relationName}: `.replace(/\s+/g, ' ');
+                  const matchedEvidence = evidenceList.find((item) => item.startsWith(evidencePrefix));
+                  const evidenceSnippet = matchedEvidence?.slice(evidencePrefix.length);
                   return (
                     <li key={relationKey} className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -989,26 +987,14 @@ function RelationsPanel({ record, relations, evidence, onAdd, onRemove }) {
               <ul className="space-y-2">
                 {inbound.map((r) => {
                   const inboundKey = `${r.fromId}-${r.kind}`;
-                  const inboundName = r.other?.name || r.fromId;
-                  const inboundMatched = evidenceList.find((e) =>
-                    e.startsWith(`${r.kind} → `) &&
-                    ((record.name && e.toLowerCase().includes(record.name.toLowerCase())) ||
-                     (inboundName && e.toLowerCase().includes(inboundName.toLowerCase())))
-                  );
-                  const inboundSnippet = inboundMatched
-                    ? (inboundMatched.includes(': ') ? inboundMatched.split(': ').slice(1).join(': ') : inboundMatched)
-                    : null;
+                  // Incoming evidence belongs to the other ingredient and is
+                  // not included in this detail response.
                   return (
                     <li key={inboundKey} className="space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-gray-400">{getRelationKind(r.kind)?.inverseLabel || r.kind}</span>
                         {chip(r.other)}
                       </div>
-                      {inboundSnippet && (
-                        <p className="text-[11px] text-gray-400 italic pl-3 border-l border-port-border">
-                          “{inboundSnippet}”
-                        </p>
-                      )}
                     </li>
                   );
                 })}
@@ -1477,7 +1463,7 @@ function GalleryPickerModal({ onClose, onPick }) {
 function SourcesPanel({ sources, evidence }) {
   const list = Array.isArray(sources) ? sources : [];
   const evidenceList = Array.isArray(evidence)
-    ? evidence.filter(Boolean)
+    ? evidence.filter((item) => typeof item === 'string' && item.trim())
     : typeof evidence === 'string' && evidence.trim()
     ? evidence.split('\n').map((s) => s.trim()).filter(Boolean)
     : [];

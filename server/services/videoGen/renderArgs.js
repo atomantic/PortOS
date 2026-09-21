@@ -605,6 +605,11 @@ export const buildFastVideoArgs = ({
   assertByovRuntimeInstalled('fastvideo');
   assertRenderModeContract({ model, mode, sourceImagePath, lastImagePath });
   const family = fastvideoFamily(model);
+  if (family === 'fasth3' && sourceImagePath) {
+    throw new ServerError('FastH3 MLX does not support first-frame conditioning.', {
+      status: 400, code: 'VIDEO_MODE_UNSUPPORTED',
+    });
+  }
   const modelRoot = fastvideoModelPath || model.repo;
   const args = [
     FASTVIDEO_HELPER_SCRIPT,

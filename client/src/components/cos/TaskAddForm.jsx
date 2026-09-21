@@ -89,6 +89,7 @@ const readQuickTemplatesExpanded = (fallback) => {
 
 export default function TaskAddForm({ providers, providersLoaded = true, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '', queueFirst = false }) {
   const [initialDraft] = useState(() => readTaskDescriptionDraft(defaultApp));
+  const pendingDraftAppRef = useRef(Boolean(initialDraft.app) && !apps?.length);
   const [newTask, setNewTask] = useState(() => {
     return {
       description: initialDraft.description,
@@ -240,11 +241,17 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   }, [newTask.app, newTask.description]);
 
   useEffect(() => {
-    if (!initialDraft.app || !apps?.length || newTask.app === initialDraft.app) return;
+    if (!pendingDraftAppRef.current || !apps?.length) return;
+    pendingDraftAppRef.current = false;
     if (apps.some(app => app.id === initialDraft.app)) {
       setNewTask(task => ({ ...task, app: initialDraft.app }));
     }
-  }, [apps, initialDraft.app, newTask.app]);
+  }, [apps, initialDraft.app]);
+
+  const handleAppChange = (app) => {
+    pendingDraftAppRef.current = false;
+    setNewTask(task => ({ ...task, app }));
+  };
 
   useEffect(() => {
     if (!newTask.app || !apps?.length || apps.some(app => app.id === newTask.app)) return;
@@ -563,6 +570,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // untouched, `false` turns it off. Collapsing absent to false would make a
   // plain user template silently clear toggles it never meant to touch.
   const applyTemplate = useCallback(async (template) => {
+    if (template.app) pendingDraftAppRef.current = false;
     // A template saved before Antigravity split model from effort pins the
     // suffixed id (`gemini-3.6-flash-high`). Seed the two controls from its two
     // halves so the pin lands on a base model + its tier rather than an option
@@ -826,6 +834,15 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     onTaskAdded?.(result, { position: addToTop ? 'top' : 'bottom' });
   };
 
+  const handleDescriptionKeyDown = (event) => {
+    // Enter can confirm an IME candidate without submitting the completed
+    // description. Safari may report that confirmation as keyCode 229.
+    if (event.key !== 'Enter' || event.shiftKey || event.repeat || isSubmitting
+      || event.nativeEvent?.isComposing || event.nativeEvent?.keyCode === 229) return;
+    event.preventDefault();
+    handleAddTask();
+  };
+
   if (queueFirst) {
     const reviewers = reviewOverrides.reviewers ?? reviewDefaults.reviewers;
     const completion = planOnly ? 'Plan and file issue'
@@ -840,12 +857,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           placeholder="What needs doing?"
           value={newTask.description}
           onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
-          onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.repeat && !isSubmitting) {
-              e.preventDefault();
-              handleAddTask();
-            }
-          }}
+          onKeyDown={handleDescriptionKeyDown}
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-base min-h-[44px]"
           aria-required="true"
         />
@@ -907,12 +919,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             placeholder="Task description *"
             value={newTask.description}
             onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) {
-                e.preventDefault();
-                handleAddTask();
-              }
-            }}
+            onKeyDown={handleDescriptionKeyDown}
             className="w-full @xl:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
@@ -921,7 +928,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               <AppContextPicker
                 apps={apps}
                 value={newTask.app}
-                onChange={(appId) => setNewTask(t => ({ ...t, app: appId }))}
+                onChange={handleAppChange}
                 label=""
                 placeholder="PortOS"
                 ariaLabel="Select app context"
@@ -971,7 +978,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               placeholder="Task description *"
               value={newTask.description}
               onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) { e.preventDefault(); handleAddTask(); } }}
+              onKeyDown={handleDescriptionKeyDown}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
               aria-required="true"
             />
@@ -1331,7 +1338,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           <AppContextPicker
             apps={apps}
             value={newTask.app}
-            onChange={(appId) => setNewTask(t => ({ ...t, app: appId }))}
+            onChange={handleAppChange}
             label="Target application"
             placeholder="PortOS (default)"
             showRepoPath
@@ -1526,9 +1533,9 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           )}
         </div>
         </>}
-        {quickTemplatesEnabled && (section === 'all' || section === 'templates') && <>
+        {(section === 'all' || section === 'templates') && <>
         {/* Template Save Inline Input */}
-        {showTemplateSave && (
+        {quickTemplatesEnabled && showTemplateSave && (
           <div className="flex flex-wrap gap-2 items-center">
             <input
               type="text"
@@ -1572,7 +1579,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 {addToTop ? 'Top' : 'Bottom'}
               </button>
             </div>
-            <button
+            {quickTemplatesEnabled && <button
               onClick={saveAsTemplate}
               type="button"
               className="flex items-center gap-1 px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-gray-400 hover:text-white rounded-lg text-sm transition-colors min-h-[44px]"
@@ -1580,7 +1587,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             >
               <Bookmark size={14} aria-hidden="true" />
               <span className="hidden @sm:inline">Save Template</span>
-            </button>
+            </button>}
             {!queueFirst && <button
               onClick={handleAddTask}
               disabled={isSubmitting || isEnhancing}

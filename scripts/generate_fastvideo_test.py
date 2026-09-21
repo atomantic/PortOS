@@ -139,9 +139,11 @@ class BuildCommandTest(unittest.TestCase):
         for label in ("negative prompt", "prompt enhancer", "refinement pass"):
             self.assertIn(label, stderr)
 
-    def test_fasth3_preview_rejects_first_frame_conditioning(self):
-        with self.assertRaisesRegex(ValueError, "does not support first-frame conditioning"):
-            self.build(family="fasth3", image="/fixture/first.png")
+    def test_fasth3_preview_and_v2_reject_first_frame_conditioning(self):
+        for vsa in (False, True):
+            with self.subTest(vsa=vsa):
+                with self.assertRaisesRegex(ValueError, "does not support first-frame conditioning"):
+                    self.build(family="fasth3", vsa=vsa, image="/fixture/first.png")
 
     def test_fasth3_reports_a_non_native_fps_and_stays_quiet_at_24(self):
         _, noisy = self.build(family="fasth3", fps=30)

@@ -548,6 +548,7 @@ describe('reviewQueue.buildQueue', () => {
       {
         id: 'plan-notification',
         type: 'plan_question',
+        historyHidden: true,
         title: 'Plan question',
         message: 'Choose a direction',
         timestamp: '2026-09-20T00:00:00.000Z',
@@ -565,6 +566,7 @@ describe('reviewQueue.buildQueue', () => {
 
     const queue = await buildQueue();
 
+    expect(notifications.getNotifications).toHaveBeenCalledWith({ includeHidden: true });
     expect(queue.items.filter(item => item.id === 'memory:memory-1')).toHaveLength(1);
     expect(queue.items.find(item => item.id === 'review:legacy-alert')).toMatchObject({
       actionKind: 'review.triage',

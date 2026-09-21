@@ -39,7 +39,7 @@ describe('data.reference seed file', () => {
     const upgraded = reloadMediaModels();
     for (const id of ids) expect(upgraded.video.mlx.find((entry) => entry.id === id)).toBeDefined();
     const v2 = upgraded.video.mlx.find((entry) => entry.id === 'fasth3_v2_int6');
-    expect(v2).toMatchObject({ steps: 8, samplerLocked: true, fastvideoVsa: true, fastvideoMlxFormat: 'int6', supportedModes: ['text', 'image'] });
+    expect(v2).toMatchObject({ steps: 8, samplerLocked: true, fastvideoVsa: true, fastvideoMlxFormat: 'int6', supportedModes: ['text'] });
     expect(v2.termsGate.id).toBe('minimax-h3-community-license-2026-08-02');
     upgraded.video.mlx = upgraded.video.mlx.filter((entry) => entry.id !== v2.id);
     writeFileSync(registryFile, JSON.stringify(upgraded));
@@ -71,15 +71,21 @@ describe('data.reference seed file', () => {
   });
 });
 
-describe('FastH3 V2 image-mode compatibility upgrade', () => {
-  it('upgrades shipped V2 rows but preserves forks and explicit custom modes', async () => {
-    const { upgradeFastH3V2ImageModes } = await import('./mediaModels.js');
-    const shipped = { id: 'fasth3_v2_int6', repo: 'FastVideo/FastVideo-FastH3-8-Step-V2', supportedModes: ['text'] };
-    const fork = { ...shipped, repo: 'example/FastH3-fork' };
-    const custom = { ...shipped, supportedModes: ['text', 'fflf'] };
-    expect(upgradeFastH3V2ImageModes([shipped, fork, custom])).toEqual([
-      { ...shipped, supportedModes: ['text', 'image'] }, fork, custom,
-    ]);
+describe('FastH3 V2 runtime-mode compatibility correction', () => {
+  it('loads shipped V2 as text-only while preserving forks and custom declarations', async () => {
+    const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+    const shipped = registry.video.mlx.find((entry) => entry.id === 'fasth3_v2_int6');
+    shipped.supportedModes = ['text', 'image'];
+    const fork = { ...shipped, id: 'fasth3_v2_int8', repo: 'example/FastH3-fork' };
+    const custom = { ...shipped, id: 'custom-fasth3', supportedModes: ['text', 'fflf'] };
+    registry.video.mlx = registry.video.mlx.filter((entry) => entry.id !== fork.id);
+    registry.video.mlx.push(fork, custom);
+    writeFileSync(registryFile, JSON.stringify(registry));
+    const models = reloadMediaModels().video.mlx;
+    expect(models.find((entry) => entry.id === shipped.id).supportedModes).toEqual(['text']);
+    expect(models.find((entry) => entry.id === fork.id)).toMatchObject(fork);
+    expect(models.find((entry) => entry.id === custom.id)).toMatchObject(custom);
   });
 });
 
@@ -1650,7 +1656,7 @@ describe('video registry upgrade chain', () => {
       'upgradeMiniMaxH3OutputControls',
       'upgradeLtx25AudioControls',
       'upgradeFastMetalDownloadSizes',
-      'upgradeFastH3V2ImageModes',
+      'upgradeFastH3V2RuntimeModes',
       'backfillRuntime',
       'upgradeLegacyCudaLtxRuntime',
       'upgradeLtx25CudaMemoryFloor',

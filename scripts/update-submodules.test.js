@@ -69,6 +69,7 @@ describe.each(SCRIPT_COMMANDS)('$path submodule update contract', ({ path, pull,
   it('clears locks a previously killed update left behind, before it takes any', () => {
     const sweepIndex = source.indexOf('clearStaleGitLocksIn');
     expect(sweepIndex).toBeGreaterThanOrEqual(0);
+    expect(sweepIndex).toBeLessThan(source.indexOf(preflight));
     expect(sweepIndex).toBeLessThan(source.indexOf(pull));
   });
 });

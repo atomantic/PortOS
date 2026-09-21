@@ -1,8 +1,7 @@
 /**
- * The act-warning message has one job beyond reporting the component: when a
- * leaked setState is caught by a LATER test's afterEach, it must send the
- * reader to the test that leaked — not to the one that happened to catch it.
- * That misattribution cost a CI bisect on #7785, so it is pinned here.
+ * The act-warning diagnostic distinguishes the test active when a warning
+ * fires from the test whose afterEach reports it. Neither proves where the
+ * asynchronous work began.
  */
 import { describe, it, expect } from 'vitest';
 import { actWarningEntry, formatActWarningError } from './actWarnings.js';
@@ -20,17 +19,19 @@ describe('actWarningEntry', () => {
 });
 
 describe('formatActWarningError', () => {
-  it('points at the leaking test when another test caught the warning', () => {
+  it('names observation and detection without claiming an asynchronous origin', () => {
     const message = formatActWarningError(
       [actWarningEntry('AttachmentMirrorCard', 'mounts the panel')],
       'keeps Save token disabled until something is typed',
     );
-    expect(message).toContain('AttachmentMirrorCard (leaked from: mounts the panel)');
-    expect(message).toContain('fix it there, not here');
+    expect(message).toContain('AttachmentMirrorCard (warning observed during: mounts the panel)');
+    expect(message).toContain('asynchronous work may have started in an earlier test');
+    expect(message).not.toContain('leaked from');
+    expect(message).not.toContain('fix it there, not here');
     expect(message).toContain('"keeps Save token disabled until something is typed"');
   });
 
-  it('does not cry misattribution when the leak is in the catching test', () => {
+  it('still avoids claiming an origin when observation and detection share a test', () => {
     const message = formatActWarningError(
       [actWarningEntry('AttachmentMirrorCard', 'mounts the panel')],
       'mounts the panel',
@@ -40,22 +41,23 @@ describe('formatActWarningError', () => {
     expect(message).not.toContain('fix it there, not here');
   });
 
-  it('treats a warning that fired between tests as belonging to the catcher', () => {
+  it('does not invent an observation test for a warning captured between tests', () => {
     // `currentTestName` is null outside a test body; with no origin to name,
     // claiming it escaped somewhere else would be a guess.
     const message = formatActWarningError([actWarningEntry('Card', null)], 'some test');
     expect(message).not.toContain('leaked from');
+    expect(message).not.toContain('warning observed during:');
   });
 
-  it('dedupes repeats but keeps two origins of the same component apart', () => {
+  it('dedupes repeats but keeps two observation contexts of the same component apart', () => {
     const message = formatActWarningError([
       actWarningEntry('Card', 'test A'),
       actWarningEntry('Card', 'test A'),
       actWarningEntry('Card', 'test B'),
     ], 'test C');
-    expect(message).toContain('Card (leaked from: test A)');
-    expect(message).toContain('Card (leaked from: test B)');
-    expect(message.match(/leaked from: test A/g)).toHaveLength(1);
+    expect(message).toContain('Card (warning observed during: test A)');
+    expect(message).toContain('Card (warning observed during: test B)');
+    expect(message.match(/warning observed during: test A/g)).toHaveLength(1);
   });
 
   it('always carries the remedy', () => {

@@ -22,6 +22,7 @@ import {
 } from './catalogTypes.js';
 import { csvIdsParam } from './sharedSchemas.js';
 import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
+import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
 // type there flows through to consumers automatically. Kept as a frozen
@@ -671,20 +672,20 @@ export const catalogSyncTagSchema = z.object({
 // harmlessly rather than 400-ing the whole envelope. `mediaKey` is a reference,
 // not bytes — the receiver matches it against its own library on apply.
 export const catalogMediaMetadataSchema = z.object({
-  format: z.string().max(64).optional(),
-  parameters: z.string().max(64 * 1024).optional(),
-  prompt: z.string().max(16_000).optional(),
-  negativePrompt: z.string().max(16_000).optional(),
-  steps: z.number().int().min(0).max(100_000).optional(),
-  sampler: z.string().max(256).optional(),
-  cfgScale: z.number().finite().min(0).max(1_000).optional(),
-  seed: z.union([z.number().int(), z.string().max(128)]).optional(),
-  width: z.number().int().positive().max(100_000).optional(),
-  height: z.number().int().positive().max(100_000).optional(),
-  modelHash: z.string().max(256).optional(),
-  model: z.string().max(512).optional(),
+  format: z.string().max(GENERATION_METADATA_LIMITS.format).optional(),
+  parameters: z.string().max(GENERATION_METADATA_LIMITS.parameters).optional(),
+  prompt: z.string().max(GENERATION_METADATA_LIMITS.prompt).optional(),
+  negativePrompt: z.string().max(GENERATION_METADATA_LIMITS.negativePrompt).optional(),
+  steps: z.number().int().min(0).max(GENERATION_METADATA_LIMITS.steps).optional(),
+  sampler: z.string().max(GENERATION_METADATA_LIMITS.sampler).optional(),
+  cfgScale: z.number().finite().min(0).max(GENERATION_METADATA_LIMITS.cfgScale).optional(),
+  seed: z.union([z.number().int(), z.string().max(GENERATION_METADATA_LIMITS.seed)]).optional(),
+  width: z.number().int().positive().max(GENERATION_METADATA_LIMITS.width).optional(),
+  height: z.number().int().positive().max(GENERATION_METADATA_LIMITS.height).optional(),
+  modelHash: z.string().max(GENERATION_METADATA_LIMITS.modelHash).optional(),
+  model: z.string().max(GENERATION_METADATA_LIMITS.model).optional(),
 }).passthrough().refine(
-  (metadata) => JSON.stringify(metadata).length <= 96 * 1024,
+  (metadata) => JSON.stringify(metadata).length <= GENERATION_METADATA_LIMITS.jsonChars,
   { message: 'media metadata exceeds 96KB JSON size cap' },
 );
 

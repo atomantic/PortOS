@@ -32,18 +32,19 @@ Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_A
 
 ## Security Model
 
-PortOS is designed for personal/developer use on trusted networks. It implements the following security measures:
+PortOS can execute host commands and access private files. It must remain on the user's private network; a reachable LAN or tailnet peer is not automatically trustworthy. It implements the following security measures:
 
 - **Network isolation**: By default, access should be restricted to trusted networks (e.g., Tailscale VPN, localhost)
-- **Command allowlist**: Shell command execution is restricted to an approved allowlist (see `server/lib/commandSecurity.js`)
+- **Command policies**: Execution follows each surface's operator/unattended policy and agent execution profile (see `server/lib/commandSecurity.js`); these controls do not sandbox the entire application
 - **Input validation**: All API inputs are validated using Zod schemas
 - **Opt-in authentication**: Off by default (trusting private network/Tailscale), PortOS supports opt-in instance password authentication (enforced by `server/services/authGate.js`) gating `/api/*`, `/data/*`, and `/sdapi/*` via session cookies, Bearer tokens, or HTTP Basic credentials
 
-**Important**: Do not expose PortOS APIs directly to untrusted networks. For production deployments, consider:
+Never publish PortOS administration, APIs, sockets, sidecars, or host controls through public tunnels, reverse proxies, or forwarding. A password or TLS does not make public deployment supported. For private deployments, consider:
 - Binding to `127.0.0.1` instead of `0.0.0.0`
 - Enabling instance password authentication in Settings → Security
-- Running behind an authenticated reverse proxy
 - Using Tailscale or similar VPN for remote access
+
+Password-free installs warn the operator until they set a password or explicitly accept the risk. See the [host-control security model](../PRD.md#host-control-security-model) for the full contract.
 
 ## REST Endpoints
 

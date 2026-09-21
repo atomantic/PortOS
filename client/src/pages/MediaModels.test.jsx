@@ -215,17 +215,17 @@ describe('MediaModels catalog/cache join', () => {
     ));
     expect(screen.getByText(/Video text encoders \(2\)/)).toBeInTheDocument();
   });
-});
 
-it('disables a catalog entry and queues a new model support request', async () => {
-  setMediaModelEnabled.mockResolvedValue({ enabled: false });
-  requestMediaModelSupport.mockResolvedValue({ id: 'task-support' });
-  render(<MediaModels />);
-  const disable = await screen.findAllByRole('button', { name: /^Disable / });
-  fireEvent.click(disable[0]);
-  await screen.findByRole('button', { name: /^Enable / });
-  fireEvent.change(screen.getByLabelText('Model or method, source links, and desired capabilities'), { target: { value: 'Example image model' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Investigate and open PR' }));
-  await screen.findByText(/Request queued: task-support/);
-  expect(requestMediaModelSupport).toHaveBeenCalledWith({ kind: 'image', request: 'Example image model' }, { silent: true });
+  it('disables a catalog entry and queues a new model support request', async () => {
+    setMediaModelEnabled.mockResolvedValue({ enabled: false });
+    requestMediaModelSupport.mockResolvedValue({ id: 'task-support' });
+    render(<MediaModels />);
+    const disable = await screen.findAllByRole('button', { name: /^Disable / });
+    fireEvent.click(disable[0]);
+    await screen.findByRole('button', { name: /^Enable / });
+    fireEvent.change(screen.getByLabelText('Model or method, source links, and desired capabilities'), { target: { value: 'Example image model' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Investigate and open PR' }));
+    await screen.findByText(/Request queued: task-support/);
+    expect(requestMediaModelSupport).toHaveBeenCalledWith({ kind: 'image', request: 'Example image model' }, { silent: true });
+  });
 });

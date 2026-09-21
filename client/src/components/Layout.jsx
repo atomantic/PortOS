@@ -55,7 +55,7 @@ import {
   SECTIONS_BELOW_MORE,
 } from '../lib/navPresentation.js';
 import { isFullWidthRoute } from '../lib/layoutRoutes.js';
-import { getNavCommandForPath, getSectionNavGroups, NAV_COMMANDS } from '../../../server/lib/navManifest.js';
+import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
 import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
 import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
@@ -550,7 +550,8 @@ export default function Layout() {
     const declaredPath = commandByPath.has(path);
     const matchedCommand = declaredPath ? getNavCommandForPath(location.pathname) : null;
     if (matchedCommand?.section === 'Models') {
-      return matchedCommand.path === path;
+      const owningTab = getSectionNavTabForPath('Models', location.pathname);
+      return owningTab?.to === path || matchedCommand.path === path;
     }
     return location.pathname === path || location.pathname.startsWith(path + '/');
   };

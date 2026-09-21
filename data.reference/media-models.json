@@ -1253,8 +1253,7 @@
         "fastvideoFamily": "fasth3",
         "fastvideoMlxFormat": "int8",
         "supportedModes": [
-          "text",
-          "image"
+          "text"
         ],
         "defaultWidth": 832,
         "defaultHeight": 480,
@@ -1336,8 +1335,7 @@
         "fastvideoFamily": "fasth3",
         "fastvideoMlxFormat": "int6",
         "supportedModes": [
-          "text",
-          "image"
+          "text"
         ],
         "defaultWidth": 832,
         "defaultHeight": 480,
