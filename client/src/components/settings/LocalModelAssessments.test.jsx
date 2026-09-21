@@ -37,6 +37,7 @@ import {
 } from '../../services/api';
 import toast from '../ui/Toast';
 import socket from '../../services/socket';
+import { localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
 import LocalModelAssessments from './LocalModelAssessments.jsx';
 
 // The measure drawer's target lives in the URL, so every render needs a router.
@@ -152,7 +153,7 @@ describe('LocalModelAssessments', () => {
       taskTokensPerSecond: null, taskCharsPerSecond: null, toolCalls: null, elapsedMs: 4000,
     });
     const user = userEvent.setup();
-    await renderPanel();
+    await renderPanel('/models/performance/agent-checks');
     await user.click(screen.getAllByRole('button', { name: 'Run task check' })[0]);
     await waitFor(() => expect(runOpenCodeAgentBenchmark).toHaveBeenCalledWith({
       backend: 'llama', modelId: 'dflash',
@@ -249,7 +250,7 @@ describe('LocalModelAssessments', () => {
     const user = userEvent.setup();
     getLocalLlmAssessmentSweep.mockResolvedValue({ status: 'running', total: 2, completed: 1, current: null, results: [] });
     cancelLocalLlmAssessmentSweep.mockResolvedValue({ status: 'cancelled', total: 2, completed: 1, current: null, results: [] });
-    await renderPanel();
+    await renderPanel('/models/performance/tuning');
 
     await user.click(await screen.findByRole('button', { name: /stop sweep/i }));
     // Once for the mount, once because the queue's evidence just changed.
@@ -955,5 +956,85 @@ describe('LocalModelAssessments — routable tuning-sweep drawer', () => {
       '/models/performance?sweepBackend=llama&sweepModel=example-model.gguf',
     ));
     expect(screen.queryByRole('dialog', { name: 'Measure this model' })).not.toBeInTheDocument();
+  });
+});
+
+describe('LocalModelAssessments — focused task views and selected evidence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    idleSweep();
+    getLocalLlmAssessments.mockResolvedValue(report({
+      ranked: [rankedEntry({
+        backend: 'llama',
+        modelId: 'hf.co/example-org/model/Q4_K_M',
+        tuningKey: '',
+        tuningLabel: null,
+      })],
+    }));
+  });
+
+  it('keeps a legacy measurement drawer open while switching task views', async () => {
+    const user = userEvent.setup();
+    await renderPanel('/models/performance?measureBackend=llama&measureModel=hf.co%2Fexample-org%2Fmodel%2FQ4_K_M');
+
+    await screen.findByRole('dialog', { name: 'Measure this model' });
+    await user.click(screen.getByRole('tab', { name: 'Capabilities' }));
+
+    expect(currentUrl()).toBe('/models/performance/capabilities?measureBackend=llama&measureModel=hf.co%2Fexample-org%2Fmodel%2FQ4_K_M');
+    expect(screen.getByRole('dialog', { name: 'Measure this model' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Capabilities' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('keeps legacy drawer params when selecting evidence', async () => {
+    const user = userEvent.setup();
+    const entry = rankedEntry({
+      backend: 'llama',
+      modelId: 'hf.co/example-org/model/Q4_K_M',
+      tuningKey: '',
+      tuningLabel: null,
+    });
+    getLocalLlmAssessments.mockResolvedValue(report({ ranked: [entry] }));
+    const search = '?measureBackend=llama&measureModel=hf.co%2Fexample-org%2Fmodel%2FQ4_K_M';
+    await renderPanel(`/models/performance${search}`);
+
+    await screen.findByRole('dialog', { name: 'Measure this model' });
+    await user.click(screen.getByRole('link', { name: 'View evidence for hf.co/example-org/model/Q4_K_M' }));
+
+    expect(currentUrl()).toBe(`${localModelAssessmentPath(entry)}${search}`);
+    expect(screen.getByRole('dialog', { name: 'Measure this model' })).toBeInTheDocument();
+  });
+
+  it('replaces an unknown task view with Results', async () => {
+    await renderPanel('/models/performance/not-a-view');
+
+    await waitFor(() => expect(currentUrl()).toBe('/models/performance/results'));
+    expect(screen.getByRole('tab', { name: 'Results' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('opens reversible selected evidence for a slash-containing model id', async () => {
+    const entry = rankedEntry({
+      backend: 'llama',
+      modelId: 'hf.co/example-org/model/Q4_K_M',
+      tuningKey: '',
+      tuningLabel: null,
+    });
+    getLocalLlmAssessments.mockResolvedValue(report({ ranked: [entry] }));
+    const path = localModelAssessmentPath(entry);
+
+    await renderPanel(path);
+
+    expect(await screen.findByRole('heading', { name: 'Selected evidence' })).toBeInTheDocument();
+    expect(screen.getAllByText('hf.co/example-org/model/Q4_K_M').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('backend defaults').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText('Selected evidence unavailable')).not.toBeInTheDocument();
+  });
+
+  it('offers recovery without guessing when selected evidence is invalid', async () => {
+    await renderPanel('/models/performance/results/v1-e30');
+
+    expect(await screen.findByText('Selected evidence unavailable')).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('link', { name: 'Return to Results' }));
+    expect(currentUrl()).toBe('/models/performance/results');
   });
 });

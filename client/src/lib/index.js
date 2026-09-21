@@ -128,6 +128,7 @@ export * from './joinInfluenceList.js';
 export * from './kanbanColumns.js';
 export * from './localLlmBackends.js';
 export * from './localLlmTargetKey.js';
+export * from './localModelAssessmentKey.js';
 export * from './loomLayout.js';
 export * from './loopbackHost.js';
 export * from './manuscriptAnchors.js';

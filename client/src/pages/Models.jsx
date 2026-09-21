@@ -87,7 +87,7 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
   const params = useParams();
   const tab = fixedTab || params.tab;
   const recordId = fixedRecordId || params.recordId;
-  const { taskView } = params;
+  const taskView = params.taskView || params.view || (fixedTab === 'performance' && params.assessmentKey ? 'results' : undefined);
   if (tab === 'llms' && recordId === 'jev') return <Navigate to={`/models/decision-classifiers/jev${taskView ? '/' + taskView : ''}`} replace />;
   // An unknown slug lands on LLMs rather than rendering a blank page, matching
   // the section's default destination in App and the primary navigation.
@@ -117,7 +117,9 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
           {/* Local boundary rather than the App-level one: a lazy tab must not blank
               the section header and tab bar while its chunk loads. */}
           <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
-            {DetailContent ? <DetailContent recordId={recordId} /> : <TabContent view={recordId} />}
+            {DetailContent
+              ? <DetailContent recordId={recordId} />
+              : <TabContent view={recordId} taskView={taskView} assessmentKey={params.assessmentKey} />}
           </Suspense>
         </div>
       </div>

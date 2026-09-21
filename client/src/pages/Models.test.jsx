@@ -13,7 +13,17 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { ModelsDesktopNavigator, TABS } from '../components/models/ModelsTabsHeader';
 import SidebarContext from '../components/SidebarContext';
 
-vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({ default: () => <div>assessments panel</div> }));
+vi.mock('../components/settings/LocalModelAssessments.jsx', () => ({
+  default: ({ taskView, assessmentKey }) => (
+    <div
+      data-testid="assessments-panel"
+      data-task-view={taskView || 'none'}
+      data-assessment-key={assessmentKey || 'none'}
+    >
+      assessments panel
+    </div>
+  ),
+}));
 vi.mock('../components/settings/LocalLlmTab', () => ({
   LocalLlmTab: ({ view }) => <div data-testid="llms-view" data-view={view || 'none'}>llms panel</div>,
 }));
@@ -62,6 +72,8 @@ const ownTabs = TABS.filter((t) => !EXTERNAL_TAB_IDS.includes(t.id));
 const renderAt = (path) => render(
   <MemoryRouter initialEntries={[path]}>
     <Routes>
+      <Route path="/models/performance/results/:assessmentKey" element={<Models fixedTab="performance" />} />
+      <Route path="/models/performance/:view" element={<Models fixedTab="performance" />} />
       <Route path="/models/:tab" element={<Models />} />
       <Route path="/models/:tab/:recordId" element={<Models />} />
       <Route path="/models/decision-classifiers/jev/:taskView" element={<Models fixedTab="decision-classifiers" fixedRecordId="jev" />} />
@@ -96,6 +108,18 @@ describe('Models', () => {
   it('redirects an unknown tab slug to LLMs', async () => {
     renderAt('/models/not-a-tab');
     expect(await screen.findByText('llms panel')).toBeInTheDocument();
+  });
+
+  it('passes an explicit Performance task view through the section shell', async () => {
+    renderAt('/models/performance/capabilities');
+    expect(await screen.findByTestId('assessments-panel')).toHaveAttribute('data-task-view', 'capabilities');
+  });
+
+  it('passes a selected assessment key through the results route', async () => {
+    renderAt('/models/performance/results/v1-example');
+    const panel = await screen.findByTestId('assessments-panel');
+    expect(panel).toHaveAttribute('data-task-view', 'results');
+    expect(panel).toHaveAttribute('data-assessment-key', 'v1-example');
   });
 
   // The slug comes straight off the URL, so a plain `TAB_CONTENT[tab]` lookup
