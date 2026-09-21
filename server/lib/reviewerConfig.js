@@ -15,6 +15,8 @@ import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffo
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
+import { isReviewerConfigFault } from './reviewerHealth.js';
+export { REVIEWER_CONFIG_FAULT_CODES, isReviewerConfigFault } from './reviewerHealth.js';
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
 // Copilot review; `claude`/`antigravity`/`codex`/`grok`/`cursor`/`opencode`/`kimi`
@@ -42,22 +44,6 @@ export const isReviewer = (value) => REVIEWER_VALUES.includes(value) || isProvid
 export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value) || isProviderReviewer(value);
 
 /**
- * Reviewer refusals a CALLER can fix by changing configuration, as opposed to a
- * reviewer that was genuinely asked and failed (quota, transport, timeout).
- *
- * The review gate in a claim/PR run answers an unreachable reviewer with
- * `review-blocked`: publish, leave the PR open, wait for the outage to pass.
- * That is exactly wrong for a reviewer that can NEVER answer — the pipeline
- * stalls indefinitely while each individual PR looks like it is merely waiting
- * (#7660). These codes are how a caller tells the two apart.
- *
- * Vocabulary rather than service code so the route deciding 400-vs-502 and the
- * service producing the codes read the SAME list, without the route pulling in
- * the review service's closure to do it.
- */
-export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze(['NO_MODEL', 'REVIEWER_UNAVAILABLE', 'REVIEWER_UNSUPPORTED']);
-
-/**
  * What an agent does with a review that could not return a verdict: say so in
  * the run summary, and leave the PR/MR thread alone.
  *
@@ -72,7 +58,6 @@ export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze(['NO_MODEL', 'REVIEWER_
  * being one. `reviewerConfig.test.js` pins the no-drift claim.
  */
 export const REVIEW_UNAVAILABLE_REPORTING_NOTE = 'Report the pending review in your run summary — do NOT post a PR/MR comment saying the review was unavailable or inconclusive.';
-export const isReviewerConfigFault = (code) => REVIEWER_CONFIG_FAULT_CODES.includes(code);
 
 /**
  * What an agent does when EVERY configured reviewer returned a config fault:

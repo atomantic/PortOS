@@ -51,14 +51,11 @@ import {
   resolveGoalFidelityConfig,
 } from '../lib/goalFidelity.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
+import { isReviewerConfigFault } from '../lib/reviewerHealth.js'
 import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
 const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|allowance|credit|capacity|exhausted|too many requests|429/i
-// Keep this tiny predicate local: codeReview.js is imported by health and API
-// routes, so reaching into reviewerConfig.js here would pull the entire review
-// configuration graph into a widely-reached module and trip the import budget.
-const isReviewerConfigFault = (code) => code === 'NO_MODEL' || code === 'REVIEWER_UNSUPPORTED'
 export const isReviewerQuotaFailure = (error) => QUOTA_FAILURE.test(String(error || ''))
 
 const normalizeFallbackGroups = (groups) => Array.isArray(groups)
@@ -96,20 +93,24 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
 
 export async function reportReviewerSuccess(reviewer, now = Date.now()) {
   if (!isReviewer(reviewer)) return false
-  const settings = await getSettings()
-  const health = settings?.codeReview?.reviewerHealth
-  const prior = health?.[reviewer]
-  if (!prior || (!isReviewerConfigFault(prior.code) && Number(prior.pausedUntil) > now)) return false
-  const remaining = Object.fromEntries(Object.entries(health).filter(([key]) => key !== reviewer))
-  await updateSettingsWith((current) => ({
-    ...current,
-    codeReview: {
-      ...Object.fromEntries(Object.entries(current.codeReview || {}).filter(([key]) => key !== 'reviewerHealth')),
-      ...(Object.keys(remaining).length ? { reviewerHealth: remaining } : {}),
-    },
-  }))
-  cachedDefaults = null
-  return true
+  if (!(await getSettings())?.codeReview?.reviewerHealth?.[reviewer]) return false
+  let cleared = false
+  await updateSettingsWith((current) => {
+    const health = current.codeReview?.reviewerHealth
+    const prior = health?.[reviewer]
+    if (!prior || (!isReviewerConfigFault(prior.code) && Number(prior.pausedUntil) > now)) return current
+    const remaining = Object.fromEntries(Object.entries(health).filter(([key]) => key !== reviewer))
+    cleared = true
+    return {
+      ...current,
+      codeReview: {
+        ...Object.fromEntries(Object.entries(current.codeReview || {}).filter(([key]) => key !== 'reviewerHealth')),
+        ...(Object.keys(remaining).length ? { reviewerHealth: remaining } : {}),
+      },
+    }
+  })
+  if (cleared) cachedDefaults = null
+  return cleared
 }
 
 export function reviewerConfigFaultsFromHealth(raw) {

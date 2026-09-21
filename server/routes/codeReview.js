@@ -1,7 +1,8 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
-import { validateRequest, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
+import { validateRequest, cliReviewerOutcomeSchema, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
+import { reviewerAccessFailureCode } from '../lib/reviewerHealth.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewUnsupported, reportReviewerFailure, reportReviewerSuccess } from '../services/codeReview.js'
 
@@ -98,6 +99,18 @@ router.post('/local', asyncHandler(async (req, res) => {
   }
   await reportReviewerSuccess(body.backend)
   res.json(result)
+}))
+
+// The existing /api auth gate protects this orchestrator-only report. It never
+// invokes a provider, accepts raw CLI output, or changes optional-review policy.
+router.post('/cli-outcome', asyncHandler(async (req, res) => {
+  const body = validateRequest(cliReviewerOutcomeSchema, req.body)
+  if (body.outcome === 'reviewed') {
+    return res.json({ recorded: await reportReviewerSuccess(body.reviewer) })
+  }
+  const code = reviewerAccessFailureCode(body.reviewer, body.failure)
+  const recorded = code ? await reportReviewerFailure(body.reviewer, { code }) : false
+  res.json({ recorded, code })
 }))
 
 export default router

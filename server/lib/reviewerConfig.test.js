@@ -941,6 +941,14 @@ describe('hasReviewerCoverage', () => {
     expect(hasReviewerCoverage([], {})).toBe(false);
     expect(ZERO_REVIEWER_COVERAGE_NOTE).toContain('No reviewer reviewed this branch');
   });
+
+  it('keeps an access refusal inconclusive while another reviewer provides coverage', () => {
+    const refusal = { opencode: { code: 'REVIEWER_ACCESS_DENIED', verdict: 'clean' } };
+    expect(hasReviewerCoverage(['opencode'], refusal)).toBe(false);
+    expect(hasReviewerCoverage(['opencode', 'codex'], {
+      ...refusal, codex: { verdict: 'clean' },
+    })).toBe(true);
+  });
 });
 
 describe('REVIEW_UNAVAILABLE_REPORTING_NOTE', () => {

@@ -93,6 +93,17 @@ describe('CodeReviewersTab', () => {
     expect(screen.getByText(/Select a model in this tab/)).toBeInTheDocument();
   });
 
+  it('identifies a provider access refusal and its configuration remedy', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['opencode', 'codex'],
+      optionalReviewers: ['opencode'],
+      reviewerConfigFaults: { opencode: { code: 'REVIEWER_ACCESS_DENIED', lastFailureAt: 123 } },
+    });
+    render(<CodeReviewersTab />);
+    expect(await screen.findByText(/opencode cannot review on this install/)).toHaveTextContent('Select an accessible service or model, or correct provider access.');
+    expect(screen.getByText(/A successful review clears this warning/)).toBeInTheDocument();
+  });
+
   it('renders error banner with Retry button and disables Save button when fetch rejects', async () => {
     api.getCodeReviewDefaults.mockRejectedValue(new Error('Network error'));
 

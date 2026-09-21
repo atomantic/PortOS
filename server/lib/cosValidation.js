@@ -36,6 +36,7 @@ import {
   MODEL_SELECTABLE_REVIEWERS,
   REVIEWER_ALIASES,
   isReviewer,
+  isCliReviewer,
   isToolFreeReviewer,
   REVIEW_STOP_MODES,
   normalizeOptionalReviewers,
@@ -643,6 +644,28 @@ export const taskTemplateFromTaskSchema = z.object({
   }),
   templateName: z.string().trim().min(1).max(120).optional(),
 });
+
+// CLI outcome reports carry only a bounded projection, never raw output or
+// provider headers. A successful process exit alone is not a review verdict.
+const cliReviewerIdentitySchema = z.string().max(40).refine(value => isReviewer(value) && isCliReviewer(value));
+export const cliReviewerOutcomeSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    reviewer: cliReviewerIdentitySchema,
+    outcome: z.literal('reviewed'),
+    verdict: z.enum(['clean', 'findings']),
+  }).strict(),
+  z.object({
+    reviewer: cliReviewerIdentitySchema,
+    outcome: z.literal('failed'),
+    failure: z.object({
+      name: z.string().max(80).optional(),
+      statusCode: z.number().int().min(100).max(599).optional(),
+      isRetryable: z.boolean().optional(),
+      providerErrorType: z.string().max(80).optional(),
+      message: z.string().max(512).optional(),
+    }).strict(),
+  }).strict(),
+]);
 
 // Global Code Review Loop defaults (settings.codeReview). Surfaced on the AI
 // Providers page; TaskAddForm + ScheduleTab seed from this when the user

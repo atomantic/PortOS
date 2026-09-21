@@ -17,6 +17,9 @@ vi.mock('../../lib/httpsState.js', () => ({
 
 import { getHttpsEnabledAtBoot } from '../../lib/httpsState.js';
 import { buildReviewLoopFollowUpSection, prepareSandboxedReviewLoopBody } from './reviewLifecycle.js';
+import { buildLocalReviewerInstructions } from '../cosTaskPrompts.js';
+import { CLI_REVIEW_OUTCOME_GUIDE } from './reviewerOutcome.js';
+import { readFileSync } from 'node:fs';
 
 const metadata = {
   reviewLoopFollowUp: true,
@@ -32,12 +35,30 @@ describe('reviewLifecycle agent-facing API origin', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    getHttpsEnabledAtBoot.mockReturnValue({ value: false, initialized: true });
     delete process.env.PORT;
     delete process.env.PORTOS_HTTP_PORT;
   });
 
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('reports CLI health from claims and review loops without giving reviewers the token', () => {
+    getHttpsEnabledAtBoot.mockReturnValue({ value: true, initialized: true });
+    const sections = [
+      buildLocalReviewerInstructions(['opencode', 'codex']),
+      buildReviewLoopFollowUpSection({ ...metadata, reviewLoopReviewers: ['opencode', 'codex'], reviewLoopOptionalReviewers: ['opencode'] }),
+    ];
+    for (const section of sections) {
+      expect(section).toContain('http://127.0.0.1:5553/api/code-review/cli-outcome');
+      expect(section).toContain(CLI_REVIEW_OUTCOME_GUIDE);
+      expect(section).toContain('Never give reviewers the API token');
+    }
+    const procedure = readFileSync(CLI_REVIEW_OUTCOME_GUIDE, 'utf8');
+    expect(procedure).toContain('-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"');
+    expect(procedure).toContain('A recorded failure is INCONCLUSIVE, never clean');
+    expect(buildLocalReviewerInstructions(['ollama'])).not.toContain('/cli-outcome');
   });
 
   it('points the challenge-protocol curl at the loopback HTTP mirror when HTTPS is active', () => {
