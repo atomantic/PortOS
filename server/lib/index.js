@@ -714,3 +714,5 @@ export * from './contributionSecurityPolicy.js';
 
 export * from './catalogExtractionDraft.js';
 export * from './markdownImages.js';
+
+export * from './chatgptText.js';

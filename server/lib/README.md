@@ -731,3 +731,5 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `persistentMindProcessAudit.js` | Bounded process-audit schemas, deterministic observations, measured recovery ratios, and closed-vocabulary synthetic finding renderer. |
 | `markdownImages.js` | `markdownImages(content, limit)` — bounded, deduplicated safe markdown image previews for Brain cards and import archives. |
+
+| `chatgptText.js` | `stripChatgptCitations(text)` removes opaque ChatGPT citation tokens while preserving ordinary Markdown and asset links. |

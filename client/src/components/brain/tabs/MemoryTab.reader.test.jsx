@@ -69,6 +69,11 @@ describe('Brain memory reader', () => {
     expect(screen.queryByRole('complementary')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
 
+    // Selecting from a scrolled list keeps that same independent scroll region.
+    const entries = screen.getByRole('region', { name: 'Memory entries' });
+    expect(entries.className).toContain('overflow-y-auto');
+    entries.scrollTop = 800;
+
     // Click to read full entry
     fireEvent.click(screen.getByRole('button', { name: 'Read First memory' }));
     expect(screen.getByTestId('location').textContent).toBe('/brain/memory/memories/mem-1');
@@ -76,6 +81,9 @@ describe('Brain memory reader', () => {
     // Sidebar aside preview appears, NO modal dialog
     const sidebar = await screen.findByRole('complementary', { name: 'Preview: First memory' });
     expect(sidebar).toBeTruthy();
+    expect(sidebar.className).toContain('h-full');
+    expect(screen.getByRole('region', { name: 'Memory entries' })).toBe(entries);
+    expect(entries.scrollTop).toBe(800);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(within(sidebar).getByText('First memory full content')).toBeTruthy();
     expect(screen.getByText('Viewing')).toBeTruthy();

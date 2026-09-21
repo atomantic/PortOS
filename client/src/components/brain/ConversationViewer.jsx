@@ -13,7 +13,7 @@ import { timeAgo } from '../../utils/formatters';
  * (with inline images and asset links) lives in the import archive or markdown
  * body, rendered in this sidebar preview without a blocking modal.
  */
-export default function ConversationViewer({ record, onClose, onEdit, onSendToCatalog }) {
+export default function ConversationViewer({ record, onClose, onEdit, onSendToCatalog, fillHeight = false }) {
   const [archive, setArchive] = useState(null);
   const [loading, setLoading] = useState(record?.source === 'chatgpt-import' && !!record?.sourceRef);
   const [error, setError] = useState(null);
@@ -38,7 +38,7 @@ export default function ConversationViewer({ record, onClose, onEdit, onSendToCa
   return (
     <aside
       aria-label={`Preview: ${title}`}
-      className="bg-port-card border border-port-border rounded-lg flex flex-col w-full overflow-hidden shadow-lg lg:sticky lg:top-4 max-h-[85vh] lg:max-h-[calc(100vh-10rem)]"
+      className={`bg-port-card border border-port-border rounded-lg flex flex-col w-full overflow-hidden shadow-lg ${fillHeight ? 'h-full min-h-0' : 'lg:sticky lg:top-4 max-h-[85vh] lg:max-h-[calc(100vh-10rem)]'}`}
     >
       {/* Mobile-only back button bar */}
       <div className="px-4 pt-3 pb-0 lg:hidden">
