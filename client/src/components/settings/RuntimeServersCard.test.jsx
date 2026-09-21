@@ -55,6 +55,27 @@ describe('RuntimeServersCard', () => {
     }
   });
 
+  it('keeps dense runtime rows in a bounded container-aware grid', () => {
+    renderCard({
+      llamaStatus: {
+        installed: true,
+        running: false,
+        managed: true,
+        runAtStartup: true,
+        version: '0.4.0',
+        latestVersion: '0.4.1',
+        updateAvailable: true,
+        canUpgrade: true,
+      },
+    });
+    const llama = row('llama.cpp');
+
+    expect(llama.className).toMatch(/\bflex-col\b/);
+    expect(llama.className).toContain('@min-[48rem]:grid');
+    expect(llama.className).toContain('@min-[48rem]:grid-cols-[10rem_minmax(0,1fr)_minmax(12rem,20rem)]');
+    expect(llama.className).not.toContain('sm:w-44');
+  });
+
   it('offers Start for an installed-but-stopped backend and Stop for a running one', () => {
     const handlers = renderCard({
       status: {
