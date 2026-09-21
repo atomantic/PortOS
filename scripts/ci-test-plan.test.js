@@ -65,6 +65,18 @@ const TRACKED = [
   'scripts/fix-windows-console.js',
 ];
 
+const REVIEW_LOOP_SNAPSHOT = 'server/services/promptSections/__snapshots__/reviewLoopMatrix/local-gh.txt';
+const REVIEW_LOOP_OWNER = 'server/services/promptSections/reviewLifecycleMatrix.test.js';
+const REVIEW_LIFECYCLE_SOURCE = 'server/services/promptSections/reviewLifecycle.js';
+const REVIEW_LIFECYCLE_TEST = 'server/services/promptSections/reviewLifecycle.test.js';
+const REVIEW_LOOP_TRACKED = [
+  ...TRACKED,
+  REVIEW_LOOP_SNAPSHOT,
+  REVIEW_LOOP_OWNER,
+  REVIEW_LIFECYCLE_SOURCE,
+  REVIEW_LIFECYCLE_TEST,
+];
+
 it('preserves Git-quoted source and contract paths through the planner CLI', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-paths-'));
   const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
@@ -580,6 +592,71 @@ describe('CI test impact planner', () => {
 
     const clientSide = buildCiTestPlan(['client/src/lib/eidoverseWorldReset.js'], { trackedFiles: tracked, pathContractTests });
     expect(clientSide.server.files).toContain('server/lib/eidoverseWorldReset.parity.test.js');
+  });
+
+  describe('explicit text fixture ownership', () => {
+    it('selects the review-loop snapshot owner and always-run guards without full CI', () => {
+      const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT], { trackedFiles: REVIEW_LOOP_TRACKED });
+
+      expect(plan).toMatchObject({
+        full: false,
+        server: {
+          mode: 'files',
+          files: [REVIEW_LOOP_OWNER, 'server/services/taskPromptDefaults.test.js'],
+          sources: [],
+        },
+        client: { mode: 'skip' },
+        db: false,
+        build: false,
+        smoke: false,
+        windows: false,
+      });
+    });
+
+    it('combines a mapped snapshot owner with normal source selection', () => {
+      const plan = buildCiTestPlan([REVIEW_LIFECYCLE_SOURCE, REVIEW_LOOP_SNAPSHOT], {
+        trackedFiles: REVIEW_LOOP_TRACKED,
+      });
+
+      expect(plan.full).toBe(false);
+      expect(plan.server.mode).toBe('files');
+      expect(plan.server.sources).toEqual([]);
+      expect(plan.server.files).toEqual(expect.arrayContaining([
+        REVIEW_LIFECYCLE_TEST,
+        REVIEW_LOOP_OWNER,
+        'server/services/taskPromptDefaults.test.js',
+      ]));
+      expect(plan.smoke).toBe(true);
+    });
+
+    it('fails closed for an unmapped fixture or a missing owner', () => {
+      const unmapped = buildCiTestPlan([
+        'server/services/promptSections/__snapshots__/otherMatrix/unknown.txt',
+      ], { trackedFiles: REVIEW_LOOP_TRACKED });
+      expect(unmapped.full).toBe(true);
+      expect(unmapped.reason).toMatch(/unclassified/);
+
+      const missingOwner = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT], { trackedFiles: TRACKED });
+      expect(missingOwner.full).toBe(true);
+      expect(missingOwner.reason).toMatch(/fixture owner not tracked/);
+    });
+
+    it('keeps an independent lockfile full-CI trigger authoritative', () => {
+      const plan = buildCiTestPlan([REVIEW_LOOP_SNAPSHOT, 'package-lock.json'], {
+        trackedFiles: [...REVIEW_LOOP_TRACKED, ...WINDOWS_CONTRACT_TESTS],
+      });
+
+      expect(plan).toMatchObject({
+        full: true,
+        server: { mode: 'full' },
+        client: { mode: 'full' },
+        db: true,
+        build: true,
+        smoke: true,
+        windows: true,
+        windowsMode: 'full',
+      });
+    });
   });
 
   it('runs the tree-scanning route and prompt-stage guards whenever a server source changes', () => {
