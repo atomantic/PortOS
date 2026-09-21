@@ -43,12 +43,11 @@
  * than being judged against a second, non-playable graph.
  */
 
+import { asArray } from './arrayUtils.js';
 import { EVOLUTION_STAGES, EVOLUTION_STAGE_LABELS, isDeclaredEvolution } from './characterEvolution.js';
 import { computeTopologicalNodeOrder } from './fableLoomProduction.js';
 import { enumerateEpisodePlaythroughs } from './fableLoomPlaytest.js';
 import { isNonBlankStr } from './textUtils.js';
-
-const asArray = (value) => (Array.isArray(value) ? value : []);
 
 /**
  * Per-lens and whole-report coverage. Mirrors `CHARACTER_REVIEW_STATUSES` in

@@ -36,6 +36,7 @@
  * digest), and nothing here reads a record body.
  */
 
+import { asArray } from './arrayUtils.js';
 import {
   EIDOVERSE_SCALAR_SOURCE_KEYS,
   EIDOVERSE_WORLD_DESIGN_V3,
@@ -60,7 +61,6 @@ const MAX_CHANGE_ENTRIES = 20;
 // which degrades to reporting them as new once, not to a broken file.
 const MAX_MARKER_FOUNDATION_IDS = 2000;
 
-const asArray = (value) => (Array.isArray(value) ? value : []);
 const sortedUnique = (values) => [...new Set(asArray(values).filter(Boolean))].sort();
 
 /**

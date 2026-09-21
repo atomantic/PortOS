@@ -13,8 +13,8 @@
  * blocks on.
  */
 
+import { asArray } from './arrayUtils.js';
 import { isNonBlankStr } from './textUtils.js';
-const asArray = (v) => (Array.isArray(v) ? v : []);
 
 export const GRAPH_ISSUE_CODES = Object.freeze({
   MISSING_START: 'MISSING_START',
