@@ -94,3 +94,22 @@ it('defaults a brain-bridge ingest to the Reality universe even though it starts
     expect.objectContaining({ universeRef: 'universe-reality' }),
   ));
 });
+
+it('keeps partial extraction failures visible in review and excludes draft metadata from legacy payloads', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'partial-scrap' } });
+  extractFromCatalogScrap.mockResolvedValue({ scrap: { id: 'partial-scrap' }, draft: {
+    ideas: [{ draftId: 'draft-idea-1', sourceIdentity: 'a thought', name: 'Partial thought', summary: 'A supported fragment.' }],
+    stages: [{ id: 'catalog-1', label: 'Part 1', status: 'completed' }, { id: 'catalog-2', label: 'Part 2', status: 'failed', error: 'Output capacity exceeded' }],
+    coverage: { status: 'partial', failedChunks: [1] },
+  } });
+  commitCatalogScrapDraft.mockResolvedValue({ ingredients: [] });
+  render(<MemoryRouter initialEntries={['/catalog/ingest']}><CatalogIngest /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText(/Raw text/), { target: { value: 'a thought' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Ingest' }));
+  await screen.findByDisplayValue('Partial thought');
+  expect(screen.getByRole('alert')).toHaveTextContent('Extraction is incomplete');
+  expect(screen.getByRole('alert')).toHaveTextContent('Part 2: Output capacity exceeded');
+  fireEvent.click(screen.getByRole('button', { name: /Commit/ }));
+  await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith('partial-scrap',
+    [expect.objectContaining({ payload: { summary: 'A supported fragment.' } })], expect.anything()));
+});

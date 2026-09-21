@@ -1,515 +1,191 @@
-/**
- * Unit tests for catalogExtraction — bibleExtractor + stageRunner are both
- * mocked so this test stays pure (no LLM call). Asserts:
- *   - Stage list covers the three bible kinds + one bundled light stage
- *   - Each stage emits running → completed progress frames
- *   - Failures isolate (one kind's throw doesn't poison the rest)
- *   - The returned draft groups extracted entries under the right field key
- *   - The bundled light stage splits its LLM response into ideas/scenes/concepts
- *   - Light-shape entries are sanitized (drops nameless rows, caps fields)
- *   - Triple-backtick fences in user paste are neutralized before reaching
- *     extractBible (so a paste containing ``` can't close the prompt fence)
- */
-
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { applyTemplate } from '../lib/promptTemplate.js';
+import { withCreativeLatitude, CREATIVE_LATITUDE_HEADING } from '../lib/creativeLatitude.js';
+import { estimateTokens } from '../lib/contextBudget.js';
+import { neutralizeFences } from '../lib/promptFencing.js';
+import { catalogScrapCommitSchema } from '../lib/catalogValidation.js';
 
-vi.mock('./bibleExtractor.js', () => ({
-  extractBible: vi.fn(),
-}));
-vi.mock('./stageRunner.js', () => ({
-  runStagedLLM: vi.fn(),
-}));
-// catalogDB pulls in the Postgres pool — mock just the one function the
-// extractor consumes so scanProseForIngredientRefs stays a pure unit test.
-vi.mock('./catalogDB.js', () => ({
-  listIngredientsForRef: vi.fn(),
-  getScrap: vi.fn(),
-  listChildScraps: vi.fn(),
-}));
-
-const bibleExtractor = await import('./bibleExtractor.js');
+vi.mock('./stageRunner.js', () => ({ resolveStageContext: vi.fn(), runStageScopedInlineLLM: vi.fn() }));
+vi.mock('./promptService.js', () => ({ buildPrompt: vi.fn() }));
+vi.mock('./catalogDB.js', () => ({ getScrap: vi.fn(), listChildScraps: vi.fn(), listIngredientsForRef: vi.fn(), createIngredient: vi.fn() }));
 const stageRunner = await import('./stageRunner.js');
+const prompts = await import('./promptService.js');
 const catalogDB = await import('./catalogDB.js');
 const { catalogEvents } = await import('./catalogEvents.js');
-const { applyTemplate } = await import('../lib/promptTemplate.js');
-const { readFileSync } = await import('fs');
-const { join, dirname } = await import('path');
-const { fileURLToPath } = await import('url');
-
-// server/services → ../../data.reference is the shipped template directory.
-const stagePrompt = (name) =>
-  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data.reference', 'prompts', 'stages', `${name}.md`), 'utf8');
-const {
-  extractIngredients,
-  extractIngredientsForScrap,
-  dedupDrafts,
-  EXTRACTION_STAGES,
-  scanProseForIngredientRefs,
-} = await import('./catalogExtraction.js');
-
-const emptyLightResponse = { content: { ideas: [], scenes: [], concepts: [] } };
+const { extractIngredients, extractIngredientsForScrap, scanProseForIngredientRefs } = await import('./catalogExtraction.js');
+const template = readFileSync(new URL('../../data.reference/prompts/stages/catalog-extract.md', import.meta.url), 'utf8');
+const empty = () => ({ characters: [], places: [], objects: [], ideas: [], scenes: [], concepts: [], relationships: [] });
+const route = (contextWindow = 64000) => ({ provider: { id: 'example-provider' }, model: 'example-model', contextWindow });
+const story = 'Example Owner owns the pistol inherited from her aunt. At Example Station she lends it to Example Companion, who uses it to signal the last train. A paper cup sits nearby. What if memory could be inherited? In this world memory is currency.';
+const storyGraph = () => ({
+  characters: [
+    { draftId: 'owner', name: 'Example Owner', background: 'Inherited the pistol from her aunt.', evidence: ['Example Owner owns the pistol inherited from her aunt.'] },
+    { draftId: 'companion', name: 'Example Companion', evidence: ['Example Companion, who uses it to signal the last train.'] },
+  ],
+  places: [{ draftId: 'station', name: 'Example Station', evidence: ['At Example Station'] }],
+  objects: [{ draftId: 'pistol', name: 'Inherited pistol', aliases: ['the pistol'], sourceIdentity: 'the pistol inherited from her aunt', description: 'An inherited pistol lent to a companion.', significance: 'Inheritance and the last train signal.', evidence: ['Example Owner owns the pistol inherited from her aunt.'] }],
+  ideas: [{ draftId: 'idea', name: 'Inherited memory', summary: 'A question about inherited memory.', evidence: 'What if memory could be inherited?' }],
+  scenes: [{ draftId: 'scene', name: 'Signal the last train', summary: 'The companion uses the lent pistol to signal.', setting: 'Example Station', actors: ['Example Owner', 'Example Companion'], evidence: 'At Example Station she lends it to Example Companion, who uses it to signal the last train.' }],
+  concepts: [{ draftId: 'concept', name: 'Memory currency', summary: 'Memory is currency.', kind: 'rule', evidence: 'In this world memory is currency.' }],
+  relationships: [
+    { fromDraftId: 'pistol', toDraftId: 'owner', kind: 'owned-by', evidence: 'Example Owner owns the pistol inherited from her aunt.' },
+    { fromDraftId: 'pistol', toDraftId: 'companion', kind: 'used-by', evidence: 'she lends it to Example Companion, who uses it to signal the last train.' },
+    { fromDraftId: 'pistol', toDraftId: 'scene', kind: 'appears-in', evidence: 'Example Companion, who uses it to signal the last train.' },
+    { fromDraftId: 'scene', toDraftId: 'station', kind: 'appears-in', evidence: 'At Example Station she lends it to Example Companion' },
+  ],
+});
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  // Default: the light stage returns nothing unless the test overrides.
-  stageRunner.runStagedLLM.mockResolvedValue(emptyLightResponse);
+  vi.resetAllMocks();
+  stageRunner.resolveStageContext.mockResolvedValue(route());
+  stageRunner.runStageScopedInlineLLM.mockResolvedValue({ content: JSON.stringify(empty()) });
+  prompts.buildPrompt.mockImplementation(async (_name, variables) => withCreativeLatitude(applyTemplate(template, variables)));
 });
 
-describe('catalogExtraction — stage shape', () => {
-  it('covers the three bible kinds + one bundled light stage', () => {
-    const ids = EXTRACTION_STAGES.map((s) => s.id);
-    expect(ids).toEqual(['characters', 'places', 'objects', 'ideasScenesConcepts']);
-    // The bible stages carry a `kind`; the bundled light stage does not.
-    const bibleKinds = EXTRACTION_STAGES.filter((s) => s.kind).map((s) => s.kind);
-    expect(bibleKinds.sort()).toEqual(['character', 'object', 'place']);
-  });
-});
-
-describe('catalogExtraction — extractIngredients', () => {
-  it('rejects an empty corpus before any LLM call', async () => {
-    await expect(extractIngredients({ rawText: '   ' })).rejects.toThrow(/rawText is required/);
-    expect(bibleExtractor.extractBible).not.toHaveBeenCalled();
-    expect(stageRunner.runStagedLLM).not.toHaveBeenCalled();
-  });
-
-  it('runs every bible stage in parallel and groups results under the BIBLE_FIELD key', async () => {
-    bibleExtractor.extractBible.mockImplementation(async ({ kind }) => ({
-      extracted: [{ name: `${kind}-1` }],
-    }));
-
-    const out = await extractIngredients({ rawText: 'long prose', scrapId: 'cat-scrap-x' });
-    expect(out).toHaveProperty('runId');
-    expect(out.characters).toEqual([{ name: 'character-1' }]);
-    expect(out.places).toEqual([{ name: 'place-1' }]);
-    expect(out.objects).toEqual([{ name: 'object-1' }]);
-    // Bible stages report count=1; the (unused) light stage reports 0.
-    const bibleStages = out.stages.filter((s) => s.id !== 'ideasScenesConcepts');
-    expect(bibleStages.every((s) => s.status === 'completed' && s.count === 1)).toBe(true);
+describe('catalog extraction workflow', () => {
+  it('extracts six types and the grounded ownership/use/scene graph with one call and no saves', async () => {
+    stageRunner.runStageScopedInlineLLM.mockResolvedValue({ content: JSON.stringify(storyGraph()) });
+    const out = await extractIngredients({ rawText: story, scrapId: 'example-scrap', providerOverride: 'chosen', modelOverride: 'chosen-model' });
+    expect(stageRunner.runStageScopedInlineLLM).toHaveBeenCalledTimes(1);
+    expect(stageRunner.resolveStageContext).toHaveBeenCalledWith('catalog-extract', { providerOverride: 'chosen', modelOverride: 'chosen-model' });
+    const [stage, prompt, options] = stageRunner.runStageScopedInlineLLM.mock.calls[0];
+    expect(stage).toBe('catalog-extract');
+    expect(options).toMatchObject({ providerOverride: 'example-provider', modelOverride: 'example-model', allowFallback: false, returnsJson: false, maxTokens: 8000 });
+    expect(prompt).toContain(CREATIVE_LATITUDE_HEADING);
+    expect(prompt).toContain('Omit incidental generic props');
+    expect(prompt).toContain('does NOT establish ownership');
+    expect(out.coverage.status).toBe('complete');
+    for (const key of Object.keys(empty()).filter(key => key !== 'relationships')) expect(out[key].length).toBeGreaterThan(0);
+    expect(out.objects).toHaveLength(1);
+    expect(out.objects[0]).toMatchObject({ name: 'Inherited pistol', significance: 'Inheritance and the last train signal.' });
+    const objectId = out.objects[0].draftId;
+    expect(out.relationships).toContainEqual(expect.objectContaining({ fromDraftId: objectId, toDraftId: out.characters[0].draftId, kind: 'owned-by' }));
+    expect(out.relationships).toContainEqual(expect.objectContaining({ fromDraftId: objectId, toDraftId: out.characters[1].draftId, kind: 'used-by' }));
+    const accepted = ['characters', 'places', 'objects', 'ideas', 'scenes', 'concepts'].flatMap(key =>
+      out[key].map(({ draftId, sourceIdentity: _identity, name, tags, ...payload }) => ({
+        draftId, type: key.slice(0, -1), name, tags, payload,
+      })));
+    expect(catalogScrapCommitSchema.safeParse({ accepted, relationships: out.relationships }).success).toBe(true);
+    expect(catalogDB.createIngredient).not.toHaveBeenCalled();
   });
 
-  it('isolates per-stage failures — one kind throwing does not block the others', async () => {
-    bibleExtractor.extractBible.mockImplementation(async ({ kind }) => {
-      if (kind === 'place') throw new Error('llm timeout');
-      return { extracted: [{ name: `${kind}-ok` }] };
+  it('uses the entire fitting parent despite stored children and preserves its factual lens', async () => {
+    catalogDB.getScrap.mockResolvedValue({ id: 'example-parent', rawText: story, title: 'Example memoir', sourceKind: 'voice-memo' });
+    catalogDB.listChildScraps.mockResolvedValue([{ rawText: 'stale child' }, { rawText: 'another child' }]);
+    stageRunner.runStageScopedInlineLLM.mockResolvedValue({ content: JSON.stringify(storyGraph()) });
+    const out = await extractIngredientsForScrap({ scrapId: 'example-parent' });
+    expect(stageRunner.runStageScopedInlineLLM).toHaveBeenCalledTimes(1);
+    expect(catalogDB.listChildScraps).not.toHaveBeenCalled();
+    const prompt = stageRunner.runStageScopedInlineLLM.mock.calls[0][1];
+    expect(prompt).toContain(story);
+    expect(prompt).toContain('Example memoir');
+    expect(prompt).toContain('voice-memo');
+    expect(prompt).toContain('## Lens: non-fiction');
+    expect(out.characters[0].tags).toEqual(['factual', 'real-person']);
+    expect(out.objects[0].tags).toEqual(['factual']);
+  });
+
+  it('budgets actual rendered overhead/output and sends bounded complete chunks on one pinned route', async () => {
+    stageRunner.resolveStageContext.mockResolvedValue(route(null));
+    // A customized prompt repeating source text defeats a fixed template-size guess.
+    prompts.buildPrompt.mockImplementation(async (_stage, variables) => withCreativeLatitude(`${'instructions '.repeat(200)}\n${variables.draftBody}\n${variables.draftBody}`));
+    const rawText = 'First paragraph.\n\nAnother paragraph without omissions.\n'.repeat(1000);
+    let active = 0;
+    let peak = 0;
+    stageRunner.runStageScopedInlineLLM.mockImplementation(async () => {
+      peak = Math.max(peak, ++active);
+      await Promise.resolve();
+      active--;
+      return { content: JSON.stringify(empty()) };
     });
-
-    const out = await extractIngredients({ rawText: 'prose' });
-    expect(out.places).toEqual([]);
-    expect(out.characters).toEqual([{ name: 'character-ok' }]);
-    expect(out.objects).toEqual([{ name: 'object-ok' }]);
-    const placeStage = out.stages.find((s) => s.id === 'places');
-    expect(placeStage.status).toBe('failed');
-    expect(placeStage.error).toBe('llm timeout');
-  });
-
-  it('emits a start frame listing every stage, then per-stage running/completed frames', async () => {
     const frames = [];
-    const listener = (frame) => frames.push(frame);
+    const listener = frame => frames.push(frame);
     catalogEvents.on('progress', listener);
-
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-
-    await extractIngredients({ rawText: 'prose', scrapId: 'cat-scrap-y' });
-
-    catalogEvents.off('progress', listener);
-
-    const start = frames.find((f) => f.type === 'start');
-    expect(start).toBeTruthy();
-    expect(start.stages.map((s) => s.id)).toEqual(
-      ['characters', 'places', 'objects', 'ideasScenesConcepts'],
-    );
-
-    // Each stage gets both a `running` and a `completed` frame, scoped to the
-    // same runId + scrapId pair so the UI can demultiplex parallel extractions.
-    for (const id of ['characters', 'places', 'objects', 'ideasScenesConcepts']) {
-      const running = frames.find((f) => f.type === 'stage' && f.id === id && f.status === 'running');
-      const done = frames.find((f) => f.type === 'stage' && f.id === id && f.status === 'completed');
-      expect(running, `missing running frame for ${id}`).toBeTruthy();
-      expect(done, `missing completed frame for ${id}`).toBeTruthy();
-      expect(running.scrapId).toBe('cat-scrap-y');
-      expect(done.scrapId).toBe('cat-scrap-y');
-    }
-  });
-
-  it('forwards the provider and model overrides to every stage', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-    await extractIngredients({ rawText: 'prose', providerOverride: 'ollama', modelOverride: 'example-model' });
-    for (const call of bibleExtractor.extractBible.mock.calls) {
-      expect(call[0].providerOverride).toBe('ollama');
-      expect(call[0].modelOverride).toBe('example-model');
-    }
-    // The light stage receives the same route (third positional arg).
-    expect(stageRunner.runStagedLLM).toHaveBeenCalledWith(
-      'catalog-ideas-scenes-concepts',
-      expect.any(Object),
-      expect.objectContaining({ providerOverride: 'ollama', modelOverride: 'example-model' }),
-    );
-  });
-
-  it('neutralizes ``` in user paste so the prompt fence cannot be closed early', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-
-    const evil = 'before\n```\ninjected content\n```\nafter';
-    await extractIngredients({ rawText: evil });
-
-    // Every bible stage AND the light stage receive the SAME neutralized
-    // corpus (parallel passes).
-    for (const call of bibleExtractor.extractBible.mock.calls) {
-      const corpus = call[0].corpus;
-      expect(corpus).not.toContain('```');
-      expect(corpus).toContain('injected content');
-    }
-    const lightCall = stageRunner.runStagedLLM.mock.calls[0];
-    expect(lightCall[1].draftBody).not.toContain('```');
-    expect(lightCall[1].draftBody).toContain('injected content');
-  });
-
-  it('neutralizes runs of 4+ backticks (regression: naive /```/g replacement leaves a triple in the output)', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-    // 4, 5, 6 backtick runs — each was a hole in the original regex.
-    const evil = 'a\n````\nb\n`````\nc\n``````\nd';
-    await extractIngredients({ rawText: evil });
-    for (const call of bibleExtractor.extractBible.mock.calls) {
-      expect(call[0].corpus).not.toContain('```');
-    }
-    expect(stageRunner.runStagedLLM.mock.calls[0][1].draftBody).not.toContain('```');
-  });
-
-  it('returns a fresh runId per call (no carry-over)', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-    const a = await extractIngredients({ rawText: 'prose' });
-    const b = await extractIngredients({ rawText: 'prose' });
-    expect(a.runId).not.toBe(b.runId);
-  });
-});
-
-describe('catalogExtraction — bundled light stage', () => {
-  it('splits the single LLM response into ideas/scenes/concepts arrays', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-    stageRunner.runStagedLLM.mockResolvedValue({
-      content: {
-        ideas:    [{ name: 'Inherited memory', summary: 'What if memory was genetic?' }],
-        scenes:   [{ name: 'Diner 3am', summary: 'Two friends at a 3am diner.', setting: 'a diner', actors: ['friend A', 'friend B'] }],
-        concepts: [{ name: 'Sleep magic', summary: 'Spells cost sleep.', kind: 'magic-system' }],
-      },
+    let out;
+    try { out = await extractIngredients({ rawText, scrapId: 'example-parent' }); }
+    finally { catalogEvents.off('progress', listener); }
+    expect(out.plan).toMatchObject({ mode: 'chunked', contextWindow: 8192, unknownCapacity: true, outputReserveTokens: 2048 });
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(peak).toBe(2);
+    expect(stageRunner.resolveStageContext).toHaveBeenCalledTimes(1);
+    expect(out.plan.chunks.map(chunk => rawText.slice(chunk.startChar, chunk.endChar)).join('')).toBe(rawText);
+    const calls = stageRunner.runStageScopedInlineLLM.mock.calls;
+    calls.forEach(([, prompt, options], index) => {
+      expect(estimateTokens(prompt)).toBeLessThanOrEqual(out.plan.inputBudget);
+      expect(prompt).toContain(rawText.slice(out.plan.chunks[index].startChar, out.plan.chunks[index].endChar));
+      expect(options).toMatchObject({ providerOverride: 'example-provider', modelOverride: 'example-model', maxTokens: 2048, allowFallback: false });
     });
+    expect(out.stages).toHaveLength(calls.length);
+    expect(frames.filter(frame => frame.type === 'start')).toHaveLength(1);
+    expect(new Set(frames.map(frame => frame.runId))).toEqual(new Set([out.runId]));
+    expect(frames.every(frame => frame.scrapId === 'example-parent')).toBe(true);
+    expect(frames.filter(frame => frame.status === 'completed')).toHaveLength(calls.length);
+  });
+
+  it('marks partial coverage and each failed chunk instead of letting a success erase failure', async () => {
+    stageRunner.resolveStageContext.mockResolvedValue(route(8192));
+    stageRunner.runStageScopedInlineLLM.mockRejectedValueOnce(new Error('Output capacity exceeded'));
+    const out = await extractIngredients({ rawText: 'Example paragraph. '.repeat(2500) });
+    expect(out.plan.chunks.length).toBeGreaterThan(1);
+    expect(out.coverage).toMatchObject({ status: 'partial', failedChunks: [0], totalChunks: out.plan.chunks.length });
+    expect(out.coverage.completedChunks).toBe(out.plan.chunks.length - 1);
+    expect(out.stages[0]).toMatchObject({ status: 'failed', error: 'Output capacity exceeded' });
+    expect(out.stages.slice(1).every(stage => stage.status === 'completed')).toBe(true);
+  });
+
+  it('refuses oversized fixed overhead before any generation and permits genuinely empty results', async () => {
+    stageRunner.resolveStageContext.mockResolvedValue(route(64));
+    await expect(extractIngredients({ rawText: 'prose' })).rejects.toMatchObject({ code: 'CATALOG_CONTEXT_TOO_SMALL' });
+    expect(stageRunner.runStageScopedInlineLLM).not.toHaveBeenCalled();
+    stageRunner.resolveStageContext.mockResolvedValue(route());
     const out = await extractIngredients({ rawText: 'prose' });
-    expect(out.ideas).toHaveLength(1);
-    expect(out.ideas[0]).toMatchObject({ name: 'Inherited memory', summary: 'What if memory was genetic?' });
-    expect(out.scenes).toHaveLength(1);
-    expect(out.scenes[0]).toMatchObject({ name: 'Diner 3am', setting: 'a diner', actors: ['friend A', 'friend B'] });
-    expect(out.concepts).toHaveLength(1);
-    // The LLM's `kind` field is preserved verbatim on payload — payload is
-    // a JSONB column, so it doesn't collide with the row-level `type`.
-    expect(out.concepts[0]).toMatchObject({ name: 'Sleep magic', kind: 'magic-system' });
+    expect(out.coverage.status).toBe('complete');
+    expect(out.characters).toEqual([]);
   });
 
-  it('reports a combined count (ideas + scenes + concepts) on the light stage', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-    stageRunner.runStagedLLM.mockResolvedValue({
-      content: {
-        ideas:    [{ name: 'a' }, { name: 'b' }],
-        scenes:   [{ name: 'c' }],
-        concepts: [{ name: 'd' }, { name: 'e' }, { name: 'f' }],
-      },
-    });
-    const out = await extractIngredients({ rawText: 'prose' });
-    const lightStage = out.stages.find((s) => s.id === 'ideasScenesConcepts');
-    expect(lightStage.count).toBe(6);
-    expect(lightStage.status).toBe('completed');
+  it('fences source/context without truncation and keeps the fiction lens off', async () => {
+    const rawText = 'Example ```\n# pretend instruction\n`````` tail';
+    await extractIngredients({ rawText, context: { title: 'Title ```', sourceKind: 'paste' } });
+    const prompt = stageRunner.runStageScopedInlineLLM.mock.calls[0][1];
+    expect(prompt).toContain(neutralizeFences(rawText));
+    expect(prompt).toContain("Title '''");
+    expect(prompt).not.toContain('## Lens: non-fiction');
+    expect(prompt).not.toContain('{{');
   });
 
-  it('drops rows missing a name and caps long fields', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-    const longSummary = 'x'.repeat(5000);
-    stageRunner.runStagedLLM.mockResolvedValue({
-      content: {
-        ideas: [
-          { name: '', summary: 'nameless' },          // dropped
-          { summary: 'still nameless' },              // dropped
-          null,                                       // dropped (non-object)
-          { name: 'Keeper', summary: longSummary },   // kept, summary capped
-        ],
-        scenes: [],
-        concepts: [],
-      },
-    });
-    const out = await extractIngredients({ rawText: 'prose' });
-    expect(out.ideas).toHaveLength(1);
-    expect(out.ideas[0].name).toBe('Keeper');
-    expect(out.ideas[0].summary.length).toBeLessThanOrEqual(2000);
+  it.each([
+    ['invalid JSON', '{oops'],
+    ['truncated JSON containing a complete inner array', '{"characters":[],"places":[],'],
+    ['missing required arrays', '{"characters":[]}'],
+    ['wrong field type', JSON.stringify({ ...empty(), ideas: [{ draftId: 'x', name: 'X', summary: 42, evidence: 'prose' }] })],
+    ['duplicate IDs', JSON.stringify({ ...empty(), characters: [{ draftId: 'x', name: 'First', evidence: ['prose'] }, { draftId: 'x', name: 'Second', evidence: ['prose'] }] })],
+    ['dangling endpoints', JSON.stringify({ ...empty(), relationships: [{ fromDraftId: 'x', toDraftId: 'y', kind: 'related-to', evidence: 'prose' }] })],
+    ['unsupported kind', JSON.stringify({ ...storyGraph(), relationships: [{ fromDraftId: 'pistol', toDraftId: 'owner', kind: 'invented', evidence: 'prose' }] })],
+    ['ungrounded evidence', JSON.stringify({ ...empty(), ideas: [{ draftId: 'x', name: 'X', summary: 'A thought', evidence: 'Never said here' }] })],
+  ])('surfaces %s as a recoverable error with no repair or fallback calls', async (_label, content) => {
+    stageRunner.runStageScopedInlineLLM.mockResolvedValue({ content });
+    await expect(extractIngredients({ rawText: 'prose' })).rejects.toMatchObject({ code: 'CATALOG_EXTRACTION_FAILED' });
+    expect(stageRunner.runStageScopedInlineLLM).toHaveBeenCalledTimes(1);
   });
 
-  it('a malformed light response (non-array `ideas`) yields empty arrays — never poisons the rest', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [{ name: 'A' }] });
-    stageRunner.runStagedLLM.mockResolvedValue({ content: { ideas: 'oops' } });
-    const out = await extractIngredients({ rawText: 'prose' });
-    expect(out.ideas).toEqual([]);
-    expect(out.scenes).toEqual([]);
-    expect(out.concepts).toEqual([]);
-    expect(out.characters).toEqual([{ name: 'A' }]); // bible stage unaffected
-    const lightStage = out.stages.find((s) => s.id === 'ideasScenesConcepts');
-    expect(lightStage.status).toBe('completed');
-    expect(lightStage.count).toBe(0);
+  it('rejects an output-limit stop even if the bytes form complete valid JSON', async () => {
+    stageRunner.runStageScopedInlineLLM.mockResolvedValue({ content: JSON.stringify(empty()), finishReason: 'length' });
+    await expect(extractIngredients({ rawText: 'prose' })).rejects.toThrow(/stopped before completion/);
   });
 
-  it('isolates a thrown LLM error from the bible passes', async () => {
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [{ name: 'A' }] });
-    stageRunner.runStagedLLM.mockRejectedValue(new Error('provider down'));
-    const out = await extractIngredients({ rawText: 'prose' });
-    expect(out.characters).toEqual([{ name: 'A' }]);
-    expect(out.ideas).toEqual([]);
-    const lightStage = out.stages.find((s) => s.id === 'ideasScenesConcepts');
-    expect(lightStage.status).toBe('failed');
-    expect(lightStage.error).toBe('provider down');
-  });
-});
-
-describe('catalogExtraction — dedupDrafts', () => {
-  it('unions per-child draft arrays under each type key', () => {
-    const merged = dedupDrafts([
-      { characters: [{ name: 'Alice' }], ideas: [{ name: 'Memory genes' }] },
-      { characters: [{ name: 'Bob' }], scenes: [{ name: 'Rooftop' }] },
-    ]);
-    expect(merged.characters.map((c) => c.name)).toEqual(['Alice', 'Bob']);
-    expect(merged.ideas.map((c) => c.name)).toEqual(['Memory genes']);
-    expect(merged.scenes.map((c) => c.name)).toEqual(['Rooftop']);
+  it('stops scheduling further chunks when the user cancels a provider run', async () => {
+    stageRunner.resolveStageContext.mockResolvedValue(route(8192));
+    stageRunner.runStageScopedInlineLLM.mockRejectedValueOnce(Object.assign(new Error('Stopped'), { code: 'RUN_CANCELED', canceled: true }));
+    await expect(extractIngredients({ rawText: 'Example paragraph. '.repeat(5000) })).rejects.toMatchObject({ code: 'RUN_CANCELED' });
+    expect(stageRunner.runStageScopedInlineLLM.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
-  it('dedups by name+type keeping the FIRST occurrence (case-insensitive)', () => {
-    const merged = dedupDrafts([
-      { characters: [{ name: 'Echo', summary: 'first' }] },
-      { characters: [{ name: 'echo', summary: 'second' }, { name: 'Nova' }] },
-    ]);
-    expect(merged.characters).toHaveLength(2);
-    expect(merged.characters[0]).toMatchObject({ name: 'Echo', summary: 'first' });
-    expect(merged.characters[1]).toMatchObject({ name: 'Nova' });
-  });
-
-  it('a same name under DIFFERENT type keys is NOT a dup', () => {
-    const merged = dedupDrafts([
-      { characters: [{ name: 'Harbor' }], places: [{ name: 'Harbor' }] },
-    ]);
-    expect(merged.characters).toHaveLength(1);
-    expect(merged.places).toHaveLength(1);
-  });
-
-  it('tolerates missing / non-array keys and nameless entries', () => {
-    const merged = dedupDrafts([
-      { characters: 'oops', ideas: [{ name: '' }, { summary: 'no name' }, null] },
-      null,
-      undefined,
-    ]);
-    expect(merged.characters).toEqual([]);
-    expect(merged.ideas).toEqual([]);
-  });
-});
-
-describe('catalogExtraction — extractIngredientsForScrap', () => {
-  it('falls back to a single extraction when the scrap has no children', async () => {
-    catalogDB.getScrap.mockResolvedValue({ id: 'cat-scrap-p', rawText: 'whole text', parentScrapId: null });
-    catalogDB.listChildScraps.mockResolvedValue([]);
-    bibleExtractor.extractBible.mockImplementation(async ({ kind, corpus }) => ({
-      extracted: [{ name: `${kind}:${corpus}` }],
-    }));
-
-    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-    expect(catalogDB.listChildScraps).toHaveBeenCalledWith('cat-scrap-p');
-    // Single pass over the parent's full text.
-    expect(bibleExtractor.extractBible).toHaveBeenCalledTimes(3); // 3 bible kinds, one pass
-    expect(out.characters).toEqual([{ name: 'character:whole text' }]);
-  });
-
-  it('runs per-child and unions the drafts (dedup by name+type, keep first)', async () => {
-    catalogDB.getScrap.mockResolvedValue({ id: 'cat-scrap-p', rawText: 'A|B', parentScrapId: null });
-    catalogDB.listChildScraps.mockResolvedValue([
-      { id: 'cat-scrap-c1', rawText: 'chunkA', chunkIndex: 1, parentScrapId: 'cat-scrap-p' },
-      { id: 'cat-scrap-c2', rawText: 'chunkB', chunkIndex: 2, parentScrapId: 'cat-scrap-p' },
-    ]);
-    // Both chunks surface a 'Shared' character; chunk B adds 'OnlyB'.
-    bibleExtractor.extractBible.mockImplementation(async ({ kind, corpus }) => {
-      if (kind !== 'character') return { extracted: [] };
-      if (corpus === 'chunkA') return { extracted: [{ name: 'Shared', summary: 'fromA' }] };
-      return { extracted: [{ name: 'Shared', summary: 'fromB' }, { name: 'OnlyB' }] };
-    });
-
-    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-    // bible called once per kind per child (3 kinds × 2 children).
-    expect(bibleExtractor.extractBible).toHaveBeenCalledTimes(6);
-    expect(out.characters.map((c) => c.name)).toEqual(['Shared', 'OnlyB']);
-    // First occurrence wins — chunk A's summary, not chunk B's.
-    expect(out.characters[0].summary).toBe('fromA');
-  });
-
-  it('a stage failing in only ONE child is not marked failed overall', async () => {
-    catalogDB.getScrap.mockResolvedValue({ id: 'cat-scrap-p', rawText: 'x', parentScrapId: null });
-    catalogDB.listChildScraps.mockResolvedValue([
-      { id: 'c1', rawText: 'chunkA', chunkIndex: 1, parentScrapId: 'cat-scrap-p' },
-      { id: 'c2', rawText: 'chunkB', chunkIndex: 2, parentScrapId: 'cat-scrap-p' },
-    ]);
-    bibleExtractor.extractBible.mockImplementation(async ({ kind, corpus }) => {
-      if (kind === 'place' && corpus === 'chunkA') throw new Error('llm timeout');
-      return { extracted: kind === 'place' ? [{ name: 'Harbor' }] : [] };
-    });
-
-    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-    const placeStage = out.stages.find((s) => s.id === 'places');
-    // chunk B's success clears the failed flag.
-    expect(placeStage.status).toBe('completed');
-    expect(out.places.map((p) => p.name)).toEqual(['Harbor']);
-  });
-
-  it('throws when the scrap does not exist', async () => {
+  it('rejects a missing source before provider execution', async () => {
+    await expect(extractIngredients({ rawText: ' ' })).rejects.toThrow(/rawText is required/);
     catalogDB.getScrap.mockResolvedValue(null);
-    await expect(extractIngredientsForScrap({ scrapId: 'missing' }))
-      .rejects.toThrow(/not found/);
-  });
-});
-
-// The scrap's title and source kind were loaded by getScrap and then dropped,
-// so the catalog path rendered every framing slot in the bible prompts empty
-// and the light stage had no idea what it was reading. A first-person memoir
-// then came back as `MOM` / `DAD` role tags, because the fiction-shaped
-// prompt did exactly what it was told (#7609).
-describe('catalogExtraction — extraction lens (#7609)', () => {
-  const scrap = (over = {}) => ({ id: 'cat-scrap-p', rawText: 'two words', parentScrapId: null, ...over });
-
-  beforeEach(() => {
-    catalogDB.listChildScraps.mockResolvedValue([]);
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-  });
-
-  it('leaves the lens off for an invented-fiction paste', async () => {
-    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Chapter one', sourceKind: 'paste' }));
-    bibleExtractor.extractBible.mockResolvedValue({ extracted: [{ name: 'THE BARTENDER' }] });
-    stageRunner.runStagedLLM.mockResolvedValue({ content: { ideas: [{ name: 'A premise' }], scenes: [], concepts: [] } });
-
-    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-
-    expect(bibleExtractor.extractBible.mock.calls[0][0].context.factual).toBe(false);
-    expect(stageRunner.runStagedLLM.mock.calls[0][1].factual).toBe(false);
-    // No tag stamping under the fiction lens — a novel's cast is not a real person.
-    expect(out.characters[0].tags).toBeUndefined();
-    expect(out.ideas[0].tags).toEqual([]);
-  });
-
-  it.each(['voice-memo', 'brain-bridge'])('raises the factual lens for %s', async (sourceKind) => {
-    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Sunday', sourceKind }));
-
-    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-
-    expect(bibleExtractor.extractBible.mock.calls[0][0].context.factual).toBe(true);
-    expect(stageRunner.runStagedLLM.mock.calls[0][1].factual).toBe(true);
-  });
-
-  it('stamps real-person on characters and factual on every row under the lens', async () => {
-    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Sunday', sourceKind: 'voice-memo' }));
-    bibleExtractor.extractBible.mockImplementation(async ({ kind }) => ({
-      extracted: [{ name: kind === 'character' ? 'Mom' : 'the kitchen', tags: ['seed'] }],
-    }));
-    stageRunner.runStagedLLM.mockResolvedValue({
-      content: { ideas: [{ name: 'Why I apologize' }], scenes: [], concepts: [] },
-    });
-
-    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-
-    // real-person is what keeps real people filterable apart from a cast; it
-    // rides the per-RUN lens, so it can never be the type registry's defaultTags.
-    expect(out.characters[0].tags).toEqual(['seed', 'factual', 'real-person']);
-    expect(out.places[0].tags).toEqual(['seed', 'factual']);
-    expect(out.ideas[0].tags).toEqual(['factual']);
-  });
-
-  it('does not double-stamp a tag the model already emitted', async () => {
-    catalogDB.getScrap.mockResolvedValue(scrap({ sourceKind: 'voice-memo' }));
-    bibleExtractor.extractBible.mockImplementation(async ({ kind }) => ({
-      extracted: kind === 'character' ? [{ name: 'Mom', tags: ['real-person'] }] : [],
-    }));
-
-    const out = await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-    expect(out.characters[0].tags).toEqual(['real-person', 'factual']);
-  });
-
-  it('gives every chunk of a chunked scrap the parent lens, with its OWN word count', async () => {
-    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Sunday', sourceKind: 'voice-memo', rawText: 'a b c d' }));
-    catalogDB.listChildScraps.mockResolvedValue([
-      { id: 'c1', rawText: 'a b', chunkIndex: 1, parentScrapId: 'cat-scrap-p' },
-      { id: 'c2', rawText: 'c d e', chunkIndex: 2, parentScrapId: 'cat-scrap-p' },
-    ]);
-
-    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-
-    const contexts = bibleExtractor.extractBible.mock.calls.map(([args]) => args.context);
-    // Splitting a memoir mid-paragraph must not flip half of it to fiction, and
-    // a child carries no title of its own.
-    expect(contexts.every((c) => c.factual === true && c.work.title === 'Sunday')).toBe(true);
-    // Word count is measured against the corpus the model actually receives —
-    // telling it "4 words" while handing it 2 is a lie about its own input.
-    expect(new Set(contexts.map((c) => c.work.wordCount))).toEqual(new Set([2, 3]));
-  });
-
-  // The two halves of the fix live in different files — the extractor names the
-  // variables, the shipped templates read them. Either side can be renamed
-  // without the other failing, and the symptom is a silently empty prompt
-  // section, which is the exact bug #7609 reports. Render the real templates
-  // with the real variables to keep them pinned together.
-  it('fills the shipped templates it hands those variables to', async () => {
-    catalogDB.getScrap.mockResolvedValue(scrap({ title: 'Kitchen table notes', sourceKind: 'voice-memo' }));
-
-    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-
-    const bibleVars = bibleExtractor.extractBible.mock.calls[0][0].context;
-    // Every bible kind is framed identically — one lens per scrap, not per stage.
-    for (const [args] of bibleExtractor.extractBible.mock.calls) {
-      expect(args.context.work).toEqual({ title: 'Kitchen table notes', kind: 'voice-memo', wordCount: 2 });
-    }
-    const characters = applyTemplate(stagePrompt('writers-room-characters'), { ...bibleVars, draftBody: 'x' });
-    // The framing block the catalog path used to render as three empty labels.
-    expect(characters).toContain('- Title: Kitchen table notes');
-    expect(characters).toContain('- Kind: voice-memo');
-    expect(characters).toContain('- Word count: 2');
-    expect(characters).toContain('## Lens: non-fiction');
-
-    const [, lightVars] = stageRunner.runStagedLLM.mock.calls[0];
-    // One vocabulary: the light template reads the same {{work.*}} slots the
-    // three bible templates declare, so the framing cannot drift between them.
-    const light = applyTemplate(stagePrompt('catalog-ideas-scenes-concepts'), lightVars);
-    expect(light).toContain('- Title: Kitchen table notes');
-    expect(light).toContain('- Captured as: voice-memo');
-    expect(light).toContain('## Lens: non-fiction');
-    // Nothing unresolved is left staring at the model.
-    expect(characters).not.toMatch(/\{\{/);
-    expect(light).not.toMatch(/\{\{/);
-  });
-
-  it('gives a title-less paste the same instructions it got before the lens existed', async () => {
-    // A scrap with neither field (a peer-synced row can have both null) must
-    // not render a half-empty framing stub or leak the non-fiction rules.
-    catalogDB.getScrap.mockResolvedValue(scrap({ title: null, sourceKind: null }));
-
-    await extractIngredientsForScrap({ scrapId: 'cat-scrap-p' });
-
-    const { context } = bibleExtractor.extractBible.mock.calls[0][0];
-    expect(context.work).toEqual({ title: '', kind: '', wordCount: 2 });
-    expect(context.factual).toBe(false);
-
-    // Empty strings are what keep the mustache sections CLOSED. The guarantee
-    // is instruction-level, not byte-level: promptTemplate deliberately does
-    // not strip a standalone section line, so a closed section collapses to a
-    // blank line (the same convention {{#sceneMap}} already uses). What must
-    // hold is that none of the non-fiction rules reach a fiction extraction.
-    for (const name of ['writers-room-characters', 'writers-room-places', 'writers-room-objects']) {
-      const rendered = applyTemplate(stagePrompt(name), { ...context, draftBody: 'x' });
-      expect(rendered).not.toContain('## Lens: non-fiction');
-      expect(rendered).not.toMatch(/\{\{/);
-    }
-    const [, lightVars] = stageRunner.runStagedLLM.mock.calls[0];
-    const light = applyTemplate(stagePrompt('catalog-ideas-scenes-concepts'), lightVars);
-    expect(light).not.toContain('## Lens: non-fiction');
-    // The Source block is gated on the capture kind, so a kind-less scrap gets
-    // no empty "## Source" stub either.
-    expect(light).not.toContain('## Source\n');
-    expect(light).not.toMatch(/\{\{/);
+    await expect(extractIngredientsForScrap({ scrapId: 'missing' })).rejects.toThrow(/not found/);
+    expect(stageRunner.runStageScopedInlineLLM).not.toHaveBeenCalled();
   });
 });
 

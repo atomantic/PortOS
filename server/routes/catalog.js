@@ -105,7 +105,7 @@ router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogExtractRequestSchema, req.body || {});
   const scrap = await catalogDB.getScrap(req.params.id);
   if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
-  // Extraction runs on the PARENT scrap (it unions across its child chunks).
+  // Extraction plans from the complete PARENT source against the chosen model.
   // A request against a child row is a client bug — reject rather than extract
   // a single chunk in isolation and silently lose the rest of the corpus.
   if (scrap.parentScrapId) {

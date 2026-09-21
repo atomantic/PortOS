@@ -727,6 +727,18 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     expect(out.content).toEqual({ x: 1 });
   });
 
+  it('carries the output budget and terminal reason through the API transport', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(apiProvider());
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('{}');
+      onComplete({ success: true, finishReason: 'length' });
+    });
+    const result = await runStagedLLM('s', {}, { maxTokens: 2048, allowFallback: false });
+    expect(runner.executeApiRun).toHaveBeenCalledWith(expect.objectContaining({ maxTokens: 2048 }));
+    expect(result).toMatchObject({ content: '{}', finishReason: 'length' });
+  });
+
   it('forwards source to createRun for transcript filtering', async () => {
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(apiProvider());

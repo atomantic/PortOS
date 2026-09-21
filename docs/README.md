@@ -9,6 +9,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | Doc | Covers |
 |-----|--------|
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
+| [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
 | [API.md](./API.md) | REST endpoints, complete route-domain index, Socket.IO events |
 | [API_TOOL_CONTRACT.md](./API_TOOL_CONTRACT.md) | Unified semantic tool, Persistent Mind, and Agent Tools MCP contract |
 | [COMPANION_APP_API.md](./COMPANION_APP_API.md) | PortDeck native iOS companion client discovery and HTTP API contract |

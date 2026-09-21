@@ -928,6 +928,7 @@ export function createRunnerService(config = {}) {
       // This mirrors every other SSE consumer in the tree (openAiChatStream.js,
       // ollamaManager.js, voice/llm.js); this loop was the lone holdout.
       let buffer = '';
+      let finishReason = null;
 
       const consumeLine = (rawLine) => {
         // A CRLF transport leaves `\r` on each line: it has to come off before
@@ -951,7 +952,9 @@ export function createRunnerService(config = {}) {
           console.error(`❌ Run ${runId} skipped an unparseable stream frame (${data.length} chars)`);
           return;
         }
-        const delta = parsed?.choices?.[0]?.delta;
+        const choice = parsed?.choices?.[0];
+        if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason;
+        const delta = choice?.delta;
 
         if (delta?.content) {
           const text = delta.content;
@@ -1037,6 +1040,7 @@ export function createRunnerService(config = {}) {
           metadata.outputSize = Buffer.byteLength(output);
           metadata.hadReasoning = reasoning.length > 0;
           metadata.usedReasoningAsFallback = usedReasoningAsFallback;
+          if (finishReason) metadata.finishReason = finishReason;
           await atomicWrite(metadataPath, metadata);
 
           if (typeof providerStatusService?.markApiSuccess === 'function') {

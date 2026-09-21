@@ -84,6 +84,7 @@ export const CREATIVE_PREFIXES = Object.freeze([
 
 /** Creative stages/runs whose names don't carry a domain prefix. */
 export const CREATIVE_NAMES = Object.freeze([
+  'catalog-extract',
   'catalog-extract-ideas-scenes-concepts', // pulls scenes/ideas out of a source work
   'catalog-ideas-scenes-concepts',
   'catalog-babble-prune',

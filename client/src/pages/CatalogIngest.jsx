@@ -468,7 +468,7 @@ export default function CatalogIngest() {
         const c = arr[i];
         const name = (c.name || '').trim();
         if (!name) continue;
-        const { id: _id, type: _type, name: _name, tags: _tags, payload: nestedPayload, description, ...rest } = c;
+        const { draftId: _draftId, sourceIdentity: _sourceIdentity, id: _id, type: _type, name: _name, tags: _tags, payload: nestedPayload, description, ...rest } = c;
         const payload = { ...rest, ...(nestedPayload && typeof nestedPayload === 'object' ? nestedPayload : {}) };
         if (description !== undefined) payload.description = description;
         accepted.push({ type: section.type, name, payload, tags: Array.isArray(c.tags) ? c.tags : [] });
@@ -702,7 +702,7 @@ export default function CatalogIngest() {
           <div className="bg-port-card border border-port-border rounded-lg p-6 space-y-3">
             <p className="text-sm font-medium text-white flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin text-port-accent" aria-hidden="true" />
-              {babble ? 'Pruning your brainstorm — one AI pass.' : 'Extracting ingredients — this runs several AI passes.'}
+              {babble ? 'Pruning your brainstorm — one AI pass.' : 'Extracting ingredients — one pass per source chunk.'}
             </p>
             <ul className="space-y-1.5 mt-2">
               {stages.map((s) => (
@@ -743,6 +743,14 @@ export default function CatalogIngest() {
                 </select>
               </div>
             </div>
+            {stages.some(stage => stage.status === 'failed') && (
+              <div role="alert" className="bg-port-card border border-port-error rounded-lg p-4 text-sm space-y-2">
+                <p>Extraction is incomplete. These candidates cover only the successful parts of your source. Retry ingestion to cover the failed parts.</p>
+                {stages.filter(stage => stage.status === 'failed').map(stage => (
+                  <p key={stage.id}>{stage.label}: {stage.error || 'Extraction failed'}</p>
+                ))}
+              </div>
+            )}
             {KIND_SECTIONS.map((section) => (
               <ReviewSection
                 key={section.key}

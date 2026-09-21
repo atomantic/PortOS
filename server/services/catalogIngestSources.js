@@ -56,7 +56,7 @@ const clampText = (s) => (typeof s === 'string' ? s.slice(0, RAW_TEXT_MAX) : '')
  */
 async function createScrapAndExtract({ title, rawText, sourceKind, metadata, providerOverride, log }) {
   // Chunk long pastes identically to the textarea flow — createChunkedScrap
-  // returns the PARENT scrap and extractIngredientsForScrap unions the children.
+  // returns the PARENT scrap; extraction budgets its complete text for the selected model.
   const scrap = await catalogDB.createChunkedScrap({ title, rawText, sourceKind, metadata });
   const draft = await extractIngredientsForScrap({ scrapId: scrap.id, providerOverride });
   if (log) console.log(log(scrap));

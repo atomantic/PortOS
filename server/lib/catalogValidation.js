@@ -404,6 +404,14 @@ export const catalogMediaVoiceMemoSchema = z.object({
   role: z.string().trim().max(64).optional().nullable(),
 }).strict();
 
+// The extraction and commit boundaries share the same graph-edge wire limits.
+export const catalogDraftRelationshipSchema = z.object({
+  fromDraftId: z.string().trim().min(1).max(120),
+  toDraftId: z.string().trim().min(1).max(120),
+  kind: z.enum(RELATION_KINDS),
+  evidence: z.string().trim().min(1).max(400),
+}).strict();
+
 // `universeRef` (+ optional `role`) mirrors catalogBulkImportSchema.defaults
 // below — same field name, same shape — so the two ingest paths (bulk-import,
 // scrap-commit) cannot drift (#7615). Omitting `universeRef` reproduces
@@ -416,12 +424,7 @@ export const catalogScrapCommitSchema = z.object({
     span: z.record(z.string(), z.unknown()).optional(),
   })).min(0).max(200),
   // Omitted preserves legacy clustering; [] explicitly means no edges.
-  relationships: z.array(z.object({
-    fromDraftId: z.string().trim().min(1).max(120),
-    toDraftId: z.string().trim().min(1).max(120),
-    kind: z.enum(RELATION_KINDS),
-    evidence: z.string().trim().min(1).max(400),
-  }).strict()).max(1000).optional(),
+  relationships: z.array(catalogDraftRelationshipSchema).max(1000).optional(),
   universeRef: z.string().trim().min(1).max(120).optional(),
   role: z.string().trim().min(1).max(64).optional(),
 }).strict().superRefine((body, ctx) => {
