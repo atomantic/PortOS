@@ -255,7 +255,7 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     });
 
     it('declines the diff-only judgement after independent empty inventories, without inventing a ship verdict or follow-up', async () => {
-      runLocalGoalFidelityReviewMock.mockResolvedValueOnce(verdict({
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({
         verdict: 'fix-first', missing: ['Security inventory and bot PR resolution'],
         unrequested: ['The audit note'], evidence: 'Only an audit note is visible.',
       }));
