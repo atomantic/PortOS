@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import Drawer from '../Drawer';
+import useDrawerTab from '../../hooks/useDrawerTab';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { Plus, Image, X, ChevronDown, ChevronRight, Sparkles, Loader2, Paperclip, FileText, Zap, Bookmark, Ticket, GitBranch, GitPullRequest, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -78,7 +80,7 @@ const readTaskDescriptionDraft = (defaultApp) => {
   };
 };
 
-export default function TaskAddForm({ providers, providersLoaded = true, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
+export default function TaskAddForm({ providers, providersLoaded = true, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '', queueFirst = false }) {
   const [initialDraft] = useState(() => readTaskDescriptionDraft(defaultApp));
   const [newTask, setNewTask] = useState(() => {
     return {
@@ -137,6 +139,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // tall container (the dashboard Quick Task widget) pass defaultExpanded
   // so the card paints as a complete capture form on first render.
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const [configurationOpen, setConfigurationOpen] = useState(false);
   const [templateNameInput, setTemplateNameInput] = useState('');
   const [showTemplateSave, setShowTemplateSave] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -793,6 +796,63 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     onTaskAdded?.(result, { position: addToTop ? 'top' : 'bottom' });
   };
 
+  if (queueFirst) {
+    const reviewers = reviewOverrides.reviewers ?? reviewDefaults.reviewers;
+    const completion = planOnly ? 'Plan and file issue'
+      : useWorktree ? (openPR ? prCompletionOption(prCompletion)?.label : 'Auto-merge on completion')
+        : whenDone === 'commit-push' ? 'Commit and push to default branch' : 'Leave code uncommitted';
+    return (
+      <section className="@container bg-port-card border border-port-border rounded-lg p-3 mb-3 space-y-2" aria-label="Add new task">
+        <label htmlFor="task-description" className="sr-only">Task description (required)</label>
+        <AutoSizeTextarea
+          id="task-description"
+          ref={descriptionRef}
+          placeholder="What needs doing?"
+          value={newTask.description}
+          onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.repeat && !isSubmitting) {
+              e.preventDefault();
+              handleAddTask();
+            }
+          }}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-base min-h-[44px]"
+          aria-required="true"
+        />
+        <p className="text-xs text-gray-400 break-words" aria-label="Task execution summary">
+          {selectedApp?.name || 'PortOS'} · {orchestrationMode === 'orchestrated'
+            ? `Orchestrated: ${ORCHESTRATION_ROLES_META.map(({ key, label }) => {
+              const role = orchestrationProfile[key];
+              return `${label} ${role.provider || 'default'}/${role.model || 'default'}`;
+            }).join(' · ')}`
+            : [selectedProvider?.name || newTask.provider || 'Default provider', selectedModelOrSole || 'default model', newTask.effort].filter(Boolean).join(' / ')}
+          {' · '}{planOnly ? 'Read-only planning' : useWorktree ? 'Worktree' : 'Direct checkout'}
+          {' · '}{completion}
+          {!planOnly && openPR && prCompletion === 'review-then-merge' && ` · Review: ${[...reviewers, ...(reviewOverrides.usernames ?? reviewDefaults.usernames).map(name => '@' + name)].join(', ') || 'None'}`}
+          {isFederated && ` · Instance: ${assignableInstances.find(instance => instance.id === targetInstanceId)?.name || targetInstanceId || 'Any'}`}
+          {planOnly && ` · Issue: ${issueTarget}`}
+          {createJiraTicket && !planOnly && ' · JIRA ticket'}
+          {enhancePrompt && ' · Enhance prompt'}
+          {addToTop && ' · Queue at top'}
+        </p>
+        {renderPreviews()}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <button type="button" onClick={() => setConfigurationOpen(true)}
+            className="min-h-[44px] px-3 py-2 text-sm text-port-accent border border-port-border rounded-lg">
+            Task configuration
+          </button>
+          <button type="button" onClick={handleAddTask} disabled={isSubmitting || isEnhancing}
+            className="min-h-[44px] flex items-center gap-1 px-3 py-2 text-sm bg-port-accent/20 text-port-accent rounded-lg disabled:opacity-50">
+            {isSubmitting || isEnhancing ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Plus size={14} aria-hidden="true" />}
+            {isSubmitting ? 'Adding...' : planOnly ? 'Plan & File Issue' : enhancePrompt ? 'Enhance & Add task' : 'Add task'}
+          </button>
+        </div>
+        <TaskConfigurationDrawer open={configurationOpen} onClose={() => setConfigurationOpen(false)}
+          renderFields={renderFullFormFields} renderTemplates={renderTemplates} renderUploads={() => <>{renderUploadControls()}{renderPreviews()}</>} />
+      </section>
+    );
+  }
+
   // Compact mode: single row with description + app + add, expandable.
   // Every breakpoint below is a CONTAINER query, not a viewport one: compact
   // mode renders inside a dashboard tile that can be ~250px wide on a 2560px
@@ -863,6 +923,34 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // Full mode: identical to original TasksTab form
   return (
     <div className="@container bg-port-card border border-port-accent/50 rounded-lg p-4 mb-4" role="form" aria-label="Add new task">
+      {renderTemplates()}
+
+      <div className="space-y-2">
+        <div className="flex flex-col @sm:flex-row gap-2 items-start">
+          <div className="flex-1 min-w-0 w-full">
+            <label htmlFor="task-description" className="sr-only">Task description (required)</label>
+            <AutoSizeTextarea
+              id="task-description"
+              ref={descriptionRef}
+              placeholder="Task description *"
+              value={newTask.description}
+              onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) { e.preventDefault(); handleAddTask(); } }}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+              aria-required="true"
+            />
+          </div>
+          {renderUploadControls()}
+        </div>
+        {renderPreviews()}
+        {renderFullFormFields()}
+      </div>
+    </div>
+  );
+
+  function renderTemplates() {
+    return (
+      <>
       {/* Quick Templates */}
       {templates.length > 0 && (
         <div className="mb-4">
@@ -913,29 +1001,9 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           )}
         </div>
       )}
-
-      <div className="space-y-2">
-        <div className="flex flex-col @sm:flex-row gap-2 items-start">
-          <div className="flex-1 min-w-0 w-full">
-            <label htmlFor="task-description" className="sr-only">Task description (required)</label>
-            <AutoSizeTextarea
-              id="task-description"
-              ref={descriptionRef}
-              placeholder="Task description *"
-              value={newTask.description}
-              onChange={e => setNewTask(t => ({ ...t, description: e.target.value }))}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isSubmitting) { e.preventDefault(); handleAddTask(); } }}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-              aria-required="true"
-            />
-          </div>
-          {renderUploadControls()}
-        </div>
-        {renderPreviews()}
-        {renderFullFormFields()}
-      </div>
-    </div>
-  );
+      </>
+    );
+  }
 
   function renderUploadControls() {
     return (
@@ -1032,9 +1100,10 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     );
   }
 
-  function renderFullFormFields() {
+  function renderFullFormFields(section = 'all') {
     return (
       <>
+        {(section === 'all' || section === 'execution') && <>
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-port-border/40">
           <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
             <span>Execution:</span>
@@ -1239,6 +1308,8 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             instances={assignableInstances}
           />
         )}
+        </>}
+        {(section === 'all' || section === 'completion') && <>
         <div className="grid grid-cols-1 @sm:flex @sm:items-center gap-x-4 gap-y-1 @sm:flex-wrap">
           <label className="flex items-center gap-2 cursor-pointer select-none py-1">
             <input
@@ -1417,6 +1488,8 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             </>
           )}
         </div>
+        </>}
+        {(section === 'all' || section === 'templates') && <>
         {/* Template Save Inline Input */}
         {showTemplateSave && (
           <div className="flex flex-wrap gap-2 items-center">
@@ -1471,7 +1544,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               <Bookmark size={14} aria-hidden="true" />
               <span className="hidden @sm:inline">Save Template</span>
             </button>
-            <button
+            {!queueFirst && <button
               onClick={handleAddTask}
               disabled={isSubmitting || isEnhancing}
               className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
@@ -1487,10 +1560,30 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                   {planOnly ? (enhancePrompt ? 'Enhance & Plan' : 'Plan & File Issue') : enhancePrompt ? 'Enhance & Add' : 'Add'}
                 </>
               )}
-            </button>
+            </button>}
           </div>
         )}
+        </>}
       </>
     );
   }
+}
+
+
+// The form owns all drafts; changing a drawer tab only remounts its controls.
+function TaskConfigurationDrawer({ open, onClose, renderFields, renderTemplates, renderUploads }) {
+  const [tab, setTab] = useDrawerTab('taskConfig', 'execution', ['execution', 'completion', 'templates']);
+  return (
+    <Drawer open={open} onClose={onClose} title="Task configuration" size="lg"
+      closeLabel="Close task configuration"
+      tabs={[
+        { id: 'execution', label: 'Execution', icon: Zap },
+        { id: 'completion', label: 'Completion & review', icon: GitPullRequest },
+        { id: 'templates', label: 'Templates & attachments', icon: Paperclip },
+      ]}
+      activeTab={tab} onTabChange={setTab} bodyClassName="@container space-y-3">
+      {tab === 'templates' && <>{renderTemplates()}{renderUploads()}</>}
+      {renderFields(tab)}
+    </Drawer>
+  );
 }

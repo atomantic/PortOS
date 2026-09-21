@@ -22,6 +22,7 @@ import SortableTaskItem from './SortableTaskItem';
 import TaskAddForm from '../TaskAddForm';
 import { MicroGlyph, SchematicLabel } from '../../micrographics';
 import useAssignableInstances from '../../../hooks/useAssignableInstances';
+import { formatCount } from '../../../utils/formatters';
 import { runningAgentsByTaskId, isSpawningTask } from '../../../lib/cosSpawnWindow';
 
 // Maps a task-section status → micrographic glyph spec. Animation only on
@@ -211,7 +212,7 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
       {/* User Tasks */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold text-white">User Tasks (TASKS.md)</h3>
+          <h3 className="text-lg font-semibold text-white">Task queue</h3>
           <button
             onClick={async () => {
               // Only toast success after the evaluate request resolves.
@@ -222,7 +223,7 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
                 toast.error(err.message);
               }
             }}
-            className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"
+            className="flex items-center gap-1 text-sm bg-port-success/20 hover:bg-port-success/30 text-port-success px-3 py-1.5 rounded-lg transition-colors"
             aria-label="Run tasks now"
           >
             <Play size={16} aria-hidden="true" />
@@ -230,8 +231,13 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
           </button>
         </div>
 
-        {/* Add Task Form */}
-        <TaskAddForm providers={providers} providersLoaded={providersLoaded} apps={apps} onTaskAdded={handleTaskAdded} />
+        <p className="mb-3 text-sm text-gray-400" aria-label="Queue status">
+          {formatCount(pendingUserTasksLocal.length + pendingSystemTasks.length)} pending
+          {' · '}{formatCount(activeUserTasksLocal.length + activeSystemTasks.length)} active
+          {' · '}{formatCount(blockedUserTasksLocal.length + blockedSystemTasks.length)} blocked
+        </p>
+        {/* Compact capture keeps the queue above detailed configuration. */}
+        <TaskAddForm queueFirst providers={providers} providersLoaded={providersLoaded} apps={apps} onTaskAdded={handleTaskAdded} />
 
         {/* User Tasks Sections */}
         {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
@@ -244,8 +250,8 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
             {/* Pending Section */}
             {pendingUserTasksLocal.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-yellow-500 flex items-center gap-2">
+                <div className="px-3 py-2 bg-port-warning/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-warning flex items-center gap-2">
                     <SectionGlyph status="pending" />
                     Pending ({pendingUserTasksLocal.length})
                   </span>
@@ -347,8 +353,8 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
             {/* Pending Section */}
             {pendingSystemTasks.length > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                <div className="px-3 py-2 bg-yellow-500/10 border-b border-port-border flex items-center justify-between">
-                  <span className="text-sm font-medium text-yellow-500 flex items-center gap-2">
+                <div className="px-3 py-2 bg-port-warning/10 border-b border-port-border flex items-center justify-between">
+                  <span className="text-sm font-medium text-port-warning flex items-center gap-2">
                     <SectionGlyph status="pending" />
                     Pending ({pendingSystemTasks.length})
                   </span>
