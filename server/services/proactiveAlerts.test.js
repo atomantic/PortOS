@@ -88,7 +88,7 @@ describe('proactiveAlerts — desktop (GUI) process exemption (#2991)', () => {
     expect(alerts).toHaveLength(1);
     // 1 of 2 — the game is not part of the denominator either, so the ratio
     // the user reads is not diluted by an exempt process.
-    expect(alerts[0].metadata).toEqual({ processId: 0, errored: 1, total: 2 });
+    expect(alerts[0].metadata).toEqual({ processId: 0, processName: 'web', errored: 1, total: 2 });
   });
 
   it('does not report a desktop app restart loop as crashing', async () => {
