@@ -21,7 +21,7 @@ import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import {
   detectPython, installPackages, createVenv, isAllowedPython,
-  resolveFlux2Python, FLUX2_VENV_DEFAULT, installFlux2Venv, isFlux2VenvHealthy,
+  resolveFlux2Python, FLUX2_VENV_DEFAULT, installFlux2Venv, isFlux2InstallSatisfied,
 } from '../lib/pythonSetup.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
@@ -47,21 +47,36 @@ router.get('/python', asyncHandler(async (_req, res) => {
 // gate the second click — the first install hasn't created the python yet.
 let flux2InstallInFlight = null;
 
+// The model the caller named, resolved ONCE per request — `getImageModels()`
+// re-derives hardware compatibility for the whole registry on every call, and
+// these endpoints are polled by the Image Gen page.
+function requestedModel(req) {
+  const modelId = typeof req.query?.modelId === 'string' ? req.query.modelId : '';
+  if (!modelId) return null;
+  return getImageModels().find((candidate) => candidate.id === modelId) || null;
+}
+
+// The pipeline class the caller's model needs, so every readiness answer here
+// matches the per-model verdict `diagnoseLocalRuntime` showed the user. Without
+// it a venv whose diffusers predates that class reads as installed.
+const pipelineClassOf = (model) =>
+  (typeof model?.pipelineClass === 'string' ? model.pipelineClass : '');
+
 async function flux2Status(req) {
-  const [token, healthy] = await Promise.all([getHfToken(), isFlux2VenvHealthy()]);
+  const model = requestedModel(req);
+  const [token, healthy] = await Promise.all([
+    getHfToken(),
+    isFlux2InstallSatisfied(pipelineClassOf(model)),
+  ]);
   const venvPython = resolveFlux2Python();
   // The 9B (bf16) and 4B variants ship as separately-gated repos with
   // distinct HF license URLs. Use the active model's `licenseUrl` when the
   // client supplies a `modelId`; fall back to the 4B URL for callers that
   // pre-date the multi-variant registry.
   const FLUX2_DEFAULT_LICENSE = 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B';
-  let licenseUrl = FLUX2_DEFAULT_LICENSE;
-  if (typeof req.query?.modelId === 'string' && req.query.modelId.length > 0) {
-    const model = getImageModels().find((candidate) => candidate.id === req.query.modelId);
-    if (isFlux2(model) && typeof model?.licenseUrl === 'string' && model.licenseUrl.length > 0) {
-      licenseUrl = model.licenseUrl;
-    }
-  }
+  const licenseUrl = (isFlux2(model) && typeof model?.licenseUrl === 'string' && model.licenseUrl.length > 0)
+    ? model.licenseUrl
+    : FLUX2_DEFAULT_LICENSE;
   return {
     hfTokenPresent: !!token,
     venvInstalled: healthy,
@@ -92,10 +107,12 @@ router.post('/flux2-install', asyncHandler(async (req, res) => {
     safeEnd();
   });
 
-  // Skip only when the venv binary AND the import work — a half-broken venv
-  // (binary present, packages missing from a killed mid-install) needs to
-  // re-run the install, not be reported as ready.
-  if (await isFlux2VenvHealthy()) {
+  // Skip only when re-running the install would change nothing — the venv
+  // binary, every pipeline class the verify stage guarantees, and the selected
+  // model's own class must all import. A half-broken venv (binary present,
+  // packages missing from a killed mid-install) or one whose diffusers predates
+  // the selected model's pipeline needs the install, not "nothing to do".
+  if (await isFlux2InstallSatisfied(pipelineClassOf(requestedModel(req)))) {
     send({ type: 'stage', stage: 'verify', message: 'FLUX.2 venv already installed.' });
     send({ type: 'complete', message: 'Already installed — nothing to do.' });
     return safeEnd();

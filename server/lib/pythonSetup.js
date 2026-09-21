@@ -393,6 +393,29 @@ async function probeFlux2Venv(pipelineClass) {
       .catch(() => false)
     : false;
 }
+// Pipeline classes the installer's verify stage guarantees. Membership rule:
+// the base FLUX.2 pipeline, plus the NEWEST diffusers pipeline PortOS ships a
+// model for — together they date the venv's diffusers snapshot, which is the
+// only thing the verify stage can assert without a model download. Per-model
+// classes are not listed here; the gate takes the selected model's own
+// `pipelineClass` as an argument instead, so the registry stays the one place
+// a new family is declared.
+//
+// The readiness GATE in front of the installer must require all of them:
+// gating on the base `Flux2KleinPipeline` alone let a venv built before a
+// newer pipeline landed report "already installed" while the per-model verdict
+// (which probes that model's own `pipelineClass`) said unavailable — the user
+// saw an Install button that answered "nothing to do".
+export const FLUX2_VERIFY_PIPELINE_CLASSES = Object.freeze(['Flux2KleinPipeline', 'QwenImage21Pipeline']);
+
+// Whether re-running the installer would be a no-op: every class the verify
+// stage checks imports, plus the one the caller's selected model needs.
+export async function isFlux2InstallSatisfied(pipelineClass = '') {
+  const required = [...new Set([...FLUX2_VERIFY_PIPELINE_CLASSES, pipelineClass].filter(Boolean))];
+  const results = await Promise.all(required.map((cls) => isFlux2VenvHealthy(cls)));
+  return results.every(Boolean);
+}
+
 export function invalidateFlux2Health() {
   cachedFlux2Python = null;
   flux2Health.clear();
@@ -1072,7 +1095,7 @@ export function installFlux2Venv(onLog) {
     if (killed) return { ok: false, stage: 'install', cancelled: true };
 
     stage('verify', 'Verifying FLUX.2 and Qwen 2.1 pipeline imports…');
-    if (!await runPython([venvPython, '-c', 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline; print("ok")'])) {
+    if (!await runPython([venvPython, '-c', `from diffusers import ${FLUX2_VERIFY_PIPELINE_CLASSES.join(', ')}; print("ok")`])) {
       onLog({ type: 'error', message: 'Verification failed: FLUX.2 or Qwen 2.1 pipeline did not import. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh' });
       return { ok: false, stage: 'verify' };
     }
