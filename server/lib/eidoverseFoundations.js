@@ -66,7 +66,7 @@
 
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { canonicalStringify } from './objects.js';
+import { canonicalStringify, isPlainObject } from './objects.js';
 import { describeJsonPath, federationSafetyFindings, walkJsonText } from './federationSafety.js';
 
 /** Ownership layers, widest-shared first. See the module header. */
@@ -151,8 +151,6 @@ const contributionIdSchema = z.string().trim().min(1).max(120);
 
 /** A shipped-definition / foundation slug. Mirrors `foundationIdSchema`. */
 const CONTROLLER_DEFINITION_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
-const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 /**
  * The shipped controller definition id a `controller` foundation names, or
