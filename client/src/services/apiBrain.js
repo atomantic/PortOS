@@ -195,8 +195,8 @@ export const uploadChatgptZip = (file, { tags = '', skipEmpty = true, ...options
   formData.append('skipEmpty', skipEmpty ? 'true' : 'false');
   return request('/brain/import/chatgpt/zip', { method: 'POST', body: formData, ...options });
 };
-export const getChatgptArchive = (name) =>
-  request(`/brain/import/chatgpt/archive/${encodeURIComponent(name)}`);
+export const getChatgptArchive = (name, { preview, ...options } = {}) =>
+  request(`/brain/import/chatgpt/archive/${encodeURIComponent(name)}${preview === 'images' ? '?preview=images' : ''}`, options);
 
 // Brain - Digests & Reviews
 export const getBrainLatestDigest = () => request('/brain/digest/latest');

@@ -345,6 +345,7 @@ export default function App() {
           <Route path="calendar/:tab" element={<CalendarPage />} />
           <Route path="brain" element={<Navigate to="/brain/inbox" replace />} />
           <Route path="brain/links/:id/scan-report" element={<BrainScanReport />} />
+          <Route path="brain/:tab/:recordType/:recordId" element={<Brain />} />
           <Route path="brain/:tab" element={<Brain />} />
           <Route path="digital-twin" element={<Navigate to="/digital-twin/overview" replace />} />
           <Route path="digital-twin/:tab" element={<DigitalTwin />} />
