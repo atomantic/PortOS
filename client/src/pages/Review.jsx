@@ -33,6 +33,7 @@ import {
   Save
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import QueueInvestigationButton from '../components/ui/QueueInvestigationButton';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
@@ -869,7 +870,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
     : sourceOperations.filter((operation) => operation.id !== 'rate');
 
   return (
-    <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
+    <div className={`grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
       <div className={`mt-0.5 shrink-0 ${config.color}`}>
         <Icon size={18} />
       </div>
@@ -878,7 +879,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           <button
             type="button"
             onClick={() => onSelect?.(item)}
-            className="text-sm font-medium text-white text-left hover:text-port-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent rounded"
+            className="min-w-0 break-words text-sm font-medium text-white text-left hover:text-port-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent rounded"
             aria-label={`Open action ${item.title}`}
           >
             {item.title}
@@ -888,7 +889,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           </span>
         </div>
         {item.summary && (
-          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{item.summary}</p>
+          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2 break-words">{item.summary}</p>
         )}
         <QueueMetaChips meta={item.meta} />
         {item.timestamp && (
@@ -898,7 +899,8 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           </p>
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+      <div className="col-span-2 flex min-w-0 items-center gap-2 flex-wrap border-t border-port-border/50 pt-2 sm:col-start-2 sm:col-span-1 [&_button]:min-h-[44px] [&_select]:min-h-[44px]">
+        <QueueInvestigation item={item} />
         {onResolve && rateOperation && (
           <FeedbackRatingControls
             id={item.id}
@@ -965,6 +967,15 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
       </div>
     </div>
   );
+}
+
+function QueueInvestigation({ item }) {
+  if (item.investigation) {
+    return <QueueInvestigationButton key={item.id} task={item.investigation} className="min-h-[44px] max-w-full" />;
+  }
+  return item.investigationUnavailable
+    ? <p className="w-full text-xs text-port-text-muted">{item.investigationUnavailable}</p>
+    : null;
 }
 
 function SummaryPill({ icon: Icon, label, value, tone = 'text-white', urgent = false }) {
@@ -1301,6 +1312,7 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
           </section>
         )}
 
+        <QueueInvestigation item={item} />
         {item.source === 'health' && <p className="text-sm text-gray-400">Mark resolved after correcting the issue. Earlier runs will no longer count toward run-based alerts; new evidence can raise another alert.</p>}
         {operations.length > 0 && (
           <section className="flex flex-wrap gap-2">

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock every producer service the aggregator pulls from, so the test exercises
 // only the normalization / sort / bounded-read / snapshot / degrade-on-failure logic.
+const apps = { getAllApps: vi.fn() };
+vi.mock('./apps.js', () => apps);
 const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
 const brainStorage = { getThreads: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
@@ -74,6 +76,7 @@ const {
 
 // Default: every producer returns "nothing needs attention".
 function resetEmpty() {
+  apps.getAllApps.mockResolvedValue([]);
   cosTaskStore.getTaskById.mockResolvedValue(null);
   brain.getInboxLog.mockResolvedValue([]);
   brainStorage.getThreads.mockResolvedValue([]);
@@ -589,6 +592,38 @@ describe('reviewQueue.buildQueue', () => {
     expect(healthRows).toHaveLength(1);
     expect(healthRows[0]).toMatchObject({ severity: 'critical', summary: '95% used', drillTo: '/system-resources/overview' });
     expect(queue.items.find(i => i.source === 'backup')).toMatchObject({ title: 'Backup failed', summary: 'disk full' });
+  });
+
+  it('offers a process investigation in the registered owning app with full evidence', async () => {
+    apps.getAllApps.mockResolvedValue([{ id: 'example-app', name: 'Example App', repoPath: '/repos/example', pm2ProcessNames: ['example-worker'] }]);
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{
+      id: 'process_crash_loop:7', type: 'process_error', severity: 'high',
+      title: 'Process in crash loop', detail: '3 unstable restarts',
+      metadata: { processId: 7, processName: 'example-worker' },
+      evidence: { unstableRestarts: 3 },
+    }]);
+    const row = (await buildQueue()).items.find(item => item.source === 'health');
+    expect(row.investigation.app).toBe('example-app');
+    expect(row.investigation.prompt).toContain('example-worker');
+    expect(row.investigation.prompt).toContain('"unstableRestarts":3');
+    expect(row.investigation.prompt).toContain('health:process_crash_loop:7');
+    expect(row.investigation.prompt).toContain('Work only in the selected app repository');
+    expect(row.operations).toContainEqual({ id: 'complete', label: 'Mark resolved', available: true });
+  });
+
+  it.each(['unknown', 'ambiguous', 'custom-home', 'registry-error'])('keeps %s process ownership from defaulting an investigation to PortOS', async (scenario) => {
+    const app = { id: 'example-app', name: 'Example App', repoPath: '/repos/example', pm2ProcessNames: ['example-worker'] };
+    apps.getAllApps.mockResolvedValue(scenario === 'ambiguous' ? [app, { ...app, id: 'other-app' }]
+      : scenario === 'custom-home' ? [{ ...app, pm2Home: '/example/pm2' }] : []);
+    if (scenario === 'registry-error') apps.getAllApps.mockRejectedValue(new Error('Unavailable'));
+    proactiveAlerts.generateNonProductAlerts.mockResolvedValue([{
+      id: 'process_errored:7', type: 'process_error', severity: 'high',
+      title: 'Errored process', metadata: { processId: 7, processName: 'example-worker' },
+    }]);
+    const row = (await buildQueue()).items.find(item => item.source === 'health');
+    expect(row.investigation).toBeUndefined();
+    expect(row.investigationUnavailable).toContain('link this process');
+    expect(row.operations).toContainEqual({ id: 'complete', label: 'Mark resolved', available: true });
   });
 
   it('offers health resolution, clears cached alerts, and preserves durable baselines', async () => {

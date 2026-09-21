@@ -87,6 +87,7 @@ const TRIAGE_RECOMMENDATION = {
 
 vi.mock('../services/api', () => ({
   getReviewItems: vi.fn(() => Promise.resolve([ITEM, SHORT_ITEM, COMPLETED_ITEM])),
+  addCosTask: vi.fn(() => Promise.resolve({ id: 'task-1' })),
   getReviewCounts: vi.fn(),
   getReviewBriefing: vi.fn(() => Promise.resolve(null)),
   getReviewQueue: vi.fn(() => Promise.resolve({ items: [], sources: {}, partial: false })),
@@ -201,6 +202,21 @@ describe('Review Hub queue-card triage (#3282)', () => {
     expect(screen.queryByTitle('Accept')).not.toBeInTheDocument();
     expect(screen.getAllByTitle('Reject').length).toBeGreaterThan(0);
     expect(screen.getAllByTitle('Delete')).toHaveLength(2);
+  });
+
+  it('queues an app-scoped investigation without resolving the alert', async () => {
+    const investigation = { app: 'example-app', description: 'Fix process failure', prompt: 'Inspect example-worker logs and verify recovery.' };
+    api.getReviewQueue.mockResolvedValueOnce({ partial: false, sources: {}, items: [{
+      id: 'health:process_errored:7', source: 'health', sourceLabel: 'Health anomalies',
+      title: 'Errored process: example-worker', investigation,
+      operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+    }] });
+    render(<Review />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Queue agent to investigate' }));
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalledWith({ ...investigation, isInvestigation: true }, { silent: true }));
+    expect(await screen.findByRole('button', { name: 'Agent queued' })).toBeDisabled();
+    expect(screen.getByText('Errored process: example-worker')).toBeInTheDocument();
+    expect(api.resolveReviewQueueItem).not.toHaveBeenCalled();
   });
 
   it('lets a corrected health issue be resolved from its card', async () => {

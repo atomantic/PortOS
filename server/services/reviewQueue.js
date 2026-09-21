@@ -668,7 +668,10 @@ const PRODUCERS = [
           byId.set(alert.id, alert);
         }
       }
-      return [...byId.values()].slice(0, limit);
+      const selected = [...byId.values()].slice(0, limit);
+      if (!selected.some(alert => alert.type === 'process_error')) return selected;
+      const { attachProcessInvestigations } = await import('./reviewQueueInvestigations.js');
+      return attachProcessInvestigations(selected);
     },
     // The collector owns semantic identity; the queue only namespaces it.
     map(alert) {
@@ -679,6 +682,8 @@ const PRODUCERS = [
         : null;
       return {
         id: `health:${alert.id}`,
+        ...(alert.investigation ? { investigation: alert.investigation } : {}),
+        ...(alert.investigationUnavailable ? { investigationUnavailable: alert.investigationUnavailable } : {}),
         operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
         nextAction: 'Investigate or mark resolved',
         title: alert.title || `${alert.type || 'System'} alert`,
