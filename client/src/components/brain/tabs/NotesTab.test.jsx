@@ -534,6 +534,62 @@ describe('NotesTab URL state and unavailable reads', () => {
     expect(screen.queryByText('Notes are unavailable')).toBeNull();
   });
 
+  it('does not render the previous folder when the next folder scan fails', async () => {
+    const project = { ...note, path: 'Projects/project.md', name: 'project', folder: 'Projects' };
+    const otherNotes = Array.from({ length: 21 }, (_, index) => ({
+      ...note,
+      path: `Other/other-${index}.md`,
+      name: `other-${index}`,
+      folder: 'Other',
+    }));
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [project, ...otherNotes], total: 22 });
+    await renderTab();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Other 21' })); });
+    await screen.findByRole('button', { name: 'Show all 21 notes...' });
+    api.scanNotesVault.mockRejectedValueOnce(new Error('temporary outage'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show all 21 notes...' })); });
+
+    expect(await screen.findByText('Notes are unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('project')).toBeNull();
+  });
+
+  it('surfaces vault-add, note-create, and note-delete failures without false success', async () => {
+    const rootNote = { ...note, path: 'first.md', name: 'first', folder: '' };
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [rootNote], total: 1 });
+    api.addNotesVault.mockRejectedValueOnce(new Error('vault unavailable'));
+    await renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage vaults' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Custom vault path' }), { target: { value: '/new/vault' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })); });
+    expect(mockToast.error).toHaveBeenCalledWith('vault unavailable');
+
+    api.createNote.mockRejectedValueOnce(new Error('note unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New note' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'New note path' }), { target: { value: 'new.md' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create' })); });
+    expect(mockToast.error).toHaveBeenCalledWith('note unavailable');
+
+    api.getNote.mockResolvedValueOnce(rootNote);
+    api.deleteNote.mockRejectedValueOnce(new Error('delete unavailable'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+    await act(async () => { fireEvent.click(screen.getByText('first')); });
+    await screen.findByRole('heading', { name: 'first' });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true })); });
+    expect(mockToast.error).toHaveBeenCalledWith('delete unavailable');
+    expect(mockToast.success).not.toHaveBeenCalledWith('Note deleted');
+    expect(screen.getByRole('heading', { name: 'first' })).toBeInTheDocument();
+  });
+
+  it('keeps tag-read failures visible through the normal API error feedback', async () => {
+    api.getNotesVaultTags.mockRejectedValueOnce(new Error('tags unavailable'));
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Tags' })); });
+    expect(api.getNotesVaultTags).toHaveBeenCalledWith('vault-1');
+  });
+
   it('keeps a failed note deep link open for retry instead of showing blank content', async () => {
     api.getNote.mockRejectedValueOnce(new Error('temporary outage'));
     await renderTab('/brain/notes?vault=vault-1&note=Projects%2Ffirst.md');

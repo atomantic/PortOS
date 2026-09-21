@@ -30,6 +30,13 @@ const ROWS = [
 ];
 const DONE_ROW = { id: 'done', title: 'Finished loop', status: 'done', refs: [], tags: [] };
 
+const deferred = () => {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+};
+
 const RESOLVED = [{ kind: 'url', id: 'https://example.com', label: 'example', url: 'https://example.com', resolved: true }];
 
 function Location() {
@@ -170,6 +177,36 @@ describe('ThreadsTab', () => {
 
     expect(await screen.findByText('Pinned loop')).toBeInTheDocument();
     expect(screen.queryByText('Threads are unavailable')).toBeNull();
+  });
+
+  it('does not render the previous filter when the next filter fails', async () => {
+    renderTab();
+    await screen.findByText('Plain loop');
+
+    api.listThreads.mockRejectedValueOnce(new Error('temporary outage'));
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Done' })); });
+
+    expect(await screen.findByText('Threads are unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Plain loop')).toBeNull();
+  });
+
+  it('ignores a retry that resolves after a newer filter request', async () => {
+    renderTab();
+    await screen.findByText('Plain loop');
+
+    api.listThreads.mockRejectedValueOnce(new Error('temporary outage'));
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Done' })); });
+    expect(await screen.findByText('Threads are unavailable')).toBeInTheDocument();
+
+    const retry = deferred();
+    api.listThreads.mockReturnValueOnce(retry.promise).mockResolvedValueOnce({ threads: [DONE_ROW], total: 1 });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Archived' })); });
+    expect(await screen.findByText('Finished loop')).toBeInTheDocument();
+
+    await act(async () => { retry.resolve({ threads: ROWS, total: ROWS.length }); });
+    expect(screen.getByText('Finished loop')).toBeInTheDocument();
+    expect(screen.queryByText('Plain loop')).toBeNull();
   });
 
   it('keeps a selected thread deep link open when the record read fails and retries it in place', async () => {

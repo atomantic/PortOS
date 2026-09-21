@@ -167,6 +167,7 @@ export default function ThreadsTab() {
   const [drawerTab, setDrawerTab] = useDrawerTab('threadTab', 'details', DRAWER_TAB_IDS);
 
   const [threads, setThreads] = useState([]);
+  const [threadsKey, setThreadsKey] = useState(null);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -178,6 +179,7 @@ export default function ThreadsTab() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [completingSource, setCompletingSource] = useState(false);
   const [newRef, setNewRef] = useState({ kind: 'url', id: '', label: '' });
+  const listRequestRef = useRef(0);
 
   // Two-stage search (the Catalog page's pattern): `searchInput` is what the
   // user is typing; `q` (the URL) drives the fetch and only moves after a
@@ -191,24 +193,34 @@ export default function ThreadsTab() {
   }, [searchInput, q, updateParams]);
 
   // The list — one request for exactly the statuses the view shows. Keep the
-  // last good list when a refresh fails: an unavailable response is not an
-  // empty working set.
+  // last good list when a refresh fails only when it belongs to the same filter;
+  // a failed new filter must not present another filter's records as current.
+  const listStatus = statusView === 'all' ? WORKING_SET : statusView;
+  const listKey = JSON.stringify({ q, tag, status: listStatus });
+  const hasCurrentList = threadsKey === listKey;
   const loadThreads = useCallback(() => {
+    const requestId = ++listRequestRef.current;
+    const requestKey = listKey;
     let active = true;
     setLoading(true);
     setListError(false);
     api.listThreads(
-      { q, tag, status: statusView === 'all' ? WORKING_SET : statusView },
+      { q, tag, status: listStatus },
       { silent: true },
     )
       .then((res) => {
-        if (!active) return;
+        if (!active || requestId !== listRequestRef.current) return;
         setThreads(Array.isArray(res?.threads) ? res.threads : []);
+        setThreadsKey(requestKey);
       })
-      .catch(() => { if (active) setListError(true); })
-      .finally(() => { if (active) setLoading(false); });
+      .catch(() => {
+        if (active && requestId === listRequestRef.current) setListError(true);
+      })
+      .finally(() => {
+        if (active && requestId === listRequestRef.current) setLoading(false);
+      });
     return () => { active = false; };
-  }, [q, tag, statusView]);
+  }, [listKey, listStatus, q, tag]);
 
   useEffect(() => loadThreads(), [loadThreads]);
 
@@ -393,20 +405,20 @@ export default function ThreadsTab() {
       </div>
 
       <div id={`brain-threads-${statusView}`} role="tabpanel" aria-labelledby={`tab-${statusView}`} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
-        {loading && threads.length === 0 && <p className="text-sm text-gray-500">Loading threads…</p>}
+        {loading && (!hasCurrentList || threads.length === 0) && <p className="text-sm text-gray-500">Loading threads…</p>}
         {listError && (
           <UnavailableState
             title="Threads are unavailable"
-            message={threads.length > 0 ? 'Showing the last successful list. Retry when the server is reachable.' : 'The thread list could not be read, so the working set is unknown.'}
+            message={hasCurrentList && threads.length > 0 ? 'Showing the last successful list. Retry when the server is reachable.' : 'The thread list could not be read, so the working set is unknown.'}
             onRetry={loadThreads}
           />
         )}
-        {!loading && !listError && threads.length === 0 && (
+        {!loading && !listError && hasCurrentList && threads.length === 0 && (
           <p className="text-sm text-gray-500">
             {q || tag ? 'No threads match.' : 'Nothing tracked yet — add the first open loop above.'}
           </p>
         )}
-        {(!listError || threads.length > 0) && groups.map((group) => (
+        {hasCurrentList && (!listError || threads.length > 0) && groups.map((group) => (
           <section key={group.id} aria-label={group.label}>
             <h3 className="text-xs uppercase tracking-wide text-gray-500 mb-2">
               {group.label} <span className="text-gray-600">{formatCount(group.items.length)}</span>
