@@ -68,6 +68,7 @@ import {
 const { HEARTBEAT_INTERVAL_MS } = PERSISTENT_MIND_LIMITS;
 const MAX_TOOL_PROVIDER_ROUNDS = 4;
 const MAX_TOOL_RESULT_CHARS = 4_000;
+const MAX_CONTINUATION_TOOL_PROMPT_CHARS = 24_000;
 const MAX_MEMORY_CANDIDATES_PER_TURN = 5;
 
 const memoryCandidateSchema = z.object({
@@ -610,8 +611,18 @@ export function createPersistentMindTurnAdapter() {
         // call may have just activated or renewed a family, so re-read the
         // live lease state, but this in-turn rebuild must never age it again
         // or log a second trace line for the same turn.
+        const completedToolNames = completedToolResults
+          .filter((toolResult) => toolResult.state === 'completed')
+          .map((toolResult) => toolResult.name)
+          .filter(Boolean);
         basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, maintenancePrompt, callCapabilityPrompt,
-          toolCapabilityPrompt: await buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities), { turnId }),
+          // A successful call proves only that its own schema was useful. Keep
+          // that schema (and the compact discovery index) for continuation;
+          // do not expand every sibling in the leased family. This bounds the
+          // complete prompt while preserving explicit activation semantics.
+          toolCapabilityPrompt: await buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities), {
+            turnId, maxChars: MAX_CONTINUATION_TOOL_PROMPT_CHARS, requiredToolNames: completedToolNames,
+          }),
         });
         const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;
         providerPrompt = `${basePrompt}\n\n# Completed tool results\n${JSON.stringify(completedToolResults)}\n\n${parsed.taskRequests.length > 0 ? 'Task requests from this intermediate round were not queued. Include only the final desired taskRequests in a terminal response with toolCalls: [].\n' : ''}${budgetExhausted ? 'The tool-call budget is exhausted. Return a final response with toolCalls: [] and do not repeat completed actions.' : 'Use these results to continue. Do not repeat a completed requestId.'}`;
