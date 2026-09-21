@@ -407,11 +407,6 @@ function AppDetail() {
                 <span className="hidden sm:inline text-xs">Edit</span>
               </button>
             </div>
-            {app.pm2ProcessNames?.length > 0 && (
-              <div className="text-xs text-gray-500 mt-1 break-words">
-                {app.pm2ProcessNames.join(', ')}
-              </div>
-            )}
           </div>
           <div className="flex flex-wrap items-center gap-1 lg:max-w-[60%]">
             {/* Start/Stop/Restart - only for PM2 apps */}
