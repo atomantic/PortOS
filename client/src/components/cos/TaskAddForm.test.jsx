@@ -34,6 +34,7 @@ const apiSystem = vi.hoisted(() => ({ getAssignableInstances: vi.fn() }));
 // describe below that clears mocks without re-seeding it still renders without
 // unhandled fetch, since `vi.clearAllMocks()` clears calls but keeps this default.
 const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn().mockResolvedValue({ models: [] }) }));
+const featureGate = vi.hoisted(() => ({ quickTemplatesEnabled: true }));
 const toast = vi.hoisted(() => {
   const toastFn = vi.fn();
   toastFn.success = vi.fn();
@@ -44,7 +45,17 @@ const toast = vi.hoisted(() => {
 vi.mock('../../services/apiSystem', () => apiSystem);
 vi.mock('../../services/api', () => api);
 vi.mock('../../services/apiLocalLlm', () => apiLocalLlm);
+vi.mock('../../hooks/useInstanceFeatures', () => ({
+  useInstanceFeatures: () => ({
+    isFeatureEnabled: (featureId) => featureId === 'cos-task-templates' ? featureGate.quickTemplatesEnabled : true,
+  }),
+}));
 vi.mock('../ui/Toast', () => ({ default: toast }));
+
+beforeEach(() => {
+  featureGate.quickTemplatesEnabled = true;
+  localStorage.removeItem('portos-cos-quick-templates-expanded');
+});
 
 const worktreeToggle = () => screen.getByTitle(/isolated git worktree/i).closest('label').querySelector('input');
 const openPrToggle = () => screen.getByTitle(/Open a pull request/i).closest('label').querySelector('input');
@@ -72,6 +83,20 @@ describe('TaskAddForm responsive layout', () => {
     apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
     // Nothing authoritative by default, so the id regex alone decides.
     apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
+  });
+
+  it('hides quick templates and skips their fetch when the feature is disabled', async () => {
+    featureGate.quickTemplatesEnabled = false;
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'hidden-template', name: 'Hidden Template', description: 'Not shown', isBuiltin: true }],
+    });
+
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Task description *')).toBeInTheDocument());
+    expect(screen.queryByText('Quick Templates')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Save Template/i })).toBeNull();
+    expect(api.getCosPopularTemplates).not.toHaveBeenCalled();
   });
 
   // #7796: hiding configuration must not reset the draft or silently change
@@ -481,6 +506,34 @@ describe('TaskAddForm quick templates', () => {
     // A template that pins no app must not clear the one already selected —
     // clearing it also silently reset the app's worktree/PR defaults.
     expect(screen.getByLabelText(/target application/i)).toHaveValue('example-app');
+  });
+
+  it('remembers a collapsed section across queue-first task forms', async () => {
+    const user = userEvent.setup();
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'user-abc', name: 'My Template', description: 'Do the thing', isBuiltin: false }],
+    });
+
+    const formProps = {
+      queueFirst: true,
+      providers: [],
+      apps: [],
+      onTaskAdded: vi.fn(),
+    };
+    const { unmount } = render(<TaskAddForm {...formProps} />);
+    const firstToggle = await screen.findByRole('button', { name: /Quick Templates/ });
+    expect(firstToggle).toHaveAttribute('aria-expanded', 'true');
+
+    await user.click(firstToggle);
+    await waitFor(() => expect(firstToggle).toHaveAttribute('aria-expanded', 'false'));
+    await waitFor(() => expect(localStorage.getItem('portos-cos-quick-templates-expanded')).toBe('false'));
+    expect(screen.queryByText('My Template')).toBeNull();
+
+    unmount();
+    render(<TaskAddForm {...formProps} />);
+    const secondToggle = await screen.findByRole('button', { name: /Quick Templates/ });
+    expect(secondToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('My Template')).toBeNull();
   });
 
   it('keeps the local template application and warns when usage recording fails', async () => {

@@ -83,6 +83,12 @@ export const INSTANCE_FEATURES = Object.freeze([
     defaultEnabled: false,
   }),
   Object.freeze({
+    id: 'cos-task-templates',
+    label: 'CoS task templates',
+    description: 'Quick reusable task templates in the Chief of Staff task form.',
+    defaultEnabled: false,
+  }),
+  Object.freeze({
     id: 'openclaw',
     label: 'OpenClaw',
     description: 'Operator chat with a configured OpenClaw runtime.',

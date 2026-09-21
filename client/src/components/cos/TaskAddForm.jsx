@@ -18,9 +18,10 @@ import ReviewerPicker from './ReviewerPicker';
 import InstancePicker from './InstancePicker';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import useAssignableInstances from '../../hooks/useAssignableInstances';
+import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
 import { PORTOS_APP_ID } from '../../lib/appIdentity';
-import { safeReadJsonStorage, safeReadStorage, safeRemoveStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
+import { safeReadJsonStorage, safeReadStorage, safeRemoveStorage, safeWriteJsonStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const ORCHESTRATION_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const ORCHESTRATION_ROLES_META = [
@@ -30,6 +31,7 @@ const ORCHESTRATION_ROLES_META = [
 ];
 
 const TASK_DESCRIPTION_DRAFT_KEY = 'portos-cos-task-description-draft';
+const QUICK_TEMPLATES_EXPANDED_KEY = 'portos-cos-quick-templates-expanded';
 const INVALID_DRAFT = Symbol('invalid task description draft');
 
 // ReviewerPicker's onChange patch keys, mapped to their addCosTask payload
@@ -76,6 +78,13 @@ const readTaskDescriptionDraft = (defaultApp) => {
     description: typeof draft.description === 'string' ? draft.description : '',
     app: typeof draft.app === 'string' && draft.app ? draft.app : defaultApp,
   };
+};
+
+const readQuickTemplatesExpanded = (fallback) => {
+  const stored = safeReadStorage(QUICK_TEMPLATES_EXPANDED_KEY);
+  if (stored === 'true') return true;
+  if (stored === 'false') return false;
+  return fallback;
 };
 
 export default function TaskAddForm({ providers, providersLoaded = true, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '', queueFirst = false }) {
@@ -128,11 +137,13 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // opportunistic default. Hidden entirely on a single-instance install.
   const [targetInstanceId, setTargetInstanceId] = useState('');
   const { instances: assignableInstances, isFederated } = useAssignableInstances();
+  const { isFeatureEnabled } = useInstanceFeatures();
+  const quickTemplatesEnabled = isFeatureEnabled('cos-task-templates');
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
   const [screenshots, setScreenshots] = useState([]);
   const [attachments, setAttachments] = useState([]);
   const [templates, setTemplates] = useState([]);
-  const [showTemplates, setShowTemplates] = useState(queueFirst);
+  const [showTemplates, setShowTemplates] = useState(() => readQuickTemplatesExpanded(queueFirst));
   // Compact-mode-only "More options" toggle. Callers that render in a
   // tall container (the dashboard Quick Task widget) pass defaultExpanded
   // so the card paints as a complete capture form on first render.
@@ -152,6 +163,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     implementer: { provider: '', model: '', effort: '' },
     reviewer: { provider: '', model: '', effort: '' },
   });
+  const showTemplatesInitialized = useRef(false);
 
   useEffect(() => {
     api.getOrchestrationProfiles?.({ silent: true })
@@ -239,12 +251,32 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     setNewTask(task => ({ ...task, app: defaultApp }));
   }, [apps, defaultApp, newTask.app]);
 
-  // Fetch templates
+  // Fetch templates only when the optional feature is enabled. This keeps the
+  // default form free of template UI and avoids an unnecessary API read.
   useEffect(() => {
+    if (!quickTemplatesEnabled) {
+      setTemplates([]);
+      setShowTemplateSave(false);
+      return;
+    }
+    let active = true;
     api.getCosPopularTemplates(8)
-      .then(data => setTemplates(data.templates || []))
-      .catch(() => setTemplates([]));
-  }, []);
+      .then(data => {
+        if (active) setTemplates(data.templates || []);
+      })
+      .catch(() => {
+        if (active) setTemplates([]);
+      });
+    return () => { active = false; };
+  }, [quickTemplatesEnabled]);
+
+  useEffect(() => {
+    if (!showTemplatesInitialized.current) {
+      showTemplatesInitialized.current = true;
+      return;
+    }
+    safeWriteStorage(QUICK_TEMPLATES_EXPANDED_KEY, String(showTemplates));
+  }, [showTemplates]);
 
   // Seed reviewer state from the global Code Review Defaults (AI Providers →
   // Code Review Defaults panel). One-shot on mount: if the user later toggles
@@ -953,6 +985,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   );
 
   function renderTemplates() {
+    if (!quickTemplatesEnabled) return null;
     return (
       <>
       {/* Quick Templates */}
@@ -1493,7 +1526,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
           )}
         </div>
         </>}
-        {(section === 'all' || section === 'templates') && <>
+        {quickTemplatesEnabled && (section === 'all' || section === 'templates') && <>
         {/* Template Save Inline Input */}
         {showTemplateSave && (
           <div className="flex flex-wrap gap-2 items-center">
