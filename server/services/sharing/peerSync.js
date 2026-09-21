@@ -25,6 +25,7 @@ import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
+import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { flushBaseHashes, withBaseHashFlushBatch } from '../../lib/conflictJournal.js';
 import { recordEvents, registerSubscriptionAdapter } from './recordEvents.js';
 import { getPeers, enqueueReciprocalSync } from '../instances.js';
@@ -143,7 +144,7 @@ export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
   await withBaseHashFlushBatch(async () => {
     for (const peer of targets) {
       const sub = await subscribePeer({ peerId: peer.instanceId, recordKind, recordId }, { awaitInitialPush: true }).catch((err) => {
-        console.log(`⚠️ peerSync: auto-subscribe ${recordKind}/${recordId} → ${peer.name || peer.instanceId} failed: ${err.message}`);
+        logFailureWithStack(`⚠️ peerSync: auto-subscribe ${recordKind}/${recordId} → ${peer.name || peer.instanceId} failed`, err);
         return null;
       });
       if (sub && sub.created) {
@@ -246,7 +247,7 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   const peer = peers.find(p => p.instanceId === peerId);
   if (!peer || !peerAllowsOutbound(peer) || !peerHasCategory(peer, recordKind)) return [];
   const records = await listRecordsForKind(recordKind).catch(() => {
-    console.log(`⚠️ peerSync: backfill inventory unavailable for ${recordKind}/records`);
+    console.error(`⚠️ peerSync: backfill inventory unavailable for ${recordKind}/records`);
     return [];
   });
   if (records.length === 0) return [];
@@ -280,7 +281,7 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   await withBaseHashFlushBatch(async () => {
     for (const rec of missing) {
       const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }, { skipCursorInit: cursorInited, awaitInitialPush: true }).catch((err) => {
-        console.log(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed: ${err.message}`);
+        logFailureWithStack(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed`, err);
         return null;
       });
       if (sub && sub.created) created.push({ recordId: rec.id, subscriptionId: sub.id });
@@ -318,7 +319,7 @@ export async function getFullSyncCoverageForPeer(peerId) {
     const failedReads = results.flatMap((result, index) => {
       if (result.status === 'fulfilled') return [];
       const operation = index === 0 ? 'records' : 'subscriptions';
-      console.log(`⚠️ peerSync: full-sync coverage unavailable for ${kind}/${operation}`);
+      console.error(`⚠️ peerSync: full-sync coverage unavailable for ${kind}/${operation}`);
       return [{ kind, operation }];
     });
     const records = results[0].status === 'fulfilled' ? results[0].value : [];
@@ -364,7 +365,7 @@ export async function unsubscribeAllForPeer(peerId) {
   const removed = [];
   for (const sub of matching) {
     await unsubscribePeer(sub.id).catch((err) => {
-      console.log(`⚠️ peerSync: unsubscribe-all failed for ${sub.id}: ${err.message}`);
+      logFailureWithStack(`⚠️ peerSync: unsubscribe-all failed for ${sub.id}`, err);
     });
     removed.push(sub.id);
   }
@@ -396,7 +397,7 @@ export async function unsubscribeAllForRecord(recordKind, recordId) {
   const failed = [];
   for (const sub of matching) {
     const ok = await unsubscribePeer(sub.id).then(() => true).catch((err) => {
-      console.log(`⚠️ peerSync: unsubscribe-for-record failed for ${sub.id}: ${err.message}`);
+      logFailureWithStack(`⚠️ peerSync: unsubscribe-for-record failed for ${sub.id}`, err);
       return false;
     });
     if (ok) {
@@ -441,7 +442,7 @@ export async function pruneOrphanedPeerSubscriptions(resolver) {
     const exists = await resolver(sub.recordKind, sub.recordId).catch(() => true);
     if (exists) continue;
     const ok = await unsubscribePeer(sub.id).then(() => true).catch((err) => {
-      console.log(`⚠️ peerSync: orphan-subscription sweep failed for ${sub.id}: ${err.message}`);
+      logFailureWithStack(`⚠️ peerSync: orphan-subscription sweep failed for ${sub.id}`, err);
       return false;
     });
     if (ok) removed.push(sub.id);
@@ -481,7 +482,7 @@ export async function triggerPushForRecord(recordKind, recordId) {
       // newer hash. Reading the live record by id makes the debounced fire
       // safe against all three.
       trackBackgroundOperation(pushFromFreshSubscription(subId).catch((err) => {
-        console.log(`⚠️ peerSync: scheduled push failed for ${subId}: ${err.message}`);
+        logFailureWithStack(`⚠️ peerSync: scheduled push failed for ${subId}`, err);
       }));
     }, DEBOUNCE_MS);
     if (typeof t.unref === 'function') t.unref();
@@ -603,7 +604,7 @@ export async function retryPendingPushesForPeer(peerId) {
       // may have upgraded since the last 409). Edit-triggered pushes still
       // respect the cooldown.
       const result = await pushRecordToPeer(sub, { bypassSchemaCooldown: true }).catch((err) => {
-        console.log(`⚠️ peerSync: retry push failed for ${sub.id}: ${err.message}`);
+        logFailureWithStack(`⚠️ peerSync: retry push failed for ${sub.id}`, err);
         return null;
       });
       if (result?.pushed) pushed += 1;
@@ -676,7 +677,7 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
     .catch((err) => {
       if (err?.code === RESPONSE_TOO_LARGE) {
         tooLarge = true; // HTTPS shim tripped the cap — same condition as the Content-Length check
-        console.log(`⚠️ peerSync: pull-record ${recordKind}/${recordId} exceeded payload cap — ${err.message}`);
+        logFailureWithStack(`⚠️ peerSync: pull-record ${recordKind}/${recordId} exceeded payload cap`, err);
       }
       return null;
     });
@@ -688,7 +689,7 @@ export async function pullRecordFromPeer(peerId, recordKind, recordId) {
   // Content-Length on JSON — reject an oversized declared body before buffering.
   const declaredLen = Number(res.headers?.get?.('content-length'));
   if (Number.isFinite(declaredLen) && declaredLen > RECORD_PAYLOAD_MAX_BYTES) {
-    console.log(`⚠️ peerSync: pull-record ${recordKind}/${recordId} declared ${declaredLen} bytes > cap`);
+    console.error(`⚠️ peerSync: pull-record ${recordKind}/${recordId} declared ${declaredLen} bytes > cap`);
     return { pulled: false, reason: 'payload-too-large' };
   }
 
@@ -727,12 +728,12 @@ export async function syncNowForPeer(peerId) {
   for (const kind of PEER_SUBSCRIBABLE_KINDS) {
     if (peerHasCategory(peer, kind)) {
       await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {
-        console.log(`⚠️ peerSync: syncNow backfill failed for ${kind}`);
+        console.error(`⚠️ peerSync: syncNow backfill failed for ${kind}`);
       });
     }
   }
   await retryPendingPushesForPeer(peer.instanceId).catch((err) => {
-    console.log(`⚠️ peerSync: syncNow retry pushes → ${peerId} failed: ${err.message}`);
+    logFailureWithStack(`⚠️ peerSync: syncNow retry pushes → ${peerId} failed`, err);
   });
   return { ok: true };
 }
@@ -746,7 +747,7 @@ export function installPeerSyncListener() {
   if (onUpdated) return;
   onUpdated = ({ recordKind, recordId }) => {
     trackBackgroundOperation(triggerPushForRecord(recordKind, recordId).catch((err) => {
-      console.log(`⚠️ peerSync: listener error for ${recordKind}/${recordId}: ${err.message}`);
+      logFailureWithStack(`⚠️ peerSync: listener error for ${recordKind}/${recordId}`, err);
     }));
   };
   recordEvents.on('updated', onUpdated);
@@ -765,7 +766,7 @@ export function installPeerSyncListener() {
   // `forPeerId` scoping.)
   onDeleted = ({ recordKind, recordId }) => {
     trackBackgroundOperation(triggerPushForRecord(recordKind, recordId).catch((err) => {
-      console.log(`⚠️ peerSync: delete listener error for ${recordKind}/${recordId}: ${err.message}`);
+      logFailureWithStack(`⚠️ peerSync: delete listener error for ${recordKind}/${recordId}`, err);
     }));
   };
   recordEvents.on('deleted', onDeleted);
@@ -800,7 +801,7 @@ export function installPeerSyncListener() {
         // subscribes every kind here.
         if (peerHasCategory(peer, kind)) {
           await autoSubscribePeerToAllRecords(peer.instanceId, kind).catch(() => {
-            console.log(`⚠️ peerSync: peer:online backfill failed for ${kind}`);
+            console.error(`⚠️ peerSync: peer:online backfill failed for ${kind}`);
           });
         }
       }
