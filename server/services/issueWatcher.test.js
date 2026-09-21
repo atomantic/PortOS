@@ -599,7 +599,7 @@ describe('processTaskOutput', () => {
     expect(result).toMatchObject({ reviewed: 1, merged: 1 });
     const reviewCall = execGhMock.mock.calls.find(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'));
     expect(JSON.parse(reviewCall[2].input)).toMatchObject({ event: 'APPROVE', comments: [] });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40) });
   });
 
   it.each([
@@ -704,7 +704,7 @@ describe('processTaskOutput', () => {
     });
 
     expect(result).toMatchObject({ reviewed: 1, merged: 1 });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40) });
     expect(execGhMock.mock.calls.some(([args]) => (
       args[0] === 'api' && args.some((arg) => String(arg).endsWith('/issues/101'))
     ))).toBe(true);
@@ -802,7 +802,7 @@ describe('processTaskOutput', () => {
         body: '💡 **Non-blocking**\n\nConsider making this helper name more specific in a follow-up.',
       }],
     });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40) });
   });
 
   it('approves without inline comments when GitHub rejects the comment anchors', async () => {
@@ -839,7 +839,7 @@ describe('processTaskOutput', () => {
     const reviewCalls = execGhMock.mock.calls.filter(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'));
     expect(reviewCalls).toHaveLength(2);
     expect(JSON.parse(reviewCalls[1][2].input)).toMatchObject({ event: 'APPROVE', comments: [] });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40) });
   });
 
   it('treats a finding with no explicit blocking flag as blocking and does not merge', async () => {
@@ -902,22 +902,34 @@ describe('processTaskOutput', () => {
     expect(mergePrMock).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('requests head-pinned auto-merge for pending CI and reports rejection (%s)', async autoMergeError => {
-    installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] }), autoMergeError });
+  it('withholds a reviewer approval and a persisted approval when current security screening fails', async () => {
+    installDefaultGhMock();
+    runModelAbuseScanMock.mockResolvedValue({ ok: true, safe: false, code: 'security-model-withheld' });
+    const result = await processTaskOutput({ appId: APP.id, success: true, task: { metadata }, payload: {
+      issueComments: [], pullRequests: [{ number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'Looks good.', findings: [], rebaseRequired: false, ciPolicy: 'required' }],
+    } });
+    expect(result).toMatchObject({ reviewed: 0, merged: 0 });
+    apps.set(APP.id, { ...APP, issueWatcherState: { approvedPullRequests: [{
+      number: 7, headSha: 'a'.repeat(40), contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF), ciPolicy: 'required', rebaseRequired: true, autoMergeEnabled: true,
+    }] } });
+    await buildTaskInput({ app: apps.get(APP.id) });
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'))).toBe(false);
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('update-branch'))).toBe(false);
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('--disable-auto'))).toBe(true);
+  });
+
+  it('keeps pending-CI approvals in the local queue so GitHub cannot bypass reassessment', async () => {
+    installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] }) });
     const result = await processTaskOutput({ appId: APP.id, success: true, task: { metadata }, payload: {
       issueComments: [], pullRequests: [{ number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'Reviewed.', findings: [], rebaseRequired: false, ciPolicy: 'required' }],
     } });
     expect(result).toMatchObject({ reviewed: 1, merged: 0 });
     expect(mergePrMock).not.toHaveBeenCalled();
-    const mutation = execGhMock.mock.calls.find(([args]) => args.includes('graphql'));
-    expect(mutation).toBeDefined();
-    expect(JSON.parse(mutation[2].input)).toMatchObject({ variables: { input: {
-      pullRequestId: 'PR_node_7', expectedHeadOid: 'a'.repeat(40), mergeMethod: 'MERGE',
-    } } });
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('graphql'))).toBe(false);
     expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([
-      expect.objectContaining({ number: 7, autoMergeEnabled: !autoMergeError }),
+      expect.objectContaining({ number: 7, autoMergeEnabled: false }),
     ]);
-    if (autoMergeError) expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining('did not enable auto-merge') }));
   });
 
   it('waits one scheduled observation before treating absent CI as skippable', async () => {
@@ -946,7 +958,7 @@ describe('processTaskOutput', () => {
     const followUp = await buildTaskInput({ app: apps.get(APP.id) });
 
     expect(followUp).toEqual({ skip: { reason: 'baselined' } });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40) });
     expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
   });
 
@@ -979,7 +991,7 @@ describe('processTaskOutput', () => {
       reviews: [[{ user: { login: 'owner' }, commit_id: 'a'.repeat(40), state: 'APPROVED' }]],
     });
     await buildTaskInput({ app: apps.get(APP.id) });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40) });
   });
 
   it('does not release CI for a PR it did not approve', async () => {
@@ -1088,7 +1100,7 @@ describe('processTaskOutput', () => {
 
     await buildTaskInput({ app: apps.get(APP.id) });
 
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40) });
     expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
   });
 

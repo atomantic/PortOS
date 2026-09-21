@@ -728,3 +728,5 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `developmentWorkIdentity.js` | Canonical development task identity and cross-producer ownership matching. |
 
 | `persistentMindProcessAudit.js` | Bounded process-audit schemas, deterministic observations, measured recovery ratios, and closed-vocabulary synthetic finding renderer. |
+
+| `contributionSecurityPolicy.js` | Trusted host-control security policy and strict tool-free GitHub contribution assessment contract. |

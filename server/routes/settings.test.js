@@ -1314,3 +1314,10 @@ describe('Settings routes — backup excludePaths bounds (#7241)', () => {
     expect(store.backup.excludePaths).toEqual(excludePaths);
   });
 });
+
+it('generic settings updates cannot acknowledge password-free host access', async () => {
+  store = { passwordRiskAcknowledgement: null };
+  const res = await request(buildApp()).put('/api/settings').send({ passwordRiskAcknowledgement: { version: 1 } });
+  expect(res.status).toBe(200);
+  expect(store.passwordRiskAcknowledgement).toBeNull();
+});

@@ -37,7 +37,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 - **Context:** runs PortOS across any number of their own machines — including local-inference boxes — federated as peers and reachable from phone/tablet/laptop over Tailscale. Directs AI coding agents "Rick Rubin style" (produces/curates rather than hand-writes most code) and expects the system to keep working correctly across their own forks and upgrades over time.
 
 ### Federated Peer Instance (secondary, non-human "user")
-- **Needs:** version-gated sync payloads it can safely apply without corrupting its own state, capacity-aware admission when asked to perform generation work on another peer's behalf, and a trust boundary (Tailscale) it can rely on instead of implementing its own authn/authz.
+- **Needs:** version-gated sync payloads it can safely apply without corrupting its own state, capacity-aware admission when asked to perform generation work on another peer's behalf, and private-network transport plus explicit peer/category permissions and password credentials where configured; network membership alone does not authorize host control.
 - **Context:** any number of other PortOS installs owned by the same person — not a fixed pair — registered in the local peer registry, exchanging Brain/Memory/Sharing records and instance metadata, and, where explicitly enabled, acting as a queued media-generation backend for peers over Tailscale.
 
 ### External Contributor (out-of-band, low priority)
@@ -172,13 +172,25 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 
 ---
 
+## Host-control security model
+
+PortOS is a high-stakes control surface for the host computer. Its APIs, terminal, and delegated agents can execute commands and read or modify private files with the operating-system user's privileges. Treat access to PortOS as access to the computer; command policies and agent sandbox settings do not make the entire application a sandbox.
+
+PortOS MUST remain on the user's private network. Publishing its administration UI, APIs, sockets, sidecars, or execution controls through Cloudflare tunnels/DNS gateways, Tailscale Funnel, ngrok, reverse proxies, router forwarding, or equivalent public relays is prohibited. TLS, a password, or an opt-in feature switch does not make public deployment supported. Separately managed applications can be public under their own security models without exposing PortOS.
+
+A private network is necessary but does not make every connected machine trustworthy. A compromised LAN or tailnet peer can abuse reachable password-free APIs to control the host. PortOS MUST strongly encourage a unique password while retaining opt-in authentication. On the first visit after upgrading, every password-free instance MUST show an explanation and offer password setup or explicit risk acceptance and dismissal. The acknowledgement MUST persist only on that install, survive restart, and reset when a password is set and later removed. Failed status reads or writes MUST NOT dismiss the warning. This warning is informed consent, not a substitute for authentication or network isolation.
+
+CoS MUST assess the actual behavior proposed by external GitHub issues, comments, and PRs against this model, separately from prompt-injection screening. Benign wording, green CI, labels, and claimed contributor approval MUST NOT authorize a conflicting feature. Programmatic screening MUST withhold actions when the security assessment is missing, malformed, unavailable, or uncertain; pending PR approvals MUST be reassessed before further action. Autonomous claim instructions MUST enforce the same eligibility rule. Private federation between the user's own machines remains supported through configured peer/category permissions; network reachability alone never grants command-execution authority.
+
+---
+
 ## Non-Functional Requirements
 
 | ID | Category | Requirement |
 |---|---|---|
 | NFR-1 | Security | Authentication MUST remain fully functional when the optional instance password is set, even though it is off by default — no code path may assume auth is permanently absent. |
 | NFR-2 | Security | Peer-to-peer hops over Tailscale MAY skip TLS certificate verification (`rejectUnauthorized: false`) on the assumption that WireGuard supplies mutual auth between tailnet nodes; non-tailnet peers get no equivalent guarantee and MUST be treated as lower-trust. |
-| NFR-3 | Security | All shell command execution MUST be restricted to an explicit allowlist (`server/lib/commandSecurity.js`) — no arbitrary shell invocation from user or agent input. |
+| NFR-3 | Security | Command execution MUST preserve each surface's operator/unattended policies (`server/lib/commandSecurity.js`) and agent execution profile. Authorized agents can still run host commands: these controls MUST NOT be represented as a sandbox around PortOS or as permission for public exposure. |
 | NFR-4 | Security | All route input MUST be validated via Zod schemas with explicit size/shape bounds (string length caps, numeric ranges, ID regex constraints) — no unbounded strings or arrays accepted at the API boundary. |
 | NFR-5 | Reliability | On-disk data-format changes MUST ship with a migration under `scripts/migrations/`, tracked per install in `data/migrations.applied.json`, so independently-updating installs never silently corrupt on upgrade. |
 | NFR-6 | Reliability | Cross-peer sync payloads MUST be version-gated (`server/lib/schemaVersions.js`) so a newer peer cannot corrupt an older one during federation. |
@@ -230,7 +242,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 ## Assumptions & Constraints
 
 - Runs on Node.js ≥22.12.0; PostgreSQL (system `:5432` or Docker `:5561`) is a mandatory runtime dependency for every install.
-- The user operates on a private Tailscale network; the network boundary, not application-layer auth, is the default trust boundary.
+- The user operates on a private Tailscale network. A compromised network peer remains a host-access risk, so PortOS strongly recommends the optional instance password and requires explicit acknowledgement when it is absent.
 - The user maintains an arbitrary, unbounded number of federated PortOS installs (including local-inference machines) as sync peers and, where enabled, spare generation capacity — not a single fixed primary/secondary pair.
 - AI provider costs are assumed to run primarily through flat-rate subscriptions (Claude Max, Codex, Google AI Pro, SuperGrok) plus local Ollama/LM Studio inference, not metered per-call billing — this shapes the "no cold-bootstrap LLM calls" policy.
 - The project accepts external PRs but does not guarantee backward compatibility of its own conventions for third-party contributors; breaking changes may ship without notice, mitigated only by the mandatory migration/versioning discipline for on-disk data (NFR-5–NFR-8). Contribution expectations are documented in [CONTRIBUTING.md](./docs/CONTRIBUTING.md).

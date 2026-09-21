@@ -191,3 +191,27 @@ describe('auth routes', () => {
     expect(good.body).toEqual({ enabled: false });
   });
 });
+
+describe('password-free risk acknowledgement', () => {
+  it('enrolls existing installs, requires explicit consent, persists across restart, and re-arms after password removal', async () => {
+    let app = await buildApp();
+    expect((await request(app).get('/api/auth/password-risk')).body).toEqual({ enabled: false, acknowledgementRequired: true });
+    expect((await request(app).post('/api/auth/password-risk').send({ acceptRisk: false })).status).toBe(400);
+    expect((await request(app).get('/api/auth/password-risk')).body.acknowledgementRequired).toBe(true);
+    expect((await request(app).post('/api/auth/password-risk').send({ acceptRisk: true })).body).toEqual({ enabled: false, acknowledgementRequired: false });
+    app = await buildApp();
+    expect((await request(app).get('/api/auth/password-risk')).body.acknowledgementRequired).toBe(false);
+    await request(app).post('/api/auth/password').send({ newPassword: 'example-password' });
+    expect((await request(app).get('/api/auth/password-risk')).body).toEqual({ enabled: true, acknowledgementRequired: false });
+    await request(app).delete('/api/auth/password').send({ currentPassword: 'example-password' });
+    expect((await request(app).get('/api/auth/password-risk')).body).toEqual({ enabled: false, acknowledgementRequired: true });
+  });
+  it('refuses corrupt settings for status and acknowledgement without removing password state', async () => {
+    const app = await buildApp();
+    writeFileSync(join(tempRoot, 'settings.json'), '{corrupt');
+    expect((await request(app).get('/api/auth/password-risk')).status).toBe(503);
+    expect((await request(app).post('/api/auth/password-risk').send({ acceptRisk: true })).status).toBe(503);
+    const { readFileSync } = await import('fs');
+    expect(readFileSync(join(tempRoot, 'settings.json'), 'utf8')).toBe('{corrupt');
+  });
+});

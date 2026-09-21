@@ -42,6 +42,7 @@ import { useEngagementReminderToast } from '../hooks/useEngagementReminderToast'
 import { useSharingNotifications } from '../hooks/useSharingNotifications';
 import UpdateBanners from './UpdateBanners';
 import SetupBanner from './SetupBanner';
+import PasswordRiskWarning from './PasswordRiskWarning.jsx';
 import { useAIStatusNotifications } from '../hooks/useAIStatusNotifications';
 import { useNavWorkingSet } from '../hooks/useNavWorkingSet.js';
 import { migrateLegacyNavPath } from '../utils/navWorkingSet.js';
@@ -1105,6 +1106,7 @@ export default function Layout() {
             push the page instead of covering a bottom-anchored composer (#3786) */}
         <UpdateBanners />
         <SetupBanner />
+        <PasswordRiskWarning />
 
         {/* Main content */}
         {(() => {

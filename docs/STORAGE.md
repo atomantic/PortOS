@@ -516,3 +516,7 @@ new work instead of losing deduplication history. Transcript windows are read on
 demand, never copied into public findings or automatic wake summaries. Deleting
 the ledger loses duplicate-publication protection; reconcile tracker references
 before manually retiring history.
+
+### Password-free access acknowledgement
+
+`passwordRiskAcknowledgement` is an optional, versioned machine-local setting in the existing file-primary `data/settings.json` store, alongside instance authentication configuration. It contains only the accepted policy version, has no record relationships or search needs, and never federates. Absence means the warning is required, so existing installs enroll on upgrade without a seed or data rewrite. Password changes clear it. Existing settings backup and serialized writes apply.

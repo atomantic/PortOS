@@ -64,7 +64,7 @@ const classifyFailure = detail => ({
   error: detail,
 });
 
-async function mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranch, timeoutMs }) {
+async function mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranch, timeoutMs, expectedHeadSha }) {
   const args = ['pr', 'merge', String(number)];
   // A `repoSpec` puts gh in `--repo` remote mode; omitting it runs the merge
   // against whatever repo `cwd` is already checked out to (the automated
@@ -75,6 +75,7 @@ async function mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranc
   // runs a local checkout in the user's working tree. Local mode: it deletes
   // the branch in `cwd`'s checkout, same as `gh pr merge` does unassisted.
   if (deleteBranch) args.push('--delete-branch');
+  if (expectedHeadSha) args.push('--match-head-commit', expectedHeadSha);
 
   const error = await execGh(args, timeoutMs, { cwd, env }).then(() => null, err => err);
   return error ? classifyFailure(error.ghStderr || error.message || 'gh pr merge failed') : { ok: true };
@@ -115,16 +116,20 @@ async function mergeGitlabCore({ cwd, env, number, method, deleteBranch, timeout
  * @param {number|string} options.number
  * @param {'merge'|'squash'|'rebase'} [options.method='merge']
  * @param {boolean} [options.deleteBranch=false]
+ * @param {string|null} [options.expectedHeadSha] - GitHub commit required at merge time
  * @param {number} [options.timeoutMs]
  * @returns {Promise<{ok:boolean, code?:string, error?:string}>}
  */
-export async function runForgeMerge({ cwd, env, forge, repoSpec = null, number, method = DEFAULT_MERGE_METHOD, deleteBranch = false, timeoutMs } = {}) {
+export async function runForgeMerge({ cwd, env, forge, repoSpec = null, number, method = DEFAULT_MERGE_METHOD, deleteBranch = false, timeoutMs, expectedHeadSha = null } = {}) {
+  if (expectedHeadSha !== null && (forge !== 'github' || typeof expectedHeadSha !== 'string' || !/^[a-f0-9]{40}$/i.test(expectedHeadSha))) {
+    return { ok: false, code: 'invalid-head', error: 'A GitHub merge requires an exact reviewed head commit' };
+  }
   if (!MERGE_METHODS.includes(method)) {
     return { ok: false, code: 'invalid-method', error: `Unsupported merge method '${method}'` };
   }
   return forge === 'gitlab'
     ? mergeGitlabCore({ cwd, env, number, method, deleteBranch, timeoutMs })
-    : mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranch, timeoutMs });
+    : mergeGithubCore({ cwd, env, repoSpec, number, method, deleteBranch, timeoutMs, expectedHeadSha });
 }
 
 /**

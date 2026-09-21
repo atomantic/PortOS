@@ -24,6 +24,7 @@ vi.mock('../hooks/useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => 
 vi.mock('../hooks/useAIStatusNotifications', () => ({ useAIStatusNotifications: () => {} }));
 vi.mock('./UpdateBanners', () => ({ default: () => null }));
 vi.mock('./SetupBanner', () => ({ default: () => null }));
+vi.mock('./PasswordRiskWarning.jsx', () => ({ default: () => null }));
 vi.mock('../hooks/useNotifications', () => ({
   useNotifications: () => ({
     notifications: [],
