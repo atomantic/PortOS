@@ -327,6 +327,11 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.settings.local-llm', path: '/models/llms', label: 'Model Library', section: 'Models', tabId: 'llms', navGroup: 'Library', previousPaths: ['/settings/local-llm'], aliases: ['local-llm', 'local-llms', 'llms', 'models-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend', 'llama.cpp'] },
   { id: 'nav.models.llms.abuse', path: '/models/llms/abuse', label: 'Abuse Guard', section: 'Models', tabId: 'abuse', navGroup: 'Policies', aliases: ['abuse-guard', 'model-abuse', 'model-abuse-guard', 'prompt-guard', 'prompt guard'], keywords: ['classifier', 'prompt injection', 'security scan', 'llama prompt guard', 'install guard'] },
   { id: 'nav.models.llms.jev', path: '/models/decision-classifiers/jev', label: 'Jev', section: 'Models', previousPaths: ['/models/llms/jev'], aliases: ['jev', 'openjev', 'entailment', 'nli', 'decision-scorer'], keywords: ['entailment', 'nli', 'closed set', 'abstain', 'margin', 'scorer', 'decision', 'install jev'] },
+  { id: 'nav.models.jev.try', path: '/models/decision-classifiers/jev/try', label: 'Jev Try a decision', section: 'Models', aliases: ['jev-try'], keywords: ['jev', 'try'] },
+  { id: 'nav.models.jev.integrations', path: '/models/decision-classifiers/jev/integrations', label: 'Jev Integrations', section: 'Models', aliases: ['jev-integrations'], keywords: ['jev', 'integrations'] },
+  { id: 'nav.models.jev.results', path: '/models/decision-classifiers/jev/results', label: 'Jev Results', section: 'Models', aliases: ['jev-results'], keywords: ['jev', 'results'] },
+  { id: 'nav.models.jev.training', path: '/models/decision-classifiers/jev/training', label: 'Jev Training', section: 'Models', aliases: ['jev-training'], keywords: ['jev', 'training'] },
+  { id: 'nav.models.jev.setup', path: '/models/decision-classifiers/jev/setup', label: 'Jev Setup', section: 'Models', aliases: ['jev-setup'], keywords: ['jev', 'setup'] },
   // Split out of the LLMs page (#7414): managing the SERVERS that run models is
   // a different job from browsing the weights they serve, and it was the LLMs
   // default view, not a drill-down — so it gets a sibling tab rather than a

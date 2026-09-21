@@ -8,6 +8,7 @@ const SOURCES = [
   ['email', 'Message triage action and priority'],
   ['stacker-news', 'Stacker News classification and risk'],
 ];
+const CONSEQUENCES = { disabled: 'No Jev scoring for this source.', off: 'Compare with chat without changing its answer.', prefer: 'Use local decisions; fall back to chat on abstention or failure.', only: 'Use local decisions; skip unresolved items.' };
 const MODES = { disabled: 'Disabled', off: 'Shadow', prefer: 'Prefer local', only: 'Local only' };
 
 export default function JevIntegrations({ registry, status }) {
@@ -56,9 +57,9 @@ export default function JevIntegrations({ registry, status }) {
       <p className="text-xs text-gray-400">Shadow compares with the chat provider without changing its answer. Prefer local falls back to chat on abstention or failure. Local only skips unresolved items. Disabled runs no Jev scoring for that source. All sources also require the global switch and an installed model.</p>
       {(error || saveError) && <p role="alert" className="text-xs text-port-warning">{saveError || 'Could not refresh integration settings; displayed settings may be stale.'} <button type="button" onClick={refetch} className="underline">Retry</button></p>}
       {!policy && !error && <p className="text-xs text-gray-400">Loading integration settings…</p>}
-      <fieldset disabled={saving || !!error || !policy} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <fieldset disabled={saving || !!error || !policy} className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {SOURCES.map(([source, label]) => (
-          <div key={source}>
+          <div key={source} className="min-w-0">
             <label htmlFor={`jev-source-${source}`} className="block text-xs text-gray-300 mb-1">{label}</label>
             <select id={`jev-source-${source}`} value={policy?.sources?.[source]?.jevMode || 'off'}
               disabled={!policy?.sources?.[source]}
@@ -66,6 +67,7 @@ export default function JevIntegrations({ registry, status }) {
               className="w-full bg-port-bg border border-port-border rounded p-2 text-sm text-white">
               {Object.entries(MODES).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
             </select>
+            <p className="text-xs text-gray-300 mt-1">{CONSEQUENCES[policy?.sources?.[source]?.jevMode] || 'Awaiting saved policy.'}</p>
             {policy && !policy.sources?.[source] && <p className="text-xs text-port-warning">Invalid policy; repair content safety settings.</p>}
             <p className="text-xs text-gray-500 mt-1">Additional margin floor: {policy?.sources?.[source]?.jevMinMargin ?? 'per-decision default'}</p>
           </div>

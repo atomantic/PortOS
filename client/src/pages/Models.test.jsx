@@ -64,6 +64,8 @@ const renderAt = (path) => render(
     <Routes>
       <Route path="/models/:tab" element={<Models />} />
       <Route path="/models/:tab/:recordId" element={<Models />} />
+      <Route path="/models/decision-classifiers/jev/:taskView" element={<Models fixedTab="decision-classifiers" fixedRecordId="jev" />} />
+      <Route path="/models/llms/jev/:taskView" element={<Models fixedTab="llms" fixedRecordId="jev" />} />
     </Routes>
   </MemoryRouter>
 );
@@ -210,4 +212,10 @@ it('redirects the old Jev URL into Decision Classifiers', async () => {
     renderAt('/models/llms/jev');
     expect(await screen.findByText('classifiers panel jev')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Decision Classifiers' })).toHaveAttribute('aria-selected', 'true');
+});
+
+it('keeps the Jev task legacy alias within the Decision Classifiers host', async () => {
+  renderAt('/models/llms/jev/results');
+  expect(await screen.findByText('classifiers panel jev')).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'Decision Classifiers' })).toHaveAttribute('aria-selected', 'true');
 });

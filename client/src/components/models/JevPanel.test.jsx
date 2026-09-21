@@ -13,6 +13,7 @@ vi.mock('../../services/api', () => ({
   adoptJevHead: vi.fn(),
   discardJevHead: vi.fn(),
 }));
+vi.mock('../../hooks/useInstanceFeatures', () => ({ useInstanceFeatures: () => ({ features: [{ id: 'jev', enabled: false }] }) }));
 vi.mock('./JevIntegrations', () => ({ default: () => <div>Integration controls</div> }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../ui/Toast', () => ({
@@ -25,6 +26,8 @@ import {
 } from '../../services/api';
 import socket from '../../services/socket';
 import JevPanel from './JevPanel';
+import { MemoryRouter, Routes, Route } from 'react-router';
+let initialView = 'try';
 
 const stages = (ready) => [
   { id: 'python', label: 'Host Python', description: 'A Python interpreter.', ready: true },
@@ -77,13 +80,16 @@ const headRow = (overrides = {}) => ({
 });
 
 const renderPanel = async () => {
-  render(<JevPanel />);
+  render(<MemoryRouter initialEntries={['/models/decision-classifiers/jev/' + initialView]}><Routes>
+    <Route path="/models/decision-classifiers/jev/:taskView?" element={<JevPanel />} />
+  </Routes></MemoryRouter>);
   const heading = await screen.findByRole('heading', { name: 'jev decision scorer' });
   expect(heading).toBeInTheDocument();
-  expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', heading.id);
+  expect(screen.getByTestId('jev-card')).toHaveAttribute('aria-labelledby', heading.id);
 };
 
 describe('JevPanel install', () => {
+  beforeEach(() => { initialView = 'setup'; });
   it('shows four stages and no Hugging Face token step — openjev is ungated', async () => {
     await renderPanel();
     await waitFor(() => expect(screen.getByTestId('jev-stage-model')).toBeInTheDocument());
@@ -130,6 +136,7 @@ describe('JevPanel install', () => {
 });
 
 describe('JevPanel try-it box', () => {
+  beforeEach(() => { initialView = 'try'; });
   const ready = () => getJevStatus.mockResolvedValue(status({ ready: true, setupState: 'ready', stages: stages(true) }));
 
   const fill = (premise, options) => {
@@ -189,6 +196,7 @@ describe('JevPanel try-it box', () => {
   });
 
   it('offers an immediate unload only while the model is resident', async () => {
+    initialView = 'setup';
     await renderPanel();
     expect(screen.queryByRole('button', { name: 'Unload now' })).not.toBeInTheDocument();
 
@@ -200,6 +208,7 @@ describe('JevPanel try-it box', () => {
 });
 
 describe('JevPanel decision agreement', () => {
+  beforeEach(() => { initialView = 'results'; });
   it('reads an unmeasured decision as no data rather than as zero agreement', async () => {
     getJevDecisionStats.mockResolvedValue({ updatedAt: null, decisions: [
       { decisionId: 'issue-comment-reply', label: 'Issue comment reply gate', observed: 0, decided: 0, abstained: 0, unavailable: 0, compared: 0, agreed: 0, agreementRate: null, abstentionRate: null },
@@ -229,6 +238,7 @@ describe('JevPanel decision agreement', () => {
 });
 
 describe('JevPanel project head', () => {
+  beforeEach(() => { initialView = 'training'; });
   it('says scope adherence answers zero-shot when no head is trained', async () => {
     await renderPanel();
     expect(await screen.findByText(/answers zero-shot/)).toBeInTheDocument();
@@ -330,6 +340,7 @@ describe('JevPanel project head', () => {
 });
 
 describe('JevPanel head architecture', () => {
+  beforeEach(() => { initialView = 'training'; });
   // `mlp1` is in the artifact contract and the trainer; a knob only a
   // hand-written request could reach is a knob nobody tunes.
   it('trains the architecture the operator picked', async () => {
@@ -340,5 +351,42 @@ describe('JevPanel head architecture', () => {
     fireEvent.change(screen.getByLabelText('Head'), { target: { value: 'mlp1' } });
     await act(async () => { fireEvent.click(button); });
     expect(trainJevHead).toHaveBeenCalledWith({ architecture: 'mlp1' }, { silent: true });
+  });
+});
+
+
+describe('Jev task navigation', () => {
+  it('retains drafts and an in-flight result through task switches without resubscribing', async () => {
+    initialView = 'try';
+    getJevStatus.mockResolvedValue(status({ ready: true }));
+    let resolveScore;
+    scoreJev.mockImplementation(() => new Promise(resolve => { resolveScore = resolve; }));
+    await renderPanel();
+    fireEvent.change(screen.getByLabelText('Premise'), { target: { value: 'Example premise' } });
+    fireEvent.change(screen.getByLabelText('Options (one per line)'), { target: { value: 'First\nSecond' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Score' }));
+    const subscriptions = socket.on.mock.calls.length;
+    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
+    expect(screen.queryByRole('button', { name: 'Score' })).not.toBeInTheDocument();
+    await act(async () => resolveScore({ ok: true, abstained: true, margin: 0.01 }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Try a decision' }));
+    expect(screen.getByLabelText('Premise')).toHaveValue('Example premise');
+    expect(screen.getByLabelText('Options (one per line)')).toHaveValue('First\nSecond');
+    expect(screen.getByTestId('jev-decision')).toHaveTextContent('Abstained');
+    expect(scoreJev).toHaveBeenCalledTimes(1);
+    expect(socket.on).toHaveBeenCalledTimes(subscriptions);
+    expect(socket.off).not.toHaveBeenCalled();
+  });
+
+  it('recovers an invalid view to Try and exposes setup recovery without starting work', async () => {
+    initialView = 'unknown';
+    await renderPanel();
+    expect(screen.getByRole('tab', { name: 'Try a decision' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Setup to prepare the scorer' }));
+    expect(screen.getByRole('tab', { name: 'Setup' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: 'Install jev' })).toBeInTheDocument();
+    expect(installJev).not.toHaveBeenCalled();
+    expect(scoreJev).not.toHaveBeenCalled();
+    expect(trainJevHead).not.toHaveBeenCalled();
   });
 });
