@@ -497,10 +497,10 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(400);
     });
 
-    it('rejects more than 4 referenceStrengths entries', async () => {
+    it('rejects more than 10 referenceStrengths entries', async () => {
       const response = await request(app)
         .post('/api/image-gen/generate')
-        .send({ prompt: 'multi-ref', referenceStrengths: [0.1, 0.2, 0.3, 0.4, 0.5] });
+        .send({ prompt: 'multi-ref', referenceStrengths: Array(11).fill(0.5) });
       expect(response.status).toBe(400);
     });
 
