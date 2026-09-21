@@ -66,12 +66,10 @@ import {
   getFlux2Status,
 } from '../services/api';
 
-// Multi-reference conditioning — 4 fixed slots, each carrying an uploaded File
-// + a 0..1 strength weight. Slots are positional so the blob-URL revoke pairs
-// with the slot the user cleared. Local consumes all 4 (FLUX.2 only); a cloud
-// CLI takes however many its image tool accepts alongside the init image (see
-// referenceSlotsFor), so the form offers only that many slots there.
-const REFERENCE_SLOT_COUNT = 4;
+// Positional slots preserve uploads across model switches. Qwen 2.1 takes up
+// to ten inputs total; other backends retain their existing four-slot form.
+// referenceSlotsFor reserves room for the init image where the cap is shared.
+const REFERENCE_SLOT_COUNT = 10;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
 
 // Revoke an object URL only when it's a blob: URL we created — gallery `/data/...`
@@ -756,10 +754,12 @@ export default function ImageGen() {
   // switch shouldn't destroy an upload the user can get back by switching
   // again) but are neither rendered nor submitted — every consumer reads these
   // two derived views rather than re-slicing `referenceImages`.
+  const isQwen21Model = currentModel?.pipelineClass === 'QwenImage21Pipeline';
   const referenceSlotCount = referenceSlotsFor(effectiveMode, {
     hasInitImage: initImage.source != null,
-    maxSlots: REFERENCE_SLOT_COUNT,
-    localSupportsReferences: isFlux2Model,
+    maxSlots: isLocalMode && isQwen21Model ? REFERENCE_SLOT_COUNT : 4,
+    localSupportsReferences: isFlux2Model || isQwen21Model,
+    localInputCap: isQwen21Model ? 10 : null,
   });
   // The exact prompt a render would be submitted with right now — the same
   // composition submitGenerationPayload performs. The LoRA picker's #4665
@@ -1616,9 +1616,9 @@ export default function ImageGen() {
           {referenceSlotCount > 0 && (
             <ReferenceImagePicker
               referenceImages={activeReferenceImages}
-              showStrength={supportsReferenceStrength(effectiveMode)}
+              showStrength={supportsReferenceStrength(effectiveMode) && isFlux2Model}
               caption={isLocalMode
-                ? `up to ${referenceSlotCount} images for FLUX.2 multi-reference edit`
+                ? `up to ${referenceSlotCount} images for ${isQwen21Model ? 'Qwen Image 2.1' : 'FLUX.2'} multi-reference edit`
                 : `up to ${referenceSlotCount} more image${referenceSlotCount === 1 ? '' : 's'} ${cloudModeLabel} will use as visual references`}
               onPick={handlePickReferenceImage}
               onClear={handleClearReferenceImage}

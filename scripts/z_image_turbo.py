@@ -203,6 +203,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--output", required=True)
     p.add_argument("--metadata", action="store_true", help="write <output>.metadata.json sidecar")
+    p.add_argument("--reference-images", nargs="+", default=[], help="Qwen 2.1 reference images (10 inputs total)")
     p.add_argument("--image-path", default=None, help="optional init image for i2i")
     p.add_argument("--image-strength", type=float, default=None, help="0..1 i2i denoise strength")
     p.add_argument("--stepwise-image-output-dir", default=None)
@@ -220,6 +221,12 @@ def parse_args() -> argparse.Namespace:
 @install_hf_error_handler
 def main() -> None:
     args = parse_args()
+
+    input_count = len(args.reference_images) + bool(args.image_path)
+    if args.reference_images and args.pipeline_class != "QwenImage21Pipeline":
+        raise ValueError("Reference images require QwenImage21Pipeline")
+    if args.pipeline_class == "QwenImage21Pipeline" and input_count > 10:
+        raise ValueError("Qwen Image 2.1 accepts at most 10 input images")
 
     device = pick_device(args.device)
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
@@ -260,6 +267,13 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 init_image = None
+
+    if args.reference_images:
+        images = [init_image] if init_image is not None else []
+        for path in args.reference_images:
+            with Image.open(path) as source:
+                images.append(source.convert("RGBA"))
+        init_image = images
 
     apply_memory_optimizations(pipe, width=args.width, height=args.height)
     apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])

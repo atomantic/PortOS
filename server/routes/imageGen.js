@@ -84,7 +84,7 @@ async function enqueueLoggedImage(req, job) {
 // number of `referenceImageN` upload field names below.
 const MAX_PROMPT_LENGTH = 8000;
 const MAX_LORAS = 8;
-const MAX_REFERENCE_IMAGES = 4;
+const MAX_REFERENCE_IMAGES = 10;
 const MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024;
 const updatePromptSchema = z.object({ prompt: z.string().max(MAX_PROMPT_LENGTH) });
 const galleryImageFilenameSchema = (label) => z.string().max(256)

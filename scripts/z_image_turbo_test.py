@@ -46,8 +46,8 @@ class RunnerContract(unittest.TestCase):
         )
         with patch.dict(sys.modules, {'torch': torch}):
             runner = importlib.import_module('z_image_turbo')
-        for editing in (False, True):
-            with self.subTest(editing=editing), tempfile.TemporaryDirectory() as directory:
+        for editing, references in ((False, 0), (True, 0), (False, 10), (True, 9)):
+            with self.subTest(editing=editing, references=references), tempfile.TemporaryDirectory() as directory:
                 source = Path(directory) / 'source.png'
                 output = Path(directory) / 'output.png'
                 Image.new('RGBA', (48, 64), (1, 2, 3, 50)).save(source)
@@ -56,6 +56,8 @@ class RunnerContract(unittest.TestCase):
                         '--steps', '40', '--guidance', '1', '--seed', '42', '--output', str(output)]
                 if editing:
                     argv += ['--image-path', str(source), '--image-strength', '0.5']
+                if references:
+                    argv += ['--reference-images'] + [str(source)] * references
                 pipe = Qwen21Pipeline()
                 with patch.object(sys, 'argv', argv), patch.multiple(
                     runner, pick_device=lambda _: 'cpu',
@@ -71,7 +73,12 @@ class RunnerContract(unittest.TestCase):
                     runner.main()
                 self.assertEqual(pipe.received['steps'], 40)
                 self.assertEqual(pipe.received['cfg'], 1)
-                if editing:
+                if references:
+                    self.assertEqual(len(pipe.received['image']), 10)
+                    for image in pipe.received['image']:
+                        self.assertEqual(image.size, (48, 64))
+                        self.assertEqual(image.getpixel((0, 0))[3], 50)
+                elif editing:
                     self.assertEqual(pipe.received['image'].size, (48, 64))
                     self.assertEqual(pipe.received['image'].getpixel((0, 0))[3], 50)
                 else:
