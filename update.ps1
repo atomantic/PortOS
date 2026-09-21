@@ -244,6 +244,25 @@ function Safe-Install {
     Stop-UpdateScript 1
 }
 
+# A previous update can advance the superproject and be killed before its
+# submodule step runs. Git then reports the still-old submodule checkout as a
+# dirty gitlink, so the next update would fail at this step forever before it
+# could reach the existing post-pull repair. Reconcile that state first. Git's
+# normal submodule update refuses to overwrite local submodule edits; a user
+# change therefore still reaches the dirty-checkout guard rather than being
+# discarded.
+function Repair-StaleSubmodules {
+    $status = @(git submodule status --recursive 2>$null)
+    $hasDrift = $status | Where-Object { $_ -match '^[+U-]' }
+    if (-not $hasDrift) { return $true }
+
+    Write-SafeHost "🔧 Repairing submodules that are not at the parent checkout's pinned commits..." -ForegroundColor Yellow
+    Invoke-Logged git submodule sync --recursive
+    if ($LASTEXITCODE -ne 0) { return $false }
+    Invoke-Logged git submodule update --init --recursive
+    return $LASTEXITCODE -eq 0
+}
+
 # Pull latest — always switch to main (detached HEAD or feature branch both
 # need to land on main before pulling, or the version won't advance). The
 # rest of the script (install, build, restart) runs on main so the app
@@ -262,6 +281,11 @@ if ($originUrl) {
 }
 $headRef = git symbolic-ref -q HEAD 2>$null
 $currentBranch = if ($headRef) { $headRef -replace "refs/heads/", "" } else { "" }
+if (-not (Repair-StaleSubmodules)) {
+    Write-SafeHost "❌ Could not repair the checkout's pinned submodules" -ForegroundColor Red
+    Step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
+    Stop-UpdateScript 1
+}
 $hasChanges = $false
 git diff --quiet 2>$null
 if ($LASTEXITCODE -ne 0) { $hasChanges = $true }
@@ -287,6 +311,11 @@ if ($currentBranch -ne "main") {
     }
     Invoke-Logged git checkout main
     if ($LASTEXITCODE -ne 0) { Stop-UpdateScript $LASTEXITCODE }
+}
+if (-not (Repair-StaleSubmodules)) {
+    Write-SafeHost "❌ Could not repair the main checkout's pinned submodules" -ForegroundColor Red
+    Step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
+    Stop-UpdateScript 1
 }
 # Record main's pre-pull HEAD — captured AFTER any checkout so it's the commit
 # the installed node_modules was built from (main, which the rest of this script

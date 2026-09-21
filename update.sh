@@ -107,6 +107,27 @@ safe_install() {
   return 1
 }
 
+# A previous update can advance the superproject and be killed before its
+# submodule step runs. Git then reports the still-old submodule checkout as a
+# dirty gitlink, so the next update would fail at this step forever before it
+# could reach the existing post-pull repair. Reconcile that state first. Git's
+# normal submodule update refuses to overwrite local submodule edits; a user
+# change therefore still reaches the dirty-checkout guard rather than being
+# discarded.
+repair_stale_submodules() {
+  local status
+  status=$(git submodule status --recursive 2>/dev/null || true)
+  if ! printf '%s\n' "$status" | grep -qE '^[+U-]'; then
+    return 0
+  fi
+
+  log "🔧 Repairing submodules that are not at the parent checkout's pinned commits..."
+  if ! run git submodule sync --recursive; then
+    return 1
+  fi
+  run git submodule update --init --recursive
+}
+
 # Pull latest — always switch to main (detached HEAD or feature branch both
 # need to land on main before pulling, or the version won't advance). The
 # rest of the script (install, build, restart) runs on main so the app
@@ -124,6 +145,11 @@ if [ -n "$origin_url" ]; then
   echo "🌐 Pulling from origin: $origin_url_safe" >> "$UPDATE_LOG"
 fi
 current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
+if ! repair_stale_submodules; then
+  log "❌ Could not repair the checkout's pinned submodules"
+  step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
+  exit 1
+fi
 has_local_changes() {
   ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]
 }
@@ -135,6 +161,11 @@ fi
 if [ "$current_branch" != "main" ]; then
   log "⚠️  On branch '${current_branch:-detached HEAD}' — switching to main for update"
   run git checkout main
+fi
+if ! repair_stale_submodules; then
+  log "❌ Could not repair the main checkout's pinned submodules"
+  step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
+  exit 1
 fi
 # Record main's pre-pull HEAD — captured AFTER any checkout so it's the commit
 # the installed node_modules was built from (main, which the rest of this script

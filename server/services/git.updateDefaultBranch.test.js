@@ -60,6 +60,34 @@ describe('updateDefaultBranch', () => {
     expect(commands().some(command => command.includes('rebase'))).toBe(false);
   });
 
+  it('repairs pinned submodules before and after pulling the parent repository', async () => {
+    withGit({ 'rev-parse --abbrev-ref HEAD': ok('main') });
+    const result = await updateDefaultBranch('/repo');
+
+    expect(result).toMatchObject({ success: true, branch: 'main', conflict: false });
+    const pulls = commands().map((command, index) => ({ command, index }))
+      .filter(({ command }) => command === 'pull --ff-only origin main');
+    const updates = commands().map((command, index) => ({ command, index }))
+      .filter(({ command }) => command === 'submodule update --init --recursive');
+
+    expect(updates).toHaveLength(2);
+    expect(pulls).toHaveLength(1);
+    expect(updates[0].index).toBeLessThan(pulls[0].index);
+    expect(updates[1].index).toBeGreaterThan(pulls[0].index);
+  });
+
+  it('stops before pulling when pinned submodules cannot be reconciled', async () => {
+    withGit({
+      'submodule update --init --recursive': fail('fatal: local submodule changes would be overwritten')
+    });
+
+    const result = await updateDefaultBranch('/repo');
+
+    expect(result).toMatchObject({ success: false, branch: 'main', conflict: true });
+    expect(result.error).toContain('local submodule changes would be overwritten');
+    expect(commands()).not.toContain('pull --ff-only origin main');
+  });
+
   it('rebases with --autostash when the checkout is dirty or diverged', async () => {
     withGit({
       'status --porcelain': ok(' M package-lock.json'),

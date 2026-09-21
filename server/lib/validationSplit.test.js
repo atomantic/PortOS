@@ -254,7 +254,10 @@ describe('exported validation schemas are wired (#5730)', () => {
       intentionallyUnwired: new Set(['testOneValidation.js:allowlistedSchema']),
       barrel: 'server/lib/index.js',
       trackedFiles: Object.keys(fakeFiles),
-      readFile: (p) => fakeFiles[p.replace(/^\/fake\/root\//, '')],
+      readFile: (p) => {
+        const normalized = p.replaceAll('\\', '/');
+        return fakeFiles[normalized.split('/fake/root/').at(-1)];
+      },
     });
 
     expect(unwired).toEqual([
