@@ -40,9 +40,18 @@ export function blankComments(src) {
 // never division, because a keyword cannot be an operand — `await /[)]/.test(s)`
 // and `return /a/` both open a regex. Reading one as division blanked nothing,
 // so the regex body's own brackets skewed the caller's bracket walk.
+//
+// RESERVED WORDS ONLY, and the two errors are not symmetrical. Missing a real
+// regex context restores the old behavior: the literal is read as division,
+// nothing is blanked, and the scan is conservative. Listing a word that can
+// also be an IDENTIFIER is corrupting: `const of = 4; f(of / n)` would lex the
+// division as a regex opener and blank the rest of the line, hiding whatever
+// came after it. So `of` — a contextual keyword and a legal identifier — is
+// deliberately absent, while `await` and `yield` are in: every source these
+// guards read is an ES module, where both are reserved.
 const KEYWORDS_BEFORE_REGEX = new Set([
-  'await', 'case', 'delete', 'do', 'else', 'in', 'instanceof', 'new', 'of',
-  'return', 'throw', 'typeof', 'void', 'yield',
+  'await', 'case', 'default', 'delete', 'do', 'else', 'extends', 'in',
+  'instanceof', 'new', 'return', 'throw', 'typeof', 'void', 'yield',
 ]);
 
 /**

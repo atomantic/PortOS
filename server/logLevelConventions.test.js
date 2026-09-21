@@ -264,6 +264,16 @@ describe('the failure-log recognizer', () => {
       const ratio = total / count;
       console.log(\`${CROSS_MARK} failed at \${ratio}\`);
     `)).toHaveLength(1);
+    // `of` is a contextual keyword AND a legal identifier, so it must stay out
+    // of the keyword set: reading `of / n` as a regex opener blanks the rest of
+    // the line and the marker after it vanishes.
+    expect(findMislabeledFailureLogs(
+      `const of = 4; console.log(of / (count), \`${CROSS_MARK} failed\`);`,
+    )).toHaveLength(1);
+    // A property named after a keyword is a value, so the `/` after it divides.
+    expect(findMislabeledFailureLogs(
+      `console.log(limits.in / (count), \`${CROSS_MARK} failed\`);`,
+    )).toHaveLength(1);
   });
 
   // Bypass probe: the scan is only worth its runtime if a reintroduced
