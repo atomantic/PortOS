@@ -15,8 +15,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('./taskPromptService.js', () => ({
-  getTaskPrompt: vi.fn(async () => 'Improve {appName} at {repoPath}'),
-  getStagePrompt: vi.fn(async () => 'Improve {appName} at {repoPath}'),
+  getTaskPrompt: vi.fn(async () => 'Improve {appName} at {repoPath}\n{issueAuthorFilter}\n{issueExcludeLabels}\nReviewers: {reviewers}'),
+  getStagePrompt: vi.fn(async () => 'Improve {appName} at {repoPath}\n{issueAuthorFilter}\n{issueExcludeLabels}\nReviewers: {reviewers}'),
 }));
 
 const getTaskIntervalMock = vi.fn(async () => ({ type: 'weekly', taskMetadata: {} }));
@@ -28,6 +28,7 @@ vi.mock('./taskSchedule.js', () => ({
   parkPerpetual: vi.fn(async () => {}),
   getPerpetualDrainState: vi.fn(async () => ({ signature: null, dispatchCount: 0 })),
   recordPerpetualDispatch: vi.fn(async () => 1),
+  recordPerpetualStall: vi.fn(async () => {}),
 }));
 
 vi.mock('./appActivity.js', async (importActual) => ({
@@ -59,7 +60,12 @@ vi.mock('../lib/gitRemote.js', async (importActual) => ({
   readOriginRemoteUrl: vi.fn(async () => null),
 }));
 
-import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
+vi.mock('./perpetualWork.js', async importOriginal => ({
+  ...(await importOriginal()),
+  detectActionableWork: vi.fn(async () => ({ actionable: true, count: 3, signature: '42,43,44' })),
+}));
+
+import { generateManagedAppImprovementTaskForType, prepareManagedAppImprovementTask, resolveClaimWorkMetadata } from './cosTaskGenerator.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
 const STATE = { config: { confidenceAutoApproval: { enabled: false }, idleReviewPriority: 'MEDIUM' } };
@@ -151,4 +157,30 @@ describe('pipeline stage provider precedence', () => {
     });
     expect(overridden.metadata).toMatchObject({ provider: 'opencode-tui', model: 'explicit-model', effort: 'high' });
   });
+});
+
+// Regression: maintainer inspection and batch execution must resolve the same
+// claim-issue settings, rather than consulting the separate claim-work defaults.
+it('prepares a scheduled perpetual swarm with matching filters and per-app execution settings', async () => {
+  getTaskIntervalMock.mockImplementation(async taskType => taskType === 'claim-issue' ? {
+    type: 'on-demand', perpetual: true, autoStart: false, providerId: 'opencode-tui', model: 'global-model', effort: 'low',
+    taskMetadata: { swarmCount: 6, issueAuthorFilter: 'self', reviewers: ['codex'], useWorktree: false, openPR: false },
+  } : { taskMetadata: { swarmCount: 0, issueAuthorFilter: 'any' } });
+  getAppTaskTypeOverridesMock.mockResolvedValue({
+    'claim-issue': { providerId: 'claude-cli', model: 'app-model',
+      taskMetadata: { swarmCount: 3, issueAuthorFilter: 'collaborators', issueExcludeLabels: ['hold'], reviewers: ['opencode'] } },
+    'claim-work': { taskMetadata: { issueAuthorFilter: 'owner' } },
+  });
+  const preview = await resolveClaimWorkMetadata(APP, 'claim-issue');
+  const prepared = await prepareManagedAppImprovementTask('claim-issue', APP, STATE);
+  expect(prepared.task.metadata).toMatchObject({ ...preview.metadata, analysisType: 'claim-issue',
+    claimFlow: true, perpetual: true, provider: 'claude-cli', model: 'app-model', effort: 'low' });
+  expect(prepared.task.metadata.claimTarget).toBeUndefined();
+  expect(prepared.task.description).toContain('--swarm=3');
+  expect(prepared.task.description).toContain('collaborators');
+  expect(prepared.task.description).toContain('hold');
+  expect(prepared.task.description).toContain('opencode');
+  expect(prepared.task.description).toContain('model:');
+  expect(prepared.task.description).toContain('effort:');
+  expect(prepared.pendingPerpetualDispatch).toMatchObject({ taskType: 'claim-issue', appId: APP.id });
 });

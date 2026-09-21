@@ -316,7 +316,7 @@ const PLAN_SELF_CLAIM_TASK_TYPES = new Set(['plan-task']);
 const PLAN_GATE_TASK_TYPES = new Set(['plan-task']);
 
 /**
- * Resolve an app's configured `claim-work` metadata the same way the scheduled
+ * Resolve an app's configured claim metadata the same way the scheduled
  * router does: global schedule metadata, then per-app overrides on top (managed
  * agent fields stripped, both passes sanitized/value-constrained). This is what
  * carries the user's `issueAuthorFilter`, reviewer, and swarm choices into the
@@ -325,19 +325,19 @@ const PLAN_GATE_TASK_TYPES = new Set(['plan-task']);
  *
  * @returns {Promise<{ metadata: object, interval: object }>}
  */
-export async function resolveClaimWorkMetadata(app) {
+export async function resolveClaimWorkMetadata(app, taskType = 'claim-work') {
   const taskSchedule = await import('./taskSchedule.js');
   // Independent reads (schedule config + per-app overrides) — the merge below
   // needs both, but neither depends on the other.
   const [interval, appOverrides] = await Promise.all([
-    taskSchedule.getTaskInterval('claim-work'),
+    taskSchedule.getTaskInterval(taskType),
     getAppTaskTypeOverrides(app.id)
   ]);
   const metadata = {};
   const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
   if (sanitizedGlobalMeta) Object.assign(metadata, sanitizedGlobalMeta);
   const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
-    'claim-work', appOverrides['claim-work']?.taskMetadata
+    taskType, appOverrides[taskType]?.taskMetadata
   );
   const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) Object.assign(metadata, sanitizedAppMeta);

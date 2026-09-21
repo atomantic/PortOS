@@ -655,9 +655,10 @@ describe('claim-work single-source routing', () => {
     // The metadata merge itself lives in resolveClaimWorkMetadata, shared with the
     // work-item picker route so both scan under the SAME author filter.
     const resolver = GEN_SRC.slice(GEN_SRC.indexOf('export async function resolveClaimWorkMetadata('));
-    expect(resolver).toMatch(/getTaskInterval\('claim-work'\)/);
+    expect(resolver).toContain("taskType = 'claim-work'");
+    expect(resolver).toMatch(/getTaskInterval\(taskType\)/);
     expect(resolver).toMatch(/getAppTaskTypeOverrides\(app\.id\)/);
-    expect(resolver).toMatch(/stripManagedAgentOptionsFromOverride\(\s*'claim-work'/);
+    expect(resolver).toMatch(/stripManagedAgentOptionsFromOverride\(\s*taskType/);
     // issueAuthorFilter: explicit option > configured metadata > 'self'
     // (the slashdo /do:next --self security boundary).
     expect(GEN_SRC).toMatch(/return explicit \?\? metadata\?\.issueAuthorFilter \?\? 'self'/);
