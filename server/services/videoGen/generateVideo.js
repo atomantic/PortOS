@@ -337,7 +337,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // (requiresPreDownload). icLoraArgs turns that into the user-facing 400; log
     // the reason here so the server log explains WHY there's no auto-download.
     if (!resolved.path) {
-      console.log(`⛔ IC-LoRA weight for ${mode} needs an explicit download (auto-fetch would snapshot ${resolved.spec.mirrorRepo || resolved.spec.repo})`);
+      console.warn(`⛔ IC-LoRA weight for ${mode} needs an explicit download (auto-fetch would snapshot ${resolved.spec.mirrorRepo || resolved.spec.repo})`);
     }
   }
 

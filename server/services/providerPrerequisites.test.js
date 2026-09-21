@@ -43,6 +43,7 @@ beforeEach(() => {
   getProviderRuntimeStatus.mockResolvedValue(null);
   getProviderRuntimeStatuses.mockResolvedValue({});
   vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -327,12 +328,16 @@ describe('prerequisitesMetForRouting', () => {
     expect(prerequisitesMetForRouting(wrapper, { orcarouter: { id: 'orcarouter' } })).toBe(false);
   });
 
-  it('logs one line naming what is missing when it skips a provider', () => {
+  it('warns one line naming what is missing when it skips a provider', () => {
     peekProviderRuntimeStatuses.mockReturnValue({ codex: CODEX_ABSENT });
 
     prerequisitesMetForRouting(codex(), {});
 
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Codex CLI is not installed'));
+    // A skipped fallback is a deliberate refusal, so it belongs on stderr where
+    // a stderr-based monitor sees it — not on stdout with progress chatter
+    // (#7945, enforced tree-wide by server/logLevelConventions.test.js).
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Codex CLI is not installed'));
+    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('Codex CLI is not installed'));
   });
 });
 

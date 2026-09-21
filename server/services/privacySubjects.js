@@ -232,7 +232,7 @@ export async function hasActiveConsent(subjectId) {
 export async function assertSubjectConsent(subjectId, { action = 'this action' } = {}) {
   const subject = await assertSubject(subjectId);
   if (await hasActiveConsent(subject.id)) return subject;
-  console.log(`⛔ Refused ${action} for privacy subject ${subject.id}: no consent on file`);
+  console.warn(`⛔ Refused ${action} for privacy subject ${subject.id}: no consent on file`);
   throw new ServerError(
     `Privacy subject ${subject.id} has no recorded consent — ${action} refused`,
     { status: 403, code: 'SUBJECT_CONSENT_REQUIRED' },

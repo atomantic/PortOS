@@ -242,6 +242,9 @@ export const ALWAYS_RUN_TESTS = [
   'server/lib/qwenAgentParsers.test.js',
   'server/lib/testDataIsolation.guards.test.js',
   'server/lib/testHelper.test.js',
+  // Whole-tree scanner: any server file can log a failure through
+  // `console.log`, and the guard only ever sees it as a path string.
+  'server/logLevelConventions.test.js',
   'server/services/imageGen/renderTargets.guard.test.js',
   'server/services/taskPromptDefaults.test.js',
   'server/timerCallbackConventions.test.js',

@@ -709,7 +709,7 @@ export async function renderProject(projectId) {
       job.status = 'error';
       const reason = `Failed to spawn ffmpeg: ${err.message}`;
       job.lastError = reason;
-      console.log(`❌ Timeline render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
+      console.error(`❌ Timeline render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
       broadcastSse(job, { type: 'error', error: reason });
       projectRenders.delete(projectId);
       closeJobAfterDelay(jobs, jobId);
@@ -729,7 +729,9 @@ export async function renderProject(projectId) {
             ? 'Render cancelled'
             : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
           job.lastError = reason;
-          console.log(`${canceled ? '🛑' : '❌'} Timeline render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+          // A cancel is a user action (stdout); a non-zero exit is a failure (#7945).
+          const logClose = canceled ? console.log : console.error;
+          logClose(`${canceled ? '🛑' : '❌'} Timeline render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
           await unlink(outputPath).catch(() => {});
           broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
           projectRenders.delete(projectId);

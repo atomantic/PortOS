@@ -300,7 +300,7 @@ export async function dispatchCreativeTool(name, args = {}, ctx = {}) {
   if (BUDGETED_COST_CLASSES.has(tool.costClass) && !tool.selfBudgeted) {
     const status = await getDomainBudgetStatus(BUDGET_DOMAIN);
     if (!status.withinBudget) {
-      console.log(`⛔ creative dispatch ${name} over budget (${BUDGET_DOMAIN} ${status.exceeded})`);
+      console.warn(`⛔ creative dispatch ${name} over budget (${BUDGET_DOMAIN} ${status.exceeded})`);
       await recordLedger(ctx, { ...base, outcome: 'budget-exceeded', timingMs: 0, exceeded: status.exceeded });
       return { ok: false, rejected: true, reason: 'budget', exceeded: status.exceeded, mode, tool: name };
     }
