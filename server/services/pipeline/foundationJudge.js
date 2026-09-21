@@ -36,6 +36,7 @@
  */
 
 import { join } from 'path';
+import { assertValidSeriesId } from '../../lib/pipelineIds.js';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM, resolveStageContext, resolveJudgeForStage } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
@@ -163,14 +164,6 @@ function compareArcBlockers(left, right) {
 function formatArcBlockerProfile(findings) {
   const profile = arcBlockerProfile(findings);
   return `${profile.total} blocker(s): ${profile.high} high, ${profile.medium} medium, ${profile.low} low`;
-}
-
-// Defense-in-depth: refuse path-traversal-shaped ids before interpolating into
-// the on-disk snapshot path (series ids are `ser-<uuid>`).
-function assertValidSeriesId(id) {
-  if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid series id: ${id}`);
-  }
 }
 
 const foundationDir = () => join(PATHS.data, 'pipeline-foundation-judge');

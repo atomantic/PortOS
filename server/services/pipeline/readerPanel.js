@@ -20,6 +20,7 @@
 
 import { join } from 'path';
 import { rm } from 'fs/promises';
+import { assertValidSeriesId } from '../../lib/pipelineIds.js';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM } from '../stageRunner.js';
 import {
@@ -33,14 +34,6 @@ import { seedReviewFromFindings } from './manuscriptReview.js';
 
 const CONSENSUS_CHECK_ID = 'reader-panel.consensus';
 const nowIso = () => new Date().toISOString();
-
-// Series ids are `ser-<uuid>` — restrict to a safe charset before interpolating
-// into the on-disk snapshot path (defense-in-depth against path traversal).
-function assertValidSeriesId(id) {
-  if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid series id: ${id}`);
-  }
-}
 
 const panelDir = () => join(PATHS.data, 'pipeline-reader-panel');
 const snapshotPath = (seriesId) => join(panelDir(), `${seriesId}.json`);

@@ -524,6 +524,7 @@ export * from './providerRouteRecipes.js';
 export * from './serviceDefinitions.js';
 export * from './providerRouteSettings.js';
 export * from './personaTraitBlend.js';
+export * from './pipelineIds.js';
 export * from './pipelineIssueOrder.js';
 export * from './pipelineStages.js';
 export * from './postAdaptive.js';

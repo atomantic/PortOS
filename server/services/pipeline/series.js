@@ -11,6 +11,8 @@
  * collection (server/services/pipeline/issues.js) and reference a series by id.
  */
 
+export { assertValidSeriesId } from '../../lib/pipelineIds.js';
+
 import { randomUUID } from 'crypto';
 import { getSeriesStore } from './seriesStore/store.js';
 import { sanitizeArc, sanitizeSeasonList, sanitizeSeriesDesign } from '../../lib/storyArc.js';
