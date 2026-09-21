@@ -17,16 +17,14 @@ if (-not $nodeCommand) {
     exit 1
 }
 
-# Check Node.js version. Vite 8 (client build) requires ^20.19 || >=22.12, so an
-# older install fails at `npm run build` rather than here. This mirrors MIN_NODE
-# in scripts/checkNodeVersion.js, which owns the floor and re-checks it at the
-# head of `npm run setup` below; scripts/node-version-drift.test.js keeps the two
-# literals in sync.
-$nodeVersion = (node -v) -replace 'v', ''
-$majorVersion = [int]($nodeVersion.Split('.')[0])
-$minorVersion = [int]($nodeVersion.Split('.')[1])
-if ($majorVersion -lt 22 -or ($majorVersion -eq 22 -and $minorVersion -lt 12)) {
-    Write-Host "Node.js 22.12+ required (found v$nodeVersion) - see .nvmrc" -ForegroundColor Red
+# Keep the pre-install check on the same owner as npm run setup/start/dev.
+# The Node script handles excluded release lines (23/25) as well as patch
+# floors, without a second semver implementation in PowerShell.
+node scripts/checkNodeVersion.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$nodeVersion = (node -v) -replace '^v', ''
+if (-not $nodeVersion) {
+    Write-Host "Unable to read the Node.js version after the compatibility check." -ForegroundColor Red
     exit 1
 }
 Write-Host "Found Node.js v$nodeVersion" -ForegroundColor Green

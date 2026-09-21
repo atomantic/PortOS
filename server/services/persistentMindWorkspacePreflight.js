@@ -22,7 +22,8 @@ import {
   isCliReviewer,
   isReviewer,
 } from '../lib/validation.js';
-import { compareVersions } from '../../scripts/checkNodeVersion.js';
+import { compareVersions, satisfiesVersionRequirement } from '../../scripts/checkNodeVersion.js';
+export { satisfiesVersionRequirement } from '../../scripts/checkNodeVersion.js';
 import * as codeReview from './codeReview.js';
 
 const execFileAsync = promisify(execFile);
@@ -272,68 +273,6 @@ const engineRequirements = (manifest) => {
     } : null,
   };
 };
-
-/**
- * Compare a tool version against the small, portable subset of npm engine
- * ranges used by PortOS manifests. It intentionally does not pretend to be a
- * complete semver implementation; unsupported syntax is unknown to callers.
- */
-export function satisfiesVersionRequirement(version, requirement) {
-  if (typeof version !== 'string' || !version.trim() || typeof requirement !== 'string' || !requirement.trim()) return null;
-  if (!/^v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/.test(version.trim())) return null;
-  const alternatives = requirement.split('||').map((part) => part.trim()).filter(Boolean);
-  if (!alternatives.length) return null;
-
-  const satisfiesComparator = (candidate, comparator) => {
-    const token = comparator.trim();
-    if (!token || token === '*' || /^x$/i.test(token)) return true;
-    const match = token.match(/^(>=|<=|>|<|=|\^|~)?\s*(v?\d+(?:\.\d+){0,2})(?:\.[xX*])?$/);
-    if (!match) return null;
-    const operator = match[1] || '=';
-    const target = match[2];
-    const comparison = compareVersions(candidate, target);
-    const numericParts = target.replace(/^v/, '').split('.').map((part) => Number(part));
-    const major = numericParts[0];
-    const minor = numericParts[1] || 0;
-    const patch = numericParts[2] || 0;
-    const isPartial = numericParts.length < 3 || /(?:^|\.)[xX*]$/.test(token);
-    const partialUpper = numericParts.length < 2
-      ? `${major + 1}.0.0`
-      : `${major}.${minor + 1}.0`;
-    if (operator === '=' && isPartial) {
-      return comparison >= 0 && compareVersions(candidate, partialUpper) < 0;
-    }
-    if (operator === '>=') return comparison >= 0;
-    if (operator === '<=') return isPartial
-      ? compareVersions(candidate, partialUpper) < 0
-      : comparison <= 0;
-    if (operator === '>') return isPartial
-      ? compareVersions(candidate, partialUpper) >= 0
-      : comparison > 0;
-    if (operator === '<') return comparison < 0;
-    if (operator === '^') {
-      const upper = major > 0
-        ? `${major + 1}.0.0`
-        : minor > 0
-          ? `0.${minor + 1}.0`
-          : numericParts.length < 3 ? '0.1.0' : `0.0.${patch + 1}`;
-      return comparison >= 0 && compareVersions(candidate, upper) < 0;
-    }
-    if (operator === '=') return comparison === 0;
-    const upper = numericParts.length < 2 ? `${major + 1}.0.0` : `${major}.${minor + 1}.0`;
-    return comparison >= 0 && compareVersions(candidate, upper) < 0;
-  };
-
-  const results = alternatives.map((alternative) => {
-    const comparators = alternative.replaceAll(',', ' ').split(/\s+/).filter(Boolean);
-    const values = comparators.map((comparator) => satisfiesComparator(version, comparator));
-    if (values.some((value) => value === null)) return null;
-    return values.every(Boolean);
-  });
-  if (results.some(Boolean)) return true;
-  if (results.every((value) => value === false)) return false;
-  return null;
-}
 
 const normalizeVersion = (value) => {
   const match = String(value || '').trim().match(/^v?\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/);
