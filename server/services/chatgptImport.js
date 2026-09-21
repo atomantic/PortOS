@@ -20,6 +20,7 @@
  */
 
 import { join } from 'path';
+import { stripChatgptCitations } from '../lib/chatgptText.js';
 import { unlink } from 'fs/promises';
 import { atomicWrite, ensureDir, PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { createMemoryEntry } from './brainStorage.js';
@@ -170,7 +171,7 @@ export function extractMessages(conversation, { assetResolver = null } = {}) {
     if (!role || role === 'system') continue;
     const { text: partsText, renderedIds } = renderParts(msg.content?.parts, assetResolver);
     const attachmentText = renderAttachments(msg, assetResolver, renderedIds);
-    const text = `${partsText}${attachmentText}`;
+    const text = stripChatgptCitations(`${partsText}${attachmentText}`);
     if (!text.trim()) continue;
     messages.push({
       id: msg.id || node.id,

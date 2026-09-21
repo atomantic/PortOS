@@ -737,7 +737,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   };
 
   return (
-    <div className="space-y-4">
+    <div className={fixedType ? 'space-y-4' : 'h-full min-h-0 flex flex-col gap-4 overflow-hidden p-3 sm:p-4'}>
       {/* Backend status banner */}
       {backendStatus?.backend === 'file' && (
         <Banner
@@ -762,7 +762,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       )}
 
       {/* Type tabs */}
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap shrink-0">
         {!fixedType && MEMORY_TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeType === tab.id;
@@ -826,9 +826,9 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       </div>
 
       {/* Main content area: split into list + sidebar preview when an entry is active */}
-      <div className="flex flex-col lg:flex-row items-start gap-4">
+      <div className={`flex flex-col lg:flex-row gap-4 ${fixedType ? 'items-start' : 'flex-1 min-h-0 overflow-hidden'}`}>
         {/* Left column: search, add form, records list */}
-        <div className={`flex-1 min-w-0 w-full space-y-4 ${recordId && !loading ? 'hidden lg:block' : 'block'}`}>
+        <div role="region" aria-label="Memory entries" tabIndex={0} className={`flex-1 min-w-0 w-full space-y-4 ${fixedType ? '' : 'min-h-0 overflow-y-auto overscroll-contain'} ${recordId && !loading ? 'hidden lg:block' : 'block'}`}>
           {/* Search filter */}
           <div className="relative">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -903,11 +903,12 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
 
         {/* Right column: Sidebar preview for full content */}
         {recordId && !loading && (
-          <div className="w-full lg:w-[480px] xl:w-[560px] 2xl:w-[640px] shrink-0">
+          <div className={`w-full lg:w-[480px] xl:w-[560px] 2xl:w-[640px] shrink-0 ${fixedType ? '' : 'h-full min-h-0 overflow-y-auto'}`}>
             {viewerRecord ? (
               <ConversationViewer
                 key={viewerRecord.id}
                 record={viewerRecord}
+                fillHeight={!fixedType}
                 onClose={closeReader}
                 onEdit={startEdit}
                 onSendToCatalog={handleSendToCatalog}
