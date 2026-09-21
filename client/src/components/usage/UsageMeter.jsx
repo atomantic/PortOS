@@ -2,6 +2,10 @@ import { Clock } from 'lucide-react';
 import ProgressBar from '../ui/ProgressBar';
 import { timeAgo, timeUntil } from '../../utils/formatters';
 
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+const DETAILED_RESET_MAX_MS = 30 * DAY_MS;
+
 /**
  * One quota window's meter — the shared rendering for a `limits[]` entry from
  * `GET /api/usage/providers`.
@@ -20,12 +24,24 @@ import { timeAgo, timeUntil } from '../../utils/formatters';
 // this localizes and adds the relative "in 3h" that makes a reset time useful at
 // a glance. The raw-text fallback stays for a reading off an older peer that
 // still emits its CLI's own wording.
+const formatResetCountdown = (date) => {
+  const remainingMs = date.getTime() - Date.now();
+  // Keep the existing compact buckets outside the multi-day window. Within it,
+  // include the hour remainder so a 47-hour reset does not collapse to "1d".
+  if (remainingMs < DAY_MS || remainingMs >= DETAILED_RESET_MAX_MS) return timeUntil(date, '');
+
+  const totalHours = Math.floor(remainingMs / HOUR_MS);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return `in ${days}d${hours ? ` ${hours}h` : ''}`;
+};
+
 export const formatResetsAt = (resetsAt) => {
   if (!resetsAt || !/^\d{4}-\d{2}-\d{2}T/.test(resetsAt)) return resetsAt;
   const d = new Date(resetsAt);
   if (Number.isNaN(d.getTime())) return resetsAt;
   const local = d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  const relative = timeUntil(d, '');
+  const relative = formatResetCountdown(d);
   return relative ? `${local} (${relative})` : local;
 };
 
