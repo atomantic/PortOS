@@ -216,6 +216,36 @@ describe('POST /api/providers/:id/derive', () => {
 });
 
 describe('PUT /api/providers/:id on a derived preset', () => {
+  it('does not treat a gateway wrapper\'s execution-only sibling key as a direct apiKey edit', async () => {
+    const inherited = {
+      ...DERIVED,
+      id: 'opencode-nvidia-nim-tui',
+      name: 'OpenCode NVIDIA NIM TUI',
+      command: 'opencode',
+      harnessId: 'opencode',
+      serviceId: 'nvidia-nim',
+    };
+    Object.defineProperty(inherited, 'apiKey', { value: 'nim-key', enumerable: false, configurable: true });
+    providerService.getProviderById.mockResolvedValue(inherited);
+    presetService.materializeStoredPreset.mockImplementation(async (candidate, { updates }) => {
+      if (Object.hasOwn(updates, 'apiKey')) {
+        throw new ServerError(
+          'apiKey is derived from service "nvidia-nim"; edit the service instead',
+          { status: 400, code: 'PRESET_FIELD_DERIVED', context: { fields: ['apiKey'], serviceId: 'nvidia-nim' } },
+        );
+      }
+      return { ...candidate, rederived: true };
+    });
+
+    const res = await request(app()).put('/api/providers/opencode-nvidia-nim-tui').send({ effort: 'low' });
+
+    expect(res.status).toBe(200);
+    const [, { updates }] = presetService.materializeStoredPreset.mock.calls[0];
+    expect(updates).toMatchObject({ effort: 'low' });
+    expect(updates).not.toHaveProperty('apiKey');
+    expect(providerService.updateProvider).toHaveBeenCalledWith('opencode-nvidia-nim-tui', expect.objectContaining({ rederived: true, effort: 'low' }));
+  });
+
   it('stores what the service re-derives from the merged record, with redacted secrets restored first', async () => {
     const res = await request(app()).put('/api/providers/pi-tui-nvidia-nim-free').send({ effort: 'low', envVars: { NVIDIA_API_KEY: '***' } });
     expect(res.status).toBe(200);
