@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
   getBrainInbox: vi.fn(),
@@ -47,6 +47,11 @@ vi.mock('../RepoIntakeOptions', () => ({ default: () => null }));
 import { captureBrainThought, getBrainInbox } from '../../../services/api';
 import InboxTab from './InboxTab';
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location-state">{JSON.stringify(location.state || {})}</output>;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   getBrainInbox.mockResolvedValue({ entries: [], counts: {} });
@@ -79,5 +84,35 @@ describe('Brain inbox capture', () => {
     expect(captureBrainThought.mock.calls[0][3]).toMatchObject({
       note: 'Share this with the team',
     });
+  });
+
+  it('carries the Brain provider and model into the creative Catalog handoff', async () => {
+    getBrainInbox.mockResolvedValue({
+      entries: [{
+        id: 'inbox-creative-1',
+        capturedText: 'A captured story fragment.',
+        creative: true,
+        status: 'filed',
+        capturedAt: '2026-01-01T00:00:00.000Z',
+      }],
+      counts: {},
+    });
+
+    render(
+      <MemoryRouter>
+        <InboxTab settings={{ defaultProvider: 'ollama', defaultModel: 'example-model' }} />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send to Catalog' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Catalog' }));
+
+    await waitFor(() => expect(JSON.parse(screen.getByTestId('location-state').textContent)).toMatchObject({
+      prefill: expect.objectContaining({
+        providerOverride: 'ollama',
+        modelOverride: 'example-model',
+      }),
+    }));
   });
 });

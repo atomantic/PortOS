@@ -179,13 +179,14 @@ function sanitizeLightEntry(kind, raw) {
  * malformed response logs and yields empty arrays, mirroring extractBible's
  * sanitizeBibleList tolerance for missing keys.
  */
-async function extractIdeasScenesConcepts({ corpus, providerOverride, promptContext = {} }) {
+async function extractIdeasScenesConcepts({ corpus, providerOverride, modelOverride, promptContext = {} }) {
   const result = await runStagedLLM('catalog-ideas-scenes-concepts', {
     ...promptContext,
     draftBody: corpus,
     returnsJson: true,
   }, {
     providerOverride,
+    modelOverride,
     returnsJson: true,
     source: 'catalog-extract-ideas-scenes-concepts',
   });
@@ -211,6 +212,7 @@ async function extractIdeasScenesConcepts({ corpus, providerOverride, promptCont
  * @param {string} args.rawText      The scrap body to extract from.
  * @param {string} [args.scrapId]    Scrap id to attach to progress frames.
  * @param {string} [args.providerOverride] Override the staged-llm provider.
+ * @param {string} [args.modelOverride] Override the staged-llm model.
  * @param {object} [args.context]    Extraction lens — `{ title, sourceKind, factual }`
  *                                   from `scrapExtractionContext`. Fills the prompts'
  *                                   framing slots and gates the factual sections.
@@ -249,7 +251,7 @@ function neutralizeFenceDelimiters(text) {
 // omitted, a fresh runId is minted (the normal single-scrap path). `emitStart`
 // lets the chunked path suppress the per-child `start` frame, which would
 // otherwise reset the client's stage checklist on every chunk.
-export async function extractIngredients({ rawText, scrapId = null, providerOverride, runId = randomUUID(), emitStart = true, context = {} } = {}) {
+export async function extractIngredients({ rawText, scrapId = null, providerOverride, modelOverride, runId = randomUUID(), emitStart = true, context = {} } = {}) {
   if (typeof rawText !== 'string' || !rawText.trim()) {
     throw new Error('extractIngredients: rawText is required');
   }
@@ -287,7 +289,7 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
     emit({ type: 'stage', id: stage.id, status: 'running' });
     try {
       if (stage.id === LIGHT_STAGE_ID) {
-        const out = await extractIdeasScenesConcepts({ corpus, providerOverride, promptContext });
+        const out = await extractIdeasScenesConcepts({ corpus, providerOverride, modelOverride, promptContext });
         const count = LIGHT_TYPE_IDS.reduce((n, id) => n + (out[lightDraftKey(id)]?.length || 0), 0);
         emit({ type: 'stage', id: stage.id, status: 'completed', count });
         return { id: stage.id, light: out, error: null };
@@ -298,6 +300,7 @@ export async function extractIngredients({ rawText, scrapId = null, providerOver
         existing: [],
         context: promptContext,
         providerOverride,
+        modelOverride,
         source: `catalog-extract-${stage.id}`,
       });
       // A real person additionally earns `real-person`, which is what keeps
@@ -411,8 +414,9 @@ const CHUNK_EXTRACT_CONCURRENCY = 2;
  * @param {object} args
  * @param {string} args.scrapId            Parent scrap id.
  * @param {string} [args.providerOverride] Override the staged-llm provider.
+ * @param {string} [args.modelOverride]    Override the staged-llm model.
  */
-export async function extractIngredientsForScrap({ scrapId, providerOverride } = {}) {
+export async function extractIngredientsForScrap({ scrapId, providerOverride, modelOverride } = {}) {
   const parent = await getScrap(scrapId);
   if (!parent) throw new Error(`extractIngredientsForScrap: scrap ${scrapId} not found`);
 
@@ -423,7 +427,7 @@ export async function extractIngredientsForScrap({ scrapId, providerOverride } =
 
   const children = await listChildScraps(parent.id);
   if (children.length === 0) {
-    return extractIngredients({ rawText: parent.rawText, scrapId: parent.id, providerOverride, context });
+    return extractIngredients({ rawText: parent.rawText, scrapId: parent.id, providerOverride, modelOverride, context });
   }
 
   // One shared run id for the whole chunked extraction so every child's
@@ -444,7 +448,7 @@ export async function extractIngredientsForScrap({ scrapId, providerOverride } =
   // union the per-child drafts. Progress frames carry the parent scrapId + the
   // shared runId so the UI's existing live checklist keeps tracking one scrap.
   const childDrafts = await mapWithConcurrency(children, CHUNK_EXTRACT_CONCURRENCY, (child) =>
-    extractIngredients({ rawText: child.rawText, scrapId: parent.id, providerOverride, runId, emitStart: false, context }),
+    extractIngredients({ rawText: child.rawText, scrapId: parent.id, providerOverride, modelOverride, runId, emitStart: false, context }),
   );
 
   const merged = dedupDrafts(childDrafts);

@@ -131,17 +131,18 @@ describe('catalogExtraction — extractIngredients', () => {
     }
   });
 
-  it('forwards providerOverride to every stage', async () => {
+  it('forwards the provider and model overrides to every stage', async () => {
     bibleExtractor.extractBible.mockResolvedValue({ extracted: [] });
-    await extractIngredients({ rawText: 'prose', providerOverride: 'codex' });
+    await extractIngredients({ rawText: 'prose', providerOverride: 'ollama', modelOverride: 'example-model' });
     for (const call of bibleExtractor.extractBible.mock.calls) {
-      expect(call[0].providerOverride).toBe('codex');
+      expect(call[0].providerOverride).toBe('ollama');
+      expect(call[0].modelOverride).toBe('example-model');
     }
-    // The light stage also receives the override (third positional arg).
+    // The light stage receives the same route (third positional arg).
     expect(stageRunner.runStagedLLM).toHaveBeenCalledWith(
       'catalog-ideas-scenes-concepts',
       expect.any(Object),
-      expect.objectContaining({ providerOverride: 'codex' }),
+      expect.objectContaining({ providerOverride: 'ollama', modelOverride: 'example-model' }),
     );
   });
 

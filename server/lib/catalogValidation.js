@@ -416,10 +416,11 @@ export const catalogScrapCommitSchema = z.object({
   role: z.string().trim().min(1).max(64).optional(),
 }).strict();
 
-// /scraps/:id/extract — optional provider override (e.g., force a specific
-// LLM provider for this extraction). Empty body is valid.
+// /scraps/:id/extract — optional provider/model override (e.g., a Brain
+// handoff carrying the user's selected local route). Empty body is valid.
 export const catalogExtractRequestSchema = z.object({
   providerOverride: z.string().trim().min(1).max(64).optional(),
+  modelOverride: z.string().trim().min(1).max(200).optional(),
 }).strict();
 
 // Babble is deliberately bounded to one provider call; never silently truncate it.
