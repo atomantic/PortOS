@@ -40,8 +40,8 @@ it('serializes concurrent admissions and retains per-turn allowance across new c
   const reserve = (turnId, date = '2026-01-01T23:59:59Z') => reserveMaintainerInference({ ...disk, turnId, lane: 'local-curation', policy, now: () => Date.parse(date) });
   const results = await Promise.all([reserve('one'), reserve('one'), reserve('one')]);
   expect(results.map(result => result.ok)).toEqual([true, true, false]);
-  await expect(reserve('two')).resolves.toMatchObject({ ok: false });
-  await expect(reserve('one', '2026-01-02T00:01:00Z')).resolves.toMatchObject({ ok: false });
+  await expect(reserve('two')).resolves.toMatchObject({ ok: false, code: 'day-exhausted', disposition: 'reset-wait' });
+  await expect(reserve('one', '2026-01-02T00:01:00Z')).resolves.toMatchObject({ ok: false, code: 'turn-exhausted' });
   await expect(reserve('two', '2026-01-02T00:01:00Z')).resolves.toMatchObject({ ok: true });
   expect((await disk.read()).lastReservation.costUsd).toBeNull();
   await expect(reserve('three', '2026-01-01T23:59:59Z')).resolves.toMatchObject({ ok: false });

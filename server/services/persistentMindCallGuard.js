@@ -38,7 +38,7 @@ const DENIAL_STATUS = Object.freeze({
   authorization: 'degraded',
 });
 
-const denial = (reason, status, extra = {}) => ({ ok: false, reason, status, ...extra });
+const denial = (reason, status, extra = {}) => ({ ok: false, reason, status, code: 'policy', disposition: 'hold', ...extra });
 
 /**
  * The comparable fingerprint of the mind's capability grants.
@@ -125,10 +125,10 @@ export async function evaluatePersistentMindCallAdmission({
   try {
     budget = await getDomainBudgetStatus('cos');
   } catch (error) {
-    return denial(`Persistent mind budget check failed: ${error?.message || 'unknown error'}`, DENIAL_STATUS.budget);
+    return denial(`Persistent mind budget check failed: ${error?.message || 'unknown error'}`, DENIAL_STATUS.budget, { code: 'ledger-unavailable' });
   }
   if (!budget.withinBudget) {
-    return denial(`CoS ${budget.exceeded || 'daily'} budget exhausted`, DENIAL_STATUS.budget);
+    return denial(`CoS ${budget.exceeded || 'daily'} budget exhausted`, DENIAL_STATUS.budget, { code: 'cos-budget-exhausted', disposition: 'retry' });
   }
 
   if (maintainer.enabled) {
@@ -204,7 +204,7 @@ export function createPersistentMindCallBoundary({
         policy: admission.maintainer.policy, now }).catch(() => ({ ok: false, reason: 'Maintainer inference budget is unreadable; restore or repair its ledger before retrying.' }));
       if (!reserved.ok) {
         await writeReceipt({ purpose, round, outcome: 'denied', reason: reserved.reason });
-        throw buildPersistentMindCallDenial({ reason: reserved.reason, status: 'waiting' });
+        throw buildPersistentMindCallDenial(reserved);
       }
       reservation = reserved.reservation;
       await appendEvent({ kind: 'mind.maintainer.reservation', mindId, turnId,

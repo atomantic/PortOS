@@ -1004,10 +1004,11 @@ async function runClaimedPersistentMindTurn(turn, mind) {
         usageLimit
           ? PROVIDER_USAGE_LIMIT_PAUSE_REASON
           : (contextBudget ? contextBudgetPauseReasonFrom(error) : message),
-        (usageLimit || contextBudget) ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
+        (usageLimit || contextBudget || (denied && error.retryDisposition === 'hold' && error.requiresResubmission !== true)) ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
         {
           consumedAttempt: runStartedAt != null,
           retireWake: denied && error.requiresResubmission === true,
+          retryAt: denied && error.retryDisposition === 'reset-wait' ? error.retryAt : null,
         },
       );
       if (usageLimit) {
