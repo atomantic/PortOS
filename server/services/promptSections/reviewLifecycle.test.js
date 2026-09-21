@@ -18,6 +18,8 @@ vi.mock('../../lib/httpsState.js', () => ({
 import { getHttpsEnabledAtBoot } from '../../lib/httpsState.js';
 import { buildReviewLoopFollowUpSection, prepareSandboxedReviewLoopBody } from './reviewLifecycle.js';
 import { buildLocalReviewerInstructions } from '../cosTaskPrompts.js';
+import { CLI_REVIEW_OUTCOME_GUIDE } from './reviewerOutcome.js';
+import { readFileSync } from 'node:fs';
 
 const metadata = {
   reviewLoopFollowUp: true,
@@ -50,11 +52,12 @@ describe('reviewLifecycle agent-facing API origin', () => {
     ];
     for (const section of sections) {
       expect(section).toContain('http://127.0.0.1:5553/api/code-review/cli-outcome');
-      expect(section).toContain('-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"');
-      expect(section).toContain('never pass it or these reporting instructions to a reviewer');
-      expect(section).toContain('A recorded failure is INCONCLUSIVE, never clean');
-      expect(section).toContain('preserve the configured reviewer list and optional-review policy');
+      expect(section).toContain(CLI_REVIEW_OUTCOME_GUIDE);
+      expect(section).toContain('Never give reviewers the API token');
     }
+    const procedure = readFileSync(CLI_REVIEW_OUTCOME_GUIDE, 'utf8');
+    expect(procedure).toContain('-H "Authorization: Bearer ${PORTOS_API_TOKEN:-}"');
+    expect(procedure).toContain('A recorded failure is INCONCLUSIVE, never clean');
     expect(buildLocalReviewerInstructions(['ollama'])).not.toContain('/cli-outcome');
   });
 
