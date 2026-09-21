@@ -7,12 +7,13 @@
  * list, naming a downgraded test file that is not tracked, or reporting
  * "CI will also run: db" from a plan field that has since been renamed.
  */
-import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { execFileSync, spawnSync } from 'child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import {
   buildCiTestPlan,
   collectPlanInputs,
@@ -44,11 +45,11 @@ const planWith = (overrides = {}) => ({
 describe('resolvePlanStages', () => {
   it('runs only the scopes the plan selected', () => {
     const stages = resolvePlanStages(planWith());
-    expect(stages.map((stage) => stage.name)).toEqual(['server tests']);
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'server tests']);
   });
 
   it('hands each runner the plan\'s own selector lists', () => {
-    const [stage] = resolvePlanStages(planWith({
+    const [, stage] = resolvePlanStages(planWith({
       server: { mode: 'related', files: ['server/lib/a.test.js'], sources: ['server/lib/a.js'] },
     }));
     expect(stage.script).toBe('run-ci-tests.js');
@@ -60,13 +61,17 @@ describe('resolvePlanStages', () => {
     });
   });
 
-  it('puts lint first, so the one-second verdict is not queued behind Vitest', () => {
+  it('scans hidden content before lint and tests using the resolved base', () => {
     const stages = resolvePlanStages(planWith({
       lint: { mode: 'files', files: ['client/src/App.jsx'] },
       client: { mode: 'files', files: ['client/src/App.test.jsx'], sources: [] },
-    }));
-    expect(stages.map((stage) => stage.name)).toEqual(['client lint', 'server tests', 'client tests']);
-    expect(stages[0].env).toEqual({ CI_LINT_MODE: 'files', CI_LINT_FILES: '["client/src/App.jsx"]' });
+    }), { baseSha: 'resolved-base' });
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'client lint', 'server tests', 'client tests']);
+    expect(stages[0]).toEqual({
+      name: 'hidden-content scan', script: 'scan-diff-hidden-content.js',
+      args: ['--base', 'resolved-base', '--worktree'], env: {},
+    });
+    expect(stages[1].env).toEqual({ CI_LINT_MODE: 'files', CI_LINT_FILES: '["client/src/App.jsx"]' });
   });
 
   it('drops the lint stage under --skip-lint but keeps the test stages', () => {
@@ -74,7 +79,143 @@ describe('resolvePlanStages', () => {
       planWith({ lint: { mode: 'files', files: ['client/src/App.jsx'] } }),
       { skipLint: true },
     );
-    expect(stages.map((stage) => stage.name)).toEqual(['server tests']);
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'server tests']);
+  });
+});
+
+// These regressions need the actual CLI and Git, not mocked stage dispatch:
+// a later Git state can hide an earlier addition, no-index uses exit 1 for
+// success, and even a read-only `git status` can refresh the caller's index.
+describe('pregate hidden-content invocation', () => {
+  let scratch;
+  let root;
+  let base;
+  const trackedPath = 'docs/tracked note.md';
+  const clean = '# Example\n';
+  const hidden = `${clean}hidden: \u200B\n`;
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, content) => writeFileSync(join(root, path), content);
+  const run = (...args) => spawnSync(process.execPath, ['scripts/pregate.js', '--base', base, ...args], {
+    cwd: root, encoding: 'utf8',
+  });
+  const snapshot = () => ({
+    status: git('--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'),
+    index: readFileSync(join(root, '.git', 'index')),
+  });
+
+  beforeEach(async () => {
+    ({ scratch, repo: root } = await makeGitSandbox({ prefix: 'portos-pregate-cli-' }));
+    git('config', 'core.hooksPath', join(scratch, 'empty-hooks'));
+    // Copy the real builtin-only entrypoints so REPO_ROOT targets this fixture.
+    // No runners or test files: docs-only changes produce an empty test plan.
+    for (const path of [
+      'scripts/pregate.js', 'scripts/scan-diff-hidden-content.js',
+      'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js',
+      'scripts/lib/directInvocation.js', 'scripts/lib/githubOutput.js',
+      'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
+      'server/lib/textUtils.js',
+    ]) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      copyFileSync(join(REPO_ROOT, path), join(root, path));
+    }
+    write('package.json', '{"type":"module"}\n');
+    mkdirSync(join(root, 'docs'));
+    write(trackedPath, clean);
+    git('add', '--all');
+    git('commit', '-qm', 'pregate fixture');
+    base = git('rev-parse', 'HEAD');
+  });
+
+  afterEach(async () => {
+    await destroyGitSandbox(scratch);
+  });
+
+  it.each(['committed', 'staged', 'unstaged', 'untracked'])(
+    'rejects %s hidden content without changing files or staging state', (state) => {
+      const path = state === 'untracked' ? 'docs/untracked note.md' : trackedPath;
+      write(path, hidden);
+      if (state === 'committed' || state === 'staged') git('add', '--', path);
+      if (state === 'committed') git('commit', '-qm', 'hidden fixture');
+      // A clean worktree must not conceal the staged or committed addition.
+      if (state === 'committed' || state === 'staged') write(path, clean);
+      const before = snapshot();
+      const contents = readFileSync(join(root, path));
+      const result = run('--skip-lint');
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(`${path}:2 — hidden-unicode:`);
+      expect(result.stdout).not.toContain('Pregate passed');
+      expect(snapshot()).toEqual(before);
+      expect(readFileSync(join(root, path))).toEqual(contents);
+
+      if (state === 'committed') {
+        const ci = spawnSync(process.execPath, ['scripts/scan-diff-hidden-content.js', '--base', base], {
+          cwd: root, encoding: 'utf8',
+        });
+        expect(ci.status).toBe(1);
+        expect(result.stderr).toContain(ci.stderr.trim());
+      }
+    },
+  );
+
+  it('passes clean uncommitted changes even when the plan selects no lint or tests', () => {
+    git('config', 'core.autocrlf', 'true');
+    write(trackedPath, `${clean}staged\n`);
+    git('add', '--', trackedPath);
+    write(trackedPath, `${clean}unstaged\n`);
+    write('docs/new note.md', 'ordinary text\n');
+    const before = snapshot();
+    const result = run('--skip-lint');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Pregate passed: hidden-content scan.');
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('lists the mandatory scan in plan-only mode without scanning hidden content', () => {
+    write('docs/new note.md', hidden);
+    const before = snapshot();
+    const result = run('--plan-only', '--skip-lint');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`hidden-content scan: scan-diff-hidden-content.js --base ${base} --worktree`);
+    expect(result.stdout).not.toContain('▶️');
+    expect(result.stderr).toBe('');
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('preserves binary, empty-file, and stdin-like path findings for untracked additions', () => {
+    const emptyPath = 'docs/empty\u200B.md';
+    write(emptyPath, '');
+    write('docs/payload.bin', Buffer.from([0, 1, 2]));
+    write('-', hidden);
+    const before = snapshot();
+    const result = run('--skip-lint');
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain(`${emptyPath}:1 — hidden-unicode: filename`);
+    expect(result.stderr).toContain('docs/payload.bin:1 — opaque-binary:');
+    expect(result.stderr).toContain('./-:2 — hidden-unicode:');
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('rejects a no-index read error even when Git reports the difference exit code', () => {
+    // Git lists an untracked nested repository as a directory. Comparing that
+    // path with /dev/null fails with exit 1 and no patch, rather than exit 2.
+    git('init', '-q', 'docs/nested');
+    write('docs/nested/example.md', clean);
+    const result = run('--skip-lint');
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('Cannot read untracked diff for docs/nested/');
+    expect(result.stdout).not.toContain('Pregate passed');
+  });
+
+  it('fails closed when Git cannot read a blob in the requested committed diff', () => {
+    const blob = git('rev-parse', `HEAD:${trackedPath}`);
+    write(trackedPath, `${clean}ordinary addition\n`);
+    git('add', '--', trackedPath);
+    git('commit', '-qm', 'changed fixture');
+    rmSync(join(root, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
+    const result = run('--skip-lint');
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('Hidden-content scan failed:');
+    expect(result.stdout).not.toContain('Pregate passed');
   });
 });
 

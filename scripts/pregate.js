@@ -11,8 +11,8 @@
  * file imports. Each cost a push, a ~20-minute CI round, and a diagnosis from
  * a log. They are all static and take seconds to answer here.
  *
- * This runs the SAME planner CI runs and hands its plan to the SAME runners
- * (`run-ci-lint.js`, `run-ci-tests.js`), so a green pregate means those Linux
+ * This runs CI's hidden-content scan and hands the SAME planner's plan to the
+ * SAME runners (`run-ci-lint.js`, `run-ci-tests.js`), so a green pregate means those Linux
  * jobs are green for the same reasons — never a second, drifting opinion about
  * which tests matter.
  *
@@ -59,11 +59,15 @@ export const UNCOVERED_SUITES = Object.freeze({
  * The ordered stages to run for a plan, each a spawnable command.
  *
  * Pure, so the plan -> stage mapping is testable without spawning Vitest.
- * Order is cheapest-signal-first: lint answers in about a second, and a
- * failure there means the test stages would only delay the same verdict.
+ * The hidden-content scan always runs first, even if lint/tests select no work.
  */
-export function resolvePlanStages(plan, { skipLint = false } = {}) {
-  const stages = [];
+export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
+  const stages = [{
+    name: 'hidden-content scan',
+    script: 'scan-diff-hidden-content.js',
+    args: ['--base', baseSha, '--worktree'],
+    env: {},
+  }];
 
   if (!skipLint && plan.lint.mode !== 'skip') {
     stages.push({
@@ -135,7 +139,7 @@ export function statusPaths(output) {
 export function collectPregateChangedFiles(baseSha, { cwd = REPO_ROOT } = {}) {
   const committed = gitPaths(['diff', '-z', '--name-only', '--diff-filter=ACMRD', `${baseSha}...HEAD`], cwd);
   const status = execFileSync(
-    'git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
+    'git', ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all'],
     { cwd, encoding: 'utf8' },
   );
   const workingTree = statusPaths(status);
@@ -221,14 +225,9 @@ function main() {
     console.log('⚠️ CI will run the FULL suite for this diff — running the always-run guards only. Pass --full to run everything.');
   }
 
-  const stages = resolvePlanStages(plan, { skipLint: options.skipLint });
+  const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha });
   const uncovered = Object.keys(UNCOVERED_SUITES).filter((key) => plan[key]);
   uncovered.forEach((key) => console.log(`ℹ️ CI will also run: ${key} — not covered here; run ${UNCOVERED_SUITES[key]}`));
-
-  if (stages.length === 0) {
-    console.log('✅ Nothing for this gate to run — the plan selected no lint or test work.');
-    process.exit(0);
-  }
 
   if (options.planOnly) {
     stages.forEach((stage) => console.log(`• ${stage.name}: ${stage.script} ${stage.args.join(' ')}`));
