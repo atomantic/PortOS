@@ -19,6 +19,9 @@ const review = (over = {}) => ({
   evidence: 'The diff rewrites the scheduler instead.',
   backend: 'ollama',
   model: 'qwen3',
+  objective: 'Add retry caps to the queue\nplus detail',
+  baseCommit: 'a'.repeat(40),
+  headCommit: 'b'.repeat(40),
   ...over,
 });
 
@@ -205,31 +208,33 @@ describe('buildGoalFidelityIssue', () => {
     expect(body.slice(0, 500)).toContain(goalFidelityIssueMarker(fingerprint));
   });
 
-  it('says so explicitly when the review judged a truncated diff', () => {
-    const { body } = buildGoalFidelityIssue({
+  it('refuses publication when the review judged a truncated diff', () => {
+    const { body, error } = buildGoalFidelityIssue({
       task: { description: 'Add retry caps' }, review: review({ diffTruncated: true }), fingerprint,
     });
-    expect(body).toContain('TRUNCATED diff');
+    expect(body).toBeNull();
+    expect(error).toContain('truncated');
   });
 
-  it('bounds the title and the body', () => {
+  it('bounds the title without cutting substantive context from the body', () => {
     const { title, body } = buildGoalFidelityIssue({
       task: { description: 'x'.repeat(5_000) },
-      review: review({ missing: Array.from({ length: 40 }, () => 'y'.repeat(400)) }),
+      review: review(),
       fingerprint,
     });
     expect(title.length).toBeLessThanOrEqual(160);
     expect(body.length).toBeLessThanOrEqual(12_000);
+    expect(body).toContain('plus detail');
   });
 
   it('reads as a finding even when the review named nothing specific', () => {
     const { body } = buildGoalFidelityIssue({
       task: { description: 'Add retry caps' },
-      review: review({ missing: [], unrequested: [], evidence: '' }),
+      review: review({ missing: [], unrequested: [], evidence: 'The reviewer could not locate the acceptance check.' }),
       fingerprint,
     });
     expect(body).toContain('named nothing specific as missing');
-    expect(body).toContain('recorded no evidence note');
+    expect(body).toContain('allegation requiring independent investigation');
   });
 });
 
@@ -263,7 +268,7 @@ describe('buildGoalFidelityFollowUpTask', () => {
         description: 'Complete the requested change',
         metadata: { prompt: 'Also verify the shipped outcome and preserve the existing contract.' },
       },
-      review: review(),
+      review: review({ objective: undefined }),
       fingerprint,
     });
     expect(body).toContain('## What was asked\nComplete the requested change\n\nAlso verify the shipped outcome and preserve the existing contract.');

@@ -736,7 +736,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     : taskObjective(task);
   if (!objective) return noFidelityVerdict(claimFlow ? 'Claimed issue requirements unavailable; claim workflow is not a code objective.' : null);
 
-  const { diff, reason, truncated } = await runWindowDiff(workspacePath, startedAt, { maxChars: MAX_FIDELITY_DIFF_CHARS });
+  const { diff, base, head, reason, truncated } = await runWindowDiff(workspacePath, startedAt, { maxChars: MAX_FIDELITY_DIFF_CHARS });
   // `reason` = git could not answer; `''` = the run committed nothing. Both skip
   // the review, and neither is a finding: a run with no diff is judged by the
   // commit criterion, which is the check that actually owns that question.
@@ -759,6 +759,11 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       evidence: result.evidence,
       backend: result.backend,
       model: result.model,
+      // Preserve the actual review inputs, including forge-resolved claim
+      // requirements. The outer task prompt may describe only claim mechanics.
+      objective,
+      baseCommit: base,
+      headCommit: head,
       ...(truncated ? { diffTruncated: true } : {}),
       checkedAt: new Date().toISOString(),
     },

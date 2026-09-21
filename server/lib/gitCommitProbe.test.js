@@ -119,6 +119,11 @@ describe('committedDuringRun (#3637)', () => {
 
 describe('runWindowDiff (#5994)', () => {
   const baseOk = { exitCode: 0, stdout: `${'b'.repeat(40)}\n`, stderr: '' };
+  const headOk = { exitCode: 0, stdout: `${'a'.repeat(40)}\n`, stderr: '' };
+
+  beforeEach(() => {
+    vi.mocked(execGit).mockResolvedValueOnce(headOk);
+  });
 
   it('diffs the newest pre-window commit against HEAD, so a multi-commit run reads as one change', async () => {
     vi.mocked(execGit)
@@ -128,18 +133,19 @@ describe('runWindowDiff (#5994)', () => {
     expect(await runWindowDiff('/tmp/ws', SINCE)).toEqual({
       diff: 'diff --git a/a.js b/a.js\n+ok\n',
       base: 'b'.repeat(40),
+      head: 'a'.repeat(40),
       truncated: false,
       reason: null,
     });
     // Older persisted records still work with only a timestamp, and a checkout
     // without a remote default retains the original time-window fallback.
-    expect(execGit).toHaveBeenNthCalledWith(1,
-      ['rev-list', '-n', '1', '--before=2026-08-08T18:23:30.000Z', 'HEAD'],
+    expect(execGit).toHaveBeenNthCalledWith(2,
+      ['rev-list', '-n', '1', '--before=2026-08-08T18:23:30.000Z', 'a'.repeat(40)],
       '/tmp/ws',
       { ignoreExitCode: true, timeout: 10_000 }
     );
-    expect(execGit).toHaveBeenNthCalledWith(2,
-      ['diff', '--no-color', '--no-ext-diff', `${'b'.repeat(40)}..HEAD`],
+    expect(execGit).toHaveBeenNthCalledWith(3,
+      ['diff', '--no-color', '--no-ext-diff', `${'b'.repeat(40)}..${'a'.repeat(40)}`],
       '/tmp/ws',
       { ignoreExitCode: true, timeout: 30_000 }
     );
@@ -150,7 +156,7 @@ describe('runWindowDiff (#5994)', () => {
     expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: '', reason: null });
 
     vi.clearAllMocks();
-    vi.mocked(execGit).mockResolvedValueOnce(baseOk).mockResolvedValueOnce({ exitCode: 128, stdout: '', stderr: 'bad revision' });
+    vi.mocked(execGit).mockResolvedValueOnce(headOk).mockResolvedValueOnce(baseOk).mockResolvedValueOnce({ exitCode: 128, stdout: '', stderr: 'bad revision' });
     expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: null, reason: 'could not read the run window diff' });
   });
 
@@ -164,7 +170,7 @@ describe('runWindowDiff (#5994)', () => {
 
     vi.clearAllMocks();
     vi.mocked(execGit).mockRejectedValue(new Error('timed out'));
-    expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: null, reason: 'could not resolve the run window base commit' });
+    expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: null, head: null, reason: 'could not resolve the run window head commit' });
   });
 
   it('truncates and flags an oversized diff rather than handing a fixed-window model more than it can read', async () => {
@@ -244,7 +250,8 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('runWindowDiff real git history (#7690)'
       const oldBase = (await git(['rev-list', '-n', '1', '--before=2026-08-08T18:23:30Z', 'HEAD'])).stdout.trim();
       expect((await git(['diff', `${oldBase}..HEAD`])).stdout).toContain('upstream.txt');
       const result = await runWindowDiff(sandbox.repo, SINCE);
-      expect(result).toMatchObject({ base: absorbed, reason: null, truncated: false });
+      expect(result).toMatchObject({ base: absorbed, head: runHead, reason: null, truncated: false });
+      expect(result.diff).toBe((await git(['diff', '--no-color', '--no-ext-diff', `${result.base}..${result.head}`])).stdout);
       expect(result.diff).toContain('+first change');
       expect(result.diff).toContain('+second change');
       expect(result.diff).not.toContain('upstream.txt');

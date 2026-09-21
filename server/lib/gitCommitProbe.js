@@ -116,17 +116,26 @@ export async function committedDuringRun(workspacePath, sinceMs) {
  * @param {number} [options.maxChars] - hard cap on the returned text; the diff
  *   is truncated (and flagged) rather than returned whole, because the caller
  *   feeds it to a model with a fixed context window.
- * @returns {Promise<{diff: string|null, base: string|null, truncated: boolean, reason: string|null}>}
+ * @returns {Promise<{diff: string|null, base: string|null, head: string|null, truncated: boolean, reason: string|null}>}
  */
 export async function runWindowDiff(workspacePath, sinceMs, { maxChars = 60_000 } = {}) {
-  const decline = (reason) => ({ diff: null, base: null, truncated: false, reason });
+  const decline = (reason) => ({ diff: null, base: null, head: null, truncated: false, reason });
   if (!workspacePath || typeof workspacePath !== 'string') return decline('no workspace path');
   if (!Number.isFinite(sinceMs)) return decline('no run window');
   const since = new Date(sinceMs);
   if (Number.isNaN(since.getTime())) return decline('unusable run window');
 
+  // Freeze HEAD once: the returned references must reproduce the exact diff
+  // even if another operation moves the checkout while these probes run.
+  const headResult = await execGit(
+    ['rev-parse', '--verify', 'HEAD'], workspacePath,
+    { ignoreExitCode: true, timeout: 10_000 },
+  ).catch(() => null);
+  const head = headResult?.exitCode === 0 ? headResult.stdout.trim() : '';
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(head)) return decline('could not resolve the run window head commit');
+
   const baseResult = await execGit(
-    ['rev-list', '-n', '1', `--before=${since.toISOString()}`, 'HEAD'],
+    ['rev-list', '-n', '1', `--before=${since.toISOString()}`, head],
     workspacePath,
     { ignoreExitCode: true, timeout: 10_000 },
   ).catch(() => null);
@@ -137,7 +146,7 @@ export async function runWindowDiff(workspacePath, sinceMs, { maxChars = 60_000 
   const upstream = await resolveRemoteDefaultRef(workspacePath);
   if (upstream) {
     const mergeBaseResult = await execGit(
-      ['merge-base', 'HEAD', upstream.sha], workspacePath,
+      ['merge-base', head, upstream.sha], workspacePath,
       { ignoreExitCode: true, timeout: 10_000 },
     ).catch(() => null);
     const upstreamBase = mergeBaseResult?.exitCode === 0 ? mergeBaseResult.stdout.trim() : null;
@@ -167,20 +176,20 @@ export async function runWindowDiff(workspacePath, sinceMs, { maxChars = 60_000 
   // unified text (or block on a GUI); `--no-color` so escape codes don't reach
   // a model reading it as source.
   const diffResult = await execGit(
-    ['diff', '--no-color', '--no-ext-diff', `${base}..HEAD`],
+    ['diff', '--no-color', '--no-ext-diff', `${base}..${head}`],
     workspacePath,
     { ignoreExitCode: true, timeout: 30_000 },
   ).catch(() => null);
   if (!diffResult || diffResult.exitCode !== 0) return decline('could not read the run window diff');
 
   const diff = diffResult.stdout;
-  if (!diff.trim()) return { diff: '', base, truncated: false, reason: null };
+  if (!diff.trim()) return { diff: '', base, head, truncated: false, reason: null };
   // The cap bounds what the CALLER receives, marker included — a consumer that
   // re-checks the length against the same constant would otherwise reject the
   // very text this function handed it.
   if (diff.length > maxChars) {
     const marker = '\n…[diff truncated]';
-    return { diff: `${diff.slice(0, Math.max(0, maxChars - marker.length))}${marker}`, base, truncated: true, reason: null };
+    return { diff: `${diff.slice(0, Math.max(0, maxChars - marker.length))}${marker}`, base, head, truncated: true, reason: null };
   }
-  return { diff, base, truncated: false, reason: null };
+  return { diff, base, head, truncated: false, reason: null };
 }

@@ -57,7 +57,8 @@ vi.mock('./agentErrorAnalysis.js', () => ({
   resolveTypeFailureSignal: vi.fn(() => ({ record: 'skip' })),
 }));
 
-const runWindowDiffMock = vi.fn(async () => ({ diff: 'diff --git a/a.js b/a.js', base: 'abc', truncated: false, reason: null }));
+const reviewedDiff = { diff: 'diff --git a/a.js b/a.js', base: 'a'.repeat(40), head: 'b'.repeat(40), truncated: false, reason: null };
+const runWindowDiffMock = vi.fn(async () => reviewedDiff);
 vi.mock('../lib/gitCommitProbe.js', () => ({
   committedDuringRun: vi.fn(async () => true),
   runWindowDiff: (...args) => runWindowDiffMock(...args),
@@ -202,7 +203,7 @@ beforeEach(() => {
     metadata: { lastErrorCategory: analysis?.category || null },
   }));
   getGoalFidelityConfigMock.mockResolvedValue({ enabled: true, backend: 'ollama', model: 'example-model', effort: null });
-  runWindowDiffMock.mockResolvedValue({ diff: 'diff --git a/a.js b/a.js', base: 'abc', truncated: false, reason: null });
+  runWindowDiffMock.mockResolvedValue(reviewedDiff);
   runLocalGoalFidelityReviewMock.mockResolvedValue(verdict());
 });
 
@@ -268,6 +269,11 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     await finalize({ task: { id: 'task-1', description: 'Claim and ship', metadata: { claimFlow: true } } });
     expect(runLocalGoalFidelityReviewMock.mock.calls[0][0].objective).toContain('Retry synthesis failures.');
     expect(completion().completionReason).toBe(GOAL_FIDELITY_CATEGORY);
+    const actualObjective = runLocalGoalFidelityReviewMock.mock.calls[0][0].objective;
+    expect(completion().goalFidelity.objective).toBe(actualObjective);
+    expect(runGoalFidelityFollowUpMock.mock.calls[0][0].review).toMatchObject({
+      objective: actualObjective, baseCommit: reviewedDiff.base, headCommit: reviewedDiff.head,
+    });
   });
 
   it.each(['no branch', 'missing body', 'wrong issue', 'oversized body', 'forge unavailable', 'credentials unavailable'])(
@@ -413,6 +419,23 @@ describe('finalizeAgent — goal-fidelity gate', () => {
         issue: { number: 42, url: 'https://example.com/issues/42', duplicate: false },
         taskId: 'cos-9',
       });
+    });
+
+    it('retains the metadata-backed objective actually judged and immutable change references', async () => {
+      await finalize({
+        task: { id: 'task-1', description: 'Add retry caps', metadata: {
+          prompt: 'Acceptance criteria: stop after three attempts; preserve cancellation.',
+          unrelated: 'UNRELATED METADATA',
+        } },
+        outputBuffer: 'RAW EXECUTION TRANSCRIPT',
+      });
+      const judged = runLocalGoalFidelityReviewMock.mock.calls[0][0];
+      const review = runGoalFidelityFollowUpMock.mock.calls[0][0].review;
+      expect(review.objective).toBe(judged.objective);
+      expect(review.objective).toContain('Acceptance criteria: stop after three attempts; preserve cancellation.');
+      expect(review).toMatchObject({ baseCommit: reviewedDiff.base, headCommit: reviewedDiff.head });
+      expect(JSON.stringify(review)).not.toMatch(/RAW EXECUTION TRANSCRIPT|UNRELATED METADATA|diff --git/);
+      expect(completion().goalFidelity).toMatchObject({ objective: judged.objective });
     });
 
 // The card reads these to decide what to call the task and whether to still

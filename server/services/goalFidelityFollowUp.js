@@ -65,15 +65,16 @@ import { forgeCliForTracker, resolveAppForgeTarget } from '../lib/workTracker.js
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
 import { buildGoalFidelityFalsePositiveReportBlock } from '../lib/goalFidelityCalibration.js';
 import {
   GOAL_FIDELITY_ISSUE_LABEL,
   GOAL_FIDELITY_ISSUE_LABEL_SPEC,
+  GOAL_FIDELITY_ISSUE_LIMITS,
   buildGoalFidelityFollowUpTask,
   buildGoalFidelityIssue,
   goalFidelityFingerprint,
   goalFidelityFollowUpApplies,
-  goalFidelityIssueMarker,
   issueMatchesGoalFidelityMarker,
   resolveGoalFidelityFollowUp,
 } from '../lib/goalFidelityFollowUp.js';
@@ -309,19 +310,41 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
     return { issue: null, error: `this repository already carries ${SCAN_LIMIT}+ '${GOAL_FIDELITY_ISSUE_LABEL}' issues, so a duplicate cannot be ruled out; nothing was filed` };
   }
 
-  const { title, body } = buildGoalFidelityIssue({ task, review, fingerprint });
-  // The forge path is scrubbed by `fileForgeIssue` itself, by construction —
-  // JIRA doesn't go through it, so it scrubs explicitly here. A filed issue is
-  // world-readable the moment it lands, and this text is model-authored prose
-  // derived from an untrusted diff. The marker itself is a slug of the task's
-  // first line and carries no path or credential shape, so the scrub leaves it
-  // intact — which it must, or the issue it files could never dedupe against
-  // itself.
+  // Admit the ORIGINAL context before scrubbing: redaction must never turn an
+  // oversized or incomplete review into an apparently complete public finding.
+  const admission = buildGoalFidelityIssue({ task, review, fingerprint });
+  if (admission.error) return { issue: null, error: admission.error };
+  const scrub = (text) => typeof text === 'string' ? redactPii(scrubForgeIssueText(text)) : text;
+  const publicTask = {
+    description: scrub(task?.description), taskType: scrub(task?.taskType),
+    metadata: { app: scrub(task?.metadata?.app) },
+  };
+  // Slugging destroys credential/address shapes. Keep the established dedup
+  // key, but refuse publication if it would encode private text unsanitized.
+  if (goalFidelityFingerprint(publicTask) !== fingerprint) {
+    return { issue: null, error: 'the finding dedup key contains private context; local investigation remains available' };
+  }
+  const publicIssue = buildGoalFidelityIssue({ task: publicTask, fingerprint, review: {
+    objective: scrub(review.objective), baseCommit: review.baseCommit, headCommit: review.headCommit,
+    verdict: review.verdict, missing: review.missing.map(scrub), unrequested: review.unrequested.map(scrub),
+    evidence: scrub(review.evidence), backend: scrub(review.backend), model: scrub(review.model),
+  } });
+  if (publicIssue.error) return { issue: null, error: publicIssue.error };
+  // Scrub BOTH forge and JIRA inputs here so the queued snapshot is exactly
+  // the public body. Never serialize the task metadata, transcript, or raw diff.
+  const title = scrubForgeIssueText(publicIssue.title);
+  const body = scrubForgeIssueText(publicIssue.body);
+  if (!body.includes(review.baseCommit) || !body.includes(review.headCommit)) {
+    return { issue: null, error: 'the reviewed commit references could not be preserved safely' };
+  }
+  if (body.length > GOAL_FIDELITY_ISSUE_LIMITS.bodyChars) {
+    return { issue: null, error: 'the scrubbed finding exceeds the issue body limit' };
+  }
   const created = tracker === 'jira'
-    ? await createJiraIssue({ app, title: scrubForgeIssueText(title), body: scrubForgeIssueText(body) })
+    ? await createJiraIssue({ app, title, body })
     : await createForgeIssue({ app, target, tracker, exec, title, body });
   if (!created.ok) return { issue: null, error: created.error };
-  return { issue: { number: created.number, url: created.url, duplicate: false }, error: null };
+  return { issue: { number: created.number, url: created.url, body, duplicate: false }, error: null };
 }
 
 /**
@@ -417,4 +440,3 @@ export async function runGoalFidelityFollowUp({ agentId, task, review }) {
 
   return result;
 }
-
