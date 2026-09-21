@@ -688,6 +688,14 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 {agent.metadata.model.replace('claude-', '').replace(/-\d+$/, '')}
               </span>
             )}
+            {agent.metadata?.effort && (
+              <span
+                className="px-2 py-0.5 text-xs rounded bg-orange-500/20 text-orange-400 shrink-0"
+                title="Reasoning effort used for this invocation"
+              >
+                Effort: {agent.metadata.effort}
+              </span>
+            )}
             {!inactive && (
               // 'stalled' is the one phase that does NOT pulse: the run is still
               // alive but has ignored every nudge, and an animated badge reads as

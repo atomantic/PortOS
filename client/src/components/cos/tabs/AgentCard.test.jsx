@@ -465,6 +465,27 @@ describe('AgentCard responsive header', () => {
     expect(screen.getByText(agent.id)).toHaveClass('min-w-0');
     expect(actions).toHaveClass('ml-0', 'sm:ml-auto');
   });
+
+  it('shows the effort used alongside the model on active and completed cards', () => {
+    for (const cardAgent of [
+      { ...agent, status: 'running', completedAt: null },
+      agent,
+    ]) {
+      render(
+        <MemoryRouter>
+          <AgentCard
+            agent={{
+              ...cardAgent,
+              metadata: { ...cardAgent.metadata, model: 'example-model', effort: 'low' },
+            }}
+            completed={cardAgent.status === 'completed'}
+          />
+        </MemoryRouter>
+      );
+      expect(screen.getByText('Effort: low')).toBeInTheDocument();
+      cleanup();
+    }
+  });
 });
 
 describe('AgentCard transcript truncation (#3498)', () => {
