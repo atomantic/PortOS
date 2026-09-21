@@ -418,8 +418,10 @@ describe('Layout — persistent mobile touch targets', () => {
     expect(closeMenu.className).toContain('lg:hidden');
 
     const searchButtons = screen.getAllByRole('button', { name: 'Open command palette' });
-    expect(searchButtons).toHaveLength(1);
+    expect(searchButtons).toHaveLength(2);
     searchButtons.forEach(expectAtLeast44px);
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: 'Open command palette' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Ambient display' })).not.toBeInTheDocument();
 
     const themeToggles = screen.getAllByRole('button', { name: 'Toggle day/night mode' });
     expect(themeToggles).toHaveLength(2);
@@ -430,6 +432,16 @@ describe('Layout — persistent mobile touch targets', () => {
       expect(toggle.className).not.toContain('sm:min-w-0');
       expect(toggle.className).not.toContain('sm:min-h-0');
     });
+  });
+
+  it('opens the command palette from the mobile header search button', async () => {
+    await renderLayout();
+    const dispatchSpy = vi.spyOn(document, 'dispatchEvent');
+
+    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Open command palette' }));
+
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: CMD_K_SEARCH_OPEN_EVENT }));
+    dispatchSpy.mockRestore();
   });
 
   it('expands section children when the mobile sidebar opens from a collapsed desktop preference', async () => {
@@ -447,8 +459,9 @@ describe('Layout — nav footer', () => {
   it('opens the command palette from the footer search button', async () => {
     await renderLayout();
     const dispatchSpy = vi.spyOn(document, 'dispatchEvent');
+    const footer = screen.getByText(/^vtest$/).closest('.border-t');
 
-    const searchButton = screen.getByRole('button', { name: 'Open command palette' });
+    const searchButton = within(footer).getByRole('button', { name: 'Open command palette' });
     fireEvent.click(searchButton);
 
     expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: CMD_K_SEARCH_OPEN_EVENT }));
