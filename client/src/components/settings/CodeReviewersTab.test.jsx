@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
 import CodeReviewersTab from './CodeReviewersTab';
 import * as api from '../../services/api';
+import toast from '../ui/Toast';
 
 vi.mock('../../services/api', () => ({
   getCodeReviewDefaults: vi.fn(),
@@ -44,14 +45,14 @@ describe('CodeReviewersTab', () => {
     const provider = await screen.findByLabelText('Provider');
     expect(screen.queryByRole('option', { name: 'Disabled API' })).not.toBeInTheDocument();
     fireEvent.change(provider, { target: { value: 'example-gpu' } });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Model', exact: true }), { target: { value: 'coder-b' } });
-    fireEvent.change(screen.getByLabelText('Thinking effort'), { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add provider reviewer' }));
+    fireEvent.change(screen.getByLabelText('Model for Example GPU'), { target: { value: 'coder-b' } });
+    fireEvent.change(screen.getByLabelText('Reasoning effort for Example GPU'), { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
     const saved = api.updateSettings.mock.calls[0][0].codeReview;
     expect(saved).toMatchObject({
-      reviewers: ['copilot', 'provider:example-gpu'],
+      reviewers: ['provider:example-gpu', 'copilot'],
       providerModels: { 'provider:example-gpu': 'coder-b' },
       providerEfforts: { 'provider:example-gpu': 'high' },
       codexModel: 'legacy-model', claudeEffort: 'medium',
@@ -73,6 +74,93 @@ describe('CodeReviewersTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(3));
     expect(api.updateSettings.mock.calls[2][0].codeReview).toMatchObject({ reviewers: ['copilot'], providerModels: {}, providerEfforts: {} });
+  });
+
+  it('edits persisted tier priority, shares pins across memberships, and saves only nonempty tiers', async () => {
+    const token = 'provider:example-gpu';
+    pickerData.current = {
+      loaded: true, providers: [{ id: 'example-gpu', name: 'Example GPU', enabled: true, command: 'codex', models: ['custom-coder'] }],
+      optionsByReviewer: { [token]: ['custom-coder'] },
+    };
+    api.getCodeReviewDefaults.mockResolvedValue({
+      // The active runtime tier is intentionally not the configured Primary.
+      reviewers: ['codex'], reviewerFallbackGroups: [[token, 'ollama'], ['codex']],
+      providerModels: { [token]: 'custom-coder' }, providerEfforts: { [token]: 'high' },
+      optionalReviewers: [token, '@example-bot'], reviewerMaxRounds: { [token]: 1, '@example-bot': 2 },
+      usernames: ['example-bot'], stopMode: 'consensus', reviewerApplies: true,
+    });
+    api.updateSettings.mockResolvedValue({});
+    const view = render(<CodeReviewersTab />);
+    const primary = await screen.findByRole('region', { name: 'Primary' });
+    expect(within(primary).getByLabelText('Model for Example GPU')).toHaveValue('custom-coder');
+    expect(api.updateSettings).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Fallback reviewer groups')).not.toBeInTheDocument();
+    const fallback = screen.getByRole('region', { name: 'Fallback 1' });
+    fireEvent.change(within(fallback).getByLabelText('Provider'), { target: { value: 'example-gpu' } });
+    fireEvent.click(within(fallback).getByText('Add provider reviewer'));
+    expect(screen.getAllByLabelText('Model for Example GPU')).toHaveLength(2);
+    fireEvent.change(within(fallback).getByLabelText('Provider'), { target: { value: 'example-gpu' } });
+    expect(within(fallback).getByText('Add provider reviewer')).toBeDisabled();
+    fireEvent.change(within(fallback).getByLabelText('Reasoning effort for Example GPU'), { target: { value: 'low' } });
+    expect(within(primary).getByLabelText('Reasoning effort for Example GPU')).toHaveValue('low');
+    fireEvent.click(within(primary).getByLabelText('Remove Example GPU'));
+    expect(screen.getByLabelText('Model for Example GPU')).toHaveValue('custom-coder');
+    fireEvent.change(screen.getByLabelText('Tier for codex in Fallback 1'), { target: { value: 'tier-0' } });
+    fireEvent.click(screen.getByLabelText('Move Primary later'));
+    fireEvent.click(screen.getByText('Add tier'));
+    fireEvent.click(screen.getByText('Save defaults'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    const saved = api.updateSettings.mock.lastCall[0].codeReview;
+    expect(saved).toMatchObject({
+      reviewers: [token], reviewerFallbackGroups: [[token], ['ollama', 'codex']],
+      providerModels: { [token]: 'custom-coder' }, providerEfforts: { [token]: 'low' },
+      optionalReviewers: [token, '@example-bot'], reviewerMaxRounds: { [token]: 1, '@example-bot': 2 },
+      usernames: ['example-bot'], stopMode: 'consensus', reviewerApplies: true,
+    });
+    expect(screen.queryByRole('region', { name: 'Fallback 2' })).not.toBeInTheDocument();
+    view.unmount();
+    api.getCodeReviewDefaults.mockResolvedValue(saved);
+    render(<CodeReviewersTab />);
+    fireEvent.click(await screen.findByText('Save defaults'));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(2));
+    expect(api.updateSettings.mock.lastCall[0].codeReview).toEqual(saved);
+    await waitFor(() => expect(screen.getByText('Save defaults')).not.toBeDisabled());
+    fireEvent.click(screen.getByLabelText('Remove Primary'));
+    expect(screen.queryByLabelText('Model for Example GPU')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Remove Primary'));
+    fireEvent.click(screen.getByText('Save defaults'));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(3));
+    expect(api.updateSettings.mock.lastCall[0].codeReview).toMatchObject({
+      reviewers: [], reviewerFallbackGroups: [], usernames: ['example-bot'], providerModels: {}, providerEfforts: {},
+      optionalReviewers: ['@example-bot'], reviewerMaxRounds: { '@example-bot': 2 },
+    });
+  });
+
+  it('respects explicit empty groups despite a legacy roster and gates failed or in-flight saves', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], reviewerFallbackGroups: [], usernames: ['example-bot'] });
+    let rejectSave;
+    api.updateSettings.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
+    render(<CodeReviewersTab />);
+    fireEvent.click(await screen.findByText('Save defaults'));
+    expect(screen.getByText('Saving…')).toBeDisabled();
+    expect(screen.getByText('Add tier')).toBeDisabled();
+    expect(screen.getByLabelText('Remove @example-bot')).toBeDisabled();
+    expect(api.updateSettings.mock.lastCall[0].codeReview).toMatchObject({ reviewers: [], reviewerFallbackGroups: [], usernames: ['example-bot'] });
+    rejectSave(new Error('example failure'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('example failure')));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Remove @example-bot')).not.toBeDisabled();
+    api.updateSettings.mockResolvedValue({});
+    fireEvent.click(screen.getByText('Save defaults'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+  });
+
+  it('does not enable save after a malformed defaults response', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], reviewerFallbackGroups: [['codex'], null] });
+    render(<CodeReviewersTab />);
+    expect(await screen.findByText('Failed to load code review defaults.')).toBeInTheDocument();
+    expect(screen.getByText('Save defaults')).toBeDisabled();
+    expect(api.updateSettings).not.toHaveBeenCalled();
   });
 
   it('renders loading state initially and populates panel when fetch succeeds', async () => {

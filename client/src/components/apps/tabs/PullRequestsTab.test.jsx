@@ -23,9 +23,14 @@ const { toastMock } = vi.hoisted(() => {
 });
 
 vi.mock('../../../services/socket', () => ({ default: socketMock }));
+vi.mock('../../../services/apiLocalLlm', () => ({
+  getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
+  getVisionModels: vi.fn().mockResolvedValue({ models: [] }),
+}));
 vi.mock('../../ui/Toast', () => ({ default: toastMock }));
 vi.mock('../../../services/api', () => ({
   getAppPullRequests: vi.fn(),
+  getInstanceFeatures: vi.fn().mockResolvedValue({ features: {} }),
   resolveAppPullRequest: vi.fn(),
   reviewAppPullRequest: vi.fn(),
   doReviewAppPullRequest: vi.fn(),
@@ -644,7 +649,9 @@ describe('PullRequestsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Remove codex$/i }));
     expect(screen.getByRole('button', { name: /Reviewer override \(active\)/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Codex$/ }));
+    fireEvent.click(screen.getByText('Standalone / legacy backend'));
+    fireEvent.change(screen.getByLabelText('Legacy backend'), { target: { value: 'codex' } });
+    fireEvent.click(screen.getByText('Add legacy reviewer'));
     expect(screen.getByRole('button', { name: /^Reviewer override$/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Resolve & merge' }));

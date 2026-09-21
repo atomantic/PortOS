@@ -68,3 +68,38 @@ claim and follow-up procedures resolve these maps before issuing provider
 reviews and send `inheritDefaults: false` to the local-review bridge, preventing
 a cleared task pin from being replaced by a global pin. Direct bridge/API
 requests that omit this flag continue to inherit the saved defaults.
+
+## Primary and fallback tiers
+
+Models → Code Reviewers edits saved priority as Primary, Fallback 1, and so on.
+Add a tier, choose a configured provider, then set its model, effort, optional
+status and round cap on the same row controls used by task and schedule pickers.
+Standalone / legacy backend retains direct CLI, local runtime and Copilot
+identities; these do not select a configured provider account or transport.
+Custom model IDs and unavailable saved providers remain editable.
+
+Drag a tier handle to change priority, or a reviewer handle to reorder or move
+its membership. Pointer and touch work on the handles; keyboard users press
+Space, arrow keys, then Space to drop or Escape to cancel. Earlier/later buttons
+and Move to tier selectors offer the same operations without dragging.
+Tool-free reviewers always precede CLI and Copilot reviewers within a tier;
+moves across that boundary are normalized to the execution order. Forge usernames
+remain in a final separate section and never belong to a fallback tier.
+
+The runtime selects the first nonempty tier with **every** reviewer unpaused.
+A partially paused tier is skipped too. If no tier qualifies, it selects the
+first configured tier; paused members still report unavailable. The displayed
+status updates at pause expiry without saving or rearranging the configuration.
+Provider availability and configuration-fault warnings do not change this rule.
+
+A reviewer may belong to several tiers. Model, effort, optional status and round
+caps are shared by identity. Removing a membership or tier prunes only pins whose
+last membership was removed. Adding an identity already in a tier changes nothing.
+Empty tiers are drafts and are removed on save; clearing all tiers explicitly
+disables AI reviewers while retaining forge usernames. Legacy flat settings load
+as one Primary tier. Saves include that first configured tier as `reviewers` for
+older readers, independently of the currently healthy tier.
+
+Task, schedule and app overrides remain flat and retain absent-as-inherit and
+explicit-clear semantics; fallback groups are only an install default. A failed
+load disables saving, and a failed save keeps the draft for retry.

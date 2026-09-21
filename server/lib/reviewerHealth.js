@@ -23,3 +23,14 @@ export function reviewerAccessFailureCode(reviewer, failure) {
       || failure.message === "OpenCode's free tier can only be used from within OpenCode");
   return freeTierError || accessDenied ? 'REVIEWER_ACCESS_DENIED' : null;
 }
+
+/** First nonempty tier with ALL members unpaused, or the first configured tier.
+ * Empty drafts never participate. Shared by runtime and the settings preview;
+ * configuration faults are warnings, not quota pauses or a new fallback rule.
+ */
+export function activeReviewerGroupIndex(groups, health = {}, now = Date.now()) {
+  const first = groups.findIndex(group => group.length > 0);
+  const healthy = groups.findIndex(group => group.length > 0
+    && group.every(reviewer => !(Number(health[reviewer]?.pausedUntil) > now)));
+  return healthy < 0 ? first : healthy;
+}

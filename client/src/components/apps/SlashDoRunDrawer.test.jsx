@@ -25,6 +25,7 @@ vi.mock('../../services/api', () => api);
 // the annotation itself is covered in ProviderModelSelector.test.jsx.
 vi.mock('../../services/apiLocalLlm', () => ({
   getToolUseModels: vi.fn(() => new Promise(() => {})),
+  getVisionModels: vi.fn().mockResolvedValue({ models: [] }),
 }));
 
 // Routed: the override note links to the panel that owns the pin, so the drawer
@@ -155,7 +156,9 @@ describe('SlashDoRunDrawer', () => {
 
     await waitFor(() => expect(screen.getByText('Reviewers (in order):')).toBeInTheDocument());
     // Add a second, non-Copilot reviewer — the two flags render at 2+ / non-copilot.
-    await userEvent.click(screen.getByRole('button', { name: /^Claude/ }));
+    await userEvent.click(screen.getByText('Standalone / legacy backend'));
+    await userEvent.selectOptions(screen.getByLabelText('Legacy backend'), 'claude');
+    await userEvent.click(screen.getByText('Add legacy reviewer'));
 
     expect(screen.queryByText('Stop mode:')).not.toBeInTheDocument();
     expect(screen.queryByText(/Reviewer applies fixes/)).not.toBeInTheDocument();
