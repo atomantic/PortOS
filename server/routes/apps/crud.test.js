@@ -98,8 +98,9 @@ describe('Apps CRUD Routes', () => {
     }
   });
 
-  // Uniquely pins the on-demand publish route: it commits for the loaded app
-  // regardless of the opt-in toggle, and 404s rather than publishing for a stranger.
+  // Uniquely pins the on-demand publish route: it lands a snapshot PR for the
+  // loaded app regardless of the opt-in toggle, and 404s rather than publishing
+  // for a stranger.
   it('publishes a managed app snapshot on demand and 404s for an unknown app', async () => {
     appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Example App', repoPath: '/repo/example-app' });
     const published = await request(app).post('/api/apps/app-001/quality-snapshot');

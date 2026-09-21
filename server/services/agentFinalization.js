@@ -1675,9 +1675,10 @@ async function recoverBareSentinelPayload(contents, taskType) {
 
 /**
  * Opt-in only: an app with `publishQualitySnapshot` gets its freshly recorded
- * measurement committed into the repo's `.quality.json`. This is a completion
- * boundary outside the Express request lifecycle, so a missing repo, a git
- * failure, or a locked index must log and let finalization finish.
+ * measurement landed as the repo's `.quality.json` through a merge-on-green
+ * pull request. This is a completion boundary outside the Express request
+ * lifecycle, so a missing repo, a git failure, or a locked index must log and
+ * let finalization finish.
  */
 async function publishAppSnapshotFileAfterAudit(appId) {
   if (!appId) return;

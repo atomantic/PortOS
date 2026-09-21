@@ -118,15 +118,19 @@ describe('AppQuality snapshot publishing', () => {
     expect(screen.getByRole('button', { name: 'Publish snapshot now' })).toBeInTheDocument();
   });
 
-  it('reports the commit that carried the snapshot into the repo', async () => {
-    publishAppQualitySnapshot.mockResolvedValue({ success: true, published: true, hash: 'abc1234def', path: '.quality.json' });
+  it('reports the pull request that carries the snapshot into the repo', async () => {
+    publishAppQualitySnapshot.mockResolvedValue({
+      success: true, published: true, hash: 'abc1234def', path: '.quality.json',
+      prUrl: 'https://github.com/example/app/pull/42',
+    });
     render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
     await screen.findByText(/No scored assessments/);
 
     fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot now' }));
 
     await waitFor(() => expect(publishAppQualitySnapshot).toHaveBeenCalledWith('example'));
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Quality snapshot committed to .quality.json (abc1234)'));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
+      'Quality snapshot pull request opened; it will merge when CI is green'));
   });
 
   it('explains a refusal instead of claiming a commit that never happened', async () => {

@@ -742,7 +742,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                 <span className="text-sm text-white">Publish quality snapshot to repo</span>
               </label>
               <p className="ml-6 text-xs text-gray-500">
-                After each audit, PortOS writes the app’s numeric quality scores to .quality.json at the repo root and commits it, so other PortOS installs running this app start with the latest scores. Off by default; nothing is pushed.
+                After each audit, PortOS writes the app’s numeric quality scores to .quality.json, opens a pull request, and merges it when CI is green so the live checkout never diverges from origin. Off by default.
               </p>
             </div>
           )}
