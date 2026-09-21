@@ -1608,7 +1608,9 @@ async function executeProviderRunOnce({
         // about the effective provider's type (e.g. vision, which only works
         // on API providers) must read this, since a proactive swap leaves
         // `usedFallback`/`fallbackProvider` unset.
-        safeResolve({ text: finalText, runId, model: effectiveModel, provider: effectiveProvider });
+        safeResolve({ text: finalText, runId, model: effectiveModel, provider: effectiveProvider,
+          ...(result?.finishReason ? { finishReason: result.finishReason } : {}),
+        });
       }
     };
 

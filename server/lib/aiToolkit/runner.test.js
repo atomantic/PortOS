@@ -1032,6 +1032,25 @@ describe('AI Toolkit runner service', () => {
       .toBe('split-across-reads');
   });
 
+  it('retains a streamed output-limit reason in completion and run metadata', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-finish-'));
+    tempDirs.push(dataDir);
+    const frames = ['data: {"choices":[{"delta":{"content":"{}"}}]}\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n', 'data: [DONE]\n'];
+    let index = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => ({
+      read: async () => index < frames.length
+        ? { done: false, value: new TextEncoder().encode(frames[index++]) } : { done: true },
+    }) } })));
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+    await runner.executeApiRun({ runId: 'run-finish', provider: runReady(), prompt: 'hi', onComplete: complete });
+    expect(await completed).toMatchObject({ finishReason: 'length' });
+    const metadata = JSON.parse(await readFile(join(dataDir, 'runs', 'run-finish', 'metadata.json'), 'utf8'));
+    expect(metadata.finishReason).toBe('length');
+  });
+
   // Same boundary, one layer down: a multi-byte character cut in half by the
   // read boundary needs the decoder's own streaming carry, or it lands as U+FFFD.
   it('decodes a multi-byte character split across two reads', async () => {

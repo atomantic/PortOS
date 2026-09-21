@@ -66,8 +66,8 @@ const OBJECT_EDITABLE_LIST_FIELDS = [
  *   snippetFallbackKeys    — ordered payload keys the list/picker snippet pulls
  *                            from (first non-empty wins).
  *   ftsFields              — payload keys folded into the weighted FTS column.
- *   extractionShape        — 'bible' (runs through extractBible) or 'light'
- *                            (the bundled ideas/scenes/concepts LLM stage).
+ *   extractionShape        — 'bible' (uses the shared bible sanitizer) or 'light'
+ *                            (idea/scene/concept draft fields).
  *   payloadSchemaVersion   — current per-record payload-shape version.
  *   payloadUpgraders       — { <fromVersion>: (payload) => payload } chain.
  *   defaultTags            — canonical tag labels seeded onto every freshly-

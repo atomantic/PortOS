@@ -509,6 +509,7 @@ export function extractJson(text, { promptToStrip } = {}) {
  *     Clamped to the provider's ladder and dropped for effort-incapable providers
  *     by the runner, so it is safe to pass unconditionally. See resolveEffortHint.
  *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
+ *   - maxTokens: API output cap, when the caller budgets an output reserve
  *   - returnsJson: parse `content` via `extractJson` before returning
  *   - source: free-form tag persisted on the run record (e.g. 'pipeline-text-stage',
  *     'writers-room-evaluate') so /runs is filterable
@@ -663,6 +664,7 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
   const runResult2 = await runPromptThroughProvider({
     provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,
+    maxTokens: options.maxTokens,
     // Reasoning effort (#3641). Always passed: the runner clamps it to the
     // provider's ladder and omits the flag entirely for a provider with no
     // effort control, so no capability check is needed here.
@@ -688,5 +690,7 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
   // providers — returns input unchanged when the banner isn't present.
   const cleaned = extractCodexAssistant(text);
   const content = options.returnsJson ? extractJson(cleaned, { promptToStrip: prompt }) : cleaned;
-  return { content, model: finalModel || null, providerId: finalProvider.id, runId: finalRunId };
+  return { content, model: finalModel || null, providerId: finalProvider.id, runId: finalRunId,
+    ...(runResult2.finishReason ? { finishReason: runResult2.finishReason } : {}),
+  };
 }
