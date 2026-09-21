@@ -688,14 +688,6 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 {agent.metadata.model.replace('claude-', '').replace(/-\d+$/, '')}
               </span>
             )}
-            {agent.metadata?.effort && (
-              <span
-                className="px-2 py-0.5 text-xs rounded bg-orange-500/20 text-orange-400 shrink-0"
-                title="Reasoning effort used for this invocation"
-              >
-                Effort: {agent.metadata.effort}
-              </span>
-            )}
             {!inactive && (
               // 'stalled' is the one phase that does NOT pulse: the run is still
               // alive but has ignored every nudge, and an animated badge reads as
@@ -854,8 +846,16 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         )}
 
         {/* Agent configuration badges */}
-        {CONFIG_BADGE_KEYS.some(key => agent.metadata?.[key]) && (
+        {(CONFIG_BADGE_KEYS.some(key => agent.metadata?.[key]) || agent.metadata?.effort) && (
           <div className="flex items-center gap-1.5 flex-wrap mb-2">
+            {agent.metadata?.effort && (
+              <span
+                className="flex items-center px-1.5 py-0.5 text-[11px] rounded bg-orange-500/15 text-orange-400"
+                title="Reasoning effort used for this invocation"
+              >
+                Effort: {agent.metadata.effort}
+              </span>
+            )}
             {/* A claim run self-manages its `claim/<item>` worktree and its own forge
                 handoff, so CoS keeps configUseWorktree/configOpenPR off to avoid
                 nesting a second worktree. Badge what it actually does rather than

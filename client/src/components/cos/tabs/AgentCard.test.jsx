@@ -146,6 +146,30 @@ describe('AgentCard runtime presentation', () => {
     expect(screen.getByRole('link', { name: /Open Shell/ })).toHaveAttribute('href', '/shell?session=sess-abcdef123');
   });
 
+  it('keeps effort beside the worktree and PR configuration badges', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard
+          agent={{
+            ...agent,
+            metadata: {
+              ...agent.metadata,
+              effort: 'medium',
+              configUseWorktree: true,
+              configOpenPR: true,
+            },
+          }}
+          completed
+        />
+      </MemoryRouter>
+    );
+
+    const effort = screen.getByText('Effort: medium');
+    expect(effort).toHaveClass('text-[11px]');
+    expect(effort.closest('div')).toHaveTextContent('Worktree');
+    expect(effort.closest('div')).toHaveTextContent('PR');
+  });
+
   it('distinguishes a live process, a zombie, and missing process stats', async () => {
     const runningAgent = { ...runningAt(30_000), pid: 4242 };
     api.getCosAgentStats.mockResolvedValueOnce({ active: true, pid: 4242, state: 'running', cpu: 12.3, memoryMb: 64 });
