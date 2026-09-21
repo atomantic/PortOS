@@ -250,7 +250,7 @@ export const openAppFolder = (id) => request(`/apps/${id}/open-folder`, { method
 // The server resolves the real .xcworkspace/.xcodeproj name and opens it on the
 // machine Xcode runs on — so this works from a phone, and a missing project
 // comes back as a real error instead of a silent `xcode://` no-op.
-export const openAppInXcode = (id) => request(`/apps/${id}/open-xcode`, { method: 'POST' });
+export const openAppInXcode = (id, options = {}) => request(`/apps/${id}/open-xcode`, { method: 'POST', ...options });
 export const refreshAppConfig = (id) => request(`/apps/${id}/refresh-config`, { method: 'POST' });
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
 // when it already renders its own error UI.

@@ -32,7 +32,7 @@ const GRAPH = {
   timeline: {
     startAt: NOW.toISOString(),
     endAt: new Date(NOW.getTime() + 24 * 3600 * 1000).toISOString(),
-    occurrences: [{ nodeId: 'task:ux', at: NOW.toISOString() }],
+    occurrences: [{ id: 'occurrence-1', nodeId: 'task:ux', at: NOW.toISOString() }],
     windows: [],
   },
   nodes: [{
