@@ -84,6 +84,18 @@ describe('reviewLifecycle reviewer invocation details', () => {
     getHttpsEnabledAtBoot.mockReturnValue({ value: false, initialized: true });
   });
 
+  it('uses resolved provider pins for both claim review and the public-comment gate', () => {
+    const token = 'provider:example-reviewer';
+    const section = buildLocalReviewerInstructions([token], { [token]: 'example-model' }, { [token]: 'high' }, { claimCommentGate: true });
+    expect(section).toContain('--arg model example-model');
+    expect(section).toContain('--arg effort high');
+    expect(section.match(/inheritDefaults: false/g)).toHaveLength(2);
+    const cleared = buildLocalReviewerInstructions([token], {}, {}, { claimCommentGate: true });
+    expect(cleared.match(/inheritDefaults: false/g)).toHaveLength(2);
+    expect(cleared).not.toContain('--arg model');
+    expect(cleared).not.toContain('--arg effort');
+  });
+
   // The route validates `backend` against a z.enum of the local-LLM reviewers, so
   // a leftover `<lmstudio|ollama>` placeholder in a run configured for MTPLX is a
   // 400 the agent has to guess its way out of.
@@ -98,6 +110,21 @@ describe('reviewLifecycle reviewer invocation details', () => {
     const section = buildReviewLoopFollowUpSection({ ...metadata, reviewLoopReviewers: ['ollama', 'mtplx'] });
     expect(section).toContain('backend: "<ollama|mtplx>"');
     expect(section).toContain('Substitute the active reviewer name');
+  });
+
+  it('renders separate executable requests for provider identities with different pins', () => {
+    const section = buildReviewLoopFollowUpSection({
+      ...metadata,
+      reviewLoopReviewers: ['provider:first', 'ollama', 'provider:second'],
+      reviewLoopReviewerModels: { 'provider:first': 'first-model', 'provider:second': 'second-model' },
+      reviewLoopReviewerEfforts: { 'provider:first': 'high', 'provider:second': 'low' },
+    });
+    const requests = [...section.matchAll(/jq -Rs '(\{[^'\n]+\}) \+ \{ diff: \. \}'/g)].map(match => JSON.parse(match[1]));
+    expect(requests).toEqual([
+      { backend: 'provider:first', inheritDefaults: false, model: 'first-model', effort: 'high', timeoutMs: 1800000 },
+      { backend: 'provider:second', inheritDefaults: false, model: 'second-model', effort: 'low', timeoutMs: 1800000 },
+    ]);
+    expect(section).toContain('backend: "ollama"');
   });
 
   // The challenge-protocol curl hits `/api/*`, which the optional instance

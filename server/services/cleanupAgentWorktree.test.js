@@ -246,6 +246,8 @@ import { getAgent, getAgentRecord, getTaskById, addTask, forceSpawnTask, updateT
 import { removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
+import { resolveReviewerConfig } from '../lib/reviewerConfig.js';
+import { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle.js';
 
 // Helper: build a mock agent state for worktree agents
 function mockWorktreeAgent(overrides = {}) {
@@ -1656,6 +1658,34 @@ describe('spawnReviewLoopFollowUp', () => {
     vi.clearAllMocks();
     addTask.mockResolvedValue({ id: 'sys-rl-x' });
     forceSpawnTask.mockResolvedValue({ success: true });
+  });
+
+  it('preserves resolved provider pins and explicit clears in the queued review procedure', async () => {
+    const backend = 'provider:example-reviewer';
+    const defaults = {
+      reviewers: [backend, 'codex'],
+      providerModels: { [backend]: 'example-model', 'provider:unused': 'unused-model' },
+      providerEfforts: { [backend]: 'high', 'provider:unused': 'low' },
+      codexModel: 'gpt-5.6-sol', codexEffort: 'low',
+    };
+    const spawn = async metadata => spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-example', originalTask: { id: 'task-example' },
+      prUrl: 'https://github.com/example-owner/example-repo/pull/9',
+      prBranch: 'example-branch', sourceWorkspace: '/example-workspace',
+      ...resolveReviewerConfig(metadata, defaults, defaults.reviewers),
+    });
+    const followUp = await spawn({});
+    expect(followUp.metadata.reviewLoopReviewerModels).toEqual({ [backend]: 'example-model', codex: 'gpt-5.6-sol' });
+    expect(followUp.metadata.reviewLoopReviewerEfforts).toEqual({ [backend]: 'high', codex: 'low' });
+    const section = buildReviewLoopFollowUpSection(followUp.metadata);
+    expect(section).toContain('"backend":"provider:example-reviewer","inheritDefaults":false,"model":"example-model","effort":"high"');
+    const cleared = await spawn({ reviewerModels: {}, reviewerEfforts: {} });
+    expect(cleared.metadata.reviewLoopReviewerModels).toBeNull();
+    expect(cleared.metadata.reviewLoopReviewerEfforts).toBeNull();
+    const clearedSection = buildReviewLoopFollowUpSection(cleared.metadata);
+    expect(clearedSection).toContain('"backend":"provider:example-reviewer","inheritDefaults":false,"timeoutMs":');
+    expect(clearedSection).not.toContain('"model":"example-model"');
+    expect(clearedSection).not.toContain('"effort":"high"');
   });
 
   it('should not spawn when prUrl is missing', async () => {

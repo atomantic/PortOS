@@ -203,6 +203,7 @@ export function pickCodeReviewDefaults(settings) {
     // non-integer or unbounded budget. Empty object = no caps configured; an
     // absent key is NOT `0` (which slashdo reads as "loop until clean").
     ...(raw?.providerModels ? { providerModels: normalizeReviewerModels(raw.providerModels) || {} } : {}),
+    ...(raw?.providerEfforts ? { providerEfforts: Object.fromEntries(Object.entries(effortDefaults).filter(([key]) => isProviderReviewer(key))) } : {}),
     reviewerMaxRounds: normalizeReviewerMaxRounds(raw?.reviewerMaxRounds) || {},
     stopMode: REVIEW_STOP_MODES.includes(raw?.stopMode) ? raw.stopMode : DEFAULT_REVIEW_STOP_MODE,
     reviewerApplies: raw?.reviewerApplies === true,

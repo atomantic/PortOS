@@ -174,6 +174,7 @@ export default function ReviewerPicker({
   const [addProviderId, setAddProviderId] = useState('');
   const [addProviderModel, setAddProviderModel] = useState('');
   const [addProviderEffort, setAddProviderEffort] = useState('');
+  const [effortNotice, setEffortNotice] = useState('');
   const providerRecords = modelOptions?.providers || [];
   const addProvider = providerRecords.find(provider => provider.id === addProviderId);
   const labelFor = (token) => isProviderReviewer(token)
@@ -423,11 +424,15 @@ export default function ReviewerPicker({
   // one, so accepting them here would show the user a pin that never persists.
   const setModel = (token, raw) => {
     const model = sanitizeReviewerModelInput(raw).trim();
-    if (!model) {
-      emit({ reviewerModels: models.without(token) });
-      return;
+    const next = { reviewerModels: { ...models.without(token), ...(model ? { [token]: model } : {}) } };
+    const provider = providerRecords.find(record => `provider:${record.id}` === token);
+    const effort = efforts.get(token);
+    setEffortNotice('');
+    if (provider && effort && !effortLevelsForProvider(provider, effectiveModelFor(provider, model))?.includes(effort)) {
+      next.reviewerEfforts = efforts.without(token);
+      setEffortNotice(`Reasoning effort for ${labelFor(token)} was cleared because the new model does not support ${effort}. Choose a supported effort or keep the provider default.`);
     }
-    emit({ reviewerModels: { ...models.without(token), [token]: model } });
+    emit(next);
   };
 
   // Blank clears the pin so the reviewer reasons at its own default — the DELETE,
@@ -437,9 +442,10 @@ export default function ReviewerPicker({
   // only be one of the exact levels renderEffortCell rendered, and the one
   // out-of-ladder option it renders is already the selected value, so picking it
   // fires no change.
-  const setEffort = (token, level) => emit({
-    reviewerEfforts: level ? { ...efforts.without(token), [token]: level } : efforts.without(token)
-  });
+  const setEffort = (token, level) => {
+    setEffortNotice('');
+    emit({ reviewerEfforts: level ? { ...efforts.without(token), [token]: level } : efforts.without(token) });
+  };
 
   // The "this reviewer has no such control" cell, shared by the Model and Effort
   // columns so both read identically when the pin doesn't apply.
@@ -511,6 +517,8 @@ export default function ReviewerPicker({
       ariaLabel: `Reasoning effort for ${subject}`,
       title: cursorNeedsModel
         ? `${subject} carries its reasoning effort inside the model id, so pin a Model too — a tier with no model is not passed to the CLI.`
+        : stored && !levels.includes(stored)
+        ? `${subject}'s selected model does not support ${stored} reasoning effort. Choose a supported effort or clear the pin before running a review.`
         : stored
         ? `${subject} reviews at ${stored} reasoning effort. Choose "default" to let it decide.`
         : `${subject} reasons at its own default. Pick a tier to make it think harder (slower, pricier) or lighter.`,
@@ -742,6 +750,7 @@ export default function ReviewerPicker({
             onModelChange={setAddProviderModel}
             effort={addProviderEffort}
             onEffortChange={setAddProviderEffort}
+            effortAllowed={(level, provider, model) => !!effortLevelsForProvider(provider, model)?.includes(level)}
             emptyProviderOption="Choose a reviewer provider"
             emptyModelOption="Provider default"
             alwaysShowModel
@@ -757,6 +766,7 @@ export default function ReviewerPicker({
           <p className="text-xs text-gray-500">Choose from your enabled AI providers. Providers need an API text transport or an enforced tool-free harness to run reviews.</p>
         </div>
       )}
+      {effortNotice && <p role="status" className="text-xs text-port-warning">{effortNotice}</p>}
       <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">Reviewers (in order):</span>
         {selected.length > 0 && (

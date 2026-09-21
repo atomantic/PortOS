@@ -6,6 +6,44 @@ import ReviewerPicker from './ReviewerPicker';
 import { typeSettled } from '../../test/settledInput';
 
 describe('ReviewerPicker', () => {
+  it('clears an incompatible provider effort when its model changes and announces why', () => {
+    const provider = { id: 'example-codex', name: 'Example Codex', command: 'codex', enabled: true,
+      defaultModel: 'gpt-5.6-sol', models: ['gpt-5.6-sol', 'gpt-6-astra'] };
+    const token = 'provider:example-codex';
+    const onChange = vi.fn();
+    function Form() {
+      const [config, setConfig] = useState({
+        reviewers: [token], reviewerModels: { [token]: 'gpt-5.6-sol' },
+        reviewerEfforts: { [token]: 'minimal', claude: 'high' },
+      });
+      return <ReviewerPicker {...config} modelOptions={{ providers: [provider], optionsByReviewer: { [token]: provider.models } }}
+        onChange={value => { onChange(value); setConfig(value); }} />;
+    }
+    render(<Form />);
+    fireEvent.change(screen.getByLabelText('Model for Example Codex'), { target: { value: 'gpt-6-astra' } });
+    expect(screen.getByLabelText('Reasoning effort for Example Codex')).toHaveValue('');
+    expect(onChange.mock.lastCall[0].reviewerEfforts).toEqual({ claude: 'high' });
+    expect(screen.getByRole('status')).toHaveTextContent('new model does not support minimal');
+    fireEvent.change(screen.getByLabelText('Reasoning effort for Example Codex'), { target: { value: 'high' } });
+    fireEvent.change(screen.getByLabelText('Model for Example Codex'), { target: { value: 'gpt-5.6-sol' } });
+    expect(onChange.mock.lastCall[0].reviewerEfforts).toEqual({ [token]: 'high', claude: 'high' });
+  });
+
+  it('keeps an incompatible saved provider effort visible and clearable without mutating on mount', () => {
+    const onChange = vi.fn();
+    const token = 'provider:example-codex';
+    render(<ReviewerPicker reviewers={[token]} reviewerModels={{ [token]: 'gpt-6-astra' }}
+      reviewerEfforts={{ [token]: 'minimal' }} onChange={onChange}
+      modelOptions={{ providers: [{ id: 'example-codex', name: 'Example Codex', command: 'codex' }] }} />);
+    const effort = screen.getByLabelText('Reasoning effort for Example Codex');
+    expect(effort).toHaveValue('minimal');
+    expect(screen.getByRole('option', { name: 'minimal (unsupported)' })).toBeInTheDocument();
+    expect(effort).toHaveAttribute('title', expect.stringContaining('does not support minimal'));
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.change(effort, { target: { value: '' } });
+    expect(onChange.mock.lastCall[0].reviewerEfforts).toEqual({});
+  });
+
   it('adds, edits, and clears effort for a configured provider reviewer', () => {
     const onChange = vi.fn();
     const providers = [{ id: 'codex-tui', name: 'Codex TUI', command: 'codex', enabled: true, defaultModel: 'gpt-6-astra', models: ['gpt-6-astra'] }];

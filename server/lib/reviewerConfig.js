@@ -1004,10 +1004,10 @@ export const KEYED_REVIEWER_PINS = [
  * `claudeEffort` / `antigravityEffort` / `lmstudioEffort` / `ollamaEffort`) into
  * the token-keyed map shape the resolvers and the picker UI both speak — the
  * effort twin of `reviewerModelsFromDefaults`, and the one adapter between the
- * two shapes.
+ * two shapes. Configured providers use the additive `providerEfforts` map.
  */
 export function reviewerEffortsFromDefaults(defaults) {
-  const out = {};
+  const out = Object.fromEntries(Object.entries(normalizeReviewerEfforts(defaults?.providerEfforts) || {}).filter(([key]) => isProviderReviewer(key)));
   for (const r of EFFORT_SELECTABLE_REVIEWERS) {
     // Re-checked, not trusted: settings.json is hand-editable, and a stale level
     // must not surface as a pin the invocation builders would then drop.
