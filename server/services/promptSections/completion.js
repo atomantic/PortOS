@@ -2,7 +2,7 @@
  * Completion workflow, worktree, and sentinel prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isCliReviewer, isToolFreeReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
@@ -603,7 +603,8 @@ export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommand
  * `prCompletion` selects the review gate or CI-only merge gate. Leave-open
  * callers do not invoke this helper.
  */
-function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
+function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, forgeCli = 'gh' } = {}) {
+  const mergeGateForge = forgeCli === 'glab' ? 'gitlab' : 'github';
   // No review loop → CI is the whole gate, so emit the shared CI procedure that
   // the manual-TUI workflow and the merge follow-up agent also use. The PR URL
   // isn't known when this prompt is written, hence the placeholder.
@@ -643,14 +644,25 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
   const optionalMergeNote = allReviewersOptional
     ? ' Every configured reviewer is optional (`~opt`), so a reviewer that timed out or returned no verdict does NOT make the loop inconclusive and is never your reason to skip the merge — the loop already excluded it. An `inconclusive` that still appears despite that is a real blocker (fixes committed but not pushed), and stands.'
     : '';
-  const lines = [
-    `${startStep}. **Merge the PR immediately when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--merge --delete-branch\`, nothing else — a true merge commit keeps the branch tip in main's history so automated worktree cleanup can prove the branch is merged; any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, \`review-blocked\`, or \`guardrail\`; leave the PR open for human follow-up. ${REVIEW_UNAVAILABLE_REPORTING_NOTE}${optionalMergeNote}`,
-    '   ```bash',
-    '   gh pr merge "<PR_URL>" --merge --delete-branch',
-    '   ```',
-    `${startStep + 1}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection), fix, and retry. Do NOT exit until state is \`MERGED\` (or you have explicitly decided not to merge per the rule above).`
+  const localReviewers = reviewers.filter(reviewer => isCliReviewer(reviewer) || isToolFreeReviewer(reviewer));
+  const localReviewRequired = hasRequiredReviewer(localReviewers, optionalReviewers);
+  const reviewNames = [
+    ...reviewers.filter(reviewer => !localReviewers.includes(reviewer)),
+    ...usernames.map(username => `@${username}`),
   ];
-  return { lines, nextStep: startStep + 2 };
+  const gate = buildCiMergeGateSteps(startStep + 1, {
+    prRef: '"<PR_URL>"',
+    forge: mergeGateForge,
+    alreadyMergedHint: '',
+    localReviewers,
+    localReviewRequired,
+    reviewRecheckReviewers: reviewNames,
+  });
+  const lines = [
+    `${startStep}. **Enter the CI merge gate only when the ${reviewerLabel}review loop reports ${mergeStatuses}** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\`, then follow the current-head CI gate below. Do not merge directly from a review verdict; skip the gate if the loop ended \`timeout\`, \`error\`, \`inconclusive\`, \`review-blocked\`, or \`guardrail\` and leave the PR open for human follow-up. ${REVIEW_UNAVAILABLE_REPORTING_NOTE}${optionalMergeNote}`,
+    ...gate.lines,
+  ];
+  return { lines, nextStep: gate.nextStep };
 }
 
 /**
@@ -772,7 +784,7 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   // alone when it doesn't (nothing else merges a no-review-loop PR). The one
   // exception is a PR a human lands (JIRA-tracked; see lib/prDisposition.js).
   const merge = (willOpenPR && !leavePrOpen && !policyLeavesOpen)
-    ? buildPostPRMergeSteps(3, { prCompletion, reviewers, usernames: reviewUsernames, optionalReviewers, reviewStopMode })
+    ? buildPostPRMergeSteps(3, { prCompletion, reviewers, usernames: reviewUsernames, optionalReviewers, reviewStopMode, forgeCli })
     : { lines: (leavePrOpen || policyLeavesOpen) && willOpenPR ? [LEAVE_PR_OPEN_STEP(3, leavePrOpen)] : [], nextStep: (leavePrOpen || policyLeavesOpen) && willOpenPR ? 4 : 3 };
   const sentinelStep = merge.nextStep;
 
@@ -1154,7 +1166,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     if (leavePrOpen || policyLeavesOpen) {
       lines.push(LEAVE_PR_OPEN_STEP(step, leavePrOpen));
     } else {
-      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewers, usernames: reviewUsernames, optionalReviewers, reviewStopMode });
+      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewers, usernames: reviewUsernames, optionalReviewers, reviewStopMode, forgeCli });
       lines.push(...merge.lines);
     }
     return lines.join('\n');
