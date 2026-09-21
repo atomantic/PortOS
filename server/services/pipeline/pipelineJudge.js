@@ -28,7 +28,7 @@
  */
 
 import { join } from 'path';
-import { createHash } from 'crypto';
+import { contentHash } from './contentHash.js';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM, resolveStageContext, resolveJudgeForStage } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
@@ -81,10 +81,6 @@ const MAX_REVISIONS = 3;
 const JUDGE_OUTPUT_RESERVE_TOKENS = 2_500;
 
 const nowIso = () => new Date().toISOString();
-
-// Snapshot content hash — pins the judged draft so a later edit flips `stale`.
-// One-liner (matches editorialAnalysis.js) — not worth a shared lib module.
-const contentHash = (text) => createHash('sha256').update(text || '').digest('hex');
 
 // Defense-in-depth: refuse path-traversal-shaped ids before interpolating into
 // the on-disk snapshot path (issue ids are `iss-<uuid>`).
