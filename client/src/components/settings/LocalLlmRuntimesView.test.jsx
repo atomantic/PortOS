@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, } from 'react-router';
+import { MemoryRouter, Routes, Route, useParams, useNavigate, useLocation } from 'react-router';
 
 vi.mock('../../services/api', () => ({
   getLocalLlmStatus: vi.fn(),
@@ -85,10 +85,17 @@ import {
 // "hf.co/sja…" on a phone before the row was allowed to wrap.
 const LONG_ID = 'hf.co/example-org/Example-Long-Model-Name-34B-Instruct-GGUF:Q6_K';
 
-const renderRuntimes = async () => {
+function RoutedRuntimes() {
+  const { runtimeId } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  return <><button onClick={() => navigate(-1)}>History back</button><output aria-label="Current route">{location.pathname}{location.search}</output><LocalLlmRuntimesView view={runtimeId} /></>;
+}
+
+const renderRuntimes = async (runtimeId = 'llama') => {
   render(
-    <MemoryRouter>
-      <LocalLlmRuntimesView />
+    <MemoryRouter initialEntries={[`/models/llms-runtimes${runtimeId ? '/' + runtimeId : ''}`]}>
+      <Routes><Route path="/models/llms-runtimes/:runtimeId?" element={<RoutedRuntimes />} /></Routes>
     </MemoryRouter>,
   );
   await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'llm-runtimes-panel'));
@@ -160,6 +167,7 @@ describe('LocalLlmRuntimesView information architecture', () => {
     expect(screen.getByRole('heading', { name: 'Local Runtime Servers' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Models' })).not.toBeInTheDocument();
     expect(getLocalLlmCatalog).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText('Setup guidance and recommendations'));
     const recommendationHeading = await screen.findByRole('heading', { name: 'Recommended coding-agent setup' });
     const runtimeHeading = screen.getByRole('heading', { name: 'Local Runtime Servers' });
     expect(runtimeHeading.compareDocumentPosition(recommendationHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -178,6 +186,7 @@ describe('LocalLlmRuntimesView information architecture', () => {
     }));
     await renderRuntimes();
 
+    fireEvent.click(screen.getByText('Setup guidance and recommendations'));
     expect((await screen.findByRole('heading', { name: 'Recommended coding-agent setup' })).closest('details')).toHaveAttribute('open');
   });
 
@@ -191,8 +200,54 @@ describe('LocalLlmRuntimesView information architecture', () => {
   });
 
   it('links to the shared local generation controls', async () => {
-    await renderRuntimes();
+    await renderRuntimes('ollama');
     expect(screen.getByRole('link', { name: /temperature, top-p and thinking defaults/i }).getAttribute('href')).toBe('/ai');
+  });
+});
+
+describe('runtime selection workflow', () => {
+  it('opens configuration from the roster and recovers an invalid deep link', async () => {
+    const { getLlamaServerStatus } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValue({ installed: false, running: false });
+    await renderRuntimes('unknown-runtime');
+    expect(screen.getByText(/Runtime not found/)).toBeVisible();
+    fireEvent.click(screen.getByRole('link', { name: 'All runtimes' }));
+    expect(screen.queryByRole('heading', { name: 'Runtime configuration' })).not.toBeInTheDocument();
+    const roster = screen.getByRole('group', { name: 'llama.cpp' });
+    fireEvent.click(within(roster).getByRole('button', { name: 'Configure' }));
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/models/llms-runtimes/llama');
+    expect(screen.getByRole('heading', { name: 'Runtime configuration' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: /Install llama.cpp/ })).toBeVisible();
+  });
+
+  it('retains a launch draft and download cancellation across selection and history', async () => {
+    const { getLlamaServerStatus, startLlamaServer, cancelSpecDecodeModelDownload } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValue(llamaReady({ presets: specPresets({ baseExists: false }) }));
+    cancelSpecDecodeModelDownload.mockResolvedValue({ cancelled: true });
+    await renderRuntimes('llama');
+    const field = screen.getByRole('textbox', { name: 'Target Base Model (GGUF Path)' });
+    fireEvent.change(field, { target: { value: 'models/example-draft.gguf' } });
+    // Return to the preset so its in-flight weight is available to cancel.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Preset' }), { target: { value: 'qwen3.8-27b-dspark' } });
+    fireEvent.click(screen.getByRole('button', { name: /Advanced options/ }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Context Size' }), { target: { value: '16384' } });
+    const handler = socket.on.mock.calls.find(([event]) => event === 'llamaServer:download')?.[1];
+    expect(handler).toBeTypeOf('function');
+    act(() => handler({ presetId: 'qwen3.8-27b-dspark', role: 'model', received: 1024, total: 4096 }));
+    const subscriptions = socket.on.mock.calls.length;
+    fireEvent.click(screen.getByRole('link', { name: 'All runtimes' }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'MTPLX' })).getByRole('button', { name: 'Configure' }));
+    expect(screen.queryByRole('button', { name: /^Cancel$/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('link', { name: 'llama.cpp progress' }));
+    expect(screen.getByRole('spinbutton', { name: 'Context Size' })).toHaveValue(16384);
+    expect(screen.getByRole('button', { name: /^Cancel$/ })).toBeVisible();
+    expect(socket.on.mock.calls).toHaveLength(subscriptions);
+    expect(startLlamaServer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'History back' }));
+    expect(screen.getByLabelText('Current route')).toHaveTextContent('/models/llms-runtimes/mtplx');
+    fireEvent.click(screen.getByRole('link', { name: 'llama.cpp progress' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
+    await waitFor(() => expect(cancelSpecDecodeModelDownload).toHaveBeenCalled());
   });
 });
 
@@ -252,7 +307,7 @@ describe('LocalLlmTab backend disable state', () => {
       ollama: { installed: true, available: true, modelCount: 0, models: [] },
       lmstudio: { installed: true, available: false, disabled: true, modelCount: 0, models: [] },
     });
-    await renderRuntimes();
+    await renderRuntimes('lmstudio');
     fireEvent.click(screen.getByTitle('Mark LM Studio as intentionally disabled'));
     await waitFor(() => expect(patchSettingsSlice).toHaveBeenCalledWith('localLlm.lmstudio', { disabled: true }));
     await waitFor(() => expect(screen.getByText('Disabled')).toBeInTheDocument());
@@ -310,7 +365,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     });
     pullMtplxModel.mockResolvedValue({ success: false, model: null, error: 'no space left on device' });
 
-    await renderRuntimes();
+    await renderRuntimes('mtplx');
     fireEvent.click(screen.getByRole('button', { name: /Download default checkpoint/ }));
     await clickStartDownload();
 
@@ -325,7 +380,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
     });
     pullMtplxModel.mockResolvedValue({ success: true, model: null, cachedModels: ['Example/Qwen-MTP'] });
 
-    await renderRuntimes();
+    await renderRuntimes('mtplx');
     fireEvent.click(screen.getByRole('button', { name: /Download default checkpoint/ }));
     await clickStartDownload();
 
@@ -357,7 +412,7 @@ describe('LocalLlmTab runtime context window', () => {
 
   it('flags a runtime window below the agent floor', async () => {
     withContext({ runtime: 32768, applied: null, agentMinimum: 65536 });
-    await renderRuntimes();
+    await renderRuntimes('ollama');
     const badge = screen.getByTitle(/below what an agent harness/);
     expect(badge.textContent).toContain('32K ctx');
     expect(badge.className).toMatch(/text-port-warning/);
@@ -365,14 +420,14 @@ describe('LocalLlmTab runtime context window', () => {
 
   it('shows a generous window without the warning styling', async () => {
     withContext({ runtime: 131072, applied: 131072, agentMinimum: 65536 });
-    await renderRuntimes();
+    await renderRuntimes('ollama');
     const badge = screen.getByTitle('Loaded models are running at 128K ctx');
     expect(badge.className || '').not.toMatch(/text-port-warning/);
   });
 
   it('shows nothing while no model is resident — Ollama has not picked a window yet', async () => {
     withContext({ runtime: null, applied: null, agentMinimum: 65536 });
-    await renderRuntimes();
+    await renderRuntimes('ollama');
     expect(screen.queryByTitle(/Loaded models are running at/)).toBeNull();
   });
 });

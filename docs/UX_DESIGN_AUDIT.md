@@ -83,3 +83,8 @@ training gates; source-save failure; legacy host routing; invalid task recovery;
 and a scoring result arriving while another task is selected without duplicate
 subscriptions. The same explicit API actions and adoption criteria remain in
 place. The pilot provides a composition example, not a new universal component.
+
+
+### Runtimes operations pilot (#7795)
+
+The roster now selects runtime configuration by URL, preserves form/progress owners across selection, and keeps setup guidance in a named disclosure. See [task map and synthetic validation evidence](validation/7795-runtimes-workspace.md) for observed layout, interaction checks, and evidence limits.
