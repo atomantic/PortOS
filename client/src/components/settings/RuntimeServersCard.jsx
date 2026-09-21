@@ -205,8 +205,8 @@ function ServerRow({ row, busy, actionInProgress, selected, children }) {
   const Icon = row.icon;
   const meta = STATE_META[row.state] || STATE_META.missing;
   return (
-    <div role="group" aria-label={row.label} data-runtime-id={row.id} className={`flex flex-col @min-[48rem]:grid @min-[48rem]:grid-cols-[10rem_minmax(0,1fr)_minmax(12rem,20rem)] gap-2 sm:gap-3 bg-port-bg border rounded-lg px-3 py-2 ${selected ? 'border-port-accent' : 'border-port-border'}`}>
-      <div className="flex items-center gap-2 min-w-0 sm:w-44 shrink-0">
+    <div role="group" aria-label={row.label} data-runtime-id={row.id} className={`flex flex-col @min-[48rem]:grid @min-[48rem]:grid-cols-[10rem_minmax(0,1fr)_minmax(12rem,20rem)] gap-2 @min-[48rem]:gap-3 bg-port-bg border rounded-lg px-3 py-2 ${selected ? 'border-port-accent' : 'border-port-border'}`}>
+      <div className="flex items-center gap-2 min-w-0 @min-[48rem]:w-full @min-[48rem]:shrink-0">
         <Icon size={14} className="text-port-accent shrink-0" />
         <span className="text-sm text-white break-words">{row.label}</span>
       </div>
