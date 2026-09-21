@@ -11,6 +11,7 @@ import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 const FILE = join(PATHS.cos, 'maintainer-inference.json');
 const writeQueue = createFileWriteQueue();
 const emptyDay = date => ({ date, calls: 0, paidCalls: 0, reservedMs: 0 });
+const nextUtcReset = now => new Date(Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate() + 1)).toISOString();
 const ledgerSchema = z.object({ schemaVersion: z.literal(1),
   day: z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value),
     calls: z.number().int().nonnegative(), paidCalls: z.number().int().nonnegative(), reservedMs: z.number().int().nonnegative() }),
@@ -64,15 +65,15 @@ export async function reserveMaintainerInference({ turnId, lane, policy, now = (
   return queue(async () => {
     const date = new Date(now()).toISOString().slice(0, 10);
     const stored = validateLedger(await read());
-    if (stored && date < stored.day.date) return { ok: false, reason: 'Maintainer budget clock moved backwards; check the system clock.' };
+    if (stored && date < stored.day.date) return { ok: false, reason: 'Maintainer budget clock moved backwards; check the system clock.', code: 'invalid-clock', disposition: 'hold', status: 'degraded' };
     const day = stored?.day.date === date ? { ...stored.day } : emptyDay(date);
     // Only the active supervisor turn may reach this boundary (CallGuard
     // compares activeTurn.id immediately before reservation). An older turn
     // cannot resume after another is admitted; retrying creates a new id.
     const turn = stored?.turn.id === turnId ? { ...stored.turn } : { id: turnId, calls: 0 };
-    if (turn.calls >= policy.maxCallsPerTurn) return { ok: false, reason: 'Maintainer per-turn inference allowance exhausted.' };
-    if (day.calls >= policy.maxCallsPerDay || day.reservedMs + policy.maxCallMs > policy.maxReservedMsPerDay) return { ok: false, reason: 'Maintainer daily inference allowance exhausted.' };
-    if (lane === 'authorized-escalation' && day.paidCalls >= policy.maxPaidCallsPerDay) return { ok: false, reason: 'Maintainer paid escalation allowance exhausted.' };
+    if (turn.calls >= policy.maxCallsPerTurn) return { ok: false, reason: 'Maintainer per-turn inference allowance exhausted.', code: 'turn-exhausted', disposition: 'hold', status: 'waiting' };
+    if (day.calls >= policy.maxCallsPerDay || day.reservedMs + policy.maxCallMs > policy.maxReservedMsPerDay) return { ok: false, reason: 'Maintainer daily inference allowance exhausted.', code: 'day-exhausted', disposition: 'reset-wait', retryAt: nextUtcReset(now()), status: 'waiting' };
+    if (lane === 'authorized-escalation' && day.paidCalls >= policy.maxPaidCallsPerDay) return { ok: false, reason: 'Maintainer paid escalation allowance exhausted.', code: 'paid-day-exhausted', disposition: 'reset-wait', retryAt: nextUtcReset(now()), status: 'waiting' };
     day.calls += 1; day.reservedMs += policy.maxCallMs; turn.calls += 1;
     if (lane === 'authorized-escalation') day.paidCalls += 1;
     const reservation = { lane, turnId, at: new Date(now()).toISOString(), timeoutMs: policy.maxCallMs,

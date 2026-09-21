@@ -233,6 +233,13 @@ describe('createPersistentMindCallBoundary', () => {
     });
   });
 
+  it('carries a non-replaying disposition for a deterministic policy denial', async () => {
+    mock.budget = { withinBudget: false, exceeded: 'minutes' };
+    const { call } = boundary();
+    const denial = await call({ purpose: 'tool-round', round: 1 }, async () => ({})).catch((error) => error);
+    expect(denial).toMatchObject({ denialCode: 'cos-budget-exhausted', retryDisposition: 'retry', retryAt: null });
+  });
+
   it('marks a boundary refusal so a caller can tell it from a provider failure', async () => {
     mock.profile = { ok: false, error: 'Pinned provider "example-api" is unavailable' };
     const { call } = boundary();
