@@ -61,26 +61,28 @@ export default function InlineConfirmRow({
     <div
       ref={rowRef}
       tabIndex={autoFocus ? -1 : undefined}
-      className={`flex items-center gap-2 ${v.frame} ${t.wrapper} focus:outline-hidden focus:ring-2 focus:ring-port-accent ${className}`.trim()}
+      className={`flex flex-col items-stretch gap-2 sm:flex-row sm:items-center ${v.frame} ${t.wrapper} focus:outline-hidden focus:ring-2 focus:ring-port-accent ${className}`.trim()}
       {...rest}
     >
-      <span className={`${v.question} text-white flex-1`}>{question}</span>
-      <button
-        type="button"
-        onClick={onConfirm}
-        title={confirmTitle}
-        className={`px-2 py-1 text-xs rounded transition-colors ${t.confirm}`}
-      >
-        {confirmText}
-      </button>
-      <button
-        type="button"
-        onClick={onCancel}
-        title={cancelTitle}
-        className="px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
-      >
-        {cancelText}
-      </button>
+      <span className={`${v.question} text-white flex-1 min-w-0`}>{question}</span>
+      <div className="grid grid-cols-2 gap-2 sm:flex sm:shrink-0">
+        <button
+          type="button"
+          onClick={onConfirm}
+          title={confirmTitle}
+          className={`min-w-0 min-h-9 px-2 py-1 text-xs rounded transition-colors ${t.confirm}`}
+        >
+          {confirmText}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          title={cancelTitle}
+          className="min-w-0 min-h-9 px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+        >
+          {cancelText}
+        </button>
+      </div>
     </div>
   );
 }
