@@ -415,6 +415,20 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       });
     });
 
+    it('hands investigators the selected issue objective and the commits actually reviewed', async () => {
+      const head = 'a'.repeat(40);
+      const base = 'b'.repeat(40);
+      execGit.mockImplementation(async args => ({ stdout: args[0] === 'rev-parse' && args[1] === 'HEAD' ? head : 'claim/issue-42', exitCode: 0 }));
+      runWindowDiffMock.mockResolvedValue({ diff: 'diff --git a/a.js b/a.js', base, truncated: false, reason: null });
+      await finalize({ task: { id: 'task-1', description: 'Claim the next issue', metadata: { claimFlow: true } } });
+      expect(runWindowDiffMock).toHaveBeenCalledWith('/example/worktree', expect.any(Number), { maxChars: 60_000, head });
+      const { context } = runGoalFidelityFollowUpMock.mock.calls[0][0];
+      expect(context).toEqual({ base, head, objective: runLocalGoalFidelityReviewMock.mock.calls[0][0].objective });
+      expect(context.objective).toContain('Retry transient synthesis failures');
+      expect(context.objective).not.toContain('Claim the next issue');
+      expect(completion().goalFidelity).not.toHaveProperty('context');
+    });
+
 // The card reads these to decide what to call the task and whether to still
     // offer the manual fallback, so the producer's verdict has to survive the
     // completion write, not just the log line.
