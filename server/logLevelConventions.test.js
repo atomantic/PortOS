@@ -274,6 +274,18 @@ describe('the failure-log recognizer', () => {
     expect(findMislabeledFailureLogs(
       `console.log(limits.in / (count), \`${CROSS_MARK} failed\`);`,
     )).toHaveLength(1);
+    // Same for a private field — `#return` is a name, not the keyword.
+    expect(findMislabeledFailureLogs(
+      `class C { #return = 4; m(n) { console.log(this.#return / (n), \`${CROSS_MARK} failed\`); } }`,
+    )).toHaveLength(1);
+    // And for an identifier that merely ENDS in a keyword's letters, including
+    // one with a non-ASCII character an ASCII-only boundary would split on.
+    expect(findMislabeledFailureLogs(
+      `console.log(caseCount / (n), \`${CROSS_MARK} failed\`);`,
+    )).toHaveLength(1);
+    expect(findMislabeledFailureLogs(
+      `console.log(café / (n), \`${CROSS_MARK} failed\`);`,
+    )).toHaveLength(1);
   });
 
   // Bypass probe: the scan is only worth its runtime if a reintroduced

@@ -54,17 +54,24 @@ const KEYWORDS_BEFORE_REGEX = new Set([
   'instanceof', 'new', 'return', 'throw', 'typeof', 'void', 'yield',
 ]);
 
+// Anything that can appear inside an identifier, Unicode included: `café`
+// ends in `e`, and an ASCII-only boundary would read `naïvereturn` as ending
+// in the keyword `return`.
+const IDENTIFIER_CHAR = /[\p{ID_Continue}$]/u;
+
 /**
  * The identifier ending at `end` (exclusive) in the character ARRAY `chars`, or
- * '' when the preceding character is not an identifier character. Reads the
- * PARTIALLY BLANKED output, so a keyword spelled inside an already-blanked
- * string or comment is invisible here — which is the point.
+ * '' when what ends there is not a bare identifier. Reads the PARTIALLY
+ * BLANKED output, so a keyword spelled inside an already-blanked string or
+ * comment is invisible here — which is the point.
  */
 function wordEndingAt(chars, end) {
   let start = end;
-  while (start > 0 && /[A-Za-z0-9_$]/.test(chars[start - 1])) start -= 1;
-  // `obj.in` / `obj.return` are property reads, not keywords.
-  if (start > 0 && chars[start - 1] === '.') return '';
+  while (start > 0 && IDENTIFIER_CHAR.test(chars[start - 1])) start -= 1;
+  // `obj.return` is a property read and `this.#return` a private field: both
+  // are VALUES, so a `/` after one divides. Reading either as the keyword lexes
+  // that division as a regex opener and blanks the rest of the line.
+  if (start > 0 && (chars[start - 1] === '.' || chars[start - 1] === '#')) return '';
   return chars.slice(start, end).join('');
 }
 
@@ -75,7 +82,7 @@ function wordEndingAt(chars, end) {
  */
 function regexCanStartAfter(prev, chars, at) {
   if (prev === '' || '(,=:[!&|?{};+-*%~^<>'.includes(prev)) return true;
-  if (!/[A-Za-z0-9_$]/.test(prev)) return false;
+  if (!IDENTIFIER_CHAR.test(prev)) return false;
   // Step back over the whitespace between the keyword and the `/`.
   let end = at;
   while (end > 0 && /\s/.test(chars[end - 1])) end -= 1;
