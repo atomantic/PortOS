@@ -50,6 +50,7 @@ const {
   eligibleIssues,
   START_RATING,
   ELO_K,
+  TOURNAMENT_STOP,
   __testing,
 } = await import('./comparativeRank.js');
 
@@ -190,6 +191,19 @@ describe('runSwissTournament', () => {
     expect(ranking).toHaveLength(3);
     expect(ranking[0].id).toBe('iss-1');
   });
+
+  it('stops before mutating the declined match', async () => {
+    const entrants = [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4)];
+    const playMatch = vi.fn(async () => TOURNAMENT_STOP);
+    const result = await runSwissTournament(entrants, playMatch, { rounds: 4 });
+
+    expect(result.stopped).toBe(true);
+    expect(result.roundsCompleted).toBe(0);
+    expect(result.matches).toEqual([]);
+    expect(playMatch).toHaveBeenCalledTimes(1);
+    expect(result.ranking.every((row) => row.rating === START_RATING)).toBe(true);
+    expect(result.ranking.every((row) => row.wins === 0 && row.losses === 0)).toBe(true);
+  });
 });
 
 describe('parseCompareWinner (tie-refusal handling)', () => {
@@ -265,8 +279,28 @@ describe('runComparativeRank', () => {
     const chargeAction = async () => { calls += 1; return calls <= 1; }; // allow one match then cut off
     const snap = await runComparativeRank('ser-1', { issues, chargeAction });
     expect(snap.budgetStopped).toBe(true);
+    expect(snap.status).toBe('partial');
+    expect(snap.matches).toHaveLength(1);
+    expect(snap.weakest).toEqual([]);
+    expect(snap.ranking.filter((row) => row.rating !== START_RATING)).toHaveLength(2);
+    expect(snap.ranking.filter((row) => row.rating === START_RATING)).toHaveLength(2);
     // Only the first match actually ran the LLM (subsequent matches short-circuit).
     expect(stageRunner.runStagedLLM).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists an explicit partial result without inventing a first match', async () => {
+    stageRunner.runStagedLLM.mockResolvedValue({ content: { winner: 'A' } });
+    const chargeAction = vi.fn(async () => false);
+    const snap = await runComparativeRank('ser-1', {
+      issues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4)],
+      chargeAction,
+    });
+
+    expect(snap).toMatchObject({ status: 'partial', budgetStopped: true, matches: [], weakest: [] });
+    expect(snap.ranking.every((row) => row.rating === START_RATING)).toBe(true);
+    expect(snap.ranking.every((row) => row.wins === 0 && row.losses === 0)).toBe(true);
+    expect(stageRunner.runStagedLLM).not.toHaveBeenCalled();
+    expect(chargeAction).toHaveBeenCalledTimes(1);
   });
 });
 

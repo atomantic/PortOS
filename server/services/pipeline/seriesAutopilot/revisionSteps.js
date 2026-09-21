@@ -133,7 +133,10 @@ export async function runRevisionCycle(sId, record) {
   //    else the judge's weakest-first (lowest qualityScore).
   let weakestId = null;
   const rank = await getComparativeRank(sId).catch(() => null);
-  if (rank?.status === 'complete' && !rank.stale && Array.isArray(rank.weakest) && rank.weakest[0]) {
+  // A budget-stopped snapshot is deliberately `partial`; never let partial
+  // standings become the autopilot's comparative revision evidence.
+  if (rank?.status === 'complete' && rank.budgetStopped !== true && !rank.stale
+    && Array.isArray(rank.weakest) && rank.weakest[0]) {
     weakestId = rank.weakest[0].issueId;
   }
   if (!weakestId) weakestId = seriesJudge.weakest?.[0]?.issueId || null;
