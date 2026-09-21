@@ -31,7 +31,7 @@ import { mergePR, resolveForgeForRepo } from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
-import { screenedPullRequestContent, screenedPullRequestFingerprintMatches } from '../lib/prReviewContent.js';
+import { screenedPullRequestFingerprintMatches } from '../lib/prReviewContent.js';
 import { trimTo } from '../lib/textUtils.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
@@ -128,10 +128,10 @@ async function resolveContext(app) {
   const repoSpec = githubRepoSpec(origin);
   const host = githubApiHost(origin?.host);
   if (!repoSpec || !host || !origin?.fullName) return null;
-  const reachable = await ensureForgeReachable('issue-watcher', { hostname: host });
-  if (!reachable.ok) return null;
-  const forge = await resolveForgeForRepo(app.repoPath).catch(() => null);
+  const forge = await resolveForgeForRepo(app.repoPath, { forgeAccount: app.forgeAccount || null }).catch(() => null);
   if (!forge || forge.cli !== 'gh') return null;
+  const reachable = await ensureForgeReachable('issue-watcher', { hostname: host, env: forge.env });
+  if (!reachable.ok) return null;
   return {
     cwd: app.repoPath,
     env: forge.env,
@@ -625,10 +625,9 @@ async function eligibilityFactsStillCurrent(ctx, pr, target) {
   const expected = normalizeEligibilityFacts(target?.eligibilityFacts);
   const authorLogin = typeof target?.authorLogin === 'string' ? target.authorLogin.trim() : '';
   if (!authorLogin || !sameLogin(pr?.author?.login, authorLogin)) return false;
-  // A waived prerequisite (the maintainer's explicit request) cannot go stale,
-  // so only the author identity is rechecked for it; re-requiring an open
-  // linked issue here would silently skip every action on a PR with none.
-  if (issuePrerequisiteWaived(expected)) return true;
+  // A targeted request waives the prerequisite, never intent already assessed.
+  const waived = issuePrerequisiteWaived(expected);
+  if (waived && !expected.intentFingerprint) return true;
   if (!expected.issueLookupComplete) return false;
   if (expected.linkedIssueNumbers.length === 0) return false;
 
@@ -652,10 +651,10 @@ async function eligibilityFactsStillCurrent(ctx, pr, target) {
     openerAssignedIssueNumbers,
     issueLookupComplete: true,
   });
-  if (!sameNumberList(expected.linkedIssueNumbers, actual.linkedIssueNumbers)
+  if (!waived && (!sameNumberList(expected.linkedIssueNumbers, actual.linkedIssueNumbers)
     || !sameNumberList(expected.openLinkedIssueNumbers, actual.openLinkedIssueNumbers)
     || !sameNumberList(expected.openerAssignedIssueNumbers, actual.openerAssignedIssueNumbers)
-    || expected.issueLookupComplete !== actual.issueLookupComplete) return false;
+    || expected.issueLookupComplete !== actual.issueLookupComplete)) return false;
 
   // The gate judged the diff against the issue text as it read at scan time. A
   // requirement that was rewritten since is a different requirement, so the old
@@ -893,7 +892,8 @@ async function processPendingApprovals(app, ctx) {
       changed = true;
       continue;
     }
-    if (!await currentPullRequestSecurityPasses(pr, approvedDiff)) {
+    const assessment = await assessCurrentPullRequest(ctx, pr, approvedDiff);
+    if (!assessment.ok) {
       await keepPendingApproval(app, approval, remaining, 'the current security-model assessment did not pass');
       changed = true;
       continue;
@@ -912,7 +912,7 @@ async function processPendingApprovals(app, ctx) {
         continue;
       }
       if (behindBy > 0) {
-        if (await updatePullRequestBranch(ctx, pr.number, pr.headRefOid)) changed = true;
+        if (await assessment.stillCurrent() && await updatePullRequestBranch(ctx, pr.number, pr.headRefOid)) changed = true;
         else {
           await keepPendingApproval(app, approval, remaining, 'its required rebase could not be applied', { ctx, pr, tracker: handbacks });
           changed = true;
@@ -944,8 +944,8 @@ async function processPendingApprovals(app, ctx) {
       && checkRollup.length === 0
       && approval.noChecksObserved === true;
     const mayMerge = checks === 'green' || maySkipEmptyChecks;
-    if (mayMerge && pr.mergeable === 'MERGEABLE') {
-      const merged = await mergePR(app.repoPath, approval.number, { expectedHeadSha: approval.headSha }).catch(() => ({ success: false }));
+    if (mayMerge && pr.mergeable === 'MERGEABLE' && await assessment.stillCurrent()) {
+      const merged = await mergePR(app.repoPath, approval.number, { expectedHeadSha: approval.headSha, forgeAccount: app.forgeAccount || null }).catch(() => ({ success: false }));
       if (merged.success) {
         changed = true;
         continue;
@@ -1279,8 +1279,8 @@ async function readCurrentIssueComment(ctx, item) {
   };
 }
 
-async function submitReview(ctx, number, { body, event, comments = [] }) {
-  const input = JSON.stringify({ body: trimTo(body, MAX_REVIEW_BODY_CHARS), event, comments });
+async function submitReview(ctx, number, headSha, { body, event, comments = [] }) {
+  const input = JSON.stringify({ commit_id: headSha, body: trimTo(body, MAX_REVIEW_BODY_CHARS), event, comments });
   return runGh([...apiArgs(ctx, `repos/${ctx.repoFullName}/pulls/${number}/reviews`, { method: 'POST' }), '--input', '-'], ctx, input)
     .then(() => true)
     .catch((err) => {
@@ -1334,10 +1334,14 @@ function createDropLog() {
   };
 }
 
-async function currentPullRequestSecurityPasses(pr, diff) {
-  const { screenUntrustedContent } = await import('./untrustedContent.js');
-  const result = await screenUntrustedContent({ content: screenedPullRequestContent(pr, diff), source: 'github-pr' });
-  return result.ok === true && result.screening?.safe === true;
+async function assessCurrentPullRequest(ctx, pr, diff) {
+  const { assessPullRequestForAction } = await import('./prReviewerSecurity.js');
+  return assessPullRequestForAction({
+    pr, diff, repoFullName: ctx.repoFullName,
+    readPr: () => readPullRequest(ctx, pr.number),
+    readDiff: () => runGh(['pr', 'diff', String(pr.number), '--repo', ctx.repoSpec], ctx).catch(() => null),
+    readIssue: (number) => runJson(apiArgs(ctx, `repos/${ctx.repoFullName}/issues/${number}`), ctx),
+  }).catch(() => ({ ok: false }));
 }
 
 /**
@@ -1373,10 +1377,11 @@ async function verifyScreenedPullRequest(ctx, raw, expectedPullRequests) {
     // `pr` rides along so the notification can still link to it.
     return { number, pr, reason: 'its content no longer matches what the security scan screened', notify: true };
   }
-  if (!await currentPullRequestSecurityPasses(pr, diff)) {
+  const assessment = await assessCurrentPullRequest(ctx, pr, diff);
+  if (!assessment.ok) {
     return { number, pr, reason: 'the current security-model assessment did not pass', notify: true };
   }
-  return { ok: true, decision, target, pr, diff };
+  return { ok: true, decision, target, pr, diff, assessment };
 }
 
 /** Validated reply/review/rebase/merge pass run after cognition. */
@@ -1460,10 +1465,14 @@ export async function processTaskOutput({ appId, success, payload, task, require
       }
       continue;
     }
-    const { decision, target, pr, diff } = verified;
+    const { decision, target, pr, diff, assessment } = verified;
     const eligibilityRequired = requireEligibilityFacts
       || Object.prototype.hasOwnProperty.call(target, 'eligibilityFacts');
     const eligibilityStillCurrent = async () => {
+      if (!await assessment.stillCurrent()) {
+        drops.record(decision.number, 'the assessed contribution or CI changed before action');
+        return false;
+      }
       if (!eligibilityRequired) return true;
       const current = await eligibilityFactsStillCurrent(ctx, pr, target);
       if (!current) {
@@ -1501,9 +1510,9 @@ export async function processTaskOutput({ appId, success, payload, task, require
         downgraded,
       });
       const posted = shouldRequestChanges
-        ? await submitReview(ctx, pr.number, { body: summary, event: 'REQUEST_CHANGES', comments: findings })
-          || await submitReview(ctx, pr.number, { body: summary, event: 'COMMENT', comments: findings })
-        : await submitReview(ctx, pr.number, { body: summary, event: 'COMMENT', comments: findings })
+        ? await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'REQUEST_CHANGES', comments: findings })
+          || await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'COMMENT', comments: findings })
+        : await submitReview(ctx, pr.number, pr.headRefOid, { body: summary, event: 'COMMENT', comments: findings })
           || await postReviewFallback(ctx, pr.number, summary);
       if (!posted) {
         drops.record(decision.number, 'GitHub rejected the review comment');
@@ -1529,11 +1538,11 @@ export async function processTaskOutput({ appId, success, payload, task, require
       nonBlockingFindings: normalizedFindings,
     });
     if (!await eligibilityStillCurrent()) continue;
-    const approved = await submitReview(ctx, pr.number, {
+    const approved = await submitReview(ctx, pr.number, pr.headRefOid, {
       body: approveBody,
       event: 'APPROVE',
       comments: findings,
-    }) || (findings.length > 0 && await submitReview(ctx, pr.number, {
+    }) || (findings.length > 0 && await submitReview(ctx, pr.number, pr.headRefOid, {
       body: approveBody,
       event: 'APPROVE',
     }));
@@ -1569,7 +1578,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
     const mayMerge = pr.mergeable === 'MERGEABLE' && checks === 'green';
     if (mayMerge) {
       if (!await eligibilityStillCurrent()) continue;
-      const result = await mergePR(app.repoPath, pr.number, { expectedHeadSha: pr.headRefOid }).catch(() => ({ success: false }));
+      const result = await mergePR(app.repoPath, pr.number, { expectedHeadSha: pr.headRefOid, forgeAccount: app.forgeAccount || null }).catch(() => ({ success: false }));
       if (result.success) {
         approvals = approvals.filter((entry) => entry.number !== pr.number);
         merged += 1;

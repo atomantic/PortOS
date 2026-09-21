@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { modelAbuseContentFingerprint } from './modelAbuseGuard.js';
 import {
   SCREENED_PR_FINGERPRINT_VERSION,
   isScreenedPullRequestFingerprint,
@@ -96,4 +97,18 @@ describe('screenedPullRequestContent', () => {
     expect(screenedPullRequestContent(PR, DIFF, [])).not.toContain('Commit messages:');
     expect(screenedPullRequestContent(PR, DIFF, COMMITS)).toContain('Commit messages:');
   });
+});
+
+it('covers a commit tail past the old limit while retaining the v2 recipe', () => {
+  const commits = [{ messageHeadline: 'x'.repeat(100_001) + 'TAIL' }];
+  const content = screenedPullRequestContent(PR, DIFF, commits);
+  expect(content).toContain('TAIL');
+  const stamp = screenedPullRequestFingerprint(PR, DIFF, commits);
+  const edited = [{ messageHeadline: 'x'.repeat(100_001) + 'EDIT' }];
+  expect(screenedPullRequestFingerprintMatches(stamp, PR, DIFF, edited)).toBe(false);
+  const legacyContent = content.replace(commits[0].messageHeadline, 'x'.repeat(100_000));
+  const v2 = '2:' + modelAbuseContentFingerprint('pull-request',
+    { number: PR.number, headSha: PR.headRefOid }, legacyContent);
+  expect(screenedPullRequestFingerprintMatches(v2, PR, DIFF, commits)).toBe(true);
+  expect(screenedPullRequestFingerprintMatches(v2, { ...PR, body: 'edited' }, DIFF, commits)).toBe(false);
 });
