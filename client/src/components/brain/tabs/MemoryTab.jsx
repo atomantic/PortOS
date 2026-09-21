@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useParams, useLocation } from 'react-router';
 import * as api from '../../../services/api';
 import {Plus,
   Edit2,
@@ -15,6 +15,7 @@ import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import { FormField } from '../../ui/FormField';
 import ConversationViewer from '../ConversationViewer';
+import MemoryImagePreview from '../MemoryImagePreview';
 
 import {
   MEMORY_TABS,
@@ -55,7 +56,11 @@ export function transcriptTeaser(content, maxLen = 220) {
 // federation continue to use the same idea model and API.
 export default function MemoryTab({ onRefresh, fixedType = null }) {
   const navigate = useNavigate();
-  const [activeType, setActiveType] = useState(fixedType || 'memories');
+  const { recordType, recordId } = useParams();
+  const location = useLocation();
+  const basePath = fixedType ? '/brain/ideas' : '/brain/memory';
+  const closeReader = () => navigate(basePath + location.search);
+  const [activeType, setActiveType] = useState(fixedType || recordType || 'memories');
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
@@ -65,8 +70,10 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [backendStatus, setBackendStatus] = useState(null);
-  // The chatgpt-import conversation currently open in the full-transcript viewer.
-  const [viewerRecord, setViewerRecord] = useState(null);
+  const viewerRecord = records.find(record => record.id === recordId);
+  useEffect(() => {
+    if (recordType && MEMORY_TABS.some(tab => tab.id === recordType)) setActiveType(recordType);
+  }, [recordType]);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
@@ -556,12 +563,12 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
 
     return (
       <div key={record.id} className="p-4 bg-port-card border border-port-border rounded-lg hover:border-port-border/80 transition-colors">
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-col sm:flex-row items-start justify-between gap-2">
           {/* min-w-0: without it a flex child won't shrink below its content's
               intrinsic width, so a long unbreakable code block in an imported
               transcript blows the row out and shoves the action buttons off
               the page. */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 w-full">
             {activeType === 'people' && (
               <>
                 <h3 className="font-medium text-white">{record.name}</h3>
@@ -623,31 +630,24 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             {activeType === 'memories' && (
               <>
                 <div className="flex items-center gap-2">
-                  <h3 className="font-medium text-white">{record.title}</h3>
+                  <h3 className="font-medium text-white"><button className="text-left hover:text-port-accent" onClick={() => navigate(`${basePath}/memories/${encodeURIComponent(record.id)}${location.search}`)}>{record.title}</button></h3>
                   {record.mood && (
                     <span className="px-2 py-0.5 text-xs rounded border bg-pink-500/20 text-pink-400 border-pink-500/30">
                       {record.mood}
                     </span>
                   )}
                 </div>
-                {record.content && (
-                  // Imported ChatGPT transcripts can be multi-KB markdown with
-                  // images. Rendering full MarkdownOutput for every card was
-                  // ballooning the Memory tab past 100k DOM nodes. Show a
-                  // plain teaser here; the full thread opens in ConversationViewer.
-                  // Hand-written memories stay plain pre-wrap text.
-                  record.source === 'chatgpt-import'
-                    ? <p className="text-sm text-gray-400 mt-1 line-clamp-3 break-words">{transcriptTeaser(record.content)}</p>
-                    : <p className="text-sm text-gray-400 mt-1 whitespace-pre-wrap break-words">{record.content}</p>
-                )}
-                {record.source === 'chatgpt-import' && record.sourceRef && (
-                  <button
-                    onClick={() => setViewerRecord(record)}
-                    className="mt-2 inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
-                  >
-                    <MessageSquareText size={13} aria-hidden="true" /> View full conversation
-                  </button>
-                )}
+                <button
+                  onClick={() => navigate(`${basePath}/memories/${encodeURIComponent(record.id)}${location.search}`)}
+                  className="mt-1 w-full text-left rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent"
+                  aria-label={`Read ${record.title || 'memory'}`}
+                >
+                  <span className="block text-sm text-gray-400 line-clamp-3 break-words">{transcriptTeaser(record.content)}</span>
+                  <MemoryImagePreview record={record} />
+                  <span className="mt-2 inline-flex min-h-[44px] items-center gap-1 text-xs text-port-accent">
+                    <MessageSquareText size={13} aria-hidden="true" /> Read full entry
+                  </span>
+                </button>
                 {record.tags?.length > 0 && (
                   <div className="flex gap-1 mt-2 flex-wrap">
                     {record.tags.map((tag, i) => (
@@ -756,7 +756,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
           return (
             <button
               key={tab.id}
-              onClick={() => { setActiveType(tab.id); setStatusFilter(''); setSearchQuery(''); }}
+              onClick={() => { closeReader(); setActiveType(tab.id); setStatusFilter(''); setSearchQuery(''); }}
               className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
                 isActive
                   ? `${destInfo.color}`
@@ -882,8 +882,14 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         </div>
       )}
 
-      {viewerRecord && (
-        <ConversationViewer record={viewerRecord} onClose={() => setViewerRecord(null)} />
+      {recordId && !loading && !viewerRecord && (
+        <Banner tone="warning" title="Entry not found">
+          This entry may have been deleted or archived.
+          <button onClick={closeReader} className="block min-h-[44px] text-port-accent">Back to entries</button>
+        </Banner>
+      )}
+      {viewerRecord && !loading && (
+        <ConversationViewer key={viewerRecord.id} record={viewerRecord} onClose={closeReader} />
       )}
     </div>
   );

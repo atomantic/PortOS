@@ -15,6 +15,7 @@
  *   GET  /api/brain/import/chatgpt/archive/:name  Fetch one archived conversation transcript
  */
 
+import { markdownImages } from '../lib/markdownImages.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { unlink } from 'fs/promises';
@@ -126,7 +127,7 @@ router.get('/chatgpt/archive/:name', asyncHandler(async (req, res) => {
   if (!archived) {
     throw new ServerError('Archived conversation not found', { status: 404, code: 'NOT_FOUND' });
   }
-  res.json(archived);
+  res.json(req.query.preview === 'images' ? { images: markdownImages(archived.transcript) } : archived);
 }));
 
 export default router;

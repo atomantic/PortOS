@@ -166,3 +166,16 @@ describe('brainImport routes', () => {
     expect(res.status).toBe(404);
   });
 });
+
+it('projects bounded archive-only image previews without transferring the transcript', async () => {
+  chatgptImport.readArchivedConversation.mockResolvedValue({
+    transcript: `${'Long conversation '.repeat(1000)}\n![Cover](/data/brain-imports/example.png)\n![Duplicate](/data/brain-imports/example.png)\n![Unsafe](javascript:alert)\n${Array.from({ length: 8 }, (_, i) => `![Image](https://example.com/${i}.png)`).join('\n')}`,
+    messages: ['private transcript']
+  });
+  const res = await request(buildApp()).get('/api/brain/import/chatgpt/archive/example.json?preview=images');
+  expect(res.status).toBe(200);
+  expect(Object.keys(res.body)).toEqual(['images']);
+  expect(res.body.images).toHaveLength(4);
+  expect(res.body.images[0]).toEqual({ src: '/data/brain-imports/example.png', alt: 'Cover' });
+  expect(res.body.images.every(image => !image.src.startsWith('javascript:'))).toBe(true);
+});
