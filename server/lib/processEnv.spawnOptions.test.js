@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { basename, dirname } from 'path';
 
 const childProcessMocks = vi.hoisted(() => ({
   execFile: vi.fn(),
@@ -31,6 +32,8 @@ describe('PATH probe spawn options', () => {
     childProcessMocks.execFileSync.mockReset();
   });
 
+  afterEach(() => vi.unstubAllEnvs());
+
   it('hides the async probe console', async () => {
     childProcessMocks.execFile.mockImplementation((_cmd, _args, _opts, callback) => {
       callback(null, { stdout: '/example/node\n', stderr: '' });
@@ -49,5 +52,19 @@ describe('PATH probe spawn options', () => {
     expect(childProcessMocks.execFileSync).toHaveBeenCalledWith(pathProbeCommand, ['node'], expect.objectContaining({
       windowsHide: true,
     }));
+  });
+
+  it.each([
+    ['async', whichFirst],
+    ['sync', whichFirstSync],
+  ])('still discovers installed executables when the %s probe times out', async (_mode, probe) => {
+    vi.stubEnv('PATH', dirname(process.execPath));
+    vi.stubEnv('Path', dirname(process.execPath));
+    const timeout = Object.assign(new Error('PATH probe timed out'), { killed: true, signal: 'SIGTERM' });
+    childProcessMocks.execFile.mockImplementation((_cmd, _args, _opts, callback) => callback(timeout));
+    childProcessMocks.execFileSync.mockImplementation(() => { throw timeout; });
+
+    expect(await probe(basename(process.execPath))).toBe(process.execPath);
+    expect(await probe('portos-nonexistent-binary-xyz-2392')).toBeNull();
   });
 });

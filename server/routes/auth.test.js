@@ -191,3 +191,34 @@ describe('auth routes', () => {
     expect(good.body).toEqual({ enabled: false });
   });
 });
+
+describe('password-free risk status', () => {
+  it('enrolls existing installs without letting network callers acknowledge the warning', async () => {
+    let app = await buildApp();
+    const initial = { enabled: false, revision: 'initial' };
+    expect((await request(app).get('/api/auth/password-risk')).body).toEqual(initial);
+    expect((await request(app).post('/api/auth/password-risk').send({ acceptRisk: true })).status).toBe(404);
+    app = await buildApp();
+    expect((await request(app).get('/api/auth/password-risk')).body).toEqual(initial);
+
+    await request(app).post('/api/auth/password').send({ newPassword: 'example-password' });
+    const protectedStatus = (await request(app).get('/api/auth/password-risk')).body;
+    expect(protectedStatus).toEqual({ enabled: true, revision: expect.any(String) });
+    expect(protectedStatus.revision).not.toBe(initial.revision);
+    await request(app).delete('/api/auth/password').send({ currentPassword: 'example-password' });
+    const unprotectedStatus = (await request(app).get('/api/auth/password-risk')).body;
+    expect(unprotectedStatus.enabled).toBe(false);
+    expect(unprotectedStatus.revision).not.toBe(initial.revision);
+    expect(unprotectedStatus.revision).not.toBe(protectedStatus.revision);
+    app = await buildApp();
+    expect((await request(app).get('/api/auth/password-risk')).body).toEqual(unprotectedStatus);
+  });
+
+  it('refuses corrupt settings without removing password state', async () => {
+    const app = await buildApp();
+    writeFileSync(join(tempRoot, 'settings.json'), '{corrupt');
+    expect((await request(app).get('/api/auth/password-risk')).status).toBe(503);
+    const { readFileSync } = await import('fs');
+    expect(readFileSync(join(tempRoot, 'settings.json'), 'utf8')).toBe('{corrupt');
+  });
+});

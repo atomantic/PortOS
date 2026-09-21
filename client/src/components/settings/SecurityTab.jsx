@@ -118,6 +118,7 @@ export function SecurityTab() {
       return;
     }
     setEnabled(true);
+    window.dispatchEvent(new Event('portos:auth-changed'));
     setCurrentPassword('');
     setNewPassword('');
     setConfirmPassword('');
@@ -138,6 +139,7 @@ export function SecurityTab() {
       return;
     }
     setEnabled(false);
+    window.dispatchEvent(new Event('portos:auth-changed'));
     setShowDisable(false);
     setDisablePassword('');
     toast.success('Login password disabled');
@@ -185,9 +187,11 @@ export function SecurityTab() {
               Login password {enabled ? 'enabled' : 'disabled'}
             </h2>
             <p className="text-sm text-gray-400 mt-1">
-              PortOS is normally reachable to anything on your tailnet. Setting a
-              password gates the UI and API behind a single shared secret —
-              useful when other devices or sidecars share the network.
+              PortOS can execute commands and access files on this computer.
+              Without a password, any reachable LAN or Tailscale device, including
+              a compromised peer, may use its APIs to control this host. Set a strong,
+              unique password to reduce that risk. Keep PortOS private: a password
+              does not make public tunnels, gateways, or port forwarding safe.
             </p>
           </div>
         </div>

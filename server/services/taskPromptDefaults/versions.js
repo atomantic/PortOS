@@ -86,10 +86,10 @@ export const PROMPT_VERSIONS = {
   'jira-status-report': 1,
 };
 
-// Claim prompts now reconcile stale blocked labels whose blockers are closed.
-PROMPT_VERSIONS['claim-issue'] = 32;
-PROMPT_VERSIONS['claim-issue-gitlab'] = 29;
-PROMPT_VERSIONS['claim-issue-jira'] = 19;
+// Claim prompts enforce host-control security eligibility before any claim or handoff.
+PROMPT_VERSIONS['claim-issue'] = 33;
+PROMPT_VERSIONS['claim-issue-gitlab'] = 30;
+PROMPT_VERSIONS['claim-issue-jira'] = 20;
 
 // Audit anchor for reference-watch's read/write coupling.
 // The reference-watch schedule default (`taskMetadata.readOnly` in DEFAULT_TASK_INTERVALS)

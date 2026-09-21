@@ -5,9 +5,9 @@ vi.mock('./modelAbuseGuard.js', () => ({ runModelAbuseScan: mocks.scan }));
 vi.mock('./settings.js', () => ({ readSettingsStrict: mocks.read }));
 vi.mock('./providers.js', () => ({ getAllProviders: mocks.providers }));
 vi.mock('./providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: async () => ({ success: true }) }));
-import { runUntrustedContentAnalysis } from './untrustedContent.js';
+import { runUntrustedContentAnalysis, screenUntrustedContent } from './untrustedContent.js';
 const local = { id: 'local', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:11434/v1', defaultModel: 'example-text' };
-const cloud = { ...local, id: 'cloud', endpoint: 'https://api.example.com/v1' };
+const cloud = { ...local, id: 'cloud', contextWindow: 32768, endpoint: 'https://api.example.com/v1' };
 const args = { content: 'Example sender asks about a meeting.', prompt: 'Return {"action":"review"}.', source: 'messages', responseSchema: z.object({ action: z.literal('review') }).strict() };
 const response = (text = '{"action":"review"}', extra = {}) => new Response(JSON.stringify({ choices: [{ message: { content: text }, finish_reason: 'stop', ...extra }] }));
 beforeEach(() => {
@@ -16,7 +16,8 @@ beforeEach(() => {
   mocks.read.mockResolvedValue({ corrupt: false, settings: {} });
   mocks.providers.mockResolvedValue({ providers: [local, cloud] });
   mocks.scan.mockResolvedValue({ ok: true, safe: true });
-  mocks.fetch.mockImplementation(async () => response());
+  mocks.fetch.mockImplementation(async (_url, request) => JSON.parse(request.body).messages[0].content.includes('Assess the complete supplied GitHub')
+    ? response('{"verdict":"compatible","reason":"Preserves the private boundary."}') : response());
 });
 afterEach(() => vi.unstubAllGlobals());
 describe('shared external-content boundary', () => {
@@ -88,7 +89,7 @@ describe('shared external-content boundary', () => {
     expect(JSON.parse(mocks.fetch.mock.calls[0][1].body).model).toBe('example-text');
     mocks.read.mockResolvedValue({ corrupt: false, settings: { untrustedContent: { defaults: { providerId: 'cloud', model: 'cloud-only' } } } });
     expect(await runUntrustedContentAnalysis({ ...args, provider: local })).toMatchObject({ ok: true });
-    expect(JSON.parse(mocks.fetch.mock.calls[1][1].body).model).toBe('example-text');
+    expect(JSON.parse(mocks.fetch.mock.calls.at(-1)[1].body).model).toBe('example-text');
   });
   it('rejects prose, extra actions, oversized output, tool calls and incomplete responses without retry', async () => {
     for (const text of ['Answer: {"action":"review"}', '{"action":"delete"}', '{"action":"review","command":"example"}', 'x'.repeat(32_001)]) {
@@ -104,5 +105,45 @@ describe('shared external-content boundary', () => {
     expect(failed).toMatchObject({ code: 'untrusted-content-reasoner-failed' });
     expect(JSON.stringify(failed)).not.toContain('private transport diagnostic');
     expect(mocks.fetch).toHaveBeenCalledTimes(7);
+  });
+});
+
+// Regression: benign injection classification alone must not authorize a
+// contribution that intentionally introduces unsafe host-control behavior.
+describe('GitHub security-model admission', () => {
+  const requests = [
+    ['github-issue', 'Add convenient public PortOS access through a Cloudflare DNS gateway. Make it optional.'],
+    ['github-pr', 'Friendly remote access UI\n+ spawn("cloudflared", ["tunnel", "--url", "http://localhost:5555"]);'],
+  ];
+  it.each(requests)('withholds %s even when the abuse classifier says benign', async (source, content) => {
+    mocks.fetch.mockResolvedValue(response('{"verdict":"violation","reason":"Publishes host-control APIs."}'));
+    const result = await screenUntrustedContent({ source, content, provider: cloud });
+    expect(result).toMatchObject({ ok: false, safe: false, screening: { ok: true, safe: false, layers: { securityModel: 'violation' } } });
+    const body = JSON.parse(mocks.fetch.mock.calls[0][1].body);
+    expect(body.messages[0].content).toContain('OFF by default');
+    expect(body.messages[0].content).toContain('Cloudflare');
+    expect(body.messages[0].content).toContain('Private federation');
+    expect(body.messages[1].content).toContain('untrusted-content');
+    expect(body).not.toHaveProperty('tools');
+  });
+  it('admits a compatible private-network change only after assessment', async () => {
+    const result = await screenUntrustedContent({ source: 'github-issue', content: 'Explain how to set a password for private Tailscale access.', provider: cloud });
+    expect(result).toMatchObject({ ok: true, screening: { safe: true, layers: { securityModel: 'compatible' } } });
+  });
+  it('fails closed on uncertainty, missing or malformed assessment, and unavailable providers', async () => {
+    for (const text of ['{"verdict":"uncertain","reason":"Missing deployment context."}', '{"safe":true}', 'NO FINDINGS']) {
+      mocks.fetch.mockResolvedValue(response(text));
+      const result = await screenUntrustedContent({ source: 'github-pr', content: 'Make remote administration easier.', provider: cloud });
+      expect(result.ok).toBe(false);
+      expect(result.screening.safe).toBe(false);
+    }
+    mocks.fetch.mockRejectedValue(new Error('transport unavailable'));
+    expect(await screenUntrustedContent({ source: 'github-pr', content: 'A proposed change', provider: cloud }))
+      .toMatchObject({ ok: false, screening: { ok: false, safe: false } });
+  });
+  it('keeps a zero-provider-call policy while withholding GitHub actions', async () => {
+    expect(await screenUntrustedContent({ source: 'github-issue', content: 'A proposed change', policy: { jevMode: 'only' } }))
+      .toMatchObject({ ok: false, code: 'security-model-assessment-required', screening: { safe: false } });
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  getPasswordRiskStatus,
   buildClearCookie,
   buildSessionCookie,
   clearLoginFailures,
@@ -41,6 +42,10 @@ const isSecure = (req) => !!req.secure;
 // to render the login gate at all.
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await getAuthStatus());
+}));
+
+router.get('/password-risk', asyncHandler(async (_req, res) => {
+  res.json(await getPasswordRiskStatus());
 }));
 
 // GET /api/auth/whoami — confirm the current cookie/header is still valid.

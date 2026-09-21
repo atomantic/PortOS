@@ -516,3 +516,9 @@ new work instead of losing deduplication history. Transcript windows are read on
 demand, never copied into public findings or automatic wake summaries. Deleting
 the ledger loses duplicate-publication protection; reconcile tracker references
 before manually retiring history.
+
+### Password-free access acknowledgement
+
+Password-risk acceptance is browser-local, stored for this origin under the versioned `portos-password-risk-v1` key. No API can acknowledge the warning for another browser. Missing or unreadable storage requires consent again; acceptance is not federated or included in instance backups. This is a browser preference, not an app-native record.
+
+`passwordRiskRevision` is an optional, opaque machine-local setting in the existing file-primary `data/settings.json` store, alongside authentication configuration. Password changes rotate it so old browser acknowledgements become invalid even if that browser was offline. Its absence means the initial revision, enrolling existing installs without a seed or migration. Generic settings updates cannot replace it; the read-only password-risk endpoint exposes only the revision and whether password protection is enabled.

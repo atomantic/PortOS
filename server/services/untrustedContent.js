@@ -1,3 +1,4 @@
+import { CONTRIBUTION_SECURITY_ASSESSMENT, contributionSecurityAssessmentSchema } from '../lib/contributionSecurityPolicy.js';
 import { readSettingsStrict } from './settings.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { readBodyCapped } from '../lib/safeUrlFetch.js';
@@ -70,7 +71,7 @@ function jevObservations(plan, outcome, llmValue) {
 }
 
 /** Complete input crosses the classifier before any conversational model sees it. */
-export async function screenUntrustedContent({ content, source, policy: override = {} } = {}) {
+export async function screenUntrustedContent({ content, source, policy: override = {}, provider, model } = {}) {
   const state = await readSettingsStrict();
   if (state.corrupt) return failure('untrusted-content-settings-unreadable', 'The untrusted-content settings could not be read. Repair Settings before retrying.');
   const policy = resolveUntrustedContentPolicy(state.settings.untrustedContent, source, override);
@@ -86,7 +87,34 @@ export async function screenUntrustedContent({ content, source, policy: override
   // legitimate block sends them to a status panel that will just say ready.
   if (!screening.ok) return { ...failure(screening.code || 'untrusted-content-screening-failed', 'Model-abuse screening could not run. Check Models > LLMs > Abuse Guard.'), screening };
   if (screening.safe !== true) return { ...failure(screening.code || 'untrusted-content-blocked', 'The model-abuse guard flagged this content and blocked it. This is expected screening behavior, not a guard setup problem.'), screening };
-  return { ok: true, safe: true, policy, screening, fingerprint: modelAbuseContentFingerprint(source, {}, content) };
+  const screened = { ok: true, safe: true, policy, screening, fingerprint: modelAbuseContentFingerprint(source, {}, content) };
+  if (source !== 'github-issue' && source !== 'github-pr') return screened;
+  // An injection classifier cannot establish whether a benign feature request
+  // violates the host's trust model. This separate mandatory verdict uses the
+  // same bounded, tool-free transport, never a scorer or CLI fallback.
+  const assessment = policy.jevMode === 'only'
+    ? failure('security-model-assessment-required', 'A security-model assessment is required; this source forbids text-provider calls.')
+    : await analyzeScreenedContent({ provider, model, content, source, screened,
+      prompt: CONTRIBUTION_SECURITY_ASSESSMENT, responseSchema: contributionSecurityAssessmentSchema });
+  if (!assessment.ok) {
+    // Some callers consume .screening directly. Never leave the earlier benign
+    // abuse verdict attached to a failed security-model assessment.
+    return { ...assessment, screening: { ok: false, safe: false, code: assessment.code } };
+  }
+  if (assessment.value.verdict === 'uncertain') {
+    const held = failure('security-model-uncertain', 'Security-model compatibility could not be established; automation was withheld.');
+    return { ...held, screening: { ...held, layers: { ...screening.layers, securityModel: 'uncertain' } } };
+  }
+  const compatible = assessment.value.verdict === 'compatible';
+  const verdict = { ...screening, safe: compatible,
+    code: compatible ? screening.code : 'security-model-withheld',
+    layers: { ...screening.layers, securityModel: assessment.value.verdict },
+    findings: compatible ? screening.findings : [{ severity: 'blocking', category: 'security-model', location: 'external-content',
+      reason: 'The contribution violates the host-control security model or its compatibility could not be established. Automation was withheld.' }],
+  };
+  // Model-authored assessment prose never becomes instructions or a work order.
+  return { ...screened, ok: compatible, safe: compatible, screening: verdict,
+    ...(compatible ? {} : { code: verdict.code, message: verdict.findings[0].reason }) };
 }
 
 // A premise may be given as a thunk. The default install never opts in, so the
@@ -211,10 +239,10 @@ export async function jevBatchGate({ content, source, items, accept } = {}) {
  */
 export async function runUntrustedContentAnalysis({ provider, model, content, prompt, source, responseSchema, policy, jev } = {}) {
   if (typeof prompt !== 'string' || !prompt.trim() || (!responseSchema?.safeParse && typeof responseSchema !== 'function')) return failure('untrusted-content-contract-required', 'A trusted task and response contract are required.');
-  const screened = await screenUntrustedContent({ content, source, policy });
+  const screened = await screenUntrustedContent({ content, source, policy, provider, model });
   if (!screened.ok) return screened;
   const config = screened.policy;
-  // Phase 1 has passed and nothing has reached a model yet, so this is the one
+  // All required admission checks passed, so this is the one
   // point where the local scorer may answer instead. A caller that supplies no
   // plan — or an install with the feature off — takes exactly the path it took
   // before jev existed, down to the provider selection below.
@@ -243,6 +271,23 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
       return failure('untrusted-content-jev-abstained', 'The local scorer could not separate the options and this source is configured to skip rather than call a provider.');
     }
   }
+  const analysis = await analyzeScreenedContent({ provider, model, content, prompt, source, responseSchema, screened });
+  if (!analysis.ok) return analysis;
+  const value = analysis.value;
+  // Measurement, never behavior. In `shadow` mode this is the only time jev
+  // runs at all; in `prefer` mode it is the plan that already abstained, now
+  // scored against the answer the chat model gave — either way the value
+  // returned below is the chat model's, byte for byte.
+  if (plan && (jevMode === 'shadow' || jevOutcome)) {
+    const measured = jevOutcome || await runJevPlan(plan, config);
+    await jevRouter.recordJevObservations(jevObservations(plan, measured, value));
+  }
+  return analysis;
+}
+
+// Private transport entry: only callers above can supply a completed screen.
+async function analyzeScreenedContent({ provider, model, content, prompt, source, responseSchema, screened }) {
+  const config = screened.policy;
   const providers = provider ? [provider] : (await getAllProviders()).providers || [];
   const selected = provider || (config.providerId
     ? providers.find(item => item.id === config.providerId)
@@ -311,13 +356,5 @@ export async function runUntrustedContentAnalysis({ provider, model, content, pr
   const validated = validateAgainstContract(responseSchema, parsedValue);
   if (!validated.ok) return failure('untrusted-content-response-invalid', 'The model did not return the required JSON contract.');
   const value = validated.value;
-  // Measurement, never behavior. In `shadow` mode this is the only time jev
-  // runs at all; in `prefer` mode it is the plan that already abstained, now
-  // scored against the answer the chat model gave — either way the value
-  // returned below is the chat model's, byte for byte.
-  if (plan && (jevMode === 'shadow' || jevOutcome)) {
-    const measured = jevOutcome || await runJevPlan(plan, config);
-    await jevRouter.recordJevObservations(jevObservations(plan, measured, value));
-  }
   return { ok: true, value, model: effectiveModel, providerId: selected.id, fingerprint: screened.fingerprint, screening: screened.screening };
 }

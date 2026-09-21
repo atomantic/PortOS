@@ -49,6 +49,7 @@ describe('bounded forge mutations', () => {
   it.each([
     ['createPR', ['pr', 'create'], () => createPR('/repo', { title: 'Title', body: 'Body', base: 'main', head: 'topic' })],
     ['mergePR', ['pr', 'merge', '42', '--merge', '--delete-branch'], () => mergePR('/repo', 42)],
+    ['head-pinned mergePR', ['pr', 'merge', '42', '--merge', '--delete-branch', '--match-head-commit', 'a'.repeat(40)], () => mergePR('/repo', 42, { expectedHeadSha: 'a'.repeat(40) })],
     ['requestCopilotReview', ['api', 'repos/example-owner/repo/pulls/42/requested_reviewers'], () => requestCopilotReview('/repo', 'https://github.com/example-owner/repo/pull/42')],
   ])('kills a stalled gh process and returns a structured timeout from %s', async (_name, expectedArgs, invoke) => {
     const child = hungChild();

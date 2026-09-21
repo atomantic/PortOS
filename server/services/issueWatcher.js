@@ -31,7 +31,7 @@ import { mergePR, resolveForgeForRepo } from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
-import { screenedPullRequestFingerprintMatches } from '../lib/prReviewContent.js';
+import { screenedPullRequestContent, screenedPullRequestFingerprintMatches } from '../lib/prReviewContent.js';
 import { trimTo } from '../lib/textUtils.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
@@ -610,27 +610,6 @@ async function approveHeldWorkflowRuns(ctx, pr) {
   return approved;
 }
 
-// Use the enable-only API, not `gh pr merge --auto`: the latter can merge
-// immediately when the repository has no required checks, even while our own
-// observed CI is pending. Pin the mutation to the exact reviewed commit.
-async function enableReviewedPullRequestAutoMerge(ctx, pr) {
-  if (!pr.id || !/^[a-f0-9]{40}$/i.test(pr.headRefOid)) return false;
-  const query = `mutation($input: EnablePullRequestAutoMergeInput!) {
-    enablePullRequestAutoMerge(input: $input) {
-      pullRequest { headRefOid autoMergeRequest { enabledAt } }
-    }
-  }`;
-  const raw = await runGh([
-    ...apiArgs(ctx, 'graphql', { method: 'POST' }), '--input', '-',
-  ], ctx, JSON.stringify({ query, variables: { input: {
-    pullRequestId: pr.id, expectedHeadOid: pr.headRefOid, mergeMethod: 'MERGE',
-  } } })).catch(() => null);
-  const response = raw === null ? null : safeJSONParse(raw, null, { logError: false });
-  const enabled = response?.data?.enablePullRequestAutoMerge?.pullRequest;
-  return !response?.errors?.length && enabled?.headRefOid === pr.headRefOid
-    && Boolean(enabled?.autoMergeRequest?.enabledAt);
-}
-
 function sameNumberList(left, right) {
   const a = Array.isArray(left) ? left : [];
   const b = Array.isArray(right) ? right : [];
@@ -767,8 +746,8 @@ async function screenModelAbuseInputs({ app, state, issueComments }) {
     await addNotification({
       type: NOTIFICATION_TYPES.AGENT_WARNING,
       priority: PRIORITY_LEVELS.HIGH,
-      title: `${newBlocked.length} external item${newBlocked.length === 1 ? '' : 's'} withheld by the model-abuse guard`,
-      description: 'PortOS withheld flagged external content before it reached the reasoning agent. No issue reply, review, label, or merge action was taken for those items.',
+      title: `${newBlocked.length} external item${newBlocked.length === 1 ? '' : 's'} withheld by the contribution security guard`,
+      description: 'PortOS withheld flagged external content before it reached the action-taking agent. No issue reply, review, label, or merge action was taken for those items.',
       metadata: { appId: app.id, issueWatcherModelAbuseCount: newBlocked.length },
     }).catch((err) => {
       console.error(`❌ issue-watcher: failed to notify about model-abuse findings: ${err.message}`);
@@ -867,7 +846,7 @@ async function processPendingApprovals(app, ctx) {
   const drops = createDropLog();
   const handbacks = createHandbackTracker(app);
   let changed = false;
-  for (const approval of approvals) {
+  for (let approval of approvals) {
     const pr = await readPullRequest(ctx, approval.number);
     if (!pr) {
       await keepPendingApproval(app, approval, remaining, 'it could not be read from GitHub', { tracker: handbacks });
@@ -877,6 +856,24 @@ async function processPendingApprovals(app, ctx) {
     if (pr.state !== 'OPEN') {
       changed = true;
       continue;
+    }
+    // Upgrade old queues before any further wait/action: GitHub auto-merge
+    // would otherwise bypass the current content and security-model gates.
+    if (approval.autoMergeEnabled) {
+      const disabled = await runGh(['pr', 'merge', String(pr.number), '--repo', ctx.repoSpec, '--disable-auto'], ctx)
+        .then(() => true, () => false);
+      if (!disabled) {
+        // An armed remote action must remain tracked even when the ordinary
+        // polling budget expires. Notify once, then keep retrying revocation.
+        if (!approval.autoMergeRevocationFailed) {
+          await notifyPendingApproval(app, approval, 'GitHub auto-merge could not be disabled for security reassessment. Disable it on the PR; PortOS will keep trying.');
+        }
+        remaining.push({ ...approval, autoMergeRevocationFailed: true });
+        changed = true;
+        continue;
+      }
+      approval = { ...approval, autoMergeEnabled: false };
+      changed = true;
     }
     if (pr.headRefOid !== approval.headSha) {
       drops.record(pr.number, 'a new head commit replaced the approved one');
@@ -893,6 +890,11 @@ async function processPendingApprovals(app, ctx) {
       // head after the review. An old approval is never enough to merge the
       // new content, so discard the pending action and require a fresh run.
       drops.record(pr.number, 'its content no longer matches the approved revision');
+      changed = true;
+      continue;
+    }
+    if (!await currentPullRequestSecurityPasses(pr, approvedDiff)) {
+      await keepPendingApproval(app, approval, remaining, 'the current security-model assessment did not pass');
       changed = true;
       continue;
     }
@@ -943,7 +945,7 @@ async function processPendingApprovals(app, ctx) {
       && approval.noChecksObserved === true;
     const mayMerge = checks === 'green' || maySkipEmptyChecks;
     if (mayMerge && pr.mergeable === 'MERGEABLE') {
-      const merged = await mergePR(app.repoPath, approval.number).catch(() => ({ success: false }));
+      const merged = await mergePR(app.repoPath, approval.number, { expectedHeadSha: approval.headSha }).catch(() => ({ success: false }));
       if (merged.success) {
         changed = true;
         continue;
@@ -1332,6 +1334,12 @@ function createDropLog() {
   };
 }
 
+async function currentPullRequestSecurityPasses(pr, diff) {
+  const { screenUntrustedContent } = await import('./untrustedContent.js');
+  const result = await screenUntrustedContent({ content: screenedPullRequestContent(pr, diff), source: 'github-pr' });
+  return result.ok === true && result.screening?.safe === true;
+}
+
 /**
  * Re-verify one reviewed PR against the content the security scan screened,
  * with a single exit carrying the reason.
@@ -1364,6 +1372,9 @@ async function verifyScreenedPullRequest(ctx, raw, expectedPullRequests) {
   if (!screenedPullRequestFingerprintMatches(target.contentFingerprint, pr, diff)) {
     // `pr` rides along so the notification can still link to it.
     return { number, pr, reason: 'its content no longer matches what the security scan screened', notify: true };
+  }
+  if (!await currentPullRequestSecurityPasses(pr, diff)) {
+    return { number, pr, reason: 'the current security-model assessment did not pass', notify: true };
   }
   return { ok: true, decision, target, pr, diff };
 }
@@ -1445,7 +1456,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
       drops.record(verified.number, verified.reason);
       if (verified.notify) {
         await notifyPendingApproval(app, { number: verified.number, url: verified.pr?.url || null },
-          'The review finished, but the PR content no longer matches what the security scan screened, so PortOS took no action on it.');
+          `The review finished, but ${verified.reason}, so PortOS took no action on it.`);
       }
       continue;
     }
@@ -1558,7 +1569,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
     const mayMerge = pr.mergeable === 'MERGEABLE' && checks === 'green';
     if (mayMerge) {
       if (!await eligibilityStillCurrent()) continue;
-      const result = await mergePR(app.repoPath, pr.number).catch(() => ({ success: false }));
+      const result = await mergePR(app.repoPath, pr.number, { expectedHeadSha: pr.headRefOid }).catch(() => ({ success: false }));
       if (result.success) {
         approvals = approvals.filter((entry) => entry.number !== pr.number);
         merged += 1;
@@ -1582,10 +1593,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
       continue;
     }
     if (!await eligibilityStillCurrent()) continue;
-    const autoMergeEnabled = await enableReviewedPullRequestAutoMerge(ctx, pr);
-    if (!autoMergeEnabled) {
-      await notifyPendingApproval(app, pr, 'The review approved this commit, but GitHub did not enable auto-merge. Check repository auto-merge settings and branch requirements. The approval remains in the pending merge queue.');
-    }
+    // PortOS owns the wait so a later merge must pass fresh security checks.
     approvals = mergeApproval(approvals, {
       number: pr.number,
       headSha: pr.headRefOid,
@@ -1594,7 +1602,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
       eligibilityFacts: target.eligibilityFacts,
       url: pr.url,
       ciPolicy: decision.ciPolicy,
-      autoMergeEnabled,
+      autoMergeEnabled: false,
       rebaseRequired: false,
       noChecksObserved: checkRollup.length === 0,
       reviewedAt: new Date().toISOString(),

@@ -1315,3 +1315,10 @@ describe('Settings routes — backup excludePaths bounds (#7241)', () => {
     expect(store.backup.excludePaths).toEqual(excludePaths);
   });
 });
+
+it('generic settings updates cannot replace the password-risk revision', async () => {
+  store = { passwordRiskRevision: 'current-revision' };
+  const res = await request(buildApp()).put('/api/settings').send({ passwordRiskRevision: 'old-revision' });
+  expect(res.status).toBe(200);
+  expect(store.passwordRiskRevision).toBe('current-revision');
+});

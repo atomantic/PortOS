@@ -433,7 +433,7 @@ export async function createPR(dir, { title, body, base, head }) {
  * @param {number|string} prNumber - Pull request number
  * @returns {Promise<{success: boolean, error?: string, cli?: string, account?: string|null, owner?: string|null, host?: string|null}>}
  */
-export async function mergePR(dir, prNumber, { forgeAccount = null } = {}) {
+export async function mergePR(dir, prNumber, { forgeAccount = null, expectedHeadSha = null } = {}) {
   // The pin matters here as much as on the read side: an owner-match alone picks
   // the wrong account for an org repo, and the merge fails authorization (#7540).
   const { cli, env, host, owner, account } = await resolveForgeForRepo(dir, { forgeAccount });
@@ -451,6 +451,7 @@ export async function mergePR(dir, prNumber, { forgeAccount = null } = {}) {
     number: prNumber,
     method: 'merge',
     deleteBranch: true,
+    expectedHeadSha,
   });
   return result.ok ? { success: true, ...meta } : { success: false, error: result.error, ...meta };
 }

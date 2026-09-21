@@ -167,6 +167,17 @@ export const getAuthStatus = async () => {
   return { enabled };
 };
 
+// The server only reports password posture. Risk acceptance lives in each
+// browser, so an unauthenticated peer cannot dismiss another browser's warning.
+// Password changes rotate the revision, invalidating even an offline browser's
+// old acknowledgement. Absence enrolls existing installs without a migration.
+export const getPasswordRiskStatus = async () => {
+  const { corrupt, settings } = await readSettingsStrict();
+  if (corrupt) throw new ServerError('Security settings could not be read', { status: 503, code: 'AUTH_SETTINGS_UNREADABLE' });
+  const enabled = await isAuthEnabled();
+  return { enabled, revision: settings.passwordRiskRevision || 'initial' };
+};
+
 // Set or replace the password. When `currentPassword` is provided we verify it
 // against the stored hash first; pass `null` for the first-time set. Returns a
 // fresh session token so the caller can stay signed in after a change.
@@ -198,7 +209,7 @@ export const setPassword = async ({ newPassword, currentPassword = null }) => {
     salt,
     updatedAt: new Date().toISOString(),
   };
-  await updateSettings({ secrets });
+  await updateSettings({ secrets, passwordRiskRevision: randomBytes(16).toString('hex') });
   // Existing sessions are invalidated on password change — the user (or anyone
   // holding a stolen token) starts over.
   await revokeAllSessions();
@@ -220,7 +231,7 @@ export const clearPassword = async ({ currentPassword }) => {
   const settings = await getSettings();
   const secrets = { ...(settings.secrets || {}) };
   delete secrets.auth;
-  await updateSettings({ secrets });
+  await updateSettings({ secrets, passwordRiskRevision: randomBytes(16).toString('hex') });
   await revokeAllSessions();
   return { enabled: false };
 };
