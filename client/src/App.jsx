@@ -399,6 +399,11 @@ export default function App() {
           {/* Harnesses folded into the AI Providers harnesses view (/ai/harnesses);
               retires the duplicate /models/harnesses page while keeping bookmarks working. */}
           <Route path="models/harnesses" element={<Navigate to="/ai/harnesses" replace />} />
+          {/* Performance owns task views rather than making one long page. The
+              selected result route is more specific so a slash-containing model
+              id stays inside the reversible assessment key segment. */}
+          <Route path="models/performance/results/:assessmentKey" element={<Models fixedTab="performance" />} />
+          <Route path="models/performance/:view" element={<Models fixedTab="performance" />} />
           {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
               Models itself, so it keeps the section header and tab bar — see
               TAB_DETAIL there. */}

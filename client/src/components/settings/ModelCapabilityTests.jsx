@@ -871,12 +871,14 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
       </div>
 
       <p className="text-[11px] text-gray-500 leading-relaxed">
-        Speed says how fast a model runs here; it cannot say whether the model can do the job. Each test below
-        runs only where the model claims the matching capability — a model with no{' '}
-        <span className="text-gray-400">vision</span> badge shows <em>not applicable</em> on the image test,
-        never a failure. Nothing here calls a model until you press a button that names it, and every run keeps
-        the full output.
+        Review task-specific evidence by model. Run a named check only when a saved result is missing or needs refreshing; each run keeps its full output.
       </p>
+      <details className="border border-port-border/70 rounded px-2 py-1.5">
+        <summary className="cursor-pointer text-[11px] text-gray-400">How capability evidence is scoped</summary>
+        <p className="text-[11px] text-gray-500 leading-snug pt-1.5">
+          A test runs only where the model claims the matching capability. A model with no <span className="text-gray-400">vision</span> badge shows <em>not applicable</em> on the image test, never a failure. Navigation and loading this view never call a provider.
+        </p>
+      </details>
 
       {tests.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-3">
@@ -890,7 +892,10 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
                   <span className="text-xs font-medium text-gray-200">{t.label}</span>
                   <span className="text-[10px] text-gray-500">{t.capabilities.join(' · ')}</span>
                 </div>
-                <p className="text-[11px] text-gray-500 leading-snug">{t.blurb}</p>
+                <details className="bg-port-card border border-port-border/70 rounded px-2 py-1">
+                  <summary className="cursor-pointer text-[10px] text-gray-400">What this test checks</summary>
+                  <p className="text-[11px] text-gray-500 leading-snug pt-1">{t.blurb}</p>
+                </details>
               </div>
             );
           })}

@@ -23,11 +23,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Gauge, RefreshCw, Trash2, Play, AlertTriangle, History, SlidersHorizontal, ChevronDown, ChevronUp, Terminal } from 'lucide-react';
+import { Link, useLocation, useNavigate } from 'react-router';
+import { BarChart3, Gauge, RefreshCw, Trash2, Play, AlertTriangle, History, SlidersHorizontal, ChevronDown, ChevronUp, Terminal, FlaskConical } from 'lucide-react';
 import socket from '../../services/socket';
 import Drawer from '../Drawer';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
+import TabPills from '../ui/TabPills';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -35,8 +37,9 @@ import AssessmentSweepPanel from './AssessmentSweepPanel';
 import ModelCapabilityTests, { TestCell } from './ModelCapabilityTests.jsx';
 import CapabilityBadges from '../models/CapabilityBadges.jsx';
 import ModelThroughputReport from './ModelThroughputReport';
-import { formatContextTokens, formatDurationMs, throughputLabel } from '../../utils/formatters';
+import { formatContextTokens, formatDurationMs, timeAgo, throughputLabel } from '../../utils/formatters';
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
+import { decodeLocalModelAssessmentKey, localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
 import {
   getLocalLlmAssessments, runLocalLlmAssessment, runOpenCodeAgentBenchmark, deleteLocalLlmAssessment,
   getModelCapabilityTests,
@@ -48,6 +51,15 @@ const INTENTS = [
   { id: 'fastest', label: 'Fastest', blurb: 'Favors measured throughput above all else.' },
   { id: 'lightweight', label: 'Lightweight', blurb: 'Favors the smallest resident footprint — room left for other work.' },
 ];
+
+export const PERFORMANCE_VIEWS = [
+  { id: 'results', label: 'Results', icon: BarChart3 },
+  { id: 'capabilities', label: 'Capabilities', icon: FlaskConical },
+  { id: 'agent-checks', label: 'Agent checks', icon: Terminal },
+  { id: 'tuning', label: 'Tuning', icon: SlidersHorizontal },
+];
+
+const PERFORMANCE_PATH = '/models/performance';
 
 // Fallback labels only. The authoritative roster (label, reachability, knob
 // catalog) rides on the report as `runtimes` — a hardcoded list here would drift
@@ -149,6 +161,95 @@ function VerdictPill({ verdict }) {
   const meta = VERDICT_META[verdict] || VERDICT_META.unknown;
   return (
     <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded border ${meta.cls}`}>{meta.label}</span>
+  );
+}
+
+function SelectedEvidence({ entry, report, loading, selected, search }) {
+  if (!selected) {
+    return (
+      <aside className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2" aria-label="Selected evidence">
+        <h3 className="text-xs font-medium text-gray-300">Selected evidence</h3>
+        <p className="text-[11px] text-gray-500">Choose a measured row to inspect its runtime, tuning, timing, and freshness evidence.</p>
+      </aside>
+    );
+  }
+
+  if (loading) {
+    return (
+      <aside className="bg-port-bg border border-port-border rounded-lg p-3" aria-label="Selected evidence">
+        <BrailleSpinner text="Loading selected evidence" />
+      </aside>
+    );
+  }
+
+  if (!entry) {
+    return (
+      <aside className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2" role="alert" aria-label="Selected evidence">
+        <h3 className="text-xs font-medium text-gray-300">Selected evidence unavailable</h3>
+        <p className="text-[11px] text-gray-500">
+          This measurement is stale, deleted, or no longer installed. Nothing will run from this link.
+        </p>
+        <Link className="text-xs text-port-accent hover:underline" to={{ pathname: `${PERFORMANCE_PATH}/results`, search }}>
+          Return to Results
+        </Link>
+      </aside>
+    );
+  }
+
+  const performance = entry.performance || {};
+  const tableRow = report?.throughputReport?.rows?.find((row) => entryKey(row) === entryKey(entry));
+  const measuredContexts = entry.samples?.map((sample) => sample.contextTokens).filter(Number.isFinite);
+  const contextBasis = measuredContexts?.length
+    ? measuredContexts.map(formatContextTokens).join(', ')
+    : (report?.defaultContextTokens || []).map(formatContextTokens).join(', ');
+  const freshness = entry.staleness?.comparable === false
+    ? 'Unknown'
+    : entry.staleness?.stale
+      ? 'Stale'
+      : 'Current';
+  const timingBasis = tableRow?.timingSource === 'runtime'
+    ? 'Runtime-reported timing'
+    : tableRow?.timingSource === 'stream-window'
+      ? 'Observed stream window'
+      : tableRow?.timingSource === 'wall-clock'
+        ? 'End-to-end wall clock'
+        : 'Timing basis unavailable';
+
+  return (
+    <aside className="bg-port-bg border border-port-border rounded-lg p-3 space-y-3" aria-label="Selected evidence">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="text-xs font-medium text-gray-300">Selected evidence</h3>
+          <p className="text-sm text-white font-mono break-all mt-1">{entry.modelId}</p>
+          <p className="text-[11px] text-gray-500">{backendLabel(report, entry.backend)}</p>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <VerdictPill verdict={entry.verdict} />
+          <StalePill staleness={entry.staleness} />
+        </div>
+      </div>
+
+      {entry.reason && <p className="text-[11px] text-port-warning">{entry.reason}</p>}
+      {entry.explanation && <p className="text-[11px] text-gray-400">{entry.explanation}</p>}
+
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-[11px]">
+        <div><dt className="text-gray-500">Launch tuning</dt><dd className="text-gray-200">{entry.tuningLabel || 'backend defaults'}</dd></div>
+        <div><dt className="text-gray-500">Freshness</dt><dd className={freshness === 'Stale' ? 'text-port-warning' : 'text-gray-200'}>{freshness}</dd></div>
+        <div><dt className="text-gray-500">Measured</dt><dd className="text-gray-200">{timeAgo(entry.assessedAt, 'unknown')}</dd></div>
+        <div><dt className="text-gray-500">Timing basis</dt><dd className="text-gray-200">{timingBasis}</dd></div>
+        <div><dt className="text-gray-500">Context samples</dt><dd className="text-gray-200">{contextBasis || 'not measured'}</dd></div>
+        <div><dt className="text-gray-500">Max context</dt><dd className="text-gray-200">{Number.isFinite(performance.maxWorkingContextTokens) ? `${formatContextTokens(performance.maxWorkingContextTokens)} tokens` : 'not measured'}</dd></div>
+        <div><dt className="text-gray-500">Throughput</dt><dd className="text-gray-200">{throughputLabel(performance) || 'not measured'}</dd></div>
+        <div><dt className="text-gray-500">First token</dt><dd className="text-gray-200">{Number.isFinite(performance.meanTtftMs) ? formatDurationMs(performance.meanTtftMs) : 'not measured'}</dd></div>
+      </dl>
+
+      <Link
+        className="inline-flex items-center text-xs text-port-accent hover:underline"
+        to={{ pathname: `${PERFORMANCE_PATH}/results`, search }}
+      >
+        Clear selection
+      </Link>
+    </aside>
   );
 }
 
@@ -368,10 +469,10 @@ function CapabilityStrip({ capability, backend, modelId, tests, onOpen }) {
   );
 }
 
-function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings, sweepVariants, busy, capability, capabilityTests, onOpenCapabilityTest }) {
+function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings, sweepVariants, busy, capability, capabilityTests, onOpenCapabilityTest, selected, search }) {
   const perf = entry.performance || {};
   return (
-    <div className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
+    <div className={`bg-port-bg border rounded-lg p-3 space-y-2 ${selected ? 'border-port-accent/70' : 'border-port-border'}`}>
       <div className="flex items-start justify-between gap-2 flex-wrap">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
@@ -410,6 +511,15 @@ function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings,
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <Link
+            to={{ pathname: localModelAssessmentPath(entry), search }}
+            aria-label={`View evidence for ${entry.modelId}`}
+            aria-current={selected ? 'page' : undefined}
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-port-accent transition-colors"
+            title="View selected evidence"
+          >
+            <BarChart3 size={13} />
+          </Link>
           <button
             onClick={() => onRemeasure(entry)}
             disabled={busy}
@@ -613,11 +723,14 @@ function OpenCodeAgentBenchmarkPanel({ results, running, onRun }) {
         <h3 className="font-medium">Local TUI agent-task check</h3>
       </div>
       <p className="text-[11px] text-gray-500">
-        Runs one disposable task through each configured local TUI preset using the actual PTY-backed harness.
-        The agent must create and read a sentinel file in a temporary workspace, so this measures harness
-        completion including startup and terminal paste overhead. Compare the direct report above for engine
-        throughput.
+        Run one explicit task through each configured local TUI preset and compare completion evidence.
       </p>
+      <details className="border border-port-border/70 rounded px-2 py-1.5">
+        <summary className="cursor-pointer text-[11px] text-gray-400">How the task check is measured</summary>
+        <p className="text-[11px] text-gray-500 pt-1.5">
+          The harness asks the agent to create and read a sentinel file in a temporary workspace. Completion time includes startup and terminal paste overhead; it is not engine throughput.
+        </p>
+      </details>
       {leader && (
         <div className="text-[11px] text-port-accent border border-port-accent/30 rounded px-2 py-1">
           Current task leader: <span className="font-medium">{leader.target.label}</span> — {formatDurationMs(leader.result.elapsedMs)} fastest completion
@@ -661,7 +774,27 @@ function OpenCodeAgentBenchmarkPanel({ results, running, onRun }) {
   );
 }
 
-export function LocalModelAssessments() {
+export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const pathSegments = location.pathname.split('/').filter(Boolean);
+  const pathnameView = pathSegments[0] === 'models' && pathSegments[1] === 'performance'
+    ? pathSegments[2]
+    : null;
+  const pathnameAssessmentKey = pathnameView === 'results' ? pathSegments[3] : null;
+  const requestedView = taskView || view || pathnameView || 'results';
+  const selectedKey = assessmentKey || pathnameAssessmentKey;
+  const validView = PERFORMANCE_VIEWS.some((item) => item.id === requestedView);
+  const activeView = validView ? requestedView : 'results';
+
+  useEffect(() => {
+    if (!validView) navigate({ pathname: `${PERFORMANCE_PATH}/results`, search: location.search }, { replace: true });
+  }, [location.search, navigate, validView]);
+
+  const openView = useCallback((nextView) => {
+    navigate({ pathname: `${PERFORMANCE_PATH}/${nextView}`, search: location.search });
+  }, [location.search, navigate]);
+
   const [intent, setIntent] = useState('balanced');
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -753,6 +886,18 @@ export function LocalModelAssessments() {
   const capabilityByModel = useMemo(() => new Map(
     (capabilityReport?.models || []).map((m) => [`${m.backend}:${m.modelId}`, m]),
   ), [capabilityReport]);
+
+  const selectedTuple = useMemo(
+    () => decodeLocalModelAssessmentKey(selectedKey),
+    [selectedKey],
+  );
+  const selectedEntry = useMemo(() => {
+    if (!selectedTuple) return null;
+    const wanted = entryKey(selectedTuple);
+    const rows = [report?.ranked, report?.excluded, report?.assessments, report?.uninstalled];
+    return rows.flatMap((group) => group || []).find((entry) => entryKey(entry) === wanted) || null;
+  }, [report, selectedTuple]);
+  const selectedEvidenceLoading = Boolean(selectedKey && !report);
 
   // Both this panel and the suite panel drive the same URL params, so a row's
   // chip opens the same drawer the matrix does without either owning the other.
@@ -956,58 +1101,99 @@ export function LocalModelAssessments() {
   const activeIntent = INTENTS.find((i) => i.id === intent);
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
+    <div className="space-y-4 min-w-0">
       {/* No refresh control: the report loads with the tab and reloads itself
           after every run, sweep and discard, so a manual refresh only ever
           re-fetched what was already on screen. */}
       <div className="flex items-center gap-2">
         <Gauge size={16} className="text-port-accent" />
-        <h2 className="text-sm font-medium text-gray-300">Measured Model Assessments</h2>
+        <div>
+          <h2 className="text-sm font-medium text-gray-300">Model Performance</h2>
+          <p className="text-[11px] text-gray-500">Compare measured evidence first, then run a focused check when the result leaves a question.</p>
+        </div>
         {loading && <BrailleSpinner />}
       </div>
 
-      <p className="text-xs text-gray-500">
-        The install catalog estimates fit from a model&apos;s file size. This measures it: one short
-        generation at each of several context lengths, recording throughput, time to first token, and how
-        far throughput falls off as context grows — across every local runtime PortOS can reach
-        (Ollama, LM Studio, llama.cpp, MTPLX, vLLM). Throughput is reported in tokens per second wherever
-        the runtime reports token counts. Measure a model under more than one launch tuning to
-        see which configuration this machine actually prefers, or start a sweep to measure everything at
-        once. Results stay on this machine — they describe this hardware, so they are never synced to a peer.
-      </p>
-
-      <RuntimeRoster runtimes={report?.runtimes} />
-
-      <OpenCodeAgentBenchmarkPanel
-        results={agentBenchmarkResults}
-        running={agentBenchmarkRunning || busy}
-        onRun={runAgentBenchmark}
+      <TabPills
+        tabs={PERFORMANCE_VIEWS}
+        activeTab={activeView}
+        onChange={openView}
+        ariaLabel="Model performance tasks"
+        controlsIdPrefix="performance-task"
+        mobileCompact
       />
 
-      {/* The batch run. Kept above the ranking because it is what you come here
-          to press at the end of the day; the results below are what you read the
-          next morning. Disabled while a single-model run holds the provider —
-          two measurements at once would measure the contention. */}
-      {/* What each model CLAIMS, and what it has proved. Kept above the ranking
-          because "can it do the job" is the question you ask before "how fast is
-          it" — and because the matrix is what sends you into a run. */}
-      <ModelCapabilityTests
-        report={capabilityReport}
-        loading={capabilityLoading}
-        onReload={loadCapabilities}
-        disabled={busy}
-      />
+      <details hidden={activeView !== 'results'} className="bg-port-card border border-port-border rounded-xl px-4 py-3">
+        <summary className="cursor-pointer text-xs text-gray-400">How measurements and rankings work</summary>
+        <p className="text-[11px] text-gray-500 pt-2">
+          An explicit assessment runs one short generation at each sampled context size and records throughput, first-token timing, context stability, and resident memory. Tokens/s and chars/s remain separate units; missing evidence is never treated as zero. Results stay on this machine because they describe its current hardware and runtime state.
+        </p>
+      </details>
 
-      <AssessmentSweepPanel
-        counts={report?.sweepScopes}
-        contextTokens={report?.defaultContextTokens || []}
-        disabled={localBusy}
-        onRunningChange={setSweepRunning}
-        onSweepFinished={() => load(intent)}
-        tuningRequest={tuningSweepRequest}
-        onTuningRequestClose={closeSweepTarget}
-      />
+      <div hidden={activeView !== 'results'}>
+        <RuntimeRoster runtimes={report?.runtimes} />
+      </div>
 
+      <div
+        hidden={activeView !== 'agent-checks'}
+        role="tabpanel"
+        id="performance-task-agent-checks"
+        aria-labelledby="tab-agent-checks"
+      >
+        <OpenCodeAgentBenchmarkPanel
+          results={agentBenchmarkResults}
+          running={agentBenchmarkRunning || busy}
+          onRun={runAgentBenchmark}
+        />
+      </div>
+
+      <div
+        hidden={activeView !== 'capabilities'}
+        role="tabpanel"
+        id="performance-task-capabilities"
+        aria-labelledby="tab-capabilities"
+      >
+        <ModelCapabilityTests
+          report={capabilityReport}
+          loading={capabilityLoading}
+          onReload={loadCapabilities}
+          disabled={busy}
+        />
+      </div>
+
+      <div
+        hidden={activeView !== 'tuning'}
+        role="tabpanel"
+        id="performance-task-tuning"
+        aria-labelledby="tab-tuning"
+        className="space-y-4"
+      >
+        <AssessmentSweepPanel
+          counts={report?.sweepScopes}
+          contextTokens={report?.defaultContextTokens || []}
+          disabled={localBusy}
+          onRunningChange={setSweepRunning}
+          onSweepFinished={() => load(intent)}
+          tuningRequest={tuningSweepRequest}
+          onTuningRequestClose={closeSweepTarget}
+        />
+        <ModelThroughputReport
+          report={report?.throughputReport}
+          runtimeLabelFor={runtimeLabelFor}
+        />
+        <TuningComparison
+          rows={report?.tuningComparison}
+          runtimeLabelFor={runtimeLabelFor}
+        />
+      </div>
+
+      <div
+        hidden={activeView !== 'results'}
+        role="tabpanel"
+        id="performance-task-results"
+        aria-labelledby="tab-results"
+        className="space-y-4"
+      >
       <div className="flex items-center gap-2 flex-wrap">
         <label htmlFor="assessment-intent" className="text-xs text-gray-400">Rank for</label>
         <select
@@ -1040,14 +1226,17 @@ export function LocalModelAssessments() {
             </p>
           )}
 
-          {report.ranked.length > 0 ? (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,26rem)] items-start">
             <div className="space-y-2">
-              {report.ranked.map((entry) => (
+            {report.ranked.length > 0 ? (
+              <div className="space-y-2">
+                {report.ranked.map((entry) => (
                 <RankedRow
                   key={entryKey(entry)}
                   entry={entry}
                   runtimeLabel={backendLabel(report, entry.backend)}
                   busy={busy}
+                  selected={selectedTuple && entryKey(entry) === entryKey(selectedTuple)}
                   sweepVariants={gridFor(report, entry.backend).length}
                   onRemeasure={openTarget}
                   onDelete={removeAssessment}
@@ -1055,22 +1244,22 @@ export function LocalModelAssessments() {
                   capability={capabilityByModel.get(`${entry.backend}:${entry.modelId}`) || null}
                   capabilityTests={capabilityReport?.tests}
                   onOpenCapabilityTest={openCapabilityTest}
+                  search={location.search}
                 />
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-gray-500">
-              Nothing measured yet. Pick a model below and run an assessment to see how it actually
-              performs here.
-            </p>
-          )}
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500">
+                Nothing measured yet. Pick a model below and run an assessment to see how it actually performs here.
+              </p>
+            )}
 
           {report.excluded?.length > 0 && (
             <div className="space-y-1">
               <h3 className="text-xs font-medium text-gray-400">Measured, but not recommended</h3>
               {report.excluded.map((entry) => (
                 <div key={entryKey(entry)} className="flex items-center gap-2 text-xs flex-wrap">
-                  <span className="text-gray-300 font-mono break-all">{entry.modelId}</span>
+                  <Link className="text-gray-300 font-mono break-all hover:text-port-accent" to={{ pathname: localModelAssessmentPath(entry), search: location.search }}>{entry.modelId}</Link>
                   {/* Several rows can name the same model — one per tuning — so
                       the configuration is what tells them apart. */}
                   <span className="px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-500">
@@ -1082,16 +1271,6 @@ export function LocalModelAssessments() {
               ))}
             </div>
           )}
-
-          <ModelThroughputReport
-            report={report.throughputReport}
-            runtimeLabelFor={runtimeLabelFor}
-          />
-
-          <TuningComparison
-            rows={report.tuningComparison}
-            runtimeLabelFor={runtimeLabelFor}
-          />
 
           {report.unassessed?.length > 0 && (
             <div className="space-y-1">
@@ -1120,8 +1299,18 @@ export function LocalModelAssessments() {
               </div>
             </div>
           )}
+            </div>
+            <SelectedEvidence
+              entry={selectedEntry}
+              report={report}
+              loading={selectedEvidenceLoading}
+              selected={Boolean(selectedKey)}
+              search={location.search}
+            />
+          </div>
         </>
       )}
+      </div>
 
       <AssessmentDrawer
         target={pendingTarget}
