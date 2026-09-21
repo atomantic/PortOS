@@ -1,6 +1,7 @@
 """Runner contract tests without model weights or a torch installation."""
 import contextlib
 import importlib
+import io
 import sys
 import tempfile
 import unittest
@@ -23,6 +24,20 @@ class Qwen21Pipeline:
 
 
 class RunnerContract(unittest.TestCase):
+    def test_missing_pipeline_reports_runtime_remedy_before_exit_two(self):
+        with patch.dict(sys.modules, {'torch': SimpleNamespace()}):
+            runner = importlib.import_module('z_image_turbo')
+        stderr = io.StringIO()
+        with patch.dict(sys.modules, {'diffusers': SimpleNamespace()}), patch.multiple(
+            runner, suppress_cosmetic_clip_truncation=lambda: None,
+            heartbeat=lambda _: contextlib.nullcontext(),
+        ), contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as stopped:
+            runner.load_pipeline('Qwen/Qwen-Image-2.1', 'cpu', 'bf16', 'QwenImage21Pipeline')
+        self.assertEqual(stopped.exception.code, 2)
+        self.assertIn('USER_ERROR:torch_runtime_broken', stderr.getvalue())
+        self.assertIn('QwenImage21Pipeline', stderr.getvalue())
+        self.assertIn('FLUX2_FORCE_REINSTALL=1', stderr.getvalue())
+
     def test_qwen21_generation_and_edit_preserve_alpha(self):
         torch = SimpleNamespace(
             bfloat16='bf16', float32='fp32', inference_mode=contextlib.nullcontext,

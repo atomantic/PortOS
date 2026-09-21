@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vites
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { EventEmitter } from 'node:events';
+
+const mockSpawn = vi.fn();
+vi.mock('../../lib/childProcess.js', async (original) => ({ ...await original(), spawn: (...args) => mockSpawn(...args) }));
+vi.mock('../../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: async () => ({ ok: true, release: async () => {} }) }));
+vi.mock('../localMemory.js', () => ({ gpuBlockersMessage: vi.fn(), prepareLocalMemory: async () => ({ blockers: [], unloaded: [] }) }));
+vi.mock('../hfToken.js', () => ({ hfChildEnv: async () => ({}) }));
+vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
 // FLUX.2 venv resolution mock — flip between "installed" and "missing" with
 // the .returnValue setter on each test.
@@ -11,7 +19,7 @@ const mockResolveFlux2Python = vi.fn();
 const mockIsFlux2VenvHealthy = vi.fn(async () => true);
 vi.mock('../../lib/pythonSetup.js', () => ({
   resolveFlux2Python: () => mockResolveFlux2Python(),
-  isFlux2VenvHealthy: () => mockIsFlux2VenvHealthy(),
+  isFlux2VenvHealthy: (...args) => mockIsFlux2VenvHealthy(...args),
   invalidateFlux2Health: vi.fn(),
   FLUX2_VENV_DEFAULT: '/fake/home/.portos/venv-flux2/bin/python3',
 }));
@@ -995,11 +1003,39 @@ describe('imageGen local.generateImage runtime pre-flight', () => {
     mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
     mockIsFlux2VenvHealthy.mockResolvedValue(false);
 
-    await expect(generateImage({ modelId: 'flux2-klein-4b', prompt: 'a fox' })).rejects.toMatchObject({
+    await expect(generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' })).rejects.toMatchObject({
       // Same code buildArgs throws when the venv's python is missing outright.
       code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED',
       status: 400,
       message: expect.stringContaining('not installed or healthy'),
     });
+    expect(mockIsFlux2VenvHealthy).toHaveBeenCalledWith('QwenImage21Pipeline');
+  });
+});
+
+// Regression: SSE had the Python diagnosis, but the queue and status snapshot
+// replaced it with only an exit code. Exercise the actual child close boundary.
+describe('local render failure delivery', () => {
+  it.each([
+    ['USER_ERROR:torch_runtime_broken\n❌ Unknown diffusers pipeline class: QwenImage21Pipeline. Reinstall the runtime.\n', 'Reinstall the runtime.'],
+    ['runner.py: error: invalid value for --steps\n', 'invalid value for --steps'],
+  ])('preserves the runner diagnosis in failed events and SSE replays', async (stderr, expected) => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    mockIsFlux2VenvHealthy.mockResolvedValue(true);
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    mockSpawn.mockReturnValue(child);
+    const { imageGenEvents } = await import('../imageGenEvents.js');
+    const { attachSseClient } = await import('./local.js');
+    const failed = new Promise((resolve) => imageGenEvents.once('failed', resolve));
+    const { jobId } = await generateImage({ modelId: 'qwen-image-2.1', prompt: 'a fox' });
+    child.stderr.emit('data', Buffer.from(stderr));
+    child.emit('close', 2);
+    expect((await failed).error).toContain(expected);
+    const response = { writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), req: new EventEmitter() };
+    expect(attachSseClient(jobId, response)).toBe(true);
+    expect(response.write.mock.calls[0][0]).toContain(expected);
+    response.req.emit('close');
   });
 });

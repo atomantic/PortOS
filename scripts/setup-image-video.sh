@@ -1109,6 +1109,10 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
       "peft>=0.17" \
       "optimum-quanto>=0.2.7" \
       pillow
+    # Same-version dev snapshots are not replaced by --upgrade. Refresh the
+    # pipeline code without reinstalling torch or its platform-specific wheel.
+    "$FLUX2_PY" -m pip install --force-reinstall --no-deps \
+      "diffusers @ git+https://github.com/huggingface/diffusers"
     probe_or_fail \
       "flux2 venv built but 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' failed." \
       "Try: $FLUX2_PY -m pip install --upgrade --force-reinstall 'diffusers @ git+https://github.com/huggingface/diffusers'" \

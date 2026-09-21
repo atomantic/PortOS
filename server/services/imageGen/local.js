@@ -590,7 +590,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // Decks page rendered that as an unexplained "Failed" badge. Refuse up front
   // with the same reason and one-button remedy the status probe reports.
   if (usesTorchVenv(model)) {
-    const healthy = await isFlux2VenvHealthy().then((v) => v).catch(() => null);
+    const healthy = await isFlux2VenvHealthy(model.pipelineClass).then((v) => v).catch(() => null);
     if (healthy === false) {
       throw new ServerError(
         `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT}). Install it from Settings › Image Gen › Local, then retry. FLUX.2, Z-Image, ERNIE, HiDream and Qwen all render through it.`,
@@ -978,6 +978,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // the runtime still failed to import. Bust the health cache so the next
       // status poll reports the truth instead of the cached pass, and name the
       // same one-button remedy rather than leaving the caller with "Exit code 1".
+      if (userKind === 'torch_runtime_broken') invalidateFlux2Health();
       if (!userMessage && usesTorchVenv(model)) {
         const importBroken = lines.some((l) => /^(ModuleNotFoundError|ImportError)\b/.test(l) || /cannot import name /.test(l));
         if (importBroken) {
@@ -1013,13 +1014,13 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         ? `${userMessage}\n\n(diagnostic) ${reason}`
         : `Generation failed: ${reason}\n${tail}`;
       console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
-      job.error = userMessage || reason;
+      job.error = userMessage || errorText;
       job.errorKind = userKind;
       job.errorRepo = userRepo;
       broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo });
       // Propagate the friendly message (not the raw "Exit code 1") to the
       // job queue so its `failed` log line and future SSE replays carry it.
-      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: userMessage || reason });
+      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error });
     } else {
       job.status = 'complete';
       // Large-source regen (issue #912): the render ran at a clamped FLUX-sane

@@ -157,6 +157,7 @@ def load_pipeline(
         if pipeline_class:
             cls = getattr(diffusers, pipeline_class, None)
             if cls is None:
+                print("USER_ERROR:torch_runtime_broken", file=sys.stderr, flush=True)
                 print(
                     f"❌ Unknown diffusers pipeline class: {pipeline_class}. "
                     "Upgrade the image runtime: INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 "
