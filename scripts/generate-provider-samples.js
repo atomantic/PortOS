@@ -533,7 +533,7 @@ const TUPLES = [
   {
     id: 'grok-cli', harnessId: 'grok', method: 'cli', service: 'grok-build',
     overrides: {
-      name: 'Grok Build CLI', models: ['grok-4.6'], defaultModel: 'grok-4.6', lightModel: 'grok-4.6', mediumModel: 'grok-4.6', heavyModel: 'grok-4.6',
+      name: 'Grok Build CLI', models: ['grok-4.7', 'grok-4.6', 'grok-4.5'], defaultModel: 'grok-4.7', lightModel: 'grok-4.7', mediumModel: 'grok-4.7', heavyModel: 'grok-4.7',
       contextWindow: 256000, timeout: 300000, enabled: false,
       headlessArgs: OMIT,
     },
@@ -541,7 +541,7 @@ const TUPLES = [
   {
     id: 'grok-tui', harnessId: 'grok', method: 'tui', service: 'grok-build',
     overrides: {
-      name: 'Grok Build TUI', models: ['grok-4.6'], defaultModel: 'grok-4.6', lightModel: 'grok-4.6', mediumModel: 'grok-4.6', heavyModel: 'grok-4.6',
+      name: 'Grok Build TUI', models: ['grok-4.7', 'grok-4.6', 'grok-4.5'], defaultModel: 'grok-4.7', lightModel: 'grok-4.7', mediumModel: 'grok-4.7', heavyModel: 'grok-4.7',
       contextWindow: 256000, enabled: false,
     },
   },
@@ -580,17 +580,6 @@ const TUPLES = [
     },
   },
 
-  // --- Direct API definitions (no harness program) -----------------------------
-  {
-    id: 'nvidia-kimi', harnessId: 'direct', method: 'api', service: { definitionId: 'nvidia-nim', slug: 'nvidia-kimi', credentials: { apiKey: '' } },
-    overrides: {
-      name: 'NVIDIA Kimi K2.5', enabled: false,
-      models: ['moonshotai/kimi-k2.5', 'moonshotai/kimi-k2-instruct', 'moonshotai/kimi-k2-thinking'],
-      defaultModel: 'moonshotai/kimi-k2.5', lightModel: 'moonshotai/kimi-k2-instruct', mediumModel: 'moonshotai/kimi-k2.5', heavyModel: 'moonshotai/kimi-k2-thinking',
-      fallbackProvider: null, timeout: 300000,
-      envVars: {}, apiKey: '',
-    },
-  },
   {
     id: 'cerebras', harnessId: 'direct', method: 'api', service: { definitionId: 'cerebras', credentials: { apiKey: '' } },
     overrides: {
@@ -626,7 +615,8 @@ const TUPLES = [
     id: 'grok', harnessId: 'direct', method: 'api', service: { definitionId: 'xai', slug: 'grok', credentials: { apiKey: '' } },
     overrides: {
       name: 'xAI Grok', enabled: false,
-      models: ['grok-4', 'grok-3', 'grok-3-mini', 'grok-code-fast-1'], defaultModel: 'grok-4', lightModel: 'grok-3-mini', mediumModel: 'grok-3', heavyModel: 'grok-4',
+      models: ['grok-4.7', 'grok-4', 'grok-3', 'grok-3-mini', 'grok-code-fast-1'], defaultModel: 'grok-4.7', lightModel: 'grok-3-mini', mediumModel: 'grok-3', heavyModel: 'grok-4.7',
+      contextWindow: 500000,
       fallbackProvider: null, timeout: 300000, envVars: {}, apiKey: '',
     },
   },
@@ -671,7 +661,7 @@ export const PROVIDER_ORDER = [
   'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
   'claude-code-tui', 'claude-code-tui-bedrock',
   'antigravity-tui', 'antigravity-cli',
-  'nvidia-kimi', 'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
+  'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
   'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
 ];
 

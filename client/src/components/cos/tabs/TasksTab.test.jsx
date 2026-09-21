@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router';
 
 // Regression coverage for #2519 — the "Run Now" evaluate button must only toast
 // success after the request resolves.
+vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
 const api = vi.hoisted(() => ({
   forceCosEvaluate: vi.fn(),
   getCosLearningDurations: vi.fn(),

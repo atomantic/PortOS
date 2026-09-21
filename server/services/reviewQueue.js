@@ -32,23 +32,21 @@ import * as brain from './brain.js';
 import * as brainStorage from './brainStorage.js';
 import * as askConversations from './askConversations.js';
 import * as cosTaskStore from './cosTaskStore.js';
-import * as cosAgentFeedback from './cosAgentFeedback.js';
 import * as messageDrafts from './messageDrafts.js';
+import { HEALTH_RESOLUTION_PREFIX } from './healthAlertResolutions.js';
 import { generateNonProductAlerts } from './proactiveAlertSources.js';
-import * as backup from './backup.js';
 import * as identity from './identity.js';
 import * as reviewService from './review.js';
 import * as notifications from './notifications.js';
 import * as stackerNews from './stackerNews.js';
 import * as x from './x.js';
-import { promoteLatestAssistantTurn } from './askPromote.js';
-import { adaptNotification, adaptStoredReviewItem } from './reviewActionAdapters.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getProductEngagement } from './portosProductMetrics.js';
 import * as reviewQueueTriageStore from './reviewQueueTriageStore.js';
 import { todayInTimezone } from '../lib/timezone.js';
+import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { isTerminalThreadStatus, threadNextLine } from '../lib/brainThreads.js';
 
 // Producers are read with a bounded upper limit. The queue reports a lower
@@ -105,18 +103,21 @@ const PRIORITY_ORDER = { HIGH: 0, MEDIUM: 1, LOW: 2 };
 // alert list is fine here (the dedicated health views read it live).
 const ALERTS_TTL_MS = 30_000;
 let alertsCache = { data: null, timestamp: 0 };
+let alertsGeneration = 0;
 
 async function getAlertsCached() {
   if (alertsCache.data && (Date.now() - alertsCache.timestamp) < ALERTS_TTL_MS) {
     return alertsCache.data;
   }
+  const generation = alertsGeneration;
   const result = await generateNonProductAlerts();
-  alertsCache = { data: result, timestamp: Date.now() };
+  if (generation === alertsGeneration) alertsCache = { data: result, timestamp: Date.now() };
   return result;
 }
 
 // Test seam: drop the alerts cache so a suite can assert fresh per-case data.
 export function __resetAlertsCache() {
+  alertsGeneration++;
   alertsCache = { data: null, timestamp: 0 };
 }
 
@@ -160,6 +161,18 @@ function threadBelongsToView(thread, view, timezone, now = new Date()) {
   if (view === 'snoozed') return ACTIVE_THREAD_STATUSES.has(thread.status);
   if (view === 'waiting' || view === 'someday') return thread.status === view;
   return ACTIVE_THREAD_STATUSES.has(thread.status) && isDueByLocalToday(thread, timezone, now);
+}
+
+// These are task-owned obligations, not independent promises made by the user.
+// Read live state so legacy recovery commitments clear as soon as
+// automation resumes or finishes. Missing tasks stay visible; unreadable tasks
+// fail the source read rather than falsely reporting an empty queue.
+async function taskNeedsUserAction(taskId) {
+  const task = await cosTaskStore.getTaskById(taskId);
+  if (!task) return true;
+  if (task.status === 'pending' && task.approvalRequired) return true;
+  if (task.status === 'blocked') return !TIMED_COOLDOWN_BLOCKED_CATEGORIES.has(task.metadata?.blockedCategory);
+  return !['pending', 'in_progress', 'completed', 'cancelled'].includes(task.status);
 }
 
 const visibleInLiveViews = (producer, view) => {
@@ -234,8 +247,13 @@ const PRODUCERS = [
       const timezone = ctx.timezone || 'UTC';
       const now = ctx.now || new Date();
       const threads = await brainStorage.getThreads();
-      const matching = (Array.isArray(threads) ? threads : [])
+      const candidates = (Array.isArray(threads) ? threads : [])
         .filter((thread) => threadBelongsToView(thread, ctx.view, timezone, now));
+      const actionable = await Promise.all(candidates.map(async thread => {
+        const taskRef = thread.source === 'cos' && thread.refs?.find(ref => ref?.kind === 'cos.task' && ref.id);
+        return !taskRef || ctx.view === 'history' || await taskNeedsUserAction(taskRef.id);
+      }));
+      const matching = candidates.filter((_, index) => actionable[index]);
       return { items: matching, truncated: matching.length > limit };
     },
     map(thread) {
@@ -346,7 +364,8 @@ const PRODUCERS = [
     drillTo: '/cos/agents?feedback=needs-feedback',
     views: ['today', 'all', 'history'],
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT, ctx = {}) {
-      const pending = await cosAgentFeedback.getPendingAgentFeedback({ includeUnavailable: ctx.view === 'history' });
+      const { getPendingAgentFeedback } = await import('./cosAgentFeedback.js');
+      const pending = await getPendingAgentFeedback({ includeUnavailable: ctx.view === 'history' });
       const items = [
         ...(Array.isArray(pending?.agents) ? pending.agents : []),
         ...(ctx.view === 'history' && Array.isArray(pending?.unavailable) ? pending.unavailable : []),
@@ -445,6 +464,7 @@ const PRODUCERS = [
     label: 'Stored review obligations',
     drillTo: '/review',
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const { adaptStoredReviewItem } = await import('./reviewActionAdapters.js');
       const pendingItems = await reviewService.getItems({ status: 'pending' });
       const items = (Array.isArray(pendingItems) ? pendingItems : [])
         .map(adaptStoredReviewItem)
@@ -525,10 +545,11 @@ const PRODUCERS = [
     label: 'Actionable notifications',
     drillTo: '/review',
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const { adaptNotification } = await import('./reviewActionAdapters.js');
       // Filter before applying the queue cap. A busy history stream must not
       // hide a source-owned approval that happens to be older than it.
-      const unread = await notifications.getNotifications({ unreadOnly: true });
-      const items = (Array.isArray(unread) ? unread : [])
+      const records = await notifications.getNotifications({ includeHidden: true });
+      const items = (Array.isArray(records) ? records : [])
         .map(adaptNotification)
         .filter(Boolean);
       return {
@@ -647,7 +668,10 @@ const PRODUCERS = [
           byId.set(alert.id, alert);
         }
       }
-      return [...byId.values()].slice(0, limit);
+      const selected = [...byId.values()].slice(0, limit);
+      if (!selected.some(alert => alert.type === 'process_error')) return selected;
+      const { attachProcessInvestigations } = await import('./reviewQueueInvestigations.js');
+      return attachProcessInvestigations(selected);
     },
     // The collector owns semantic identity; the queue only namespaces it.
     map(alert) {
@@ -658,6 +682,10 @@ const PRODUCERS = [
         : null;
       return {
         id: `health:${alert.id}`,
+        ...(alert.investigation ? { investigation: alert.investigation } : {}),
+        ...(alert.investigationUnavailable ? { investigationUnavailable: alert.investigationUnavailable } : {}),
+        operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+        nextAction: 'Investigate or mark resolved',
         title: alert.title || `${alert.type || 'System'} alert`,
         summary: (alert.detail || alert.message || '').slice(0, 200),
         timestamp: alert.timestamp || null,
@@ -674,11 +702,12 @@ const PRODUCERS = [
     label: 'Failed backups',
     drillTo: '/settings/backup',
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
+      const { getState } = await import('./backup.js');
       // A backup needing acknowledgement is either a full failure (status
       // 'error') or a degraded run (status 'degraded' — file rsync succeeded but
       // the DB dump failed; it also carries an `error` string). Both warrant a
       // queue item, but they map to different severities below.
-      const state = await backup.getState();
+      const state = await getState();
       const needsAttention = state && (state.status === 'error' || state.status === 'degraded' || state.error);
       return needsAttention ? [state].slice(0, limit) : [];
     },
@@ -868,6 +897,9 @@ export function applyQueueTriage(items, entries = [], now = new Date(), { includ
   return items.flatMap((item) => {
     const identity = queueActionIdentity(item);
     const state = byIdentity.get(reviewQueueTriageStore.triageIdentityKey(identity)) || emptyTriageState;
+    const delivery = byIdentity.get(reviewQueueTriageStore.triageIdentityKey({
+      actionKey: `delivery:${item.id}`, occurrence: item.occurrence, revision: '',
+    }));
     const snoozedUntilMs = state.snoozedUntil ? Date.parse(state.snoozedUntil) : NaN;
     const snoozed = Number.isFinite(snoozedUntilMs) && snoozedUntilMs > currentTime;
     const dismissed = state.dismissed && item.isRecommendation === true;
@@ -877,7 +909,7 @@ export function applyQueueTriage(items, entries = [], now = new Date(), { includ
       triage: {
         snoozedUntil: state.snoozedUntil,
         dismissed: state.dismissed,
-        deliveryGeneration: state.deliveryGeneration,
+        deliveryGeneration: delivery?.deliveryGeneration ?? state.deliveryGeneration,
       },
       triageOperations: triageOperationsFor(item, { snoozed }),
     }];
@@ -1033,8 +1065,19 @@ const SOURCE_ACTIONS = Object.freeze({
     complete: (id) => reviewService.completeItem(id),
     reopen: (id) => reviewService.reopenItem(id),
   }),
+  health: Object.freeze({
+    complete: async (id) => {
+      const { resolveHealthAlert } = await import('./proactiveAlertSources.js');
+      const result = await resolveHealthAlert(id);
+      if (result) __resetAlertsCache();
+      return result;
+    },
+  }),
   feedback: Object.freeze({
-    rate: (id, input) => cosAgentFeedback.submitAgentFeedback(id, input),
+    rate: async (id, input) => {
+      const { submitAgentFeedback } = await import('./cosAgentFeedback.js');
+      return submitAgentFeedback(id, input);
+    },
   }),
 });
 
@@ -1234,6 +1277,7 @@ export async function promoteAskQueueItem(queueItemId, target, goalId) {
     throw new ServerError('goalId is required to promote into a goal', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
+  const { promoteLatestAssistantTurn } = await import('./askPromote.js');
   const result = await promoteLatestAssistantTurn({ conversationId, target, goalId });
   await clearQueueTriageMarkersForItem(queueItemId);
   return { source, id: queueItemId, promoted: true, target: result.target, ref: result.ref };
@@ -1302,13 +1346,24 @@ async function readQueueTriageForProjection({
   const currentKeys = pruneOrphans
     ? new Set(currentItems.map((item) => reviewQueueTriageStore.triageIdentityKey(queueActionIdentity(item))))
     : null;
+  const currentDeliveryIds = pruneOrphans
+    ? new Set(currentItems.map((item) => String(item.id)))
+    : null;
   const removableKeys = new Set();
   for (const entry of entries) {
+    // Acknowledgement baselines must survive the disappearance of their alert.
+    if (entry.actionKey.startsWith(HEALTH_RESOLUTION_PREFIX)) continue;
     const key = reviewQueueTriageStore.triageIdentityKey(entry);
     const expired = entry.snoozedUntil && Date.parse(entry.snoozedUntil) <= nowMs;
     const unused = expired && entry.dismissed !== true && entry.deliveryGeneration === 0;
     const actionKind = typeof entry.actionKey === 'string' ? entry.actionKey.split(':')[0] : null;
-    const orphaned = currentKeys && !currentKeys.has(key) && !preservedKinds.has(actionKind);
+    const deliveryId = entry.delivery && typeof entry.actionKey === 'string'
+      ? entry.actionKey.startsWith('delivery:') ? entry.actionKey.slice('delivery:'.length) : null
+      : null;
+    const orphaned = currentKeys && (
+      (entry.delivery && deliveryId && !currentDeliveryIds.has(deliveryId))
+      || (!entry.delivery && !currentKeys.has(key) && !preservedKinds.has(actionKind))
+    );
     if (unused || orphaned) removableKeys.add(key);
   }
   for (const entry of entries) {

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import sys
 import tempfile
 import types
@@ -345,7 +347,7 @@ class GenerateLtx2TeaCacheTest(unittest.TestCase):
         self.assertEqual(result["teacache"], {"num_steps": 2, "thresh": 1.5})
         self.assertEqual(self.calls, [(2, 1.5)])
 
-    def test_run_extend_clears_config_even_when_pipeline_raises(self):
+    def test_run_extend_reports_resident_fallback_and_clears_config_when_pipeline_raises(self):
         # The per-call config gate must reset on every exit path so it can't
         # leak TeaCache activation into a later, unrelated call.
         memory = types.ModuleType("ltx_core_mlx.utils.memory")
@@ -363,7 +365,7 @@ class GenerateLtx2TeaCacheTest(unittest.TestCase):
         sys.modules.update(injected)
 
         class BoomPipeline:
-            def __init__(self, **kwargs):
+            def __init__(self, model_dir, gemma_model_id):
                 pass
 
             def extend_from_video(self, **kwargs):
@@ -376,13 +378,15 @@ class GenerateLtx2TeaCacheTest(unittest.TestCase):
             model="m", gemma="g", extend_from_video="in.mp4", prompt="p",
             extend_frames=2, extend_direction="after", seed=0, steps=None,
             cfg_scale=None, no_teacache=False, teacache_thresh=None,
-            user_lora_specs=[],
+            user_lora_specs=[], streaming_mode="auto",
         )
         try:
             self.helper._EXTEND_TC_CONFIG = None
-            with self.assertRaises(RuntimeError):
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaisesRegex(RuntimeError, 'boom'):
                 self.helper.run_extend(args)
             self.assertIsNone(self.helper._EXTEND_TC_CONFIG)
+            self.assertIn('Skipping unsupported optional constructor option(s) for extend: low_ram_streaming', stderr.getvalue())
         finally:
             for name, module in saved.items():
                 if module is None:

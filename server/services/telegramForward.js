@@ -72,6 +72,16 @@ async function shouldForward(notification, cachedForwardTypes) {
  */
 export async function forwardNotification(notification, { cachedForwardTypes, sendMessage }) {
   if (!await shouldForward(notification, cachedForwardTypes)) return;
+  // Only proven references participate. Legacy uncorrelated forwards retain
+  // their existing type/autonomy/budget behavior.
+  const { adaptNotification } = await import('./reviewActionAdapters.js');
+  const action = adaptNotification(notification);
+  const actionId = action?.id || (notification.type === 'daily_post_reminder'
+    && notification.metadata?.actionId === 'product:daily-post' ? 'product:daily-post' : null);
+  if (actionId) {
+    const { claimQueueDelivery } = await import('./reviewQueueDelivery.js');
+    if (!(await claimQueueDelivery(actionId, 'telegram', notification.metadata?.occurrence)).claimed) return;
+  }
 
   // The approval body is the one piece of the message that needs I/O, so it is
   // resolved here and handed to the pure builder.

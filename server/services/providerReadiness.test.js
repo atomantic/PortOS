@@ -176,7 +176,7 @@ describe('getProviderReadiness', () => {
       { findCommand: () => '/opt/homebrew/bin/ollama', probe: reachable([]) },
     );
     const model = checkById(readiness, 'model');
-    expect(model.fixHint).toMatch(/Models → LLMs/);
+    expect(model.fixHint).toMatch(/Models → Model Library/);
     expect(model.fixHint).not.toMatch(/Models → Runtimes/);
   });
 

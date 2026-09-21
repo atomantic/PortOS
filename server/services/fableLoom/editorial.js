@@ -8,6 +8,7 @@
  * edits land; the autopilot composes the two bounded operations.
  */
 
+import { asArray } from '../../lib/arrayUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { analyzeEpisodeContinuity, CONTINUITY_CODES } from '../../lib/fableLoomContinuity.js';
 import { analyzeEpisodeGraph, describeGraphForPrompt } from '../../lib/fableLoomGraph.js';
@@ -46,6 +47,7 @@ import {
   sanitizeLoom,
 } from './records.js';
 import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
+import { isPlainObject } from '../../lib/objects.js';
 
 const REVIEW_SEVERITIES = new Set(['high', 'medium', 'low']);
 const REVIEW_CATEGORIES = new Set([
@@ -75,7 +77,6 @@ const INSTRUCTION_PLACEHOLDER_VALUES = new Set([
   'the signal shivers through the flooded tunnel walls.',
 ]);
 
-const asArray = (value) => (Array.isArray(value) ? value : []);
 const hasOwn = (value, key) => Object.hasOwn(value, key);
 const clampScore = (value) => (Number.isFinite(value)
   ? Math.max(0, Math.min(10, Math.round(value * 10) / 10))
@@ -635,7 +636,6 @@ const collectionHasContent = (value) => (
   || (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0)
 );
 
-const isPlainObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
 const isOptionalId = (value) => value === undefined
   || (typeof value === 'string' && value.trim().length > 0);
 const isPlanItem = (value) => isPlainObject(value)

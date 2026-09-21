@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { reviewQueueQuerySchema, validateRequest } from '../lib/validation.js';
 import * as reviewService from '../services/review.js';
+import { claimQueueDelivery } from '../services/reviewQueueDelivery.js';
 import { buildQueue, MAX_REVIEW_QUEUE_SNOOZE_MS, resolveQueueItem, triageQueueItem, promoteAskQueueItem } from '../services/reviewQueue.js';
 
 const router = express.Router();
@@ -64,6 +65,12 @@ const resolveQueueSchema = z.object({
   }
 });
 
+const deliverySchema = z.object({ id: z.string().min(1).max(500) });
+router.post('/queue/delivery', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(deliverySchema, req.body);
+  res.json(await claimQueueDelivery(id, 'toast'));
+}));
+
 // POST /api/review/queue/resolve — accept a single cross-domain queue row in
 // place. Source-owned approvals carry an explicit operation so the mutation
 // revalidates the owning domain instead of using generic Review completion.
@@ -73,6 +80,7 @@ router.post('/queue/resolve', asyncHandler(async (req, res) => {
   const result = operation
     ? (Object.keys(input).length ? await resolveQueueItem(id, operation, input) : await resolveQueueItem(id, operation))
     : await resolveQueueItem(id);
+  reviewService.reviewEvents.emit('queue:changed');
   res.json(result);
 }));
 
@@ -98,6 +106,7 @@ const triageQueueSchema = z.object({
 router.post('/queue/triage', asyncHandler(async (req, res) => {
   const { id, operation, snoozedUntil } = validateRequest(triageQueueSchema, req.body);
   const result = await triageQueueItem(id, operation, snoozedUntil ? { snoozedUntil } : {});
+  reviewService.reviewEvents.emit('queue:changed');
   res.json(result);
 }));
 
@@ -120,6 +129,7 @@ const promoteAskQueueSchema = z.object({
 router.post('/queue/promote-ask', asyncHandler(async (req, res) => {
   const { id, target, goalId } = validateRequest(promoteAskQueueSchema, req.body);
   const result = await promoteAskQueueItem(id, target, goalId);
+  reviewService.reviewEvents.emit('queue:changed');
   res.json(result);
 }));
 

@@ -316,7 +316,7 @@ const PLAN_SELF_CLAIM_TASK_TYPES = new Set(['plan-task']);
 const PLAN_GATE_TASK_TYPES = new Set(['plan-task']);
 
 /**
- * Resolve an app's configured `claim-work` metadata the same way the scheduled
+ * Resolve an app's configured claim metadata the same way the scheduled
  * router does: global schedule metadata, then per-app overrides on top (managed
  * agent fields stripped, both passes sanitized/value-constrained). This is what
  * carries the user's `issueAuthorFilter`, reviewer, and swarm choices into the
@@ -325,19 +325,19 @@ const PLAN_GATE_TASK_TYPES = new Set(['plan-task']);
  *
  * @returns {Promise<{ metadata: object, interval: object }>}
  */
-export async function resolveClaimWorkMetadata(app) {
+export async function resolveClaimWorkMetadata(app, taskType = 'claim-work') {
   const taskSchedule = await import('./taskSchedule.js');
   // Independent reads (schedule config + per-app overrides) — the merge below
   // needs both, but neither depends on the other.
   const [interval, appOverrides] = await Promise.all([
-    taskSchedule.getTaskInterval('claim-work'),
+    taskSchedule.getTaskInterval(taskType),
     getAppTaskTypeOverrides(app.id)
   ]);
   const metadata = {};
   const sanitizedGlobalMeta = sanitizeTaskMetadata(interval.taskMetadata);
   if (sanitizedGlobalMeta) Object.assign(metadata, sanitizedGlobalMeta);
   const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
-    'claim-work', appOverrides['claim-work']?.taskMetadata
+    taskType, appOverrides[taskType]?.taskMetadata
   );
   const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) Object.assign(metadata, sanitizedAppMeta);
@@ -1149,6 +1149,11 @@ export async function evaluateTasks(options) {
     }
   }
 
+  if (state.config.persistentMindMaintainer?.enabled) {
+    const { runDevelopmentWatchdog } = await import('./developmentWatchdog.js');
+    await runDevelopmentWatchdog().catch(err => console.error(`❌ Development watchdog failed: ${err.message}`));
+  }
+
   // Resolve this instance's federation id once per cycle so the priority tiers
   // can skip tasks a peer holds a live lease on (#1650). Warm path is the cheap
   // cached read; only the cold boot creates the identity.
@@ -1728,6 +1733,7 @@ function stampApprovalReason(metadata, approval) {
  * Used by both normal rotation and on-demand task requests
  */
 export async function generateSelfImprovementTaskForType(taskType, state) {
+  if (taskType === 'development-watchdog') return null;
   const taskSchedule = await import('./taskSchedule.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
   const interval = await taskSchedule.getTaskInterval(taskType);
@@ -2177,7 +2183,7 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
   for (const request of pending) {
     const taskConfig = schedule?.tasks?.[request.taskType];
     handled.add(request.id);
-    if (!isImprovementEnabled(state)) {
+    if (request.taskType !== 'development-watchdog' && !isImprovementEnabled(state)) {
       emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
       await taskScheduleMod.clearOnDemandRequest(request.id);
       continue;

@@ -50,7 +50,7 @@ function issueNumbersFromText(value, repoFullName) {
   // unrelated cross-repo issue cannot become an eligibility fact.
   const referencePattern = /(?:\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|relate[sd]?\s+to|ref(?:s)?|part\s+of)\s+)?(?:(?:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\s*)?#(\d+)/gi;
   let match;
-  while ((match = referencePattern.exec(value)) && numbers.size < MAX_LINKED_ISSUES) {
+  while ((match = referencePattern.exec(value)) && numbers.size <= MAX_LINKED_ISSUES) {
     const qualified = match[0].match(/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\s*#\d+$/i)?.[1];
     if (qualified && qualified.toLowerCase() !== repo) continue;
     const number = Number(match[1]);
@@ -63,7 +63,7 @@ export function extractLinkedIssueNumbers(pr, repoFullName) {
   return [...new Set([
     ...issueNumbersFromText(pr?.title, repoFullName),
     ...issueNumbersFromText(pr?.body, repoFullName),
-  ])].sort((a, b) => a - b).slice(0, MAX_LINKED_ISSUES);
+  ])].sort((a, b) => a - b).slice(0, MAX_LINKED_ISSUES + 1);
 }
 
 /**
@@ -72,7 +72,12 @@ export function extractLinkedIssueNumbers(pr, repoFullName) {
  * issues contribute intent — a closed issue is not a live requirement, and the
  * pre-action recheck recomputes the fingerprint from the same open set.
  */
-async function resolveEligibilityFacts(pr, repoFullName, hostname) {
+async function resolveEligibilityFacts(pr, repoFullName, hostname, readIssue = async (number) => {
+  const raw = await execGh([
+    'api', '--hostname', hostname, `repos/${repoFullName}/issues/${number}`,
+  ]).catch(() => null);
+  return safeJSONParse(raw, null);
+}) {
   const linkedIssueNumbers = extractLinkedIssueNumbers(pr, repoFullName);
   if (linkedIssueNumbers.length === 0) {
     return {
@@ -87,15 +92,15 @@ async function resolveEligibilityFacts(pr, repoFullName, hostname) {
       inputComplete: true,
     };
   }
+  if (linkedIssueNumbers.length > MAX_LINKED_ISSUES) {
+    return { facts: { issueLookupComplete: false }, linkedIssues: [], inputComplete: false };
+  }
   const openLinkedIssueNumbers = [];
   const openerAssignedIssueNumbers = [];
   const openIssues = [];
   let issueLookupComplete = true;
   for (const issueNumber of linkedIssueNumbers) {
-    const raw = await execGh([
-      'api', '--hostname', hostname, `repos/${repoFullName}/issues/${issueNumber}`,
-    ]).catch(() => null);
-    const issue = safeJSONParse(raw, null);
+    const issue = await readIssue(issueNumber);
     if (!issue || issue.number !== issueNumber) {
       issueLookupComplete = false;
       continue;
@@ -124,6 +129,50 @@ async function resolveEligibilityFacts(pr, repoFullName, hostname) {
     linkedIssues,
     inputComplete: openIssues.length <= LINKED_ISSUE_MAX_COUNT && !linkedIssues.some(issue => issue.truncated),
   };
+}
+
+/**
+ * Assess the complete current contribution, then re-read after inference. Both
+ * automated merge queues use this boundary; the caller supplies forge readers
+ * so every read retains the owning app's account and host.
+ *
+ * stillCurrent performs no inference and can be called again after a review or
+ * another network action. A verdict never authorizes a changed head, mutable
+ * description, linked intent, or CI observation.
+ */
+export async function assessPullRequestForAction({ pr, diff, repoFullName, readPr, readDiff, readIssue }) {
+  const fingerprint = screenedPullRequestFingerprint(pr, diff);
+  if (!fingerprint || !isHeadRefOid(pr?.headRefOid) || typeof diff !== 'string' || !diff.trim()) {
+    return failure('security-action-evidence-unavailable');
+  }
+  const readIntent = (row) => resolveEligibilityFacts(
+    { ...row, authorLogin: row.author?.login }, repoFullName, null, readIssue,
+  );
+  const intent = await readIntent(pr);
+  if (!intent.inputComplete || !intent.facts.issueLookupComplete) return failure('security-action-intent-unavailable');
+  const content = [screenedPullRequestContent(pr, diff), linkedIssueIntentContent(intent.linkedIssues)]
+    .filter(Boolean).join('\n\n');
+  if (content.length > SECURITY_SCAN_MAX_DIFF_CHARS) return failure('security-action-input-too-large');
+  const screened = await screenUntrustedContent({ content, source: 'github-pr' });
+  if (screened?.ok !== true || screened.screening?.safe !== true) return failure('security-action-assessment-withheld');
+
+  const actionState = (row) => JSON.stringify({
+    state: row.state, isDraft: row.isDraft, author: row.author?.login,
+    baseRefName: row.baseRefName, baseRefOid: row.baseRefOid,
+    mergeable: row.mergeable, mergeStateStatus: row.mergeStateStatus,
+    checks: row.statusCheckRollup,
+  });
+  const stillCurrent = async () => {
+    const [current, currentDiff] = await Promise.all([readPr(), readDiff()]);
+    if (!current || typeof currentDiff !== 'string'
+      || screenedPullRequestFingerprint(current, currentDiff) !== fingerprint
+      || actionState(current) !== actionState(pr)) return false;
+    const currentIntent = await readIntent(current);
+    return currentIntent.inputComplete && currentIntent.facts.issueLookupComplete
+      && JSON.stringify(currentIntent.facts) === JSON.stringify(intent.facts);
+  };
+  if (!await stillCurrent()) return failure('security-action-evidence-changed');
+  return { ok: true, stillCurrent };
 }
 
 /**

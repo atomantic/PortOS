@@ -1,14 +1,5 @@
 import { NOTIFICATION_ACTION_POLICY } from '../lib/notificationTypes.js';
 
-const SOURCE_OWNED_REVIEW_CATEGORIES = new Set([
-  'content-review',
-  'goal-fidelity',
-  'memory-approval',
-  'plan-question',
-  'task-approval',
-  'autopilot-paused',
-]);
-
 const CONTEXT_ONLY_REVIEW_CATEGORIES = new Set([
   'client-error',
   'health-issue',
@@ -37,18 +28,6 @@ const operation = (id, label, available = true) => ({
 });
 
 export const canonicalActionId = (source, sourceRef) => `${source}:${sourceRef}`;
-
-export const isSourceOwnedReviewItem = (item) => {
-  const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
-  const category = toText(metadata.category);
-
-  if (metadata.sourceOwned === true || metadata.triageOnly === true) return true;
-  if (SOURCE_OWNED_REVIEW_CATEGORIES.has(category)) return true;
-  if (item?.type === 'cos' && (toReference(metadata.taskId) || toReference(metadata.referenceId))) {
-    return true;
-  }
-  return item?.type === 'alert';
-};
 
 const reviewItemBase = (item, values) => ({
   ...values,
@@ -192,7 +171,8 @@ const notificationReference = (notification, policy) => {
 };
 
 export function adaptNotification(notification) {
-  if (!notification || notification.read === true) return null;
+  // Read and clear apply to event history, never to the source obligation.
+  if (!notification) return null;
 
   const policy = NOTIFICATION_ACTION_POLICY[notification.type];
   if (!policy) return null;

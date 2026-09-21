@@ -59,6 +59,7 @@ beforeEach(() => {
   loadState.mockResolvedValue({
     config: {
       avatarStyle: 'cyber',
+      persistentMindMaintainer: { enabled: true, appIds: ['private-maintainer-target'], intervalMinutes: 60 },
       persistentMindProfile: { enabled: true, providerId: 'example-provider', model: 'example-model', effort: 'high', wakeIntervalMinutes: 45 },
       persistentMindPrompt: { identity: 'I am the example Mind.', instructions: 'Stay candid and concise.' },
       persistentMindPlaybook: { mode: 'continuous-play', customInstructions: 'Prefer small experiments.' },
@@ -94,6 +95,8 @@ describe('persistentMindBundle scopes', () => {
     expect(sealed).toEqual(['profile', 'memories']);
     expect(header.scopes).toEqual(['profile', 'memories']);
     expect(Object.keys(documents).sort()).toEqual(['memories.json', 'profile.json']);
+    expect(JSON.stringify(documents)).not.toContain('private-maintainer-target');
+    expect(JSON.stringify(documents)).not.toContain('persistentMindMaintainer');
     expect(documents['profile.json'].chosenName).toBe('Example Mind');
     expect(documents['profile.json'].soul.identity).toBe('I am the example Mind.');
     expect(documents['profile.json'].playbook.mode).toBe('continuous-play');

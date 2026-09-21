@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
@@ -24,7 +24,16 @@ const BASE_SETTINGS = { beeper: { enabled: false, intervalMinutes: 5, baseUrl: '
 // No router: the panel takes `realtime` as a prop and reads nothing off the
 // URL — the OAuth outcome flag is the page shell's job, covered by the page's
 // own suite.
-const renderPanel = (props = {}) => render(<BeeperSettingsPanel {...props} />);
+const renderPanel = async (props = {}) => {
+  const result = render(<BeeperSettingsPanel {...props} />);
+  // The panel and its AttachmentMirrorCard both fetch on mount. Settle those
+  // promises here, or a test that finishes before they resolve leaves a
+  // setState to land outside act(...) — and src/test/setup.js throws it in
+  // whichever test's afterEach happens to be running by then, blaming a case
+  // that never touched the component.
+  await act(async () => {});
+  return result;
+};
 
 const BASE_ATTACHMENT_SUMMARY = {
   budgetBytes: 5 * 1024 * 1024 * 1024,
@@ -53,7 +62,7 @@ describe('BeeperSettingsPanel — status card states', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: false, reachable: null, lastProbeError: null, accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByRole('heading', { name: 'Connect Beeper' })).toBeInTheDocument();
     // Both paths are first-class (#11 decision 3), so both are on screen at once.
@@ -68,7 +77,7 @@ describe('BeeperSettingsPanel — status card states', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: false, lastProbeError: 'Beeper request failed: connection refused', baseUrl: 'http://127.0.0.1:23373', accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop unreachable')).toBeInTheDocument();
     expect(screen.getByText('Beeper request failed: connection refused')).toBeInTheDocument();
@@ -79,7 +88,7 @@ describe('BeeperSettingsPanel — status card states', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: true, lastProbeError: null, appVersion: '4.3.73', accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop connected')).toBeInTheDocument();
     expect(screen.getByTestId('beeper-roster-empty')).toBeInTheDocument();
@@ -92,7 +101,7 @@ describe('BeeperSettingsPanel — status card states', () => {
       tokenConfigured: true, reachable: true, lastProbeError: null, accounts: [],
       tokenScopes: ['read', 'write'],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop connected')).toBeInTheDocument();
     expect(screen.getByText('Scopes: read, write')).toBeInTheDocument();
@@ -106,7 +115,7 @@ describe('BeeperSettingsPanel — status card states', () => {
       tokenConfigured: true, reachable: true, lastProbeError: null, accounts: [],
       tokenScopes: ['read'],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Scopes: read')).toBeInTheDocument();
     expect(screen.getByText('Read-only grant — sending will fail.')).toBeInTheDocument();
@@ -120,7 +129,7 @@ describe('BeeperSettingsPanel — status card states', () => {
       tokenConfigured: true, tokenSource: 'pasted', reachable: true, lastProbeError: null, accounts: [],
       tokenScopes: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop connected')).toBeInTheDocument();
     expect(screen.getByText('Scopes unknown (pasted token).')).toBeInTheDocument();
@@ -133,7 +142,7 @@ describe('BeeperSettingsPanel — status card states', () => {
       tokenConfigured: true, tokenSource: 'legacy-settings', reachable: true, lastProbeError: null, accounts: [],
       tokenScopes: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop connected')).toBeInTheDocument();
     expect(screen.queryByText(/Scopes/)).toBeNull();
@@ -149,7 +158,7 @@ describe('BeeperSettingsPanel — status card states', () => {
         accountsDone: 3, accountsTotal: 9, chats: 40, messages: 812,
       },
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Syncing… 3 of 9 accounts')).toBeInTheDocument();
   });
@@ -162,7 +171,7 @@ describe('BeeperSettingsPanel — status card states', () => {
         accountsDone: 9, accountsTotal: 9, chats: 210, messages: 4032,
       },
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText(/Last synced \d{1,2}:\d{2}/)).toBeInTheDocument();
   });
@@ -180,7 +189,7 @@ describe('BeeperSettingsPanel — status card states', () => {
       baseUrl: 'http://127.0.0.1:23373',
       accounts: [{ accountId: 'acc1', displayName: 'Example WhatsApp', network: 'whatsapp' }],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop unreachable')).toBeInTheDocument();
     expect(screen.getByText('Example WhatsApp')).toBeInTheDocument();
@@ -194,7 +203,7 @@ describe('BeeperSettingsPanel — status card states', () => {
       lastProbeError: null,
       accounts: [{ accountId: 'acc1', displayName: 'Example WhatsApp', network: 'whatsapp' }],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Checking Beeper Desktop…')).toBeInTheDocument();
     expect(screen.getByText('Example WhatsApp')).toBeInTheDocument();
@@ -206,7 +215,7 @@ describe('BeeperSettingsPanel — status card states', () => {
         { accountId: 'acc1', displayName: 'Example WhatsApp', network: 'whatsapp' },
       ],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Example WhatsApp')).toBeInTheDocument();
     expect(screen.getByText('whatsapp')).toBeInTheDocument();
@@ -222,7 +231,7 @@ describe('BeeperSettingsPanel — status card states', () => {
         state: 'reconnecting', lastEventAt: null, lastPingAt: null, appState: 'needs-login', appStateActionable: true,
       },
     });
-    renderPanel();
+    await renderPanel();
 
     await screen.findByText('Beeper Desktop connected');
     expect(screen.getByTestId('connection-status-dot')).toHaveAttribute('data-status', 'reconnecting');
@@ -243,7 +252,7 @@ describe('BeeperSettingsPanel — status card states', () => {
         state: 'connecting', lastEventAt: null, lastPingAt: null, appState: 'needs-login', appStateActionable: true,
       },
     });
-    renderPanel();
+    await renderPanel();
 
     await screen.findByText('Beeper Desktop unreachable');
     expect(screen.getByTestId('connection-status-dot')).toHaveAttribute('data-status', 'connecting');
@@ -260,7 +269,7 @@ describe('BeeperSettingsPanel — status card states', () => {
         state: 'down', lastEventAt: null, lastPingAt: null, appState: null, appStateActionable: false, authRejected: true,
       },
     });
-    renderPanel();
+    await renderPanel();
 
     await screen.findByText('Checking Beeper Desktop…');
     expect(screen.getByTestId('connection-status-dot')).toHaveAttribute('data-status', 'down');
@@ -283,7 +292,7 @@ describe('BeeperSettingsPanel — status card states', () => {
         state: 'down', lastEventAt: null, lastPingAt: null, appState: null, appStateActionable: false, authRejected: true,
       },
     });
-    renderPanel();
+    await renderPanel();
 
     await screen.findByText('Beeper token expired');
     expect(screen.getByTestId('connection-status-dot')).toHaveAttribute('data-status', 'down');
@@ -297,7 +306,7 @@ describe('BeeperSettingsPanel — status card states', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: true, lastProbeError: null, accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     await screen.findByText('Beeper Desktop connected');
     expect(screen.queryByTestId('connection-status-dot')).toBeNull();
@@ -310,7 +319,7 @@ describe('BeeperSettingsPanel — status card states', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: null, lastProbeError: null, accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Checking Beeper Desktop…')).toBeInTheDocument();
     expect(screen.queryByText('Beeper Desktop unreachable')).toBeNull();
@@ -322,7 +331,7 @@ describe('BeeperSettingsPanel — status card states', () => {
   // otherwise be silently told to connect.
   it('never renders "Connect Beeper" when the status fetch itself rejects', async () => {
     api.getBeeperStatus.mockRejectedValue(new Error('network down'));
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Could not read Beeper status')).toBeInTheDocument();
     expect(screen.getByText('network down')).toBeInTheDocument();
@@ -338,7 +347,7 @@ describe('BeeperSettingsPanel — status card states', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: true, probeState: 'slow', probeLatencyMs: 3000, lastProbeError: null, accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop connected')).toBeInTheDocument();
     expect(screen.getByText(/Slow to respond \(3000ms\)/)).toBeInTheDocument();
@@ -353,7 +362,7 @@ describe('BeeperSettingsPanel — status card states', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: true, probeState: 'ok', probeLatencyMs: 8, lastProbeError: null, accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop connected')).toBeInTheDocument();
     expect(screen.queryByText(/Slow to respond/)).toBeNull();
@@ -366,7 +375,7 @@ describe('BeeperSettingsPanel — status card states', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: true, lastProbeError: null, accounts: null, accountsError: 'Could not read the mirrored account roster',
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper Desktop connected')).toBeInTheDocument();
     expect(screen.getByTestId('beeper-roster-unknown')).toHaveTextContent('Could not read the mirrored account roster');
@@ -383,7 +392,7 @@ describe('BeeperSettingsPanel — status card states', () => {
 describe('BeeperSettingsPanel — inline errors are announced', () => {
   it('exposes the status-fetch failure with role="alert"', async () => {
     api.getBeeperStatus.mockRejectedValue(new Error('network down'));
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('network down')).toHaveAttribute('role', 'alert');
   });
@@ -392,7 +401,7 @@ describe('BeeperSettingsPanel — inline errors are announced', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: true, lastProbeError: null, accounts: null, accountsError: 'Could not read the mirrored account roster',
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByTestId('beeper-roster-unknown')).toHaveAttribute('role', 'alert');
   });
@@ -406,7 +415,7 @@ describe('BeeperSettingsPanel — settings', () => {
         enabled: true, intervalMinutes: 5, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5, allowNonLoopbackBaseUrl: false,
       },
     });
-    renderPanel();
+    await renderPanel();
 
     // Exact, not /Save/: the connect card's "Save token" is on screen too.
     const saveButton = await screen.findByRole('button', { name: 'Save' });
@@ -433,7 +442,7 @@ describe('BeeperSettingsPanel — settings', () => {
         enabled: false, intervalMinutes: 5, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5, allowNonLoopbackBaseUrl: true,
       },
     });
-    renderPanel();
+    await renderPanel();
 
     const checkbox = await screen.findByLabelText(/Allow a non-loopback base URL/);
     expect(checkbox).not.toBeChecked();
@@ -452,7 +461,7 @@ describe('BeeperSettingsPanel — settings', () => {
     api.getBeeperStatus.mockResolvedValue({
       tokenConfigured: true, reachable: false, lastProbeError: 'refused', baseUrl: 'http://127.0.0.1:23373', accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     await screen.findByText('Beeper Desktop unreachable');
     const retryButton = screen.getByRole('button', { name: /Retry/ });
@@ -469,7 +478,7 @@ describe('BeeperSettingsPanel — settings', () => {
   it('shows the load-failed card instead of the form when settings fail to load, and never offers Save', async () => {
     api.getSettings.mockRejectedValue(new Error('network error'));
     api.getBeeperStatus.mockResolvedValue({ tokenConfigured: false, reachable: null, accounts: [] });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Could not load Beeper settings')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
@@ -487,7 +496,7 @@ describe('BeeperSettingsPanel — the connect flow (#31)', () => {
   it('opens the authorization URL the server minted, rather than building one client-side', async () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     api.startBeeperOAuth.mockResolvedValue({ authorizationUrl: 'http://127.0.0.1:23373/oauth/authorize?state=s' });
-    renderPanel();
+    await renderPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Connect Beeper' }));
     await waitFor(() => expect(open).toHaveBeenCalledWith('http://127.0.0.1:23373/oauth/authorize?state=s', '_blank', 'noopener'));
@@ -499,7 +508,7 @@ describe('BeeperSettingsPanel — the connect flow (#31)', () => {
   // code): one call, one toast, and no second attempt.
   it('reports a failed connect once and does not retry', async () => {
     api.startBeeperOAuth.mockRejectedValue(new Error('Beeper authorization-server metadata unavailable (404)'));
-    renderPanel();
+    await renderPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Connect Beeper' }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Beeper authorization-server metadata unavailable (404)'));
@@ -508,7 +517,7 @@ describe('BeeperSettingsPanel — the connect flow (#31)', () => {
 
   it('posts a pasted token, clears the field, and refreshes status', async () => {
     api.saveBeeperToken.mockResolvedValue({ tokenConfigured: true, tokenExpiresAt: null, tokenSource: 'pasted' });
-    renderPanel();
+    await renderPanel();
 
     const input = await screen.findByLabelText('Or paste an access token');
     expect(input).toHaveAttribute('type', 'password');
@@ -521,7 +530,7 @@ describe('BeeperSettingsPanel — the connect flow (#31)', () => {
   });
 
   it('keeps Save token disabled until something is typed', async () => {
-    renderPanel();
+    await renderPanel();
     const save = await screen.findByRole('button', { name: /Save token/ });
     expect(save).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Or paste an access token'), { target: { value: 'example-beeper-token' } });
@@ -539,7 +548,7 @@ describe('BeeperSettingsPanel — expired token', () => {
       tokenExpiresAt: '2026-01-01T00:00:00.000Z', tokenExpiresInDays: -3,
       reachable: false, lastProbeError: 'connection refused', accounts: [],
     });
-    renderPanel();
+    await renderPanel();
 
     expect(await screen.findByText('Beeper token expired')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reconnect Beeper' })).toBeInTheDocument();
@@ -557,7 +566,7 @@ describe('BeeperSettingsPanel — disconnect', () => {
   // No window.confirm anywhere in the client — the confirmation is inline.
   it('confirms inline before disconnecting', async () => {
     api.disconnectBeeper.mockResolvedValue({ deleted: true, tokenConfigured: false });
-    renderPanel();
+    await renderPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: /Disconnect/ }));
     expect(screen.getByText('Forget this Beeper credential?')).toBeInTheDocument();
@@ -569,7 +578,7 @@ describe('BeeperSettingsPanel — disconnect', () => {
   });
 
   it('cancels without calling the API', async () => {
-    renderPanel();
+    await renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: /Disconnect/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByText('Forget this Beeper credential?')).toBeNull();
@@ -588,7 +597,7 @@ describe('BeeperSettingsPanel — attachment mirror', () => {
   });
 
   it('renders the disk picture without starting anything', async () => {
-    renderPanel();
+    await renderPanel();
     expect(await screen.findByText('Attachment mirror')).toBeInTheDocument();
     expect(screen.getByText(/of 5 GB/)).toBeInTheDocument();
     expect(api.backfillBeeperAttachments).not.toHaveBeenCalled();
@@ -599,7 +608,7 @@ describe('BeeperSettingsPanel — attachment mirror', () => {
       ...BASE_ATTACHMENT_SUMMARY, pendingCount: 12, pendingBytes: 4 * 1024 * 1024, pendingUnknownCount: 3,
     });
     api.backfillBeeperAttachments.mockResolvedValue({ fetched: 12, failed: 0, bytes: 4194304, stoppedForBudget: false });
-    renderPanel();
+    await renderPanel();
 
     fireEvent.click(await screen.findByRole('button', { name: /Mirror all attachments/i }));
     // The modal states BOTH numbers, and the unknown-size tail separately
@@ -616,7 +625,7 @@ describe('BeeperSettingsPanel — attachment mirror', () => {
 
   it('cancels the consent modal without transferring anything', async () => {
     api.getBeeperAttachmentSummary.mockResolvedValue({ ...BASE_ATTACHMENT_SUMMARY, pendingCount: 4, pendingBytes: 2048 });
-    renderPanel();
+    await renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: /Mirror all attachments/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^Cancel$/ }));
     await waitFor(() => expect(screen.queryByText(/Mirror all attachments\?/)).not.toBeInTheDocument());
@@ -625,7 +634,7 @@ describe('BeeperSettingsPanel — attachment mirror', () => {
 
   it('reports a failed summary read instead of rendering zeros as the truth', async () => {
     api.getBeeperAttachmentSummary.mockRejectedValue(new Error('Database unavailable'));
-    renderPanel();
+    await renderPanel();
     expect(await screen.findByText('Database unavailable')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Mirror all attachments/i })).not.toBeInTheDocument();
   });

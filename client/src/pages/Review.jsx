@@ -33,42 +33,20 @@ import {
   Save
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import QueueInvestigationButton from '../components/ui/QueueInvestigationButton';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import CollapsibleText from '../components/ui/CollapsibleText';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import Drawer from '../components/Drawer';
+import AgentCard from '../components/cos/tabs/AgentCard';
 import TabPills from '../components/ui/TabPills';
 import useUrlParams from '../hooks/useUrlParams';
 import useAsyncAction from '../hooks/useAsyncAction';
 import { timeAgo, formatDateTime, formatCount, localDateKey } from '../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
-import { coalesce } from '../utils/coalesce';
+import { useActionQueue } from '../hooks/useActionQueue';
 import * as api from '../services/api';
 import socket from '../services/socket';
-
-// Producer-domain socket events that change what the unified Actions queue
-// (GET /api/review/queue) would return. The queue is derived
-// live from each producer, so when any of these fire — a draft sent, an inbox
-// item classified, a CoS task resolved, a backup finishing — we re-pull the
-// queue (debounced) instead of waiting for a manual reload. Ask is omitted
-// (no socket emit) and proactive alerts are live-computed (no event).
-const QUEUE_INVALIDATION_EVENTS = [
-  'brain:classified',          // inbox item classified / re-reviewed
-  'cos:tasks:user:changed',    // CoS user-task list changed
-  'cos:tasks:cos:changed',     // CoS internal-task list changed
-  'cos:agent:completed',       // a newly completed run may need feedback
-  'messages:changed',          // draft approved/deleted/status changed
-  'messages:draft:created',    // new draft awaiting review
-  'messages:draft:sent',       // draft sent (resolves a drafts row)
-  'backup:started',            // backup state transitioning
-  'backup:completed',          // backup succeeded (clears a failed-backup row)
-  'backup:failed',              // backup errored (surfaces a failed-backup row)
-  'brain:threads:changed',      // Brain commitment created/edited/completed
-  'review:item:created',        // legacy manual todo created
-  'review:item:updated',        // legacy manual todo status/title changed
-  'review:item:deleted',        // legacy manual todo removed
-  'review:items:bulk-updated'
-];
 
 // Cross-domain queue source → icon + accent (M42 P5 inbox-zero aggregator).
 const QUEUE_SOURCE_CONFIG = {
@@ -172,7 +150,7 @@ export default function Review() {
   // Cross-domain live queue (M42 P5). Source payloads remain live projections;
   // presentation decisions are durable server-side markers keyed by the row's
   // canonical action identity, occurrence, and revision.
-  const [queue, setQueue] = useState(null);
+  const { data: queue, error: queueError, loading: queueLoading, refetch: fetchQueue } = useActionQueue(actionView);
   const [dismissedQueueIds, setDismissedQueueIds] = useState(() => new Set());
   // Rows with an inline accept/promote in flight — disables the button so a
   // double-tap can't double-resolve while the request is pending.
@@ -197,18 +175,11 @@ export default function Review() {
     setBriefing(data);
   }, []);
 
-  const fetchQueue = useCallback(async () => {
-    // Owns its own fallback, so silence the helper's default error toast.
-    const data = await api.getReviewQueue({ view: actionView, silent: true }).catch(() => null);
-    setQueue(data);
-  }, [actionView]);
-
   useEffect(() => {
     fetchItems();
     fetchCounts();
     fetchBriefing();
-    fetchQueue();
-  }, [fetchItems, fetchCounts, fetchBriefing, fetchQueue]);
+  }, [fetchItems, fetchCounts, fetchBriefing]);
 
   useEffect(() => {
     const handleCreated = (item) => {
@@ -248,20 +219,6 @@ export default function Review() {
       socket.off('review:items:bulk-updated', handleBulkUpdated);
     };
   }, [fetchCounts, fetchItems]);
-
-  // Live-invalidate the cross-domain queue. A burst of producer events (e.g.
-  // a draft sent fires both messages:draft:sent and messages:changed) coalesces
-  // into a single refetch on the trailing edge. dismissedQueueIds still filters
-  // the result, so a row the user dismissed this session won't pop back; a
-  // re-resolved item simply isn't returned by the server anymore.
-  useEffect(() => {
-    const refetch = coalesce(() => fetchQueue(), 400);
-    for (const evt of QUEUE_INVALIDATION_EVENTS) socket.on(evt, refetch);
-    return () => {
-      for (const evt of QUEUE_INVALIDATION_EVENTS) socket.off(evt, refetch);
-      refetch.cancel();
-    };
-  }, [fetchQueue]);
 
   const handleCreateTodo = async (e) => {
     e.preventDefault();
@@ -408,7 +365,7 @@ export default function Review() {
   // Keep old stored Review records rendered only as a compatibility fallback
   // while the live Actions projection is empty. Once a canonical row exists,
   // rendering the old lists as well would show the same obligation twice.
-  const showLegacyReviewSurface = queueItems.length === 0 && queueSourceErrors.length === 0 && !queue?.partial;
+  const showLegacyReviewSurface = queue && !queueError && queueItems.length === 0 && queueSourceErrors.length === 0 && !queue.partial;
 
   const pendingItems = useMemo(() => items.filter(i => i.status === 'pending'), [items]);
   const genericCompletableCount = pendingItems.filter(isGenericCompletableItem).length;
@@ -497,11 +454,19 @@ export default function Review() {
         />
         {/* Triage summary */}
         <section className="flex flex-wrap gap-2">
-          <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
-          <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
-          <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
-          <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
+          {queue && <span className="text-sm text-port-text">{queue.partial || queueError ? 'At least ' : ''}{formatCount(queueItems.filter(item => item.required === true).length)} required</span>}
+          {queueLoading && !queue && <span role="status">Loading actions…</span>}
+          {queueError && <span role="alert">Actions unavailable{queue ? ' — showing last known actions' : ''}. <button onClick={fetchQueue}>Retry</button></span>}
         </section>
+        <details>
+          <summary className="text-xs text-port-text-muted">Stored review history counts</summary>
+          <section className="flex flex-wrap gap-2">
+            <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
+            <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
+            <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
+            <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
+          </section>
+        </details>
 
         {/* Canonical Actions queue — live-pulled from Brain commitments, manual
             todos, Ask, CoS, Messages, Health, and Backups. Shown whenever there
@@ -772,57 +737,23 @@ function QueueMetaChips({ meta }) {
 // Promote-target label for the Ask picker buttons.
 const PROMOTE_TARGET_LABEL = { brain: 'Brain', task: 'Task', goal: 'Goal' };
 
-function FeedbackRatingControls({ id, onSubmit, disabled = false, options = ['positive', 'negative', 'neutral'] }) {
-  const [rating, setRating] = useState('');
-  const [comment, setComment] = useState('');
-  const safeId = String(id || 'feedback').replace(/[^a-zA-Z0-9_-]/g, '-');
-  const ratingId = `feedback-rating-${safeId}`;
-  const commentId = `feedback-comment-${safeId}`;
-  const submit = () => {
-    if (!rating) return;
-    const trimmedComment = comment.trim();
-    onSubmit({ rating, ...(trimmedComment ? { comment: trimmedComment } : {}) });
-  };
+function AgentFeedbackReview({ item, onSaved }) {
+  const [agent, setAgent] = useState(null);
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setAgent(null);
+    setError(false);
+    api.getCosAgent(item.sourceRef, { lines: 1, silent: true })
+      .then((record) => { if (active) setAgent(record); })
+      .catch(() => { if (active) setError(true); });
+    return () => { active = false; };
+  }, [item.sourceRef, attempt]);
 
-  return (
-    <div className="flex items-end gap-2 flex-wrap rounded-md border border-port-border/60 bg-port-bg/40 p-2">
-      <label className="text-xs text-gray-400" htmlFor={ratingId}>
-        Rating (required)
-        <select
-          id={ratingId}
-          value={rating}
-          onChange={(event) => setRating(event.target.value)}
-          disabled={disabled}
-          className="mt-1 block min-h-[36px] rounded border border-port-border bg-port-card px-2 py-1 text-xs text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
-        >
-          <option value="">Choose…</option>
-          {options.map((option) => (
-            <option key={option} value={option}>{option[0].toUpperCase() + option.slice(1)}</option>
-          ))}
-        </select>
-      </label>
-      <label className="min-w-[12rem] flex-1 text-xs text-gray-400" htmlFor={commentId}>
-        Comment (optional)
-        <input
-          id={commentId}
-          value={comment}
-          onChange={(event) => setComment(event.target.value)}
-          maxLength={5000}
-          disabled={disabled}
-          className="mt-1 block min-h-[36px] w-full rounded border border-port-border bg-port-card px-2 py-1 text-xs text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
-        />
-      </label>
-      <button
-        type="button"
-        onClick={submit}
-        disabled={disabled || !rating}
-        className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-port-success/30 bg-port-success/10 px-2 py-1 text-xs font-medium text-port-success hover:bg-port-success/20 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        <Check size={14} />
-        Rate
-      </button>
-    </div>
-  );
+  if (error) return <p role="alert">Could not load this agent run. <button type="button" className="underline min-h-[44px]" onClick={() => setAttempt(value => value + 1)}>Retry</button></p>;
+  if (!agent) return <p role="status">Loading agent run…</p>;
+  return <AgentCard agent={agent} completed initiallyExpanded onFeedbackChange={onSaved} />;
 }
 
 function QueueTriageControls({ item, onTriage, disabled = false }) {
@@ -906,7 +837,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
     : sourceOperations.filter((operation) => operation.id !== 'rate');
 
   return (
-    <div className={`flex items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
+    <div className={`grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 p-3 rounded-lg border bg-port-card ${borderTone}`}>
       <div className={`mt-0.5 shrink-0 ${config.color}`}>
         <Icon size={18} />
       </div>
@@ -915,7 +846,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           <button
             type="button"
             onClick={() => onSelect?.(item)}
-            className="text-sm font-medium text-white text-left hover:text-port-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent rounded"
+            className="min-w-0 break-words text-sm font-medium text-white text-left hover:text-port-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent rounded"
             aria-label={`Open action ${item.title}`}
           >
             {item.title}
@@ -925,7 +856,7 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           </span>
         </div>
         {item.summary && (
-          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{item.summary}</p>
+          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2 break-words">{item.summary}</p>
         )}
         <QueueMetaChips meta={item.meta} />
         {item.timestamp && (
@@ -935,14 +866,12 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
           </p>
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+      <div className="col-span-2 flex min-w-0 items-center gap-2 flex-wrap border-t border-port-border/50 pt-2 sm:col-start-2 sm:col-span-1 [&_button]:min-h-[44px] [&_select]:min-h-[44px]">
+        <QueueInvestigation item={item} />
         {onResolve && rateOperation && (
-          <FeedbackRatingControls
-            id={item.id}
-            options={rateOperation.input.options}
-            disabled={resolving}
-            onSubmit={(input) => onResolve(item, rateOperation.id, input)}
-          />
+          <button type="button" onClick={() => onSelect?.(item)} className="inline-flex items-center gap-2 rounded border border-port-accent/30 px-3 py-2 text-sm text-port-accent">
+            <Eye size={14} /> Review run and give feedback
+          </button>
         )}
         {onResolve && inlineActions.map(action => (
           <button
@@ -1002,6 +931,15 @@ function QueueRow({ item, onSelect, onDrill, onResolve, onPromoteAsk, onTriage, 
       </div>
     </div>
   );
+}
+
+function QueueInvestigation({ item }) {
+  if (item.investigation) {
+    return <QueueInvestigationButton key={item.id} task={item.investigation} className="min-h-[44px] max-w-full" />;
+  }
+  return item.investigationUnavailable
+    ? <p className="w-full text-xs text-port-text-muted">{item.investigationUnavailable}</p>
+    : null;
 }
 
 function SummaryPill({ icon: Icon, label, value, tone = 'text-white', urgent = false }) {
@@ -1263,7 +1201,7 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
       onClose={onClose}
       title={item.title}
       subtitle={item.sourceLabel}
-      size="md"
+      size={item.source === 'feedback' ? 'lg' : 'md'}
       closeLabel="Close action"
     >
       <div className="space-y-5">
@@ -1338,19 +1276,20 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
           </section>
         )}
 
-        {operations.length > 0 && (
+        <QueueInvestigation item={item} />
+        {item.source === 'health' && <p className="text-sm text-gray-400">Mark resolved after correcting the issue. Earlier runs will no longer count toward run-based alerts; new evidence can raise another alert.</p>}
+        {item.source === 'feedback' && item.available !== false && item.availability !== 'unavailable' && (
+          <AgentFeedbackReview key={item.sourceRef} item={item} onSaved={async () => {
+            await onSaved?.();
+            onClose();
+          }} />
+        )}
+        {item.source !== 'feedback' && operations.length > 0 && (
           <section className="flex flex-wrap gap-2">
             {operations.map((operation) => (
-              operation.input?.type === 'rating'
-                ? <FeedbackRatingControls
-                    key={operation.id}
-                    id={`detail-${item.id}`}
-                    options={operation.input.options}
-                    onSubmit={(input) => resolve(operation.id, input)}
-                  />
-                : <button key={operation.id} type="button" onClick={() => resolve(operation.id)} className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3 py-2 text-sm text-port-success hover:bg-port-success/20">
-                    <Check size={14} /> {operation.label}
-                  </button>
+              <button key={operation.id} type="button" onClick={() => resolve(operation.id)} className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3 py-2 text-sm text-port-success hover:bg-port-success/20">
+                <Check size={14} /> {operation.label}
+              </button>
             ))}
           </section>
         )}

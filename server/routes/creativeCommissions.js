@@ -11,6 +11,7 @@
  */
 
 import { Router } from 'express';
+import { reviewEvents } from '../services/review.js';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -72,6 +73,7 @@ router.post('/:id/run', asyncHandler(async (req, res) => {
 router.post('/:id/feedback', asyncHandler(async (req, res) => {
   const body = validateRequest(commissionFeedbackSchema, req.body ?? {});
   const rec = await svc.submitCommissionFeedback(req.params.id, body).catch((err) => { throw mapServiceError(err); });
+  reviewEvents.emit('queue:changed');
   res.status(201).json(rec);
 }));
 

@@ -296,7 +296,7 @@ export const appSchema = z.object({
   // task when it diverges. See lib/repoStateExpectations.js. Unset = ON: an install
   // that never hears about a leaked branch just accumulates them.
   verifyRepoStateOnCompletion: z.boolean().optional(),
-  // Unset/false = off (default); true = commit a `.quality.json` quality snapshot into the app repo after each audit.
+  // Unset/false = off (default); true = land a `.quality.json` quality snapshot through a merge-on-green PR after each audit.
   publishQualitySnapshot: z.boolean().optional(),
   featureOverrides: appFeatureOverridesSchema.optional(),
   jira: jiraConfigSchema.optional().nullable(),
@@ -1637,7 +1637,7 @@ export const databaseExportSchema = z.object({
 // System health dashboard warnings — see server/routes/systemHealth.js. The
 // `type` enum mirrors every `rawWarnings.push({ type: ... })` call site there;
 // keep the two lists in sync.
-export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge'];
+export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge', 'code-review'];
 export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
 export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import TaskAddForm from './TaskAddForm';
 import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
 import { findEnabledByLabelText } from '../../test/enabledBarrier.js';
@@ -32,7 +33,8 @@ const apiSystem = vi.hoisted(() => ({ getAssignableInstances: vi.fn() }));
 // Resolved to empty here (not just in the top describe's beforeEach) so every
 // describe below that clears mocks without re-seeding it still renders without
 // unhandled fetch, since `vi.clearAllMocks()` clears calls but keeps this default.
-const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn().mockResolvedValue({ models: [] }) }));
+const apiLocalLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn().mockResolvedValue({ models: [] }), getVisionModels: vi.fn().mockResolvedValue({ models: [] }) }));
+const featureGate = vi.hoisted(() => ({ quickTemplatesEnabled: true }));
 const toast = vi.hoisted(() => {
   const toastFn = vi.fn();
   toastFn.success = vi.fn();
@@ -43,7 +45,17 @@ const toast = vi.hoisted(() => {
 vi.mock('../../services/apiSystem', () => apiSystem);
 vi.mock('../../services/api', () => api);
 vi.mock('../../services/apiLocalLlm', () => apiLocalLlm);
+vi.mock('../../hooks/useInstanceFeatures', () => ({
+  useInstanceFeatures: () => ({
+    isFeatureEnabled: (featureId) => featureId === 'cos-task-templates' ? featureGate.quickTemplatesEnabled : true,
+  }),
+}));
 vi.mock('../ui/Toast', () => ({ default: toast }));
+
+beforeEach(() => {
+  featureGate.quickTemplatesEnabled = true;
+  localStorage.removeItem('portos-cos-quick-templates-expanded');
+});
 
 const worktreeToggle = () => screen.getByTitle(/isolated git worktree/i).closest('label').querySelector('input');
 const openPrToggle = () => screen.getByTitle(/Open a pull request/i).closest('label').querySelector('input');
@@ -71,6 +83,114 @@ describe('TaskAddForm responsive layout', () => {
     apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
     // Nothing authoritative by default, so the id regex alone decides.
     apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
+  });
+
+  it('hides quick templates and skips their fetch when the feature is disabled', async () => {
+    featureGate.quickTemplatesEnabled = false;
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'hidden-template', name: 'Hidden Template', description: 'Not shown', isBuiltin: true }],
+    });
+
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('Task description *')).toBeInTheDocument());
+    expect(screen.queryByText('Quick Templates')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Save Template/i })).toBeNull();
+    expect(api.getCosPopularTemplates).not.toHaveBeenCalled();
+  });
+
+  it('can submit the full form with Quick Templates disabled', async () => {
+    localStorage.clear();
+    featureGate.quickTemplatesEnabled = false;
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    const user = userEvent.setup();
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect the example app');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ description: 'Inspect the example app' }), { silent: true });
+    expect(screen.getByRole('textbox', { name: /Task description/ })).toHaveValue('');
+  });
+
+  it.each([
+    ['full', {}], ['compact', { compact: true }], ['queue', { queueFirst: true }],
+  ])('does not launch from an IME confirmation in the %s form', async (_variant, props) => {
+    localStorage.clear();
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    render(<TaskAddForm {...props} providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: /Task description/ });
+    fireEvent.change(input, { target: { value: 'Inspect the example app' } });
+
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter', isComposing: true }); });
+    expect(api.addCosTask).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 }); });
+    expect(api.addCosTask).not.toHaveBeenCalled();
+
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }); });
+    expect(api.addCosTask).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('keeps a new app selection after restoring a draft (deferred apps: %s)', async (deferred) => {
+    localStorage.clear();
+    localStorage.setItem('portos-cos-task-description-draft', JSON.stringify({ description: 'Inspect the selected app', app: 'draft-app' }));
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    const user = userEvent.setup();
+    const apps = [{ id: 'draft-app', name: 'Draft App' }, { id: 'chosen-app', name: 'Chosen App' }];
+    const props = { providers: [], defaultApp: 'chosen-app', onTaskAdded: vi.fn() };
+    const { rerender } = render(<TaskAddForm {...props} apps={deferred ? [] : apps} />);
+    if (deferred) rerender(<TaskAddForm {...props} apps={apps} />);
+    await waitFor(() => expect(screen.getByLabelText('Target application')).toHaveValue('draft-app'));
+
+    await user.selectOptions(screen.getByLabelText('Target application'), 'chosen-app');
+    expect(screen.getByLabelText('Target application')).toHaveValue('chosen-app');
+    rerender(<TaskAddForm {...props} apps={[...apps]} />);
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'chosen-app' }), { silent: true });
+  });
+
+  // #7796: hiding configuration must not reset the draft or silently change
+  // app completion defaults, and a failed submission must remain retryable.
+  it('keeps queue settings inline and retains drafts across collapse and failed submission', async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    const added = vi.fn();
+    api.getCosPopularTemplates.mockResolvedValue({ templates: [{ id: 'example-template', name: 'Inspect example', description: 'Inspect example', isBuiltin: true }] });
+    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'] });
+    api.addCosTask.mockRejectedValueOnce(new Error('Queue unavailable'))
+      .mockResolvedValueOnce({ id: 'example-task', status: 'pending' });
+    render(<MemoryRouter><TaskAddForm queueFirst providers={[]} defaultApp="example-app"
+      apps={[{ id: 'example-app', name: 'Example App', defaultUseWorktree: true, defaultOpenPR: true, defaultPrCompletion: 'review-then-merge' }]}
+      onTaskAdded={added} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Review: codex'));
+    expect(screen.queryByLabelText('AI provider')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Attach screenshots')).toBeInTheDocument();
+    expect(screen.getByLabelText('Attach files')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Inspect example/ })).toBeVisible();
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect synthetic queue');
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    expect(openPrToggle()).toBeChecked();
+    expect(worktreeToggle()).toBeChecked();
+    await user.click(worktreeToggle());
+    await user.selectOptions(screen.getByLabelText('When done'), 'commit-push');
+    expect(screen.getByLabelText('When done')).toHaveValue('commit-push');
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    expect(screen.getByLabelText('Task execution summary')).toHaveTextContent('Direct checkout · Commit and push to default branch');
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Queue unavailable'));
+    expect(screen.getByRole('textbox', { name: /Task description/ })).toHaveValue('Inspect synthetic queue');
+    expect(added).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+    expect(screen.getByLabelText('When done')).toHaveValue('commit-push');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+    await waitFor(() => expect(added).toHaveBeenCalledWith({ id: 'example-task', status: 'pending' }, { position: 'bottom' }));
+    expect(api.addCosTask).toHaveBeenLastCalledWith(expect.objectContaining({
+      app: 'example-app', description: 'Inspect synthetic queue', useWorktree: false,
+      openPR: false, whenDone: 'commit-push',
+    }), { silent: true });
+    expect(screen.getByRole('textbox', { name: /Task description/ })).toHaveValue('');
   });
 
   it('keeps PR completion controls full-width on mobile', async () => {
@@ -437,6 +557,34 @@ describe('TaskAddForm quick templates', () => {
     // A template that pins no app must not clear the one already selected —
     // clearing it also silently reset the app's worktree/PR defaults.
     expect(screen.getByLabelText(/target application/i)).toHaveValue('example-app');
+  });
+
+  it('remembers a collapsed section across queue-first task forms', async () => {
+    const user = userEvent.setup();
+    api.getCosPopularTemplates.mockResolvedValue({
+      templates: [{ id: 'user-abc', name: 'My Template', description: 'Do the thing', isBuiltin: false }],
+    });
+
+    const formProps = {
+      queueFirst: true,
+      providers: [],
+      apps: [],
+      onTaskAdded: vi.fn(),
+    };
+    const { unmount } = render(<TaskAddForm {...formProps} />);
+    const firstToggle = await screen.findByRole('button', { name: /Quick Templates/ });
+    expect(firstToggle).toHaveAttribute('aria-expanded', 'true');
+
+    await user.click(firstToggle);
+    await waitFor(() => expect(firstToggle).toHaveAttribute('aria-expanded', 'false'));
+    await waitFor(() => expect(localStorage.getItem('portos-cos-quick-templates-expanded')).toBe('false'));
+    expect(screen.queryByText('My Template')).toBeNull();
+
+    unmount();
+    render(<TaskAddForm {...formProps} />);
+    const secondToggle = await screen.findByRole('button', { name: /Quick Templates/ });
+    expect(secondToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('My Template')).toBeNull();
   });
 
   it('keeps the local template application and warns when usage recording fails', async () => {

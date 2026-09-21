@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
 // Brain's 14 tabs are past the compact threshold, so the bar collapses on a
@@ -47,8 +47,9 @@ const renderPageAt = (tab) => render(
 );
 
 const renderSettledAt = async (tab) => {
-  const result = renderPageAt(tab);
+  const result = await renderPageAt(tab);
   await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+  await act(async () => {});
   return result;
 };
 

@@ -64,6 +64,7 @@ import { investigationOutcome } from '../lib/investigationTasks.js';
 import { forgeCliForTracker, resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
+import { redactPii } from '../lib/piiRedactionPatterns.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
 import { buildGoalFidelityFalsePositiveReportBlock } from '../lib/goalFidelityCalibration.js';
 import {
@@ -271,7 +272,7 @@ function trackerRefusal({ app, target, tracker }) {
  *   the queued task still wants that item's URL, so a duplicate is a usable
  *   result, not a failure.
  */
-async function fileFollowUpIssue({ task, review, fingerprint }) {
+async function fileFollowUpIssue({ task, review, fingerprint, context }) {
   const app = await resolveFollowUpRepo(task);
   // Named, not interpolated blind: a task with no `metadata.app` is PortOS's
   // own work, and `app 'undefined' has no configured repository` is not a
@@ -281,6 +282,18 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
   const { tracker, target } = await resolveAppForgeTarget(app).catch(() => ({ tracker: null, target: null }));
   const refusal = trackerRefusal({ app, target, tracker });
   if (refusal) return { issue: null, error: refusal };
+
+  // A local task can quote journals, media records, or other personal prose.
+  // Scrubbing token/email shapes cannot authorize publishing that content.
+  // Finalization grants this provenance only to a complete fetched claim
+  // objective, and it may return only to that same tracker and repository.
+  const publication = context?.publication;
+  if (publication?.source !== 'tracker-issue'
+      || publication.tracker !== tracker
+      || !publication.webHost || publication.webHost !== target?.webHost
+      || !publication.fullName || publication.fullName !== target?.fullName) {
+    return { issue: null, error: 'the reviewed objective has no verified provenance for this tracker; nothing was filed' };
+  }
 
   const exec = tracker === 'jira' ? null : await resolveForgeContext(app, tracker);
   // The reachability probe runs before anything is read or created: on an
@@ -309,19 +322,20 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
     return { issue: null, error: `this repository already carries ${SCAN_LIMIT}+ '${GOAL_FIDELITY_ISSUE_LABEL}' issues, so a duplicate cannot be ruled out; nothing was filed` };
   }
 
-  const { title, body } = buildGoalFidelityIssue({ task, review, fingerprint });
-  // The forge path is scrubbed by `fileForgeIssue` itself, by construction —
-  // JIRA doesn't go through it, so it scrubs explicitly here. A filed issue is
-  // world-readable the moment it lands, and this text is model-authored prose
-  // derived from an untrusted diff. The marker itself is a slug of the task's
-  // first line and carries no path or credential shape, so the scrub leaves it
-  // intact — which it must, or the issue it files could never dedupe against
-  // itself.
+  const draft = buildGoalFidelityIssue({ task, review, fingerprint, context });
+  if (draft.error) return { issue: null, error: draft.error };
+  // Publishing the objective adds more operator-authored text than a title.
+  // Reuse the shared PII and credential scrubbers; never include transcripts
+  // or unrelated metadata in this public projection.
+  const title = redactPii(scrubForgeIssueText(draft.title));
+  const body = redactPii(scrubForgeIssueText(draft.body));
+  // The marker hashes the local fingerprint, so redacting dates or private
+  // task text cannot change the identity the duplicate scan reads back.
   const created = tracker === 'jira'
-    ? await createJiraIssue({ app, title: scrubForgeIssueText(title), body: scrubForgeIssueText(body) })
+    ? await createJiraIssue({ app, title, body })
     : await createForgeIssue({ app, target, tracker, exec, title, body });
   if (!created.ok) return { issue: null, error: created.error };
-  return { issue: { number: created.number, url: created.url, duplicate: false }, error: null };
+  return { issue: { number: created.number, url: created.url, title, body, duplicate: false }, error: null };
 }
 
 /**
@@ -340,7 +354,7 @@ async function fileFollowUpIssue({ task, review, fingerprint }) {
  * that is the case the user most needs named — reporting "queued" for a task
  * nothing will pick up is the one wrong thing to say about it.
  */
-async function queueFollowUpTask({ task, review, fingerprint, issue }) {
+async function queueFollowUpTask({ task, review, fingerprint, context, issue }) {
   // The API base is resolved here because it is this layer's to know: the pure
   // builder cannot read the install's live network exposure to find the loopback
   // port the agent should call.
@@ -349,7 +363,7 @@ async function queueFollowUpTask({ task, review, fingerprint, issue }) {
     findingFingerprint: fingerprint,
     taskId: task?.id,
   });
-  const description = buildGoalFidelityFollowUpTask({ task, review, fingerprint, issue, falsePositiveBlock });
+  const description = buildGoalFidelityFollowUpTask({ task, review, fingerprint, context, issue, falsePositiveBlock });
   const filed = await fileInvestigationTask({
     fingerprint,
     description,
@@ -379,7 +393,7 @@ async function queueFollowUpTask({ task, review, fingerprint, issue }) {
  * @returns {Promise<{ran: boolean, fingerprint?: string, issue?: object|null,
  *   issueError?: string|null, task?: object|null, taskError?: string|null}>}
  */
-export async function runGoalFidelityFollowUp({ agentId, task, review }) {
+export async function runGoalFidelityFollowUp({ agentId, task, review, context = null }) {
   const settings = await getSettings().catch(() => null);
   const config = resolveGoalFidelityFollowUp(settings?.codeReview);
   if (!config) return { ran: false };
@@ -389,14 +403,14 @@ export async function runGoalFidelityFollowUp({ agentId, task, review }) {
   const result = { ran: true, fingerprint, issue: null, issueError: null, task: null, taskError: null };
 
   if (config.fileIssue) {
-    const filed = await fileFollowUpIssue({ task, review, fingerprint })
+    const filed = await fileFollowUpIssue({ task, review, fingerprint, context })
       .catch((err) => ({ issue: null, error: boundedErrorMessage(err, 'Issue filing failed') }));
     result.issue = filed.issue;
     result.issueError = filed.error;
   }
 
   if (config.queueTask) {
-    const queued = await queueFollowUpTask({ task, review, fingerprint, issue: result.issue })
+    const queued = await queueFollowUpTask({ task, review, fingerprint, context, issue: result.issue })
       .catch((err) => {
         console.error(`❌ goal-fidelity follow-up: could not queue a task for ${agentId}: ${err.message}`);
         return null;
@@ -417,4 +431,3 @@ export async function runGoalFidelityFollowUp({ agentId, task, review }) {
 
   return result;
 }
-

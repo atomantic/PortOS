@@ -1,3 +1,4 @@
+import { composeMaintainerInstructions } from '../lib/persistentMindMaintainer.js';
 import mindToolRecipeRoutes from './mindToolRecipeRoutes.js';
 import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistentMindThinkingRequests.js';
@@ -259,6 +260,21 @@ router.delete('/mind/thinking-request', asyncHandler(async (_req, res) => {
   res.json(await cancelPersistentMindThinkingRequest());
 }));
 
+router.get('/mind/maintainer/watchdog', asyncHandler(async (_req, res) => {
+  const { readDevelopmentWatchdogSnapshot } = await import('../services/developmentWatchdog.js');
+  res.json(await readDevelopmentWatchdogSnapshot());
+}));
+router.post('/mind/maintainer/watchdog', asyncHandler(async (req, res) => {
+  const request = validateRequest(z.object({ dryRun: z.boolean().optional() }).strict(), req.body || {});
+  const { runDevelopmentWatchdog } = await import('../services/developmentWatchdog.js');
+  res.json(await runDevelopmentWatchdog({ dryRun: request.dryRun === true, force: true, source: 'manual' }));
+}));
+
+router.get('/mind/maintainer', asyncHandler(async (_req, res) => {
+  const { describePersistentMindMaintainerSetup } = await import('../services/persistentMindMaintainer.js');
+  res.json(await describePersistentMindMaintainerSetup());
+}));
+
 router.get('/mind/context', asyncHandler(async (_req, res) => {
   const root = await loadState();
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
@@ -276,7 +292,7 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
   const preview = await preparePersistentMindContext({
     mindId: PERSISTENT_MIND_ID,
     identity: prompt.identity,
-    instructions: composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase),
+    instructions: composeMaintainerInstructions(composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase), root.config?.persistentMindMaintainer),
     memories,
   });
   res.json({

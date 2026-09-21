@@ -13,6 +13,7 @@
  * logic stays in cos.js while persistence lives here.
  */
 
+import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
 import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -351,6 +352,16 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   let tasks = [];
   if (existsSync(filePath)) {
     tasks = await readTaskFile(filePath);
+  }
+
+  // One state lock covers BOTH task files: manual and autonomous producers
+  // must acquire the same durable work identity even with different titles.
+  if (developmentWorkIdentity(taskData)) {
+    const otherPath = join(ROOT_DIR, taskType === 'user' ? state.config.cosTasksFile : state.config.userTasksFile);
+    const other = existsSync(otherPath) ? await readTaskFile(otherPath) : [];
+    const owner = [...tasks, ...other].find(task => task.id !== ignoreTaskId
+      && DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, taskData));
+    if (owner) return { ...owner, duplicate: true };
   }
 
   // Reject duplicate: same first-line description AND same target app already
@@ -1110,6 +1121,9 @@ export async function approveTask(taskId, { now = Date.now() } = {}) {
   await writeTaskFile(filePath, markdown);
 
   cosEvents.emit('tasks:changed', { type: taskType, action: 'approved', task: tasks[taskIndex] });
+
+  const { removeByMetadata } = await import('./notifications.js');
+  await removeByMetadata('taskId', taskId).catch(() => {});
 
   return tasks[taskIndex];
   });

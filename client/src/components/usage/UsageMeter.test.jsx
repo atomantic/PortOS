@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import UsageMeter, { meterTone, formatResetsAt, readingAttribution } from './UsageMeter';
+
+afterEach(() => vi.useRealTimers());
 
 describe('meterTone', () => {
   // The thresholds are the whole reason this meter was extracted rather than
@@ -29,6 +31,13 @@ describe('formatResetsAt', () => {
 
   it('localizes an ISO reset', () => {
     expect(formatResetsAt('2026-03-01T12:00:00.000Z')).toMatch(/\d/);
+  });
+
+  it('keeps the remaining hours for a multi-day reset countdown', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-21T00:00:00.000Z'));
+
+    expect(formatResetsAt('2026-09-22T23:00:00.000Z')).toMatch(/\(in 1d 23h\)$/);
   });
 });
 

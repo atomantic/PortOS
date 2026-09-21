@@ -7,8 +7,11 @@ import {
   NAV_FEATURE_IDS,
   SECTION_FEATURE,
   getNavAliasMap,
+  getNavCommandForPath,
   getNavPageForPath,
   getNavSectionForPath,
+  getSectionNavGroups,
+  getSectionNavTabForPath,
   getSectionNavTabs,
   resolveNavCommand,
 } from './navManifest.js';
@@ -35,10 +38,7 @@ const SETTINGS_PAGE = path.join(REPO_ROOT, 'client/src/pages/Settings.jsx');
 // every manifest tab in its `tabGroup` instead.
 const TABBED_PAGES = [
   { prefix: '/settings', section: 'Settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'section', constName: 'TABS' },
-  { prefix: '/models', section: 'Models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'section', constName: 'TABS',
-    nestedIdSources: [
-      { parent: 'llms', file: 'client/src/components/settings/LocalLlmTab.jsx', constName: 'LLM_NAV_SUBROUTES' },
-    ] },
+  { prefix: '/models', section: 'Models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'section', constName: 'TABS' },
   // POST's morse tab has routed `:mode` sub-pages (/post/morse/copy|send) and the
   // memory tab has the Elements study sub-page (/post/memory/elements) plus its
   // own routed practice modes — none are top-level switch cases, so declare their
@@ -157,10 +157,26 @@ describe('nav contract — generated section child navigation', () => {
 
   it('keeps moved Providers and Usage destinations in the Models child nav', () => {
     expect(getSectionNavTabs('Models').filter((tab) => ['providers', 'usage'].includes(tab.id))).toEqual([
-      { id: 'providers', label: 'Providers', to: '/ai/presets' },
-      { id: 'usage', label: 'Usage', to: '/devtools/usage' },
+      { id: 'providers', label: 'Providers', to: '/ai/presets', navGroup: 'Connect' },
+      { id: 'usage', label: 'Usage', to: '/devtools/usage', navGroup: 'Operate' },
     ]);
     expect(getSectionNavTabs('Settings').some((tab) => tab.id === 'providers')).toBe(false);
+  });
+
+  it('keeps Models groups and destinations in the design order', () => {
+    expect(getSectionNavGroups('Models').map(({ label, tabs }) => [label, tabs.map((tab) => tab.label)])).toEqual([
+      ['Connect', ['AI Services', 'Harnesses', 'Providers', 'Runtimes']],
+      ['Evaluate', ['Comparison', 'Performance', 'Playground']],
+      ['Library', ['3D', 'Embeddings', 'LoRAs', 'Media', 'Model Library', 'Training']],
+      ['Operate', ['Quota Burn', 'Status', 'Subscriptions', 'Usage']],
+      ['Policies', ['Abuse Guard', 'Code Reviewers', 'Decision Classifiers']],
+    ]);
+  });
+
+  it('resolves a promoted drill-down as itself instead of its LLM parent', () => {
+    expect(getSectionNavTabForPath('Models', '/models/llms/abuse')).toMatchObject({ id: 'abuse', label: 'Abuse Guard' });
+    expect(getNavCommandForPath('/models/decision-classifiers/jev')).toMatchObject({ path: '/models/decision-classifiers/jev', label: 'Jev' });
+    expect(getSectionNavTabForPath('Models', '/models/training/dataset-abc')).toMatchObject({ id: 'training' });
   });
 
   it.each([
@@ -185,7 +201,7 @@ describe('nav contract — generated section child navigation', () => {
 // they still hold on the old pill — has to keep landing on the same page.
 describe('nav contract — Models → Runtimes', () => {
   it('is a Models section tab at its canonical path', () => {
-    expect(getSectionNavTabs('Models')).toContainEqual({ id: 'llms-runtimes', label: 'Runtimes', to: '/models/llms-runtimes' });
+    expect(getSectionNavTabs('Models')).toContainEqual({ id: 'llms-runtimes', label: 'Runtimes', to: '/models/llms-runtimes', navGroup: 'Connect' });
   });
 
   it.each(['runtimes', 'llm runtimes', 'local runtimes', 'llama server'])(
@@ -221,7 +237,7 @@ describe('nav contract — Models → Runtimes', () => {
 // the parent's name) would put the neutral fallback wording on every card.
 describe('getNavPageForPath', () => {
   it.each([
-    ['/models/llms', 'Models → LLMs', 'LLMs'],
+    ['/models/llms', 'Models → Model Library', 'Model Library'],
     ['/models/llms-runtimes', 'Models → Runtimes', 'Runtimes'],
     // Longest-match: a drill-down names itself, not the tab that hosts it.
     ['/models/llms/abuse', 'Models → Abuse Guard', 'Abuse Guard'],

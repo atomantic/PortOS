@@ -22,6 +22,7 @@ import { sha256Text } from '../lib/fileUtils.js';
 import { boundedErrorMessage } from '../lib/errorHandler.js';
 import { MANAGED_ASSESSMENT_BACKENDS, localRuntimeKind } from '../lib/localProviderRuntime.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { getActiveApps, getAppWorkTracker } from './apps.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 import { loadState } from './cosState.js';
@@ -357,6 +358,10 @@ async function queueOneTask({ request, taskId, apps, allowedAppIds }) {
   const [providers, root] = await Promise.all([listSelectableProviders(), loadState()]);
   const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
   if (!capabilities.createTasks) return { success: false, error: 'Persistent mind task creation access is disabled' };
+  const maintainer = normalizePersistentMindMaintainer(root.config?.persistentMindMaintainer);
+  if (maintainer.enabled && maintainer.appIds.includes(request.appId)) {
+    return { success: false, error: 'Maintainer repository work must use a tracked issue and maintenance.refresh so the watchdog can enforce ownership. File a deduplicated issue through the granted issue or report tools.' };
+  }
   const choice = await validateChoice(request, apps, providers, capabilities);
   if (choice.error) return { success: false, error: choice.error };
   const planOnly = request.planOnly === true;

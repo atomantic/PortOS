@@ -95,7 +95,7 @@ describe('resolveModelRates', () => {
 
   it('resolves configured-default sentinels to their provider family', () => {
     expect(resolveModelRates('codex', 'codex-configured-default')).toMatchObject({ rateModel: 'gpt-5.3-codex', matched: 'family' });
-    expect(resolveModelRates('grok', 'grok-configured-default')).toMatchObject({ rateModel: 'grok-4.5', matched: 'family' });
+    expect(resolveModelRates('grok', 'grok-configured-default')).toMatchObject({ rateModel: 'grok-4.7', matched: 'family' });
     expect(resolveModelRates('antigravity-cli', 'antigravity-configured-default')).toMatchObject({ rateModel: 'gemini-3.1-pro-preview', matched: 'family' });
   });
 
@@ -273,6 +273,12 @@ describe('estimateCostUsd', () => {
 });
 
 describe('cache-tier rates on resolveModelRates', () => {
+  it('estimates Grok 4.7 standard and cached tokens without changing historical Grok rates', () => {
+    const rates = resolveModelRates('grok', 'grok-4.7');
+    expect(rates).toMatchObject({ inputPer1M: 2, outputPer1M: 6, cacheReadPer1M: 0.5, cacheWritePer1M: 2, matched: 'exact' });
+    expect(estimateCostUsd(100_000, 10_000, rates, { cacheReadTokens: 100_000 })).toBeCloseTo(0.31);
+    expect(resolveModelRates('grok-cli', 'grok-4.6')).toMatchObject({ inputPer1M: 2, outputPer1M: 6, cacheReadPer1M: 0.3 });
+  });
   it('derives both cache tiers from the input rate on every match tier', () => {
     for (const [providerId, model] of [
       ['claude-code', 'claude-opus-5'],        // exact

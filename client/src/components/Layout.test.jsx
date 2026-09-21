@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router';
 import { PINNED_KEY } from '../utils/navWorkingSet.js';
 import * as api from '../services/api';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
+import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
 
 // This suite locks the *integration* path that SingleNavRow.test.jsx can't reach:
 // pinning a top-level `single: true` row (Dashboard `/`, Review Hub `/review`,
@@ -23,6 +24,7 @@ vi.mock('../hooks/useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => 
 vi.mock('../hooks/useAIStatusNotifications', () => ({ useAIStatusNotifications: () => {} }));
 vi.mock('./UpdateBanners', () => ({ default: () => null }));
 vi.mock('./SetupBanner', () => ({ default: () => null }));
+vi.mock('./PasswordRiskWarning.jsx', () => ({ default: () => null }));
 vi.mock('../hooks/useNotifications', () => ({
   useNotifications: () => ({
     notifications: [],
@@ -80,6 +82,7 @@ vi.mock('../services/api', () => ({
   listPipelineSeriesNames: vi.fn(() => Promise.resolve([])),
   listUniverseNames: vi.fn(() => Promise.resolve([])),
   getDailyActions: vi.fn(() => Promise.resolve({ actions: [] })),
+  getReviewQueue: vi.fn(() => new Promise(() => {})),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
 
@@ -390,6 +393,16 @@ describe('Layout — System Resources location state', () => {
 });
 
 describe('Layout — section destinations', () => {
+  it('keeps a Models task route and its owning sidebar destination active', async () => {
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/models/performance/results']));
+    await renderLayout('/models/performance/results');
+
+    expect(screen.getByRole('button', { name: 'Models' })).toHaveClass('text-port-accent');
+    expect(screen.getByRole('link', { name: 'Performance' })).toHaveClass('text-port-accent');
+    expect(within(pinnedSection()).getByRole('link', { name: 'Performance Results' })).toHaveClass('text-port-accent');
+    expect(screen.getByRole('link', { name: 'Model Library' })).not.toHaveClass('text-port-accent');
+  });
+
   it('opens LLMs when the Models section label is clicked', async () => {
     await renderLayout();
 
@@ -415,9 +428,11 @@ describe('Layout — persistent mobile touch targets', () => {
     expect(openMenu.closest('header')?.className).toContain('lg:hidden');
     expect(closeMenu.className).toContain('lg:hidden');
 
-    const ambientLinks = screen.getAllByRole('link', { name: 'Ambient display' });
-    expect(ambientLinks).toHaveLength(2);
-    ambientLinks.forEach(expectAtLeast44px);
+    const searchButtons = screen.getAllByRole('button', { name: 'Open command palette' });
+    expect(searchButtons).toHaveLength(2);
+    searchButtons.forEach(expectAtLeast44px);
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: 'Open command palette' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Ambient display' })).not.toBeInTheDocument();
 
     const themeToggles = screen.getAllByRole('button', { name: 'Toggle day/night mode' });
     expect(themeToggles).toHaveLength(2);
@@ -428,6 +443,16 @@ describe('Layout — persistent mobile touch targets', () => {
       expect(toggle.className).not.toContain('sm:min-w-0');
       expect(toggle.className).not.toContain('sm:min-h-0');
     });
+  });
+
+  it('opens the command palette from the mobile header search button', async () => {
+    await renderLayout();
+    const dispatchSpy = vi.spyOn(document, 'dispatchEvent');
+
+    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Open command palette' }));
+
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: CMD_K_SEARCH_OPEN_EVENT }));
+    dispatchSpy.mockRestore();
   });
 
   it('expands section children when the mobile sidebar opens from a collapsed desktop preference', async () => {
@@ -442,6 +467,18 @@ describe('Layout — persistent mobile touch targets', () => {
 });
 
 describe('Layout — nav footer', () => {
+  it('opens the command palette from the footer search button', async () => {
+    await renderLayout();
+    const dispatchSpy = vi.spyOn(document, 'dispatchEvent');
+    const footer = screen.getByText(/^vtest$/).closest('.border-t');
+
+    const searchButton = within(footer).getByRole('button', { name: 'Open command palette' });
+    fireEvent.click(searchButton);
+
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: CMD_K_SEARCH_OPEN_EVENT }));
+    dispatchSpy.mockRestore();
+  });
+
   it('renders a compact footer layout preventing controls from overflowing the sidebar', async () => {
     await renderLayout();
 

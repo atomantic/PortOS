@@ -9,6 +9,8 @@
  * makes zero provider calls.
  */
 
+import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
+import { canonicalStringify as maintainerCanonicalStringify } from '../lib/objects.js';
 import { randomUUID } from 'crypto';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { isPersistentMindCallDenial } from '../lib/persistentMindTrajectory.js';
@@ -877,6 +879,7 @@ async function runClaimedPersistentMindTurn(turn, mind) {
       thinkingSelection,
       selfThinkingRequest,
       capabilityFingerprint: persistentMindCapabilityGrantFingerprint(admissionRoot.config?.persistentMindCapabilities),
+      maintainerFingerprint: maintainerCanonicalStringify(normalizePersistentMindMaintainer(admissionRoot.config?.persistentMindMaintainer)),
       signal: controller.signal,
     });
     // Context/memory orchestration is only needed once admission succeeds.
@@ -1001,10 +1004,11 @@ async function runClaimedPersistentMindTurn(turn, mind) {
         usageLimit
           ? PROVIDER_USAGE_LIMIT_PAUSE_REASON
           : (contextBudget ? contextBudgetPauseReasonFrom(error) : message),
-        (usageLimit || contextBudget) ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
+        (usageLimit || contextBudget || (denied && error.retryDisposition === 'hold' && error.requiresResubmission !== true)) ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
         {
           consumedAttempt: runStartedAt != null,
           retireWake: denied && error.requiresResubmission === true,
+          retryAt: denied && error.retryDisposition === 'reset-wait' ? error.retryAt : null,
         },
       );
       if (usageLimit) {

@@ -51,6 +51,7 @@ import {
   resolveGoalFidelityConfig,
 } from '../lib/goalFidelity.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
+import { activeReviewerGroupIndex, isReviewerConfigFault } from '../lib/reviewerHealth.js'
 import { getSettings, updateSettingsWith, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
@@ -64,23 +65,72 @@ const normalizeFallbackGroups = (groups) => Array.isArray(groups)
 export function pickAvailableReviewerGroups(raw, now = Date.now()) {
   const groups = normalizeFallbackGroups(raw?.reviewerFallbackGroups)
   const health = raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? raw.reviewerHealth : {}
-  return groups.find(group => group.length && group.every(reviewer => !(Number(health[reviewer]?.pausedUntil) > now))) || groups[0] || null
+  return groups[activeReviewerGroupIndex(groups, health, now)]
+    ?? (Array.isArray(raw?.reviewerFallbackGroups) ? [] : null)
 }
 
 export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
-  if (!isReviewerQuotaFailure(error) || !isReviewer(reviewer)) return false
+  if (!isReviewer(reviewer)) return false
+  const result = error && typeof error === 'object' ? error : { error }
+  const message = String(result.error || 'Reviewer failed')
+  const code = typeof result.code === 'string' ? result.code : null
+  const isConfigFault = isReviewerConfigFault(code)
+  if (!isConfigFault && !isReviewerQuotaFailure(message)) return false
   await updateSettingsWith((settings) => ({
     ...settings,
     codeReview: {
       ...(settings.codeReview || {}),
       reviewerHealth: {
         ...(settings.codeReview?.reviewerHealth || {}),
-        [reviewer]: { pausedUntil: now + REVIEWER_PAUSE_MS, reason: 'quota', lastFailureAt: now },
+        [reviewer]: isConfigFault
+          ? { code, reason: 'configuration', lastFailureAt: now }
+          : { pausedUntil: now + REVIEWER_PAUSE_MS, reason: 'quota', lastFailureAt: now },
       },
     },
   }))
   cachedDefaults = null
   return true
+}
+
+export async function reportReviewerSuccess(reviewer, now = Date.now()) {
+  if (!isReviewer(reviewer)) return false
+  if (!(await getSettings())?.codeReview?.reviewerHealth?.[reviewer]) return false
+  let cleared = false
+  await updateSettingsWith((current) => {
+    const health = current.codeReview?.reviewerHealth
+    const prior = health?.[reviewer]
+    if (!prior || (!isReviewerConfigFault(prior.code) && Number(prior.pausedUntil) > now)) return current
+    const remaining = Object.fromEntries(Object.entries(health).filter(([key]) => key !== reviewer))
+    cleared = true
+    return {
+      ...current,
+      codeReview: {
+        ...Object.fromEntries(Object.entries(current.codeReview || {}).filter(([key]) => key !== 'reviewerHealth')),
+        ...(Object.keys(remaining).length ? { reviewerHealth: remaining } : {}),
+      },
+    }
+  })
+  if (cleared) cachedDefaults = null
+  return cleared
+}
+
+export function reviewerConfigFaultsFromHealth(raw) {
+  const health = raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? raw.reviewerHealth : {}
+  return Object.fromEntries(Object.entries(health)
+    .filter(([, entry]) => isReviewerConfigFault(entry?.code))
+    .map(([reviewer, entry]) => [reviewer, {
+      code: entry.code,
+      lastFailureAt: entry.lastFailureAt || null,
+    }]))
+}
+
+export async function getReviewerConfigHealth() {
+  const settings = await getSettings()
+  const configFaults = reviewerConfigFaultsFromHealth(settings?.codeReview)
+  return {
+    status: Object.keys(configFaults).length ? 'warning' : 'ok',
+    configFaults,
+  }
 }
 
 // LM Studio (`:1234`), Ollama (`:11434`) and MTPLX (`:8000/v1`) all ship
@@ -136,10 +186,12 @@ export function pickCodeReviewDefaults(settings) {
   const reviewers = configuredReviewers(settings)
   const fallbackGroups = normalizeFallbackGroups(raw?.reviewerFallbackGroups)
   const activeFallbackGroup = pickAvailableReviewerGroups(raw, Date.now())
+  const reviewerConfigFaults = reviewerConfigFaultsFromHealth(raw)
   return {
     reviewers: activeFallbackGroup || (reviewers.length ? reviewers : [...DEFAULT_REVIEWERS]),
     ...(Array.isArray(raw?.reviewerFallbackGroups) ? { reviewerFallbackGroups: fallbackGroups } : {}),
     ...(raw?.reviewerHealth && typeof raw.reviewerHealth === 'object' ? { reviewerHealth: raw.reviewerHealth } : {}),
+    ...(Object.keys(reviewerConfigFaults).length ? { reviewerConfigFaults } : {}),
     // Arbitrary GitHub reviewer usernames appended to `--review-with` to gate the
     // merge. Normalized so a hand-edited settings.json can't smuggle in unsafe
     // tokens. Empty array = none configured.
@@ -152,6 +204,7 @@ export function pickCodeReviewDefaults(settings) {
     // non-integer or unbounded budget. Empty object = no caps configured; an
     // absent key is NOT `0` (which slashdo reads as "loop until clean").
     ...(raw?.providerModels ? { providerModels: normalizeReviewerModels(raw.providerModels) || {} } : {}),
+    ...(raw?.providerEfforts ? { providerEfforts: Object.fromEntries(Object.entries(effortDefaults).filter(([key]) => isProviderReviewer(key))) } : {}),
     reviewerMaxRounds: normalizeReviewerMaxRounds(raw?.reviewerMaxRounds) || {},
     stopMode: REVIEW_STOP_MODES.includes(raw?.stopMode) ? raw.stopMode : DEFAULT_REVIEW_STOP_MODE,
     reviewerApplies: raw?.reviewerApplies === true,
@@ -221,15 +274,20 @@ export function pickCodeReviewDefaults(settings) {
  */
 let cachedSettings = null
 let cachedDefaults = null
+let cachedDefaultsExpiresAt = Infinity
 settingsEvents.on('settings:updated', () => { cachedSettings = null; cachedDefaults = null })
 
 /** Test-only: reset the memoized defaults cache to its uninitialized sentinel. */
 export function __resetCodeReviewDefaultsCache() { cachedSettings = null; cachedDefaults = null }
 
 export async function getCodeReviewDefaults() {
-  if (cachedDefaults) return cachedDefaults
+  const now = Date.now()
+  if (cachedDefaults && now < cachedDefaultsExpiresAt) return cachedDefaults
   if (!cachedSettings) cachedSettings = await getSettings()
   cachedDefaults = pickCodeReviewDefaults(cachedSettings)
+  // Keep the I/O cache, but recompute health-dependent selection at expiry.
+  cachedDefaultsExpiresAt = Math.min(Infinity, ...Object.values(cachedDefaults.reviewerHealth || {})
+    .map(entry => Number(entry?.pausedUntil)).filter(expiry => expiry > now))
   return cachedDefaults
 }
 

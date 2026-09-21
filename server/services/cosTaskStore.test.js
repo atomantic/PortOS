@@ -13,6 +13,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync as realReadFileSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { removeByMetadata } from './notifications.js';
+
+vi.mock('./notifications.js', () => ({ removeByMetadata: vi.fn().mockResolvedValue(1) }));
 
 const mock = vi.hoisted(() => ({
   files: new Map(),
@@ -1739,6 +1742,7 @@ describe('cosTaskStore.approveTask', () => {
     await addTask({ description: 'need approve', id: 'sys-ap2', approvalRequired: true }, 'internal', { now: T0 });
     const approved = await approveTask('sys-ap2', { now: T1 });
     expect(approved.metadata.updatedAt).toBe(new Date(T1).toISOString());
+    expect(removeByMetadata).toHaveBeenCalledWith('taskId', 'sys-ap2');
   });
 
   it('rejects a task that does not require approval', async () => {
@@ -2328,5 +2332,23 @@ describe('cosTaskStore — a repaired task is returned exactly as it is persiste
 
     expect(created.priority).toBe('MEDIUM');
     expect((await getTaskById(created.id)).priority).toBe('MEDIUM');
+  });
+});
+
+describe('shared development work admission', () => {
+  it('matches a manual PR resolution and autonomous follow-up across task files and titles', async () => {
+    const metadata = { app: 'example', reviewLoopPRUrl: 'https://github.com/acme/example/pull/42' };
+    const manual = await addTask({ description: 'Manual resolve', metadata }, 'user');
+    const scheduled = await addTask({ description: 'Scheduled follow-up', metadata }, 'internal');
+    expect(scheduled).toMatchObject({ id: manual.id, duplicate: true });
+    expect((await getCosTasks()).tasks).toHaveLength(0);
+    await updateTask(manual.id, { status: 'completed' }, 'user');
+    expect((await addTask({ description: 'New evidence', metadata }, 'internal')).duplicate).not.toBe(true);
+  });
+  it('reserves untargeted claims against targeted work while preserving independent apps', async () => {
+    const claim = await addTask({ description: 'Claim next', app: 'example', claimFlow: true }, 'internal');
+    expect(await addTask({ description: 'Claim 42', app: 'example', claimFlow: true, claimTarget: '42' }, 'user'))
+      .toMatchObject({ id: claim.id, duplicate: true });
+    expect((await addTask({ description: 'Claim 42', app: 'different', claimFlow: true, claimTarget: '42' }, 'user')).duplicate).not.toBe(true);
   });
 });

@@ -598,8 +598,8 @@ describe('processTaskOutput', () => {
 
     expect(result).toMatchObject({ reviewed: 1, merged: 1 });
     const reviewCall = execGhMock.mock.calls.find(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'));
-    expect(JSON.parse(reviewCall[2].input)).toMatchObject({ event: 'APPROVE', comments: [] });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(JSON.parse(reviewCall[2].input)).toMatchObject({ event: 'APPROVE', comments: [], commit_id: 'a'.repeat(40) });
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
   });
 
   it.each([
@@ -704,7 +704,7 @@ describe('processTaskOutput', () => {
     });
 
     expect(result).toMatchObject({ reviewed: 1, merged: 1 });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
     expect(execGhMock.mock.calls.some(([args]) => (
       args[0] === 'api' && args.some((arg) => String(arg).endsWith('/issues/101'))
     ))).toBe(true);
@@ -713,7 +713,7 @@ describe('processTaskOutput', () => {
   // The gate approved this diff against the issue as it read at scan time. If
   // that requirement was rewritten since, the review answered a question nobody
   // is asking any more — so the approval is discarded rather than merged.
-  it('discards an approval whose linked issue was rewritten after the gate judged it', async () => {
+  it.each([false, true])('discards rewritten linked intent (maintainerTargeted=%s)', async (maintainerTargeted) => {
     const issue = {
       number: 101,
       state: 'open',
@@ -730,6 +730,7 @@ describe('processTaskOutput', () => {
           ...eligibilityMetadata.issueWatcher.pullRequests[0],
           eligibilityFacts: {
             ...eligibilityFacts,
+            maintainerTargeted,
             intentFingerprint: linkedIssueIntentFingerprint([{
               number: 101, title: 'Crash on empty import', body: 'Importing an empty file throws.',
             }]),
@@ -802,7 +803,7 @@ describe('processTaskOutput', () => {
         body: '💡 **Non-blocking**\n\nConsider making this helper name more specific in a follow-up.',
       }],
     });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
   });
 
   it('approves without inline comments when GitHub rejects the comment anchors', async () => {
@@ -838,8 +839,8 @@ describe('processTaskOutput', () => {
     expect(result).toMatchObject({ reviewed: 1, merged: 1 });
     const reviewCalls = execGhMock.mock.calls.filter(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'));
     expect(reviewCalls).toHaveLength(2);
-    expect(JSON.parse(reviewCalls[1][2].input)).toMatchObject({ event: 'APPROVE', comments: [] });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(JSON.parse(reviewCalls[1][2].input)).toMatchObject({ event: 'APPROVE', comments: [], commit_id: 'a'.repeat(40) });
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
   });
 
   it('treats a finding with no explicit blocking flag as blocking and does not merge', async () => {
@@ -902,22 +903,123 @@ describe('processTaskOutput', () => {
     expect(mergePrMock).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('requests head-pinned auto-merge for pending CI and reports rejection (%s)', async autoMergeError => {
-    installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] }), autoMergeError });
+  it('withholds a reviewer approval and a persisted approval when current security screening fails', async () => {
+    installDefaultGhMock();
+    runModelAbuseScanMock.mockResolvedValue({ ok: true, safe: false, code: 'security-model-withheld' });
+    const result = await processTaskOutput({ appId: APP.id, success: true, task: { metadata }, payload: {
+      issueComments: [], pullRequests: [{ number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'Looks good.', findings: [], rebaseRequired: false, ciPolicy: 'required' }],
+    } });
+    expect(result).toMatchObject({ reviewed: 0, merged: 0 });
+    apps.set(APP.id, { ...APP, issueWatcherState: { approvedPullRequests: [{
+      number: 7, headSha: 'a'.repeat(40), contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF), ciPolicy: 'required', rebaseRequired: true, autoMergeEnabled: true,
+    }] } });
+    await buildTaskInput({ app: apps.get(APP.id) });
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'))).toBe(false);
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('update-branch'))).toBe(false);
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('--disable-auto'))).toBe(true);
+  });
+
+  it.each(['review', 'queued merge'])('withholds %s when linked intent changes during assessment', async (action) => {
+    const pr = pullRequest({ body: 'Closes #101' });
+    const issue = { number: 101, state: 'open', title: 'Example request', body: 'Preserve private access.', assignees: [] };
+    installDefaultGhMock({ pr, issueDetails: { 101: issue } });
+    const contentFingerprint = screenedPullRequestFingerprint(pr, DIFF);
+    const target = { number: 7, headSha: pr.headRefOid, contentFingerprint };
+    runModelAbuseScanMock.mockImplementation(async ({ content }) => {
+      if (content.includes('Linked issue #101')) issue.body = 'Rewritten during inference';
+      return { ok: true, safe: true, findings: [] };
+    });
+    if (action === 'review') {
+      const result = await processTaskOutput({ appId: APP.id, success: true,
+        task: { metadata: { issueWatcher: { ...metadata.issueWatcher, pullRequests: [target] } } },
+        payload: { issueComments: [], pullRequests: [{
+          number: 7, headSha: pr.headRefOid, verdict: 'approve', summary: 'Reviewed.',
+          findings: [], rebaseRequired: false, ciPolicy: 'required',
+        }] },
+      });
+      expect(result).toMatchObject({ reviewed: 0, merged: 0 });
+    } else {
+      apps.set(APP.id, { ...APP, issueWatcherState: { approvedPullRequests: [{
+        ...target, ciPolicy: 'required', ticks: 0,
+      }] } });
+      await buildTaskInput({ app: apps.get(APP.id) });
+      expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toHaveLength(1);
+    }
+    expect(runModelAbuseScanMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining('Preserve private access.'),
+    }));
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'))).toBe(false);
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it('does not merge if the PR body changes while its pinned review is posted', async () => {
+    const pr = pullRequest();
+    installDefaultGhMock({ pr });
+    const forgeRead = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation((args, ...rest) => {
+      if (args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input')) pr.body = 'Changed after assessment';
+      return forgeRead(args, ...rest);
+    });
+    const result = await processTaskOutput({ appId: APP.id, success: true, task: { metadata }, payload: {
+      issueComments: [], pullRequests: [{
+        number: 7, headSha: pr.headRefOid, verdict: 'approve', summary: 'Reviewed.',
+        findings: [], rebaseRequired: false, ciPolicy: 'required',
+      }],
+    } });
+    expect(result).toMatchObject({ reviewed: 1, merged: 0 });
+    const reviewCall = execGhMock.mock.calls.find(([args]) => args.includes('repos/o/r/pulls/7/reviews') && args.includes('--input'));
+    expect(JSON.parse(reviewCall[2].input).commit_id).toBe('a'.repeat(40));
+    expect(mergePrMock).not.toHaveBeenCalled();
+  });
+
+  it('retains an armed legacy auto-merge when revocation fails beyond the normal polling budget', async () => {
+    installDefaultGhMock();
+    const forgeRead = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation((args, ...rest) => {
+      if (args.includes('--disable-auto')) throw new Error('Permission denied');
+      return forgeRead(args, ...rest);
+    });
+    apps.set(APP.id, { ...APP, issueWatcherState: { approvedPullRequests: [{
+      number: 7, headSha: 'a'.repeat(40), contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF),
+      ciPolicy: 'required', autoMergeEnabled: true, ticks: MAX_PENDING_APPROVAL_TICKS,
+    }] } });
+    await buildTaskInput({ app: apps.get(APP.id) });
+    expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([
+      expect.objectContaining({ number: 7, autoMergeEnabled: true, autoMergeRevocationFailed: true }),
+    ]);
+    expect(mergePrMock).not.toHaveBeenCalled();
+    expect(spawnPrRemediationFollowUpMock).not.toHaveBeenCalled();
+    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining('auto-merge could not be disabled') }));
+  });
+
+  it('keeps pending-CI approvals in the local queue so GitHub cannot bypass reassessment', async () => {
+    installDefaultGhMock({ pr: pullRequest({ statusCheckRollup: [{ status: 'IN_PROGRESS' }] }) });
     const result = await processTaskOutput({ appId: APP.id, success: true, task: { metadata }, payload: {
       issueComments: [], pullRequests: [{ number: 7, headSha: 'a'.repeat(40), verdict: 'approve', summary: 'Reviewed.', findings: [], rebaseRequired: false, ciPolicy: 'required' }],
     } });
     expect(result).toMatchObject({ reviewed: 1, merged: 0 });
     expect(mergePrMock).not.toHaveBeenCalled();
-    const mutation = execGhMock.mock.calls.find(([args]) => args.includes('graphql'));
-    expect(mutation).toBeDefined();
-    expect(JSON.parse(mutation[2].input)).toMatchObject({ variables: { input: {
-      pullRequestId: 'PR_node_7', expectedHeadOid: 'a'.repeat(40), mergeMethod: 'MERGE',
-    } } });
+    expect(execGhMock.mock.calls.some(([args]) => args.includes('graphql'))).toBe(false);
     expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([
-      expect.objectContaining({ number: 7, autoMergeEnabled: !autoMergeError }),
+      expect.objectContaining({ number: 7, autoMergeEnabled: false }),
     ]);
-    if (autoMergeError) expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining('did not enable auto-merge') }));
+  });
+
+  it('uses the owning account for pending approval reads and the pinned merge', async () => {
+    installDefaultGhMock();
+    apps.set(APP.id, { ...APP, forgeAccount: 'example-maintainer', issueWatcherState: {
+      approvedPullRequests: [{
+        number: 7, headSha: 'a'.repeat(40),
+        contentFingerprint: screenedPullRequestFingerprint(pullRequest(), DIFF), ciPolicy: 'required',
+      }],
+    } });
+    mergePrMock.mockResolvedValue({ success: true });
+    await buildTaskInput({ app: apps.get(APP.id) });
+    expect(resolveForgeForRepoMock).toHaveBeenCalledWith(APP.repoPath, { forgeAccount: 'example-maintainer' });
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, {
+      expectedHeadSha: 'a'.repeat(40), forgeAccount: 'example-maintainer',
+    });
   });
 
   it('waits one scheduled observation before treating absent CI as skippable', async () => {
@@ -946,7 +1048,7 @@ describe('processTaskOutput', () => {
     const followUp = await buildTaskInput({ app: apps.get(APP.id) });
 
     expect(followUp).toEqual({ skip: { reason: 'baselined' } });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
     expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
   });
 
@@ -979,7 +1081,7 @@ describe('processTaskOutput', () => {
       reviews: [[{ user: { login: 'owner' }, commit_id: 'a'.repeat(40), state: 'APPROVED' }]],
     });
     await buildTaskInput({ app: apps.get(APP.id) });
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
   });
 
   it('does not release CI for a PR it did not approve', async () => {
@@ -1088,7 +1190,7 @@ describe('processTaskOutput', () => {
 
     await buildTaskInput({ app: apps.get(APP.id) });
 
-    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7);
+    expect(mergePrMock).toHaveBeenCalledWith(APP.repoPath, 7, { expectedHeadSha: 'a'.repeat(40), forgeAccount: null });
     expect(apps.get(APP.id).issueWatcherState.approvedPullRequests).toEqual([]);
   });
 

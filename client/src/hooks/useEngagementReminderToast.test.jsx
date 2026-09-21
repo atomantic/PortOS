@@ -3,15 +3,18 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { MemoryRouter } from 'react-router';
 
 const mock = vi.hoisted(() => ({
-  getDailyActions: vi.fn(),
+  getReviewQueue: vi.fn(),
+  claimReviewQueueDelivery: vi.fn(),
   updateInstanceFeature: vi.fn(),
 }));
 
 vi.mock('../services/api', () => mock);
+vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
 
 import { toast, Toaster } from '../components/ui/Toast';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 import { useEngagementReminderToast } from './useEngagementReminderToast';
+import { __resetActionQueue } from './useActionQueue';
 
 function Harness() {
   useEngagementReminderToast();
@@ -22,10 +25,14 @@ describe('useEngagementReminderToast', () => {
   beforeEach(() => {
     sessionStorage.clear();
     vi.clearAllMocks();
-    mock.getDailyActions.mockResolvedValue({
-      today: '2026-08-24',
-      actions: [{
-        id: 'daily-post',
+    __resetActionQueue();
+    mock.claimReviewQueueDelivery.mockResolvedValue({ claimed: true, generation: 0 });
+    mock.getReviewQueue.mockResolvedValue({
+      partial: false,
+      items: [{
+        id: 'product:daily-post',
+        source: 'product',
+        occurrence: '2026-08-24',
         type: 'post_engagement',
         title: 'Daily POST is waiting',
         detail: 'No POST activity today.',
@@ -46,7 +53,7 @@ describe('useEngagementReminderToast', () => {
     render(<MemoryRouter><Harness /><Toaster /></MemoryRouter>);
 
     const link = await screen.findByRole('link', { name: 'Open action' });
-    expect(link).toHaveAttribute('href', '/post/launcher');
+    expect(link).toHaveAttribute('href', '/review/product%3Adaily-post?view=today');
     expect(screen.getByRole('button', { name: 'Disable on this instance' })).toBeInTheDocument();
   });
 

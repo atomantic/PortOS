@@ -7,7 +7,7 @@
  * drifting while leaving checkRunner focused on conducting checks.
  */
 
-import { createHash } from 'crypto';
+import { contentHash as sha256 } from '../contentHash.js';
 import {
   EDITORIAL_SOURCES,
   comicLetteringIssues,
@@ -42,7 +42,6 @@ import { getSeriesCanon } from '../seriesCanon.js';
 // load-time guard below ensures a newly declared source cannot silently hash as
 // empty.
 const HASH_SEP = '\u0000';
-const sha256 = (text) => createHash('sha256').update(text || '').digest('hex');
 const SOURCE_RESOLVERS = {
   manuscript: ({ manuscript }) => manuscript || '',
   canon: ({ canon }) => canonicalStringify(canon ?? null),

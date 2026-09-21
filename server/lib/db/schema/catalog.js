@@ -223,7 +223,9 @@ export const catalogDdl = [
     // here, so federation ships the key and the receiver matches its own
     // library (missing → metadata-missing integrity surface). `kind` is an
     // app-layer enum (MEDIA_KINDS in catalogTypes.js), not a DB CHECK. Soft-
-    // delete from day one so detaches tombstone + propagate. Mirrors the
+    // delete from day one so detaches tombstone + propagate. `metadata` stores
+    // bounded generation provenance (prompt, negative prompt, sampler, etc.)
+    // when an image carries it. Mirrors the
     // catalog_ingredient_media block in init-db.sql (parity is asserted by
     // db.ddlParity.test.js).
     `CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
@@ -232,12 +234,16 @@ export const catalogDdl = [
       kind VARCHAR(32) NOT NULL,
       role VARCHAR(64),
       caption TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       deleted BOOLEAN DEFAULT FALSE,
       deleted_at TIMESTAMPTZ,
       sync_sequence BIGSERIAL,
       PRIMARY KEY (ingredient_id, media_key, kind)
     )`,
+    // CREATE IF NOT EXISTS does not add columns to existing installs, so keep
+    // the provenance upgrade idempotent for rows created before this field.
+    `ALTER TABLE catalog_ingredient_media ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_ingredient ON catalog_ingredient_media (ingredient_id)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_key ON catalog_ingredient_media (media_key)`,
     `CREATE INDEX IF NOT EXISTS idx_catalog_ing_media_sync_seq ON catalog_ingredient_media (sync_sequence)`,
@@ -359,15 +365,17 @@ export const catalogDdl = [
        EXECUTE FUNCTION update_catalog_relation_sync_seq()`,
 
     // Media UPDATE bumps sync_sequence on soft-delete/revival OR a mutable
-    // field (role/caption) change so a peer sees the edit/tombstone next pull.
-    // Mirrors the relation trigger but also watches the editable metadata.
+    // field (role/caption/metadata) change so a peer sees the edit/tombstone
+    // next pull. Mirrors the relation trigger but also watches the editable
+    // metadata.
     `CREATE OR REPLACE FUNCTION update_catalog_media_sync_seq()
      RETURNS TRIGGER AS $$
      BEGIN
        IF NEW.deleted IS DISTINCT FROM OLD.deleted
           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
           OR NEW.role IS DISTINCT FROM OLD.role
-          OR NEW.caption IS DISTINCT FROM OLD.caption THEN
+          OR NEW.caption IS DISTINCT FROM OLD.caption
+          OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
          NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
        END IF;
        RETURN NEW;

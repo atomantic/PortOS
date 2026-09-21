@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 
@@ -36,6 +36,8 @@ const api = vi.hoisted(() => ({
   getProviderCatalog: vi.fn().mockResolvedValue({
     harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {}, presets: [],
   }),
+  getProviderBootstraps: vi.fn().mockResolvedValue({ bootstraps: {} }),
+  getHarnesses: vi.fn().mockResolvedValue({ harnesses: [] }),
   createProviderPreset: vi.fn(),
   // The Services view lists instances; empty by default.
   getProviderServices: vi.fn().mockResolvedValue({ services: [] }),
@@ -90,7 +92,7 @@ import { PROVIDER_CARD_STATE } from '../utils/providers';
 // mount the real route table rather than a bare page — clicking Edit
 // navigates, and a deep link can be rendered directly. The three views are
 // route prefixes of the same page (#7567).
-const renderPage = (initialPath = '/ai/presets') => render(
+const mountPage = (initialPath = '/ai/presets') => render(
   <MemoryRouter initialEntries={[initialPath]}>
     <Routes>
       <Route path="/ai/presets" element={<AIProviders />} />
@@ -106,6 +108,12 @@ const renderPage = (initialPath = '/ai/presets') => render(
     </Routes>
   </MemoryRouter>
 );
+
+const renderPage = async (initialPath) => {
+  const result = mountPage(initialPath);
+  await act(async () => {});
+  return result;
+};
 
 // The editor opens on the Connection tab; every other field lives behind a tab
 // switch (the drawer renders only the active panel).
@@ -155,7 +163,7 @@ describe('AIProviders page load error handling', () => {
       { id: 'example-api', name: 'Example API', type: 'api', endpoint: 'http://192.0.2.10:11434', enabled: true, models: ['remote-model'] },
     ] });
     api.getProviderRuntimes.mockResolvedValue({ runtimes: { opencode: missingRuntime } });
-    renderPage();
+    await renderPage();
     expect(await screen.findByRole('heading', { name: 'Example', exact: true })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Example API' })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /Install OpenCode CLI/ })).toHaveLength(1);
@@ -176,7 +184,7 @@ describe('AIProviders page load error handling', () => {
       { id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', enabled: true, textTransportEnabled: true, executionModes },
       { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', enabled: true, textTransportEnabled: false, executionModes },
     ] });
-    renderPage();
+    await renderPage();
     await findEnabledByRole('button', { name: 'Set CLI default' });
     expect(screen.getByRole('button', { name: 'Set TUI default' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Set TUI default' }));
@@ -190,13 +198,47 @@ describe('AIProviders page load error handling', () => {
     });
     api.getProviderRuntimes.mockResolvedValue({ runtimes: { opencode: missingRuntime } });
 
-    renderPage();
+    await renderPage();
 
     const install = await screen.findByRole('button', { name: /Install OpenCode CLI/ });
     expect(install).toBeEnabled();
     fireEvent.click(install);
     const modal = screen.getByTestId('runtime-install-modal');
     expect(modal).toHaveAttribute('data-runtime', 'opencode');
+    expect(modal).toHaveAttribute('data-stream-method', 'POST');
+    expect(modal).toHaveAttribute('data-flush-ms', '250');
+  });
+
+  it('opens the shared installer when a Harnesses card starts a CLI install', async () => {
+    __resetProviderCatalogCache();
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    api.getProviderRuntimes.mockResolvedValue({
+      runtimes: {
+        pi: {
+          id: 'pi',
+          label: 'Pi Coding Agent CLI',
+          vendor: 'pi',
+          installed: false,
+          installable: true,
+          method: 'npm',
+        },
+      },
+    });
+    api.getProviderCatalog.mockResolvedValue({
+      harnesses: [{ id: 'pi', label: 'Pi', modes: ['cli', 'tui'], enabled: false, source: 'setting', detected: false }],
+      services: [],
+      bootstraps: [],
+      compatibility: {},
+      effortLevels: {},
+      effortLevelsByModel: {},
+      presets: [],
+    });
+
+    await renderPage('/ai/harnesses');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Install Pi Coding Agent CLI' }));
+    const modal = await screen.findByTestId('runtime-install-modal');
+    expect(modal).toHaveAttribute('data-runtime', 'pi');
     expect(modal).toHaveAttribute('data-stream-method', 'POST');
     expect(modal).toHaveAttribute('data-flush-ms', '250');
   });
@@ -212,7 +254,7 @@ describe('AIProviders page load error handling', () => {
       runtimes: { codex: { ...missingRuntime, id: 'codex', label: 'Codex CLI', command: 'codex' } },
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByRole('button', { name: /Install Codex CLI/ })).toBeEnabled();
   });
@@ -224,7 +266,7 @@ describe('AIProviders page load error handling', () => {
     });
     api.getProviderRuntimes.mockResolvedValue({ runtimes: { opencode: { ...missingRuntime, installed: true } } });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText(/installed/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Install OpenCode CLI/ })).not.toBeInTheDocument();
@@ -245,7 +287,7 @@ describe('AIProviders page load error handling', () => {
       activeProvider: 'grok-tui',
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('Grok Build TUI')).toBeInTheDocument();
     expect(screen.queryByText(/uploads your entire working repo/i)).not.toBeInTheDocument();
@@ -272,7 +314,7 @@ describe('AIProviders page load error handling', () => {
       },
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText(/npm is not available on PortOS's PATH/)).toBeInTheDocument();
     // No dead Install button — the vendor's own instructions are the way out.
@@ -291,7 +333,7 @@ describe('AIProviders page load error handling', () => {
     });
     localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: false } };
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByRole('link', { name: /Install LM Studio/ })).toHaveAttribute('href', '/models/llms');
   });
@@ -304,7 +346,7 @@ describe('AIProviders page load error handling', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('LM Studio')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Install LM Studio/ })).not.toBeInTheDocument();
@@ -317,7 +359,7 @@ describe('AIProviders page load error handling', () => {
     });
     api.getProviderRuntimes.mockResolvedValue({ runtimes: { opencode: missingRuntime } });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('Custom CLI')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Install/ })).not.toBeInTheDocument();
@@ -331,7 +373,7 @@ describe('AIProviders page load error handling', () => {
       activeProvider: 'p1',
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('OpenAI')).toBeInTheDocument();
     expect(screen.queryByText('No presets configured')).not.toBeInTheDocument();
@@ -346,7 +388,7 @@ describe('AIProviders page load error handling', () => {
   it('uses the Models child navigation after Providers moves out of Settings', async () => {
     api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByTestId('models-tabs-header')).toHaveAttribute('data-active-tab', 'providers');
   });
@@ -362,7 +404,7 @@ describe('AIProviders page load error handling', () => {
       activeProvider: 'p1',
     });
 
-    renderPage();
+    await renderPage();
 
     await screen.findByText('OpenAI');
     const headings = screen.getAllByRole('heading', { level: 1 });
@@ -385,7 +427,7 @@ describe('AIProviders page load error handling', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('AWS_BEARER_TOKEN_BEDROCK=(not set)')).toBeInTheDocument();
     expect(screen.queryByText('AWS_BEARER_TOKEN_BEDROCK=***')).not.toBeInTheDocument();
@@ -397,7 +439,7 @@ describe('AIProviders page load error handling', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('No presets configured')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
@@ -408,7 +450,7 @@ describe('AIProviders page load error handling', () => {
   it('renders Banner with Retry button when api.getProviders rejects and does not show EmptyState', async () => {
     api.getProviders.mockRejectedValue(new Error('Network error'));
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('Failed to load AI providers')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
@@ -425,7 +467,7 @@ describe('AIProviders page load error handling', () => {
         activeProvider: 'p1',
       });
 
-    renderPage();
+    await renderPage();
 
     const retryBtn = await screen.findByRole('button', { name: 'Retry' });
     fireEvent.click(retryBtn);
@@ -468,7 +510,7 @@ describe('local-daemon readiness on the provider card', () => {
       },
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText(/llama\.cpp setup incomplete/)).toBeInTheDocument();
     expect(screen.getByText(/Install llama\.cpp from Models/)).toBeInTheDocument();
@@ -496,7 +538,7 @@ describe('local-daemon readiness on the provider card', () => {
       },
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: /Download the default model & start MTPLX/ }));
     const modal = await screen.findByTestId('runtime-install-modal');
@@ -545,7 +587,7 @@ describe('local-daemon readiness on the provider card', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: /Use dflash as default/ }));
     await waitFor(() => {
@@ -556,7 +598,7 @@ describe('local-daemon readiness on the provider card', () => {
   it('renders no checklist for a provider the server reports nothing about', async () => {
     api.getProviderReadiness.mockResolvedValue({ readiness: {} });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('OpenCode llama TUI')).toBeInTheDocument();
     expect(screen.queryByText(/setup incomplete/)).not.toBeInTheDocument();
@@ -592,7 +634,7 @@ describe('an API provider pointed at another machine', () => {
   });
 
   it('offers no local install for it, and does not demand an API key', async () => {
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('LM Studio peer')).toBeInTheDocument();
     expect(screen.queryByText(/LM Studio not installed/)).not.toBeInTheDocument();
@@ -616,7 +658,7 @@ describe('an API provider pointed at another machine', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText(/LM Studio not installed/)).toBeInTheDocument();
   });
@@ -648,7 +690,7 @@ describe('fleet LLM setup walkthrough', () => {
   });
 
   it('creates an OpenCode provider whose actual baseURL points at the selected peer', async () => {
-    renderPage('/ai/fleet');
+    await renderPage('/ai/fleet');
 
     expect(await screen.findByRole('heading', { name: 'Model host setup' })).toBeInTheDocument();
 
@@ -677,7 +719,7 @@ describe('fleet LLM setup walkthrough', () => {
   });
 
   it('creates a direct API provider without an inert OpenCode config', async () => {
-    renderPage('/ai/fleet?fleetStep=client');
+    await renderPage('/ai/fleet?fleetStep=client');
 
     fireEvent.change(await screen.findByLabelText('Known PortOS peer'), { target: { value: 'peer-example' } });
     fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'api' } });
@@ -718,7 +760,7 @@ describe('handleAddSample error handling', () => {
   it('resets addingSample state and re-enables button if api.createProvider rejects', async () => {
     api.createProvider.mockRejectedValue(new Error('Failed to create provider'));
 
-    renderPage();
+    await renderPage();
 
     await clickLoadSamples();
 
@@ -759,7 +801,7 @@ describe('handleAddAllSamples partial failure handling', () => {
       .mockRejectedValueOnce(new Error('Creation failed'))
       .mockResolvedValueOnce({ id: 'sample-3' });
 
-    renderPage();
+    await renderPage();
 
     await clickLoadSamples();
 
@@ -794,7 +836,7 @@ describe('CoS Agent Runner allowlist warning', () => {
       runnerAllowedCommands: ['claude', 'codex'],
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('NO AGENT RUNNER')).toBeInTheDocument();
   });
@@ -806,7 +848,7 @@ describe('CoS Agent Runner allowlist warning', () => {
       runnerAllowedCommands: ['claude', 'codex'],
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('Custom Agent')).toBeInTheDocument();
     expect(screen.queryByText('NO AGENT RUNNER')).not.toBeInTheDocument();
@@ -820,7 +862,7 @@ describe('CoS Agent Runner allowlist warning', () => {
       activeProvider: 'p1',
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('Custom Agent')).toBeInTheDocument();
     expect(screen.queryByText('NO AGENT RUNNER')).not.toBeInTheDocument();
@@ -833,7 +875,7 @@ describe('CoS Agent Runner allowlist warning', () => {
       runnerAllowedCommands: ['claude', 'codex'],
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
 
@@ -871,7 +913,7 @@ describe('provider reasoning defaults', () => {
       activeProvider: 'codex',
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await openEditorTab('Models');
@@ -910,7 +952,7 @@ describe('provider reasoning defaults', () => {
       activeProvider: 'opencode-ollama',
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await openEditorTab('Models');
@@ -952,7 +994,7 @@ describe('provider reasoning defaults', () => {
       activeProvider: 'opencode-llama-tui',
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await openEditorTab('Models');
@@ -990,7 +1032,7 @@ describe('provider reasoning defaults', () => {
       activeProvider: 'opencode-llama-tui',
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await openEditorTab('Generation');
@@ -1023,7 +1065,7 @@ describe('provider reasoning defaults', () => {
       activeProvider: 'claude-ollama-tui',
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await openEditorTab('Generation');
@@ -1057,7 +1099,7 @@ describe('provider reasoning defaults', () => {
       activeProvider: 'anthropic',
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await openEditorTab('Generation');
@@ -1095,7 +1137,7 @@ describe('Codex subscription text read-risk gate', () => {
   });
 
   it('requires the read-risk acknowledgement before enabling generic text calls', async () => {
-    renderPage('/ai/presets/codex');
+    await renderPage('/ai/presets/codex');
 
     const acknowledgement = await screen.findByLabelText(/Codex may read local files/i);
     const enable = screen.getByLabelText(/serve generic text calls/i);
@@ -1130,7 +1172,7 @@ describe('Codex subscription text read-risk gate', () => {
       }],
       activeProvider: 'codex',
     });
-    renderPage('/ai/presets/codex');
+    await renderPage('/ai/presets/codex');
 
     const acknowledgement = await screen.findByLabelText(/Codex may read local files/i);
     const enable = screen.getByLabelText(/serve generic text calls/i);
@@ -1162,14 +1204,14 @@ describe('provider editor deep links', () => {
   });
 
   it('opens the editor for the provider named in the URL', async () => {
-    renderPage('/ai/presets/codex');
+    await renderPage('/ai/presets/codex');
 
     expect(await screen.findByRole('heading', { name: 'Edit Provider' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('Codex')).toBeInTheDocument();
   });
 
   it('opens the create form on /ai/new', async () => {
-    renderPage('/ai/presets/new');
+    await renderPage('/ai/presets/new');
 
     expect(await screen.findByRole('heading', { name: 'Add Provider' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create' })).toBeInTheDocument();
@@ -1178,7 +1220,7 @@ describe('provider editor deep links', () => {
   // A deleted/hand-edited id must bounce back to the list rather than leaving a
   // blank editor open over it.
   it('sends an unknown provider id back to the list', async () => {
-    renderPage('/ai/presets/does-not-exist');
+    await renderPage('/ai/presets/does-not-exist');
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No provider with id "does-not-exist"'));
     expect(screen.queryByRole('heading', { name: 'Edit Provider' })).toBeNull();
@@ -1187,14 +1229,14 @@ describe('provider editor deep links', () => {
   // The id comes off the URL, so a prototype key must not resolve to
   // Object.prototype and open the editor on it.
   it('does not open the editor for a prototype-chain id', async () => {
-    renderPage('/ai/presets/__proto__');
+    await renderPage('/ai/presets/__proto__');
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No provider with id "__proto__"'));
     expect(screen.queryByRole('heading', { name: 'Edit Provider' })).toBeNull();
   });
 
   it('honors the ?providerTab deep link', async () => {
-    renderPage('/ai/presets/codex?providerTab=models');
+    await renderPage('/ai/presets/codex?providerTab=models');
 
     expect(await screen.findByLabelText('Default Model')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Models' })).toHaveAttribute('aria-selected', 'true');
@@ -1203,7 +1245,7 @@ describe('provider editor deep links', () => {
   // Only the active tab renders, so the browser can't run its own required-field
   // check for a Save triggered from another tab.
   it('sends the user back to the field a cross-tab Save left empty', async () => {
-    renderPage('/ai/presets/codex');
+    await renderPage('/ai/presets/codex');
 
     fireEvent.change(await screen.findByDisplayValue('Codex'), { target: { value: '  ' } });
     await openEditorTab('Models');
@@ -1223,7 +1265,7 @@ describe('provider editor deep links', () => {
       activeProvider: 'new',
     });
 
-    renderPage('/ai/edit/new');
+    await renderPage('/ai/edit/new');
 
     expect(await screen.findByRole('heading', { name: 'Edit Provider' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('New')).toBeInTheDocument();
@@ -1240,7 +1282,7 @@ describe('provider editor deep links', () => {
       activeProvider: 'codex',
     });
 
-    renderPage('/ai/presets/codex?providerTab=models');
+    await renderPage('/ai/presets/codex?providerTab=models');
 
     await screen.findByLabelText('Default Model');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -1251,7 +1293,7 @@ describe('provider editor deep links', () => {
   });
 
   it('closes back to the list', async () => {
-    renderPage('/ai/presets/codex');
+    await renderPage('/ai/presets/codex');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
 
@@ -1270,7 +1312,7 @@ describe('Local num_ctx field', () => {
 
   const openEditorFor = async (provider) => {
     api.getProviders.mockResolvedValue({ providers: [provider], activeProvider: provider.id });
-    renderPage();
+    await renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
   };
 
@@ -1347,7 +1389,7 @@ describe('OpenCode OrcaRouter key hint', () => {
       activeProvider: 'opencode-orcarouter',
      });
 
-    renderPage();
+    await renderPage();
 
     const hint = await screen.findByText(/API key is inherited from/);
     expect(hint).toBeInTheDocument();
@@ -1372,7 +1414,7 @@ describe('OpenCode OrcaRouter key hint', () => {
       activeProvider: 'opencode-orcarouter',
     });
 
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit OrcaRouter API provider' }));
 
@@ -1399,7 +1441,7 @@ describe('OpenCode OrcaRouter key hint', () => {
       activeProvider: 'opencode-orcarouter-tui',
      });
 
-    renderPage();
+    await renderPage();
 
     // Configured providers state the fact and keep the link; the "where does
     // the key go?" explanation is only shown while it is still unanswered.
@@ -1417,7 +1459,7 @@ describe('OpenCode OrcaRouter key hint', () => {
       activeProvider: 'orca',
      });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('My Orca')).toBeInTheDocument();
     expect(screen.queryByText(/API key is inherited from/)).not.toBeInTheDocument();
@@ -1443,7 +1485,7 @@ describe('harness grouping', () => {
       activeProvider: 'ready',
     });
 
-    renderPage();
+    await renderPage();
 
     // Two Claude Code records share one group whatever their readiness; the
     // API record lands under the Direct API harness.
@@ -1474,7 +1516,7 @@ describe('harness grouping', () => {
     });
     api.getProviderRuntimes.mockResolvedValue({ runtimes: { opencode: missingRuntime } });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByRole('button', { name: new RegExp('^OpenCode') })).toBeInTheDocument();
     expect(screen.getByText('DISABLED')).toBeInTheDocument();
@@ -1502,7 +1544,7 @@ describe('harness grouping', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('NEEDS SETUP')).toBeInTheDocument();
   });
@@ -1516,7 +1558,7 @@ describe('harness grouping', () => {
       providers: { claude: { available: false, reason: 'usage-limit', message: 'Usage limit reached' } },
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('BENCHED · usage-limit')).toBeInTheDocument();
     // A benched provider still counts as runnable — nothing is missing on it.
@@ -1543,7 +1585,7 @@ describe('harness grouping', () => {
       activeProvider: 'codex',
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('BENCHED · usage-limit')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: new RegExp('^Codex') })).toHaveTextContent('1 of 1 can run');
@@ -1556,7 +1598,7 @@ describe('harness grouping', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     const header = await screen.findByRole('button', { name: /^Claude Code/ });
     expect(screen.getByText('Switched Off')).toBeInTheDocument();
@@ -1599,7 +1641,7 @@ describe('hardware-incompatible providers', () => {
       activeProvider: 'ok',
     });
 
-    renderPage();
+    await renderPage();
 
     const claude = await screen.findByRole('button', { name: new RegExp('^Claude Code') });
     expect(claude).toHaveTextContent('1');
@@ -1624,7 +1666,7 @@ describe('hardware-incompatible providers', () => {
       activeProvider: 'ok',
     });
 
-    renderPage();
+    await renderPage();
 
     await screen.findByText('Runs Here');
     expect(screen.queryByRole('button', { name: /Unavailable on this machine/ })).not.toBeInTheDocument();
@@ -1647,7 +1689,7 @@ describe('hardware-incompatible providers', () => {
       ],
     });
 
-    renderPage();
+    await renderPage();
 
     await clickLoadSamples();
 
@@ -1672,7 +1714,7 @@ describe('hardware-incompatible providers', () => {
       }],
     });
 
-    renderPage();
+    await renderPage();
 
     await clickLoadSamples();
 
@@ -1724,7 +1766,7 @@ describe('Launch in Shell button on TUI provider cards', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     const link = await screen.findByRole('link', { name: /Launch in Shell/ });
     // By ID, never by command — sending the line would leave the provider's env
@@ -1745,7 +1787,7 @@ describe('Launch in Shell button on TUI provider cards', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     expect(await screen.findByText('Legacy TUI')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Launch in Shell/ })).not.toBeInTheDocument();
@@ -1780,7 +1822,7 @@ describe('provider card layout', () => {
       activeProvider: null,
     });
 
-    renderPage();
+    await renderPage();
 
     const deleteButton = await screen.findByRole('button', { name: 'Delete' });
     // The row that lays identity out against the actions — one level above the
@@ -1819,13 +1861,13 @@ describe('vLLM-backed TUI provider', () => {
 
   it('badges the card so the GPU-exclusive backend is visible at a glance', async () => {
     api.getProviders.mockResolvedValue({ providers: [vllmTui()], activeProvider: null });
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('vLLM / DFLASH2')).toBeInTheDocument();
   });
 
   it('offers an API Key field on a TUI provider — the container is key-gated', async () => {
     api.getProviders.mockResolvedValue({ providers: [vllmTui()], activeProvider: null });
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     const key = await screen.findByLabelText('API Key');
@@ -1843,7 +1885,7 @@ describe('vLLM-backed TUI provider', () => {
       providers: [vllmTui({ id: 'opencode-mtplx-tui', name: 'OpenCode MTPLX TUI', vllmBacked: undefined, mtplxBacked: true })],
       activeProvider: null,
     });
-    renderPage();
+    await renderPage();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await screen.findByDisplayValue('opencode');
@@ -1877,7 +1919,7 @@ describe('AIProviders orchestration profiles', () => {
 
   it('renders orchestration profiles link in the more actions menu', async () => {
     api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
-    renderPage();
+    await renderPage();
 
     await openHeaderMenu();
     const link = await screen.findByRole('menuitem', { name: 'Orchestration profiles' });
@@ -1889,7 +1931,7 @@ describe('AIProviders orchestration profiles', () => {
       providers: [{ id: 'prov-1', name: 'Prov 1', type: 'api', enabled: true, hardwareUnavailable: false }],
       activeProvider: 'prov-1',
     });
-    renderPage();
+    await renderPage();
 
     // Open runner panel
     const runBtn = await screen.findByRole('button', { name: 'Run Prompt' });
@@ -1964,7 +2006,7 @@ describe('AIProviders model refresh', () => {
       models: ['mtplx-served', 'wang-yang/Ornith-1.0-35B-MTPLX'], canRefreshModels: true,
     });
 
-    renderPage();
+    await renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Models refreshed for OpenCode MTPLX'));
@@ -1981,7 +2023,7 @@ describe('AIProviders model refresh', () => {
   it('keeps the stored catalog when the refresh is unsupported', async () => {
     api.refreshProviderModels.mockResolvedValue(null);
 
-    renderPage();
+    await renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
@@ -2002,10 +2044,12 @@ describe('AIProviders model refresh', () => {
       .mockResolvedValueOnce(mtplxProviders())
       .mockImplementationOnce(() => new Promise((resolve) => { releaseReload = resolve; }));
 
-    renderPage();
+    mountPage();
     // The first load DOES show the skeleton — there is nothing else to show, and
     // this is what keeps the assertion below from passing vacuously.
     expect(screen.getByLabelText('Loading providers')).toBeInTheDocument();
+    // This find settles the initial mount after the pending-state assertion,
+    // including the retired-model-pin child that triggered #7801.
     fireEvent.click(await screen.findByRole('button', { name: 'Disable' }));
 
     await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
@@ -2013,9 +2057,11 @@ describe('AIProviders model refresh', () => {
     // ...and the card the user just clicked is still the thing on screen.
     expect(screen.getByRole('heading', { name: 'OpenCode MTPLX' })).toBeInTheDocument();
 
-    releaseReload({
-      ...mtplxProviders(),
-      providers: mtplxProviders().providers.map(p => ({ ...p, enabled: false })),
+    await act(async () => {
+      releaseReload({
+        ...mtplxProviders(),
+        providers: mtplxProviders().providers.map(p => ({ ...p, enabled: false })),
+      });
     });
     expect(await screen.findByRole('button', { name: 'Enable' })).toBeInTheDocument();
   });
@@ -2054,7 +2100,7 @@ describe('compatibility matrix', () => {
   });
 
   it('renders the server verdict per cell: offered, blocked with its reason, or unreachable', async () => {
-    renderPage();
+    await renderPage();
     const header = await screen.findByRole('button', { name: /Compatibility matrix/ });
     await waitFor(() => expect(header).toHaveTextContent('2 combinations offered'));
     fireEvent.click(header);
@@ -2070,7 +2116,7 @@ describe('compatibility matrix', () => {
 
   it('opens the compose flow on the clicked pair with only "Save as preset" as its exit, then lands on the new preset', async () => {
     api.createProviderPreset.mockResolvedValue({ id: 'claude-cli-ollama', name: 'Claude Code · Ollama' });
-    renderPage();
+    await renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /Compatibility matrix/ }));
     fireEvent.click(screen.getByRole('button', { name: 'New preset: Claude Code on Ollama' }));
 
@@ -2101,7 +2147,7 @@ describe('page views', () => {
   });
 
   it('offers the three views as routed tabs and swaps the header action per view', async () => {
-    renderPage('/ai/services');
+    await renderPage('/ai/services');
     expect(await screen.findByRole('button', { name: 'Add Service' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run Prompt' })).not.toBeInTheDocument();
     const tabs = screen.getByRole('tablist', { name: 'AI provider views' });
@@ -2149,7 +2195,7 @@ describe('default provider helper and card highlight', () => {
       activeProvider: 'claude-tui',
     });
 
-    renderPage();
+    await renderPage();
 
     const helper = await screen.findByTestId('default-provider-helper');
     expect(helper).toBeInTheDocument();
@@ -2176,4 +2222,3 @@ describe('default provider helper and card highlight', () => {
     expect(scrollSpy).toHaveBeenCalled();
   });
 });
-

@@ -41,6 +41,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 });
 
 import { buildReviewLoopFollowUpSection } from './reviewLifecycle.js';
+import { CLI_REVIEW_OUTCOME_GUIDE } from './reviewerOutcome.js';
 
 const SNAP = (name) => `./__snapshots__/reviewLoopMatrix/${name}.txt`;
 
@@ -137,7 +138,8 @@ const PHASES = {
 // prompt still hands a Windows agent the Windows path its shell needs.
 const BRIDGE_IN_SNAPSHOTS = '/portos/server/scripts/run-local-code-review.mjs';
 const RENDERED_BRIDGE = shellQuote(join('/portos', 'server/scripts/run-local-code-review.mjs'));
-const stable = (section) => section.split(RENDERED_BRIDGE).join(BRIDGE_IN_SNAPSHOTS);
+const stable = (section) => section.split(RENDERED_BRIDGE).join(BRIDGE_IN_SNAPSHOTS)
+  .split(CLI_REVIEW_OUTCOME_GUIDE).join('<portos-cli-review-outcome-guide>');
 
 const render = ({ phase, forge, leaveOpen, verbose }) => stable(buildReviewLoopFollowUpSection(
   fixture({ reviewLoopPRHost: FORGES[forge].host, reviewLoopLeaveOpen: leaveOpen }),

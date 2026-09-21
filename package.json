@@ -1,11 +1,12 @@
 {
   "name": "portos",
-  "version": "2.72.0",
+  "version": "2.73.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
   "license": "MIT",
   "type": "module",
+
   "engines": {
     "node": ">=22.12.0",
     "npm": ">=11.11.0"
@@ -44,6 +45,7 @@
     "setup:hooks": "bash scripts/setup-git-hooks.sh",
     "update": "node -e \"const{spawnSync:s}=require('child_process');const w=process.platform==='win32';const r=s(w?'powershell':'bash',w?['-NoProfile','-ExecutionPolicy','Bypass','-File','update.ps1']:['update.sh'],{stdio:'inherit'});process.exit(r.status??1)\"",
     "test": "npm test --prefix server && npm test --prefix client",
+    "pregate": "node scripts/pregate.js",
     "quality:snapshot": "node scripts/publish-quality-snapshot.js",
     "scan:hidden-content": "node scripts/scan-diff-hidden-content.js",
     "eidoverse:assay": "node scripts/eidoverse-resilience-assay.js",

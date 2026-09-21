@@ -435,7 +435,10 @@ export default function VideoGen() {
 
   const handleDeleteHistory = useCallback(async (item) => {
     const raw = item?.raw || item;
-    await deleteVideoHistoryItem(raw.id, { silent: true }).catch((err) => toast.error(err.message || 'Delete failed'));
+    const deleted = await deleteVideoHistoryItem(raw.id, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(err.message || 'Delete failed'); return false; });
+    if (!deleted) return;
     setHistory((h) => h.filter((v) => v.id !== raw.id));
   }, []);
   const handlePromptSaved = useCallback((item, prompt) => {
@@ -1095,10 +1098,10 @@ export default function VideoGen() {
             title={status.pythonPath || 'Local Python'}
           >
             {status.connected ? (
-              <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.pythonVersion ? `Python ${status.pythonVersion}` : 'Python'}</>
+              <><span className="w-2 h-2 rounded-full bg-port-success shrink-0" /> {status.pythonVersion ? `Python ${status.pythonVersion}` : 'Python'}</>
             ) : (
               <>
-                <AlertTriangle className="w-3 h-3" />
+                <AlertTriangle className="w-3 h-3 shrink-0" />
                 {status.reason || 'Local Python not configured — set one up below'}
               </>
             )}
@@ -1649,7 +1652,7 @@ export default function VideoGen() {
                   onChange={(e) => handleModelChange(e.target.value)}
                   loading={modelsLoading}
                 />
-                <ModelWorkflowHelp model={currentModel} models={visibleModels} onResolutionChange={handleResolutionChange} />
+                <ModelWorkflowHelp model={currentModel} mode={mode} models={models} onResolutionChange={handleResolutionChange} />
                 {remixModelFallback && (
                   <p className="mt-1 text-[11px] text-port-accent leading-snug" role="status">
                     {remixModelFallback.sourceName} {remixModelFallback.samplerLocked && remixModelFallback.negativePromptUnsupported

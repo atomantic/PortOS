@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -47,12 +47,55 @@ beforeEach(() => {
 
 // Render and wait for the loading spinner to clear (the Save button only
 // appears post-load).
-const renderTab = async () => {
+const renderTab = async ({ openExclusions = true, openSnapshots = true } = {}) => {
   render(<BackupTab />);
   await waitFor(() => expect(screen.getByRole('button', { name: /^Save$/i })).toBeTruthy());
+  if (openExclusions) {
+    fireEvent.click(screen.getByRole('button', { name: /^Exclusions/i }));
+  }
+  if (openSnapshots) {
+    fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+  }
 };
 
 describe('BackupTab', () => {
+  describe('task-first workspace', () => {
+    it('keeps the saved schedule summary separate from an unsaved draft', async () => {
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      const savedSchedule = screen.getByRole('heading', { name: 'Saved schedule' }).parentElement;
+      expect(within(savedSchedule).getByText('Scheduled backups are off')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('switch', { name: 'Scheduled backups' }));
+
+      expect(within(savedSchedule).getByText('Scheduled backups are off')).toBeInTheDocument();
+    });
+
+    it('keeps exclusions and snapshot history behind named disclosures', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-hidden' }]);
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      const exclusions = screen.getByRole('button', { name: /^Exclusions/i });
+      const snapshots = screen.getByRole('button', { name: /^Snapshot history/i });
+      expect(exclusions).toHaveAttribute('aria-expanded', 'false');
+      expect(snapshots).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByLabelText(/Additional Exclude Paths/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('snap-hidden')).not.toBeInTheDocument();
+
+      const content = screen.getByTestId('backup-settings-workspace').textContent;
+      expect(content.indexOf('Backup health')).toBeLessThan(content.indexOf('Run Backup Now'));
+      expect(content.indexOf('Run Backup Now')).toBeLessThan(content.indexOf('Exclusions'));
+      expect(content.indexOf('Exclusions')).toBeLessThan(content.indexOf('Snapshot history'));
+      expect(screen.getByRole('button', { name: /^Save$/i }).parentElement).toHaveClass('sticky', 'top-0');
+      expect(screen.getByRole('button', { name: /^Save$/i }).parentElement).not.toHaveClass('bottom-0');
+
+      fireEvent.click(exclusions);
+      expect(screen.getByLabelText(/Additional Exclude Paths/i)).toBeInTheDocument();
+      fireEvent.click(snapshots);
+      expect(await screen.findByText('snap-hidden')).toBeInTheDocument();
+    });
+  });
+
   describe('settings save flow', () => {
     it('persists the destination path and toasts success', async () => {
       updateSettings.mockResolvedValue({});
@@ -739,6 +782,68 @@ describe('BackupTab', () => {
       render(<BackupTab />);
       await waitFor(() => expect(screen.getByText(/Failed to load backup settings/i)).toBeTruthy());
       expect(screen.queryByRole('button', { name: /^Save$/i })).toBeNull();
+    });
+
+    it('refuses to render the form when cron is not a string', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/example-backups', enabled: true, cronExpression: 2 },
+      });
+      render(<BackupTab />);
+      await waitFor(() => expect(screen.getByText(/Failed to load backup settings/i)).toBeTruthy());
+      expect(screen.queryByRole('button', { name: /^Save$/i })).toBeNull();
+    });
+  });
+
+  describe('status and snapshot load failures', () => {
+    it('recovers health and snapshots after a successful backup while waiting for the exclusion catalog', async () => {
+      let finishStatusRefresh;
+      getBackupStatus.mockRejectedValueOnce(new Error('offline'))
+        .mockImplementationOnce(() => new Promise(resolve => { finishStatusRefresh = resolve; }));
+      getBackupSnapshots.mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValueOnce([{ id: 'snap-recovered' }]);
+      triggerBackup.mockResolvedValue({ status: 'ok', filesChanged: 1, pgBackup: { status: 'ok', sizeBytes: 1024, tableCount: 7 } });
+      await renderTab();
+
+      expect(screen.getByText(/Backup status unavailable/i)).toBeInTheDocument();
+      expect(screen.getByText(/Snapshot history is unavailable/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+
+      expect(await screen.findByText('snap-recovered')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Restore DB/i })).toBeEnabled();
+      expect(screen.getByText(/7 tables/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Backup status unavailable/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Snapshot history is unavailable/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/Backup exclusion details are unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByLabelText(/Additional Exclude Paths/i)).not.toBeInTheDocument();
+
+      await act(async () => finishStatusRefresh({ defaultExcludes: [{ path: '/example-cache/', reason: 'Generated cache', overridable: true }] }));
+
+      expect(screen.queryByText(/Backup exclusion details are unavailable/i)).not.toBeInTheDocument();
+      expect(screen.getByLabelText(/Additional Exclude Paths/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Default exclusions/i }));
+      expect(screen.getByRole('switch', { name: 'Disable default exclusion /example-cache/' })).toBeInTheDocument();
+    });
+
+    it('shows unavailable backup status instead of an empty exclusion state', async () => {
+      getBackupStatus.mockRejectedValue(new Error('offline'));
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      expect(screen.getByText(/Backup status unavailable — reload to retry/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Exclusions/i })).toHaveTextContent('Unavailable');
+
+      fireEvent.click(screen.getByRole('button', { name: /^Exclusions/i }));
+      expect(screen.getByText(/Backup exclusion details are unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByText(/0 active patterns/i)).not.toBeInTheDocument();
+    });
+
+    it('shows unavailable snapshot history instead of an empty list', async () => {
+      getBackupSnapshots.mockRejectedValue(new Error('offline'));
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      expect(screen.getByRole('button', { name: /^Snapshot history/i })).toHaveTextContent('Unavailable');
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      expect(screen.getByText(/Snapshot history is unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByText(/No snapshots yet/i)).not.toBeInTheDocument();
     });
   });
 });

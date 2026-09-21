@@ -35,6 +35,8 @@ export const PRIORITY_LEVELS = {
   CRITICAL: 'critical'
 };
 
+const loadActionAdapter = () => import('./reviewActionAdapters.js');
+
 /**
  * Ensure data directory exists
  */
@@ -74,6 +76,7 @@ async function saveNotifications(data) {
 export async function getNotifications(options = {}) {
   const data = await loadNotifications();
   let notifications = [...data.notifications];
+  if (!options.includeHidden) notifications = notifications.filter(n => n.historyHidden !== true);
 
   // Filter by type
   if (options.type) {
@@ -101,7 +104,7 @@ export async function getNotifications(options = {}) {
  */
 export async function getUnreadCount() {
   const data = await loadNotifications();
-  return data.notifications.filter(n => !n.read).length;
+  return data.notifications.filter(n => !n.read && n.historyHidden !== true).length;
 }
 
 /**
@@ -116,6 +119,7 @@ export async function getCountsByType() {
   };
 
   for (const n of data.notifications) {
+    if (n.historyHidden === true) continue;
     counts.total++;
     if (!n.read) counts.unread++;
     counts.byType[n.type] = (counts.byType[n.type] || 0) + 1;
@@ -129,6 +133,7 @@ export async function getCountsByType() {
  */
 export async function addNotification(notification) {
   return withLock(async () => {
+    const { adaptNotification } = await loadActionAdapter();
     const data = await loadNotifications();
 
     const newNotification = {
@@ -144,12 +149,20 @@ export async function addNotification(notification) {
       read: false,
       metadata: notification.metadata || {}
     };
+    const action = adaptNotification(newNotification);
+    if (action) newNotification.metadata = { ...newNotification.metadata, actionId: action.id };
 
     data.notifications.push(newNotification);
 
-    // Keep only the most recent 500 notifications
+    // Bound event history without dropping an unresolved source obligation.
     if (data.notifications.length > 500) {
-      data.notifications = data.notifications.slice(-500);
+      const recentIds = new Set(data.notifications.filter(n => !n.historyHidden).slice(-500).map(n => n.id));
+      data.notifications = data.notifications.filter(n => {
+        if (recentIds.has(n.id)) return true;
+        if (!adaptNotification(n)) return false;
+        n.historyHidden = true;
+        return true;
+      });
     }
 
     await saveNotifications(data);
@@ -167,6 +180,7 @@ export async function addNotification(notification) {
  */
 export async function removeNotification(id) {
   return withLock(async () => {
+    const { adaptNotification } = await loadActionAdapter();
     const data = await loadNotifications();
     const index = data.notifications.findIndex(n => n.id === id);
 
@@ -174,7 +188,9 @@ export async function removeNotification(id) {
       return { success: false, error: 'Notification not found' };
     }
 
-    const removed = data.notifications.splice(index, 1)[0];
+    const removed = data.notifications[index];
+    if (adaptNotification(removed)) removed.historyHidden = true;
+    else data.notifications.splice(index, 1);
     await saveNotifications(data);
 
     console.log(`🔔 Notification removed: ${id}`);
@@ -244,7 +260,7 @@ export async function markAllAsRead() {
     let updated = 0;
 
     for (const notification of data.notifications) {
-      if (!notification.read) {
+      if (!notification.read && !notification.historyHidden) {
         notification.read = true;
         updated++;
       }
@@ -264,10 +280,15 @@ export async function markAllAsRead() {
  */
 export async function clearAll() {
   return withLock(async () => {
+    const { adaptNotification } = await loadActionAdapter();
     const data = await loadNotifications();
-    const count = data.notifications.length;
+    const count = data.notifications.filter(n => !n.historyHidden).length;
 
-    data.notifications = [];
+    data.notifications = data.notifications.filter(n => {
+      if (!adaptNotification(n)) return false;
+      n.historyHidden = true;
+      return true;
+    });
     await saveNotifications(data);
 
     notificationEvents.emit('cleared');

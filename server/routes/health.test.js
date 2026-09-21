@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import os from 'os';
+import { checkHealth } from '../lib/db.js';
+import { getMemoryStats } from '../lib/memoryStats.js';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
@@ -88,6 +90,12 @@ vi.mock('../services/github.js', () => ({
     status: 'ok', ok: true, detail: null, remedy: null, checkedAt: '2026-01-01T00:00:00.000Z'
   })
 }));
+
+const codeReviewMock = vi.hoisted(() => ({
+  getReviewerConfigHealth: vi.fn().mockResolvedValue({ status: 'ok', configFaults: {} }),
+}));
+
+vi.mock('../services/codeReview.js', () => codeReviewMock);
 
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn().mockResolvedValue({}),
@@ -186,6 +194,22 @@ describe('System Health Routes', () => {
     );
   });
 
+
+  it('reports saturated memory and CPU without degrading health', async () => {
+    checkHealth.mockResolvedValueOnce({ connected: true, hasSchema: true });
+    getMemoryStats.mockResolvedValueOnce({ total: 100, used: 99, free: 1 });
+    const load = vi.spyOn(os, 'loadavg').mockReturnValue([1000, 1000, 1000]);
+    try {
+      const response = await request(app).get('/api/system/health/details');
+      expect(response.status).toBe(200);
+      expect(response.body.system.memory.usagePercent).toBe(99);
+      expect(response.body.system.cpu.usagePercent).toBeGreaterThan(100);
+      expect(response.body.warnings).toEqual([]);
+      expect(response.body.overallHealth).toBe('healthy');
+    } finally {
+      load.mockRestore();
+    }
+  });
 
   it('does not warn on cumulative restart_time (developer-driven restarts)', async () => {
     listProcesses.mockResolvedValueOnce([
@@ -287,6 +311,55 @@ describe('System Health Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.forge).toMatchObject({ status: 'error', ok: false });
+    });
+  });
+
+  it('surfaces persisted reviewer configuration faults as install health', async () => {
+    codeReviewMock.getReviewerConfigHealth.mockResolvedValueOnce({
+      status: 'warning',
+      configFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
+    });
+    const response = await request(app).get('/api/system/health/details');
+
+    expect(response.body.codeReview).toEqual({
+      status: 'warning',
+      configFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
+    });
+    expect(response.body.warnings).toContainEqual(expect.objectContaining({
+      type: 'code-review',
+      message: expect.stringContaining('ollama'),
+    }));
+    expect(response.body.overallHealth).toBe('warning');
+  });
+
+  it('dismisses and restores a reviewer warning without clearing its configuration fault', async () => {
+    const reviewerHealth = { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } };
+    const health = { status: 'warning', configFaults: reviewerHealth };
+    let settings = { codeReview: { reviewerHealth } };
+    await codeReviewMock.getReviewerConfigHealth.withImplementation(async () => health, async () => {
+      await getSettings.withImplementation(async () => settings, async () => {
+        await updateSettingsWith.withImplementation(async (mutate) => (settings = await mutate(settings)), async () => {
+          const original = await request(app).get('/api/system/health/details');
+          const warning = original.body.warnings.find((item) => item.type === 'code-review');
+          expect(warning).toBeDefined();
+          const dismissed = await request(app)
+            .post('/api/system/health/warnings/code-review/dismiss')
+            .send({ message: warning.message });
+          expect(dismissed.status).toBe(200);
+
+          const hidden = await request(app).get('/api/system/health/details');
+          expect(hidden.body.warnings.some((item) => item.type === 'code-review')).toBe(false);
+          expect(hidden.body.codeReview).toEqual(health);
+          expect(settings.codeReview.reviewerHealth).toEqual(reviewerHealth);
+
+          const undone = await request(app).delete('/api/system/health/warnings/code-review/dismiss');
+          expect(undone.status).toBe(200);
+          const restored = await request(app).get('/api/system/health/details');
+          expect(restored.body.warnings).toContainEqual(warning);
+          expect(restored.body.codeReview).toEqual(health);
+          expect(settings.codeReview.reviewerHealth).toEqual(reviewerHealth);
+        });
+      });
     });
   });
 

@@ -9,7 +9,7 @@ const triageQueueItem = vi.fn();
 const promoteAskQueueItem = vi.fn();
 const MAX_REVIEW_QUEUE_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
-vi.mock('../services/review.js', () => ({}));
+vi.mock('../services/review.js', () => ({ reviewEvents: { emit: vi.fn() } }));
 vi.mock('../services/reviewQueue.js', () => ({
   buildQueue,
   MAX_REVIEW_QUEUE_SNOOZE_MS,

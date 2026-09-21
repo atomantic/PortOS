@@ -394,15 +394,24 @@ export default function App() {
               its own tab. A literal segment outranks `models/:tab/:recordId`, so
               a bookmark on the old pill lands on the new page instead of LLMs
               rendering an unknown sub-view. */}
+          <Route path="models/llms/jev" element={<Navigate to="/models/decision-classifiers/jev" replace />} />
           <Route path="models/llms/runtimes" element={<Navigate to="/models/llms-runtimes" replace />} />
           {/* Harnesses folded into the AI Providers harnesses view (/ai/harnesses);
               retires the duplicate /models/harnesses page while keeping bookmarks working. */}
           <Route path="models/harnesses" element={<Navigate to="/ai/harnesses" replace />} />
+          {/* Performance owns task views rather than making one long page. The
+              selected result route is more specific so a slash-containing model
+              id stays inside the reversible assessment key segment. */}
+          <Route path="models/llms-runtimes/:recordId?" element={<Models fixedTab="llms-runtimes" />} />
+          <Route path="models/performance/results/:assessmentKey" element={<Models fixedTab="performance" />} />
+          <Route path="models/performance/:view" element={<Models fixedTab="performance" />} />
           {/* A tab's drill-down (today: the LoRA dataset workbench) renders through
               Models itself, so it keeps the section header and tab bar — see
               TAB_DETAIL there. */}
           <Route path="models/:tab" element={<Models />} />
           <Route path="models/:tab/:recordId" element={<Models />} />
+          <Route path="models/decision-classifiers/jev/:taskView" element={<Models fixedTab="decision-classifiers" fixedRecordId="jev" />} />
+          <Route path="models/llms/jev/:taskView" element={<Models fixedTab="llms" fixedRecordId="jev" />} />
           <Route path="local-llm/playground" element={<LocalLlmPlayground />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />

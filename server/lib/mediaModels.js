@@ -59,7 +59,7 @@
  *   - selectedTextEncoder: id of the active text encoder
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import { PATHS, expandHome } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
@@ -470,6 +470,25 @@ export const upgradeFastMetalDownloadSizes = (list) => {
   return list.map((entry) => FASTMETAL_DOWNLOAD_SIZE_PROFILES.reduce(upgradeFastMetalEntry, entry));
 };
 
+const FASTH3_V2_MODE_REPO = 'FastVideo/FastVideo-FastH3-8-Step-V2';
+const FASTH3_V2_MODE_REVISION = '3da2ddfe1954d9cda4c05b643dc0f26007a655c5';
+const FASTH3_V2_MODE_IDS = new Set(['fasth3_v2_int8', 'fasth3_v2_int6']);
+
+// The pinned MLX entry and pipeline have no image-conditioning API. Correct
+// the exact erroneous shipped declaration while preserving repointed forks,
+// custom IDs, and other explicit mode lists.
+export const upgradeFastH3V2RuntimeModes = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry)
+      || !FASTH3_V2_MODE_IDS.has(entry.id)
+      || entry.repo !== FASTH3_V2_MODE_REPO
+      || entry.revision !== FASTH3_V2_MODE_REVISION
+      || JSON.stringify(entry.supportedModes) !== JSON.stringify(['text', 'image'])) return entry;
+    return { ...entry, supportedModes: ['text'] };
+  });
+};
+
 // Existing installs already persisted the shipped LTX-2.5 row before its A2V
 // duration contract was declared. Backfill only the untouched pinned model and
 // only absent keys: a user-repointed fork or an explicit local override remains
@@ -826,6 +845,7 @@ const DEFAULT_REGISTRY = {
         repo: 'FastVideo/FastVideo-FastH3-8-Step-V2',
         revision: '3da2ddfe1954d9cda4c05b643dc0f26007a655c5',
         fastvideoVsa: true,
+        supportedModes: ['text'],
         steps: 8,
         samplerNote: 'Quality option: 8 steps with 80% sparse attention, reference implementation. Requires an updated FastVideo runtime with VSA support. INT6 and INT8 share one ~147.9 GB source download; first use converts the DiT locally with routing weights retained. Not a real-time model.',
       })),
@@ -1073,6 +1093,19 @@ const DEFAULT_REGISTRY = {
       // submission crashes deep inside diffusers. `editOnly` lets the route
       // reject (and the UI gate) a render with no init image up-front.
       editOnly: true,
+    },
+    // Qwen 2.1 unifies generation/editing in a new RGBA pipeline. Its
+    // research license differs from the original Apache-licensed Qwen models.
+    {
+      id: 'qwen-image-2.1',
+      name: 'Qwen-Image 2.1 (7B DiT, generation + editing, research license)',
+      runner: 'qwen',
+      repo: 'Qwen/Qwen-Image-2.1',
+      pipelineClass: 'QwenImage21Pipeline',
+      steps: 40,
+      guidance: 1.0,
+      cfgDisabled: true,
+      licenseUrl: 'https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE',
     },
     // z-image runner — Apache 2.0, ungated, reuses the FLUX.2 venv. Turbo
     // distillation runs ~8 steps with CFG disabled (guidance 1.0).
@@ -1412,6 +1445,7 @@ const VIDEO_REGISTRY_UPGRADES = Object.freeze([
   // disclosure block: this row corrects the stale `estimatedDownloadGb` inside
   // an already-persisted one, and the decorator would never revisit it.
   Object.freeze({ name: 'upgradeFastMetalDownloadSizes', apply: upgradeFastMetalDownloadSizes }),
+  Object.freeze({ name: 'upgradeFastH3V2RuntimeModes', apply: upgradeFastH3V2RuntimeModes }),
   Object.freeze({ name: 'backfillRuntime', apply: backfillRuntime }),
   // CUDA-only, and in this order: the legacy `ltx_video` row is repointed at the
   // `cuda_video` runtime first, then the LTX-2.5 memory floor is raised.
@@ -1762,7 +1796,9 @@ export const reloadMediaModels = () => {
 // the shared cache in place). Single-user trust model → no file lock needed.
 const persistRegistry = (reg) => {
   ensureDir(REGISTRY_FILE);
-  writeFileSync(REGISTRY_FILE, JSON.stringify(reg, null, 2) + '\n');
+  const temporary = `${REGISTRY_FILE}.tmp`;
+  writeFileSync(temporary, JSON.stringify(reg, null, 2) + '\n');
+  renameSync(temporary, REGISTRY_FILE);
   cached = reg;
   return reg;
 };
@@ -1880,6 +1916,18 @@ export const patchUserModelEntry = (id, patch) => {
   return updated;
 };
 
+// Availability is install configuration, including for shipped entries. Keep
+// disabled rows in the registry so they can be re-enabled without reinstalling.
+export const setMediaModelEnabled = (id, enabled) => {
+  const reg = loadMediaModels();
+  const loc = findModelLocation(reg, id);
+  if (!loc) throw new ServerError(`Unknown model id: ${id}`, { status: 404, code: 'NOT_FOUND' });
+  if (typeof enabled !== 'boolean') throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  const updated = { ...loc.entry, enabled };
+  persistRegistry(withList(reg, loc.listKey, loc.list.map((m, i) => i === loc.idx ? updated : m)));
+  return updated;
+};
+
 // Remove a USER model entry. Refuses built-ins and unknown ids. Persists +
 // hot-reloads. Returns `{ ok, id }`.
 export const removeUserModelEntry = (id) => {
@@ -1923,12 +1971,12 @@ export const requiredModelCacheGroups = (model) => {
   return groups;
 };
 
-export const getVideoModels = () => {
+export const getVideoModels = ({ includeDisabled = false } = {}) => {
   const reg = loadMediaModels();
   const bucket = activeVideoBucket();
   const capabilities = captureSystemCapabilities();
   const list = readVideoBucket(reg.video, bucket) || [];
-  return applyVideoSupportedModes(list.filter((m) => !platformBroken(m.broken))).map((model) => (
+  return applyVideoSupportedModes(list.filter((m) => !platformBroken(m.broken) && (includeDisabled || m.enabled !== false))).map((model) => (
     withHardwareCompatibility(
       model,
       capabilities,
@@ -1966,11 +2014,11 @@ export const getDefaultVideoModelId = (capabilities = captureSystemCapabilities(
   return configuredId;
 };
 
-export const getImageModels = () => {
+export const getImageModels = ({ includeDisabled = false } = {}) => {
   const reg = loadMediaModels();
   const capabilities = captureSystemCapabilities();
   return (reg.image || [])
-    .filter((m) => !platformBroken(m.broken))
+    .filter((m) => !platformBroken(m.broken) && (includeDisabled || m.enabled !== false))
     .map((model) => withHardwareCompatibility(
       model,
       capabilities,

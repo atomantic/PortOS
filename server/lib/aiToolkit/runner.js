@@ -12,6 +12,10 @@ import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalReque
 // a leaf module so a host's own backstop timer can read the absolute bound
 // without dragging this file's fs/child_process closure with it.
 import { DEFAULT_API_RUN_TIMEOUT_MS, apiRunAbsoluteTimeoutMs } from './internal/runTimeouts.js';
+// undici arms its own 300s header/body ceilings under every fetch, which raced
+// — and beat — the two above. The streaming request goes through a dispatcher
+// with those disabled so the run's declared bounds are the only ones.
+import { streamTransportDispatcher } from './internal/streamTransport.js';
 
 // npm-installed CLI providers (claude, codex, opencode, …) are .cmd/.bat
 // shims on Windows; Node's spawn() can't execute those without going through
@@ -593,7 +597,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout }) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens }) {
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -690,7 +694,7 @@ export function createRunnerService(config = {}) {
       // never reaches the fetch is still bounded, and the failure is classified
       // as a timeout instead of the AbortError's UNKNOWN/HTTP-0).
       const stallTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
-      const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout);
+      const absoluteTimeout = apiRunAbsoluteTimeoutMs(stallTimeout, absoluteTimeoutMs);
       let settled = false;
       let stallTimeoutHandle = null;
       let absoluteTimeoutHandle = null;
@@ -834,11 +838,16 @@ export function createRunnerService(config = {}) {
             method: 'POST',
             headers,
             signal: controller.signal,
+            // Hands the request undici's ceilings disabled, leaving `stallTimeout`
+            // / `absoluteTimeout` above as the run's only bounds — see
+            // ./internal/streamTransport.js for what fired first without it.
+            dispatcher: streamTransportDispatcher(),
             body: JSON.stringify({
               model: model || provider.defaultModel,
               messages: [{ role: 'user', content: messageContent }],
               stream: true,
               ...apiGenerationOptions(provider),
+              ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
               // Ollama's OpenAI-compatible endpoint defaults to a ~4K context
               // window and silently truncates longer prompts. A top-level
               // num_ctx lifts it (honored by Ollama, ignored by other
@@ -919,6 +928,7 @@ export function createRunnerService(config = {}) {
       // This mirrors every other SSE consumer in the tree (openAiChatStream.js,
       // ollamaManager.js, voice/llm.js); this loop was the lone holdout.
       let buffer = '';
+      let finishReason = null;
 
       const consumeLine = (rawLine) => {
         // A CRLF transport leaves `\r` on each line: it has to come off before
@@ -942,7 +952,9 @@ export function createRunnerService(config = {}) {
           console.error(`❌ Run ${runId} skipped an unparseable stream frame (${data.length} chars)`);
           return;
         }
-        const delta = parsed?.choices?.[0]?.delta;
+        const choice = parsed?.choices?.[0];
+        if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason;
+        const delta = choice?.delta;
 
         if (delta?.content) {
           const text = delta.content;
@@ -1028,6 +1040,7 @@ export function createRunnerService(config = {}) {
           metadata.outputSize = Buffer.byteLength(output);
           metadata.hadReasoning = reasoning.length > 0;
           metadata.usedReasoningAsFallback = usedReasoningAsFallback;
+          if (finishReason) metadata.finishReason = finishReason;
           await atomicWrite(metadataPath, metadata);
 
           if (typeof providerStatusService?.markApiSuccess === 'function') {

@@ -6,6 +6,7 @@ const normalizeCapabilities = (value) => ({
   schemaVersion: 12,
   createTasks: value?.createTasks === true,
   fileIssues: value?.fileIssues === true,
+  auditReports: value?.auditReports === true,
   manageMind: value?.manageMind === true,
   manageToolRecipes: value?.manageToolRecipes === true,
   manageEidoverse: value?.manageEidoverse === true,
@@ -24,6 +25,7 @@ const normalizeCapabilities = (value) => ({
 });
 
 const OPTIONS = [
+  { key: 'auditReports', label: 'Allow private CoS process audits', hint: 'Review at most three completed jobs per turn for selected maintainer apps. Requires PortOS reads; synthetic issue filing requires its separate grant. Raw transcripts stay private.' },
   {
     key: 'manageToolRecipes',
     label: 'Allow mind to manage saved tool recipes',
@@ -110,7 +112,7 @@ export default function PersistentMindTaskAccessControls({
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.fileIssues, capabilities?.manageMind, capabilities?.manageToolRecipes, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.fileIssues, capabilities?.auditReports, capabilities?.manageMind, capabilities?.manageToolRecipes, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;

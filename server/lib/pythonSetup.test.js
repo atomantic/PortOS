@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { posixPath } from './testHelper.js';
 
 // Mutable state read by the hoisted vi.mock factories below. Each test mutates
@@ -20,6 +20,7 @@ const mockState = {
   // of execShouldFail (which also drives the unrelated arch probe).
   fluxImportShouldFail: false,
   fluxImportCalls: 0,
+  missingPipeline: null,
   // `sys.version_info` answers per interpreter path, for the MIN_VENV_PYTHON
   // gate. Unlisted paths answer with `defaultVersion`.
   versionByPath: new Map(),
@@ -103,7 +104,7 @@ vi.mock('./childProcess.js', async () => {
       resolve({ stdout: `${a}\n`, stderr: '' });
     } else if (probeArg.includes('Flux2KleinPipeline')) {
       mockState.fluxImportCalls += 1;
-      if (mockState.fluxImportShouldFail) reject(new Error('ModuleNotFoundError'));
+      if (mockState.fluxImportShouldFail || (mockState.missingPipeline && args[2] === mockState.missingPipeline)) reject(new Error('ModuleNotFoundError'));
       else resolve({ stdout: '', stderr: '' });
     } else {
       resolve({ stdout: '', stderr: '' });
@@ -151,6 +152,7 @@ const resetState = () => {
   mockState.uvPythonDirs = null;
   mockState.fluxImportShouldFail = false;
   mockState.fluxImportCalls = 0;
+  mockState.missingPipeline = null;
   mockState.versionByPath = new Map();
   mockState.defaultVersion = '3.12.4';
   mockState.spawnExitByArgs = new Map();
@@ -534,6 +536,38 @@ describe('isFlux2VenvHealthy', () => {
     expect(mockState.fluxImportCalls).toBe(2);
   });
 
+  it('keeps selected-pipeline readiness separate and refreshes it after runtime repair', async () => {
+    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
+    mockState.missingPipeline = 'QwenImage21Pipeline';
+    const { isFlux2VenvHealthy, invalidateFlux2Health } = await loadModule();
+    await expect(isFlux2VenvHealthy()).resolves.toBe(true);
+    await expect(isFlux2VenvHealthy('QwenImage21Pipeline')).resolves.toBe(false);
+    await expect(isFlux2VenvHealthy()).resolves.toBe(true);
+    mockState.missingPipeline = null;
+    invalidateFlux2Health();
+    await expect(isFlux2VenvHealthy('QwenImage21Pipeline')).resolves.toBe(true);
+  });
+
+  it('reports the install as unsatisfied when a verified pipeline class is missing', async () => {
+    // The bug this pins: the installer's readiness GATE probed only the base
+    // FLUX.2 pipeline, so a venv whose diffusers predates QwenImage21Pipeline
+    // answered the Install button with "already installed — nothing to do"
+    // while the per-model banner said the runtime was unavailable.
+    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
+    mockState.missingPipeline = 'QwenImage21Pipeline';
+    const { isFlux2InstallSatisfied, isFlux2VenvHealthy } = await loadModule();
+    await expect(isFlux2VenvHealthy()).resolves.toBe(true);
+    await expect(isFlux2InstallSatisfied()).resolves.toBe(false);
+  });
+
+  it('also requires the selected model pipeline class the verify stage does not cover', async () => {
+    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
+    mockState.missingPipeline = 'ErnieImagePipeline';
+    const { isFlux2InstallSatisfied } = await loadModule();
+    await expect(isFlux2InstallSatisfied()).resolves.toBe(true);
+    await expect(isFlux2InstallSatisfied('ErnieImagePipeline')).resolves.toBe(false);
+  });
+
   it('caches a healthy result indefinitely', async () => {
     mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
     vi.useFakeTimers();
@@ -673,6 +707,12 @@ describe('installFlux2Venv failure reporting', () => {
     const error = events.find((ev) => ev.type === 'error');
     expect(error.message).toContain('Installing the FLUX.2 packages failed');
     expect(error.message).toContain('exit code 1');
+  });
+
+  it('fails the install when refreshing same-version diffusers code fails', async () => {
+    const { result, events } = await failingStage('--force-reinstall --no-deps');
+    expect(result).toEqual({ ok: false, stage: 'install' });
+    expect(events.find((ev) => ev.type === 'error').message).toContain('Refreshing the diffusers pipeline code failed');
   });
 
   it('emits a terminal error frame when the pip bootstrap exits non-zero', async () => {

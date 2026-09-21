@@ -48,7 +48,7 @@ describe('ProviderReadiness', () => {
 
     expect(screen.getByText('llama.cpp installed · standby')).toBeTruthy();
     expect(screen.getByText(/valid idle state/)).toBeTruthy();
-    expect(screen.getByText('Open the LLMs page').closest('a').getAttribute('href')).toBe('/models/llms');
+    expect(screen.getByText('Open the Model Library page').closest('a').getAttribute('href')).toBe('/models/llms');
     expect(screen.queryByText(/setup incomplete/)).toBeNull();
   });
 
@@ -78,7 +78,7 @@ describe('ProviderReadiness', () => {
 
   it('links to the manage page as an in-app action — never to vendor setup docs', () => {
     renderWithRouter(<ProviderReadiness readiness={readiness()} />);
-    expect(screen.getByText('Open the LLMs page').closest('a').getAttribute('href')).toBe('/models/llms');
+    expect(screen.getByText('Open the Model Library page').closest('a').getAttribute('href')).toBe('/models/llms');
     expect(screen.queryByText(/setup docs/i)).toBeNull();
     expect(screen.queryByRole('link', { name: /llama\.cpp setup docs/i })).toBeNull();
   });
@@ -90,7 +90,7 @@ describe('ProviderReadiness', () => {
   });
 
   // The label is derived from the route, not hardcoded: #7414 split the runtimes
-  // off LLMs, so a fixed "Open the LLMs page" now names the wrong sibling for
+  // off LLMs, so a fixed "Open the LLMs page" would name the wrong sibling for
   // llama.cpp, Slotstream and MTPLX while still linking to the right one.
   it('names the link after the page its route actually resolves to', () => {
     renderWithRouter(<ProviderReadiness readiness={readiness({ label: 'llama.cpp', manageUrl: '/models/llms-runtimes' })} />);

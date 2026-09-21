@@ -1480,11 +1480,45 @@ def _gemma_kwargs(args: argparse.Namespace) -> dict:
     return {}
 
 
+def build_pipeline_options(pipeline_cls, pipeline_label: str, optional: dict) -> dict:
+    """Keep only optional constructor options the resolved pipeline explicitly accepts.
+
+    Pins evolve independently: a strict Retake/Extend constructor can omit a
+    streaming option accepted by the text/image path. Required arguments and
+    user-selected runtime constraints stay at each call site, deliberately
+    outside this filter, so a changed contract still fails instead of becoming
+    an altered render. Explicit streaming requests are rejected by
+    ``configure_streaming_policy`` before this helper can downgrade them.
+    """
+    accepted = {
+        name: value
+        for name, value in optional.items()
+        if _accepts_kwarg(pipeline_cls.__init__, name)
+    }
+    dropped = [name for name in optional if name not in accepted]
+    if dropped:
+        emit_status(
+            f"Skipping unsupported optional constructor option(s) for "
+            f"{pipeline_label}: {', '.join(dropped)}"
+        )
+    return accepted
+
+
+def _pipeline_optional_kwargs(pipeline_cls, pipeline_label: str, streaming_policy: dict) -> dict:
+    """Build the optional constructor subset shared by every LTX pipeline path."""
+    optional = {}
+    if streaming_policy["requestedMode"] != "resident":
+        optional["low_ram_streaming"] = streaming_policy["active"]
+    return build_pipeline_options(pipeline_cls, pipeline_label, optional)
+
+
 def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
     """T2V/I2V path that honors CFG via the dgrauet two-stage pipeline."""
     TwoStagePipeline = _resolve_pipeline("TI2VidTwoStagesPipeline", "TwoStagePipeline")
     streaming_policy = configure_streaming_policy(args, TwoStagePipeline, "two-stage")
-    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
+    optional_kwargs = _pipeline_optional_kwargs(
+        TwoStagePipeline, "two-stage", streaming_policy
+    )
     emit_status(f"Loading two-stage pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = TwoStagePipeline(
@@ -1492,7 +1526,7 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
         dev_transformer=args.dev_transformer or "transformer-dev.safetensors",
         distilled_lora=args.distilled_lora or DISTILLED_LORA_LEGACY,
         distilled_lora_strength=args.lora_strength,
-        **streaming_kwargs,
+        **optional_kwargs,
         **_gemma_kwargs(args),
     )
     _prefer_distilled_lora(pipe, args.distilled_lora, args.require_adapter)
@@ -1528,10 +1562,12 @@ def run_text(args: argparse.Namespace) -> str:
         return run_two_stage(args)
     OneStagePipeline = _resolve_pipeline("TI2VidOneStagePipeline", "TextToVideoPipeline")
     streaming_policy = configure_streaming_policy(args, OneStagePipeline, "one-stage")
-    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
+    optional_kwargs = _pipeline_optional_kwargs(
+        OneStagePipeline, "one-stage", streaming_policy
+    )
     emit_status(f"Loading T2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = OneStagePipeline(model_dir=args.model, **streaming_kwargs, **_gemma_kwargs(args))
+    pipe = OneStagePipeline(model_dir=args.model, **optional_kwargs, **_gemma_kwargs(args))
     _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
@@ -1552,10 +1588,12 @@ def run_image(args: argparse.Namespace) -> str:
         return run_two_stage(args, image=args.image)
     OneStagePipeline = _resolve_pipeline("TI2VidOneStagePipeline", "ImageToVideoPipeline")
     streaming_policy = configure_streaming_policy(args, OneStagePipeline, "one-stage")
-    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
+    optional_kwargs = _pipeline_optional_kwargs(
+        OneStagePipeline, "one-stage", streaming_policy
+    )
     emit_status(f"Loading I2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = OneStagePipeline(model_dir=args.model, **streaming_kwargs, **_gemma_kwargs(args))
+    pipe = OneStagePipeline(model_dir=args.model, **optional_kwargs, **_gemma_kwargs(args))
     _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
@@ -1636,7 +1674,9 @@ def run_fflf(args: argparse.Namespace) -> str:
     dev_transformer = args.dev_transformer or "transformer-dev.safetensors"
     distilled_lora = args.distilled_lora or DISTILLED_LORA_LEGACY
     streaming_policy = configure_streaming_policy(args, KeyframeInterpolationPipeline, "keyframe-interpolation")
-    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
+    optional_kwargs = _pipeline_optional_kwargs(
+        KeyframeInterpolationPipeline, "keyframe-interpolation", streaming_policy
+    )
     emit_status(f"Loading Keyframe pipeline ({args.model}, dev+lora)…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = KeyframeInterpolationPipeline(
@@ -1644,7 +1684,7 @@ def run_fflf(args: argparse.Namespace) -> str:
         dev_transformer=dev_transformer,
         distilled_lora=distilled_lora,
         distilled_lora_strength=args.lora_strength,
-        **streaming_kwargs,
+        **optional_kwargs,
         **_gemma_kwargs(args),
     )
     _prefer_distilled_lora(pipe, args.distilled_lora)
@@ -1685,14 +1725,18 @@ def run_extend(args: argparse.Namespace) -> str:
     if not args.extend_from_video:
         raise SystemExit("--extend-from-video is required for extend mode")
     # RetakePipeline/ExtendPipeline has no streaming parameter at the pins this
-    # bridge targets. configure_streaming_policy() still runs — it emits an
-    # 'auto' resident explanation and, for an explicit --streaming-mode stream
-    # request, refuses HERE, before ExtendPipeline (or its weights) is
-    # constructed at all.
-    configure_streaming_policy(args, ExtendPipeline, "extend")
+    # bridge targets. configure_streaming_policy() still runs; the optional
+    # constructor filter reports that drop for auto mode and rejects an explicit
+    # --streaming-mode stream request before weights are constructed.
+    streaming_policy = configure_streaming_policy(args, ExtendPipeline, "extend")
+    optional_kwargs = _pipeline_optional_kwargs(ExtendPipeline, "extend", streaming_policy)
     emit_status(f"Loading Extend pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = ExtendPipeline(model_dir=args.model, **_gemma_kwargs(args))
+    pipe = ExtendPipeline(
+        model_dir=args.model,
+        **optional_kwargs,
+        **_gemma_kwargs(args),
+    )
     _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
     emit_status(f"Extending video {args.extend_direction} by {args.extend_frames} latent frames…")
@@ -1749,10 +1793,12 @@ def run_a2v(args: argparse.Namespace) -> str:
     if not args.audio:
         raise SystemExit("--audio is required for a2v mode")
     streaming_policy = configure_streaming_policy(args, AudioToVideoPipeline, "a2v")
-    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
+    optional_kwargs = _pipeline_optional_kwargs(
+        AudioToVideoPipeline, "a2v", streaming_policy
+    )
     emit_status(f"Loading A2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = AudioToVideoPipeline(model_dir=args.model, **streaming_kwargs, **_gemma_kwargs(args))
+    pipe = AudioToVideoPipeline(model_dir=args.model, **optional_kwargs, **_gemma_kwargs(args))
     _prefer_distilled_lora(pipe, args.distilled_lora)
     _refuse_if_streaming_distilled_adapter_missing(pipe, streaming_policy["active"])
     _apply_user_loras(pipe, args.user_lora_specs)
@@ -1848,7 +1894,9 @@ def run_ic_lora(args: argparse.Namespace) -> str:
         raise SystemExit("--ic-attention-strength must be between 0.0 and 1.0")
 
     streaming_policy = configure_streaming_policy(args, ICLoraPipeline, "ic-lora")
-    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
+    optional_kwargs = _pipeline_optional_kwargs(
+        ICLoraPipeline, "ic-lora", streaming_policy
+    )
     emit_status(f"Loading IC-LoRA pipeline ({args.model}, {ic_mode})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = ICLoraPipeline(
@@ -1858,7 +1906,7 @@ def run_ic_lora(args: argparse.Namespace) -> str:
         # which weights the reference conditioning). Upstream's CLI defaults the
         # same way.
         lora_paths=[(args.ic_lora_path, 1.0)],
-        **streaming_kwargs,
+        **optional_kwargs,
         **_gemma_kwargs(args),
     )
     # User LoRAs go through _pending_loras (fused at DiT load), NOT lora_paths —
@@ -2191,7 +2239,7 @@ def configure_streaming_policy(args: argparse.Namespace, pipeline_cls, pipeline_
     _STREAMING_PIPELINE_LABEL = pipeline_label
     if policy["active"]:
         emit_status("Block streaming enabled — transformer blocks stream from disk")
-    elif policy["reason"] and args.streaming_mode != "resident":
+    elif policy["reason"] and policy["supports"] and args.streaming_mode != "resident":
         emit_status(f"Block streaming not used: {policy['reason']}")
     return policy
 

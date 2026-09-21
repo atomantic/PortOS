@@ -154,3 +154,11 @@ describe('drainProgrammaticOnDemandRequests — cross-engine claim', () => {
     expect(cosEvents.emit).not.toHaveBeenCalled();
   });
 });
+
+
+it('runs the opted-in maintenance handler independently of the Improve toggle', async () => {
+  isImprovementEnabled.mockReturnValue(false);
+  await drainProgrammaticOnDemandRequests({ taskScheduleMod, requests: [request('development-watchdog')],
+    schedule: { tasks: { 'development-watchdog': { enabled: true } } }, state: {} });
+  expect(runScheduledHandler).toHaveBeenCalledWith(expect.objectContaining({ taskType: 'development-watchdog' }));
+});

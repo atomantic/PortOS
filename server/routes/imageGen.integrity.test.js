@@ -57,6 +57,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 vi.mock('../lib/pythonSetup.js', async (importOriginal) => ({
   ...(await importOriginal()),
   isFlux2VenvHealthy: vi.fn(async () => true),
+  isFlux2InstallSatisfied: vi.fn(async () => true),
   resolveFlux2Python: vi.fn(() => null),
 }));
 

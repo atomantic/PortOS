@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 
 // Stable navigate mock — returning a fresh vi.fn() per call would change the
@@ -72,6 +72,9 @@ vi.mock('../services/apiCatalog', () => ({
 }));
 
 vi.mock('../services/apiSystem', () => ({ generateImage: vi.fn() }));
+vi.mock('../services/apiCatalogTypes', () => ({
+  listCatalogTypes: vi.fn(async () => ({ types: [] })),
+}));
 // The editable-prompt panel lazily fetches the linked universe to layer its
 // style preset onto the composed prompt; default to "no universe" so the seed
 // renders bare unless a test overrides it.
@@ -113,12 +116,14 @@ vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: v
 import CatalogIngredient, { buildGenerationPromptSeed } from './CatalogIngredient';
 import { getCatalogIngredientDetails, unlinkCatalogIngredientRelation, updateCatalogIngredient, detachCatalogIngredientMedia } from '../services/apiCatalog';
 
-const renderPage = (path = '/catalog/character/cat-chr-1') => {
+const renderPage = async (path = '/catalog/character/cat-chr-1') => {
   const router = createMemoryRouter([
     { path: '/catalog', element: <div>Catalog index</div> },
     { path: '/catalog/:type/:id', element: <CatalogIngredient /> },
   ], { initialEntries: [path] });
-  return { ...render(<RouterProvider router={router} />), router };
+  const result = render(<RouterProvider router={router} />);
+  await act(async () => {});
+  return { ...result, router };
 };
 
 beforeEach(() => {
@@ -135,7 +140,7 @@ describe('CatalogIngredient — character sheet', () => {
   it('exposes the full record name through the heading title attribute', async () => {
     const longName = 'Augusta Ada King, Countess of Lovelace, Analytical Engine Programmer and Mathematician';
     getCatalogIngredientDetails.mockImplementation(async () => detailsOf({ ...CHAR_FIXTURE, name: longName }));
-    renderPage();
+    await renderPage();
 
     const heading = await screen.findByRole('heading', { name: longName });
     expect(heading.getAttribute('title')).toBe(longName);
@@ -147,7 +152,7 @@ describe('CatalogIngredient — character sheet', () => {
       ...detailsOf(CHAR_FIXTURE),
       media: [{ mediaKey: 'portrait.png', kind: 'portrait' }],
     }));
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Detach' })).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: 'Detach' }));
@@ -173,7 +178,7 @@ describe('CatalogIngredient — character sheet', () => {
         inbound: [],
       },
     }));
-    renderPage();
+    await renderPage();
 
     const removeButton = await screen.findByRole('button', { name: 'Remove relation to Example Place' });
     fireEvent.click(removeButton);
@@ -196,7 +201,7 @@ describe('CatalogIngredient — character sheet', () => {
 
   describe('unsaved changes', () => {
     it('tracks name, tags, and payload edits in the unsaved indicator', async () => {
-      renderPage();
+      await renderPage();
       const nameInput = await screen.findByLabelText('Name');
       const descriptionInput = screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.');
       const tagButton = screen.getByRole('button', { name: 'Change tag' });
@@ -218,7 +223,7 @@ describe('CatalogIngredient — character sheet', () => {
     });
 
     it('confirms before the Back link discards dirty edits', async () => {
-      const { router } = renderPage();
+      const { router } = await renderPage();
       const nameInput = await screen.findByLabelText('Name');
       fireEvent.change(nameInput, { target: { value: 'Edited ingredient' } });
 
@@ -238,7 +243,7 @@ describe('CatalogIngredient — character sheet', () => {
 
     it('clears the unsaved indicator after a successful save', async () => {
       updateCatalogIngredient.mockResolvedValue({ ...CHAR_FIXTURE, name: 'Saved ingredient' });
-      renderPage();
+      await renderPage();
       const nameInput = await screen.findByLabelText('Name');
       fireEvent.change(nameInput, { target: { value: 'Saved ingredient' } });
       expect(screen.getByText('Unsaved changes')).toBeTruthy();
@@ -250,7 +255,7 @@ describe('CatalogIngredient — character sheet', () => {
   });
 
   it('renders grouped sheet sections with the enriched canon scalar fields', async () => {
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
     expect(screen.getByText('Identity')).toBeTruthy();
     expect(screen.getByText('Appearance')).toBeTruthy();
@@ -270,7 +275,7 @@ describe('CatalogIngredient — character sheet', () => {
         siblings: [{ id: 'cat-plc-1', name: 'Sibling Place', type: 'place' }],
       }],
     }));
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText('Notebook Page Three')).toBeTruthy());
     // Never the raw id — that's the bug this issue fixes.
     expect(screen.queryByText('cat-scrap-abc123')).toBeNull();
@@ -288,19 +293,19 @@ describe('CatalogIngredient — character sheet', () => {
       ...CHAR_FIXTURE,
       sources: [{ scrapId: 'cat-scrap-solo', scrapTitle: 'Lone Page', extractedAt: null, siblings: [] }],
     }));
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText('Lone Page')).toBeTruthy());
     expect(screen.queryByText('From the same source')).toBeNull();
 
     // No source scrap at all (created manually) — the existing message, no stub.
     getCatalogIngredientDetails.mockImplementation(async () => detailsOf({ ...CHAR_FIXTURE, sources: [] }));
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText('Created manually — no source scrap.')).toBeTruthy());
     expect(screen.queryByText('From the same source')).toBeNull();
   });
 
   it('renders EDITABLE array editors (color palette + stats + aliases) seeded from payload', async () => {
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByRole("button", { name: /Add color/i })).toBeTruthy());
     // Editors render their values as inputs now (editable), not static text.
     expect(screen.getByDisplayValue('Brass')).toBeTruthy();
@@ -312,7 +317,7 @@ describe('CatalogIngredient — character sheet', () => {
   it('adds an alias chip, a palette swatch, and a stat row, then Save sends them in the payload', async () => {
     const { updateCatalogIngredient } = await import('../services/apiCatalog');
     updateCatalogIngredient.mockResolvedValue({ ...CHAR_FIXTURE, name: 'Ada Lovelace' });
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByRole("button", { name: /Add color/i })).toBeTruthy());
 
     // Add one of each list type.
@@ -347,7 +352,7 @@ describe('CatalogIngredient — character sheet', () => {
   });
 
   it('shows a render-reference-sheet deep-link when none exists and a universe ref is present', async () => {
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText(/Render in Universe Builder/i)).toBeTruthy());
     const link = screen.getByText(/Render in Universe Builder/i).closest('a');
     expect(link.getAttribute('href')).toContain('/universes/u-1');
@@ -358,7 +363,7 @@ describe('CatalogIngredient — character sheet', () => {
       ...CHAR_FIXTURE,
       payload: { ...CHAR_FIXTURE.payload, referenceSheetImageRef: 'sheet-123.png' },
     }));
-    renderPage();
+    await renderPage();
     await waitFor(() => {
       const img = screen.getByAltText('standard reference sheet');
       expect(img.getAttribute('src')).toBe('/data/image-refs/sheet-123.png');
@@ -371,7 +376,7 @@ describe('CatalogIngredient — character sheet', () => {
     const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
     generateImage.mockResolvedValue({ jobId: 'job-1' });
     setCatalogIngredientPortrait.mockResolvedValue({});
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
     // Step 1: open the editor — the prompt prefills with the composed seed.
@@ -403,7 +408,7 @@ describe('CatalogIngredient — character sheet', () => {
     const { setCatalogIngredientPortrait } = await import('../services/apiCatalog');
     generateImage.mockResolvedValue({ filename: 'ext.png' }); // external SD-API: no jobId
     setCatalogIngredientPortrait.mockResolvedValue({});
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
@@ -420,7 +425,7 @@ describe('CatalogIngredient — character sheet', () => {
   it('re-enables Generate after a failed render (does not get stuck)', async () => {
     const { generateImage } = await import('../services/apiSystem');
     generateImage.mockResolvedValue({ jobId: 'fail-job' });
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
@@ -441,7 +446,7 @@ describe('CatalogIngredient — character sheet', () => {
       tags: [],
       payload: { role: 'Mentor' }, // no physicalDescription/description/summary
     }));
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByRole('button', { name: /^Generate$/i })).toBeTruthy());
     // Generate is always enabled now — it opens the editor so the user can
     // compose a prompt even when no visual seed exists.
@@ -459,7 +464,7 @@ describe('CatalogIngredient — character sheet', () => {
   });
 
   it('collapses a sheet section when its header is clicked', async () => {
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('she/her')).toBeTruthy());
     fireEvent.click(screen.getByText('Identity'));
     await waitFor(() => expect(screen.queryByDisplayValue('she/her')).toBeNull());
@@ -477,7 +482,7 @@ describe('CatalogIngredient — character sheet', () => {
     // No clearMocks config — clear prior tests' calls so calls[0] is this render's.
     generateImage.mockClear();
     generateImage.mockResolvedValue({ jobId: 'job-uni' });
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
@@ -505,7 +510,7 @@ describe('CatalogIngredient — character sheet', () => {
     const { getUniverse } = await import('../services/apiUniverseBuilder');
     let resolveUniverse;
     getUniverse.mockImplementation(() => new Promise((res) => { resolveUniverse = res; }));
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByDisplayValue('Sharp eyes, ink-stained cuffs.')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /^Generate$/i }));
@@ -519,6 +524,62 @@ describe('CatalogIngredient — character sheet', () => {
     expect(promptBox.value).toBe('my hand-written prompt');
     expect(promptBox.value).not.toMatch(/neon noir/);
     getUniverse.mockResolvedValue(null); // restore default
+  });
+
+  it('attributes relation evidence only to the matching outbound kind and target', async () => {
+    const fixtureWithRelations = {
+      ...CHAR_FIXTURE,
+      payload: {
+        ...CHAR_FIXTURE.payload,
+        evidence: [
+          'owned-by → Pocket Watch: Ada carries this golden pocket watch everywhere',
+          'used-by → Pocket Watch: Ada times experiments with the watch',
+          'used-by → Analytical Engine: Ada programmed the engine with punch cards',
+        ],
+      },
+    };
+    getCatalogIngredientDetails.mockImplementation(async () => ({
+      ...detailsOf(fixtureWithRelations),
+      relations: {
+        outbound: [
+          {
+            toId: 'cat-obj-1',
+            kind: 'owned-by',
+            other: { id: 'cat-obj-1', name: 'Pocket Watch', type: 'object' },
+          },
+          {
+            toId: 'cat-obj-1',
+            kind: 'used-by',
+            other: { id: 'cat-obj-1', name: 'Pocket Watch', type: 'object' },
+          },
+        ],
+        inbound: [
+          {
+            fromId: 'cat-obj-2',
+            kind: 'used-by',
+            other: { id: 'cat-obj-2', name: 'Analytical Engine', type: 'object' },
+          },
+        ],
+      },
+    }));
+
+    await renderPage();
+
+    // Outbound uses getRelationKind('owned-by').label -> "Owned by" (appears in select option + relation list)
+    const ownedByElements = await screen.findAllByText('Owned by');
+    expect(ownedByElements.length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Pocket Watch')).toHaveLength(2);
+    expect(screen.getAllByText(/Ada carries this golden pocket watch everywhere/)).toHaveLength(2);
+    expect(screen.getAllByText(/Ada times experiments with the watch/)).toHaveLength(2);
+
+    // Inbound uses getRelationKind('used-by').inverseLabel -> "Uses"
+    expect(screen.getByText('Uses')).toBeTruthy();
+    expect(screen.getByText('Analytical Engine')).toBeTruthy();
+    // This ingredient's evidence cannot ground a relation owned by another ingredient.
+    expect(screen.getAllByText(/Ada programmed the engine with punch cards/)).toHaveLength(1);
+
+    // SourcesPanel grounded evidence
+    expect(screen.getByText('Grounded evidence')).toBeTruthy();
   });
 });
 

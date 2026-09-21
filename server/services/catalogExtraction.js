@@ -1,480 +1,83 @@
-/**
- * Catalog Extraction Service
- *
- * Runs LLM passes over a raw user-pasted scrap and returns a typed draft of
- * candidate ingredients (characters, places, objects, ideas, scenes,
- * concepts) the user can review and selectively commit via
- * POST /api/catalog/scraps/:id/commit.
- *
- * Three passes reuse server/lib/bibleExtractor.js for the storyBible-shaped
- * types (characters, places, objects) so their payloads are identical to the
- * shape stored in universe canon. A fourth pass calls a single LLM stage
- * (`catalog-ideas-scenes-concepts`) that returns all three light-shape types
- * in one round-trip — they share a corpus and an output schema, so packaging
- * them as one call cuts cost while still surfacing as a UI stage.
- *
- * Streams progress as `catalog:extract:progress` socket frames so the Ingest
- * UI can render a live stage checklist while waiting on the parallel passes.
- */
-
+/** Catalog extraction returns review drafts only; commit owns all ingredient writes. */
 import { randomUUID } from 'crypto';
-import { extractBible } from './bibleExtractor.js';
-import { runStagedLLM } from './stageRunner.js';
-import { BIBLE_KINDS, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS } from '../lib/storyBible.js';
-import { CATALOG_TYPES, canonicalTagKey } from '../lib/catalogTypes.js';
 import { isFactualSourceKind } from '../lib/catalogSourceKinds.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
+import { neutralizeFences } from '../lib/promptFencing.js';
 import { catalogEvents } from './catalogEvents.js';
-import { getScrap, listChildScraps, listIngredientsForRef } from './catalogDB.js';
-import { countWords, escapeRegExp } from '../lib/textUtils.js';
+import { getScrap, listIngredientsForRef } from './catalogDB.js';
+import { escapeRegExp } from '../lib/textUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
+import { isRunCanceledError } from '../lib/aiToolkit/errorDetection.js';
 
-// Light-shape ingredient type ids, sourced from the shared registry
-// (`extractionShape === 'light'`). Adding a light type to `catalogTypes.js`
-// flows through the draft scaffolding without a manual edit here. Order
-// matches the registry → matches the bundled prompt's JSON keys
-// (ideas/scenes/concepts today).
-const LIGHT_TYPE_IDS = CATALOG_TYPES.filter((t) => t.extractionShape === 'light').map((t) => t.id);
-// Bible type ids, sourced the same way (`extractionShape === 'bible'`).
-const BIBLE_TYPE_IDS = CATALOG_TYPES.filter((t) => t.extractionShape === 'bible').map((t) => t.id);
-// Map a light TYPE id to its plural draft key (`idea` → `ideas`). The bundled
-// prompt's JSON keys + the draft scaffolding key results by this plural.
-const lightDraftKey = (id) => `${id}s`;
-
-// Tags stamped on rows extracted under the factual lens. `factual` marks every
-// row as lived material; `real-person` additionally marks an extracted
-// character so "real people" stays filterable in the catalog. Stamped per RUN
-// from the scrap's lens — which is why this cannot be the type registry's
-// `defaultTags` (that table is per-type, and the same type is extracted under
-// both lenses).
-const FACTUAL_TAG = 'factual';
-const REAL_PERSON_TAG = 'real-person';
-
-/**
- * Derive the extraction lens from a stored scrap row. Empty strings (not
- * omitted keys) are what keep the prompts' mustache sections closed, so a
- * title-less paste gets the same instructions it gets today. (`promptTemplate`
- * does not strip a standalone section line, so a closed section collapses to a
- * blank line rather than to nothing — same convention as the `{{#sceneMap}}` /
- * `{{#characterEvolution}}` sections in the editorial prompts.)
- *
- * @param {{ title?: string, sourceKind?: string }} scrap
- * @returns {{ title: string, sourceKind: string, factual: boolean }}
- */
-function scrapExtractionContext(scrap) {
-  const trim = (value) => (typeof value === 'string' ? value.trim() : '');
-  const sourceKind = trim(scrap?.sourceKind);
-  return { title: trim(scrap?.title), sourceKind, factual: isFactualSourceKind(sourceKind) };
-}
-
-/**
- * Append tags to a sanitized entry list without mutating the entries or
- * duplicating a tag the model already emitted. An empty tag list returns the
- * SAME array reference, so every fiction-lens extraction carries exactly the
- * tags it carries today and allocates nothing.
- */
-const stampTags = (entries, tags) => {
-  if (tags.length === 0) return entries;
-  return entries.map((entry) => {
-    const existing = Array.isArray(entry.tags) ? entry.tags : [];
-    // Compare by the catalog's own tag identity, so a model that emitted
-    // `Real-Person` or a trailing-space `factual` doesn't put a visible duplicate in the
-    // review draft that `normalizeTags` would only collapse at persist time.
-    const seen = new Set(existing.map(canonicalTagKey));
-    const missing = tags.filter((tag) => !seen.has(canonicalTagKey(tag)));
-    return missing.length === 0 ? entry : { ...entry, tags: [...existing, ...missing] };
-  });
-};
-
-// Light-shape stage that bundles ideas/scenes/concepts into one LLM call.
-// Surfaced to the UI as a single stage row — the three result arrays land
-// in `draft.ideas` / `draft.scenes` / `draft.concepts` and the user reviews
-// them as separate sections.
-const LIGHT_STAGE_ID = 'ideasScenesConcepts';
-
-// Stage list emitted to the Ingest UI. Three bible stages run via extractBible
-// (one per BIBLE_KINDS entry — a future bible kind picks up automatically),
-// plus the one bundled light stage. Order matches the typical user mental
-// model: structural first, then narrative shards.
-//
-// Label is derived from BIBLE_FIELD (which is the canonical plural form
-// already used everywhere else for the field key — `characters` / `places` /
-// `objects`) rather than a hand-rolled "append 's'" helper. The append-'s'
-// approach would silently mis-pluralize a future kind that doesn't take a
-// bare-'s' plural (e.g. `entity` → `Entitys`).
-const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-export const EXTRACTION_STAGES = Object.freeze([
-  ...BIBLE_KINDS.map((kind) => ({
-    id: BIBLE_FIELD[kind],   // 'characters' | 'places' | 'objects'
-    label: capitalize(BIBLE_FIELD[kind]),
-    kind,
-  })),
-  { id: LIGHT_STAGE_ID, label: 'Ideas, scenes & concepts' },
-]);
-
-// Field caps for the light-shape sanitizer below. Generous enough for
-// reasonable LLM output, tight enough that a runaway response can't load
-// a multi-MB string into the catalog payload. NAME_MAX / TAG_MAX /
-// TAGS_PER_ENTRY_MAX MUST track BIBLE_LIMITS — those are the boundaries the
-// `/api/catalog/scraps/:id/commit` Zod schema enforces, and a sanitizer cap
-// looser than the schema would let a row pass the extractor but reject the
-// whole batch on commit.
-const LIGHT_LIMITS = Object.freeze({
-  NAME_MAX: BIBLE_LIMITS.NAME_MAX,
-  SUMMARY_MAX: 2000,
-  EVIDENCE_MAX: 400,
-  SETTING_MAX: 200,
-  KIND_MAX: 64,
-  TAG_MAX: BIBLE_LIMITS.TAG_MAX,
-  TAGS_MAX: BIBLE_LIMITS.TAGS_PER_ENTRY_MAX,
-  ACTORS_MAX: 12,
-});
-
-const trim = (v, max) =>
-  typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null;
-
-const trimArray = (arr, itemMax, listMax) => {
-  if (!Array.isArray(arr)) return [];
-  const out = [];
-  for (const item of arr) {
-    const t = trim(item, itemMax);
-    if (t && !out.includes(t)) out.push(t);
-    if (out.length >= listMax) break;
-  }
-  return out;
-};
-
-// Per-kind light-shape sanitizer. Drops rows with no name (the primary key
-// for review selection), and packages everything except `name`/`tags` into
-// the catalog payload so the commit path's payload-splat works cleanly.
-function sanitizeLightEntry(kind, raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const name = trim(raw.name, LIGHT_LIMITS.NAME_MAX);
-  if (!name) return null;
-  const summary = trim(raw.summary, LIGHT_LIMITS.SUMMARY_MAX);
-  const evidence = trim(raw.evidence, LIGHT_LIMITS.EVIDENCE_MAX);
-  const tags = trimArray(raw.tags, LIGHT_LIMITS.TAG_MAX, LIGHT_LIMITS.TAGS_MAX);
-  const entry = { name, tags };
-  if (summary) entry.summary = summary;
-  if (evidence) entry.evidence = evidence;
-  if (kind === 'scene') {
-    const setting = trim(raw.setting, LIGHT_LIMITS.SETTING_MAX);
-    const actors = trimArray(raw.actors, LIGHT_LIMITS.NAME_MAX, LIGHT_LIMITS.ACTORS_MAX);
-    if (setting) entry.setting = setting;
-    if (actors.length > 0) entry.actors = actors;
-  } else if (kind === 'concept') {
-    // The LLM emits `kind` (magic-system / faction / lore / metaphor / rule).
-    // Stored on the payload as-is — `type` is a separate column at the row
-    // level, so `payload.kind` doesn't collide with the catalog's outer type
-    // discriminator and downstream readers (Catalog.jsx snippet fallbacks,
-    // future detail-page renderers) can find the field where the prompt put it.
-    const conceptKind = trim(raw.kind, LIGHT_LIMITS.KIND_MAX);
-    if (conceptKind) entry.kind = conceptKind;
-  }
-  return entry;
-}
-
-/**
- * Run the bundled ideas/scenes/concepts LLM call. Returns three arrays
- * sanitized into the catalog payload shape. Tolerant on parse failure — a
- * malformed response logs and yields empty arrays, mirroring extractBible's
- * sanitizeBibleList tolerance for missing keys.
- */
-async function extractIdeasScenesConcepts({ corpus, providerOverride, promptContext = {} }) {
-  const result = await runStagedLLM('catalog-ideas-scenes-concepts', {
-    ...promptContext,
-    draftBody: corpus,
-    returnsJson: true,
-  }, {
-    providerOverride,
-    returnsJson: true,
-    source: 'catalog-extract-ideas-scenes-concepts',
-  });
-  const content = result?.content || {};
-  // Lived material is tagged `factual`; an invented-fiction run stamps nothing.
-  const lightTags = promptContext.factual ? [FACTUAL_TAG] : [];
-  // One sanitized array per light type, keyed by plural draft key. Driven by
-  // the registry so a new light type (with its prompt JSON key) is picked up
-  // here without an extra line.
-  const out = {};
-  for (const id of LIGHT_TYPE_IDS) {
-    const key = lightDraftKey(id);
-    const raw = Array.isArray(content[key]) ? content[key] : [];
-    out[key] = stampTags(raw.map((r) => sanitizeLightEntry(id, r)).filter(Boolean), lightTags);
-  }
-  return out;
-}
-
-/**
- * Extract candidate ingredients from a raw scrap.
- *
- * @param {object} args
- * @param {string} args.rawText      The scrap body to extract from.
- * @param {string} [args.scrapId]    Scrap id to attach to progress frames.
- * @param {string} [args.providerOverride] Override the staged-llm provider.
- * @param {object} [args.context]    Extraction lens — `{ title, sourceKind, factual }`
- *                                   from `scrapExtractionContext`. Fills the prompts'
- *                                   framing slots and gates the factual sections.
- * @returns {Promise<{
- *   runId: string,
- *   characters: Array,
- *   places: Array,
- *   objects: Array,
- *   stages: Array<{ id, label, status, error? }>
- * }>}
- */
-/**
- * Neutralize markdown fence delimiters in user-pasted text before it lands
- * inside the extractor's triple-backtick `{{draftBody}}` fence. Without this
- * a paste containing ``` would prematurely close the prompt's fenced block
- * and corrupt the structured prompt the LLM sees. The writers-room callers
- * of `extractBible` pass server-curated content so they don't need this; the
- * catalog caller passes ARBITRARY USER PASTE and does.
- *
- * Replacement inserts a zero-width joiner between every adjacent pair of
- * backticks in a run of 3 or more, so the visual content stays readable but
- * no three-backtick subsequence survives. A naive `/```/g` replace fails on
- * runs of 4+ — the leftover backtick after the first match reforms a triple
- * with the trailing pair of the replacement.
- */
-function neutralizeFenceDelimiters(text) {
-  // U+200D zero-width joiner; safe inside JSON strings, invisible in prose.
-  // Match every run of 3+ backticks and rebuild it with ZWJ between each.
-  return text.replace(/`{3,}/g, (run) => run.split('').join('‍'));
-}
-
-// `runId` lets a caller share ONE progress run across multiple extractions —
-// the chunked path passes the parent run id so every child's progress frame
-// demuxes under the same run the client is tracking (otherwise each child mints
-// its own runId and the single-run client UI ignores all but the first). When
-// omitted, a fresh runId is minted (the normal single-scrap path). `emitStart`
-// lets the chunked path suppress the per-child `start` frame, which would
-// otherwise reset the client's stage checklist on every chunk.
-export async function extractIngredients({ rawText, scrapId = null, providerOverride, runId = randomUUID(), emitStart = true, context = {} } = {}) {
-  if (typeof rawText !== 'string' || !rawText.trim()) {
-    throw new Error('extractIngredients: rawText is required');
-  }
-
-  const corpus = neutralizeFenceDelimiters(rawText);
-
-  // The lens the scrap gives the model. `work.{title,kind,wordCount}` fills the
-  // three slots every writers-room bible prompt already declares and that the
-  // catalog path used to render empty — the light stage's Source block reads the
-  // same three rather than carrying aliases that can drift. `factual` gates the
-  // non-fiction sections in both families. Word count is measured against THIS
-  // corpus (a chunk's own length), not the parent's, so a chunked run never
-  // tells the model it is reading more text than it was handed.
-  const { title = '', sourceKind = '', factual = false } = context;
-  const promptContext = {
-    work: { title, kind: sourceKind, wordCount: countWords(corpus) },
-    factual,
-  };
-
-  const emit = (frame) => {
-    try {
-      catalogEvents.emit('progress', { runId, scrapId, ...frame });
-    } catch (err) {
-      console.error(`❌ catalog progress emit failed: ${err.message}`);
-    }
-  };
-
-  if (emitStart) emit({ type: 'start', stages: EXTRACTION_STAGES.map(({ id, label }) => ({ id, label })) });
-
-  // Run every stage in parallel — they're independent and share the corpus.
-  // Each settles to a per-stage status frame so the UI flips the corresponding
-  // row to ✓ / ✗ as work completes. Bible stages return one array; the
-  // light-shape stage returns three (ideas/scenes/concepts) under one stage id.
-  const runStage = async (stage) => {
-    emit({ type: 'stage', id: stage.id, status: 'running' });
-    try {
-      if (stage.id === LIGHT_STAGE_ID) {
-        const out = await extractIdeasScenesConcepts({ corpus, providerOverride, promptContext });
-        const count = LIGHT_TYPE_IDS.reduce((n, id) => n + (out[lightDraftKey(id)]?.length || 0), 0);
-        emit({ type: 'stage', id: stage.id, status: 'completed', count });
-        return { id: stage.id, light: out, error: null };
-      }
-      const result = await extractBible({
-        kind: stage.kind,
-        corpus,
-        existing: [],
-        context: promptContext,
-        providerOverride,
-        source: `catalog-extract-${stage.id}`,
-      });
-      // A real person additionally earns `real-person`, which is what keeps
-      // them filterable apart from an invented cast.
-      const extracted = stampTags(result.extracted, factual
-        ? [FACTUAL_TAG, ...(stage.kind === BIBLE_KIND.CHARACTER ? [REAL_PERSON_TAG] : [])]
-        : []);
-      emit({ type: 'stage', id: stage.id, status: 'completed', count: extracted.length });
-      return { id: stage.id, extracted, error: null };
-    } catch (err) {
-      console.error(`❌ catalog extract ${stage.id} failed: ${err.message}`);
-      emit({ type: 'stage', id: stage.id, status: 'failed', error: err.message });
-      return { id: stage.id, error: err.message };
-    }
-  };
-
-  const settled = await Promise.all(EXTRACTION_STAGES.map(runStage));
-
-  // Default empty arrays for every result key the UI can render — keeps the
-  // commit path's `Array.isArray(result.draft.x)` guard happy even when a
-  // stage failed or returned nothing. Bible keys use BIBLE_FIELD plurals;
-  // light keys use the registry's plural draft key.
-  const draft = {};
-  for (const kind of BIBLE_TYPE_IDS) draft[BIBLE_FIELD[kind]] = [];
-  for (const id of LIGHT_TYPE_IDS) draft[lightDraftKey(id)] = [];
-  const stages = settled.map(({ id, extracted, light, error }) => {
-    let count = 0;
-    if (light) {
-      for (const lightId of LIGHT_TYPE_IDS) {
-        const key = lightDraftKey(lightId);
-        draft[key] = light[key] || [];
-        count += draft[key].length;
-      }
-    } else if (extracted) {
-      draft[id] = extracted;
-      count = extracted.length;
-    }
-    return {
-      id,
-      label: EXTRACTION_STAGES.find((s) => s.id === id).label,
-      status: error ? 'failed' : 'completed',
-      count,
-      error: error || undefined,
-    };
-  });
-
-  // (No terminal `done` socket frame — the client transitions to the review
-  // phase off the HTTP response, not a socket event. Emitting an unhandled
-  // frame is just noise.)
-
-  return { runId, ...draft, stages };
-}
-
-// Every draft-array key `extractIngredients` can return — the bible plurals
-// (`characters`/`places`/`objects`) plus the light plurals (`ideas`/`scenes`/
-// `concepts`). Each KEY encodes the ingredient type, so deduping by name WITHIN
-// a key is a dedup by (name, type). Driven by the same registries the extractor
-// uses so a new type flows through without a manual edit.
-const DRAFT_ARRAY_KEYS = Object.freeze([
-  ...BIBLE_TYPE_IDS.map((kind) => BIBLE_FIELD[kind]),
-  ...LIGHT_TYPE_IDS.map(lightDraftKey),
-]);
-
-/**
- * Union the per-child draft arrays from N chunk extractions into one draft,
- * deduping by `<draftKey>|<lowercased name>` and KEEPING THE FIRST occurrence
- * (chunk order = document order). Each draft key encodes the ingredient type,
- * so this is a dedup by (name, type). Non-array / missing keys are tolerated.
- *
- * @param {Array<object>} drafts  per-child draft objects ({ characters: [...], ... }).
- * @returns {object}  one merged draft with the same array keys.
- */
-export function dedupDrafts(drafts = []) {
-  const merged = {};
-  for (const key of DRAFT_ARRAY_KEYS) merged[key] = [];
-  const seen = new Set();
-  for (const draft of drafts) {
-    if (!draft || typeof draft !== 'object') continue;
-    for (const key of DRAFT_ARRAY_KEYS) {
-      const arr = Array.isArray(draft[key]) ? draft[key] : [];
-      for (const entry of arr) {
-        const name = typeof entry?.name === 'string' ? entry.name.trim().toLowerCase() : '';
-        if (!name) continue;
-        const dedupKey = `${key}|${name}`;
-        if (seen.has(dedupKey)) continue;
-        seen.add(dedupKey);
-        merged[key].push(entry);
-      }
-    }
-  }
-  return merged;
-}
-
-// How many child-chunk extractions run concurrently. Bounded so a long paste
-// (up to CATALOG_CHUNK_MAX_CHARS-sized chunks × maxChunks) doesn't slam the
-// provider with dozens of parallel LLM calls.
+export const EXTRACTION_STAGES = Object.freeze([{ id: 'catalog', label: 'Catalog graph' }]);
 const CHUNK_EXTRACT_CONCURRENCY = 2;
 
-/**
- * Extract candidate ingredients for a stored scrap, transparently handling
- * chunked scraps. Loads the parent scrap; if it has child rows (a long paste
- * that `createChunkedScrap` split), runs `extractIngredients` per child corpus
- * with bounded concurrency and unions the drafts (dedup by name+type, keep
- * first). A non-chunked scrap falls back to a single `extractIngredients` over
- * the parent's full text — identical to the pre-chunking behavior.
- *
- * Always extracts against the PARENT scrap id (the route rejects extract calls
- * on a child). Returns the same `{ runId, ...draft, stages }` shape as
- * `extractIngredients` so the route + client review flow are unchanged.
- *
- * @param {object} args
- * @param {string} args.scrapId            Parent scrap id.
- * @param {string} [args.providerOverride] Override the staged-llm provider.
- */
-export async function extractIngredientsForScrap({ scrapId, providerOverride } = {}) {
+/** Resolve, plan and execute one joint graph call per complete source chunk. */
+export async function extractIngredients({ rawText, scrapId = null, providerOverride, modelOverride,
+  runId = randomUUID(), emitStart = true, context = {} } = {}) {
+  if (typeof rawText !== 'string' || !rawText.trim()) throw new Error('extractIngredients: rawText is required');
+  // Writers Room imports the prose scanner below. It need not load extraction
+  // schemas, prompt configuration or the provider graph until extraction runs.
+  const { planCatalogExtraction, CATALOG_EXTRACTION_STAGE } = await import('./catalogExtractionPlan.js');
+  const { runStageScopedInlineLLM } = await import('./stageRunner.js');
+  const { parseCatalogDraft, dedupDrafts, CATALOG_DRAFT_TYPES } = await import('../lib/catalogExtractionDraft.js');
+  const { parts, options, plan } = await planCatalogExtraction({ rawText, context, providerOverride, modelOverride });
+  const emit = frame => {
+    try { catalogEvents.emit('progress', { runId, scrapId, ...frame }); }
+    catch (err) { console.error(`❌ catalog progress emit failed: ${err.message}`); }
+  };
+  if (emitStart) emit({ type: 'start', stages: plan.chunks.map(({ id, label }) => ({ id, label })), plan });
+  let cancellation = null;
+  const results = await mapWithConcurrency(parts, CHUNK_EXTRACT_CONCURRENCY, async (part, index) => {
+    const chunk = plan.chunks[index];
+    const stage = { id: chunk.id, label: chunk.label, chunkIndex: index, chunkCount: parts.length };
+    if (cancellation) return { draft: null, stage: { ...stage, status: 'failed', count: 0, error: 'Extraction canceled' } };
+    emit({ type: 'stage', ...stage, status: 'running' });
+    try {
+      const result = await runStageScopedInlineLLM(CATALOG_EXTRACTION_STAGE, part.prompt, options);
+      const draft = parseCatalogDraft(result.content, {
+        corpus: neutralizeFences(part.text), factual: context.factual === true, finishReason: result.finishReason,
+      });
+      const count = CATALOG_DRAFT_TYPES.reduce((n, type) => n + draft[type.key].length, 0);
+      const completed = { ...stage, status: 'completed', count };
+      emit({ type: 'stage', ...completed });
+      return { draft, stage: completed };
+    } catch (err) {
+      if (isRunCanceledError(err)) cancellation = err;
+      // Do not log source-bearing parse errors or provider responses. The run
+      // record already holds provider diagnostics; these frames belong to UI.
+      const error = err.message || 'Catalog extraction failed; retry this source.';
+      const failed = { ...stage, status: 'failed', count: 0, error };
+      emit({ type: 'stage', ...failed });
+      return { draft: null, stage: failed };
+    }
+  });
+  if (cancellation) throw cancellation;
+  const completedChunks = results.filter(result => result.draft).length;
+  if (!completedChunks) throw new ServerError(results[0].stage.error, { status: 502, code: 'CATALOG_EXTRACTION_FAILED' });
+  let merged;
+  try { merged = dedupDrafts(results.map(result => result.draft)); }
+  catch (err) { throw new ServerError(err.message, { status: 502, code: 'CATALOG_EXTRACTION_FAILED' }); }
+  const totalEntries = CATALOG_DRAFT_TYPES.reduce((n, type) => n + merged[type.key].length, 0);
+  return { runId, ...merged, stages: results.map(result => result.stage), plan,
+    coverage: { status: completedChunks === parts.length ? 'complete' : 'partial',
+      completedChunks, totalChunks: parts.length,
+      failedChunks: plan.chunks.filter((_, index) => !results[index].draft).map(chunk => chunk.index),
+    },
+    // Keep all candidates for review; consumers must explicitly reduce overflow.
+    ...(totalEntries > 200 || merged.relationships.length > 1000
+      ? { overflow: { entries: totalEntries, relationships: merged.relationships.length, maxEntries: 200, maxRelationships: 1000 } } : {}),
+  };
+}
+
+/** Stored children never replace the complete parent source for model planning. */
+export async function extractIngredientsForScrap({ scrapId, providerOverride, modelOverride } = {}) {
   const parent = await getScrap(scrapId);
   if (!parent) throw new Error(`extractIngredientsForScrap: scrap ${scrapId} not found`);
-
-  // One lens for the whole scrap. Chunk children inherit the PARENT's context:
-  // a child row carries no title of its own and splitting a memoir mid-paragraph
-  // must not flip half of it back to the fiction lens.
-  const context = scrapExtractionContext(parent);
-
-  const children = await listChildScraps(parent.id);
-  if (children.length === 0) {
-    return extractIngredients({ rawText: parent.rawText, scrapId: parent.id, providerOverride, context });
-  }
-
-  // One shared run id for the whole chunked extraction so every child's
-  // progress frame demuxes under the run the client is tracking (the client
-  // gates on a single active runId). Emit ONE start frame up front, then run
-  // each child with `emitStart: false` so a chunk doesn't reset the checklist.
-  const runId = randomUUID();
-  try {
-    catalogEvents.emit('progress', {
-      runId, scrapId: parent.id, type: 'start',
-      stages: EXTRACTION_STAGES.map(({ id, label }) => ({ id, label })),
-    });
-  } catch (err) {
-    console.error(`❌ catalog progress emit failed: ${err.message}`);
-  }
-
-  // Run each child corpus through the extractor with bounded concurrency, then
-  // union the per-child drafts. Progress frames carry the parent scrapId + the
-  // shared runId so the UI's existing live checklist keeps tracking one scrap.
-  const childDrafts = await mapWithConcurrency(children, CHUNK_EXTRACT_CONCURRENCY, (child) =>
-    extractIngredients({ rawText: child.rawText, scrapId: parent.id, providerOverride, runId, emitStart: false, context }),
-  );
-
-  const merged = dedupDrafts(childDrafts);
-
-  // Aggregate per-stage status so the response's `stages` reflects the whole
-  // run: a stage is 'failed' only if it failed in EVERY child (a transient
-  // single-chunk failure shouldn't fail the stage when other chunks succeeded);
-  // count is the deduped merged total for that stage's keys.
-  const stageMap = new Map();
-  for (const draft of childDrafts) {
-    for (const stage of draft.stages || []) {
-      const prev = stageMap.get(stage.id);
-      if (!prev) {
-        stageMap.set(stage.id, { ...stage });
-      } else {
-        // Any success clears the failed flag; keep the first error seen.
-        if (stage.status !== 'failed') prev.status = 'completed';
-        if (!prev.error && stage.error) prev.error = stage.error;
-      }
-    }
-  }
-  const stages = [...stageMap.values()].map((stage) => {
-    const keys = stage.id === LIGHT_STAGE_ID
-      ? LIGHT_TYPE_IDS.map(lightDraftKey)
-      : [stage.id];
-    const count = keys.reduce((n, key) => n + merged[key].length, 0);
-    return { ...stage, count };
+  const sourceKind = typeof parent.sourceKind === 'string' ? parent.sourceKind.trim() : '';
+  return extractIngredients({ rawText: parent.rawText, scrapId: parent.id, providerOverride, modelOverride,
+    context: { title: typeof parent.title === 'string' ? parent.title.trim() : '', sourceKind, factual: isFactualSourceKind(sourceKind) },
   });
-
-  return { runId, ...merged, stages };
 }
 
 // (refKind, refId) pairs the scan is allowed to consider. Only catalog

@@ -1,3 +1,4 @@
+import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 /**
  * Agent Repo-State Verification
  *
@@ -36,7 +37,7 @@ import { emitLog } from './cosEvents.js';
 import { addTask } from './cos.js';
 import * as git from './git.js';
 import { listWorktrees } from './worktreeManager.js';
-import { listRemoteHeads, driveToMerge } from './branchReconcile.js';
+import { listRemoteHeads, driveToMerge, cleanupMerged } from './branchReconcile.js';
 import { readAllTasksFlat } from './investigationTaskProducer.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -312,6 +313,30 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
     return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
   }
 
+  // A merged branch with no remote ref is safe for the deterministic reaper to
+  // retire. Do this before creating another agent task: the common failure is
+  // simply that the completing agent exited before its worktree teardown ran.
+  // `cleanupMerged` repeats merge evidence and the clean-worktree/protection
+  // gates at action time, so an unsafe or racing state falls through to the
+  // existing evidence-backed recovery task.
+  const cleanupOnly = observed.branchMerged === true
+    && observed.remoteBranchPresent === false
+    && !issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED);
+  if (cleanupOnly) {
+    const retired = await cleanupMerged(sourceWorkspace, observed.defaultBranch, [{
+      branch: branchName,
+      upstreamGone: true,
+    }]).catch(() => ({ cleaned: [] }));
+    if (retired.cleaned.includes(branchName)) {
+      // Record the proven cleanup outcome, never infer it from an agent summary.
+      await import('./cosAgentLifecycle.js').then(({ updateAgent }) => updateAgent(agentId, {
+        metadata: { maintenanceOutcome: 'deterministic-cleanup' },
+      })).catch(error => emitLog('warn', `Could not record deterministic cleanup outcome: ${error.message}`, { agentId }));
+      emitLog('info', `🔎 Deterministic cleanup retired merged branch ${branchName} for ${agentId}`, { agentId, branchName });
+      return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
+    }
+  }
+
   emitLog('warn', `🔎 Repo state diverged after ${agentId}: ${issues.map(i => i.code).join(', ')}`, { agentId, branchName, taskId: task?.id });
 
   const recoveryTaskId = await fileRepoStateRecoveryTask({
@@ -398,11 +423,17 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
       + `Do not switch branches in ${sourceWorkspace} itself.`,
   ].join('\n');
 
+  const observation = processAuditFingerprint({ codes: issues.map(issue => issue.code).sort(),
+    merged: observed.branchMerged, remotePresent: observed.remoteBranchPresent, prState: observed.prState });
+  const previous = task?.metadata?.recoveryOrigin;
   const created = await addTask({
     description: `${RECOVERY_TASK_PREFIX} Finish incomplete cleanup for branch ${branchName} in ${appName}`,
     priority: 'HIGH',
     app: appId || undefined,
     isRecovery: true,
+    metadata: { recoveryOrigin: { parentAgentId: agentId, parentTaskId: task?.id || null,
+      subsystem: 'repository-cleanup', attempt: Math.min(1000, (previous?.attempt || 0) + 1),
+      observation, noProgress: previous?.observation === observation } },
     context,
     useWorktree: false,
   }, 'user');

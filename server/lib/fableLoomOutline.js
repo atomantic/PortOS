@@ -8,11 +8,11 @@
  * before an outline is expanded and whenever an author edits it by hand.
  */
 
+import { asArray } from './arrayUtils.js';
 import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { FABLELOOM_PROTAGONIST_PRESENCE } from './fableLoomPlayback.js';
 import { trimTo, isNonBlankStr } from './textUtils.js';
 
-const asArray = (value) => (Array.isArray(value) ? value : []);
 const isObject = (value) => value && typeof value === 'object';
 
 export const OUTLINE_ISSUE_CODES = Object.freeze({

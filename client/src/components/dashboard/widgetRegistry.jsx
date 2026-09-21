@@ -48,7 +48,8 @@ const postFeatureEnabled = (state) => state?.instanceFeatures?.features?.some(
 // dashboard cells measure their content and float up (see DashboardGrid), so
 // this only has to be in the right ballpark for the first paint.
 export const WIDGETS = [
-  { id: 'daily-actions',      label: 'Today\'s Actions',        Component: DailyActionsWidget,      width: 'full',    defaultH: 4, gate: (s) => (s.dailyActions?.actions?.length ?? 0) > 0 },
+  { id: 'actions',           label: 'Actions',                Component: ReviewHubCard,          width: 'full',    defaultH: 4 },
+  { id: 'daily-actions',      label: 'Today\'s Actions',        Component: DailyActionsWidget,      width: 'full',    defaultH: 4 },
   // Daily Driver self-hides once the day is handled — gated on the per-day
   // first-visit/handled state so a handled day reserves no grid cell (#2666).
   { id: 'daily-driver',      label: 'Daily Driver',          Component: DailyDriverWidget,      width: 'third',   defaultH: 6, gate: (s) => !!s.dailyDriver && !s.dailyDriver.handledToday },

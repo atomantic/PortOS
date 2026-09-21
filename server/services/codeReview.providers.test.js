@@ -34,6 +34,18 @@ describe('configured provider reviewers', () => {
     expect(pickAvailableReviewerGroups({ reviewerFallbackGroups: [['ollama'], ['codex']], reviewerHealth: { ollama: { pausedUntil: 50 } } }, 100)).toEqual(['ollama']);
   });
 
+  it('persists repeated tier memberships and explicit disable without adding task-local fallback schemas', () => {
+    const raw = { reviewers: ['codex'], reviewerFallbackGroups: [[backend, 'codex'], [backend]], usernames: ['example-bot'] };
+    const settings = codeReviewSettingsSchema.parse(raw);
+    expect(pickCodeReviewDefaults({ codeReview: settings })).toMatchObject({
+      reviewers: [backend, 'codex'], reviewerFallbackGroups: [[backend, 'codex'], [backend]], usernames: ['example-bot'],
+    });
+    const cleared = codeReviewSettingsSchema.parse({ ...raw, reviewerFallbackGroups: [] });
+    expect(pickCodeReviewDefaults({ codeReview: cleared })).toMatchObject({ reviewers: [], reviewerFallbackGroups: [], usernames: ['example-bot'] });
+    expect(codeReviewSettingsSchema.safeParse({ reviewerFallbackGroups: [[]] }).success).toBe(false);
+    expect(sanitizeTaskMetadata({ reviewerFallbackGroups: [[backend]], reviewers: ['codex'] })).not.toHaveProperty('reviewerFallbackGroups');
+  });
+
   it('recognizes quota and usage allowance failures without classifying ordinary review failures', () => {
     expect(isReviewerQuotaFailure('429 rate limit exceeded')).toBe(true);
     expect(isReviewerQuotaFailure('monthly usage allowance exhausted')).toBe(true);
@@ -82,18 +94,33 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  it('uses the maintained no-tool CLI recipe in disposable scratch and accepts only a final result', async () => {
+  it('runs saved provider model/effort defaults through the no-tool CLI recipe and task overrides', async () => {
     const cli = { ...provider, type: 'tui', command: 'claude' };
     getProviderById.mockResolvedValue(cli);
     runCliProviderPrompt.mockResolvedValue({ text: '{"type":"result","result":"NO FINDINGS"}', partial: false, streamFormat: 'stream-json' });
-    const task = sanitizeTaskMetadata({ reviewers: [backend], reviewerEfforts: { [backend]: 'high' } });
-    expect(task.reviewerEfforts).toEqual({ [backend]: 'high' });
-    const result = await runLocalCodeReview({ backend, model: 'pinned-coder', effort: task.reviewerEfforts[backend], diff: 'example diff' });
+    const settings = codeReviewSettingsSchema.parse({
+      reviewers: [backend], providerModels: { [backend]: 'pinned-coder' }, providerEfforts: { [backend]: 'HIGH' },
+      claudeEffort: 'medium',
+    });
+    const defaults = pickCodeReviewDefaults({ codeReview: settings });
+    expect(defaults.providerEfforts).toEqual({ [backend]: 'high' });
+    const task = sanitizeTaskMetadata(resolveReviewerConfig({}, defaults, defaults.reviewers));
+    expect(task.reviewerEfforts).toEqual({ [backend]: 'high', claude: 'medium' });
+    const result = await runLocalCodeReview({ backend, model: task.reviewerModels[backend], effort: task.reviewerEfforts[backend], diff: 'example diff' });
     expect(result).toMatchObject({ ok: true, findings: 'NO FINDINGS', effort: 'high' });
     const args = runCliProviderPrompt.mock.calls[0][0];
     expect(args).toMatchObject({ provider: { ...cli, effort: 'high' }, model: 'pinned-coder', safetyProfile: 'public-review-gate' });
     await expect(access(args.cwd)).rejects.toThrow();
     expect(callProviderAISimple).not.toHaveBeenCalled();
+
+    const override = resolveReviewerConfig({ reviewerEfforts: { [backend]: 'low' } }, defaults, defaults.reviewers);
+    await runLocalCodeReview({ backend, model: override.reviewerModels[backend], effort: override.reviewerEfforts[backend], diff: 'example diff' });
+    expect(runCliProviderPrompt.mock.lastCall[0]).toMatchObject({ provider: { id: provider.id, effort: 'low' }, model: 'pinned-coder' });
+    const cleared = resolveReviewerConfig({ reviewerModels: {}, reviewerEfforts: {} }, defaults, defaults.reviewers);
+    expect(cleared).toMatchObject({ reviewerModels: {}, reviewerEfforts: {} });
+    await runLocalCodeReview({ backend, model: cleared.reviewerModels[backend], effort: cleared.reviewerEfforts[backend], diff: 'example diff' });
+    expect(runCliProviderPrompt.mock.lastCall[0]).toMatchObject({ provider: cli, model: 'default-coder' });
+    expect(runCliProviderPrompt.mock.lastCall[0].provider).not.toHaveProperty('effort');
 
     runCliProviderPrompt.mockResolvedValue({ text: '{"type":"result","is_error":true,"result":"incomplete"}', partial: false, streamFormat: 'stream-json' });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });

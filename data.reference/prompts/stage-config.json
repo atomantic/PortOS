@@ -77,6 +77,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "catalog-extract": {
+      "name": "Catalog Ingest — Grounded Graph",
+      "description": "Extract all six catalog ingredient types and source-grounded relationships in one validated response per context-budgeted source chunk.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "catalog-ideas-scenes-concepts": {
       "name": "Catalog Ingest — Ideas / Scenes / Concepts",
       "description": "Extract reusable narrative fragments — ideas (premises), scenes (dramatic beats), and concepts (lore, magic systems, factions) — from a raw user-pasted scrap into the Creative Ingredients Catalog. Runs alongside the character/place/object writers-room passes during catalog ingest.",

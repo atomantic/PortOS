@@ -411,6 +411,75 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     }
   });
 
+  it('persists reviewed ownership/use edges and evidence through reload without draft metadata', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: 'Example Owner lends an inherited pistol to Example Companion.' });
+    createdScrapIds.add(scrap.id);
+    const response = await request(makeApp()).post(`/api/catalog/scraps/${scrap.id}/commit`).send({
+      accepted: [
+        { draftId: 'pistol', type: 'object', name: 'Example Inherited Pistol' },
+        { draftId: 'owner', type: 'character', name: 'Example Owner' },
+        { draftId: 'user', type: 'character', name: 'Example Companion' },
+      ],
+      relationships: [
+        { fromDraftId: 'pistol', toDraftId: 'owner', kind: 'owned-by', evidence: 'The owner inherited the pistol.' },
+        { fromDraftId: 'pistol', toDraftId: 'user', kind: 'used-by', evidence: 'The companion borrowed the pistol.' },
+      ],
+      universeRef: UNI,
+    });
+    expect(response.status).toBe(201);
+    for (const row of response.body.ingredients) createdIngredientIds.add(row.id);
+    const [pistol, owner, user] = response.body.ingredients;
+    const reloaded = await catalogDB.getIngredient(pistol.id);
+    expect(reloaded.payload.evidence).toEqual([
+      'owned-by → Example Owner: The owner inherited the pistol.',
+      'used-by → Example Companion: The companion borrowed the pistol.',
+    ]);
+    expect(reloaded.payload).not.toHaveProperty('draftId');
+    const relations = await catalogDB.listRelationsForIngredient(pistol.id);
+    expect(relations.outbound).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toId: owner.id, kind: 'owned-by' }),
+      expect.objectContaining({ toId: user.id, kind: 'used-by' }),
+    ]));
+    expect(relations.outbound).toHaveLength(2);
+    expect((await catalogDB.listRelationsForIngredient(owner.id)).inbound)
+      .toEqual([expect.objectContaining({ fromId: pistol.id, kind: 'owned-by' })]);
+  });
+
+  it('rolls back source links, universe refs, ingredients and earlier edges on a relation failure', async () => {
+    const scrap = await catalogDB.createScrap({ rawText: 'Example relation rollback source' });
+    createdScrapIds.add(scrap.id);
+    const refs = await import('../services/catalogDB/refs.js');
+    const realLink = refs.linkIngredientRelation;
+    const linkedIds = new Set();
+    let calls = 0;
+    const spy = vi.spyOn(refs, 'linkIngredientRelation').mockImplementation(async (from, to, kind, options) => {
+      linkedIds.add(from);
+      linkedIds.add(to);
+      if (++calls === 2) throw new Error('Injected second relation failure');
+      return realLink(from, to, kind, options);
+    });
+    try {
+      await expect(catalogDB.commitScrap({
+        scrapId: scrap.id, universeRef: UNI,
+        accepted: ['a', 'b', 'c'].map(draftId => ({ draftId, type: 'idea', name: 'Example ' + draftId })),
+        relationships: [
+          { fromDraftId: 'a', toDraftId: 'b', kind: 'references', evidence: 'A references B.' },
+          { fromDraftId: 'a', toDraftId: 'c', kind: 'references', evidence: 'A references C.' },
+        ],
+      })).rejects.toThrow('Injected second relation failure');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(calls).toBe(2);
+    for (const id of linkedIds) {
+      expect(await catalogDB.getIngredient(id)).toBeNull();
+      expect(await catalogDB.listSourcesForIngredient(id)).toEqual([]);
+      expect(await catalogDB.listRefsForIngredient(id)).toEqual([]);
+    }
+    const edges = await query('SELECT * FROM catalog_ingredient_relations WHERE from_id = ANY($1::text[])', [[...linkedIds]]);
+    expect(edges.rows).toEqual([]);
+  });
+
   it('rolls back every ingredient, ref, and relation edge on a mid-batch failure', async () => {
     const scrap = await catalogDB.createScrap({ rawText: `Commit rollback source ${NONCE}` });
     createdScrapIds.add(scrap.id);

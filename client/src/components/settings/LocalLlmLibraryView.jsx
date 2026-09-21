@@ -345,7 +345,7 @@ export default function LocalLlmLibraryView() {
   };
 
   return (
-    <section id="llm-management-panel-library" role="tabpanel" aria-labelledby="tab-library" className="space-y-4">
+    <section id="llm-management-panel-library" role="tabpanel" aria-labelledby="llm-library-heading" className="space-y-4">
       {upgradeFlow && (
         <div className="bg-port-warning/10 border-2 border-port-warning/60 rounded-lg p-4 space-y-2" role="alert">
           <div className="flex items-start gap-3">
@@ -381,7 +381,7 @@ export default function LocalLlmLibraryView() {
       {/* Models — backend picker + catalog/install + installed list */}
       <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h2 className="text-sm font-medium text-gray-300">Models</h2>
+          <h2 id="llm-library-heading" className="text-sm font-medium text-gray-300">Models</h2>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <div className="flex items-center gap-1.5">
               {['recommended', 'huggingface'].map((source) => (

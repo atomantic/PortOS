@@ -18,9 +18,11 @@ import {
   MEDIA_KIND_IDS,
   USER_TYPE_FIELD_KINDS,
   isActiveType,
+  getActiveCatalogType,
 } from './catalogTypes.js';
 import { csvIdsParam } from './sharedSchemas.js';
 import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
+import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 
 // Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
 // type there flows through to consumers automatically. Kept as a frozen
@@ -403,23 +405,88 @@ export const catalogMediaVoiceMemoSchema = z.object({
   role: z.string().trim().max(64).optional().nullable(),
 }).strict();
 
+// The extraction and commit boundaries share the same graph-edge wire limits.
+export const catalogDraftRelationshipSchema = z.object({
+  fromDraftId: z.string().trim().min(1).max(120),
+  toDraftId: z.string().trim().min(1).max(120),
+  kind: z.enum(RELATION_KINDS),
+  evidence: z.string().trim().min(1).max(400),
+}).strict();
+
 // `universeRef` (+ optional `role`) mirrors catalogBulkImportSchema.defaults
 // below — same field name, same shape — so the two ingest paths (bulk-import,
 // scrap-commit) cannot drift (#7615). Omitting `universeRef` reproduces
 // today's behavior exactly: source link only, no homing ref.
 export const catalogScrapCommitSchema = z.object({
   accepted: z.array(catalogIngredientCreateSchema.extend({
+    // Extraction-local identity, never an ingredient ID or payload field.
+    draftId: z.string().trim().min(1).max(120).optional(),
     // Optional source-span hint (server forwards as-is to linkIngredientToSource).
     span: z.record(z.string(), z.unknown()).optional(),
   })).min(0).max(200),
+  // Omitted preserves legacy clustering; [] explicitly means no edges.
+  relationships: z.array(catalogDraftRelationshipSchema).max(1000).optional(),
   universeRef: z.string().trim().min(1).max(120).optional(),
   role: z.string().trim().min(1).max(64).optional(),
-}).strict();
+}).strict().superRefine((body, ctx) => {
+  if (body.relationships === undefined) return;
+  const ids = new Set();
+  body.accepted.forEach((entry, index) => {
+    if (!entry.draftId || ids.has(entry.draftId)) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'draftId'], message: 'Explicit graphs require unique draft IDs on every accepted entry' });
+    }
+    ids.add(entry.draftId);
+  });
+  body.relationships.forEach((edge, index) => {
+    if (!ids.has(edge.fromDraftId) || !ids.has(edge.toDraftId)) {
+      ctx.addIssue({ code: 'custom', path: ['relationships', index], message: 'Relationship endpoints must be accepted draft IDs' });
+    }
+    if (edge.fromDraftId === edge.toDraftId) {
+      ctx.addIssue({ code: 'custom', path: ['relationships', index], message: 'Self relationships are not allowed' });
+    }
+  });
+}).transform((body, ctx) => {
+  if (body.relationships === undefined) return body;
+  // One database edge per directed tuple, retaining each distinct evidence
+  // passage in the source payload's EXISTING evidence field. No draft IDs or
+  // new payload shape travel to older peers.
+  const entries = new Map(body.accepted.map(entry => [entry.draftId, entry]));
+  const edges = new Map();
+  const evidenceById = new Map();
+  for (const edge of body.relationships) {
+    const key = JSON.stringify([edge.fromDraftId, edge.toDraftId, edge.kind]);
+    if (!edges.has(key)) edges.set(key, edge);
+    const line = `${edge.kind} → ${entries.get(edge.toDraftId).name}: ${edge.evidence}`.replace(/\s+/g, ' ');
+    if (!evidenceById.has(edge.fromDraftId)) evidenceById.set(edge.fromDraftId, new Set());
+    evidenceById.get(edge.fromDraftId).add(line);
+  }
+  const accepted = body.accepted.map((entry, index) => {
+    const added = evidenceById.get(entry.draftId);
+    if (!added) return entry;
+    const original = entry.payload?.evidence;
+    const bible = getActiveCatalogType(entry.type)?.extractionShape === 'bible';
+    const existing = Array.isArray(original) ? original : typeof original === 'string' && original ? (bible ? [original] : original.split('\n')) : [];
+    const evidence = [...new Set([...existing, ...added])];
+    if (bible && (evidence.length > BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX ||
+        evidence.some(line => typeof line !== 'string' || line.length > BIBLE_LIMITS.EVIDENCE_ITEM_MAX))) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'payload', 'evidence'], message: 'Grounded evidence exceeds the bible evidence capacity; shorten evidence or accept fewer links' });
+      return z.NEVER;
+    }
+    const enriched = { ...entry.payload, evidence: bible || Array.isArray(original) ? evidence : evidence.join('\n') };
+    if (JSON.stringify(enriched).length > 200_000) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'payload'], message: 'Grounded payload exceeds 200KB JSON size cap' });
+      return z.NEVER;
+    }
+    return { ...entry, payload: enriched };
+  });
+  return { ...body, accepted, relationships: [...edges.values()] };
+});
 
-// /scraps/:id/extract — optional provider override (e.g., force a specific
-// LLM provider for this extraction). Empty body is valid.
+// /scraps/:id/extract — optional provider/model override (e.g., a Brain
+// handoff carrying the user's selected local route). Empty body is valid.
 export const catalogExtractRequestSchema = z.object({
   providerOverride: z.string().trim().min(1).max(64).optional(),
+  modelOverride: z.string().trim().min(1).max(200).optional(),
 }).strict();
 
 // Babble is deliberately bounded to one provider call; never silently truncate it.
@@ -598,17 +665,37 @@ export const catalogSyncTagSchema = z.object({
   syncSequence: z.string().optional(),
 }).passthrough();
 
-// Media rows carry tombstone fields + editable metadata (role/caption).
+// Media rows carry tombstone fields + editable attachment metadata
+// (role/caption) and a bounded generation-provenance projection.
 // `kind` is freeform on the wire (not the strict enum) for the same forward-
 // compat reason as relations: a newer peer's extra media kind stores
 // harmlessly rather than 400-ing the whole envelope. `mediaKey` is a reference,
 // not bytes — the receiver matches it against its own library on apply.
+export const catalogMediaMetadataSchema = z.object({
+  format: z.string().max(GENERATION_METADATA_LIMITS.format).optional(),
+  parameters: z.string().max(GENERATION_METADATA_LIMITS.parameters).optional(),
+  prompt: z.string().max(GENERATION_METADATA_LIMITS.prompt).optional(),
+  negativePrompt: z.string().max(GENERATION_METADATA_LIMITS.negativePrompt).optional(),
+  steps: z.number().int().min(0).max(GENERATION_METADATA_LIMITS.steps).optional(),
+  sampler: z.string().max(GENERATION_METADATA_LIMITS.sampler).optional(),
+  cfgScale: z.number().finite().min(0).max(GENERATION_METADATA_LIMITS.cfgScale).optional(),
+  seed: z.union([z.number().int(), z.string().max(GENERATION_METADATA_LIMITS.seed)]).optional(),
+  width: z.number().int().positive().max(GENERATION_METADATA_LIMITS.width).optional(),
+  height: z.number().int().positive().max(GENERATION_METADATA_LIMITS.height).optional(),
+  modelHash: z.string().max(GENERATION_METADATA_LIMITS.modelHash).optional(),
+  model: z.string().max(GENERATION_METADATA_LIMITS.model).optional(),
+}).passthrough().refine(
+  (metadata) => JSON.stringify(metadata).length <= GENERATION_METADATA_LIMITS.jsonChars,
+  { message: 'media metadata exceeds 96KB JSON size cap' },
+);
+
 export const catalogSyncMediaSchema = z.object({
   ingredientId: z.string().max(80),
   mediaKey: z.string().max(512),
   kind: z.string().max(32),
   role: z.string().max(64).nullable().optional(),
   caption: z.string().max(2_000).nullable().optional(),
+  metadata: catalogMediaMetadataSchema.optional(),
   createdAt: isoDate,
   deleted: z.boolean().optional(),
   deletedAt: z.string().nullable().optional(),
@@ -642,7 +729,8 @@ export const catalogSyncEnvelopeSchema = z.object({
   tags: z.array(catalogSyncTagSchema).max(20_000).optional(),
   media: z.array(catalogSyncMediaSchema).max(20_000).optional(),
   // Additive catalog v8 block — user-defined type definitions. Optional so a
-  // ≤v7 peer's envelope (no `catalogTypes`) still validates.
+  // ≤v7 peer's envelope (no `catalogTypes`) still validates. Media provenance
+  // is the separate additive v9 field on each `media` row above.
   catalogTypes: z.array(catalogSyncUserTypeSchema).max(64).optional(),
   portosMeta,
 }).passthrough();

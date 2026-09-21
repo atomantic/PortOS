@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import PromptManager from './PromptManager';
 import toast from '../components/ui/Toast';
@@ -65,12 +65,16 @@ const LocationProbe = () => {
   return <div data-testid="location-search">{search}</div>;
 };
 
-const renderPage = (entry = '/prompts') => render(
-  <MemoryRouter initialEntries={[entry]}>
-    <PromptManager />
-    <LocationProbe />
-  </MemoryRouter>,
-);
+const renderPage = async (entry = '/prompts') => {
+  const result = render(
+    <MemoryRouter initialEntries={[entry]}>
+      <PromptManager />
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+  await act(async () => {});
+  return result;
+};
 
 const currentSearch = () => screen.getByTestId('location-search').textContent;
 
@@ -96,7 +100,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('shows collapsed groups and a stage count instead of a flat 100-row list', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     // Group headers, not rows.
@@ -108,7 +112,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('expands and re-collapses a group on click', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     const header = groupHeader('Pipeline');
@@ -122,7 +126,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('filters rows on the title as the user types, auto-revealing matches', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.change(searchBox(), { target: { value: 'comic' } });
@@ -135,7 +139,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('keeps the group toggle live while filtering so a broad query can be folded', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     // A query matching everything must not become an uncollapsible wall.
@@ -152,7 +156,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('forgets a filter-scoped collapse once the filter clears', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.change(searchBox(), { target: { value: 'e' } });
@@ -170,7 +174,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('drops a fold when the query is refined, so the new match cannot hide behind it', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.change(searchBox(), { target: { value: 'e' } });
@@ -184,7 +188,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('drops a fold when the SYSTEM toggle changes the filter', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.change(searchBox(), { target: { value: 'e' } });
@@ -203,7 +207,7 @@ describe('PromptManager stage list', () => {
       },
       systemStages: SYSTEM_STAGES,
     });
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     // One PIPELINE header, holding all three — not two headers that render alike.
@@ -214,7 +218,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('filters on the description too', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.change(searchBox(), { target: { value: 'balloons' } });
@@ -223,7 +227,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('reports an empty result rather than a silently blank pane', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.change(searchBox(), { target: { value: 'zzzz' } });
@@ -231,7 +235,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('clears the query from the clear button', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.change(searchBox(), { target: { value: 'comic' } });
@@ -244,7 +248,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('narrows to system stages with the SYSTEM-only toggle', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     const toggle = screen.getByRole('button', { name: /system only/i });
@@ -262,7 +266,7 @@ describe('PromptManager stage list', () => {
   // client array ever mentioned it.
   it('badges and filters whatever the server names in systemStages', async () => {
     getPrompts.mockResolvedValue({ stages: STAGES, systemStages: ['creative-director-treatment'] });
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.click(screen.getByRole('button', { name: /system only/i }));
@@ -276,7 +280,7 @@ describe('PromptManager stage list', () => {
   // nothing — never crash on a missing key.
   it('degrades to no system stages when the server omits the list', async () => {
     getPrompts.mockResolvedValue({ stages: STAGES });
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.click(screen.getByRole('button', { name: /system only/i }));
@@ -285,7 +289,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('selects a stage into the URL from a filtered row', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
 
     fireEvent.change(searchBox(), { target: { value: 'comic' } });
@@ -295,7 +299,7 @@ describe('PromptManager stage list', () => {
   });
 
   it('opens the group holding a deep-linked stage', async () => {
-    renderPage('/prompts?stage=brain-classifier');
+    await renderPage('/prompts?stage=brain-classifier');
     await screen.findByText('Prompt Stages');
 
     await waitFor(() => expect(groupHeader('Brain').getAttribute('aria-expanded')).toBe('true'));
@@ -321,7 +325,7 @@ describe('PromptManager delete demotion', () => {
   });
 
   it('keeps delete — or any other control — out of the list rows entirely', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Prompt Stages');
     fireEvent.click(groupHeader('Pipeline'));
 
@@ -333,7 +337,7 @@ describe('PromptManager delete demotion', () => {
   });
 
   it('offers delete from the selected stage detail pane', async () => {
-    renderPage('/prompts?stage=brain-classifier');
+    await renderPage('/prompts?stage=brain-classifier');
     await screen.findByText('Prompt Stages');
 
     const del = await screen.findByRole('button', { name: /^delete$/i });
@@ -353,7 +357,7 @@ describe('PromptManager delete demotion', () => {
       referencedBy: ['server/services/pipeline/textStages.js', 'server/services/pipeline/pipelineJudge.js'],
       canDelete: false,
     });
-    renderPage('/prompts?stage=pipeline-comic-script');
+    await renderPage('/prompts?stage=pipeline-comic-script');
     await screen.findByText('Prompt Stages');
 
     fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
@@ -372,7 +376,7 @@ describe('PromptManager delete demotion', () => {
 
   it('deletes a user-authored stage without force', async () => {
     getPromptUsage.mockResolvedValue({ isSystemStage: false, usedBy: [], referencedBy: [], canDelete: true });
-    renderPage('/prompts?stage=pipeline-comic-script');
+    await renderPage('/prompts?stage=pipeline-comic-script');
     await screen.findByText('Prompt Stages');
 
     fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
@@ -402,7 +406,7 @@ describe('PromptManager stage save/create/delete feedback (#6022)', () => {
   });
 
   it('confirms a successful stage save with a named toast', async () => {
-    renderPage('/prompts?stage=pipeline-comic-script');
+    await renderPage('/prompts?stage=pipeline-comic-script');
     await screen.findByText('Prompt Stages');
     await screen.findByRole('button', { name: /^save$/i });
 
@@ -413,7 +417,7 @@ describe('PromptManager stage save/create/delete feedback (#6022)', () => {
   });
 
   it('confirms stage creation with a named toast and deep-links straight to the new stage', async () => {
-    renderPage('/prompts');
+    await renderPage('/prompts');
     await screen.findByText('Prompt Stages');
 
     fireEvent.click(screen.getByRole('button', { name: 'New Stage' }));
@@ -426,7 +430,7 @@ describe('PromptManager stage save/create/delete feedback (#6022)', () => {
   });
 
   it('confirms a successful stage delete with a named toast', async () => {
-    renderPage('/prompts?stage=pipeline-comic-script');
+    await renderPage('/prompts?stage=pipeline-comic-script');
     await screen.findByText('Prompt Stages');
 
     fireEvent.click(await screen.findByRole('button', { name: /^delete$/i }));
@@ -449,7 +453,7 @@ describe('PromptManager variable deletion', () => {
   });
 
   const openVariables = async () => {
-    renderPage('/prompts?tab=variables');
+    await renderPage('/prompts?tab=variables');
     return screen.findByText('Tone Guide');
   };
 
@@ -518,7 +522,7 @@ describe('PromptManager variable editing', () => {
   // from the URL param a commit before the effect fills the form, so keying off
   // it makes every later assertion a race against an empty editor.
   const openVariable = async (key = 'tone-guide') => {
-    renderPage(`/prompts?tab=variables&var=${key}`);
+    await renderPage(`/prompts?tab=variables&var=${key}`);
     await screen.findByDisplayValue(VARIABLES[key].content);
   };
 
@@ -554,7 +558,7 @@ describe('PromptManager variable editing', () => {
     getPromptVariables
       .mockResolvedValueOnce({ variables: VARIABLES })
       .mockResolvedValue({ variables: { ...VARIABLES, 'aside-voice': { name: 'Aside Voice', content: 'wink' } } });
-    renderPage('/prompts?tab=variables');
+    await renderPage('/prompts?tab=variables');
     await screen.findByText('Tone Guide');
 
     fireEvent.change(screen.getByPlaceholderText('variableKey'), { target: { value: 'aside-voice' } });
@@ -580,7 +584,7 @@ describe('PromptManager variable editing', () => {
   });
 
   it('confirms a delete with a toast', async () => {
-    renderPage('/prompts?tab=variables');
+    await renderPage('/prompts?tab=variables');
     await screen.findByText('Tone Guide');
 
     fireEvent.click(screen.getByLabelText('Delete variable Tone Guide'));
@@ -677,7 +681,7 @@ describe('PromptManager job skill selection', () => {
   });
 
   it('writes the picked skill to the URL instead of local state', async () => {
-    renderPage('/prompts?tab=job-skills');
+    await renderPage('/prompts?tab=job-skills');
     await screen.findByText('code-fixer');
 
     fireEvent.click(screen.getByText('code-fixer'));
@@ -688,7 +692,7 @@ describe('PromptManager job skill selection', () => {
   });
 
   it('loads the skill named by a deep link on mount', async () => {
-    renderPage('/prompts?tab=job-skills&skill=doc-writer');
+    await renderPage('/prompts?tab=job-skills&skill=doc-writer');
 
     await screen.findByText('Job doc-writer');
     expect(getJobSkill).toHaveBeenCalledWith('doc-writer', { silent: true });
@@ -696,7 +700,7 @@ describe('PromptManager job skill selection', () => {
   });
 
   it('keeps the open skill editor across a tab round-trip', async () => {
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
 
     fireEvent.click(screen.getByRole('button', { name: /variables/i }));
@@ -707,7 +711,7 @@ describe('PromptManager job skill selection', () => {
   });
 
   it('does not leave the previous skill rendered when the next fetch fails', async () => {
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
 
     getJobSkill.mockRejectedValueOnce(new Error('gone'));
@@ -721,7 +725,7 @@ describe('PromptManager job skill selection', () => {
   });
 
   it('shows the placeholder when no skill is named in the URL', async () => {
-    renderPage('/prompts?tab=job-skills');
+    await renderPage('/prompts?tab=job-skills');
     await screen.findByText('code-fixer');
 
     expect(getJobSkill).not.toHaveBeenCalled();
@@ -747,7 +751,7 @@ describe('PromptManager job skill save feedback', () => {
   });
 
   const openEditor = async () => {
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
   };
 
@@ -816,14 +820,14 @@ describe('PromptManager job skill unsaved-edit guard', () => {
   const editor = () => screen.getByLabelText('Skill Template (Markdown)');
 
   const openDirtyEditor = async () => {
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
     fireEvent.change(editor(), { target: { value: '# edited by hand' } });
     await screen.findByText('Unsaved changes');
   };
 
   it('marks the editor dirty once the template is modified', async () => {
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
     expect(screen.queryByText('Unsaved changes')).toBeNull();
 
@@ -969,7 +973,7 @@ describe('PromptManager job skill unsaved-edit guard', () => {
   it('drops a preview that resolves after the user switched skills', async () => {
     let resolvePreview;
     previewJobSkill.mockReset().mockImplementationOnce(() => new Promise((r) => { resolvePreview = r; }));
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
 
     fireEvent.click(screen.getByRole('button', { name: /preview/i }));
@@ -981,7 +985,7 @@ describe('PromptManager job skill unsaved-edit guard', () => {
   });
 
   it('does not prompt when a clean editor switches skills', async () => {
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
 
     fireEvent.click(screen.getByText('doc-writer'));
@@ -993,7 +997,7 @@ describe('PromptManager job skill unsaved-edit guard', () => {
   it('disables Preview button while request is in flight and re-enables when complete', async () => {
     let resolvePreview;
     previewJobSkill.mockReset().mockImplementationOnce(() => new Promise((r) => { resolvePreview = r; }));
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
 
     const previewBtn = screen.getByRole('button', { name: /preview/i });
@@ -1020,7 +1024,7 @@ describe('PromptManager job skill unsaved-edit guard', () => {
       })
       .mockImplementationOnce(() => new Promise((r) => { resolveSecond = r; }));
 
-    renderPage('/prompts?tab=job-skills&skill=code-fixer');
+    await renderPage('/prompts?tab=job-skills&skill=code-fixer');
     await screen.findByText('Job code-fixer');
 
     previewBtn = screen.getByRole('button', { name: /preview/i });
@@ -1051,7 +1055,7 @@ describe('PromptManager page header', () => {
   });
 
   it('renders exactly one h1, naming the page rather than the settings section', async () => {
-    renderPage();
+    await renderPage();
 
     await screen.findByLabelText('Search prompt stages');
     const headings = screen.getAllByRole('heading', { level: 1 });
@@ -1085,14 +1089,14 @@ describe('PromptManager stage unsaved-edit guard', () => {
   // A deep link expands the group holding the open stage, so the sibling row
   // under test is on screen without any manual disclosure click.
   const openDirtyEditor = async () => {
-    renderPage('/prompts?stage=pipeline-prose-draft');
+    await renderPage('/prompts?stage=pipeline-prose-draft');
     await screen.findByDisplayValue('pipeline-prose-draft template');
     fireEvent.change(templateBox(), { target: { value: 'edited by hand' } });
     await screen.findByText('Unsaved changes');
   };
 
   it('marks the stage editor dirty once the template is modified', async () => {
-    renderPage('/prompts?stage=pipeline-prose-draft');
+    await renderPage('/prompts?stage=pipeline-prose-draft');
     await screen.findByDisplayValue('pipeline-prose-draft template');
     expect(screen.queryByText('Unsaved changes')).toBeNull();
     expect(screen.queryByText('Unsaved')).toBeNull();
@@ -1105,7 +1109,7 @@ describe('PromptManager stage unsaved-edit guard', () => {
   });
 
   it('marks the editor dirty on a config-only change', async () => {
-    renderPage('/prompts?stage=pipeline-prose-draft');
+    await renderPage('/prompts?stage=pipeline-prose-draft');
     await screen.findByDisplayValue('pipeline-prose-draft template');
 
     fireEvent.change(screen.getByLabelText('Model tier'), { target: { value: 'quick' } });
@@ -1195,7 +1199,7 @@ describe('PromptManager stage unsaved-edit guard', () => {
   });
 
   it('does not prompt when a clean editor switches stages', async () => {
-    renderPage('/prompts?stage=pipeline-prose-draft');
+    await renderPage('/prompts?stage=pipeline-prose-draft');
     await screen.findByDisplayValue('pipeline-prose-draft template');
 
     fireEvent.click(await screen.findByText('Pipeline — Comic Book Script'));

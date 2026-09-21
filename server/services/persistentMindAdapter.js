@@ -1,3 +1,4 @@
+import { composeMaintainerInstructions } from '../lib/persistentMindMaintainer.js';
 /**
  * Production text-provider adapter for the persistent Chief-of-Staff mind.
  *
@@ -67,6 +68,7 @@ import {
 const { HEARTBEAT_INTERVAL_MS } = PERSISTENT_MIND_LIMITS;
 const MAX_TOOL_PROVIDER_ROUNDS = 4;
 const MAX_TOOL_RESULT_CHARS = 4_000;
+const MAX_CONTINUATION_TOOL_PROMPT_CHARS = 24_000;
 const MAX_MEMORY_CANDIDATES_PER_TURN = 5;
 
 const memoryCandidateSchema = z.object({
@@ -238,22 +240,23 @@ export function persistentMindHarnessInfo(provider) {
   };
 }
 
-const currentWakeText = (wake) => {
+const currentWakeText = (wake, maintenancePrompt) => {
   if (wake?.kind === 'message') {
     const imageCount = Array.isArray(wake.message?.images) ? wake.message.images.length : 0;
     const attachmentNote = imageCount > 0 ? `\n[${imageCount} image${imageCount === 1 ? '' : 's'} attached]` : '';
     return `A human message is waiting. Reply directly to it.\nmessageId=${wake.message?.id || 'unknown'}\n${wake.message?.text || ''}${attachmentNote}`;
   }
-  return `This is a self-directed wake. There is NO human message and NO implied user request this turn — do not invent one (no workouts, weather, inbox triage, or phone calls unless tools/capabilities explicitly require them for the playbook). Continue the standing playbook: prefer eidoverse.status then one concrete Eidoverse/PortOS action, then a short working note.\nreason=${wake?.reason || 'scheduled reflection'}`;
+  return `This is a self-directed wake. There is NO human message and NO implied user request this turn — do not invent one (no workouts, weather, inbox triage, or phone calls unless tools/capabilities explicitly require them for the playbook). ${maintenancePrompt ? 'Read the development maintenance evidence first; act only on new exceptions, then return to the standing Eidoverse playbook.' : 'Continue the standing playbook: prefer eidoverse.status then one concrete Eidoverse/PortOS action, then a short working note.'}\nreason=${wake?.reason || 'scheduled reflection'}`;
 };
 
-export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({ enabled: false }), toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
+export function buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, maintenancePrompt = '', issueCapabilityPrompt = buildPersistentMindIssueCapabilityPrompt({ enabled: false }), toolCapabilityPrompt = '# PortOS semantic tools\nSemantic tool access is OFF.', visibilityPrompt = '# Persistent Mind environment visibility\nWorkspace and runtime visibility is unknown.', userActionsPrompt = '', callCapabilityPrompt = buildPersistentMindCallCapabilityPrompt({ enabled: false }) }) {
   return `${context.text}
 
 ${visibilityPrompt}
 ${userActionsPrompt ? `\n${userActionsPrompt}\n` : ''}
+${maintenancePrompt ? `\n${maintenancePrompt}\n` : ''}
 # Current wake
-${currentWakeText(wake)}
+${currentWakeText(wake, maintenancePrompt)}
 
 ${taskCapabilityPrompt}
 
@@ -302,7 +305,7 @@ export function buildPersistentMindSummaryPrompt({ events, previousSummary, jour
  */
 const passthroughCallBoundary = (_descriptor, run) => run({ reportRunId: () => {} });
 
-async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId }) {
+async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId, timeoutMs }) {
   if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
   if (typeof heartbeat === 'function') await heartbeat();
   let activeRunId = null;
@@ -328,6 +331,7 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
     effort,
     prompt,
     source: 'cos-persistent-mind',
+    ...(timeoutMs ? { timeout: timeoutMs, absoluteTimeoutMs: timeoutMs, maxTokens: 8192, outputReserveTokens: 8192 } : {}),
     allowFallback: false,
     screenshots,
     responseSchema,
@@ -373,7 +377,7 @@ export function createPersistentMindTurnAdapter() {
         model: profile.model,
         effort: profile.effort,
         identity: prompt.identity,
-        instructions: composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase),
+        instructions: composeMaintainerInstructions(composePersistentMindInstructions(prompt.instructions, playbook, playbookPhase?.phase), root.config?.persistentMindMaintainer),
         playbook,
         playbookPhase,
         memories,
@@ -381,14 +385,15 @@ export function createPersistentMindTurnAdapter() {
     },
 
     async summarize({ events, previousSummary, journal, mindId, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
-      const result = await callBoundary({ purpose: 'summary' }, ({ reportRunId }) => runPinnedPrompt({
+      const prompt = buildPersistentMindSummaryPrompt({ events, previousSummary, journal, mindId });
+      const result = await callBoundary({ purpose: 'summary', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId, timeoutMs }) => runPinnedPrompt({
         provider,
         model,
         effort,
         signal,
         heartbeat,
         reportRunId,
-        prompt: buildPersistentMindSummaryPrompt({ events, previousSummary, journal, mindId }),
+        prompt, timeoutMs,
       }));
       return result.text.trim();
     },
@@ -397,8 +402,8 @@ export function createPersistentMindTurnAdapter() {
     // closed-schema validation and the single repair retry, so the adapter
     // cannot accidentally accept a batch the contract would have refused.
     async extractJournal({ prompt, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
-      const result = await callBoundary({ purpose: 'journal' }, ({ reportRunId }) => runPinnedPrompt({
-        provider, model, effort, signal, heartbeat, reportRunId, prompt,
+      const result = await callBoundary({ purpose: 'journal', promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) }, ({ reportRunId, timeoutMs }) => runPinnedPrompt({
+        provider, model, effort, signal, heartbeat, reportRunId, prompt, timeoutMs,
       }));
       return result.text.trim();
     },
@@ -434,7 +439,14 @@ export function createPersistentMindTurnAdapter() {
       // Deterministic and always included (epic #5593 decision 14): bounded,
       // already redacted, no grant required. Deeper lookbacks use the
       // readPortos-gated user-actions.query tool.
-      const userActionsPrompt = await readPersistentMindUserActionsPrompt();
+      // Maintainers get aggregates, not automatic ledger summaries/transcript prose.
+      const userActionsPrompt = root.config?.persistentMindMaintainer?.enabled ? '' : await readPersistentMindUserActionsPrompt();
+      let maintenancePrompt = '';
+      if (root.config?.persistentMindMaintainer?.enabled) {
+        const maintenance = await import('./persistentMindMaintenanceContext.js');
+        maintenancePrompt = maintenance.buildPersistentMindMaintenancePrompt(
+          await maintenance.readPersistentMindMaintenanceContext({ visibility }));
+      }
       // Only the very first build of the turn ages the lease and traces —
       // every later rebuild (after a tool round) reuses the same turnId with
       // isUserTurn omitted so a multi-round turn can't age its own tools out
@@ -455,6 +467,7 @@ export function createPersistentMindTurnAdapter() {
         toolCapabilityPrompt,
         visibilityPrompt,
         userActionsPrompt,
+        maintenancePrompt,
         callCapabilityPrompt,
       });
       let providerPrompt = basePrompt;
@@ -471,9 +484,10 @@ export function createPersistentMindTurnAdapter() {
       for (let round = 0; round < MAX_TOOL_PROVIDER_ROUNDS; round += 1) {
         // Round 0 is the turn itself; every later round is a continuation the
         // model earned by asking for tools. Each is admitted on its own.
+        const prompt = `${providerPrompt}\n\n# Current naming identity\n${persistentMindNamePrompt(await readPersistentMindName(PERSISTENT_MIND_ID), { canChoose: taskAccess.manageMind })}`;
         result = await callBoundary(
-          { purpose: round === 0 ? 'turn' : 'tool-round', round },
-          async ({ reportRunId }) => runPinnedPrompt({
+          { purpose: round === 0 ? 'turn' : 'tool-round', round, promptChars: prompt.length, promptBytes: Buffer.byteLength(prompt) },
+          async ({ reportRunId, timeoutMs }) => runPinnedPrompt({
             provider,
             model,
             effort,
@@ -481,7 +495,7 @@ export function createPersistentMindTurnAdapter() {
             heartbeat,
             screenshots,
             reportRunId,
-            prompt: `${providerPrompt}\n\n# Current naming identity\n${persistentMindNamePrompt(await readPersistentMindName(PERSISTENT_MIND_ID), { canChoose: taskAccess.manageMind })}`,
+            prompt, timeoutMs,
             responseSchema: persistentMindResponseSchema,
           }),
         );
@@ -597,8 +611,18 @@ export function createPersistentMindTurnAdapter() {
         // call may have just activated or renewed a family, so re-read the
         // live lease state, but this in-turn rebuild must never age it again
         // or log a second trace line for the same turn.
-        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, callCapabilityPrompt,
-          toolCapabilityPrompt: await buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities), { turnId }),
+        const completedToolNames = completedToolResults
+          .filter((toolResult) => toolResult.state === 'completed')
+          .map((toolResult) => toolResult.name)
+          .filter(Boolean);
+        basePrompt = buildPersistentMindTurnPrompt({ context, wake, taskCapabilityPrompt, issueCapabilityPrompt, visibilityPrompt, userActionsPrompt, maintenancePrompt, callCapabilityPrompt,
+          // A successful call proves only that its own schema was useful. Keep
+          // that schema (and the compact discovery index) for continuation;
+          // do not expand every sibling in the leased family. This bounds the
+          // complete prompt while preserving explicit activation semantics.
+          toolCapabilityPrompt: await buildPersistentMindToolPrompt(liveCapabilities, await readPersistentMindRecipeCatalog(liveCapabilities), {
+            turnId, maxChars: MAX_CONTINUATION_TOOL_PROMPT_CHARS, requiredToolNames: completedToolNames,
+          }),
         });
         const budgetExhausted = toolBudget.used >= COS_TOOL_CALL_LIMITS.maxCallsPerTurn || round === MAX_TOOL_PROVIDER_ROUNDS - 2;
         providerPrompt = `${basePrompt}\n\n# Completed tool results\n${JSON.stringify(completedToolResults)}\n\n${parsed.taskRequests.length > 0 ? 'Task requests from this intermediate round were not queued. Include only the final desired taskRequests in a terminal response with toolCalls: [].\n' : ''}${budgetExhausted ? 'The tool-call budget is exhausted. Return a final response with toolCalls: [] and do not repeat completed actions.' : 'Use these results to continue. Do not repeat a completed requestId.'}`;

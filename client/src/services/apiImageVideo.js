@@ -622,3 +622,11 @@ export const probeLoraEffect = (filename, { force = false, ...options } = {}) =>
   `/loras/${encodeURIComponent(filename)}/effect${force ? '?force=1' : ''}`,
   { method: 'POST', ...options },
 );
+
+export const setMediaModelEnabled = (id, enabled, options = {}) => request(`/image-video/models/registry/${encodeURIComponent(id)}/availability`, {
+  ...options, method: 'PATCH', body: JSON.stringify({ enabled }),
+});
+
+export const requestMediaModelSupport = (input, options = {}) => request('/image-video/models/support-request', {
+  ...options, method: 'POST', body: JSON.stringify(input),
+});

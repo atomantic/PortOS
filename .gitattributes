@@ -28,6 +28,9 @@
 *.ttf binary
 *.eot binary
 
+# Keep this source diff visible while removing its legacy NUL delimiter.
+server/services/pipeline/editorial/comparativeRank.js diff
+
 # Sorted catalogs and barrels: one line per module, so concurrent branches
 # conflict on the same insertion hunk. `union` keeps both sides;
 # scripts/catalog-merge-union.test.js catches a doubled or resurrected line

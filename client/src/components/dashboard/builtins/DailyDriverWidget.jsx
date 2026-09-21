@@ -29,6 +29,7 @@ const AREA_ICONS = {
 export default function DailyDriverWidget({ dashboardState }) {
   const [post, setPost] = useState(null);
   const [topRec, setTopRec] = useState(null);
+  const [autobiography, setAutobiography] = useState(null);
   const [goals, setGoals] = useState([]);
   // Sentinel: distinguish "goals failed to load" from "no goals exist" so a
   // transient fetch failure doesn't show the "Define your goals" CTA to a user
@@ -46,6 +47,7 @@ export default function DailyDriverWidget({ dashboardState }) {
     || (Array.isArray(features) && features.some((feature) => feature.id === featureId && feature.enabled === true))
   );
   const postEnabled = isFeatureEnabled('post');
+  const autobiographyEnabled = isFeatureEnabled('autobiography');
 
   const refetchDashboard = dashboardState?.refetch;
   // The first landing of the local day (recorded server-side by the dashboard's
@@ -61,11 +63,13 @@ export default function DailyDriverWidget({ dashboardState }) {
     Promise.all([
       postEnabled ? api.getPostStats().catch(() => null) : Promise.resolve(null),
       postEnabled ? api.getPostRecommendations(1).catch(() => null) : Promise.resolve(null),
+      autobiographyEnabled ? api.getAutobiographyConfig().catch(() => null) : Promise.resolve(null),
       api.getGoals({ silent: true }).catch(() => null),
-    ]).then(([stats, recs, goalsData]) => {
+    ]).then(([stats, recs, autobiographyConfig, goalsData]) => {
       if (!active) return;
       setPost(stats);
       setTopRec(recs?.recommendations?.[0] || null);
+      setAutobiography(autobiographyConfig);
       // `goalsData?.goals` present => authoritative list; null => fetch failed.
       if (Array.isArray(goalsData?.goals)) {
         setGoals(goalsData.goals.filter((g) => g.status === 'active'));
@@ -80,7 +84,7 @@ export default function DailyDriverWidget({ dashboardState }) {
     return () => {
       active = false;
     };
-  }, [postEnabled]);
+  }, [postEnabled, autobiographyEnabled]);
 
   // Mark the day handled, then refetch dashboard state so the registry gate
   // drops the card (which unmounts this widget). On failure, re-enable the
@@ -149,6 +153,24 @@ export default function DailyDriverWidget({ dashboardState }) {
                 Start <ArrowRight size={12} />
               </span>
             )}
+          </Link>
+        )}
+
+        {autobiographyEnabled && autobiography?.enabled && (
+          <Link
+            to="/digital-twin/autobiography"
+            className="flex items-center gap-2 p-2 rounded-lg border border-port-border hover:border-gray-600 transition-colors"
+          >
+            <BookOpen size={16} className="text-amber-400 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-white">Autobiography prompt</div>
+              <div className="text-xs text-gray-500 truncate">
+                {autobiography.lastPromptAt ? 'Continue your life story' : 'Start your first life story'}
+              </div>
+            </div>
+            <span className="flex items-center gap-1 text-xs text-port-accent shrink-0">
+              Write <ArrowRight size={12} />
+            </span>
           </Link>
         )}
 

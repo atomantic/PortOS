@@ -25,41 +25,69 @@ import FolderPicker from '../../FolderPicker';
 import { timeAgo, formatBytes, formatCount } from '../../../utils/formatters';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useNoteSave } from '../../../hooks/useNoteSave.js';
+import useUrlParams from '../../../hooks/useUrlParams';
 import { clickableProps } from '../../../lib/a11yKeyboard.js';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import ForceSaveNoteRow from '../../ForceSaveNoteRow.jsx';
 
+function UnavailableState({ title, message, onRetry }) {
+  return (
+    <div role="alert" className="rounded-lg border border-port-error/40 bg-port-error/10 p-4 text-sm text-gray-300">
+      <p className="font-medium text-port-error">{title}</p>
+      <p className="mt-1 text-gray-400">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-3 min-h-[44px] rounded bg-port-card px-3 text-port-accent hover:text-white"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export default function NotesTab() {
+  const [searchParams, updateParams] = useUrlParams();
+  const selectedVaultId = searchParams.get('vault') || null;
+  const folderFilter = searchParams.get('folder') || '';
+  const searchQuery = searchParams.get('q') || '';
+  const selectedNotePath = searchParams.get('note') || null;
+
   // Vault state
   const [vaults, setVaults] = useState([]);
-  const [selectedVaultId, setSelectedVaultId] = useState(null);
   const [detectedVaults, setDetectedVaults] = useState([]);
   const [showVaultSetup, setShowVaultSetup] = useState(false);
   const [addingVault, setAddingVault] = useState(false);
   const [customPath, setCustomPath] = useState('');
+  const [vaultError, setVaultError] = useState(false);
+  const [detectError, setDetectError] = useState(false);
 
   // Notes state
   const [notes, setNotes] = useState([]);
+  const [notesKey, setNotesKey] = useState(null);
   const [totalNotes, setTotalNotes] = useState(0);
   // Notes the server skipped because iCloud hasn't downloaded them — surfaced so
   // an incomplete list isn't presented as the whole vault.
   const [skippedNotes, setSkippedNotes] = useState(0);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState(false);
 
   // Note viewer/editor state
   const [selectedNote, setSelectedNote] = useState(null);
   const [noteContent, setNoteContent] = useState('');
   const [editing, setEditing] = useState(false);
   const [loadingNote, setLoadingNote] = useState(false);
+  const [noteError, setNoteError] = useState(false);
+  const [noteRetry, setNoteRetry] = useState(0);
 
   // Search state
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState(searchQuery);
   const [searchResults, setSearchResults] = useState(null);
-  const [, setSearching] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(false);
 
   // Filter state
-  const [folderFilter, setFolderFilter] = useState('');
   const [, setFolders] = useState([]);
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [tags, setTags] = useState([]);
@@ -85,6 +113,7 @@ export default function NotesTab() {
 
   // Invalidate work at the interaction boundary, including A → B → A switches.
   const vaultScopeRef = useRef(0);
+  const scopedVaultRef = useRef(selectedVaultId);
   const selectSeqRef = useRef(0);
   const scanSeqRef = useRef(0);
   const searchSeqRef = useRef(0);
@@ -97,31 +126,45 @@ export default function NotesTab() {
     setNoteContent('');
     setEditing(false);
     setLoadingNote(false);
+    setNoteError(false);
     dismissForce();
     cancelDelete();
   };
 
-  const selectVault = vaultId => {
+  const resetVaultScope = vaultId => {
+    scopedVaultRef.current = vaultId;
     vaultScopeRef.current += 1;
     scanSeqRef.current += 1;
     searchSeqRef.current += 1;
     clearSelection();
     setNotes([]);
+    setNotesKey(null);
     setTotalNotes(0);
     setSkippedNotes(0);
     setFolders([]);
     setTags([]);
     setShowTags(false);
     setExpandedFolders(new Set());
-    setSearchQuery('');
+    setSearchInput('');
     setSearchResults(null);
-    setFolderFilter('');
+    setSearchError(false);
     setShowCreateForm(false);
     setNewNotePath('');
     setCreating(false);
     setScanning(false);
-    setSelectedVaultId(vaultId);
+    setScanError(false);
   };
+
+  const selectVault = (vaultId, options = {}) => {
+    resetVaultScope(vaultId);
+    updateParams({ vault: vaultId, folder: null, q: null, note: null }, options);
+  };
+
+  // History navigation changes the URL without going through the selector.
+  // Invalidate the old vault before starting any reads for the restored URL.
+  useEffect(() => {
+    if (scopedVaultRef.current !== selectedVaultId) resetVaultScope(selectedVaultId);
+  }, [selectedVaultId]);
 
   // Load vaults on mount
   useEffect(() => {
@@ -146,11 +189,24 @@ export default function NotesTab() {
 
   const loadVaults = async (preferredVaultId) => {
     const scope = vaultScopeRef.current;
-    const data = await api.getNotesVaults().catch(() => []);
+    setVaultError(false);
+    const data = await api.getNotesVaults({ silent: true }).catch(() => null);
     if (!isCurrentScope(scope)) return;
+    if (!data) {
+      setVaultError(true);
+      setLoading(false);
+      return;
+    }
     setVaults(data);
-    if (data.length > 0 && (preferredVaultId || !selectedVaultId)) {
-      selectVault(preferredVaultId || data[0].id);
+    setVaultError(false);
+    if (data.length > 0) {
+      const requestedVaultId = preferredVaultId || selectedVaultId;
+      const nextVaultId = data.some(vault => vault.id === requestedVaultId)
+        ? requestedVaultId
+        : data[0].id;
+      if (nextVaultId !== selectedVaultId) {
+        selectVault(nextVaultId, { replace: true });
+      }
     }
     if (data.length === 0) {
       setShowVaultSetup(true);
@@ -161,29 +217,35 @@ export default function NotesTab() {
 
   const detectAvailableVaults = async () => {
     const scope = vaultScopeRef.current;
-    const detected = await api.detectNotesVaults().catch(() => []);
-    if (isCurrentScope(scope)) setDetectedVaults(detected);
+    setDetectError(false);
+    const detected = await api.detectNotesVaults({ silent: true }).catch(() => null);
+    if (!isCurrentScope(scope)) return;
+    if (detected) setDetectedVaults(detected);
+    else setDetectError(true);
   };
 
   const loadNotes = async () => {
     if (!selectedVaultId) return;
     const scope = vaultScopeRef.current;
     const sequence = ++scanSeqRef.current;
+    const requestKey = `${selectedVaultId}\u0000${folderFilter}`;
     setScanning(true);
-    const data = await api.scanNotesVault(selectedVaultId, { folder: folderFilter, limit: 500 }).catch(() => null);
+    setScanError(false);
+    const data = await api.scanNotesVault(selectedVaultId, { folder: folderFilter, limit: 500, silent: true }).catch(() => null);
     if (!isCurrentScope(scope) || sequence !== scanSeqRef.current) return;
     if (data) {
       setNotes(data.notes);
+      setNotesKey(requestKey);
       setTotalNotes(data.total);
       setSkippedNotes(data.skippedUnavailable || 0);
-    }
+    } else setScanError(true);
     setScanning(false);
   };
 
   const loadFolders = async () => {
     if (!selectedVaultId) return;
     const scope = vaultScopeRef.current;
-    const data = await api.getNotesVaultFolders(selectedVaultId).catch(() => null);
+    const data = await api.getNotesVaultFolders(selectedVaultId, { silent: true }).catch(() => null);
     if (isCurrentScope(scope) && data?.folders) setFolders(data.folders);
   };
 
@@ -194,31 +256,86 @@ export default function NotesTab() {
     if (isCurrentScope(scope) && data?.tags) setTags(data.tags);
   };
 
+  const loadNote = async () => {
+    if (!selectedVaultId || !selectedNotePath) return;
+    const scope = vaultScopeRef.current;
+    const sequence = ++selectSeqRef.current;
+    setSelectedNote(null);
+    setNoteContent('');
+    setEditing(false);
+    setNoteError(false);
+    setLoadingNote(true);
+    dismissForce();
+    cancelDelete();
+    const data = await api.getNote(selectedVaultId, selectedNotePath, { silent: true }).catch(() => null);
+    if (!isCurrentScope(scope) || sequence !== selectSeqRef.current) return;
+    if (data) {
+      setSelectedNote(data);
+      setNoteContent(data.content);
+    } else setNoteError(true);
+    setLoadingNote(false);
+  };
+
+  useEffect(() => {
+    if (!selectedVaultId || !selectedNotePath) {
+      clearSelection();
+      return;
+    }
+    loadNote();
+  }, [selectedVaultId, selectedNotePath, noteRetry]);
+
+  const loadSearch = useCallback(async (query = searchQuery) => {
+    if (!query.trim() || !selectedVaultId) return;
+    const scope = vaultScopeRef.current;
+    const sequence = ++searchSeqRef.current;
+    setSearching(true);
+    setSearchError(false);
+    const data = await api.searchNotes(selectedVaultId, query.trim(), undefined, { silent: true }).catch(() => null);
+    if (!mountedRef.current || scope !== vaultScopeRef.current || sequence !== searchSeqRef.current) return;
+    if (data) setSearchResults(data);
+    else setSearchError(true);
+    setSearching(false);
+  }, [searchQuery, selectedVaultId]);
+
+  useEffect(() => {
+    setSearchInput(searchQuery);
+    if (!searchQuery || !selectedVaultId) {
+      searchSeqRef.current += 1;
+      setSearchResults(null);
+      setSearchError(false);
+      setSearching(false);
+      return;
+    }
+    setSearchResults(null);
+    loadSearch(searchQuery);
+  }, [selectedVaultId, searchQuery, loadSearch]);
+
   const handleAddVault = async (name, path) => {
     const scope = vaultScopeRef.current;
     setAddingVault(true);
-    const result = await api.addNotesVault({ name, path }).catch(() => null);
+    const result = await api.addNotesVault({ name, path }, { silent: true }).catch((error) => {
+      toast.error(error?.message || 'Failed to add vault');
+      return null;
+    });
     if (!isCurrentScope(scope)) return;
     setAddingVault(false);
     if (result) {
       toast.success(`Added vault: ${result.name}`);
       setShowVaultSetup(false);
+      selectVault(result.id);
       await loadVaults(result.id);
     }
   };
 
-  const handleSelectNote = async (notePath) => {
-    const scope = vaultScopeRef.current;
+  const handleSelectNote = (notePath) => {
     clearSelection();
-    const sequence = selectSeqRef.current;
-    setLoadingNote(true);
-    const data = await api.getNote(selectedVaultId, notePath).catch(() => null);
-    if (!isCurrentScope(scope) || sequence !== selectSeqRef.current) return;
-    if (data) {
-      setSelectedNote(data);
-      setNoteContent(data.content);
-    }
-    setLoadingNote(false);
+    setNoteRetry(value => value + 1);
+    updateParams({ note: notePath });
+  };
+
+  const closeNote = () => {
+    clearSelection();
+    updateParams({ note: null });
   };
 
   // `force` is ONLY ever passed by <ForceSaveNoteRow>'s confirm (#3717) — never
@@ -239,7 +356,10 @@ export default function NotesTab() {
     const scope = vaultScopeRef.current;
     const sequence = selectSeqRef.current;
     setCreating(true);
-    const data = await api.createNote(selectedVaultId, newNotePath.trim()).catch(() => null);
+    const data = await api.createNote(selectedVaultId, newNotePath.trim(), '', { silent: true }).catch((error) => {
+      toast.error(error?.message || 'Failed to create note');
+      return null;
+    });
     if (!isCurrentScope(scope)) return;
     setCreating(false);
     if (data) {
@@ -254,33 +374,32 @@ export default function NotesTab() {
   const handleDeleteNote = async (notePath) => {
     const scope = vaultScopeRef.current;
     const sequence = selectSeqRef.current;
-    await api.deleteNote(selectedVaultId, notePath).catch(() => null);
-    if (!isCurrentScope(scope)) return;
+    const deleted = await api.deleteNote(selectedVaultId, notePath, { silent: true })
+      .then(() => true)
+      .catch((error) => {
+        toast.error(error?.message || 'Failed to delete note');
+        return false;
+      });
+    if (!deleted || !isCurrentScope(scope)) return;
     toast.success('Note deleted');
     cancelDelete();
     setNotes(prev => prev.filter(n => n.path !== notePath));
-    if (sequence === selectSeqRef.current && selectedNote?.path === notePath) {
+    if (sequence === selectSeqRef.current && selectedNotePath === notePath) {
       clearSelection();
+      updateParams({ note: null });
     }
   };
 
-  const handleSearch = useCallback(async () => {
-    if (!searchQuery.trim() || !selectedVaultId) return;
-    const scope = vaultScopeRef.current;
-    const sequence = ++searchSeqRef.current;
-    setSearching(true);
-    const data = await api.searchNotes(selectedVaultId, searchQuery.trim()).catch(() => null);
-    if (!mountedRef.current || scope !== vaultScopeRef.current || sequence !== searchSeqRef.current) return;
-    setSearching(false);
-    if (data) {
-      setSearchResults(data);
-    }
-  }, [searchQuery, selectedVaultId]);
+  const handleSearch = useCallback((query = searchInput) => {
+    updateParams({ q: query.trim() || null });
+  }, [searchInput, updateParams]);
 
   const clearSearch = () => {
     searchSeqRef.current += 1;
-    setSearchQuery('');
+    setSearchInput('');
     setSearchResults(null);
+    setSearchError(false);
+    updateParams({ q: null });
   };
 
   const toggleFolder = (folder) => {
@@ -301,6 +420,18 @@ export default function NotesTab() {
     );
   }
 
+  if (vaultError && vaults.length === 0) {
+    return (
+      <div className="h-full overflow-y-auto p-3 sm:p-4">
+        <UnavailableState
+          title="Notes vaults are unavailable"
+          message="The vault list could not be read, so PortOS cannot tell whether this install has any notes."
+          onRetry={() => loadVaults()}
+        />
+      </div>
+    );
+  }
+
   if (showVaultSetup || vaults.length === 0) {
     // Notes is a full-bleed tab (Brain wraps it in overflow-hidden with no
     // padding), so this branch must own its scroll + padding — otherwise the
@@ -317,27 +448,38 @@ export default function NotesTab() {
           onDetect={detectAvailableVaults}
           onClose={() => setShowVaultSetup(false)}
         />
+        {detectError && (
+          <UnavailableState
+            title="Vault detection is unavailable"
+            message="No result is shown because the iCloud scan did not complete."
+            onRetry={detectAvailableVaults}
+          />
+        )}
       </div>
     );
   }
 
+  const notesKeyForView = `${selectedVaultId}\u0000${folderFilter}`;
+  const hasCurrentNotes = notesKey === notesKeyForView;
+  const currentNotes = hasCurrentNotes ? notes : [];
+
   // Build folder tree from notes
   const rootNotes = folderFilter
-    ? notes
-    : notes.filter(n => !n.folder);
+    ? currentNotes
+    : currentNotes.filter(n => !n.folder);
   const folderNotes = folderFilter
     ? []
-    : [...new Set(notes.filter(n => n.folder).map(n => n.folder.split('/')[0]))];
+    : [...new Set(currentNotes.filter(n => n.folder).map(n => n.folder.split('/')[0]))];
 
   // Determine what to show in list
-  const displayNotes = searchResults ? searchResults.results : notes;
+  const displayNotes = searchQuery ? (searchResults?.results || []) : currentNotes;
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-full min-h-0 overflow-hidden">
       {/* Left panel: note list — on mobile it yields to the detail pane once a
           note is opened (the detail pane's back button restores it). On md+ both
           panels are always visible side-by-side. */}
-      <div className={`border-r border-port-border flex-col min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`border-r border-port-border flex-col min-h-0 overflow-hidden ${selectedNotePath || loadingNote || noteError ? 'hidden md:flex' : 'flex'}`}>
         {/* Vault selector and actions */}
         <div className="p-3 border-b border-port-border space-y-2">
           <div className="flex items-center gap-2">
@@ -372,14 +514,14 @@ export default function NotesTab() {
             <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
             <input
               ref={searchRef}
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSearch()}
               placeholder="Search notes..."
               aria-label="Search notes"
               className="w-full min-h-[44px] bg-port-bg border border-port-border rounded pl-7 pr-14 py-1.5 text-sm text-white placeholder-gray-500"
             />
-            {searchQuery && (
+            {searchInput && (
               <button
                 onClick={clearSearch}
                 aria-label="Clear search"
@@ -420,14 +562,22 @@ export default function NotesTab() {
           )}
         </div>
 
-        <OfflineNotesNotice count={skippedNotes + (searchResults?.skippedUnavailable || 0)} className="mx-3 mt-2" />
+        {vaultError && (
+          <UnavailableState
+            title="Vault list refresh failed"
+            message="Showing the last successful vault list. Retry when the server is reachable."
+            onRetry={() => loadVaults()}
+          />
+        )}
+
+        <OfflineNotesNotice count={(hasCurrentNotes ? skippedNotes : 0) + (searchResults?.skippedUnavailable || 0)} className="mx-3 mt-2" />
 
         {/* Stats bar */}
         <div className="px-3 py-1.5 border-b border-port-border flex items-center gap-3 text-xs text-gray-500">
-          <span>{formatCount(totalNotes)} notes</span>
+          <span>{formatCount(hasCurrentNotes ? totalNotes : 0)} notes</span>
           {folderFilter && (
             <button
-              onClick={() => setFolderFilter('')}
+              onClick={() => updateParams({ folder: null })}
               className="flex items-center gap-1 text-port-accent hover:text-white"
             >
               <X size={10} />
@@ -460,8 +610,8 @@ export default function NotesTab() {
               <span
                 key={t.tag}
                 className="px-1.5 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent cursor-pointer hover:bg-port-accent/30"
-                onClick={() => { setSearchQuery(`#${t.tag}`); handleSearch(); }}
-                {...clickableProps(() => { setSearchQuery(`#${t.tag}`); handleSearch(); })}
+                onClick={() => { setSearchInput(`#${t.tag}`); handleSearch(`#${t.tag}`); }}
+                {...clickableProps(() => { setSearchInput(`#${t.tag}`); handleSearch(`#${t.tag}`); })}
               >
                 #{t.tag} <span className="text-gray-500">{t.count}</span>
               </span>
@@ -469,47 +619,57 @@ export default function NotesTab() {
           </div>
         )}
 
+        {scanError && (
+          <UnavailableState
+            title="Notes are unavailable"
+            message={hasCurrentNotes && notes.length > 0 ? 'Showing the last successful scan. Retry when the vault is reachable.' : 'The vault scan did not complete, so an empty list is not being shown.'}
+            onRetry={loadNotes}
+          />
+        )}
+        {searchError && (
+          <UnavailableState
+            title="Search is unavailable"
+            message={searchResults ? 'Showing the last successful search results. Retry when search is reachable.' : 'The search did not complete, so no-match results are not being shown.'}
+            onRetry={() => loadSearch(searchQuery)}
+          />
+        )}
+
         {/* Note list */}
         <div className="flex-1 overflow-auto">
-          {scanning && notes.length === 0 ? (
+          {scanning && (!hasCurrentNotes || notes.length === 0) && !searchQuery ? (
             <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
               <BrailleSpinner /> Scanning vault...
             </div>
-          ) : displayNotes.length === 0 ? (
+          ) : searching ? (
+            <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
+              <BrailleSpinner /> Searching notes...
+            </div>
+          ) : (!searchQuery && scanError && (!hasCurrentNotes || notes.length === 0)) || (searchQuery && searchError && !searchResults) ? null : displayNotes.length === 0 ? (
             <div className="flex items-center justify-center h-32 px-4 text-center text-gray-500 text-sm">
-              {searchResults ? 'No matches found' : 'No notes yet — capture notes in your vault to enrich Ask Yourself and your digital twin.'}
+              {searchQuery ? 'No matches found' : 'No notes yet — capture notes in your vault to enrich Ask Yourself and your digital twin.'}
             </div>
           ) : (
             <div className="divide-y divide-port-border/50">
               {/* Folders first (when not searching) */}
-              {!searchResults && !folderFilter && folderNotes.map(folder => (
+              {!searchQuery && !folderFilter && folderNotes.map(folder => (
                 <FolderItem
                   key={folder}
                   folder={folder}
-                  notes={notes.filter(n => n.folder === folder || n.folder.startsWith(folder + '/'))}
+                  notes={currentNotes.filter(n => n.folder === folder || n.folder.startsWith(folder + '/'))}
                   expanded={expandedFolders.has(folder)}
                   onToggle={() => toggleFolder(folder)}
                   onSelectNote={handleSelectNote}
-                  onFilterFolder={() => setFolderFilter(folder)}
-                  selectedPath={selectedNote?.path}
+                  onFilterFolder={() => updateParams({ folder })}
+                  selectedPath={selectedNotePath}
                 />
               ))}
               {/* Root notes or filtered/search results */}
-              {(searchResults ? displayNotes : rootNotes).map(note => (
+              {(searchQuery ? displayNotes : rootNotes).map(note => (
                 <NoteListItem
                   key={note.path}
                   note={note}
-                  isSearch={!!searchResults}
-                  selected={selectedNote?.path === note.path}
-                  onClick={() => handleSelectNote(note.path)}
-                />
-              ))}
-              {/* Notes in filtered folder */}
-              {folderFilter && notes.filter(n => n.folder).map(note => (
-                <NoteListItem
-                  key={note.path}
-                  note={note}
-                  selected={selectedNote?.path === note.path}
+                  isSearch={Boolean(searchQuery)}
+                  selected={selectedNotePath === note.path}
                   onClick={() => handleSelectNote(note.path)}
                 />
               ))}
@@ -520,17 +680,32 @@ export default function NotesTab() {
 
       {/* Right panel: note viewer/editor — hidden on mobile until a note is
           opened so the list owns the small-screen viewport; always shown on md+. */}
-      <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'flex' : 'hidden md:flex'}`}>
+      <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${selectedNotePath || loadingNote || noteError ? 'flex' : 'hidden md:flex'}`}>
         {loadingNote ? (
           <div className="flex items-center justify-center h-full">
             <BrailleSpinner text="Loading" />
+          </div>
+        ) : noteError ? (
+          <div className="flex flex-col items-center justify-center gap-3 h-full p-4">
+            <button
+              type="button"
+              onClick={closeNote}
+              className="inline-flex min-h-[44px] items-center gap-2 rounded px-3 text-sm text-port-accent hover:text-white"
+            >
+              <ArrowLeft size={16} aria-hidden="true" /> Back to notes
+            </button>
+            <UnavailableState
+              title="Note is unavailable"
+              message="This note could not be read, so its contents were not replaced with an empty view."
+              onRetry={() => setNoteRetry(value => value + 1)}
+            />
           </div>
         ) : selectedNote ? (
           <>
             {/* Note header */}
             <div className="px-4 py-3 border-b border-port-border flex items-center gap-3">
               <button
-                onClick={clearSelection}
+                onClick={closeNote}
                 aria-label="Back"
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
               >

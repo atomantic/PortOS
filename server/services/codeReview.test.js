@@ -3,9 +3,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // Mock the settings store before importing the SUT — the resolver reads
 // `settings.codeReview` synchronously on every call and we want test-local
 // control of that value without touching disk.
-const mockedSettings = { current: {} }
+const mockedSettings = { current: {}, writes: Promise.resolve() }
 vi.mock('./settings.js', () => ({
   getSettings: () => Promise.resolve(mockedSettings.current),
+  updateSettingsWith: vi.fn((mutate) => {
+    const write = mockedSettings.writes.then(async () => {
+      mockedSettings.current = await mutate(mockedSettings.current)
+      return mockedSettings.current
+    })
+    mockedSettings.writes = write.catch(() => {})
+    return write
+  }),
   // Stub the EventEmitter shape the module subscribes to for cache
   // invalidation — only `.on()` is hit at import time; the SUT never emits.
   settingsEvents: { on: () => {}, emit: () => {} },
@@ -43,6 +51,10 @@ import {
   getGoalFidelityConfig,
   runLocalCodeReview,
   getReviewerCliInstalled,
+  getReviewerConfigHealth,
+  reportReviewerFailure,
+  reportReviewerSuccess,
+  reviewerConfigFaultsFromHealth,
   __resetCodeReviewDefaultsCache,
   __resetReviewerCliInstalledCache,
   __resetThinkingUnsupportedCache,
@@ -218,6 +230,35 @@ describe('codeReview helpers', () => {
   })
 
   describe('getCodeReviewDefaults', () => {
+    it('reselects cached tiers at pause expiry without changing saved priority', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      mockedSettings.current = { codeReview: {
+        reviewers: ['codex', 'ollama'],
+        reviewerFallbackGroups: [['codex', 'ollama'], ['lmstudio'], ['claude']],
+        reviewerHealth: { codex: { pausedUntil: 2000 }, lmstudio: { pausedUntil: 1500 } },
+      } };
+      try {
+        // Partially paused primary and wholly paused fallback both skip.
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['claude']);
+        vi.setSystemTime(1499);
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['claude']);
+        vi.setSystemTime(1500);
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['lmstudio']);
+        vi.setSystemTime(2000);
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['codex', 'ollama']);
+        expect(mockedSettings.current.codeReview.reviewerFallbackGroups).toEqual([['codex', 'ollama'], ['lmstudio'], ['claude']]);
+        mockedSettings.current.codeReview.reviewerHealth = { codex: { pausedUntil: 3000 }, lmstudio: { pausedUntil: 3000 }, claude: { pausedUntil: 3000 } };
+        __resetCodeReviewDefaultsCache();
+        expect((await getCodeReviewDefaults()).reviewers).toEqual(['codex', 'ollama']);
+        mockedSettings.current.codeReview.reviewerFallbackGroups = [];
+        __resetCodeReviewDefaultsCache();
+        expect((await getCodeReviewDefaults()).reviewers).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('reads from the settings store and runs the same pick logic', async () => {
       mockedSettings.current = {
         codeReview: { reviewers: ['ollama'], ollamaModel: 'codellama' },
@@ -233,6 +274,62 @@ describe('codeReview helpers', () => {
       const out = await getCodeReviewDefaults()
       expect(out.reviewers).toEqual([])
       expect(out.codexModel).toBeNull()
+    })
+
+    it('exposes only persisted configuration faults as reviewer health', () => {
+      const defaults = pickCodeReviewDefaults({
+        codeReview: {
+          reviewers: ['ollama'],
+          reviewerHealth: {
+            ollama: { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 123 },
+            codex: { pausedUntil: 999, reason: 'quota', lastFailureAt: 456 },
+          },
+        },
+      })
+      expect(defaults.reviewerConfigFaults).toEqual({
+        ollama: { code: 'NO_MODEL', lastFailureAt: 123 },
+      })
+    })
+  })
+
+  describe('reviewer configuration health', () => {
+    it('records config faults from a real failed review and clears them after success', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['ollama'] } }
+
+      await reportReviewerFailure('ollama', {
+        code: 'NO_MODEL',
+        error: 'No model configured for ollama reviewer',
+      }, 100)
+      expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({
+        ollama: { code: 'NO_MODEL', lastFailureAt: 100 },
+      })
+      expect(await getReviewerConfigHealth()).toMatchObject({
+        status: 'warning',
+        configFaults: { ollama: { code: 'NO_MODEL' } },
+      })
+
+      await reportReviewerSuccess('ollama', 200)
+      expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
+      expect(await getReviewerConfigHealth()).toEqual({ status: 'ok', configFaults: {} })
+    })
+
+    it('does not turn a real transport failure into a configuration fault', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['ollama'] } }
+      expect(await reportReviewerFailure('ollama', { error: 'ollama timed out' }, 100)).toBe(false)
+      expect(reviewerConfigFaultsFromHealth(mockedSettings.current.codeReview)).toEqual({})
+    })
+
+    it('preserves another reviewer failure arriving while a success clears its warning', async () => {
+      mockedSettings.current = { codeReview: {
+        reviewerHealth: { opencode: { code: 'REVIEWER_ACCESS_DENIED', reason: 'configuration', lastFailureAt: 100 } },
+      } }
+      await Promise.all([
+        reportReviewerSuccess('opencode', 200),
+        reportReviewerFailure('ollama', { code: 'NO_MODEL' }, 200),
+      ])
+      expect(mockedSettings.current.codeReview.reviewerHealth).toEqual({
+        ollama: { code: 'NO_MODEL', reason: 'configuration', lastFailureAt: 200 },
+      })
     })
   })
 

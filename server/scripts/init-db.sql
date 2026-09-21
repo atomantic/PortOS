@@ -256,6 +256,7 @@ CREATE TABLE IF NOT EXISTS review_queue_triage (
   snoozed_until TIMESTAMPTZ,
   dismissed BOOLEAN NOT NULL DEFAULT FALSE,
   delivery_generation INTEGER NOT NULL DEFAULT 0 CHECK (delivery_generation >= 0),
+  delivery JSONB,
   PRIMARY KEY (action_key, occurrence, revision)
 );
 
@@ -563,6 +564,7 @@ CREATE TABLE IF NOT EXISTS catalog_ingredient_media (
   kind VARCHAR(32) NOT NULL,                   -- portrait|reference|audio|video|document (MEDIA_KINDS)
   role VARCHAR(64),                            -- optional free label (e.g. 'hero-shot', 'angry')
   caption TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb, -- bounded generation provenance when present
   created_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE,               -- soft-delete tombstone so detaches propagate to peers
   deleted_at TIMESTAMPTZ,
@@ -709,14 +711,15 @@ CREATE TRIGGER trg_catalog_relation_sync_seq
 -- Media UPDATE bumps sync_sequence when a soft-delete/revival OR a mutable
 -- field (role/caption) changes, so peers receive the edit (or the tombstone)
 -- on their next pull. Unlike refs/relations, media rows carry editable
--- metadata, so the change-detector also watches role + caption.
+-- metadata, so the change-detector also watches role + caption + provenance.
 CREATE OR REPLACE FUNCTION update_catalog_media_sync_seq()
 RETURNS TRIGGER AS $$
 BEGIN
   IF NEW.deleted IS DISTINCT FROM OLD.deleted
      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
      OR NEW.role IS DISTINCT FROM OLD.role
-     OR NEW.caption IS DISTINCT FROM OLD.caption THEN
+     OR NEW.caption IS DISTINCT FROM OLD.caption
+     OR NEW.metadata IS DISTINCT FROM OLD.metadata THEN
     NEW.sync_sequence := nextval(pg_get_serial_sequence('catalog_ingredient_media', 'sync_sequence'));
   END IF;
   RETURN NEW;

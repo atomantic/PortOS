@@ -32,26 +32,36 @@ it('runs a saved provider reviewer from the standalone claim bridge without boot
   await writeFile(join(data, 'settings.json'), JSON.stringify({ codeReview: {
     reviewers: ['provider:example-gpu'], providerModels: { 'provider:example-gpu': 'review-model' },
   } }));
-  const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs')], {
-    env: { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  const result = await new Promise((resolve, reject) => {
-    let stdout = '';
-    let stderr = '';
-    const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Review bridge timed out')); }, 10000);
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
-    child.on('error', error => { clearTimeout(timeout); reject(error); });
-    child.on('close', code => { clearTimeout(timeout); resolve({ code, stdout, stderr }); });
-    child.stdin.end(JSON.stringify({ backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' }));
-  }).finally(async () => {
+  const runReview = request => {
+    const child = spawn(process.execPath, ['--preserve-symlinks', '--preserve-symlinks-main', join(root, 'server/scripts/run-local-code-review.mjs')], {
+      env: { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return new Promise((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('Review bridge timed out')); }, 10000);
+      child.stdout.on('data', chunk => { stdout += chunk; });
+      child.stderr.on('data', chunk => { stderr += chunk; });
+      child.on('error', error => { clearTimeout(timeout); reject(error); });
+      child.on('close', code => { clearTimeout(timeout); resolve({ code, stdout, stderr }); });
+      child.stdin.end(JSON.stringify(request));
+    });
+  };
+  const results = await (async () => {
+    const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
+    return [await runReview(request), await runReview({ ...request, inheritDefaults: false })];
+  })().finally(async () => {
     await new Promise(resolve => api.close(resolve));
     await rm(root, { recursive: true, force: true });
   });
-  expect(result.code, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-gpu', model: 'review-model', findings: 'NO FINDINGS' });
-  expect(bodies).toHaveLength(1);
-  expect(JSON.parse(bodies[0])).toMatchObject({ model: 'review-model' });
-  expect(JSON.parse(bodies[0])).not.toHaveProperty('tools');
+  expect(results).toHaveLength(2);
+  for (const [index, model] of ['review-model', 'default-model'].entries()) {
+    const result = results[index];
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, backend: 'provider:example-gpu', model, findings: 'NO FINDINGS' });
+    expect(JSON.parse(bodies[index])).toMatchObject({ model });
+    expect(JSON.parse(bodies[index])).not.toHaveProperty('tools');
+  }
+  expect(bodies).toHaveLength(2);
 }, 15000);

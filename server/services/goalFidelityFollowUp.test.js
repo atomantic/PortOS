@@ -1,6 +1,6 @@
 /**
  * The goal-fidelity follow-up filer, at its public boundary:
- * `runGoalFidelityFollowUp({ agentId, task, review })` in → an issue on the
+ * `runGoalFidelityFollowUp({ context: CONTEXT, agentId, task, review })` in → an issue on the
  * right tracker and/or a queued CoS task out.
  *
  * The failure this suite exists to catch is a DUPLICATE. The producer is an
@@ -43,6 +43,9 @@ const { runGoalFidelityFollowUp } = await import('./goalFidelityFollowUp.js');
 const { goalFidelityFingerprint, goalFidelityIssueMarker } = await import('../lib/goalFidelityFollowUp.js');
 
 const TASK = { id: 'task-7', taskType: 'user', description: 'Add retry caps', metadata: { app: 'comics' } };
+const CONTEXT = { base: 'a'.repeat(40), head: 'b'.repeat(40), objective: 'Add retry caps',
+  publication: { source: 'tracker-issue', tracker: 'github', webHost: 'github.com', fullName: 'acme/comics', number: 7, title: 'Add retry caps' } };
+let runContext = CONTEXT;
 const REVIEW = {
   verdict: 'rethink',
   missing: ['the retry cap'],
@@ -55,10 +58,10 @@ const FINGERPRINT = goalFidelityFingerprint(TASK);
 const MARKER = goalFidelityIssueMarker(FINGERPRINT);
 
 const GITHUB_APP = { id: 'comics', repoPath: '/repo', workTracker: 'github' };
-const GITHUB_TARGET = { forge: 'github', repoSpec: 'github.com/acme/comics', apiHost: 'github.com', fullName: 'acme/comics' };
+const GITHUB_TARGET = { forge: 'github', repoSpec: 'github.com/acme/comics', apiHost: 'github.com', webHost: 'github.com', fullName: 'acme/comics' };
 
 const settings = (goalFidelity) => getSettings.mockResolvedValue({ codeReview: { goalFidelity } });
-const run = () => runGoalFidelityFollowUp({ agentId: 'agent-1', task: TASK, review: REVIEW });
+const run = () => runGoalFidelityFollowUp({ context: runContext, agentId: 'agent-1', task: TASK, review: REVIEW });
 
 /** A `gh issue list --json` reply. */
 const ghRows = (rows) => JSON.stringify(rows);
@@ -70,6 +73,7 @@ const ghFlag = (n, name) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runContext = CONTEXT;
   ensureForgeReachable.mockResolvedValue({ ok: true });
   getAppById.mockResolvedValue(GITHUB_APP);
   resolveAppForgeTarget.mockResolvedValue({ tracker: 'github', target: GITHUB_TARGET });
@@ -87,7 +91,7 @@ describe('runGoalFidelityFollowUp — when it runs at all', () => {
 
   it('does nothing on a verdict the configured trigger does not cover', async () => {
     settings({ fileIssue: true, followUpOn: 'rethink' });
-    const result = await runGoalFidelityFollowUp({
+    const result = await runGoalFidelityFollowUp({ context: CONTEXT,
       agentId: 'agent-1', task: TASK, review: { ...REVIEW, verdict: 'fix-first' },
     });
     expect(result).toEqual({ ran: false });
@@ -97,7 +101,7 @@ describe('runGoalFidelityFollowUp — when it runs at all', () => {
   it('acts on fix-first once the wider trigger is chosen', async () => {
     settings({ fileIssue: true, followUpOn: 'any-finding' });
     execGh.mockResolvedValueOnce(ghRows([])).mockResolvedValue('https://github.com/acme/comics/issues/12');
-    const result = await runGoalFidelityFollowUp({
+    const result = await runGoalFidelityFollowUp({ context: CONTEXT,
       agentId: 'agent-1', task: TASK, review: { ...REVIEW, verdict: 'fix-first' },
     });
     expect(result.ran).toBe(true);
@@ -108,7 +112,7 @@ describe('runGoalFidelityFollowUp — when it runs at all', () => {
   // asked, so there is nothing to file and nothing to fix.
   it('never acts on a clean verdict', async () => {
     settings({ fileIssue: true, queueTask: true, followUpOn: 'any-finding' });
-    const result = await runGoalFidelityFollowUp({
+    const result = await runGoalFidelityFollowUp({ context: CONTEXT,
       agentId: 'agent-1', task: TASK, review: { ...REVIEW, verdict: 'ship' },
     });
     expect(result).toEqual({ ran: false });
@@ -123,7 +127,7 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
       .mockResolvedValueOnce('')                      // label create
       .mockResolvedValueOnce('https://github.com/acme/comics/issues/42');
     const result = await run();
-    expect(result.issue).toEqual({ number: 42, url: 'https://github.com/acme/comics/issues/42', duplicate: false });
+    expect(result.issue).toMatchObject({ number: 42, url: 'https://github.com/acme/comics/issues/42', duplicate: false });
     const createArgs = execGh.mock.calls.at(-1)[0];
     expect(createArgs.slice(0, 2)).toEqual(['issue', 'create']);
     expect(createArgs).toContain('--label');
@@ -141,7 +145,9 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
       .mockResolvedValueOnce(ghRows([]))
       .mockResolvedValueOnce('')
       .mockResolvedValueOnce('https://github.com/acme/comics/issues/50');
-    const result = await runGoalFidelityFollowUp({
+    const result = await runGoalFidelityFollowUp({ context: { ...CONTEXT,
+      objective: `Fix the sync poller under ${home}/work/demo`,
+      publication: { ...CONTEXT.publication, title: `Fix the sync poller under ${home}/work/demo` } },
       agentId: 'agent-1',
       task: { ...TASK, description: `Fix the sync poller under ${home}/work/demo` },
       review: { ...REVIEW, evidence: `Retried with ghp_${'A'.repeat(36)} and gave up.` },
@@ -177,11 +183,27 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
   it('reuses an existing issue carrying the marker, even when it is CLOSED', async () => {
     settings({ fileIssue: true });
     execGh.mockResolvedValueOnce(ghRows([
-      { number: 5, title: 'Goal-fidelity rethink: Add retry caps', body: `stuff ${MARKER}`, url: 'u5' },
+      { number: 5, title: 'Goal-fidelity rethink: Add retry caps', body: 'stuff portosgf-goal-fidelity-user-comics-add-retry-caps', url: 'u5' },
     ]));
     const result = await run();
     expect(result.issue).toMatchObject({ number: 5, duplicate: true });
     expect(execGh).toHaveBeenCalledTimes(1); // listed, never created
+  });
+
+  it('recognizes its own redacted issue when a dated task is reviewed again', async () => {
+    settings({ fileIssue: true });
+    const task = { ...TASK, description: 'Dependency audit 2026-09-21 for alice@example.com' };
+    execGh.mockResolvedValueOnce(ghRows([])).mockResolvedValueOnce('').mockResolvedValueOnce('https://github.com/acme/comics/issues/42');
+    const first = await runGoalFidelityFollowUp({ agentId: 'agent-1', task, review: REVIEW, context: CONTEXT });
+    expect(first.issue.body).not.toContain('2026-09-21');
+    expect(first.issue.body).not.toContain('alice');
+    expect(first.issue.body).toContain(goalFidelityIssueMarker(goalFidelityFingerprint(task)));
+
+    execGh.mockClear();
+    execGh.mockResolvedValueOnce(ghRows([first.issue]));
+    const second = await runGoalFidelityFollowUp({ agentId: 'agent-2', task, review: REVIEW, context: CONTEXT });
+    expect(second.issue).toMatchObject({ number: 42, duplicate: true });
+    expect(execGh).toHaveBeenCalledTimes(1);
   });
 
   it("does not match another finding's marker", async () => {
@@ -252,9 +274,10 @@ describe('runGoalFidelityFollowUp — GitHub', () => {
 
 describe('runGoalFidelityFollowUp — GitLab', () => {
   beforeEach(() => {
+    runContext = { ...CONTEXT, publication: { ...CONTEXT.publication, tracker: 'gitlab', webHost: 'gitlab.com' } };
     resolveAppForgeTarget.mockResolvedValue({
       tracker: 'gitlab',
-      target: { forge: 'gitlab', repoSpec: null, fullName: 'acme/comics' },
+      target: { forge: 'gitlab', repoSpec: null, fullName: 'acme/comics', webHost: 'gitlab.com' },
     });
     execGlabJson.mockResolvedValue({ rows: [], reason: 'ok' });
   });
@@ -336,41 +359,14 @@ describe('runGoalFidelityFollowUp — JIRA', () => {
     createTicket.mockResolvedValue({ success: true, ticketId: 'COM-12', url: 'https://jira/browse/COM-12' });
   });
 
-  // The ticket must carry the marker LABEL as well as the body marker: the
-  // label is what the next run's duplicate listing filters on, so a ticket
-  // filed without it would be invisible to the dedup and re-filed every cadence.
-  it("creates a labelled ticket in the app's project", async () => {
-    settings({ fileIssue: true });
-    const result = await run();
-    expect(result.issue).toMatchObject({ number: 'COM-12', duplicate: false });
-    expect(createTicket.mock.calls[0][1]).toMatchObject({ projectKey: 'COM', labels: ['goal-fidelity'] });
-    expect(createTicket.mock.calls[0][1].description).toContain(MARKER);
-  });
-
-  it("scopes the label listing to the app's own project", async () => {
-    settings({ fileIssue: true });
-    await run();
-    expect(searchIssues.mock.calls[0][1]).toContain('project = "COM"');
-    expect(searchIssues.mock.calls[0][1]).toContain('labels = "goal-fidelity"');
-  });
-
-  // JIRA returns the body as `description`; the mapper normalizes it so the
-  // matcher has one shape to read.
-  it('dedupes on an existing ticket', async () => {
-    settings({ fileIssue: true });
-    searchIssues.mockResolvedValue([{ key: 'COM-4', summary: 't', description: `x ${MARKER}`, url: 'u' }]);
-    const result = await run();
-    expect(result.issue).toMatchObject({ number: 'COM-4', duplicate: true });
-    expect(createTicket).not.toHaveBeenCalled();
-  });
-
-  it('refuses to file when the JIRA listing failed', async () => {
-    settings({ fileIssue: true });
-    searchIssues.mockRejectedValue(new Error('401'));
+  it('keeps the investigation local when no independently fetched JIRA objective exists', async () => {
+    settings({ fileIssue: true, queueTask: true });
     const result = await run();
     expect(result.issue).toBeNull();
-    expect(result.issueError).toMatch(/could not read/);
+    expect(result.issueError).toMatch(/verified provenance/);
+    expect(searchIssues).not.toHaveBeenCalled();
     expect(createTicket).not.toHaveBeenCalled();
+    expect(result.task).toMatchObject({ id: 'cos-9' });
   });
 
   it('says what is missing when the app tracks JIRA but configured no project', async () => {
@@ -410,7 +406,7 @@ describe('runGoalFidelityFollowUp — unfilable trackers', () => {
   it("reads the real PortOS app record for a task with no app", async () => {
     settings({ fileIssue: true });
     execGh.mockResolvedValueOnce(ghRows([])).mockResolvedValueOnce('').mockResolvedValueOnce('u/1');
-    await runGoalFidelityFollowUp({
+    await runGoalFidelityFollowUp({ context: CONTEXT,
       agentId: 'agent-1', task: { id: 't', taskType: 'user', description: 'Fix it' }, review: REVIEW,
     });
     expect(getAppById).toHaveBeenCalledWith('portos');
@@ -457,8 +453,94 @@ describe('runGoalFidelityFollowUp — the queued task', () => {
       .mockResolvedValueOnce(ghRows([]))
       .mockResolvedValueOnce('')
       .mockResolvedValueOnce('https://github.com/acme/comics/issues/42');
+    const result = await run();
+    const { description } = fileInvestigationTask.mock.calls[0][0];
+    expect(description).toContain('#42');
+    expect(description).toContain(result.issue.title);
+    expect(description).toContain('Filed issue snapshot:');
+    expect(description).toContain('## Resolution criteria\\nIf the finding is false');
+    expect(description).toContain('CURRENT body and comments');
+    expect(description).toContain('close the finding as not planned');
+    expect(description).toContain('verify closure after merge');
+    expect(description).toContain('leave it open with the exact blocker');
+    expect(description).toContain('read its state back');
+    expect(description).toContain('complete any tracked issue resolution');
+  });
+
+  it('hands a deduplicated issue snapshot to the investigator without rewriting the issue', async () => {
+    settings({ fileIssue: true, queueTask: true });
+    execGh.mockResolvedValueOnce(ghRows([
+      { number: 5, title: 'Earlier finding', body: `Earlier acceptance criteria ${MARKER}`, url: 'https://example.com/issues/5' },
+    ]));
     await run();
-    expect(fileInvestigationTask.mock.calls[0][0].description).toContain('#42');
+    expect(execGh).toHaveBeenCalledTimes(1);
+    const { description } = fileInvestigationTask.mock.calls[0][0];
+    expect(description).toContain('Earlier acceptance criteria');
+    expect(description).toContain('https://example.com/issues/5');
+    expect(description).toContain('snapshot below may be stale');
+  });
+
+  it('never publishes private local records while preserving the configured local investigation', async () => {
+    settings({ fileIssue: true, queueTask: true });
+    const objective = 'Fix journal search\nPRIVATE JOURNAL RECORD: a synthetic personal memory.';
+    const result = await runGoalFidelityFollowUp({ agentId: 'agent-1', task: { ...TASK, description: objective },
+      review: REVIEW, context: { base: CONTEXT.base, head: CONTEXT.head, objective } });
+    expect(result.issue).toBeNull();
+    expect(result.issueError).toMatch(/verified provenance/);
+    expect(execGh).not.toHaveBeenCalled();
+    expect(execGlab).not.toHaveBeenCalled();
+    expect(createTicket).not.toHaveBeenCalled();
+    expect(result.task).toMatchObject({ id: 'cos-9' });
+    expect(fileInvestigationTask.mock.calls[0][0].description).toContain(objective);
+  });
+
+  it.each([
+    { fullName: 'other/project' },
+    { webHost: 'other.example.com' },
+    { tracker: 'gitlab' },
+  ])('refuses to republish a fetched objective to a different destination: %j', async changed => {
+    settings({ fileIssue: true, queueTask: true });
+    const result = await runGoalFidelityFollowUp({ agentId: 'agent-1', task: TASK, review: REVIEW,
+      context: { ...CONTEXT, publication: { ...CONTEXT.publication, ...changed } } });
+    expect(result.issue).toBeNull();
+    expect(result.issueError).toMatch(/verified provenance/);
+    expect(execGh).not.toHaveBeenCalled();
+    expect(result.task).toMatchObject({ id: 'cos-9' });
+  });
+
+  it('files the substantive objective and exact diff while withholding private metadata and redacting public text', async () => {
+    settings({ fileIssue: true, queueTask: true });
+    execGh.mockResolvedValueOnce(ghRows([])).mockResolvedValueOnce('').mockResolvedValueOnce('https://github.com/acme/comics/issues/42');
+    const result = await runGoalFidelityFollowUp({
+      agentId: 'agent-1',
+      task: { ...TASK, description: 'PRIVATE OUTER TASK TITLE', metadata: { ...TASK.metadata, prompt: 'Stale outer claim workflow', transcript: 'PRIVATE TRANSCRIPT' } },
+      review: REVIEW,
+      context: { ...CONTEXT, objective: 'Retry transient failures; verify persisted success. Contact alice@example.com at host-XXXX.ts.net with ghp_' + 'A'.repeat(36) },
+    });
+    const body = result.issue.body;
+    expect(result.issue.title).toBe('Goal-fidelity rethink: Add retry caps');
+    expect(body).not.toContain('PRIVATE OUTER TASK TITLE');
+    expect(body).toContain('Retry transient failures; verify persisted success.');
+    expect(body).toContain(`git diff ${CONTEXT.base}..${CONTEXT.head}`);
+    expect(body).toContain('Rewrote the scheduler instead.');
+    expect(body).toContain('unverified finding');
+    for (const privateText of ['alice@example.com', 'host-XXXX.ts.net', 'ghp_', 'PRIVATE TRANSCRIPT', 'Stale outer claim workflow']) {
+      expect(body).not.toContain(privateText);
+    }
+    expect(body).toContain('[REDACTED]');
+  });
+
+  it.each([
+    ['missing commit references', { ...CONTEXT, base: null }, /commit references/],
+    ['truncated objective', { ...CONTEXT, objective: 'Task\n…[objective truncated]' }, /complete reviewed objective/],
+    ['oversized objective', { ...CONTEXT, objective: 'x'.repeat(13_000) }, /body limit/],
+  ])('refuses an issue with %s but still queues the investigation', async (_name, context, error) => {
+    settings({ fileIssue: true, queueTask: true });
+    const result = await runGoalFidelityFollowUp({ agentId: 'agent-1', task: TASK, review: REVIEW, context });
+    expect(result.issue).toBeNull();
+    expect(result.issueError).toMatch(error);
+    expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' && args[1] === 'create')).toBe(false);
+    expect(result.task).toMatchObject({ id: 'cos-9' });
   });
 
   // The task is the arm that actually gets the work done; a tracker that

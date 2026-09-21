@@ -21,6 +21,10 @@ const api = vi.hoisted(() => ({
   getProviders: vi.fn(),
   updateCosConfig: vi.fn(),
   getPersistentMindContext: vi.fn(),
+  getPersistentMindMaintainer: vi.fn().mockResolvedValue({
+    role: { schemaVersion: 1, enabled: false, appIds: [], intervalMinutes: 60 },
+    apps: [], availableApps: [], prerequisites: [], instructions: '',
+  }),
   getPersistentMindTools: vi.fn(),
   getMindRecipes: vi.fn().mockResolvedValue({ recipes: [] }),
   getPersistentMindRuntime: vi.fn(),
@@ -407,7 +411,7 @@ describe('MindTab', () => {
     await user.click(taskAccess);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, auditReports: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(screen.getAllByText(/code review then merge/i).length).toBeGreaterThan(0);

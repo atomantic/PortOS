@@ -13,6 +13,14 @@ non-conflicting changes can also carry across the branch switch. Commit work
 before updating if you need a durable recovery point, and preserve untracked
 files separately — `--autostash` is not an untracked-file backup.
 
+Repositories with submodules receive `git submodule sync --recursive` and
+`git submodule update --init --recursive` before and after the parent pull. The
+pre-pull pass repairs a checkout left halfway through an earlier update, while
+the post-pull pass checks out the commits pinned by the newly pulled parent.
+PortOS does not use `--remote` here: the parent repository's reviewed gitlinks
+are the update contract. A submodule with local file changes that Git refuses
+to overwrite still blocks the update and is reported as a conflict.
+
 A blocked checkout, failed rebase, or conflict while reapplying the autostash
 stops the update before lifecycle commands or process restart. PortOS attempts
 to abort a failed rebase and queues a CoS conflict-resolution task. An autostash

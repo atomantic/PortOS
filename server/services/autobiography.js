@@ -188,7 +188,7 @@ const PROMPT_THEMES = [
 
 const DEFAULT_CONFIG = {
   intervalHours: 24,
-  enabled: false,
+  enabled: true,
   lastPromptAt: null,
   lastPromptId: null,
   // Opt-in daily reminder at a chosen local time (default OFF), the same shape

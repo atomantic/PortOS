@@ -143,38 +143,74 @@ describe('exported validation schemas are wired (#5730)', () => {
     expect(moduleFiles.length).toBeGreaterThan(20);
   });
 
-  it('every exported *Schema/*Enum is referenced outside its own declaration', () => {
-    const tracked = execSync('git ls-files -z "*.js" "*.jsx" "*.mjs"', {
+  /**
+   * Identifies exported *Schema/*Enum declarations from validation modules that
+   * lack references outside their own export declaration.
+   */
+  function findUnwiredSchemas({
+    repoRoot,
+    libDir = path.join(repoRoot, 'server/lib'),
+    moduleFiles: files = moduleFiles,
+    intentionallyUnwired = INTENTIONALLY_UNWIRED,
+    barrel = BARREL,
+    trackedFiles,
+    readFile = (p) => readFileSync(p, 'utf8'),
+  } = {}) {
+    // Collect candidate schema/enum identifiers across the validation modules first.
+    // Indexing only these candidate names avoids retaining millions of unrelated
+    // identifier tokens across the entire repository.
+    const moduleExports = new Map(); // 'server/lib/x.js' -> Set(candidate)
+    const candidateNames = new Set();
+    for (const file of files) {
+      const rel = `server/lib/${file}`;
+      const source = readFile(path.join(repoRoot, rel));
+      const exports = new Set();
+      for (const match of source.matchAll(EXPORTED_SCHEMA)) {
+        const name = match[1];
+        candidateNames.add(name);
+        exports.add(name);
+      }
+      moduleExports.set(rel, exports);
+    }
+
+    const tracked = trackedFiles ?? execSync('git ls-files -z "*.js" "*.jsx" "*.mjs"', {
       cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
     }).split('\0').filter(Boolean);
 
-    // One pass over the tree builds the identifier index. Per-module counts are
-    // kept (not just presence) so a schema's own `export const` line can be
-    // discounted; every other file only needs presence. The barrel is skipped
-    // entirely — it re-exports wholesale and would mark everything "used".
-    const moduleCounts = new Map(); // 'server/lib/x.js' -> Map(identifier -> count)
+    // One pass over the tree builds the identifier index for candidate schemas.
+    // Per-module counts are kept (not just presence) so a schema's own `export const`
+    // line can be discounted; every other file only needs presence. The barrel is
+    // skipped entirely — it re-exports wholesale and would mark everything "used".
+    const moduleCounts = new Map(); // 'server/lib/x.js' -> Map(candidate -> count)
     const externalIdentifiers = new Set();
     for (const rel of tracked) {
-      if (rel === BARREL) continue;
+      if (rel === barrel) continue;
       const isModule = rel.startsWith('server/lib/')
-        && moduleFiles.includes(rel.slice('server/lib/'.length));
-      const tokens = readFileSync(path.join(repoRoot, rel), 'utf8').match(IDENTIFIER) || [];
+        && files.includes(rel.slice('server/lib/'.length));
+      const content = readFile(path.join(repoRoot, rel));
+      if (!isModule && !content.includes('Schema') && !content.includes('Enum')) continue;
+      const tokens = content.match(IDENTIFIER) || [];
       if (isModule) {
         const counts = new Map();
-        for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1);
+        for (const token of tokens) {
+          if (candidateNames.has(token)) {
+            counts.set(token, (counts.get(token) || 0) + 1);
+          }
+        }
         moduleCounts.set(rel, counts);
       } else {
-        for (const token of tokens) externalIdentifiers.add(token);
+        for (const token of tokens) {
+          if (candidateNames.has(token)) externalIdentifiers.add(token);
+        }
       }
     }
 
     const unwired = [];
-    for (const file of moduleFiles) {
+    for (const file of files) {
       const rel = `server/lib/${file}`;
-      const source = readFileSync(path.join(repoRoot, rel), 'utf8');
-      for (const match of source.matchAll(EXPORTED_SCHEMA)) {
-        const name = match[1];
-        if (INTENTIONALLY_UNWIRED.has(`${file}:${name}`)) continue;
+      const exports = moduleExports.get(rel) || [];
+      for (const name of exports) {
+        if (intentionallyUnwired.has(`${file}:${name}`)) continue;
         if (externalIdentifiers.has(name)) continue;
         // > 1 means the module composes it into a sibling schema beyond the
         // single occurrence on its own `export const` line.
@@ -184,7 +220,50 @@ describe('exported validation schemas are wired (#5730)', () => {
       }
     }
 
+    return unwired;
+  }
+
+  it('every exported *Schema/*Enum is referenced outside its own declaration', () => {
+    const unwired = findUnwiredSchemas({ repoRoot, moduleFiles });
     expect(unwired, 'exported but never referenced — wire these into the route/schema that should use them, delete them, or add a justified INTENTIONALLY_UNWIRED entry').toEqual([]);
+  });
+
+  it('rejects an exported-but-unreferenced schema and accepts supported reference and compatibility shapes', () => {
+    const fakeFiles = {
+      'server/lib/testOneValidation.js': `
+        export const unreferencedSchema = z.object({});
+        export const siblingComposedSchema = z.object({});
+        export const parentSchema = z.object({ child: siblingComposedSchema });
+        export const externalReferencedSchema = z.object({});
+        export const allowlistedSchema = z.object({});
+        export const barrelOnlySchema = z.object({});
+      `,
+      'server/lib/index.js': `
+        export { barrelOnlySchema } from './testOneValidation.js';
+      `,
+      'server/routes/testRoute.js': `
+        import { externalReferencedSchema, parentSchema } from '../lib/testOneValidation.js';
+        externalReferencedSchema.parse({});
+        parentSchema.parse({});
+      `,
+    };
+
+    const unwired = findUnwiredSchemas({
+      repoRoot: '/fake/root',
+      moduleFiles: ['testOneValidation.js'],
+      intentionallyUnwired: new Set(['testOneValidation.js:allowlistedSchema']),
+      barrel: 'server/lib/index.js',
+      trackedFiles: Object.keys(fakeFiles),
+      readFile: (p) => {
+        const normalized = p.replaceAll('\\', '/');
+        return fakeFiles[normalized.split('/fake/root/').at(-1)];
+      },
+    });
+
+    expect(unwired).toEqual([
+      'testOneValidation.js:unreferencedSchema',
+      'testOneValidation.js:barrelOnlySchema',
+    ]);
   });
 
   it('every INTENTIONALLY_UNWIRED entry still names a real export', () => {

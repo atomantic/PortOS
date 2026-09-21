@@ -39,6 +39,40 @@ beforeEach(() => {
   mocks.linkIngredientRelation.mockResolvedValue(undefined);
 });
 
+describe('explicit graph commits', () => {
+  const accepted = Array.from({ length: 26 }, (_, i) => ({
+    draftId: 'draft-' + i, type: 'idea', name: 'Renamed Idea ' + i,
+  }));
+  const edge = { fromDraftId: 'draft-25', toDraftId: 'draft-0', kind: 'references', evidence: 'The final idea references the first.' };
+
+  it('maps reordered draft IDs and writes only requested directed edges above the legacy cap', async () => {
+    mocks.createIngredient.mockImplementation(async ({ name }) => ({ id: 'stored-' + name }));
+    await commitScrap({ scrapId: 'example-scrap', accepted: [...accepted].reverse(), relationships: [edge] });
+    expect(mocks.linkIngredientRelation).toHaveBeenCalledExactlyOnceWith(
+      'stored-Renamed Idea 25', 'stored-Renamed Idea 0', 'references', { client: mocks.client },
+    );
+    expect(mocks.createIngredient.mock.calls[0][0]).not.toHaveProperty('draftId');
+    expect(mocks.createIngredient.mock.calls[0][0].payload).not.toHaveProperty('draftId');
+  });
+
+  it('never creates pairs for explicit [] and validates direct callers before opening a transaction', async () => {
+    mocks.createIngredient.mockImplementation(async ({ name }) => ({ id: 'stored-' + name }));
+    await commitScrap({ scrapId: 'example-scrap', accepted: accepted.slice(0, 2), relationships: [] });
+    expect(mocks.linkIngredientRelation).not.toHaveBeenCalled();
+    mocks.withTransaction.mockClear();
+    await expect(commitScrap({ accepted, relationships: [{ ...edge, toDraftId: 'missing' }] })).rejects.toThrow();
+    expect(mocks.withTransaction).not.toHaveBeenCalled();
+  });
+
+  it('propagates a relation-write failure to the transaction owner', async () => {
+    mocks.createIngredient.mockImplementation(async ({ name }) => ({ id: 'stored-' + name }));
+    const failure = new Error('relation write failed');
+    mocks.linkIngredientRelation.mockRejectedValue(failure);
+    await expect(commitScrap({ scrapId: 'example-scrap', accepted, relationships: [edge], universeRef: 'example-universe' }))
+      .rejects.toBe(failure);
+  });
+});
+
 describe('commitScrap', () => {
   it('creates accepted ingredients and source links on one transaction client', async () => {
     mocks.createIngredient

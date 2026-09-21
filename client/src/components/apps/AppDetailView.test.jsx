@@ -145,6 +145,18 @@ describe('AppDetailView header title', () => {
     const heading = await screen.findByRole('heading', { name: APP.name });
     expect(heading.parentElement).toHaveClass('flex-1', 'lg:flex-initial', 'min-w-0');
   });
+
+  it('does not display PM2 process names in the header', async () => {
+    api.getApp.mockResolvedValue({
+      ...APP,
+      pm2ProcessNames: ['example-backend', 'example-worker'],
+    });
+    renderDetail();
+
+    await screen.findByRole('heading', { name: APP.name });
+    expect(screen.queryByText(/example-backend/)).toBeNull();
+    expect(screen.queryByText(/example-worker/)).toBeNull();
+  });
 });
 
 describe('AppDetailView managed-app feature tabs', () => {
@@ -214,6 +226,31 @@ describe('AppDetailView fetch lifecycle', () => {
     vi.clearAllMocks();
     socketHandlers.clear();
     api.getApp.mockReset();
+  });
+
+  it('shows a retryable unavailable state for a failed detail request and recovers', async () => {
+    api.getApp
+      .mockRejectedValueOnce(Object.assign(new Error('Server unreachable'), { status: 503 }))
+      .mockResolvedValueOnce(APP);
+    renderDetail();
+
+    const unavailable = await screen.findByRole('alert');
+    expect(unavailable).toHaveTextContent('App unavailable');
+    expect(unavailable).toHaveTextContent('Server unreachable');
+    expect(screen.queryByText('App not found')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { name: APP.name })).toBeInTheDocument();
+  });
+
+  it('keeps a confirmed 404 distinct from an unavailable detail request', async () => {
+    api.getApp.mockRejectedValue(Object.assign(new Error('App not found'), { status: 404 }));
+    renderDetail();
+
+    const missing = await screen.findByText('App not found');
+    expect(missing).toHaveTextContent('App not found');
+    expect(screen.queryByText('App unavailable')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
   it('clears old child props immediately on navigation and ignores a late old-app refresh', async () => {

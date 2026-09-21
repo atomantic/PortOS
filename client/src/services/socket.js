@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 import { isPublicGuestRoute } from '../lib/publicGuestRoutes';
-import { showStaleBuildToast, showBuildDriftToast } from './staleBuildToast';
+import { showStaleBuildToast } from './staleBuildToast';
 import { createBuildDriftWatcher, SERVED_BUILD_ID } from '../lib/buildStamp.js';
 import { getSystemBuild } from './apiSystem';
 import toast from '../components/ui/Toast';
@@ -48,7 +48,7 @@ const EMBEDDED_BUILD_ID = SERVED_BUILD_ID;
 // One frame, two different staleness problems with two different remedies —
 // `resolveBuildFrame` owns that decision (it is pure and tested); this just
 // dispatches, once per kind per tab.
-const TOAST_IDS = { reload: 'portos-stale-build', drift: 'portos-build-drift' };
+const TOAST_IDS = { reload: 'portos-stale-build' };
 
 // The bundle hash arrives on the socket; the commit is FETCHED over the
 // authenticated API, because the server's `connection` handler also fires for
@@ -58,8 +58,8 @@ const TOAST_IDS = { reload: 'portos-stale-build', drift: 'portos-build-drift' };
 const buildWatcher = createBuildDriftWatcher({
   embeddedBuildId: EMBEDDED_BUILD_ID,
   fetchIdentity: () => getSystemBuild({ silent: true }),
-  onShow: (action) => (action === 'reload' ? showStaleBuildToast() : showBuildDriftToast()),
-  onClear: (action) => toast.dismiss(TOAST_IDS[action])
+  onShow: (action) => (action === 'reload' ? showStaleBuildToast() : undefined),
+  onClear: (action) => action === 'reload' ? toast.dismiss(TOAST_IDS.reload) : undefined
 });
 
 socket.on('build:id', ({ buildId } = {}) => buildWatcher.onBuildId(buildId));

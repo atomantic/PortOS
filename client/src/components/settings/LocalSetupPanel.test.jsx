@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 
 // LocalSetupPanel consumes useInstallStream directly rather than through either
 // install modal, so it needs its own coverage for the shared investigation
@@ -34,9 +34,13 @@ const streamState = (overrides = {}) => ({
   ...overrides,
 });
 
-const renderPanel = () => render(
-  <LocalSetupPanel pythonPath="/usr/local/bin/python3" onPythonPathChange={vi.fn()} />,
-);
+const renderPanel = async () => {
+  const result = render(
+    <LocalSetupPanel pythonPath="/usr/local/bin/python3" onPythonPathChange={vi.fn()} />,
+  );
+  await act(async () => {});
+  return result;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -56,13 +60,13 @@ describe('LocalSetupPanel install failure', () => {
       currentStage: 'install',
       logs: [{ kind: 'error', text: 'pip exited 1' }],
     }));
-    renderPanel();
+    await renderPanel();
     await waitFor(() => expect(screen.getByRole('button', { name: /queue agent to investigate/i })).toBeTruthy());
   });
 
   it('shows no investigation action before an install has failed', async () => {
     useInstallStream.mockReturnValue(streamState());
-    renderPanel();
+    await renderPanel();
     await waitFor(() => expect(screen.getByText(/install 1 missing package/i)).toBeTruthy());
     expect(screen.queryByRole('button', { name: /queue agent to investigate/i })).toBeNull();
     expect(useInstallStream).toHaveBeenCalledWith(

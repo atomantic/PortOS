@@ -1009,27 +1009,6 @@
       "envVars": {},
       "secretEnvVars": []
     },
-    "nvidia-kimi": {
-      "id": "nvidia-kimi",
-      "name": "NVIDIA Kimi K2.5",
-      "type": "api",
-      "endpoint": "https://integrate.api.nvidia.com/v1",
-      "apiKey": "",
-      "models": [
-        "moonshotai/kimi-k2.5",
-        "moonshotai/kimi-k2-instruct",
-        "moonshotai/kimi-k2-thinking"
-      ],
-      "defaultModel": "moonshotai/kimi-k2.5",
-      "lightModel": "moonshotai/kimi-k2-instruct",
-      "mediumModel": "moonshotai/kimi-k2.5",
-      "heavyModel": "moonshotai/kimi-k2-thinking",
-      "fallbackProvider": null,
-      "timeout": 300000,
-      "enabled": false,
-      "envVars": {},
-      "secretEnvVars": []
-    },
     "cerebras": {
       "id": "cerebras",
       "name": "Cerebras",
@@ -1116,16 +1095,18 @@
       "endpoint": "https://api.x.ai/v1",
       "apiKey": "",
       "models": [
+        "grok-4.7",
         "grok-4",
         "grok-3",
         "grok-3-mini",
         "grok-code-fast-1"
       ],
-      "defaultModel": "grok-4",
+      "defaultModel": "grok-4.7",
       "lightModel": "grok-3-mini",
       "mediumModel": "grok-3",
-      "heavyModel": "grok-4",
+      "heavyModel": "grok-4.7",
       "fallbackProvider": null,
+      "contextWindow": 500000,
       "timeout": 300000,
       "enabled": false,
       "envVars": {},
@@ -1138,12 +1119,14 @@
       "command": "grok",
       "args": [],
       "models": [
-        "grok-4.6"
+        "grok-4.7",
+        "grok-4.6",
+        "grok-4.5"
       ],
-      "defaultModel": "grok-4.6",
-      "lightModel": "grok-4.6",
-      "mediumModel": "grok-4.6",
-      "heavyModel": "grok-4.6",
+      "defaultModel": "grok-4.7",
+      "lightModel": "grok-4.7",
+      "mediumModel": "grok-4.7",
+      "heavyModel": "grok-4.7",
       "contextWindow": 256000,
       "timeout": 300000,
       "enabled": false,
@@ -1157,12 +1140,14 @@
       "command": "grok",
       "args": [],
       "models": [
-        "grok-4.6"
+        "grok-4.7",
+        "grok-4.6",
+        "grok-4.5"
       ],
-      "defaultModel": "grok-4.6",
-      "lightModel": "grok-4.6",
-      "mediumModel": "grok-4.6",
-      "heavyModel": "grok-4.6",
+      "defaultModel": "grok-4.7",
+      "lightModel": "grok-4.7",
+      "mediumModel": "grok-4.7",
+      "heavyModel": "grok-4.7",
       "contextWindow": 256000,
       "timeout": 600000,
       "enabled": false,

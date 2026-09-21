@@ -20,6 +20,7 @@ import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
+import { extractPngGenerationMetadata } from '../../lib/pngMetadata.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
@@ -116,6 +117,12 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
       '--seed', String(seed),
       '--output', outputPath,
     ];
+    if (model.pipelineClass === 'QwenImage21Pipeline') {
+      if (referenceImagePaths.length + (initImagePath ? 1 : 0) > 10) {
+        throw new ServerError('Qwen Image 2.1 accepts at most 10 input images', { status: 400, code: 'TOO_MANY_INPUT_IMAGES' });
+      }
+      if (referenceImagePaths.length) args.push('--reference-images', ...referenceImagePaths);
+    }
     if (negativePrompt) args.push('--negative-prompt', negativePrompt);
     if (initImagePath) args.push('--image-path', initImagePath);
     if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
@@ -590,7 +597,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // Decks page rendered that as an unexplained "Failed" badge. Refuse up front
   // with the same reason and one-button remedy the status probe reports.
   if (usesTorchVenv(model)) {
-    const healthy = await isFlux2VenvHealthy().then((v) => v).catch(() => null);
+    const healthy = await isFlux2VenvHealthy(model.pipelineClass).then((v) => v).catch(() => null);
     if (healthy === false) {
       throw new ServerError(
         `The shared torch image runtime is not installed or healthy (expected at ${FLUX2_VENV_DEFAULT}). Install it from Settings › Image Gen › Local, then retry. FLUX.2, Z-Image, ERNIE, HiDream and Qwen all render through it.`,
@@ -978,6 +985,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       // the runtime still failed to import. Bust the health cache so the next
       // status poll reports the truth instead of the cached pass, and name the
       // same one-button remedy rather than leaving the caller with "Exit code 1".
+      if (userKind === 'torch_runtime_broken') invalidateFlux2Health();
       if (!userMessage && usesTorchVenv(model)) {
         const importBroken = lines.some((l) => /^(ModuleNotFoundError|ImportError)\b/.test(l) || /cannot import name /.test(l));
         if (importBroken) {
@@ -1013,13 +1021,13 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         ? `${userMessage}\n\n(diagnostic) ${reason}`
         : `Generation failed: ${reason}\n${tail}`;
       console.error(`❌ Image generation failed [${jobId.slice(0, 8)}]: ${userMessage || reason}`);
-      job.error = userMessage || reason;
+      job.error = userMessage || errorText;
       job.errorKind = userKind;
       job.errorRepo = userRepo;
       broadcastSse(job, { type: 'error', error: errorText, kind: userKind, repo: userRepo });
       // Propagate the friendly message (not the raw "Exit code 1") to the
       // job queue so its `failed` log line and future SSE replays carry it.
-      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: userMessage || reason });
+      imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.LOCAL, generationId: jobId, error: job.error });
     } else {
       job.status = 'complete';
       // Large-source regen (issue #912): the render ran at a clamped FLUX-sane
@@ -1161,7 +1169,7 @@ async function refreshImageIndex(filename) {
  * filename and its `/data/images/` mount path for the caller to store.
  *
  * @param {string} base64Data - Raw base64 (no data: URI prefix) image bytes
- * @returns {Promise<{ filename: string, path: string }>}
+ * @returns {Promise<{ filename: string, path: string, metadata: object }>}
  */
 export async function saveUploadedGalleryImage(base64Data) {
   const buffer = Buffer.from(base64Data, 'base64');
@@ -1175,6 +1183,9 @@ export async function saveUploadedGalleryImage(base64Data) {
   if (!detected) {
     throw new ServerError('Unsupported image format (expected PNG, JPEG, WebP, or GIF)', { status: 400, code: 'UNSUPPORTED_IMAGE' });
   }
+  // Read Stable Diffusion-compatible PNG text chunks before sharp normalizes
+  // the image. JPEG/WebP/GIF uploads simply produce an empty projection.
+  const metadata = extractPngGenerationMetadata(buffer);
   // Normalize to PNG so the gallery's PNG-only list/delete paths manage it.
   // `.rotate()` with no args bakes in EXIF orientation before the metadata is
   // dropped, so a camera-JPEG portrait isn't saved sideways/upside-down.
@@ -1182,9 +1193,15 @@ export async function saveUploadedGalleryImage(base64Data) {
   const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
   await atomicWrite(join(PATHS.images, filename), png);
+  // The normalized PNG intentionally has no source text chunks. Keep the
+  // bounded projection in the canonical gallery sidecar so gallery listings,
+  // media indexing, and later catalog attachments can still recover it.
+  if (Object.keys(metadata).length > 0) {
+    await atomicWrite(join(PATHS.images, filename.replace('.png', '.metadata.json')), metadata);
+  }
   await refreshImageIndex(filename);
   console.log(`📥 Saved uploaded gallery image: ${filename} (${(png.length / 1024).toFixed(0)}KB PNG, from ${detected.mime})`);
-  return { filename, path: `/data/images/${filename}` };
+  return { filename, path: `/data/images/${filename}`, metadata };
 }
 
 export async function listGallery() {

@@ -4,6 +4,8 @@ import { request } from './apiCore.js';
 // the login gate at all.
 export const getAuthStatus = (options) => request('/auth/status', options);
 
+export const getPasswordRiskStatus = (options) => request('/auth/password-risk', options);
+
 export const loginWithPassword = (password) => request('/auth/login', {
   method: 'POST',
   body: JSON.stringify({ password }),

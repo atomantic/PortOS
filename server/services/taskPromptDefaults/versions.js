@@ -86,6 +86,12 @@ export const PROMPT_VERSIONS = {
   'jira-status-report': 1,
 };
 
+// Claim prompts enforce host-control security eligibility before any claim or handoff.
+// Dependency reconciliation requires positive completion evidence and preserves manual blockers.
+PROMPT_VERSIONS['claim-issue'] = 34;
+PROMPT_VERSIONS['claim-issue-gitlab'] = 31;
+PROMPT_VERSIONS['claim-issue-jira'] = 20;
+
 // Audit anchor for reference-watch's read/write coupling.
 // The reference-watch schedule default (`taskMetadata.readOnly` in DEFAULT_TASK_INTERVALS)
 // is derived from what the active prompt VERSION does: v3's prompt records proposals in the

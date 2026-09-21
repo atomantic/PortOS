@@ -3,7 +3,7 @@ import { useParams, Navigate } from 'react-router';
 import { Cpu } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
+import ModelsTabsHeader, { ModelsDesktopNavigator } from '../components/models/ModelsTabsHeader';
 import Image3dRuntimes from '../components/models/Image3dRuntimes';
 import ModelStatusTab from '../components/models/ModelStatusTab';
 import SubscriptionsTab from '../components/models/SubscriptionsTab';
@@ -31,6 +31,7 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  *
  *   - **3D** — image-to-3D runtime install/repair (TRELLIS.2, Pixal3D).
  *   - **Code Reviewers** — the review-loop chain and its model/effort pins.
+ *   - **Decision Classifiers** — Jev integrations and local Laya-MLX experiments.
  *   - **Embeddings** — the embedding model backing pgvector search.
  *   - **LLMs** — the model-library and abuse-guard sub-routes (the weights).
  *   - **Runtimes** — the local model servers, their lifecycle and downloads.
@@ -56,6 +57,7 @@ const TAB_CONTENT = {
   comparison: lazyWithReload(() => import('../components/models/ModelComparison')),
   '3d': Image3dRuntimes,
   'code-reviewers': CodeReviewersTab,
+  'decision-classifiers': lazyWithReload(() => import('../components/models/DecisionClassifiers')),
   embeddings: EmbeddingsTab,
   llms: LocalLlmTab,
   'llms-runtimes': LocalLlmRuntimesView,
@@ -81,8 +83,12 @@ const TAB_DETAIL = {
   training: LoraDatasetDetail,
 };
 
-export default function Models() {
-  const { tab, recordId } = useParams();
+export default function Models({ fixedTab, fixedRecordId } = {}) {
+  const params = useParams();
+  const tab = fixedTab || params.tab;
+  const recordId = fixedRecordId || params.recordId;
+  const taskView = params.taskView || params.view || (fixedTab === 'performance' && params.assessmentKey ? 'results' : undefined);
+  if (tab === 'llms' && recordId === 'jev') return <Navigate to={`/models/decision-classifiers/jev${taskView ? '/' + taskView : ''}`} replace />;
   // An unknown slug lands on LLMs rather than rendering a blank page, matching
   // the section's default destination in App and the primary navigation.
   //
@@ -100,17 +106,22 @@ export default function Models() {
   const TabContent = TAB_CONTENT[activeTab];
 
   return (
-    <div className="flex flex-col h-full min-w-0 overflow-hidden">
-      <PageHeader icon={Cpu} title="Models" />
+    <div className="flex h-full min-w-0 overflow-hidden">
+      <ModelsDesktopNavigator activeTab={activeTab} />
+      <div className="flex flex-col h-full min-w-0 flex-1">
+        <PageHeader icon={Cpu} title="Models" />
 
-      <ModelsTabsHeader activeTab={activeTab} />
+        <ModelsTabsHeader activeTab={activeTab} desktop={false} />
 
-      <div className="flex-1 min-w-0 overflow-auto p-4">
-        {/* Local boundary rather than the App-level one: a lazy tab must not blank
-            out the section header and tab bar while its chunk loads. */}
-        <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
-          {DetailContent ? <DetailContent recordId={recordId} /> : <TabContent view={recordId} />}
-        </Suspense>
+        <div className="flex-1 min-w-0 overflow-auto p-4">
+          {/* Local boundary rather than the App-level one: a lazy tab must not blank
+              the section header and tab bar while its chunk loads. */}
+          <Suspense fallback={<PageSkeleton header="none" label="Loading models section" cards={3} sidebar={false} />}>
+            {DetailContent
+              ? <DetailContent recordId={recordId} />
+              : <TabContent view={recordId} taskView={taskView} assessmentKey={params.assessmentKey} />}
+          </Suspense>
+        </div>
       </div>
     </div>
   );

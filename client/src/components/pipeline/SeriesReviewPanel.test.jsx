@@ -8,7 +8,7 @@
  * options — and, for the review, must keep the user's un-taken note.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/api', () => ({
@@ -46,11 +46,15 @@ const ISSUES_VERDICT = {
   verdict: 'issues', findings: FINDINGS, findingCount: 1, foundationThreshold: 7.5,
 };
 
-const renderPanel = () => render(
-  <MemoryRouter>
-    <SeriesReviewPanel series={{ id: 'ser-1' }} onSeriesUpdate={vi.fn()} onIssuesUpdate={vi.fn()} />
-  </MemoryRouter>,
-);
+const renderPanel = async () => {
+  const result = render(
+    <MemoryRouter>
+      <SeriesReviewPanel series={{ id: 'ser-1' }} onSeriesUpdate={vi.fn()} onIssuesUpdate={vi.fn()} />
+    </MemoryRouter>,
+  );
+  await act(async () => {});
+  return result;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -62,7 +66,7 @@ beforeEach(() => {
 describe('SeriesReviewPanel — review kickoff conflict', () => {
   it('reports the conflict and does NOT enter the reviewing state', async () => {
     startPipelineSeriesReview.mockResolvedValue({ runId: 'other-run', alreadyRunning: true, conflict: true });
-    renderPanel();
+    await renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: /Review series/i }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/different review is already running/i)));
     // Still offering the action — never swapped to the in-flight run's "Stop".
@@ -72,7 +76,7 @@ describe('SeriesReviewPanel — review kickoff conflict', () => {
 
   it('keeps the note the conflicting run never took', async () => {
     startPipelineSeriesReview.mockResolvedValue({ runId: 'other-run', alreadyRunning: true, conflict: true });
-    renderPanel();
+    await renderPanel();
     const note = await screen.findByLabelText(/Anything specific/i);
     fireEvent.change(note, { target: { value: 'volume 1 has no real development' } });
     fireEvent.click(screen.getByRole('button', { name: /Review series/i }));
@@ -82,7 +86,7 @@ describe('SeriesReviewPanel — review kickoff conflict', () => {
 
   it('still tracks a normal (non-conflicting) start', async () => {
     startPipelineSeriesReview.mockResolvedValue({ runId: 'run-1', alreadyRunning: false });
-    renderPanel();
+    await renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: /Review series/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: /Stop/i })).toBeInTheDocument());
     expect(toast.error).not.toHaveBeenCalled();
@@ -96,7 +100,7 @@ describe('SeriesReviewPanel — fix kickoff conflict', () => {
 
   it('reports the conflict instead of adopting the other pass as its own', async () => {
     startPipelineSeriesFix.mockResolvedValue({ runId: 'other-fix', alreadyRunning: true, conflict: true });
-    renderPanel();
+    await renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: /Fix these issues/i }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/different fix pass is already running/i)));
     // The confirm block is still up — the panel never entered the fixing state.
@@ -105,7 +109,7 @@ describe('SeriesReviewPanel — fix kickoff conflict', () => {
 
   it('still tracks a normal (non-conflicting) fix start', async () => {
     startPipelineSeriesFix.mockResolvedValue({ runId: 'fix-1', alreadyRunning: false });
-    renderPanel();
+    await renderPanel();
     fireEvent.click(await screen.findByRole('button', { name: /Fix these issues/i }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Fixing started/i)));
     expect(toast.error).not.toHaveBeenCalled();

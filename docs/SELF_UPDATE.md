@@ -16,26 +16,43 @@ The release-notification poll **always queries the upstream `atomantic/PortOS`**
 
 ## Pulling: origin, not upstream
 
-`update.sh` / `update.ps1` always `git pull --rebase --autostash` from **origin**. A fork user who has not merged upstream into their fork gets a silent no-op pull.
+`update.sh` / `update.ps1` always `git pull --rebase` from **origin**. They are
+stash-free; a dirty checkout is refused before the pull. A fork user who has
+not merged upstream into their fork gets a silent no-op pull.
 
 ### The update always lands on `main` first
 
 Before pulling, both scripts check the current branch and **switch to `main` if you are anywhere else** — a feature branch or a detached HEAD. This is deliberate: the rest of the script (install, build, restart) has to run on the revision the app will boot from, and pulling on a feature branch would leave the running app on a version the update never advanced.
 
-If the working tree is dirty when switching off a non-`main` branch or detached HEAD (unstaged, staged, or untracked files), the scripts perform explicit pre-checkout stashing via **`git stash push -u`** so the checkout can proceed, tagging the entry `portos-update-<timestamp>`. The stash is intentionally **not** popped afterwards — the remaining steps need `main`'s contents on disk. On completion the scripts print how to get back:
+If the working tree is dirty when switching off a non-`main` branch or detached
+HEAD — including unstaged, staged, or untracked files — the scripts refuse the
+update before changing branches. They are intentionally stash-free: a hidden
+stash is not an unattended recovery contract, and the operator must commit or
+restore the work before retrying. A clean feature branch or detached checkout
+is still moved to `main` before the pull.
+
+A previous run can be killed after the parent repository advances but before
+its submodule checkout finishes. That leaves the submodule gitlink looking like
+an uncommitted change and would otherwise make the next run fail at `git-pull`.
+Before the dirty-tree guard, both scripts inspect recursive submodule status and
+repair any checkout that is not at the parent commit with:
 
 ```bash
-git checkout <your-branch>   # or the recorded SHA, if you were on a detached HEAD
-git stash pop
+git submodule sync --recursive
+git submodule update --init --recursive
 ```
 
-The entry is at the top of `git stash list`. When already on `main`, pre-checkout stashing is skipped and dirty working trees rely instead on `git pull --autostash` during the pull. Nothing is stashed when the tree is clean, and no checkout occurs when already on `main`. Note that `git stash pop` restores file contents but not the index — anything you had staged comes back unstaged, so re-`git add` it (or pop with `--index`).
-
-**So: an in-app or CLI update run from a feature branch will leave your checkout on `main` with your work parked in the stash.** Commit your work before updating if you would rather not deal with that — pushing alone does not help, since the stash covers uncommitted changes.
+The same pinned update runs after switching to `main` and again after the pull.
+It does not use `--remote`; the parent gitlink is the reviewed release
+contract. Git still refuses to overwrite local files changed inside a
+submodule, so those changes remain a visible update blocker.
 
 ### Submodules follow the pulled parent revision
 
-After pulling `main`, both platform scripts run:
+Before pulling, both platform scripts repair any recursive submodule checkout
+that is not at the commit pinned by the current parent tree. After switching to
+`main` they repeat that repair, then after pulling `main` both platform scripts
+run:
 
 ```bash
 git submodule sync --recursive
@@ -164,10 +181,12 @@ updater that simply never runs is otherwise indistinguishable from a broken one.
 
 ### Checkout readiness: repair mechanically, escalate judgement
 
-Both update paths MOVE the checkout (`update.sh` switches to `main` and stashes;
-`updateDefaultBranch` checks out, fast-forwards, then falls back to `pull --rebase
---autostash`). Unattended, a stash nobody is told about reads as lost work. So the updater
-refuses until the checkout is on the default branch and clean.
+Both update paths MOVE the checkout. `update.sh` switches to `main` only from a
+clean branch and refuses dirty work; the manual managed-app path
+(`updateDefaultBranch`) can fall back to `pull --rebase --autostash` for
+non-conflicting local changes. The unattended readiness gate refuses until the
+checkout is on the default branch and clean, because a stash nobody is told
+about reads as lost work.
 
 Two remedies run without asking, because neither can destroy work:
 

@@ -74,9 +74,10 @@ router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
   res.json(await getAppQualityHistory(req.loadedApp, days));
 }));
 
-// POST /api/apps/:id/quality-snapshot - Commit this app's numeric snapshot into its
-// repo as `.quality.json`. Deliberately NOT gated on publishQualitySnapshot: the
-// toggle automates the audit hook, a manual call here is explicit intent.
+// POST /api/apps/:id/quality-snapshot - Land this app's numeric snapshot as
+// `.quality.json` through a merge-on-green PR. Deliberately NOT gated on
+// publishQualitySnapshot: the toggle automates the audit hook, a manual call
+// here is explicit intent.
 router.post('/:id/quality-snapshot', loadApp, asyncHandler(async (req, res) => {
   res.json({ success: true, ...await publishAppQualitySnapshot(req.loadedApp) });
 }));

@@ -469,6 +469,25 @@ describe('windowed-rate decisions (issue #2617)', () => {
       expect(summary.skipped.map(e => e.taskType)).toContain('still-broken');
     });
 
+    it('starts alert evidence after correction without erasing learning history', async () => {
+      const now = Date.now();
+      const at = new Date(now - 60_000).toISOString();
+      const old = Array.from({ length: 30 }, () => ({ t: at, s: false }));
+      const metrics = { ...stillFailingMetrics(), recentOutcomes: [...old] };
+      loadLearningData.mockResolvedValue(learningWith({ example: metrics }));
+      const options = { sinceByTaskType: { example: at } };
+      expect((await getPerformanceSummary(options)).needsAttention).toEqual([]);
+      metrics.recentOutcomes.push({ t: 'unknown', s: false });
+      metrics.recentOutcomes.push(...Array.from({ length: 4 }, () => ({ t: new Date(now).toISOString(), s: false })));
+      expect((await getPerformanceSummary(options)).needsAttention).toEqual([]);
+      metrics.recentOutcomes.push({ t: new Date(now).toISOString(), s: false });
+      expect((await getPerformanceSummary(options)).needsAttention).toEqual([
+        expect.objectContaining({ taskType: 'example', successRate: 0, windowedCompleted: 5 })
+      ]);
+      expect(metrics.recentOutcomes.slice(0, 30)).toEqual(old);
+      expect((await getPerformanceSummary({ since: new Date(now).toISOString() })).needsAttention).toEqual([]);
+    });
+
     it('pairs a windowed rate with its own sample count (evidence pairing for alerts/UI)', async () => {
       // Healthy lifetime (200 runs) hit by a 6-failure burst: the windowed 0%
       // must travel with windowedCompleted=6, not the 200 lifetime completions.

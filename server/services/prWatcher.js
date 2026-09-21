@@ -301,7 +301,7 @@ export function isPendingMergeReady(prView) {
 async function readPendingPullRequest(repoSpec, prNumber, { cwd, env } = {}) {
   const raw = await execGh([
     'pr', 'view', String(prNumber), '--repo', repoSpec,
-    '--json', 'state,mergeStateStatus,statusCheckRollup'
+    '--json', 'number,title,body,commits,headRefOid,author,state,isDraft,baseRefName,baseRefOid,mergeable,mergeStateStatus,statusCheckRollup'
   ], undefined, { cwd, env, backoffKey: repoSpec }).catch(() => null);
   const parsed = raw === null ? null : safeJSONParse(raw, null);
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
@@ -403,9 +403,25 @@ export async function processPendingMergePrs(app) {
       continue;
     }
 
+    let withheldReason = null;
     if (isPendingMergeReady(prView)) {
-      const merge = await git.mergePR(app.repoPath, entry.prNumber, { forgeAccount: app?.forgeAccount || null })
-        .catch((err) => ({ success: false, error: err.message }));
+      const { assessPullRequestForAction } = await import('./prReviewerSecurity.js');
+      const readDiff = () => execGh(['pr', 'diff', String(entry.prNumber), '--repo', repoSpec],
+        undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null);
+      const assessment = await assessPullRequestForAction({
+        pr: prView, diff: await readDiff(), repoFullName: origin.fullName,
+        readPr: () => readPendingPullRequest(repoSpec, entry.prNumber, forgeExec),
+        readDiff,
+        readIssue: async (number) => safeJSONParse(await execGh([
+          'api', '--hostname', githubApiHost(origin.host), `repos/${origin.fullName}/issues/${number}`,
+        ], undefined, { ...forgeExec, backoffKey: repoSpec }).catch(() => null), null),
+      }).catch(() => ({ ok: false }));
+      withheldReason = assessment.ok ? null : 'the complete current contribution assessment was unavailable or withheld';
+      const merge = assessment.ok
+        ? await git.mergePR(app.repoPath, entry.prNumber, {
+          forgeAccount: app?.forgeAccount || null, expectedHeadSha: prView.headRefOid,
+        }).catch((err) => ({ success: false, error: err.message }))
+        : { success: false, error: withheldReason };
       if (merge.success) {
         outcomes.set(key, null);
         result.merged += 1;
@@ -418,7 +434,7 @@ export async function processPendingMergePrs(app) {
     if (next.ticks >= MAX_PENDING_MERGE_TICKS) {
       const reason = String(prView.state || '').toUpperCase() !== 'OPEN'
         ? `it is ${String(prView.state).toLowerCase()} rather than open`
-        : 'CI or mergeability did not settle';
+        : withheldReason || 'CI or mergeability did not settle';
       await notifyPendingMergeTimeout(app, entry, reason);
       outcomes.set(key, null);
       result.timedOut += 1;

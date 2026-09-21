@@ -26,6 +26,17 @@ const GENERATOR_PATH = join(HERE, 'generate-provider-samples.js');
 const REGENERATE_COMMAND = 'node scripts/generate-provider-samples.js';
 
 describe('provider sample generator', () => {
+  it('offers Grok 4.7 on new installs while retaining selectable older generations', () => {
+    const providers = buildProviders('reference');
+    for (const id of ['grok', 'grok-cli', 'grok-tui']) {
+      expect(providers[id].defaultModel).toBe('grok-4.7');
+      expect(providers[id].models).toContain('grok-4.7');
+      expect(providers[id].enabled).toBe(false);
+    }
+    expect(providers['grok-cli'].models).toContain('grok-4.6');
+    expect(providers.grok.models).toContain('grok-4');
+    expect(providers.grok.contextWindow).toBe(500000);
+  });
   it('matches the committed toolkit sample byte-for-byte', () => {
     const committed = readFileSync(SAMPLE_PATH, 'utf8');
     const fresh = serializeDocument(buildDocument('sample'));
@@ -62,10 +73,16 @@ describe('provider sample generator', () => {
       'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
       'claude-code-tui', 'claude-code-tui-bedrock',
       'antigravity-tui', 'antigravity-cli',
-      'nvidia-kimi', 'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
+      'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
       'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
     ];
     expect([...PROVIDER_ORDER].sort()).toEqual([...SHIPPED_IDS].sort());
+  });
+
+  it('does not ship the retired NVIDIA Kimi preset', () => {
+    for (const variant of ['sample', 'reference']) {
+      expect(buildProviders(variant)).not.toHaveProperty('nvidia-kimi');
+    }
   });
 
   it('deliberately leaves every structural key (harnessId/method/serviceId) off a shipped sample', () => {

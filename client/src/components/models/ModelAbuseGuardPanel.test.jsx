@@ -53,7 +53,9 @@ beforeEach(() => {
 
 const renderPanel = async () => {
   render(<ModelAbuseGuardPanel />);
-  expect(await screen.findByRole('heading', { name: 'Model-abuse guard' })).toBeInTheDocument();
+  const heading = await screen.findByRole('heading', { name: 'Model-abuse guard' });
+  expect(heading).toBeInTheDocument();
+  expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', heading.id);
 };
 
 describe('ModelAbuseGuardPanel', () => {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Save } from 'lucide-react';
+import { Clock3, MapPin, Palette, Save } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
 import UnsavedChangesConfirm from '../ui/UnsavedChangesConfirm';
@@ -24,10 +24,12 @@ export function GeneralTab() {
   const [timezone, setTimezone] = useState('');
   const [savedTimezone, setSavedTimezone] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [timezoneError, setTimezoneError] = useState('');
   const [lat, setLat] = useState('');
   const [lon, setLon] = useState('');
   const [savedLocation, setSavedLocation] = useState(null);
   const [savingLocation, setSavingLocation] = useState(false);
+  const [locationError, setLocationError] = useState('');
   const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const allTimezones = useMemo(() => Intl.supportedValuesOf?.('timeZone') ?? [], []);
   const timezoneDirty = savedTimezone !== null && timezone !== savedTimezone;
@@ -73,23 +75,32 @@ export function GeneralTab() {
     // Both-or-neither: weather needs a full pair, and a half-set pair would
     // silently mix a custom value with the tool's default coordinate.
     if (isBlank(lat) !== isBlank(lon)) {
-      toast.error('Enter both latitude and longitude, or clear both.');
+      const message = 'Enter both latitude and longitude, or clear both.';
+      setLocationError(message);
+      toast.error(message);
       return;
     }
     const parsedLat = parseCoord(lat);
     const parsedLon = parseCoord(lon);
     if (Number.isNaN(parsedLat) || Number.isNaN(parsedLon)) {
-      toast.error('Latitude and longitude must be numbers.');
+      const message = 'Latitude and longitude must be numbers.';
+      setLocationError(message);
+      toast.error(message);
       return;
     }
     if (parsedLat !== null && (parsedLat < -90 || parsedLat > 90)) {
-      toast.error('Latitude must be between -90 and 90.');
+      const message = 'Latitude must be between -90 and 90.';
+      setLocationError(message);
+      toast.error(message);
       return;
     }
     if (parsedLon !== null && (parsedLon < -180 || parsedLon > 180)) {
-      toast.error('Longitude must be between -180 and 180.');
+      const message = 'Longitude must be between -180 and 180.';
+      setLocationError(message);
+      toast.error(message);
       return;
     }
+    setLocationError('');
     setSavingLocation(true);
     try {
       await updateSettings({ location: { lat: parsedLat, lon: parsedLon } }, { silent: true });
@@ -100,7 +111,9 @@ export function GeneralTab() {
       setLon(current => current === submittedLon ? nextLon : current);
       toast.success(parsedLat === null ? 'Location cleared' : `Location set to ${parsedLat}, ${parsedLon}`);
     } catch (err) {
-      toast.error(err.message || 'Failed to save location');
+      const message = err.message || 'Failed to save location';
+      setLocationError(message);
+      toast.error(message);
     } finally {
       setSavingLocation(false);
     }
@@ -110,7 +123,9 @@ export function GeneralTab() {
     const submittedTimezone = timezone;
     const tzToSave = tz || detectedTz;
     if (!tzToSave) {
-      toast.error('Timezone is required.');
+      const message = 'Timezone is required.';
+      setTimezoneError(message);
+      toast.error(message);
       return;
     }
 
@@ -125,10 +140,13 @@ export function GeneralTab() {
       } catch { isValid = false; }
     }
     if (!isValid) {
-      toast.error('Invalid timezone. Please select a valid IANA timezone.');
+      const message = 'Invalid timezone. Please select a valid IANA timezone.';
+      setTimezoneError(message);
+      toast.error(message);
       return;
     }
 
+    setTimezoneError('');
     setSaving(true);
     try {
       await updateSettings({ timezone: tzToSave }, { silent: true });
@@ -136,7 +154,9 @@ export function GeneralTab() {
       setTimezone(current => current === submittedTimezone ? tzToSave : current);
       toast.success(`Timezone set to ${tzToSave}`);
     } catch (err) {
-      toast.error(err.message || 'Failed to save timezone');
+      const message = err.message || 'Failed to save timezone';
+      setTimezoneError(message);
+      toast.error(message);
     } finally {
       setSaving(false);
     }
@@ -157,7 +177,12 @@ export function GeneralTab() {
   if (loading) return <BrailleSpinner />;
 
   return (
-    <div className="space-y-6">
+    <section
+      aria-labelledby="general-settings-heading"
+      data-testid="general-settings-workspace"
+      className="@container space-y-4"
+    >
+      <h2 id="general-settings-heading" className="sr-only">General settings</h2>
       <UnsavedChangesConfirm
         guard={routeGuard}
         when={hasDiscardableChanges}
@@ -165,8 +190,12 @@ export function GeneralTab() {
         label="Discard unsaved General settings changes"
         onDiscard={discardAndExit}
       />
-      <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
-        <h3 className="text-lg font-semibold text-white mb-4">Timezone</h3>
+      <div className="grid grid-cols-1 @min-[52rem]:grid-cols-2 gap-4 items-start">
+      <div data-testid="general-timezone-card" className="min-w-0 bg-port-card border border-port-border rounded-xl p-4 sm:p-5">
+        <h3 className="flex items-center gap-2 text-base font-semibold text-white mb-2">
+          <Clock3 size={17} className="text-port-accent shrink-0" aria-hidden="true" />
+          Timezone
+        </h3>
         <p className="text-sm text-gray-400 mb-4">
           Used for job scheduling (cron expressions & scheduled times) and briefing dates.
         </p>
@@ -179,7 +208,10 @@ export function GeneralTab() {
             id="timezone-input"
             type="text"
             value={timezone}
-            onChange={e => setTimezone(e.target.value)}
+            onChange={e => {
+              setTimezone(e.target.value);
+              if (timezoneError) setTimezoneError('');
+            }}
             disabled={saving}
             placeholder={detectedTz}
             className="w-full sm:flex-1 sm:max-w-xs min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm disabled:opacity-50"
@@ -213,6 +245,11 @@ export function GeneralTab() {
             </button>
           )}
         </FormField>
+        {timezoneError && (
+          <p role="alert" className="mt-3 text-sm text-port-error break-words">
+            {timezoneError}
+          </p>
+        )}
         {timezone && timezone !== detectedTz && (
           <p className="text-xs text-gray-500 mt-2 break-all">
             Browser detected: {detectedTz}
@@ -225,8 +262,11 @@ export function GeneralTab() {
         </datalist>
       </div>
 
-      <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
-        <h3 className="text-lg font-semibold text-white mb-4">Location</h3>
+      <div data-testid="general-location-card" className="min-w-0 bg-port-card border border-port-border rounded-xl p-4 sm:p-5">
+        <h3 className="flex items-center gap-2 text-base font-semibold text-white mb-2">
+          <MapPin size={17} className="text-port-accent shrink-0" aria-hidden="true" />
+          Location
+        </h3>
         <p className="text-sm text-gray-400 mb-4">
           Your home coordinates. Used by the voice assistant&apos;s weather command when you
           ask &ldquo;what&apos;s the weather?&rdquo; without naming a place. Leave both blank to use a default location.
@@ -242,7 +282,10 @@ export function GeneralTab() {
               type="text"
               inputMode="decimal"
               value={lat}
-              onChange={e => setLat(e.target.value)}
+              onChange={e => {
+                setLat(e.target.value);
+                if (locationError) setLocationError('');
+              }}
               disabled={savingLocation}
               placeholder="37.7749"
               className="w-full min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm disabled:opacity-50"
@@ -258,7 +301,10 @@ export function GeneralTab() {
               type="text"
               inputMode="decimal"
               value={lon}
-              onChange={e => setLon(e.target.value)}
+              onChange={e => {
+                setLon(e.target.value);
+                if (locationError) setLocationError('');
+              }}
               disabled={savingLocation}
               placeholder="-122.4194"
               className="w-full min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm disabled:opacity-50"
@@ -282,13 +328,23 @@ export function GeneralTab() {
             </span>
           )}
         </div>
+        {locationError && (
+          <p role="alert" className="mt-3 text-sm text-port-error break-words">
+            {locationError}
+          </p>
+        )}
+      </div>
       </div>
 
-      <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
-        <h3 className="text-lg font-semibold text-white mb-4">Interface Theme</h3>
+      <div data-testid="general-theme-card" className="bg-port-card border border-port-border rounded-xl p-4 sm:p-5">
+        <h3 className="flex items-center gap-2 text-base font-semibold text-white mb-2">
+          <Palette size={17} className="text-port-accent shrink-0" aria-hidden="true" />
+          Interface Theme
+        </h3>
+        <p className="text-sm text-gray-400 mb-4">Applies immediately and does not require a save.</p>
         <ThemePickerPanel />
       </div>
-    </div>
+    </section>
   );
 }
 

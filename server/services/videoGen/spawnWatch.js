@@ -127,7 +127,7 @@ export async function spawnAndWatchVideo({
     } catch (err) {
       // A replacement can race a read, and cancel/close removes the directory;
       // both are ordinary teardown races rather than render failures.
-      if (!previewClosed) console.log(`⚠️ Video preview read skipped [${jobId.slice(0, 8)}]: ${err.message}`);
+      if (!previewClosed && err.code !== 'ENOENT') console.log(`⚠️ Video preview read skipped [${jobId.slice(0, 8)}]: ${err.message}`);
     }
     previewReading = false;
     if (previewPending) {

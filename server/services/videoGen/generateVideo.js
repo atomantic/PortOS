@@ -29,7 +29,6 @@ import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../.
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { resolveVideoModelSelection } from './modelSelection.js';
 import { findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
-import { downloadHfRepo } from '../hfDownload.js';
 import { describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
@@ -105,7 +104,8 @@ export { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem };
 export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
 
 // Resolve a model by id from the LIVE registry (getVideoModels reads the
-// hot-reloadable cache), falling back to the boot snapshot. This is what the
+// hot-reloadable cache). Never revive disabled or removed entries from the
+// boot snapshot. This is what the
 // render path uses so a runtime-added model resolves without a server restart.
 // Attach the runtime capabilities a model entry can't express on its own:
 // whether an FFLF last frame is a real anchor, and whether the *installed* BYOV
@@ -144,43 +144,11 @@ const decorateVideoModel = (m) => (m ? {
 } : m);
 
 export const resolveVideoModel = (modelId) =>
-  decorateVideoModel(getVideoModels().find((m) => m.id === modelId) || VIDEO_MODELS[modelId] || null);
+  decorateVideoModel(getVideoModels().find((m) => m.id === modelId) || null);
 
 export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = (capabilities) => getDefaultVideoModelId(capabilities);
-
-// MiniMax's runner is intentionally offline at render time.  A missing file
-// used to reach the Python child, where huggingface_hub produced a confusing
-// "outgoing traffic has been disabled" traceback.  Rendering is already an
-// explicit user action, so it is the right place to finish provisioning the
-// selected model automatically (the same download path as the Video Gen
-// button), then retry the render once the cache is complete.
-const ensureMiniMaxH3Weights = async (model) => {
-  if (model.runtime !== 'minimax_h3' || !model.repo || !Array.isArray(model.repoFiles) || model.repoFiles.length === 0) return;
-  const missing = [];
-  for (const file of model.repoFiles) {
-    if (!(await findCachedRepoFile(model.repo, file, { revision: model.revision }))) missing.push(file);
-  }
-  if (missing.length === 0) return;
-  console.log(`⬇️ MiniMax H3 render requested with ${missing.length} uncached weight file(s); downloading automatically`);
-  const result = await downloadHfRepo({
-    repo: model.repo,
-    revision: model.revision || null,
-    only: model.repoFiles,
-    onEvent: (event) => {
-      if (event.type === 'progress' && event.file && event.downloaded == null) {
-        console.log(`⬇️ MiniMax H3: ${event.file}`);
-      }
-    },
-  }).promise;
-  if (!result.ok) {
-    throw new ServerError(
-      `MiniMax H3 weights could not be downloaded automatically: ${result.errorMessage || 'download failed'}. Open Video Gen to retry the download.`,
-      { status: 400, code: 'MINIMAX_H3_WEIGHTS_NOT_CACHED' },
-    );
-  }
-};
 
 export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
@@ -193,7 +161,6 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const { modelId: selectedModelId, model } = await resolveVideoModelSelection(modelId, { resolveModel: resolveVideoModel });
   modelId = selectedModelId;
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
-  await ensureMiniMaxH3Weights(model);
   validateVideoBatch({ batchSize, seed }, model);
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
@@ -714,10 +681,14 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       ffprobePath: ffprobe,
     }));
     if (batch) args.push('--batch-seeds', JSON.stringify(batch.map((item) => item.seed)));
+    if (model.runtime === 'minimax_h3') {
+      const { ensureMiniMaxH3Weights } = await import('./ensureWeights.js');
+      await ensureMiniMaxH3Weights(model);
+    }
   } catch (err) {
     job.status = 'error';
-    const reason = err.message || 'Failed to build video gen args';
-    console.error(`❌ Video generation buildArgs error [${jobId.slice(0, 8)}]: ${reason}`);
+    const reason = err.message || 'Failed to prepare video generation';
+    console.error(`❌ Video generation preparation error [${jobId.slice(0, 8)}]: ${reason}`);
     broadcastSse(job, { type: 'error', error: reason });
     videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: normalizeVideoFailure(err, { prompts: [prompt, negativePrompt] }) });
     void cleanupTempFiles({ includeUploads: true, includeUntrackedAudio: true });

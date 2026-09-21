@@ -71,9 +71,21 @@ export const INSTANCE_FEATURES = Object.freeze([
     defaultEnabled: false,
   }),
   Object.freeze({
+    id: 'laya-mlx',
+    label: 'Laya-MLX experiments',
+    description: 'Enable explicit local decision-classifier experiments on Apple Silicon. Does not change automated Jev integrations.',
+    defaultEnabled: false,
+  }),
+  Object.freeze({
     id: 'gsd',
     label: 'GSD',
     description: 'Get Stuff Done project planning and progress tracking for managed apps.',
+    defaultEnabled: false,
+  }),
+  Object.freeze({
+    id: 'cos-task-templates',
+    label: 'CoS task templates',
+    description: 'Quick reusable task templates in the Chief of Staff task form.',
     defaultEnabled: false,
   }),
   Object.freeze({

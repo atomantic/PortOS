@@ -1,6 +1,6 @@
 vi.mock('../services/apiMusic.js', () => ({ listMusicEngines: vi.fn(() => Promise.resolve({ engines: [] })) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
@@ -32,6 +32,7 @@ const CONFIRM_LABEL = 'Render test clip';
 const renderPage = async () => {
   render(<MemoryRouter><CreativeDirector /></MemoryRouter>);
   await screen.findByRole('button', { name: 'New project' });
+  await act(async () => {});
 };
 
 const openMenu = async (user) => {

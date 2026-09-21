@@ -8,6 +8,8 @@
 import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import { LOCAL_REVIEW_BRIDGE_SCRIPT } from '../lib/localReviewBridge.js';
+import { ZERO_REVIEWER_COVERAGE_NOTE, isProviderReviewer } from '../lib/reviewerConfig.js';
+import { buildCliReviewerOutcomeInstructions } from './promptSections/reviewerOutcome.js';
 
 export function normalizeWorkItemRef(ref) {
   const raw = String(ref ?? '').trim().replace(/^#/, '');
@@ -106,7 +108,8 @@ export const appendReviewerEffortBlock = (reviewers, reviewerEfforts, reviewerMo
 
 export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, reviewerEfforts = {}, { claimCommentGate = false } = {}) {
   const localReviewers = (reviewers || []).filter((reviewer) => isToolFreeReviewer(reviewer));
-  if (!localReviewers.length) return '';
+  const cliOutcomeInstructions = appendBlock(buildCliReviewerOutcomeInstructions(reviewers || []));
+  if (!localReviewers.length) return cliOutcomeInstructions;
 
   const diffCommand = [
     'DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed \'s@^origin/@@\')"',
@@ -126,7 +129,10 @@ export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, r
   const ingressJqArgs = Object.entries(ingressPinned)
     .map(([key, value]) => `--arg ${key} ${shellQuote(value)}`)
     .join(' ');
-  const ingressJqObject = Object.keys(ingressPinned).map((key) => `${key}: $${key}`).join(', ');
+  const ingressJqObject = [
+    ...Object.keys(ingressPinned).map((key) => `${key}: $${key}`),
+    ...(isProviderReviewer(ingressReviewer) ? ['inheritDefaults: false'] : []),
+  ].join(', ');
   const claimCommentGateBlock = claimCommentGate ? `
 
 ## Tool-Free Public Comment Gate
@@ -163,11 +169,16 @@ fi
     const jqArgs = Object.entries(pinned)
       .map(([key, value]) => `--arg ${key} ${shellQuote(value)}`)
       .join(' ');
-    const jqObject = Object.keys(pinned).map((key) => `${key}: $${key}`).join(', ');
+    // These maps already resolved task/default precedence; an absent provider
+    // pin is a deliberate clear, not permission to re-read the global pin.
+    const jqObject = [
+      ...Object.keys(pinned).map((key) => `${key}: $${key}`),
+      ...(isProviderReviewer(reviewer) ? ['inheritDefaults: false'] : []),
+    ].join(', ');
     return `### ${reviewer}\n\n\`\`\`bash\nREVIEW_DIFF=$(mktemp)\nREVIEW_RESPONSE=$(mktemp)\ntrap 'rm -f "$REVIEW_DIFF" "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT\nif ! { ${diffCommand}; } > "$REVIEW_DIFF"; then\n  echo "Unable to resolve the current branch's review diff" >&2\n  exit 1\nfi\njq -Rs ${jqArgs} '{ ${jqObject}, diff: . }' < "$REVIEW_DIFF" | node ${reviewScript} > "$REVIEW_RESPONSE"\nif ! jq -er '.findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then\n  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2\n  exit 1\nfi\ncat "\${REVIEW_RESPONSE}.findings"\n\`\`\``;
   }).join('\n\n');
 
-  return `${claimCommentGateBlock}\n\n## Local Reviewer Procedure\n\nThe tool-free local reviewers run before any tool-enabled CLI reviewer. Run each configured local reviewer in its listed order using the command below. Only a successfully extracted non-empty \`.findings\` string is a review result. Timeout, transport failure, malformed JSON, an error response, or missing/empty findings is INCONCLUSIVE: do not substitute a self-review. For a required local reviewer, record \`REVIEW_STATUS=review-blocked\`, continue to publish the MR/PR, then leave it open and do not merge until the required review completes; an optional inconclusive result remains non-blocking. Substantive findings, failed tests/build, unpushed fixes, or publication failures still block.\n\n${commands}`;
+  return `${claimCommentGateBlock}\n\n## Local Reviewer Procedure\n\nThe tool-free local reviewers run before any tool-enabled CLI reviewer. Run each configured local reviewer in its listed order using the command below. Only a successfully extracted non-empty \`.findings\` string is a review result. Timeout, transport failure, malformed JSON, an error response, or missing/empty findings is INCONCLUSIVE: do not substitute a self-review. For a required local reviewer, record \`REVIEW_STATUS=review-blocked\`, continue to publish the MR/PR, then leave it open and do not merge until the required review completes; an optional inconclusive result remains non-blocking. If every configured reviewer returns a configuration fault and none produces a verdict, report this distinct run-summary state: ${ZERO_REVIEWER_COVERAGE_NOTE} This remains non-blocking when every reviewer is marked \`~opt\`; do not use that wording when any reviewer produces a verdict. Substantive findings, failed tests/build, unpushed fixes, or publication failures still block.\n\n${commands}${cliOutcomeInstructions}`;
 }
 
 /**

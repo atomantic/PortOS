@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -12,7 +12,11 @@ vi.mock('../services/api', () => ({
 import MoodBoards from './MoodBoards';
 import { listMoodBoards, createMoodBoard, deleteMoodBoard } from '../services/api';
 
-const renderPage = () => render(<MemoryRouter><MoodBoards /></MemoryRouter>);
+const renderPage = async () => {
+  const result = render(<MemoryRouter><MoodBoards /></MemoryRouter>);
+  await act(async () => {});
+  return result;
+};
 
 describe('MoodBoards index', () => {
   beforeEach(() => {
@@ -23,7 +27,7 @@ describe('MoodBoards index', () => {
 
   it('offers a call to action with an accessible name when no boards exist', async () => {
     listMoodBoards.mockResolvedValue([]);
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('No mood boards yet')).toBeInTheDocument();
     // Scope to the empty state's own button — the header "New Board" control is
     // a separate element with its own name, so a conversion that drops
@@ -51,7 +55,7 @@ describe('MoodBoards index', () => {
         updatedAt: '2026-01-01T00:00:00.000Z',
       },
     ]);
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Retro Sci-Fi')).toBeInTheDocument();
     expect(screen.getByText('Neon aesthetics and space vibes')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create your first board' })).toBeNull();
@@ -78,7 +82,7 @@ describe('MoodBoards index', () => {
     listMoodBoards.mockResolvedValue([
       { id: 'board-1', name: 'Board To Delete', items: [], updatedAt: '2026-01-01T00:00:00.000Z' },
     ]);
-    renderPage();
+    await renderPage();
     expect(await screen.findByText('Board To Delete')).toBeInTheDocument();
 
     const deleteBtn = screen.getByRole('button', { name: 'Delete Board To Delete' });

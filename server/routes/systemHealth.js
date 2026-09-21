@@ -21,11 +21,8 @@ import { getMediaCapacity } from '../services/mediaCapacity.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
 
-// Defaults are tuned for a real dev machine: memory routinely sits in the
-// 75-85% band on a host with a couple of LLMs loaded, and big SSDs commonly
-// run >85% before being a real problem. Earlier thresholds (75/90 mem,
-// 85/95 disk) fired warnings on every healthy laptop. Users can override
-// these from /system-resources/overview (persisted to settings.json under `health`).
+// Disk capacity remains actionable. Memory thresholds are retained on the wire
+// for older clients, but no longer generate warnings or degrade health.
 const DEFAULT_THRESHOLDS = {
   memoryWarn: 85,
   memoryCritical: 95,
@@ -133,7 +130,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity] = await Promise.all([
+  const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
     cos.getStatus().catch(() => null),
@@ -152,7 +149,10 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     checkGhHealth().catch(() => ({ status: 'error', ok: false, detail: 'Health check failed', remedy: null, checkedAt: null })),
     // Media-lane capacity never fails the health report: an unreadable GPU probe
     // degrades to `null`, which the UI renders as unknown rather than as idle.
-    getMediaCapacity().catch(() => null)
+    getMediaCapacity().catch(() => null),
+    import('../services/codeReview.js')
+      .then(({ getReviewerConfigHealth }) => getReviewerConfigHealth())
+      .catch(() => ({ status: 'unknown', configFaults: {} }))
   ]);
   const { thresholds, dismissedWarnings } = healthSettings;
 
@@ -212,15 +212,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // dismissals are filtered out, from whatever warnings remain visible.
   const rawWarnings = [];
 
-  if (memUsagePercent >= thresholds.memoryCritical) {
-    rawWarnings.push({ type: 'memory', severity: 'critical', message: `Memory usage at or above ${thresholds.memoryCritical}%` });
-  } else if (memUsagePercent >= thresholds.memoryWarn) {
-    rawWarnings.push({ type: 'memory', severity: 'warning', message: `Memory usage at or above ${thresholds.memoryWarn}%` });
-  }
-
-  if (cpuUsagePercent > 100) {
-    rawWarnings.push({ type: 'cpu', severity: 'warning', message: 'CPU load high' });
-  }
+  // Memory occupancy and CPU load describe work, not a health failure.
 
   if (disk) {
     if (disk.usagePercent >= thresholds.diskCritical) {
@@ -269,6 +261,15 @@ router.get('/health/details', asyncHandler(async (req, res) => {
       type: 'forge',
       severity: 'warning',
       message: `GitHub CLI unusable (${forgeHealth.status})${forgeHealth.remedy ? ` — ${forgeHealth.remedy}` : ''}`
+    });
+  }
+
+  const reviewerConfigFaults = reviewerConfigHealth.configFaults || {};
+  if (Object.keys(reviewerConfigFaults).length) {
+    rawWarnings.push({
+      type: 'code-review',
+      severity: 'warning',
+      message: `Code review configuration needs attention for ${Object.keys(reviewerConfigFaults).join(', ')} — open Settings → Code Reviewers`
     });
   }
 
@@ -356,6 +357,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     media: mediaCapacity,
     database: dbHealth,
     forge: forgeHealth,
+    codeReview: reviewerConfigHealth,
     thresholds,
     topProcesses: [...pm2Processes]
       .sort((a, b) => (b.memory || 0) - (a.memory || 0))

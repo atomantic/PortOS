@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 
@@ -41,7 +41,11 @@ const looms = [
   },
 ];
 
-const renderPage = () => render(<MemoryRouter><FableLoom /></MemoryRouter>);
+const renderPage = async () => {
+  const result = render(<MemoryRouter><FableLoom /></MemoryRouter>);
+  await act(async () => {});
+  return result;
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -59,7 +63,7 @@ beforeEach(() => {
 
 describe('FableLoom index', () => {
   it('lists looms with episode/scene/ending stats and the universe chip', async () => {
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText('The Hollow Crown')).toBeInTheDocument());
     expect(screen.getByText('1 episode')).toBeInTheDocument();
     expect(screen.getByText('3 scenes')).toBeInTheDocument();
@@ -71,14 +75,14 @@ describe('FableLoom index', () => {
 
   it('shows the empty state when there are no looms', async () => {
     api.listLooms.mockResolvedValue([]);
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText(/No branching narratives yet/)).toBeInTheDocument());
   });
 
   it('creates a loom and navigates to its editor', async () => {
     api.createLoom.mockResolvedValue({ id: 'loom-9' });
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText('The Hollow Crown')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /New loom/ }));
@@ -99,7 +103,7 @@ describe('FableLoom index', () => {
     api.createLoom.mockResolvedValue({ id: 'loom-9' });
     api.generateLoomSeriesPlan.mockResolvedValue({ loom: { id: 'loom-9' }, runId: 'run-draft' });
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText('The Hollow Crown')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: /New loom/ }));
@@ -119,7 +123,7 @@ describe('FableLoom index', () => {
   it('deletes a loom after inline confirmation', async () => {
     api.deleteLoom.mockResolvedValue({});
     const user = userEvent.setup();
-    renderPage();
+    await renderPage();
     await waitFor(() => expect(screen.getByText('The Hollow Crown')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: 'Delete The Hollow Crown' }));

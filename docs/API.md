@@ -32,18 +32,19 @@ Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_A
 
 ## Security Model
 
-PortOS is designed for personal/developer use on trusted networks. It implements the following security measures:
+PortOS can execute host commands and access private files. It must remain on the user's private network; a reachable LAN or tailnet peer is not automatically trustworthy. It implements the following security measures:
 
 - **Network isolation**: By default, access should be restricted to trusted networks (e.g., Tailscale VPN, localhost)
-- **Command allowlist**: Shell command execution is restricted to an approved allowlist (see `server/lib/commandSecurity.js`)
+- **Command policies**: Execution follows each surface's operator/unattended policy and agent execution profile (see `server/lib/commandSecurity.js`); these controls do not sandbox the entire application
 - **Input validation**: All API inputs are validated using Zod schemas
 - **Opt-in authentication**: Off by default (trusting private network/Tailscale), PortOS supports opt-in instance password authentication (enforced by `server/services/authGate.js`) gating `/api/*`, `/data/*`, and `/sdapi/*` via session cookies, Bearer tokens, or HTTP Basic credentials
 
-**Important**: Do not expose PortOS APIs directly to untrusted networks. For production deployments, consider:
+Never publish PortOS administration, APIs, sockets, sidecars, or host controls through public tunnels, reverse proxies, or forwarding. A password or TLS does not make public deployment supported. For private deployments, consider:
 - Binding to `127.0.0.1` instead of `0.0.0.0`
 - Enabling instance password authentication in Settings → Security
-- Running behind an authenticated reverse proxy
 - Using Tailscale or similar VPN for remote access
+
+Password-free installs warn the operator until they set a password or explicitly accept the risk. See the [host-control security model](../PRD.md#host-control-security-model) for the full contract.
 
 ## REST Endpoints
 
@@ -100,7 +101,7 @@ legacy list for local Apps/Dashboard views.
 | GET | `/apps/:id/status` | Get PM2 status |
 | GET | `/apps/:id/logs` | Get recent logs |
 | POST | `/apps/:id/refresh-config` | Re-parse ecosystem config |
-| POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and commit it to `.quality.json` at its repo root (staged and committed as that one path; never pushed). Answers `{ success, published, path }` plus the commit `hash`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` when nothing was written. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any app's committed `.quality.json` is read back as a "Release snapshot" quality source, PortOS's own checkout included (`npm run quality:snapshot` is the same publish, run from the release step). |
+| POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and land `.quality.json` through a merge-on-green pull request on `portos/quality-snapshot` (scoped to that one path; the live checkout is not committed). Answers `{ success, published, path }` plus the commit `hash`, `prUrl`, and `prNumber`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` / `no-remote` / `no-default-branch` / `pr-failed` when nothing was written. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any app's committed `.quality.json` is read back as a "Release snapshot" quality source, PortOS's own checkout included (`npm run quality:snapshot` is the same publish, run from the release step). |
 | GET | `/apps/:id/quality-schedule` | The Quality tab's weekly-schedule form: every audit check with its applicability verdict and reason, the repository shapes that verdict came from, the cron expressions already occupied on this app, and the plan the shipped defaults produce. Read-only — no LLM call, no write. |
 | POST | `/apps/:id/quality-schedule/preview` | Re-plan for an edited form (selection, per-check delivery mode, checks per day, hour window, claim-drain task and offset). Still read-only; a POST only because the option bag carries a per-check map. |
 | POST | `/apps/:id/quality-schedule/apply` | Persist the plan as ordinary per-app task-type overrides: the selected checks enabled with their weekly cron and `fileIssues` mode, the audit types left out disabled with their interval cleared, and — when at least one selected check files issues — one daily cron for the issue-claim drain (one an earlier plan planted is retired when it is switched off or replaced). Other task types are untouched. |
@@ -970,3 +971,14 @@ Common error codes:
 - `VALIDATION_ERROR` - Invalid request data
 - `COMMAND_NOT_ALLOWED` - Shell command not in allowlist
 - `INTERNAL_ERROR` - Server error
+
+
+### Catalog scrap graph commits
+
+`POST /api/catalog/scraps/:id/commit` accepts up to 200 `accepted` entries and an optional `relationships` array (at most 1,000 edges). Each explicit edge has `fromDraftId`, `toDraftId`, `kind`, and nonempty `evidence` (at most 400 characters). When the array is present, every accepted entry needs a unique nonempty `draftId` (at most 120 characters); both endpoints must be accepted IDs and self-edges are rejected. Draft IDs stay outside persisted payloads. Renaming or reordering entries does not change endpoint identity.
+
+The server validates the graph before embedding or writing. Duplicate directed tuples create one edge, retaining every distinct evidence passage in the source ingredient's existing `payload.evidence` field with the kind and target name. Bible entries keep their evidence arrays (20 passages, 500 characters each including the contextual prefix); light entries keep string evidence, or arrays when supplied. Overflow is rejected explicitly, never truncated. The existing 200KB payload limit still applies after evidence enrichment.
+
+`relationships: []` means no edges. Omitting `relationships` preserves legacy all-pairs `related-to` links for batches of 2–25 entries. Explicit graphs work above that legacy batch limit. Supported kinds include `owned-by` (inverse: Owns) and `used-by` (inverse: Uses); using an object does not establish ownership. The caller must supply only grounded, accepted facts.
+
+Ingredients, source links, optional `universeRef` bindings, and edges commit in one transaction. No existing records are backfilled. The relation wire shape and existing evidence fields are unchanged; unknown relation kinds continue to round-trip through peer sync. Structured extraction and relationship review are tracked separately under #7895.

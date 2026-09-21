@@ -11,9 +11,12 @@
   "brain-weekly-review": [
     "server/services/brain.js"
   ],
-  "catalog-ideas-scenes-concepts": [
+  "catalog-extract": [
     "server/lib/creativeLatitude.js",
-    "server/services/catalogExtraction.js"
+    "server/services/catalogExtractionPlan.js"
+  ],
+  "catalog-ideas-scenes-concepts": [
+    "server/lib/creativeLatitude.js"
   ],
   "cd-evaluate": [
     "server/services/creativeDirectorPrompts.js"

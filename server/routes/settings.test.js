@@ -7,21 +7,34 @@ let store = {};
 
 vi.mock('../services/userActions.js', () => ({ recordUserAction: vi.fn(async () => ({ id: 'evt' })) }));
 
-vi.mock('../services/settings.js', () => ({
-  getSettings: vi.fn(async () => ({ ...store })),
-  getSettingsWithStatus: vi.fn(async () => ({ corrupt: false, settings: { ...store } })),
-  updateSettings: vi.fn(async (patch) => {
-    store = { ...store, ...patch };
-    return { ...store };
-  }),
-  // The PUT handler uses updateSettingsWith so it can merge the multi-owner
-  // federation slice per sub-key and re-inject persisted sub-keys this route
-  // does not own but the patch omits (see mergeFederationSlice /
-  // preserveExternallyOwnedKeys).
-  updateSettingsWith: vi.fn(async (mutate) => {
-    store = await mutate({ ...store });
-    return { ...store };
-  }),
+vi.mock('../services/settings.js', async () => {
+  const { EventEmitter } = await import('node:events');
+  const settingsEvents = new EventEmitter();
+  return {
+    settingsEvents,
+    getSettings: vi.fn(async () => ({ ...store })),
+    getSettingsWithStatus: vi.fn(async () => ({ corrupt: false, settings: { ...store } })),
+    updateSettings: vi.fn(async (patch) => {
+      store = { ...store, ...patch };
+      return { ...store };
+    }),
+    // The PUT handler uses updateSettingsWith so it can merge the multi-owner
+    // federation slice per sub-key and re-inject persisted sub-keys this route
+    // does not own but the patch omits (see mergeFederationSlice /
+    // preserveExternallyOwnedKeys).
+    updateSettingsWith: vi.fn(async (mutate) => {
+      store = await mutate({ ...store });
+      settingsEvents.emit('settings:updated');
+      return { ...store };
+    }),
+  };
+});
+// Defaults and settings persistence stay real; inventory probes must not spawn
+// CLIs or inspect the install's configured providers in a route test.
+vi.mock('../services/codeReview.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getReviewerCliInstalled: vi.fn(async () => ({})),
+  getProviderReviewUnsupported: vi.fn(async () => ({})),
 }));
 // The settings route now refuses a standing render route naming a peer that
 // could never run it (see services/federatedMedia/routingPolicy.js), so this
@@ -86,6 +99,7 @@ vi.mock('../services/beeperScheduler.js', () => ({
 }));
 
 import settingsRoutes from './settings.js';
+import codeReviewRoutes from './codeReview.js';
 import { reconcileBeeperIngestion } from '../services/beeperArming.js';
 import { restartBeeperScheduler, isBeeperSchedulerRegistered } from '../services/beeperScheduler.js';
 import { updateSettingsWith } from '../services/settings.js';
@@ -98,8 +112,32 @@ const buildApp = () => {
   const app = express();
   app.use(express.json());
   app.use('/api/settings', settingsRoutes);
+  app.use('/api/code-review', codeReviewRoutes);
   return app;
 };
+
+describe('Settings routes — configured reviewer pins', () => {
+  it('persists and clears provider model/effort defaults through settings and defaults readback', async () => {
+    store = {};
+    const app = buildApp();
+    const codeReview = {
+      reviewers: ['provider:example-reviewer', 'codex'],
+      providerModels: { 'provider:example-reviewer': 'example-model' },
+      providerEfforts: { 'provider:example-reviewer': 'high' },
+      codexModel: 'gpt-5.6-sol', codexEffort: 'low',
+    };
+    const saved = await request(app).put('/api/settings').send({ codeReview });
+    expect(saved.status).toBe(200);
+    const defaults = await request(app).get('/api/code-review/defaults');
+    expect(defaults.status).toBe(200);
+    expect(defaults.body).toMatchObject(codeReview);
+
+    const cleared = { ...codeReview, providerModels: {}, providerEfforts: {} };
+    expect((await request(app).put('/api/settings').send({ codeReview: cleared })).status).toBe(200);
+    expect((await request(app).get('/api/code-review/defaults')).body).toMatchObject(cleared);
+    expect((await request(app).get('/api/settings')).body.codeReview).toEqual(cleared);
+  });
+});
 
 // The operator-action ledger (#5594) distinguishes a human on the Settings page
 // from every other settings writer purely by this argument, so the route has to
@@ -209,6 +247,7 @@ describe('Settings routes — instance feature participation', () => {
     }));
     // GSD and OpenClaw ship disabled by default; the install opts in.
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: false }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'cos-task-templates', enabled: false, source: 'default' }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'openclaw', enabled: false }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'health', enabled: true }));
     // #40 — iMessage and Signal join the comms group, defaulting to enabled
@@ -1313,4 +1352,11 @@ describe('Settings routes — backup excludePaths bounds (#7241)', () => {
     // `computeEffectiveExcludes`, so nothing is rewritten under the user.
     expect(store.backup.excludePaths).toEqual(excludePaths);
   });
+});
+
+it('generic settings updates cannot replace the password-risk revision', async () => {
+  store = { passwordRiskRevision: 'current-revision' };
+  const res = await request(buildApp()).put('/api/settings').send({ passwordRiskRevision: 'old-revision' });
+  expect(res.status).toBe(200);
+  expect(store.passwordRiskRevision).toBe('current-revision');
 });

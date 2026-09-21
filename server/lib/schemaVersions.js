@@ -372,7 +372,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // types). A v8 receiver still accepts ≤v7 senders (sender-behind); their
   // envelopes carry no `catalogTypes` block and the receiver applies the other
   // kinds as before.
-  catalog: 8,
+  // v9 = catalog media rows carry bounded Stable Diffusion-compatible
+  // generation provenance (prompt, negative prompt, sampler, seed, model,
+  // and related fields). The metadata field is additive and optional on the
+  // wire; a v9 sender must not push it to a ≤v8 receiver that would silently
+  // drop it. A v9 receiver still accepts ≤v8 media rows without metadata.
+  catalog: 9,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced

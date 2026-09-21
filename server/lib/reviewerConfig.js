@@ -15,6 +15,8 @@ import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffo
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
+import { isReviewerConfigFault } from './reviewerHealth.js';
+export { REVIEWER_CONFIG_FAULT_CODES, isReviewerConfigFault } from './reviewerHealth.js';
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
 // Copilot review; `claude`/`antigravity`/`codex`/`grok`/`cursor`/`opencode`/`kimi`
@@ -42,22 +44,6 @@ export const isReviewer = (value) => REVIEWER_VALUES.includes(value) || isProvid
 export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value) || isProviderReviewer(value);
 
 /**
- * Reviewer refusals a CALLER can fix by changing configuration, as opposed to a
- * reviewer that was genuinely asked and failed (quota, transport, timeout).
- *
- * The review gate in a claim/PR run answers an unreachable reviewer with
- * `review-blocked`: publish, leave the PR open, wait for the outage to pass.
- * That is exactly wrong for a reviewer that can NEVER answer — the pipeline
- * stalls indefinitely while each individual PR looks like it is merely waiting
- * (#7660). These codes are how a caller tells the two apart.
- *
- * Vocabulary rather than service code so the route deciding 400-vs-502 and the
- * service producing the codes read the SAME list, without the route pulling in
- * the review service's closure to do it.
- */
-export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze(['NO_MODEL', 'REVIEWER_UNAVAILABLE', 'REVIEWER_UNSUPPORTED']);
-
-/**
  * What an agent does with a review that could not return a verdict: say so in
  * the run summary, and leave the PR/MR thread alone.
  *
@@ -72,7 +58,55 @@ export const REVIEWER_CONFIG_FAULT_CODES = Object.freeze(['NO_MODEL', 'REVIEWER_
  * being one. `reviewerConfig.test.js` pins the no-drift claim.
  */
 export const REVIEW_UNAVAILABLE_REPORTING_NOTE = 'Report the pending review in your run summary — do NOT post a PR/MR comment saying the review was unavailable or inconclusive.';
-export const isReviewerConfigFault = (code) => REVIEWER_CONFIG_FAULT_CODES.includes(code);
+
+/**
+ * What an agent does when EVERY configured reviewer returned a config fault:
+ * distinguish it from clean in the run summary, so the operator sees "no
+ * reviewer reviewed this branch" rather than a silent success.
+ *
+ * One exported sentence for the same reason as `REVIEW_UNAVAILABLE_REPORTING_NOTE`:
+ * the rule reaches prompt sites and run-summary builders, and spelled out at each
+ * one it drifts. `reviewerConfig.test.js` pins the claim.
+ */
+export const ZERO_REVIEWER_COVERAGE_NOTE = 'No reviewer reviewed this branch — every configured reviewer returned a configuration fault. The review loop is currently a no-op. Check Settings → Code Reviewers for the setting that fixes each reviewer.';
+
+/**
+ * Did any configured reviewer produce a verdict this run?
+ *
+ * Inputs: the configured reviewer list and a map of per-reviewer statuses from
+ * the run, where each value is either `{ code }` (a fault code from
+ * `REVIEWER_CONFIG_FAULT_CODES`) or `{ verdict }` (a real result).
+ * `isReviewerConfigFault(status.code)` identifies the config faults.
+ *
+ * Returns `true` when at least one reviewer produced a non-empty `verdict`.
+ * A non-configuration failure code without a verdict is still inconclusive.
+ * Returns
+ * `false` when every reviewer's status is a config fault, or when the reviewer
+ * list is empty. The empty-list case is a distinct condition from zero coverage
+ * (no reviewers were configured at all vs. reviewers were configured but none
+ * could answer); callers that need to distinguish them check the reviewer list
+ * length separately.
+ *
+ * This is the resolver the issue (#7783) names: it sits beside
+ * `hasRequiredReviewer()` and answers a complementary question — one asks
+ * "is any reviewer binding?", this asks "did any reviewer actually review?".
+ *
+ * @param {string[]} reviewers - the configured reviewer list for this run
+ * @param {Object<string, { code?: string, verdict?: string }>} perReviewerStatus
+ *   - per-reviewer status map keyed by reviewer token
+ * @returns {boolean}
+ */
+export function hasReviewerCoverage(reviewers, perReviewerStatus) {
+  const list = Array.isArray(reviewers) ? reviewers : [];
+  if (!list.length) return false;
+  const statuses = perReviewerStatus && typeof perReviewerStatus === 'object' ? perReviewerStatus : {};
+  return list.some(reviewer => {
+    const status = statuses[reviewer] || statuses[reviewer?.toLowerCase?.()];
+    if (!status || typeof status !== 'object') return false; // no status recorded = did not run
+    if (isReviewerConfigFault(status.code)) return false;
+    return typeof status.verdict === 'string' && status.verdict.trim().length > 0;
+  });
+}
 
 /**
  * Vendors PortOS can spawn that are deliberately NOT reviewers, each mapped to
@@ -311,16 +345,16 @@ export function hasReviewerOverride(metadata) {
 // instructs the agent to request each as a PR reviewer and gate the merge on it.
 //
 // Stored WITHOUT the leading `@` (added back only in the flag string). The
-// charset is deliberately shell-safe — a GitHub username (1–39 chars,
+// charset is deliberately shell-safe — a GitHub/GitLab username (1–39 chars,
 // alphanumeric + single hyphens, no leading/trailing hyphen) optionally followed
 // by a `/team-slug` for org-team mentions. No shell metacharacters, so the token
 // stays inert wherever it lands in a command string.
 export const MAX_REVIEW_USERNAMES = 20;
-const REVIEW_USERNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9._-]{1,100})?$/;
+const REVIEW_USERNAME_RE = /^[A-Za-z0-9_](?:[A-Za-z0-9._-]{0,254})(?:\/[A-Za-z0-9._-]{1,100})?$/;
 
 /**
  * Normalize a raw list of reviewer usernames: strip an optional leading `@`,
- * trim, drop anything that isn't a shell-safe GitHub username/team slug,
+ * trim, drop anything that isn't a shell-safe GitHub/GitLab username/team slug,
  * case-insensitively dedupe (GitHub logins are case-insensitive) while
  * preserving first-occurrence order, and cap at MAX_REVIEW_USERNAMES. Returns
  * a clean array of usernames WITHOUT the `@` prefix. Non-array input → [].
@@ -970,10 +1004,10 @@ export const KEYED_REVIEWER_PINS = [
  * `claudeEffort` / `antigravityEffort` / `lmstudioEffort` / `ollamaEffort`) into
  * the token-keyed map shape the resolvers and the picker UI both speak — the
  * effort twin of `reviewerModelsFromDefaults`, and the one adapter between the
- * two shapes.
+ * two shapes. Configured providers use the additive `providerEfforts` map.
  */
 export function reviewerEffortsFromDefaults(defaults) {
-  const out = {};
+  const out = Object.fromEntries(Object.entries(normalizeReviewerEfforts(defaults?.providerEfforts) || {}).filter(([key]) => isProviderReviewer(key)));
   for (const r of EFFORT_SELECTABLE_REVIEWERS) {
     // Re-checked, not trusted: settings.json is hand-editable, and a stale level
     // must not surface as a pin the invocation builders would then drop.

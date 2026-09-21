@@ -8,6 +8,7 @@ a new one.
 
 | File | What it's for |
 | --- | --- |
+| `actWarnings.js` | React act(...) warning diagnostics — records the test active when a warning was observed, without claiming to identify where asynchronous work began. |
 | `ariaRefAssertions.js` | Asserts a rendered tree's `aria-controls`/`aria-labelledby` IDREFs all resolve to a real element. |
 | `classNameScan.js` | Shared string-literal scanner (comment-stripping + literal walk) for the class-string convention guards. |
 | `dndKeyboardDrag.js` | Drives a real `@dnd-kit` keyboard drag under happy-dom, stubbing the layout happy-dom can't provide. |

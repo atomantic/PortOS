@@ -149,6 +149,8 @@ export default function PersistentMindTaskModelAllowlistControls({
                   disabled={disabled || saving}
                   modelDisabled={!provider}
                   alwaysShowModel
+                  highlightToolUse
+                  highlightVision
                   compose={false}
                   onProviderChange={(providerId) => updateEntry(index, { providerId })}
                   onModelChange={(model) => updateEntry(index, { model })}

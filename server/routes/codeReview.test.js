@@ -13,6 +13,7 @@ vi.mock('../services/codeReview.js', () => ({
   getReviewerCliInstalled: vi.fn(),
   getProviderReviewUnsupported: vi.fn(),
   reportReviewerFailure: vi.fn(),
+  reportReviewerSuccess: vi.fn(),
 }))
 
 vi.mock('../services/settings.js', () => ({
@@ -67,13 +68,19 @@ describe('GET /api/code-review/defaults', () => {
 })
 
 describe('POST /api/code-review/local', () => {
-  it('resolves a provider-backed model default and rejects unsafe provider identities', async () => {
-    settingsSvc.getSettings.mockResolvedValue({ codeReview: { providerModels: { 'provider:example-gpu': 'pinned-coder' } } });
+  it('resolves provider defaults, honors resolved task clears and rejects unsafe identities', async () => {
+    settingsSvc.getSettings.mockResolvedValue({ codeReview: {
+      providerModels: { 'provider:example-gpu': 'pinned-coder' }, providerEfforts: { 'provider:example-gpu': 'high' },
+    } });
     codeReviewSvc.runLocalCodeReview.mockResolvedValue({ ok: true, findings: 'NO FINDINGS' });
     const res = await request(makeApp()).post('/api/code-review/local')
       .send({ backend: 'provider:example-gpu', diff: 'example diff' });
     expect(res.status).toBe(200);
-    expect(codeReviewSvc.runLocalCodeReview).toHaveBeenCalledWith(expect.objectContaining({ backend: 'provider:example-gpu', model: 'pinned-coder' }));
+    expect(codeReviewSvc.runLocalCodeReview).toHaveBeenCalledWith(expect.objectContaining({ backend: 'provider:example-gpu', model: 'pinned-coder', effort: 'high' }));
+    const cleared = await request(makeApp()).post('/api/code-review/local')
+      .send({ backend: 'provider:example-gpu', inheritDefaults: false, diff: 'example diff' });
+    expect(cleared.status).toBe(200);
+    expect(codeReviewSvc.runLocalCodeReview.mock.lastCall[0]).toMatchObject({ model: undefined, effort: null });
     const invalid = await request(makeApp()).post('/api/code-review/local')
       .send({ backend: 'provider:example-gpu~opt', diff: 'example diff' });
     expect(invalid.status).toBe(400);

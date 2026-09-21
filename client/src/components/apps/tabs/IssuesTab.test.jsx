@@ -287,6 +287,11 @@ describe('IssuesTab', () => {
     await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Claim/ }));
+    const pendingClaim = screen.getByRole('button', { name: 'Queuing…' });
+    expect(pendingClaim).toHaveAttribute('aria-busy', 'true');
+    expect(pendingClaim).toHaveTextContent('Claim');
+    expect(pendingClaim).not.toHaveTextContent('Queuing…');
+    expect(pendingClaim.querySelector('svg')).toHaveClass('animate-spin');
     act(() => socketHandlers.get('cos:tasks:changed')({
       task: {
         id: 'task-1', status: 'in_progress',

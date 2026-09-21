@@ -3,7 +3,6 @@ import { NOTIFICATION_TYPES } from '../lib/notificationTypes.js';
 import {
   adaptNotification,
   adaptStoredReviewItem,
-  isSourceOwnedReviewItem,
 } from './reviewActionAdapters.js';
 
 describe('review action adapters', () => {
@@ -114,16 +113,5 @@ describe('review action adapters', () => {
       message: 'Choose a direction',
       metadata: {},
     })).toBeNull();
-  });
-
-  it('marks source-owned alerts as unavailable to generic completion', () => {
-    expect(isSourceOwnedReviewItem({
-      type: 'alert',
-      metadata: { category: 'goal-fidelity' },
-    })).toBe(true);
-    expect(isSourceOwnedReviewItem({
-      type: 'todo',
-      metadata: {},
-    })).toBe(false);
   });
 });

@@ -7,23 +7,16 @@
  * aggregate that also consumes the queue's product actions.
  */
 
-import os from 'os';
+import { getHealthAlertResolutions, healthAlertEvidence, recordHealthAlertResolution } from './healthAlertResolutions.js';
 import { getGoals } from './identity.js';
 import { getPerformanceSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
 import { annotateExpectedExit } from './apps.js';
-import { getUsage } from './usage.js';
 import { getCareSummary } from './tribe.js';
 import { findUnansweredTribeThreads } from './tribeOutreach.js';
-import { getMemoryStats } from '../lib/memoryStats.js';
 
 const STALL_THRESHOLD_DAYS = 14;
 const SUCCESS_RATE_WARNING = 50;
-const MEMORY_WARNING_PCT = 85;
-const MEMORY_CRITICAL_PCT = 95;
-const CPU_WARNING_PCT = 90;
-const USAGE_SPIKE_MULTIPLIER = 2.5;
-const USAGE_MIN_HISTORY_DAYS = 3;
 
 /**
  * Condition + explicit resource identity, never presentation text or
@@ -65,6 +58,7 @@ async function checkGoalStalls() {
         detail: `No progress in ${daysSince} days`,
         link: '/goals',
         metadata: { goalId: goal.id, daysSince, progress: goal.progress || 0 },
+        evidence: { goalId: goal.id, lastUpdate, progress: goal.progress || 0 },
       });
     }
   }
@@ -82,8 +76,7 @@ function hasCurrentPerformanceEvidence(item) {
 }
 
 /** Detect recently active task types with poor success rates. */
-async function checkSuccessRates() {
-  const perf = await getPerformanceSummary().catch(() => null);
+async function checkSuccessRates(perf) {
   if (!perf) return [];
 
   return (perf.needsAttention || [])
@@ -105,41 +98,11 @@ async function checkSuccessRates() {
     }));
 }
 
-/** Check for system resource warnings (memory, CPU, errored processes). */
+/** Check for failed processes requiring intervention. */
 async function checkSystemHealth() {
   const alerts = [];
 
-  const memStats = await getMemoryStats();
-  const memPct = Math.round((memStats.used / memStats.total) * 100);
-
-  if (memPct >= MEMORY_WARNING_PCT) {
-    const formatGB = (bytes) => `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
-    alerts.push({
-      id: alertId('system_resource', 'memory'),
-      type: 'system_resource',
-      severity: memPct >= MEMORY_CRITICAL_PCT ? 'critical' : 'high',
-      title: 'High memory usage',
-      detail: `${memPct}% — ${formatGB(memStats.used)} / ${formatGB(memStats.total)}`,
-      link: '/apps',
-      metadata: { resource: 'memory', percent: memPct },
-    });
-  }
-
-  const cpuLoad = os.loadavg()[0];
-  const cpuCount = os.cpus().length;
-  const cpuPct = Math.round((cpuLoad / cpuCount) * 100);
-
-  if (cpuPct >= CPU_WARNING_PCT) {
-    alerts.push({
-      id: alertId('system_resource', 'cpu'),
-      type: 'system_resource',
-      severity: 'high',
-      title: 'High CPU usage',
-      detail: `${cpuPct}% across ${cpuCount} cores`,
-      link: '/apps',
-      metadata: { resource: 'cpu', percent: cpuPct },
-    });
-  }
+  // Resource occupancy is telemetry: busy machines are not broken machines.
 
   // PM2 process errors. Processes whose exit is expected (a desktop app the
   // user quit) are excluded: that is a normal end to a session, and alerting
@@ -155,7 +118,8 @@ async function checkSystemHealth() {
         title: `Errored process: ${process.name}`,
         detail: 'Review the process logs and restart it after addressing the failure',
         link: '/apps',
-        metadata: { processId: process.pm_id, errored: 1, total: alertable.length },
+        metadata: { processId: process.pm_id, processName: process.name, errored: 1, total: alertable.length },
+        evidence: { processId: process.pm_id, status: process.status, restarts: process.restarts || 0 },
       });
     }
     if ((process.unstableRestarts || 0) > 0) {
@@ -166,7 +130,8 @@ async function checkSystemHealth() {
         title: `Process in crash loop: ${process.name}`,
         detail: `${process.unstableRestarts} crash-loop restarts — review the process logs`,
         link: '/apps',
-        metadata: { processId: process.pm_id, unstableRestarts: process.unstableRestarts, names: [process.name] },
+        metadata: { processId: process.pm_id, processName: process.name, unstableRestarts: process.unstableRestarts, names: [process.name] },
+        evidence: { processId: process.pm_id, unstableRestarts: process.unstableRestarts, restarts: process.restarts || 0 },
       });
     }
   }
@@ -175,8 +140,7 @@ async function checkSystemHealth() {
 }
 
 /** Check task learning health for critical issues. */
-async function checkLearningHealth() {
-  const perf = await getPerformanceSummary().catch(() => null);
+async function checkLearningHealth(perf) {
   if (!perf) return [];
 
   const alerts = [];
@@ -210,61 +174,6 @@ async function checkLearningHealth() {
   return alerts;
 }
 
-/** Detect AI usage spikes against the recent rolling average. */
-async function checkUsageSpikes() {
-  const usage = getUsage();
-  if (!usage?.dailyActivity) return [];
-
-  const daily = usage.dailyActivity;
-  const today = new Date().toISOString().split('T')[0];
-  const recentDays = [];
-  for (let i = 1; i <= 14; i++) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    const dateStr = date.toISOString().split('T')[0];
-    const dayData = daily[dateStr];
-    if (dayData && dayData.sessions > 0) recentDays.push(dayData);
-  }
-
-  if (recentDays.length < USAGE_MIN_HISTORY_DAYS) return [];
-
-  const avgTokens = recentDays.reduce((sum, day) => sum + (day.tokens || 0), 0) / recentDays.length;
-  const avgSessions = recentDays.reduce((sum, day) => sum + (day.sessions || 0), 0) / recentDays.length;
-  const alerts = [];
-  const todayData = daily[today];
-
-  if (todayData && avgTokens > 0) {
-    const tokenRatio = todayData.tokens / avgTokens;
-    if (tokenRatio >= USAGE_SPIKE_MULTIPLIER) {
-      const formatTokens = (tokens) => tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
-      alerts.push({
-        id: alertId('cost_spike', 'tokens'),
-        type: 'cost_spike',
-        severity: tokenRatio >= 5 ? 'high' : 'medium',
-        title: 'AI token usage spike',
-        detail: `${formatTokens(todayData.tokens)} tokens today vs ${formatTokens(Math.round(avgTokens))} avg/day (${tokenRatio.toFixed(1)}x)`,
-        link: '/devtools/usage',
-        metadata: { resource: 'tokens', today: todayData.tokens, average: Math.round(avgTokens), ratio: Math.round(tokenRatio * 10) / 10 },
-      });
-    }
-
-    const sessionRatio = todayData.sessions / avgSessions;
-    if (sessionRatio >= USAGE_SPIKE_MULTIPLIER && avgSessions > 0) {
-      alerts.push({
-        id: alertId('cost_spike', 'sessions'),
-        type: 'cost_spike',
-        severity: sessionRatio >= 5 ? 'high' : 'medium',
-        title: 'AI session spike',
-        detail: `${todayData.sessions} sessions today vs ${Math.round(avgSessions)} avg/day (${sessionRatio.toFixed(1)}x)`,
-        link: '/devtools/usage',
-        metadata: { resource: 'sessions', today: todayData.sessions, average: Math.round(avgSessions), ratio: Math.round(sessionRatio * 10) / 10 },
-      });
-    }
-  }
-
-  return alerts;
-}
-
 /** Detect Tribe relationships overdue for contact. */
 async function checkTribeCadence() {
   const summary = await getCareSummary(3).catch(() => null);
@@ -280,6 +189,7 @@ async function checkTribeCadence() {
     detail: names ? `Reach out to ${names}${overflow}` : 'Overdue check-ins in your Tribe',
     link: '/tribe',
     metadata: { overdueCount: summary.overdueCount, peopleCount: summary.peopleCount },
+    evidence: { overdueCount: summary.overdueCount, people: summary.overdue.map(person => ({ id: person.id, lastContact: person.lastContact })) },
   }];
 }
 
@@ -301,6 +211,7 @@ async function checkUnansweredTribeThreads() {
       title: `Unanswered: ${thread.personName}`,
       detail: `You never replied to ${snippet} (${ago(thread.daysAgo)})`,
       link: `/tribe?tab=care&outreach=${encodeURIComponent(thread.conversationKey)}`,
+      evidence: { conversationKey: thread.conversationKey, lastInboundAt: thread.lastInboundAt },
       metadata: {
         personId: thread.personId,
         source: thread.source,
@@ -320,12 +231,19 @@ async function checkUnansweredTribeThreads() {
  * separately by proactiveAlerts.js and by the Review Queue product producer.
  */
 export async function generateNonProductAlerts() {
-  const [goalAlerts, successAlerts, systemAlerts, learningAlerts, usageAlerts, tribeAlerts, unansweredAlerts] = await Promise.all([
+  const resolutions = await getHealthAlertResolutions();
+  const sinceByTaskType = Object.create(null);
+  let learningSince = null;
+  for (const [id, resolution] of resolutions) {
+    if (id.startsWith('success_drop:')) sinceByTaskType[decodeURIComponent(id.slice('success_drop:'.length))] = resolution.at;
+    if (id.startsWith('learning_') && (!learningSince || resolution.at > learningSince)) learningSince = resolution.at;
+  }
+  const performance = await getPerformanceSummary({ sinceByTaskType, since: learningSince }).catch(() => null);
+  const [goalAlerts, successAlerts, systemAlerts, learningAlerts, tribeAlerts, unansweredAlerts] = await Promise.all([
     checkGoalStalls(),
-    checkSuccessRates(),
+    checkSuccessRates(performance),
     checkSystemHealth(),
-    checkLearningHealth(),
-    checkUsageSpikes(),
+    checkLearningHealth(performance),
     checkTribeCadence(),
     checkUnansweredTribeThreads(),
   ]);
@@ -334,8 +252,29 @@ export async function generateNonProductAlerts() {
     ...successAlerts,
     ...systemAlerts,
     ...learningAlerts,
-    ...usageAlerts,
     ...tribeAlerts,
     ...unansweredAlerts,
-  ];
+  ].filter(alert => {
+    // Run-based alerts have already excluded every outcome before resolution.
+    if (alert.type === 'success_drop' || alert.type === 'learning_health') return true;
+    const resolved = resolutions.get(alert.id);
+    return !resolved || resolved.evidence !== healthAlertEvidence(alert);
+  }).map(alert => ({
+    ...alert,
+    // New post-correction evidence is a new occurrence, even if its rounded
+    // percentage matches the old one. Local UI triage cannot hide it forever.
+    occurrence: [resolutions.get(alert.id)?.at,
+      ['success_drop', 'learning_health'].includes(alert.type) ? learningSince : null]
+      .filter(Boolean).sort().at(-1) || null,
+    revision: healthAlertEvidence(alert),
+  }));
+}
+
+/** Validate against fresh source evidence before acknowledging a health issue. */
+export async function resolveHealthAlert(id) {
+  const alerts = await generateNonProductAlerts();
+  const alert = alerts.find(candidate => candidate.id === id);
+  if (!alert) return null;
+  await recordHealthAlertResolution(alert);
+  return { resolved: true };
 }

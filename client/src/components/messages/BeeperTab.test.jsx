@@ -1466,7 +1466,12 @@ describe('purging one conversation mirror', () => {
     api.getBeeperConversations.mockResolvedValue({ conversations: [conversation()], nextCursor: null });
     api.getBeeperConversation.mockResolvedValue(conversation({ attachmentBytes: 4 * 1024 * 1024, attachmentFiles: 3 }));
     renderTab(`/messages/beeper/${CONV_A}`);
-    fireEvent.click(await screen.findByRole('button', { name: /^Purge$/ }));
+    // The initial conversation effect resets the destructive confirmation.
+    // Drain that commit before clicking: finding the button alone can resolve
+    // before the effect and let its reset close the freshly opened panel.
+    await screen.findByRole('button', { name: /^Purge$/ });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /^Purge$/ }));
   };
 
   it('names the conversation and the byte count, and demands the typed word first', async () => {

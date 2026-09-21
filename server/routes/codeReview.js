@@ -1,9 +1,10 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
-import { validateRequest, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
+import { validateRequest, cliReviewerOutcomeSchema, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
+import { reviewerAccessFailureCode } from '../lib/reviewerHealth.js'
 import { getSettings } from '../services/settings.js'
-import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewUnsupported, reportReviewerFailure } from '../services/codeReview.js'
+import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewUnsupported, reportReviewerFailure, reportReviewerSuccess } from '../services/codeReview.js'
 
 const router = Router()
 
@@ -11,7 +12,9 @@ const router = Router()
 // when omitted (or empty) we fall back to the model / reasoning effort configured
 // on the Code Review Defaults panel, and with no configured model either, to the
 // model the backend itself reports serving when that is unambiguous (see
-// `resolveServedModel`). The diff is sent as-is; agents can pipe
+// `resolveServedModel`). Resolved task requests set `inheritDefaults: false` to
+// preserve explicit clears and use the backend's own defaults instead.
+// The diff is sent as-is; agents can pipe
 // `gh pr diff <N>` straight into it without preprocessing.
 // `effort` is checked against the ladder for the REQUESTED backend rather than a
 // flat union of every local level: the two backends are separate identities in
@@ -23,6 +26,7 @@ const localReviewRequestSchema = z.object({
   backend: z.string().refine(isToolFreeReviewer),
   model: z.string().optional(),
   effort: z.string().optional(),
+  inheritDefaults: z.boolean().optional(),
   diff: z.string().min(1, 'diff must be non-empty'),
   timeoutMs: z.number().int().positive().max(600000).optional(),
 }).strict().superRefine((body, ctx) => {
@@ -64,7 +68,7 @@ router.get('/defaults', asyncHandler(async (_req, res) => {
 // simple — one request, one body back.
 router.post('/local', asyncHandler(async (req, res) => {
   const body = validateRequest(localReviewRequestSchema, req.body)
-  const settings = await getSettings()
+  const settings = body.inheritDefaults === false ? {} : await getSettings()
   // Keyed off the roster's `<reviewer>Model` scalar rather than a per-backend
   // branch, so a backend added to LOCAL_LLM_REVIEWERS reads its own configured
   // model instead of silently inheriting another backend's.
@@ -86,7 +90,7 @@ router.post('/local', asyncHandler(async (req, res) => {
     timeoutMs: body.timeoutMs,
   })
   if (!result.ok) {
-    await reportReviewerFailure(body.backend, result.error)
+    await reportReviewerFailure(body.backend, result)
     // A refusal the caller can fix by changing configuration — no model, a
     // missing/disabled provider, or one that can never run a tool-free review —
     // is a config gap (400). The 502 bucket is for a reviewer that was actually
@@ -96,7 +100,20 @@ router.post('/local', asyncHandler(async (req, res) => {
       context: { backend: result.backend, model: result.model }
     })
   }
+  await reportReviewerSuccess(body.backend)
   res.json(result)
+}))
+
+// The existing /api auth gate protects this orchestrator-only report. It never
+// invokes a provider, accepts raw CLI output, or changes optional-review policy.
+router.post('/cli-outcome', asyncHandler(async (req, res) => {
+  const body = validateRequest(cliReviewerOutcomeSchema, req.body)
+  if (body.outcome === 'reviewed') {
+    return res.json({ recorded: await reportReviewerSuccess(body.reviewer) })
+  }
+  const code = reviewerAccessFailureCode(body.reviewer, body.failure)
+  const recorded = code ? await reportReviewerFailure(body.reviewer, { code }) : false
+  res.json({ recorded, code })
 }))
 
 export default router

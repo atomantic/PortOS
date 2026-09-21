@@ -67,6 +67,12 @@ describe('input-image capability helpers', () => {
     expect(referenceSlotsFor(IMAGE_GEN_MODE.GROK, { hasInitImage: false })).toBe(4);
   });
 
+  it('reserves the init slot within Qwen’s ten inputs', () => {
+    const options = { localSupportsReferences: true, localInputCap: 10, maxSlots: 10 };
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.LOCAL, options)).toBe(10);
+    expect(referenceSlotsFor(IMAGE_GEN_MODE.LOCAL, { ...options, hasInitImage: true })).toBe(9);
+  });
+
   it('offers local reference slots only when the model supports them, and none for external', () => {
     expect(referenceSlotsFor(IMAGE_GEN_MODE.LOCAL, { localSupportsReferences: true })).toBe(4);
     expect(referenceSlotsFor(IMAGE_GEN_MODE.LOCAL, { localSupportsReferences: false })).toBe(0);

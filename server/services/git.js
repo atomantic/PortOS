@@ -198,6 +198,7 @@ export async function getRemote(dir) {
 const FETCH_MAX_ATTEMPTS = 4;
 const FETCH_RETRY_DELAY_MS = 250;
 const FETCH_FRESHNESS_MS = 15000;
+const SUBMODULE_UPDATE_TIMEOUT_MS = 60000;
 
 const lastFetchTimes = new Map();
 const activeFetches = new Map();
@@ -433,7 +434,7 @@ export async function createPR(dir, { title, body, base, head }) {
  * @param {number|string} prNumber - Pull request number
  * @returns {Promise<{success: boolean, error?: string, cli?: string, account?: string|null, owner?: string|null, host?: string|null}>}
  */
-export async function mergePR(dir, prNumber, { forgeAccount = null } = {}) {
+export async function mergePR(dir, prNumber, { forgeAccount = null, expectedHeadSha = null } = {}) {
   // The pin matters here as much as on the read side: an owner-match alone picks
   // the wrong account for an org repo, and the merge fails authorization (#7540).
   const { cli, env, host, owner, account } = await resolveForgeForRepo(dir, { forgeAccount });
@@ -451,6 +452,7 @@ export async function mergePR(dir, prNumber, { forgeAccount = null } = {}) {
     number: prNumber,
     method: 'merge',
     deleteBranch: true,
+    expectedHeadSha,
   });
   return result.ok ? { success: true, ...meta } : { success: false, error: result.error, ...meta };
 }
@@ -729,6 +731,57 @@ export async function pull(dir) {
   return { success: true, output: result.stdout + result.stderr };
 }
 
+function gitResultOutput(result) {
+  return `${result.stdout || ''}${result.stderr || ''}`;
+}
+
+function gitResultError(result, fallback) {
+  return [result.stdout, result.stderr]
+    .map(stream => (stream || '').trim())
+    .filter(Boolean)
+    .join('\n') || fallback;
+}
+
+/**
+ * Run a pinned-submodule command, retrying once when Git names an abandoned
+ * lock. `git submodule update` is safe to retry after that specific rescue:
+ * unlike a pull/rebase, it has no partially-applied history operation to stack
+ * on top of.
+ */
+async function runPinnedSubmoduleCommand(args, dir) {
+  let result = await execGitSafe(args, dir, { timeout: SUBMODULE_UPDATE_TIMEOUT_MS });
+  if (result.exitCode === 0 || !clearStaleGitLock(result.stderr)) return result;
+  result = await execGitSafe(args, dir, { timeout: SUBMODULE_UPDATE_TIMEOUT_MS });
+  return result;
+}
+
+/**
+ * Synchronize submodule URLs and check out the commits pinned by the parent.
+ * The parent gitlink is the version contract; `--remote` is intentionally not
+ * used because a managed-app update must not consume an unreviewed submodule
+ * head. Kept private because callers need the parent update transaction, not
+ * an independently exposed submodule workflow.
+ */
+async function updatePinnedSubmodules(dir) {
+  const sync = await runPinnedSubmoduleCommand(['submodule', 'sync', '--recursive'], dir);
+  if (sync.exitCode !== 0) {
+    return {
+      success: false,
+      output: gitResultOutput(sync),
+      error: gitResultError(sync, 'could not synchronize submodule metadata')
+    };
+  }
+
+  const update = await runPinnedSubmoduleCommand(['submodule', 'update', '--init', '--recursive'], dir);
+  return {
+    success: update.exitCode === 0,
+    output: gitResultOutput(update),
+    ...(update.exitCode === 0
+      ? {}
+      : { error: gitResultError(update, 'could not update pinned submodules') })
+  };
+}
+
 /**
  * Move a managed application's primary checkout onto origin's default branch
  * and bring it up to date. Non-destructive: nothing is discarded, and local
@@ -736,11 +789,15 @@ export async function pull(dir) {
  * `--autostash` (which re-applies it after the rebase).
  *
  * Order of attempts:
- *   1. `pull --ff-only` — the common case, no rewrite, no stash.
- *   2. `pull --rebase --autostash` — the checkout is dirty and/or the local
+ *   1. Reconcile submodules to the current parent gitlinks, so an interrupted
+ *      earlier update cannot make the pull fail on a stale submodule checkout.
+ *   2. `pull --ff-only` — the common case, no rewrite, no stash.
+ *   3. `pull --rebase --autostash` — the checkout is dirty and/or the local
  *      branch has diverged from origin. This is what "Update App" used to
  *      refuse outright with DIRTY_WORKTREE.
- *   3. On conflict, abort any in-progress rebase and report `conflict: true`
+ *   4. Reconcile submodules again after the parent pull, because a new commit
+ *      can advance a gitlink while leaving its worktree at the old commit.
+ *   5. On conflict, abort any in-progress rebase and report `conflict: true`
  *      rather than throwing, so the caller can hand the mess to a CoS agent.
  *
  * A zero exit status is NOT enough to call the rebase clean. `--autostash`
@@ -779,6 +836,21 @@ export async function updateDefaultBranch(dir) {
 
   const currentBranch = await getBranch(dir);
   let output = '';
+  const reconcileSubmodules = async () => {
+    const submodules = await updatePinnedSubmodules(dir);
+    output += submodules.output;
+    return submodules.success ? null : {
+      success: false,
+      branch,
+      output,
+      conflict: true,
+      error: `pinned submodule update failed: ${submodules.error}`
+    };
+  };
+
+  const currentSubmoduleError = await reconcileSubmodules();
+  if (currentSubmoduleError) return currentSubmoduleError;
+
   if (currentBranch !== branch) {
     // Uncommitted changes ride along when they don't collide with the target
     // branch; when they do, git refuses and we route that to the conflict path
@@ -800,11 +872,21 @@ export async function updateDefaultBranch(dir) {
           : bothStreams(checkout, `could not check out ${branch}`)
       };
     }
+
+    // Checking out the target branch can change the gitlinks without moving
+    // the submodule worktrees. Reconcile that target tree before pulling so a
+    // previous branch's submodule checkout cannot make the pull fail.
+    const targetSubmoduleError = await reconcileSubmodules();
+    if (targetSubmoduleError) return targetSubmoduleError;
   }
 
   const fastForward = await execGit(['pull', '--ff-only', 'origin', branch], dir, { ignoreExitCode: true });
   output += fastForward.stdout + fastForward.stderr;
-  if (fastForward.exitCode === 0) return { success: true, branch, output, conflict: false };
+  if (fastForward.exitCode === 0) {
+    const submoduleError = await reconcileSubmodules();
+    if (submoduleError) return submoduleError;
+    return { success: true, branch, output, conflict: false };
+  }
 
   const fastForwardLock = clearStaleGitLock(fastForward.stderr);
   if (fastForwardLock) {
@@ -822,7 +904,11 @@ export async function updateDefaultBranch(dir) {
   if (rebase.exitCode === 0) {
     const unmerged = await execGit(['diff', '--name-only', '--diff-filter=U'], dir, { ignoreExitCode: true });
     const conflicted = unmerged.stdout.trim().split('\n').filter(Boolean);
-    if (!conflicted.length) return { success: true, branch, output, conflict: false, rebased: true };
+    if (!conflicted.length) {
+      const submoduleError = await reconcileSubmodules();
+      if (submoduleError) return submoduleError;
+      return { success: true, branch, output, conflict: false, rebased: true };
+    }
     return {
       success: false,
       branch,

@@ -596,3 +596,67 @@ describe('registerAgent branch posture for a claim run', () => {
     });
   });
 });
+
+// Blank picker values inherit provider defaults before capability suppression.
+describe('agent launch defaults (#7932)', () => {
+  it.each([
+    ['CLI default', false, undefined, 'low', 'low'],
+    ['TUI default', true, undefined, 'low', 'low'],
+    ['blank picker', true, '', 'low', 'low'],
+    ['task override', false, 'high', 'low', 'high'],
+    ['no configured effort', false, undefined, undefined, null],
+  ])('%s reaches argv and recorded run metadata', async (_name, tui, taskEffort, providerEffort, expected) => {
+    const { buildTuiSpawnConfig, spawnTuiAgent } = await import('./agentTuiSpawning.js');
+    const cli = await vi.importActual('./agentCliSpawning.js');
+    const terminal = await vi.importActual('./agentTuiSpawning.js');
+    reachDispatch();
+    vi.mocked(isTuiProvider).mockReturnValue(tui);
+    const builder = tui ? buildTuiSpawnConfig : buildCliSpawnConfig;
+    vi.mocked(builder).mockImplementationOnce(tui ? terminal.buildTuiSpawnConfig : cli.buildCliSpawnConfig);
+    const provider = { id: 'example-codex', type: tui ? 'tui' : 'cli', command: 'codex', effort: providerEffort };
+    vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
+      ok: true, provider, selectedModel: 'gpt-6-astra', modelSelection: {},
+    });
+
+    await spawnAgentForTask({
+      id: 'task-release-defaults', taskType: 'user',
+      metadata: { slashdoCommand: 'release', effort: taskEffort },
+    });
+
+    const dispatch = vi.mocked(tui ? spawnTuiAgent : spawnDirectly).mock.calls.at(-1)?.[0];
+    expect(dispatch).toBeDefined();
+    const args = (tui ? dispatch.tuiConfig : dispatch.cliConfig).args;
+    expect(args).toContain('--model');
+    expect(args).toContain('gpt-6-astra');
+    if (expected) expect(args).toContain(`model_reasoning_effort=${expected}`);
+    else expect(args.join(' ')).not.toContain('model_reasoning_effort');
+    expect(vi.mocked(registerAgent).mock.calls.at(-1)?.[2]).toMatchObject({ model: 'gpt-6-astra', effort: expected });
+    expect(provider.effort).toBe(providerEffort);
+  });
+  it('suppresses inherited effort for an Ollama model without thinking', async () => {
+    const ollama = await import('./ollamaManager.js');
+    const capabilities = vi.spyOn(ollama, 'getModelCapabilities').mockResolvedValue(['completion']);
+    const baseUrl = vi.spyOn(ollama, 'getBaseUrl').mockReturnValue('http://127.0.0.1:11434');
+    try {
+      reachDispatch();
+      vi.mocked(isTuiProvider).mockReturnValue(false);
+      const provider = { id: 'opencode-ollama', type: 'cli', command: 'opencode', ollamaBacked: true,
+        endpoint: 'http://127.0.0.1:11434', effort: 'low' };
+      vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
+        ok: true, provider, selectedModel: 'gemma3:4b', modelSelection: {},
+      });
+      await spawnAgentForTask({ id: 'task-no-thinking', metadata: {} });
+      expect(capabilities).toHaveBeenCalledWith('gemma3:4b');
+      expect(spawnDirectly).toHaveBeenCalledTimes(1);
+      const dispatch = vi.mocked(spawnDirectly).mock.calls[0][0];
+      expect(dispatch.provider).toMatchObject({ thinking: false });
+      expect(dispatch.provider.effort).toBeUndefined();
+      expect(vi.mocked(buildCliSpawnConfig).mock.calls.at(-1)?.[3].effort).toBeNull();
+      expect(vi.mocked(registerAgent).mock.calls.at(-1)?.[2].effort).toBeNull();
+      expect(provider.effort).toBe('low');
+    } finally {
+      capabilities.mockRestore();
+      baseUrl.mockRestore();
+    }
+  });
+});

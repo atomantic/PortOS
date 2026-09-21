@@ -7,10 +7,9 @@
  * the resulting narrative paths. The service layer owns that AI review.
  */
 
+import { asArray } from './arrayUtils.js';
 import { analyzeEpisodeGraph } from './fableLoomGraph.js';
 import { isNonBlankStr } from './textUtils.js';
-
-const asArray = (value) => (Array.isArray(value) ? value : []);
 
 export const FABLELOOM_PLAYTEST_LIMITS = Object.freeze({
   DEFAULT_MAX_PATHS: 96,

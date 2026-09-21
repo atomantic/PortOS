@@ -232,6 +232,7 @@ export * from './publicReviewSpawnGate.js';
 // by validation.js), so a flat `export *` here would trip the barrel's
 // duplicate-identifier collision check.
 export * as reviewerConfig from './reviewerConfig.js';
+export * as reviewerHealth from './reviewerHealth.js';
 export * from './reviewerProviderMatchers.js';
 export * from './qualitySchedulePlan.js';
 export * from './quotaBurnConfig.js';
@@ -283,6 +284,7 @@ export * from './createNewestWinsGuard.js';
 export * from './dataRoot.js';
 export * from './downloadPreflight.js';
 export * from './agentInstructionsFile.js';
+export * from './scaffoldSnippets.js';
 export * from './failureLogging.js';
 export * from './fileCore.js';
 export * as fileUtils from './fileUtils.js';
@@ -310,6 +312,7 @@ export * from './imageFrameStats.js';
 export * from './imageRgba.js';
 export * from './imageWatermark.js';
 export * from './localImageFilename.js';
+export * from './pngMetadata.js';
 export * from './pgFileFacade.js';
 export * from './multipart.js';
 export * from './safetensors.js';
@@ -523,6 +526,7 @@ export * from './providerRouteRecipes.js';
 export * from './serviceDefinitions.js';
 export * from './providerRouteSettings.js';
 export * from './personaTraitBlend.js';
+export * from './pipelineIds.js';
 export * from './pipelineIssueOrder.js';
 export * from './pipelineStages.js';
 export * from './postAdaptive.js';
@@ -699,3 +703,13 @@ export * from './deckValidation.js';
 export * from './ecosystemProcessPorts.js';
 export * from './kilo.js';
 export * from './openchamber.js';
+
+export * from './layaMlx.js';
+
+export * from './persistentMindMaintainer.js';
+
+export * from './developmentWorkIdentity.js';
+export * from './persistentMindProcessAudit.js';
+export * from './contributionSecurityPolicy.js';
+
+export * from './catalogExtractionDraft.js';

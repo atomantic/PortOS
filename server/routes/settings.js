@@ -592,6 +592,7 @@ router.put('/', asyncHandler(async (req, res) => {
   // replace a map by dropping keys the incoming patch did not mention.
   const {
     secrets: _ignoredSecrets,
+    passwordRiskRevision: _ignoredPasswordRiskRevision,
     catalogUserTypes: _ignoredTypes,
     subscriptionCosts: subscriptionCostsPatch,
     subscriptionPlanTiers: subscriptionPlanTiersPatch,

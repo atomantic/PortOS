@@ -133,11 +133,17 @@ class BuildCommandTest(unittest.TestCase):
 
     def test_fasth3_reports_rather_than_silently_dropping_unsupported_requests(self):
         cmd, stderr = self.build(family="fasth3", negative_prompt="blurry",
-                                 image="/fixture/first.png", enhance_prompt=True, refine=True)
+                                 enhance_prompt=True, refine=True)
         self.assertNotIn("--negative-prompt", cmd)
         self.assertNotIn("--image-path", cmd)
-        for label in ("negative prompt", "conditioning image", "prompt enhancer", "refinement pass"):
+        for label in ("negative prompt", "prompt enhancer", "refinement pass"):
             self.assertIn(label, stderr)
+
+    def test_fasth3_preview_and_v2_reject_first_frame_conditioning(self):
+        for vsa in (False, True):
+            with self.subTest(vsa=vsa):
+                with self.assertRaisesRegex(ValueError, "does not support first-frame conditioning"):
+                    self.build(family="fasth3", vsa=vsa, image="/fixture/first.png")
 
     def test_fasth3_reports_a_non_native_fps_and_stays_quiet_at_24(self):
         _, noisy = self.build(family="fasth3", fps=30)

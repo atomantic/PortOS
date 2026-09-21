@@ -22,6 +22,7 @@ vi.mock('child_process', async (importOriginal) => {
 
 const { spawn } = await import('child_process');
 const { createRunnerService } = await import('./runner.js');
+const { streamTransportDispatcher } = await import('./internal/streamTransport.js');
 
 describe('AI Toolkit runner service', () => {
   const tempDirs = [];
@@ -180,10 +181,10 @@ describe('AI Toolkit runner service', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
     const provider = {
-      id: 'nvidia-kimi',
-      name: 'NVIDIA Kimi K2.5',
+      id: 'nvidia-nim',
+      name: 'NVIDIA NIM',
       endpoint: 'https://integrate.api.nvidia.com/v1',
-      defaultModel: 'moonshotai/kimi-k2.5',
+      defaultModel: 'poolside/laguna-xs-2.1',
     };
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
@@ -192,7 +193,7 @@ describe('AI Toolkit runner service', () => {
       hooks: {
         ensureProviderReady: async () => ({
           success: false,
-          error: 'Authentication unavailable for NVIDIA Kimi K2.5: API key is not set.',
+          error: 'Authentication unavailable for NVIDIA NIM: API key is not set.',
         }),
       },
     });
@@ -639,6 +640,46 @@ describe('AI Toolkit runner service', () => {
     expect(metadata.error).toMatch(/no stream progress/i);
   });
 
+  // Those two bounds are only authoritative if nothing UNDERNEATH them expires
+  // first. undici arms its own `headersTimeout`/`bodyTimeout` on every fetch —
+  // both 300000ms, the same number as the default stall bound — one layer
+  // closer to the socket, so it won every race: a provider that went quiet
+  // finalized as `network-error` with no `timeoutBound` stamped for the bench
+  // decision, and a `provider.timeout` raised past five minutes was silently
+  // capped. The streaming request has to go out on the dispatcher that
+  // disables them (./internal/streamTransport.js).
+  it('sends the streaming request through the ceiling-free transport dispatcher', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    const fetch = vi.fn(async () => ({
+      ok: true,
+      body: { getReader: () => ({ read: async () => ({ done: true }), cancel: async () => {} }) }
+    }));
+    vi.stubGlobal('fetch', fetch);
+
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }) }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    await runner.executeApiRun({
+      runId: 'run-dispatcher',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      onData: undefined,
+      onComplete: (m) => done(m)
+    });
+    await completed;
+
+    expect(fetch.mock.calls[0][1].dispatcher).toBe(streamTransportDispatcher());
+  });
+
   it('bounds a run whose provider-readiness hook never resolves (fetch never reached)', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
@@ -989,6 +1030,25 @@ describe('AI Toolkit runner service', () => {
     expect(metadata.success).toBe(true);
     expect(await readFile(join(dataDir, 'runs', 'run-split-frame', 'output.txt'), 'utf-8'))
       .toBe('split-across-reads');
+  });
+
+  it('retains a streamed output-limit reason in completion and run metadata', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-finish-'));
+    tempDirs.push(dataDir);
+    const frames = ['data: {"choices":[{"delta":{"content":"{}"}}]}\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n', 'data: [DONE]\n'];
+    let index = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => ({
+      read: async () => index < frames.length
+        ? { done: false, value: new TextEncoder().encode(frames[index++]) } : { done: true },
+    }) } })));
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+    await runner.executeApiRun({ runId: 'run-finish', provider: runReady(), prompt: 'hi', onComplete: complete });
+    expect(await completed).toMatchObject({ finishReason: 'length' });
+    const metadata = JSON.parse(await readFile(join(dataDir, 'runs', 'run-finish', 'metadata.json'), 'utf8'));
+    expect(metadata.finishReason).toBe('length');
   });
 
   // Same boundary, one layer down: a multi-byte character cut in half by the
@@ -1431,6 +1491,25 @@ describe('AI Toolkit runner service', () => {
     // salvaged rather than reported as a zero-byte "provider said nothing".
     expect(metadata.outputSize).toBeGreaterThan(0);
     expect(await runner.isRunActive('run-trickle')).toBe(false);
+  });
+
+  it('enforces an explicit short absolute cap while forwarding the API output ceiling', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-budget-'));
+    tempDirs.push(dataDir);
+    vi.useFakeTimers();
+    const request = vi.fn(async (_url, opts) => ({ ok: true,
+      body: { getReader: () => clockDrivenReader({ intervalMs: 1000, signal: opts.signal }) } }));
+    vi.stubGlobal('fetch', request);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise(resolve => { complete = resolve; });
+    await runner.executeApiRun({ runId: 'run-budget', provider: runReady(), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], timeout: 120000, absoluteTimeoutMs: 5000, maxTokens: 8192,
+      onComplete: complete });
+    expect(JSON.parse(request.mock.calls[0][1].body).max_tokens).toBe(8192);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await completed).toMatchObject({ success: false, timeoutBound: 'absolute' });
+    expect(await runner.isRunActive('run-budget')).toBe(false);
   });
 
   // `Math.max` against the default cap: an install that deliberately raised

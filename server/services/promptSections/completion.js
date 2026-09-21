@@ -2,7 +2,7 @@
  * Completion workflow, worktree, and sentinel prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, hasRequiredReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
@@ -708,9 +708,9 @@ export function buildSentinelWriteSteps(stepNumber, sentinelPath, sentinelTail) 
  */
 function localReviewCompletionInstruction(localReviewRequired = true) {
   if (!localReviewRequired) {
-    return 'Complete the **Local Review Before Opening the PR/MR** section below. All local reviewers are optional, so missing/inconclusive results (including skipped, timeout, malformed, or no-verdict) may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. Hard errors, failed build/test, rejection, or unpushed fixes block. Still run each reviewer and fix its findings.';
+    return `Complete the **Local Review Before Opening the PR/MR** section below. All local reviewers are optional, so missing/inconclusive results (including skipped, timeout, malformed, or no-verdict) may continue. If every configured reviewer returns a configuration fault and none produces a verdict, report this distinct run-summary state: ${ZERO_REVIEWER_COVERAGE_NOTE} It remains non-blocking because every reviewer is \`~opt\`; do not use that wording when any reviewer produces a verdict. Set aggregate \`LOCAL_OVERALL_STATUS=clean\` for clean, configured capped, or optional inconclusive; use \`partial\` only for a qualifying stop, never raw statuses. Hard errors, failed build/test, rejection, or unpushed fixes block. Still run each reviewer and fix its findings.`;
   }
-  return 'Complete the **Local Review Before Opening the PR/MR** section below. Commit its fixes. A missing/timed-out/quota/provider/transport-failed/malformed/inconclusive REQUIRED review blocks merging, not publication: record aggregate `LOCAL_OVERALL_STATUS=review-blocked`, do not self-review, continue to publish the PR/MR, and leave it open. ' + REVIEW_UNAVAILABLE_REPORTING_NOTE + ' An OPTIONAL inconclusive result may continue. Set aggregate `LOCAL_OVERALL_STATUS=clean` for clean, configured capped, or optional inconclusive; use `partial` only for a qualifying stop, never raw statuses. A substantive rejection, failed build/test, unpushed fix, or state/publication failure blocks publication.';
+  return `Complete the **Local Review Before Opening the PR/MR** section below. Commit its fixes. A missing/timed-out/quota/provider/transport-failed/malformed/inconclusive REQUIRED review blocks merging, not publication: record aggregate \`LOCAL_OVERALL_STATUS=review-blocked\`, do not self-review, continue to publish the PR/MR, and leave it open. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} An OPTIONAL inconclusive result may continue. If every configured reviewer returns a configuration fault and none produces a verdict, report this distinct run-summary state: ${ZERO_REVIEWER_COVERAGE_NOTE} It remains non-blocking when every reviewer is marked \`~opt\`; do not use that wording when any reviewer produces a verdict. Set aggregate \`LOCAL_OVERALL_STATUS=clean\` for clean, configured capped, or optional inconclusive; use \`partial\` only for a qualifying stop, never raw statuses. A substantive rejection, failed build/test, unpushed fix, or state/publication failure blocks publication.`;
 }
 
 /**

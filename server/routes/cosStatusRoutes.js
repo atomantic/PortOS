@@ -1,3 +1,4 @@
+import { persistentMindMaintainerSchema } from '../lib/persistentMindMaintainer.js';
 /**
  * CoS Status, Config, and Lifecycle Routes
  */
@@ -71,6 +72,7 @@ export const cosConfigSchema = z.object({
   autoApproveInvestigations: z.boolean().optional(),
   // A durable reasoning route for the persistent mind. It is separate from
   // `alwaysOn`: saving or enabling this profile never starts background work.
+  persistentMindMaintainer: persistentMindMaintainerSchema.optional(),
   persistentMindProfile: persistentMindProfileSchema.optional(),
   // Saved alternates one message may borrow for a single turn. Storing them
   // changes nothing about the route the mind wakes on by default.

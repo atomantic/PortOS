@@ -47,7 +47,8 @@ const jevPlan = {
 const args = {
   content: 'Example discussion about a merged change.',
   prompt: 'Return {"disposition":"defer","concerns":[]}.',
-  source: 'github-issue',
+  // GitHub also requires a text security-model verdict, covered separately.
+  source: 'stacker-news',
   responseSchema: dispositionSchema,
 };
 const completion = (text) => new Response(JSON.stringify({ choices: [{ message: { content: text }, finish_reason: 'stop' }] }));

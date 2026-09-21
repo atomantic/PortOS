@@ -21,6 +21,7 @@
  */
 
 import { join } from 'path';
+import { assertValidSeriesId } from '../../lib/pipelineIds.js';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { getReview } from './manuscriptReview.js';
@@ -54,15 +55,6 @@ export const DEFAULT_READINESS_GATE = 'noOpenHigh';
 const MAX_TREND_SNAPSHOTS = 100;
 
 const nowIso = () => new Date().toISOString();
-
-// Defense-in-depth: refuse path-traversal-shaped ids before interpolating into
-// the on-disk ledger path. Series ids are `ser-<uuid>` — restrict to a safe
-// charset (mirrors editorialAnalysis.assertValidIssueId).
-function assertValidSeriesId(id) {
-  if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid series id: ${id}`);
-  }
-}
 
 const healthDir = () => join(PATHS.data, 'pipeline-editorial-health');
 const ledgerPath = (seriesId) => join(healthDir(), `${seriesId}.json`);

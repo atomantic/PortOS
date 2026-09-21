@@ -591,6 +591,20 @@
       }
     },
     {
+      "measurementId": "d0f5deab25cce80bf524f1c27a0d4943c8e780433b2b535a4e3500591471c902",
+      "assessedAt": "2026-09-21T11:00:03.506Z",
+      "report": {
+        "version": 1,
+        "category": "simplify",
+        "score": 78,
+        "worstSeverity": 4,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 8785,
+        "totalFiles": 8785
+      }
+    },
+    {
       "measurementId": "8c4861377fe30e010fbc9c5e6bd14c48b85208536631420e0a6d79f7603e722e",
       "assessedAt": "2026-09-11T00:19:27.463Z",
       "report": {

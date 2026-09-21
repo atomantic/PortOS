@@ -395,6 +395,10 @@ export const classifyHfMediaModel = ({ repo, model, kind, runtime, runner, isWin
   // REQUIRES a source image — a text-only render crashes deep in diffusers, so
   // the built-in carries `editOnly`. Detect the edit repo so the added entry
   // gets the right pipeline + gate instead of the plain text-to-image config.
+  // 2.1 handles text and image conditioning in one new pipeline.
+  if (resolvedRunner === RUNNER_FAMILIES.QWEN && /qwen[\s._-]?image[\s._-]?2[._-]1\b/.test(blob)) {
+    return { kind: 'image', runner: resolvedRunner, format: 'safetensors', qwen21: true };
+  }
   const editVariant = resolvedRunner === RUNNER_FAMILIES.QWEN && /qwen[\s._-]?image[\s._-]?edit|-edit\b|\bedit\b/.test(blob);
   return { kind: 'image', runner: resolvedRunner, format: 'safetensors', ...(editVariant ? { editVariant: true } : {}) };
 };
@@ -425,7 +429,7 @@ export const buildCustomModelEntry = ({ repo, model, classification, name, steps
     || repo;
   const defaults = classification.kind === 'video'
     ? (VIDEO_DEFAULTS[classification.runtime] || { steps: 25, guidance: 3.0 })
-    : (IMAGE_DEFAULTS[classification.runner] || { steps: 20, guidance: 3.5 });
+    : (classification.qwen21 ? { steps: 40, guidance: 1.0 } : IMAGE_DEFAULTS[classification.runner] || { steps: 20, guidance: 3.5 });
   const entry = {
     id,
     name: displayName,
@@ -450,7 +454,10 @@ export const buildCustomModelEntry = ({ repo, model, classification, name, steps
     Object.assign(entry, RUNNER_METADATA[classification.runner] || {});
     // A Qwen-Image-Edit repo needs the edit pipeline + the editOnly gate
     // (text-only renders crash it), overriding the plain QwenImagePipeline.
-    if (classification.editVariant) {
+    if (classification.qwen21) {
+      entry.pipelineClass = 'QwenImage21Pipeline';
+      entry.cfgDisabled = true;
+    } else if (classification.editVariant) {
       entry.pipelineClass = 'QwenImageEditPipeline';
       entry.editOnly = true;
     }

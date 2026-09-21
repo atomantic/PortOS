@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { typeSettled } from '../test/settledInput.js';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -112,7 +113,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, auditReports: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -134,7 +135,7 @@ describe('PersistentMindTools', () => {
       { persistentMindCapabilities: {
         schemaVersion: 12,
         createTasks: false,
-        fileIssues: false,
+        fileIssues: false, auditReports: false,
         manageMind: true,
         manageToolRecipes: false,
         manageEidoverse: false,
@@ -173,7 +174,7 @@ describe('PersistentMindTools', () => {
       { persistentMindCapabilities: {
         schemaVersion: 12,
         createTasks: true,
-        fileIssues: false,
+        fileIssues: false, auditReports: false,
         manageMind: false,
         manageToolRecipes: false,
         manageEidoverse: false,
@@ -261,7 +262,13 @@ describe('PersistentMindTools', () => {
     const retentionInput = await screen.findByLabelText('Retention window (extra turns)');
     expect(retentionInput).toHaveValue(3);
     await user.clear(retentionInput);
-    await user.type(retentionInput, '5');
+    // Pin the typed value before blurring. Blur saves whatever the field holds
+    // AT THAT MOMENT, so an unsettled partial value is sent once and the waitFor
+    // below can never see a second, correct call — it flaked on CI under worker
+    // contention while passing locally. Not retypeSettled: this input is
+    // controlled and re-renders the cleared field as 0, not empty, so pinning
+    // the intermediate state would assert a value it never shows.
+    await typeSettled(user, retentionInput, '5');
     await user.tab();
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
@@ -305,7 +312,7 @@ describe('PersistentMindTools', () => {
       { persistentMindCapabilities: {
         schemaVersion: 12,
         createTasks: false,
-        fileIssues: false,
+        fileIssues: false, auditReports: false,
         manageMind: false,
         manageToolRecipes: false,
         manageEidoverse: false,

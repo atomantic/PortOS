@@ -445,3 +445,7 @@ export const applyLocalPersistentMindSetup = (body = {}, options = {}) =>
 
 export const getJevPolicy = (options) => request('/local-llm/jev/policy', options);
 export const updateJevPolicy = (body, options) => request('/local-llm/jev/policy', { method: 'PUT', body: JSON.stringify(body), ...options });
+
+export const getLayaStatus = (options) => request('/local-llm/laya-mlx/status', options);
+export const installLaya = (options) => request('/local-llm/laya-mlx/install', { method: 'POST', body: '{}', ...options });
+export const scoreLaya = (body, options) => request('/local-llm/laya-mlx/score', { method: 'POST', body: JSON.stringify(body), ...options });

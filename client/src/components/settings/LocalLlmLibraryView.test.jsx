@@ -86,6 +86,7 @@ const renderLibrary = async () => {
     </MemoryRouter>,
   );
   await waitFor(() => expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'llm-management-panel-library'));
+  expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'llm-library-heading');
   await waitFor(() => expect(screen.getByText(/Installed on (Ollama|LM Studio)/)).toBeTruthy());
   await act(async () => {});
   await act(async () => {});

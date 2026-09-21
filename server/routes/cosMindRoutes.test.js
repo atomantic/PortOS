@@ -56,6 +56,7 @@ vi.mock('../services/persistentMindJournal.js', () => ({
   readPersistentMindJournal: mocks.readPersistentMindJournal,
   correctPersistentMindJournalEvent: mocks.correctPersistentMindJournalEvent,
 }));
+vi.mock('../services/persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({ ok: true }) }));
 vi.mock('../services/providers.js', () => ({ getProviderById: mocks.getProviderById }));
 vi.mock('../services/persistentMindAdapter.js', () => ({
   persistentMindHarnessInfo: (provider) => ({
@@ -234,7 +235,7 @@ describe('persistent mind routes', () => {
         thinkingInterface: 'text',
         wakeIntervalMinutes: 30,
       },
-      capabilities: { schemaVersion: 13, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [], toolExposureRetentionTurns: 3, toolExposureAllSchemas: false },
+      capabilities: { schemaVersion: 14, createTasks: true, fileIssues: false, auditReports: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [], toolExposureRetentionTurns: 3, toolExposureAllSchemas: false },
       harness: { type: 'api', recommendation: 'recommended' },
       imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
@@ -302,6 +303,21 @@ describe('persistent mind routes', () => {
     expect(JSON.stringify(res.body)).not.toContain('must not leak');
   });
 
+  it('previews scoped maintainer prerequisites and composes its charter without rewriting custom text', async () => {
+    const root = await mocks.loadState();
+    root.config.persistentMindMaintainer = { enabled: true, appIds: ['demo-app'] };
+    mocks.readPersistentMindManagedApps.mockResolvedValue([{ id: 'demo-app', name: 'Demo', fullName: 'example/project', forge: 'github', granted: false }]);
+    const setup = await get('/mind/maintainer');
+    expect(setup.status).toBe(200);
+    expect(setup.body.ready).toBe(false);
+    expect(setup.body.apps[0]).toMatchObject({ id: 'demo-app', granted: false });
+    await get('/mind/context');
+    expect(mocks.preparePersistentMindContext).toHaveBeenLastCalledWith(expect.objectContaining({
+      instructions: expect.stringContaining('Stay grounded.\n\n# Development maintainer role'),
+    }));
+    expect(root.config.persistentMindPrompt.instructions).toBe('Stay grounded.');
+  });
+
   it('exposes the editable prompt, owned memories, derived rollups, and exact context preview', async () => {
     const res = await get('/mind/context');
     expect(res.status).toBe(200);
@@ -328,8 +344,8 @@ describe('persistent mind routes', () => {
         expect.objectContaining({ name: 'eidoverse.status', granted: false, input_schema: expect.any(Object) }),
         expect.objectContaining({ name: 'cos.create-task', granted: true }),
       ]),
-      schemaVersion: 13,
-      capabilities: { schemaVersion: 13, createTasks: true, fileIssues: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [], toolExposureRetentionTurns: 3, toolExposureAllSchemas: false },
+      schemaVersion: 14,
+      capabilities: { schemaVersion: 14, createTasks: true, fileIssues: false, auditReports: false, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [], toolExposureRetentionTurns: 3, toolExposureAllSchemas: false },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
       tools: expect.arrayContaining([
         expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),

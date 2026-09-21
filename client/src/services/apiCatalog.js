@@ -32,12 +32,19 @@ export const pruneCatalogScrap = (id, body, options) =>
 // universe — the "Catalogue into" select on CatalogIngest (#7615). Omitted
 // when the caller passes 'unassigned' (the "no universe" choice), reproducing
 // prior behavior exactly (source link only, no homing ref).
-export const commitCatalogScrapDraft = (id, accepted, { universeRef, role, ...options } = {}) =>
-  request(`/catalog/scraps/${enc(id)}/commit`, {
+// `relationships` forwards explicit grounded graph relationships (including [] for structured drafts).
+export const commitCatalogScrapDraft = (id, accepted, { universeRef, role, relationships, ...options } = {}, maybeRelationships) => {
+  const rels = maybeRelationships !== undefined ? maybeRelationships : relationships;
+  return request(`/catalog/scraps/${enc(id)}/commit`, {
     method: 'POST',
-    body: JSON.stringify({ accepted, ...(universeRef ? { universeRef, ...(role ? { role } : {}) } : {}) }),
+    body: JSON.stringify({
+      accepted,
+      ...(universeRef ? { universeRef, ...(role ? { role } : {}) } : {}),
+      ...(rels !== undefined ? { relationships: rels } : {}),
+    }),
     ...options,
   });
+};
 
 // --- Alternate ingest sources (url / file / voice / brain) --------------
 // Each returns { scrap, draft } — the same shape as extractFromCatalogScrap —

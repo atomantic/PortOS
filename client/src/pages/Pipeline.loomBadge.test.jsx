@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import Pipeline from './Pipeline';
 
@@ -35,9 +35,13 @@ const SERIES = [
   { id: 'series-2', name: 'Second Series' },
 ];
 
-const renderPage = () => render(
-  <MemoryRouter initialEntries={['/pipeline']}><Pipeline /></MemoryRouter>,
-);
+const renderPage = async () => {
+  const result = render(
+    <MemoryRouter initialEntries={['/pipeline']}><Pipeline /></MemoryRouter>,
+  );
+  await act(async () => {});
+  return result;
+};
 
 describe('Pipeline series list — branching-narrative badge', () => {
   beforeEach(() => {
@@ -53,7 +57,7 @@ describe('Pipeline series list — branching-narrative badge', () => {
   });
 
   it('counts only the looms linked to each row and leaves unlinked rows bare', async () => {
-    renderPage();
+    await renderPage();
     await screen.findByText('Example Series');
     await waitFor(() => expect(screen.getByText('2 branching')).toBeInTheDocument());
 
@@ -65,7 +69,7 @@ describe('Pipeline series list — branching-narrative badge', () => {
 
   it('renders the list without badges when the loom fetch fails', async () => {
     listLooms.mockRejectedValue(new Error('offline'));
-    renderPage();
+    await renderPage();
     await screen.findByText('Example Series');
     await waitFor(() => expect(screen.getByText('Second Series')).toBeInTheDocument());
     expect(screen.queryByText(/branching/)).toBeNull();

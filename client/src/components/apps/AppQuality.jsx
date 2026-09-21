@@ -14,6 +14,9 @@ const PUBLISH_SKIPPED = {
   'no-evidence': 'No quality evidence yet — run an audit first',
   'no-repo-path': 'App repo path is not a git repository',
   'not-a-repo': 'App repo path is not a git repository',
+  'no-remote': 'App repo has no origin remote to open a pull request against',
+  'no-default-branch': 'Could not resolve the repository default branch',
+  'pr-failed': 'Could not open a quality snapshot pull request',
 };
 
 export default function AppQuality({ app, detail = false }) {
@@ -26,8 +29,9 @@ export default function AppQuality({ app, detail = false }) {
     setPublishing(false);
     if (result?.failure) return toast.error(result.failure.message || 'Could not publish the quality snapshot');
     if (result?.published) {
-      const shortHash = result.hash ? ` (${result.hash.slice(0, 7)})` : '';
-      return toast.success(`Quality snapshot committed to .quality.json${shortHash}`);
+      return toast.success(result.prUrl
+        ? 'Quality snapshot pull request opened; it will merge when CI is green'
+        : 'Quality snapshot published to .quality.json');
     }
     toast(PUBLISH_SKIPPED[result?.reason] || 'Nothing to publish to .quality.json');
   };

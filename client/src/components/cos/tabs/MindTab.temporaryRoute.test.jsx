@@ -18,6 +18,10 @@ const api = vi.hoisted(() => ({
   getProviders: vi.fn(),
   updateCosConfig: vi.fn(),
   getPersistentMindContext: vi.fn(),
+  getPersistentMindMaintainer: vi.fn().mockResolvedValue({
+    role: { schemaVersion: 1, enabled: false, appIds: [], intervalMinutes: 60 },
+    apps: [], availableApps: [], prerequisites: [], instructions: '',
+  }),
   getPersistentMindTools: vi.fn(),
   getMindRecipes: vi.fn().mockResolvedValue({ recipes: [] }),
   getPersistentMindRuntime: vi.fn(),

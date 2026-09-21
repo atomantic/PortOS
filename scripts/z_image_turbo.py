@@ -157,7 +157,13 @@ def load_pipeline(
         if pipeline_class:
             cls = getattr(diffusers, pipeline_class, None)
             if cls is None:
-                print(f"❌ Unknown diffusers pipeline class: {pipeline_class}", file=sys.stderr)
+                print("USER_ERROR:torch_runtime_broken", file=sys.stderr, flush=True)
+                print(
+                    f"❌ Unknown diffusers pipeline class: {pipeline_class}. "
+                    "Upgrade the image runtime: INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 "
+                    "bash scripts/setup-image-video.sh",
+                    file=sys.stderr,
+                )
                 sys.exit(2)
             pipe = cls.from_pretrained(
                 repo, torch_dtype=dtype, low_cpu_mem_usage=True, **extra_kwargs
@@ -197,6 +203,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--output", required=True)
     p.add_argument("--metadata", action="store_true", help="write <output>.metadata.json sidecar")
+    p.add_argument("--reference-images", nargs="+", default=[], help="Qwen 2.1 reference images (10 inputs total)")
     p.add_argument("--image-path", default=None, help="optional init image for i2i")
     p.add_argument("--image-strength", type=float, default=None, help="0..1 i2i denoise strength")
     p.add_argument("--stepwise-image-output-dir", default=None)
@@ -214,6 +221,12 @@ def parse_args() -> argparse.Namespace:
 @install_hf_error_handler
 def main() -> None:
     args = parse_args()
+
+    input_count = len(args.reference_images) + bool(args.image_path)
+    if args.reference_images and args.pipeline_class != "QwenImage21Pipeline":
+        raise ValueError("Reference images require QwenImage21Pipeline")
+    if args.pipeline_class == "QwenImage21Pipeline" and input_count > 10:
+        raise ValueError("Qwen Image 2.1 accepts at most 10 input images")
 
     device = pick_device(args.device)
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
@@ -237,21 +250,30 @@ def main() -> None:
 
     init_image = None
     if args.image_path:
-        init_image = Image.open(args.image_path).convert("RGB").resize(
-            (int(args.width), int(args.height)), Image.LANCZOS
-        )
-        # Promote the txt2img pipe to its i2i sibling. If the model family
-        # doesn't expose an i2i variant, fall through to txt2img with a warning
-        # — better than failing the request outright.
-        try:
-            pipe = to_i2i_pipeline(pipe)
-        except Exception as err:
-            print(
-                f"⚠️ z-image: i2i sibling unavailable ({type(err).__name__}: {err}); "
-                f"falling back to txt2img and ignoring init image",
-                file=sys.stderr,
-            )
-            init_image = None
+        # Unified editing pipelines already accept `image`; auto-conversion
+        # can reject them and silently discard the user's conditioning image.
+        native_image = "image" in inspect.signature(pipe.__call__).parameters
+        mode = "RGBA" if args.pipeline_class == "QwenImage21Pipeline" else "RGB"
+        with Image.open(args.image_path) as source:
+            init_image = source.convert(mode)
+        if not native_image:
+            init_image = init_image.resize((int(args.width), int(args.height)), Image.LANCZOS)
+            try:
+                pipe = to_i2i_pipeline(pipe)
+            except Exception as err:
+                print(
+                    f"⚠️ z-image: i2i sibling unavailable ({type(err).__name__}: {err}); "
+                    f"falling back to txt2img and ignoring init image",
+                    file=sys.stderr,
+                )
+                init_image = None
+
+    if args.reference_images:
+        images = [init_image] if init_image is not None else []
+        for path in args.reference_images:
+            with Image.open(path) as source:
+                images.append(source.convert("RGBA"))
+        init_image = images
 
     apply_memory_optimizations(pipe, width=args.width, height=args.height)
     apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
@@ -289,7 +311,9 @@ def main() -> None:
         # rebuilding from a list every step is pure waste (mirrors how the
         # ERNIE branch above pulls vae.bn directly, not from a list).
         qwen_mean_cpu = torch.tensor(pipe_vae.config.latents_mean).view(1, z_dim, 1, 1, 1)
-        qwen_inv_std_cpu = (1.0 / torch.tensor(pipe_vae.config.latents_std)).view(1, z_dim, 1, 1, 1)
+        # 2.1 stores the standard deviation; legacy Qwen stores its inverse.
+        qwen_std = torch.tensor(pipe_vae.config.latents_std)
+        qwen_scale_cpu = (qwen_std if args.pipeline_class == "QwenImage21Pipeline" else 1.0 / qwen_std).view(1, z_dim, 1, 1, 1)
         qwen_norm_cache = {}
 
         def unpack_latents(latents, height, width):  # noqa: E306
@@ -301,11 +325,11 @@ def main() -> None:
             if cached is None:
                 cached = (
                     qwen_mean_cpu.to(device=latents.device, dtype=latents.dtype),
-                    qwen_inv_std_cpu.to(device=latents.device, dtype=latents.dtype),
+                    qwen_scale_cpu.to(device=latents.device, dtype=latents.dtype),
                 )
                 qwen_norm_cache[key] = cached
-            mean, inv_std = cached
-            unnorm = latents * inv_std + mean
+            mean, scale = cached
+            unnorm = latents * scale + mean
             decoded = p.vae.decode(unnorm, return_dict=False)[0]
             # Qwen's image VAE returns `(B, C, T, H, W)` with T=1 for stills.
             # Slice the temporal dim out so the generic post-decode path's
@@ -327,9 +351,13 @@ def main() -> None:
         height=int(args.height),
         width=int(args.width),
         num_inference_steps=int(args.steps),
-        guidance_scale=float(args.guidance),
         generator=generator,
     )
+    # Qwen 2.1 exposes true_cfg_scale instead of guidance_scale.
+    if "guidance_scale" in accepted:
+        pipe_kwargs["guidance_scale"] = float(args.guidance)
+    elif "true_cfg_scale" in accepted:
+        pipe_kwargs["true_cfg_scale"] = float(args.guidance)
     if args.negative_prompt and "negative_prompt" in accepted:
         pipe_kwargs["negative_prompt"] = args.negative_prompt
     if callback is not None and "callback_on_step_end" in accepted:

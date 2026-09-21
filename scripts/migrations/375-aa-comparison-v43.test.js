@@ -14,12 +14,12 @@ it('upgrades an existing catalog without losing researched evidence and fails cl
   await writeFile(join(rootDir, 'data.reference/model-comparison.json'), JSON.stringify(seed));
   expect(await migration.up({ rootDir })).toEqual({ added: 0 });
   const refreshed = seed.observations.filter(row => row.id.startsWith('aa-v4.3-'));
-  expect(refreshed).toHaveLength(111);
+  expect(refreshed).toHaveLength(108);
   const researched = { ...refreshed[0], notes: 'Example locally researched evidence' };
   const prior = { schemaVersion: 1, observations: [seed.observations[0], researched] };
   const path = join(rootDir, 'data/model-comparison.json');
   await writeFile(path, JSON.stringify(prior));
-  expect(await migration.up({ rootDir })).toEqual({ added: 110 });
+  expect(await migration.up({ rootDir })).toEqual({ added: 107 });
   const result = JSON.parse(await readFile(path, 'utf8'));
   expect(result.observations.slice(0, 2)).toEqual(prior.observations);
   expect(await migration.up({ rootDir })).toEqual({ added: 0 });

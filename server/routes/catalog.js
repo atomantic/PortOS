@@ -48,7 +48,7 @@ import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
-import { uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
+import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
@@ -105,7 +105,7 @@ router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogExtractRequestSchema, req.body || {});
   const scrap = await catalogDB.getScrap(req.params.id);
   if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
-  // Extraction runs on the PARENT scrap (it unions across its child chunks).
+  // Extraction plans from the complete PARENT source against the chosen model.
   // A request against a child row is a client bug — reject rather than extract
   // a single chunk in isolation and silently lose the rest of the corpus.
   if (scrap.parentScrapId) {
@@ -114,6 +114,7 @@ router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
   const draft = await extractIngredientsForScrap({
     scrapId: scrap.id,
     providerOverride: body.providerOverride,
+    modelOverride: body.modelOverride,
   });
   res.json({ scrap, draft });
 }));
@@ -176,6 +177,7 @@ router.post('/scraps/:id/commit', asyncHandler(async (req, res) => {
   const created = await catalogDB.commitScrap({
     scrapId: scrap.id,
     accepted: body.accepted,
+    ...(body.relationships !== undefined ? { relationships: body.relationships } : {}),
     embeds,
     universeRef: body.universeRef,
     role: body.role,
@@ -486,9 +488,13 @@ router.post('/ingredients/:id/media', asyncHandler(async (req, res) => {
   if (IMAGE_MEDIA_KINDS.has(body.kind) && !resolveImageInputPath(body.mediaKey)) {
     throw new ServerError(`Media key "${body.mediaKey}" not found in the media library`, { status: 422 });
   }
+  const metadata = IMAGE_MEDIA_KINDS.has(body.kind)
+    ? await readImageGenerationMetadata(body.mediaKey)
+    : {};
   const media = await catalogDB.attachMedia(req.params.id, body.mediaKey, body.kind, {
     role: body.role ?? null,
     caption: body.caption ?? null,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   });
   res.status(201).json(media);
 }));
@@ -500,9 +506,11 @@ router.post('/ingredients/:id/media/portrait', asyncHandler(async (req, res) => 
   if (!resolveImageInputPath(body.mediaKey)) {
     throw new ServerError(`Media key "${body.mediaKey}" not found in the media library`, { status: 422 });
   }
+  const metadata = await readImageGenerationMetadata(body.mediaKey);
   const media = await catalogDB.setPortraitMedia(req.params.id, body.mediaKey, {
     role: body.role ?? null,
     caption: body.caption ?? null,
+    ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
   });
   res.status(201).json(media);
 }));

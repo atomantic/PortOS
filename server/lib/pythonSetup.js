@@ -365,41 +365,60 @@ export function resolveFlux2Python() {
 // outside PortOS) would otherwise report "unavailable" for the rest of the
 // server's lifetime with no way for the user to recover short of a restart.
 const FLUX2_HEALTH_NEGATIVE_TTL_MS = 60_000;
-let cachedFlux2Healthy = null;
-let cachedFlux2HealthyAt = 0;
-// In-flight dedupe. The cache is only written AFTER the probe resolves, so N
-// callers arriving on a cold or just-invalidated cache each spawned their own
-// full torch+diffusers import — seconds of CPU and hundreds of MB apiece. That
-// is not hypothetical: opening Settings › Image Gen › Local fires the status
-// probe and the runtime card together, and finishing an install invalidates the
-// cache and then re-probes from both the card and its host. Collapsing them onto
-// one promise costs nothing when the cache is warm, since that path returns
-// before this is read.
-let flux2HealthInFlight = null;
-export async function isFlux2VenvHealthy() {
-  if (cachedFlux2Healthy === true) return true;
-  if (cachedFlux2Healthy === false && Date.now() - cachedFlux2HealthyAt < FLUX2_HEALTH_NEGATIVE_TTL_MS) {
-    return false;
-  }
-  if (flux2HealthInFlight) return flux2HealthInFlight;
-  flux2HealthInFlight = probeFlux2Venv().finally(() => { flux2HealthInFlight = null; });
-  return flux2HealthInFlight;
+// Each selected pipeline has its own verdict: FLUX.2 importing successfully
+// says nothing about a newer Qwen class being present in the same installation.
+const flux2Health = new Map();
+export async function isFlux2VenvHealthy(pipelineClass = '') {
+  const key = pipelineClass || '';
+  const cached = flux2Health.get(key);
+  if (cached?.healthy === true) return true;
+  if (cached?.healthy === false && Date.now() - cached.at < FLUX2_HEALTH_NEGATIVE_TTL_MS) return false;
+  if (cached?.pending) return cached.pending;
+  const entry = {};
+  flux2Health.set(key, entry);
+  entry.pending = probeFlux2Venv(key).then((healthy) => {
+    entry.healthy = healthy;
+    entry.at = Date.now();
+    return healthy;
+  }).finally(() => { entry.pending = null; });
+  return entry.pending;
 }
-async function probeFlux2Venv() {
+async function probeFlux2Venv(pipelineClass) {
   const py = resolveFlux2Python();
-  const ok = py
-    ? await execFileAsync(py, ['-c', 'from diffusers import Flux2KleinPipeline'], safeChildProcessOptions({ timeout: 30_000 }))
+  // Pass registry content as argv, never interpolate it into Python code.
+  const probe = 'from diffusers import Flux2KleinPipeline; import diffusers, sys; getattr(diffusers, sys.argv[1]) if sys.argv[1] else None';
+  return py
+    ? await execFileAsync(py, ['-c', probe, pipelineClass], safeChildProcessOptions({ timeout: 30_000 }))
       .then(() => true)
       .catch(() => false)
     : false;
-  cachedFlux2Healthy = ok;
-  cachedFlux2HealthyAt = Date.now();
-  return ok;
 }
+// Pipeline classes the installer's verify stage guarantees. Membership rule:
+// the base FLUX.2 pipeline, plus the NEWEST diffusers pipeline PortOS ships a
+// model for — together they date the venv's diffusers snapshot, which is the
+// only thing the verify stage can assert without a model download. Per-model
+// classes are not listed here; the gate takes the selected model's own
+// `pipelineClass` as an argument instead, so the registry stays the one place
+// a new family is declared.
+//
+// The readiness GATE in front of the installer must require all of them:
+// gating on the base `Flux2KleinPipeline` alone let a venv built before a
+// newer pipeline landed report "already installed" while the per-model verdict
+// (which probes that model's own `pipelineClass`) said unavailable — the user
+// saw an Install button that answered "nothing to do".
+export const FLUX2_VERIFY_PIPELINE_CLASSES = Object.freeze(['Flux2KleinPipeline', 'QwenImage21Pipeline']);
+
+// Whether re-running the installer would be a no-op: every class the verify
+// stage checks imports, plus the one the caller's selected model needs.
+export async function isFlux2InstallSatisfied(pipelineClass = '') {
+  const required = [...new Set([...FLUX2_VERIFY_PIPELINE_CLASSES, pipelineClass].filter(Boolean))];
+  const results = await Promise.all(required.map((cls) => isFlux2VenvHealthy(cls)));
+  return results.every(Boolean);
+}
+
 export function invalidateFlux2Health() {
   cachedFlux2Python = null;
-  cachedFlux2Healthy = null;
-  cachedFlux2HealthyAt = 0;
+  flux2Health.clear();
 }
 
 // mflux's `mflux-train` LoRA trainer CLI is a console script installed beside
@@ -916,7 +935,7 @@ export const WIN_TORCH_CUDA_INDEX = 'https://download.pytorch.org/whl/cu126';
 export const FLUX2_PIP_SPECS = [
   ...FLUX2_TORCH_SPECS,
   'accelerate',
-  'transformers>=4.51',
+  'transformers>=5.17',
   'sentencepiece',
   'protobuf',
   'safetensors',
@@ -1067,9 +1086,17 @@ export function installFlux2Venv(onLog) {
     }
     if (killed) return { ok: false, stage: 'install', cancelled: true };
 
-    stage('verify', 'Verifying Flux2KleinPipeline import…');
-    if (!await runPython([venvPython, '-c', 'from diffusers import Flux2KleinPipeline; print("ok")'])) {
-      onLog({ type: 'error', message: 'Verification failed: Flux2KleinPipeline did not import. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh' });
+    // Git snapshots can share a dev version; --upgrade alone then keeps the
+    // older installed code. Refresh only diffusers, preserving the torch wheel.
+    if (!await runPython([venvPython, '-m', 'pip', 'install', '--force-reinstall', '--no-deps',
+      FLUX2_PIP_SPECS.find((spec) => spec.startsWith('diffusers @ '))])) {
+      return fail('install', 'Refreshing the diffusers pipeline code failed.');
+    }
+    if (killed) return { ok: false, stage: 'install', cancelled: true };
+
+    stage('verify', 'Verifying FLUX.2 and Qwen 2.1 pipeline imports…');
+    if (!await runPython([venvPython, '-c', `from diffusers import ${FLUX2_VERIFY_PIPELINE_CLASSES.join(', ')}; print("ok")`])) {
+      onLog({ type: 'error', message: 'Verification failed: FLUX.2 or Qwen 2.1 pipeline did not import. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh' });
       return { ok: false, stage: 'verify' };
     }
 

@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router';
 const api = vi.hoisted(() => ({
   getNotifications: vi.fn(),
   getNotificationCount: vi.fn(),
+  getReviewQueue: vi.fn(),
   markNotificationRead: vi.fn(),
   markAllNotificationsRead: vi.fn(),
   deleteNotification: vi.fn(),
@@ -55,6 +56,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   api.getNotifications.mockResolvedValue([NOTIFICATION]);
   api.getNotificationCount.mockResolvedValue({ count: 1 });
+  api.getReviewQueue.mockResolvedValue({ items: [], partial: false });
 });
 
 describe('useNotifications response contract', () => {
@@ -71,7 +73,10 @@ describe('useNotifications response contract', () => {
 
     expect(api.getNotifications).toHaveBeenCalledWith({ limit: 50 });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Notifications (1 unread)' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Notifications (0 required actions)' })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications (0 required actions)' }));
 
     expect(screen.getByRole('button', { name: 'View notification: Example notification' })).toBeInTheDocument();
   });
@@ -105,7 +110,7 @@ describe('authoritative unread totals', () => {
     api.markNotificationRead.mockReturnValue(mutation.promise);
     render(<MemoryRouter><NotificationSurface /></MemoryRouter>);
     await waitFor(() => expect(screen.getByTestId('notification-loading')).toHaveTextContent('false'));
-    fireEvent.click(screen.getByRole('button', { name: 'Notifications (2 unread)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Notifications (0 required actions)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Mark notification as read: Example notification' }));
     api.getNotificationCount.mockResolvedValue({ count: 1 });
 
@@ -117,7 +122,7 @@ describe('authoritative unread totals', () => {
     await act(async () => { mutation.resolve(); await mutation.promise; });
     if (order === 'http-first') act(socketUpdate);
 
-    expect(screen.getByRole('button', { name: 'Notifications (1 unread)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notifications (0 required actions)' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Mark notification as read: Remaining notification' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Mark notification as read: Example notification' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Mark all notifications as read' })).toBeInTheDocument();

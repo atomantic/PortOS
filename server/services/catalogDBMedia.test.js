@@ -6,7 +6,8 @@
  *   - setPortraitMedia demotes any other live portrait, then attaches;
  *   - getMissingMediaForIngredient reports only keys that don't resolve against
  *     the local media library (the metadata-missing integrity surface);
- *   - upsertMediaFromPeer distinguishes "tombstone fields present" from absent.
+ *   - upsertMediaFromPeer distinguishes "tombstone fields present" from absent;
+ *   - generation metadata round-trips and stays intact when an older peer omits it.
  *
  * Postgres is mocked — we capture the SQL/params and assert on them, so the
  * suite runs without a live database. `resolveImageInputPath` is mocked so the
@@ -73,6 +74,13 @@ describe('attachMedia', () => {
     await catalogDB.attachMedia('i1', 'hero.png', 'reference');
     expect(calls[0].params).toEqual(['i1', 'hero.png', 'reference', null, null]);
   });
+
+  it('stores generation provenance alongside the attachment', async () => {
+    const metadata = { format: 'a1111', prompt: 'a paper boat', steps: 24, seed: 42 };
+    await catalogDB.attachMedia('i1', 'render.png', 'reference', { metadata });
+    expect(calls[0].sql).toMatch(/metadata\)/i);
+    expect(calls[0].params).toEqual(['i1', 'render.png', 'reference', null, null, JSON.stringify(metadata)]);
+  });
 });
 
 describe('detachMedia', () => {
@@ -130,6 +138,18 @@ describe('upsertMediaFromPeer', () => {
     expect(params).toEqual(['i1', 'a.png', 'portrait', 'r', 'c', 't', true, 't2']);
   });
 
+  it('includes generation provenance when a peer sends the additive field', async () => {
+    const metadata = { prompt: 'a lighthouse', negativePrompt: 'blur', seed: 9 };
+    await catalogDB.upsertMediaFromPeer({
+      ingredientId: 'i1', mediaKey: 'a.png', kind: 'portrait',
+      role: 'r', caption: 'c', createdAt: 't', deleted: false, deletedAt: null, metadata,
+    });
+    const { sql, params } = calls[0];
+    expect(sql).toMatch(/metadata\)/i);
+    expect(sql).toMatch(/metadata = EXCLUDED\.metadata/i);
+    expect(params).toEqual(['i1', 'a.png', 'portrait', 'r', 'c', 't', false, null, JSON.stringify(metadata)]);
+  });
+
   it('uses the tombstone-less INSERT (preserve local state) when the keys are absent', async () => {
     await catalogDB.upsertMediaFromPeer({
       ingredientId: 'i1', mediaKey: 'a.png', kind: 'portrait', createdAt: 't',
@@ -137,6 +157,15 @@ describe('upsertMediaFromPeer', () => {
     const { sql, params } = calls[0];
     expect(sql).not.toMatch(/deleted = EXCLUDED.deleted/i);
     expect(sql).toMatch(/SET role = EXCLUDED.role, caption = EXCLUDED.caption/i);
+    expect(params).toEqual(['i1', 'a.png', 'portrait', null, null, 't']);
+  });
+
+  it('does not erase provenance when a peer has only an empty metadata object', async () => {
+    await catalogDB.upsertMediaFromPeer({
+      ingredientId: 'i1', mediaKey: 'a.png', kind: 'portrait', createdAt: 't', metadata: {},
+    });
+    const { sql, params } = calls[0];
+    expect(sql).not.toMatch(/metadata = EXCLUDED\.metadata/i);
     expect(params).toEqual(['i1', 'a.png', 'portrait', null, null, 't']);
   });
 });

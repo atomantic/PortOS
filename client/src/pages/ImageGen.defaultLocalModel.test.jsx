@@ -33,6 +33,16 @@ describe('ImageGen default local model', () => {
     window.matchMedia = vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   });
 
+  it('offers ten Qwen reference slots without strength controls', async () => {
+    state.models = [imageGenModel('qwen-image-2.1', { runner: 'qwen', pipelineClass: 'QwenImage21Pipeline' })];
+    state.getSettings.mockResolvedValue(settingsWith({ modelId: 'qwen-image-2.1' }));
+    state.referenceImagePickerFactory = ({ referenceImages, showStrength }) => (
+      <div data-testid="qwen-refs">{referenceImages.length}:{String(showStrength)}</div>
+    );
+    await renderImageGenPage();
+    await waitFor(() => expect(screen.getByTestId('qwen-refs').textContent).toBe('10:false'));
+  });
+
   it('opens on the model pinned in settings, not the first catalog entry', async () => {
     state.getSettings.mockResolvedValue(settingsWith({ modelId: 'flux2-klein-4b' }));
     await renderImageGenPage();

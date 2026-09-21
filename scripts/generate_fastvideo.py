@@ -398,13 +398,12 @@ def build_command(args, entry_script: Path, model_root: Path, mlx_checkpoint: Pa
             cmd.extend(["--image-path", str(args.image)])
         return cmd
 
-    # FastH3: text-to-video-with-audio only. The entry script has no --fps,
-    # --guidance, --negative-prompt or --image-path, so anything the caller
-    # passed for those is surfaced as a STATUS line instead of being dropped
-    # into a flag the child would reject.
+    # Both Preview and V2 use mlx_fasth3.py. VSA changes sparse attention,
+    # not conditioning: the pinned entry and pipeline have no image input.
+    if args.image:
+        raise ValueError("FastH3 MLX does not support first-frame conditioning")
     for label, unsupported in (
         ("negative prompt", args.negative_prompt),
-        ("conditioning image", args.image),
         ("prompt enhancer", args.enhance_prompt),
         ("refinement pass", args.refine),
     ):

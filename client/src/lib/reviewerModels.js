@@ -1,4 +1,5 @@
 import { isProviderReviewer } from './reviewerPins';
+import { EFFORT_LEVELS } from '../../../server/lib/providerModels.js';
 import {
   MODEL_SELECTABLE_REVIEWERS,
   MAX_REVIEWER_MODEL_LENGTH,
@@ -14,8 +15,8 @@ import {
  * The Code Review Defaults settings slice persists ONE SCALAR PER REVIEWER
  * (`codexModel`, `claudeModel`, `lmstudioModel`, `ollamaModel`, and the matching
  * `<reviewer>Effort` scalars) and stays that way — the encoding crosses installs,
- * so legacy scalars remain readable. Provider-backed model pins are additive in
- * `providerModels`, keyed by `provider:<id>`. Everything else (the
+ * so legacy scalars remain readable. Configured-provider pins are additive in
+ * `providerModels` / `providerEfforts`, keyed by `provider:<id>`. Everything else (the
  * ReviewerPicker table, per-task metadata, the slashdo token builders) speaks the
  * token-keyed MAP shape the `~opt` / `~max` controls already use, so the two need
  * one documented conversion point rather than a hand-rolled loop in each consumer.
@@ -46,15 +47,14 @@ import {
  * @param {(raw: string, reviewer: string) => string|undefined} validateOne
  */
 function pinScalarAdapters(roster, suffix, validateOne) {
+  const providerKey = suffix === 'Model' ? 'providerModels' : 'providerEfforts';
   return {
     fromDefaults: (defaults) => {
       const out = {};
-      if (suffix === 'Model') {
-        for (const [key, raw] of Object.entries(defaults?.providerModels || {})) {
-          if (!isProviderReviewer(key) || typeof raw !== 'string') continue;
-          const value = validateOne(raw, key);
-          if (value) out[key] = value;
-        }
+      for (const [key, raw] of Object.entries(defaults?.[providerKey] || {})) {
+        if (!isProviderReviewer(key) || typeof raw !== 'string') continue;
+        const value = validateOne(raw, key);
+        if (value) out[key] = value;
       }
       for (const reviewer of roster) {
         const raw = defaults?.[`${reviewer}${suffix}`];
@@ -66,7 +66,7 @@ function pinScalarAdapters(roster, suffix, validateOne) {
     },
     toDefaults: (pins) => ({
       ...Object.fromEntries(roster.map((reviewer) => [`${reviewer}${suffix}`, pins?.[reviewer] || undefined])),
-      ...(suffix === 'Model' ? { providerModels: Object.fromEntries(Object.entries(pins || {}).filter(([key]) => isProviderReviewer(key))) } : {})
+      [providerKey]: Object.fromEntries(Object.entries(pins || {}).filter(([key]) => isProviderReviewer(key)))
     })
   };
 }
@@ -83,7 +83,8 @@ const modelAdapters = pinScalarAdapters(MODEL_SELECTABLE_REVIEWERS, 'Model', (ra
 // before the reviewer's CLI dropped it doesn't survive into the picker.
 const effortAdapters = pinScalarAdapters(EFFORT_SELECTABLE_REVIEWERS, 'Effort', (raw, reviewer) => {
   const effort = raw.trim().toLowerCase();
-  return reviewerEffortLevels(reviewer)?.includes(effort) ? effort : undefined;
+  const levels = isProviderReviewer(reviewer) ? EFFORT_LEVELS : reviewerEffortLevels(reviewer);
+  return levels?.includes(effort) ? effort : undefined;
 });
 
 /** Scalars → `{ codex: 'gpt-…', ollama: 'qwen…' }`. */

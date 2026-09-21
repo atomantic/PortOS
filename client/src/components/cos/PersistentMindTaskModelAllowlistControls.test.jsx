@@ -6,15 +6,24 @@ const api = vi.hoisted(() => ({
   getProviders: vi.fn(),
   updateCosConfig: vi.fn(),
 }));
+const apiLocalLlm = vi.hoisted(() => ({
+  getToolUseModels: vi.fn(),
+  getVisionModels: vi.fn(),
+}));
 
 vi.mock('../../services/api', () => api);
+vi.mock('../../services/apiLocalLlm', () => apiLocalLlm);
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
+import { __resetToolUseModelIdsCache } from '../../hooks/useToolUseModelIds.js';
 import PersistentMindTaskModelAllowlistControls from './PersistentMindTaskModelAllowlistControls.jsx';
 
 describe('PersistentMindTaskModelAllowlistControls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetToolUseModelIdsCache();
+    apiLocalLlm.getToolUseModels.mockResolvedValue({ models: [] });
+    apiLocalLlm.getVisionModels.mockResolvedValue({ models: [] });
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'ollama', name: 'Ollama', type: 'cli', enabled: true, models: ['example-local', 'example-other'] }],
     });

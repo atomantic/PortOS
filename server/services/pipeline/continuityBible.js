@@ -24,7 +24,8 @@
  */
 
 import { join } from 'path';
-import { createHash } from 'crypto';
+import { contentHash } from './contentHash.js';
+import { assertValidSeriesId } from '../../lib/pipelineIds.js';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
@@ -73,17 +74,6 @@ const ANCHOR_MAX = 240;
 const LEDGER_OUTPUT_RESERVE_TOKENS = 6_000;
 
 const nowIso = () => new Date().toISOString();
-
-// Content hash — pins an input so a later edit flips the ledger to `stale`.
-const contentHash = (text) => createHash('sha256').update(text || '').digest('hex');
-
-// Defense-in-depth: refuse path-traversal-shaped ids before they reach the
-// on-disk ledger path. Series ids are `ser-<uuid>` — restrict to a safe charset.
-function assertValidSeriesId(id) {
-  if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid series id: ${id}`);
-  }
-}
 
 // ---------- per-series write tail ----------
 

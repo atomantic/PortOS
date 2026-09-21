@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 import { RECENT_KEY } from '../utils/navWorkingSet.js';
+import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
 
 const getPaletteManifest = vi.fn();
 const getInstanceFeatures = vi.fn();
@@ -350,6 +351,18 @@ describe('CmdKSearch dialog accessibility', () => {
     fireEvent.keyDown(input, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(opener).toHaveFocus();
+  });
+
+  it('opens when the shared command-palette event is dispatched', async () => {
+    render(
+      <MemoryRouter>
+        <CmdKSearch />
+      </MemoryRouter>,
+    );
+
+    act(() => document.dispatchEvent(new Event(CMD_K_SEARCH_OPEN_EVENT)));
+
+    expect(await screen.findByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
   });
 });
 

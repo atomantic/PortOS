@@ -1142,8 +1142,12 @@ export function createPortOSProviderRoutes(aiToolkit) {
 
     const updates = { ...validation.data };
 
-    // Preserve existing apiKey if client didn't send a new one
-    if (!('apiKey' in updates)) {
+    // Preserve an actually persisted apiKey if the client didn't send a new
+    // one. Gateway-backed CLI/TUI wrappers receive their sibling API key as a
+    // non-enumerable, execution-only property; carrying that value into a
+    // derived-preset update turns an inherited credential into a direct edit
+    // and makes an otherwise harmless save fail with PRESET_FIELD_DERIVED.
+    if (!('apiKey' in updates) && Object.prototype.propertyIsEnumerable.call(existing, 'apiKey')) {
       updates.apiKey = existing.apiKey;
     }
 

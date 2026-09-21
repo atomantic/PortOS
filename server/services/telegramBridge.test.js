@@ -70,12 +70,13 @@ const {
 const BOT_TOKEN = '123:ABC';
 const CHAT_ID = 12345;
 
-// Multi-tick flush so the EventEmitter handler → sendMessage → apiCall →
-// res.json() microtask chain settles before we assert on fetch calls.
-async function flush() {
-  for (let i = 0; i < 5; i++) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
+// EventEmitter.emit discards returned promises. Await the actual subscribed
+// handler so dynamic imports and suppressed forwards finish before assertions
+// and cleanup; a fixed number of event-loop ticks cannot establish completion.
+async function forwardAdded(notification) {
+  const listeners = notificationEvents.listeners('added');
+  expect(listeners).toHaveLength(1);
+  await listeners[0](notification);
 }
 
 function mockTelegramFetch({ getMeOk = true, sendOk = true } = {}) {
@@ -274,20 +275,19 @@ describe('telegramBridge service', () => {
   });
 
   describe('notification forwarding', () => {
-    it('forwards a notification by emitting an "added" event after init', async () => {
+    it('forwards a notification through the registered added-event listener after init', async () => {
       seedCredentials();
       const fetchSpy = mockTelegramFetch();
       vi.stubGlobal('fetch', fetchSpy);
       await init();
       fetchSpy.mockClear();
 
-      notificationEvents.emit('added', {
+      await forwardAdded({
         type: NOTIFICATION_TYPES.HEALTH_ISSUE,
         title: 'High & rising',
         description: '<script>',
         priority: PRIORITY_LEVELS.HIGH
       });
-      await flush();
 
       const sendCall = fetchSpy.mock.calls.find(([url]) => url.endsWith('/sendMessage'));
       expect(sendCall).toBeDefined();
@@ -306,21 +306,19 @@ describe('telegramBridge service', () => {
       fetchSpy.mockClear();
 
       updateCachedForwardTypes([NOTIFICATION_TYPES.HEALTH_ISSUE]);
-      notificationEvents.emit('added', {
+      await forwardAdded({
         type: NOTIFICATION_TYPES.CODE_REVIEW, // not in whitelist
         title: 'PR ready',
         priority: PRIORITY_LEVELS.LOW
       });
-      await flush();
       expect(fetchSpy.mock.calls.filter(([url]) => url.endsWith('/sendMessage'))).toHaveLength(0);
 
       fetchSpy.mockClear();
-      notificationEvents.emit('added', {
+      await forwardAdded({
         type: NOTIFICATION_TYPES.HEALTH_ISSUE,
         title: 'Glucose',
         priority: PRIORITY_LEVELS.MEDIUM
       });
-      await flush();
       expect(fetchSpy.mock.calls.filter(([url]) => url.endsWith('/sendMessage'))).toHaveLength(1);
     });
 
@@ -333,12 +331,11 @@ describe('telegramBridge service', () => {
         await init();
         fetchSpy.mockClear();
 
-        notificationEvents.emit('added', {
+        await forwardAdded({
           type: NOTIFICATION_TYPES.HEALTH_ISSUE,
           title: 'Should not send',
           priority: PRIORITY_LEVELS.HIGH
         });
-        await flush();
 
         expect(
           fetchSpy.mock.calls.filter(([url]) => url.endsWith('/sendMessage')),
@@ -359,14 +356,13 @@ describe('telegramBridge service', () => {
       await init();
       fetchSpy.mockClear();
 
-      notificationEvents.emit('added', {
+      await forwardAdded({
         type: NOTIFICATION_TYPES.MEMORY_APPROVAL,
         title: 'Approve memory?',
         description: 'ignored once the memory resolves',
         priority: PRIORITY_LEVELS.MEDIUM,
         metadata: { memoryId: 'mem-1' }
       });
-      await flush();
 
       const sendCall = fetchSpy.mock.calls.find(([url]) => url.endsWith('/sendMessage'));
       expect(sendCall, 'a memory approval must still be forwarded').toBeDefined();
@@ -389,13 +385,12 @@ describe('telegramBridge service', () => {
       await init();
       fetchSpy.mockClear();
 
-      notificationEvents.emit('added', {
+      await forwardAdded({
         type: NOTIFICATION_TYPES.MEMORY_APPROVAL,
         title: 'Long one',
         priority: PRIORITY_LEVELS.LOW,
         metadata: { memoryId: 'mem-2' }
       });
-      await flush();
 
       const sendCall = fetchSpy.mock.calls.find(([url]) => url.endsWith('/sendMessage'));
       const bodyLine = JSON.parse(sendCall[1].body).text.split('\n')[1];
@@ -411,12 +406,11 @@ describe('telegramBridge service', () => {
       await init();
       fetchSpy.mockClear();
 
-      notificationEvents.emit('added', {
+      await forwardAdded({
         type: NOTIFICATION_TYPES.HEALTH_ISSUE,
         title: 'Over budget',
         priority: PRIORITY_LEVELS.HIGH
       });
-      await flush();
 
       expect(
         fetchSpy.mock.calls.filter(([url]) => url.endsWith('/sendMessage')),

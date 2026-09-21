@@ -117,7 +117,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(updateAgent).not.toHaveBeenCalled();
   });
 
-  // Committing the app's `.quality.json` is opt-in and runs outside the request
+  // Landing the app's `.quality.json` PR is opt-in and runs outside the request
   // lifecycle, so it must never fire for an un-opted app nor fail a completion.
   // Each dispatch needs its own agent id — dispatchTaskOutputHookOnce caches by id.
   it('commits a repo snapshot only for an opted-in app that just recorded a measurement', async () => {

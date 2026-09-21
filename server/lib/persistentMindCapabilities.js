@@ -18,12 +18,12 @@ import {
   TOOL_ACTIVATION_LIMITS,
 } from './persistentMindToolActivation.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 13;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 14;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -59,6 +59,11 @@ export const PERSISTENT_MIND_CALL_LIMITS = Object.freeze({
 // agents. Keep this catalog beside the capability schema so the API and the UI
 // describe the same grants instead of maintaining a second client-only list.
 export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
+  Object.freeze({
+    id: 'reports.audit', capability: 'auditReports', name: 'Audit private CoS job reports', kind: 'semantic-tools', defaultEnabled: false,
+    description: 'Read bounded completed-job evidence and record incremental process audits for explicitly scoped maintainer repositories.',
+    guardrails: ['Requires maintainer role, PortOS reads, and managed-app permission', 'Three durably reserved jobs per turn; shared tool budget', 'Private transcripts are untrusted evidence; only constrained synthetic findings can be filed', 'Issue filing requires its separate grant'],
+  }),
   Object.freeze({
     id: 'mind.manage-tool-recipes', capability: 'manageToolRecipes',
     name: 'Manage saved tool recipes', kind: 'definition-management', defaultEnabled: false,
@@ -262,6 +267,7 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
     .optional(),
   createTasks: z.boolean().optional(),
   fileIssues: z.boolean().optional(),
+  auditReports: z.boolean().optional(),
   manageMind: z.boolean().optional(),
   manageToolRecipes: z.boolean().optional(),
   promoteEidoverseFoundations: z.boolean().optional(),
@@ -348,6 +354,7 @@ export function createDefaultPersistentMindCapabilities() {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: false,
     fileIssues: false,
+    auditReports: false,
     manageMind: false,
     manageToolRecipes: false,
     manageEidoverse: false,
@@ -413,6 +420,7 @@ export function normalizePersistentMindCapabilities(raw) {
     schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION,
     createTasks: source.createTasks === true,
     fileIssues: source.fileIssues === true,
+    auditReports: source.auditReports === true,
     manageMind: source.manageMind === true,
     manageToolRecipes: source.manageToolRecipes === true,
     promoteEidoverseFoundations: source.promoteEidoverseFoundations === true,

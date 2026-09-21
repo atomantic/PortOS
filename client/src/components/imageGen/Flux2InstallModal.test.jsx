@@ -33,6 +33,20 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// The server gates "already installed" on the selected model's pipeline class,
+// so a modal that omits the id gets "nothing to do" for a runtime the banner
+// just called unavailable.
+describe('Flux2InstallModal install target', () => {
+  it('scopes the install stream to the selected model', () => {
+    useInstallStream.mockReturnValue(streamState());
+    render(<Flux2InstallModal open onClose={vi.fn()} onComplete={vi.fn()} modelId="qwen-image-2.1" />);
+    expect(useInstallStream).toHaveBeenCalledWith(
+      '/api/image-gen/setup/flux2-install?modelId=qwen-image-2.1',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+});
+
 describe('Flux2InstallModal failure footer', () => {
   it('offers the investigation action once the install reports an error', () => {
     useInstallStream.mockReturnValue(streamState({

@@ -187,6 +187,7 @@ vi.mock('../lib/pythonSetup.js', () => ({
   FLUX2_VENV_DEFAULT: '/fake/flux2-venv',
   installFlux2Venv: vi.fn(),
   isFlux2VenvHealthy: vi.fn(async () => true),
+  isFlux2InstallSatisfied: vi.fn(async () => true),
 }));
 
 // Stat the python binary to key the cache. Override per-test for mtime
@@ -497,10 +498,10 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(400);
     });
 
-    it('rejects more than 4 referenceStrengths entries', async () => {
+    it('rejects more than 10 referenceStrengths entries', async () => {
       const response = await request(app)
         .post('/api/image-gen/generate')
-        .send({ prompt: 'multi-ref', referenceStrengths: [0.1, 0.2, 0.3, 0.4, 0.5] });
+        .send({ prompt: 'multi-ref', referenceStrengths: Array(11).fill(0.5) });
       expect(response.status).toBe(400);
     });
 
@@ -1306,8 +1307,8 @@ describe('Image Gen Routes', () => {
 
   describe('FLUX.2 installer contract', () => {
     it('GET /setup/flux2-install reports status without starting an install', async () => {
-      const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
-      isFlux2VenvHealthy.mockResolvedValueOnce(false);
+      const { installFlux2Venv, isFlux2InstallSatisfied } = await import('../lib/pythonSetup.js');
+      isFlux2InstallSatisfied.mockResolvedValueOnce(false);
       const response = await request(app).get('/api/image-gen/setup/flux2-install');
       expect(response.status).toBe(200);
       expect(response.body).toMatchObject({
@@ -1324,13 +1325,22 @@ describe('Image Gen Routes', () => {
       expect(response.text).toContain('Already installed');
     });
 
+    // The Install button appeared BECAUSE the per-model verdict probed that
+    // model's own pipeline class; the installer's gate has to ask the same
+    // question or it answers a real gap with "nothing to do".
+    it('POST /setup/flux2-install scopes the already-installed gate to the selected model pipeline', async () => {
+      const { isFlux2InstallSatisfied } = await import('../lib/pythonSetup.js');
+      await request(app).post('/api/image-gen/setup/flux2-install?modelId=qwen-image-2.1');
+      expect(isFlux2InstallSatisfied).toHaveBeenCalledWith('QwenImage21Pipeline');
+    });
+
     // The client renders a stream that closes with no terminal frame as
     // "Connection to installer lost. Restart PortOS or try again." — a phantom
     // transport error that hides the real failure. installFlux2Venv emits its
     // own error frame; this is the route's backstop for a path that doesn't.
     it('POST /setup/flux2-install reports a silent installer failure instead of closing the stream bare', async () => {
-      const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
-      isFlux2VenvHealthy.mockResolvedValueOnce(false);
+      const { installFlux2Venv, isFlux2InstallSatisfied } = await import('../lib/pythonSetup.js');
+      isFlux2InstallSatisfied.mockResolvedValueOnce(false);
       installFlux2Venv.mockReturnValueOnce({
         promise: Promise.resolve({ ok: false, stage: 'install' }),
         kill: vi.fn(),
@@ -1344,8 +1354,8 @@ describe('Image Gen Routes', () => {
     });
 
     it('POST /setup/flux2-install stays silent when the client cancelled the install', async () => {
-      const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
-      isFlux2VenvHealthy.mockResolvedValueOnce(false);
+      const { installFlux2Venv, isFlux2InstallSatisfied } = await import('../lib/pythonSetup.js');
+      isFlux2InstallSatisfied.mockResolvedValueOnce(false);
       installFlux2Venv.mockReturnValueOnce({
         promise: Promise.resolve({ ok: false, stage: 'install', cancelled: true }),
         kill: vi.fn(),
@@ -1357,9 +1367,9 @@ describe('Image Gen Routes', () => {
     });
 
     it('does not start an install after the client disconnects during the health probe', async () => {
-      const { installFlux2Venv, isFlux2VenvHealthy } = await import('../lib/pythonSetup.js');
+      const { installFlux2Venv, isFlux2InstallSatisfied } = await import('../lib/pythonSetup.js');
       let finishProbe;
-      isFlux2VenvHealthy.mockReturnValueOnce(new Promise((resolve) => { finishProbe = resolve; }));
+      isFlux2InstallSatisfied.mockReturnValueOnce(new Promise((resolve) => { finishProbe = resolve; }));
       const server = await startLoopbackServer(app);
       const { port } = server.address();
       const clientRequest = httpRequest({
@@ -1373,7 +1383,7 @@ describe('Image Gen Routes', () => {
 
       let serverClosed = false;
       try {
-        await vi.waitFor(() => expect(isFlux2VenvHealthy).toHaveBeenCalled());
+        await vi.waitFor(() => expect(isFlux2InstallSatisfied).toHaveBeenCalled());
         const closed = new Promise((resolve) => clientRequest.once('close', resolve));
         clientRequest.destroy();
         await closed;

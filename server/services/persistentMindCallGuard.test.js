@@ -233,6 +233,13 @@ describe('createPersistentMindCallBoundary', () => {
     });
   });
 
+  it('carries a non-replaying disposition for a deterministic policy denial', async () => {
+    mock.budget = { withinBudget: false, exceeded: 'minutes' };
+    const { call } = boundary();
+    const denial = await call({ purpose: 'tool-round', round: 1 }, async () => ({})).catch((error) => error);
+    expect(denial).toMatchObject({ denialCode: 'cos-budget-exhausted', retryDisposition: 'retry', retryAt: null });
+  });
+
   it('marks a boundary refusal so a caller can tell it from a provider failure', async () => {
     mock.profile = { ok: false, error: 'Pinned provider "example-api" is unavailable' };
     const { call } = boundary();
@@ -286,5 +293,33 @@ describe('createPersistentMindCallBoundary', () => {
       `mind-model-call:${TURN_ID}:0`,
       `mind-model-call:${TURN_ID}:1`,
     ]);
+  });
+});
+
+describe('maintainer reservation boundary', () => {
+  it('charges failed summaries and shares durable allowance with a recreated turn boundary', async () => {
+    const { reserveMaintainerInference } = await import('./persistentMindMaintainerInference.js');
+    const { normalizeMaintainerInference } = await import('../lib/persistentMindMaintainer.js');
+    let ledger = null;
+    const policy = normalizeMaintainerInference({ maxCallsPerTurn: 2 });
+    const reserveInference = args => reserveMaintainerInference({ ...args,
+      read: async () => ledger, write: async value => { ledger = structuredClone(value); } });
+    const make = () => boundary({ reserveInference,
+      evaluate: async () => ({ ok: true, maintainer: { enforced: true, lane: 'local-curation', policy } }) });
+    const provider = vi.fn(async ({ timeoutMs }) => ({ text: 'done', timeoutMs }));
+    await expect(make().call({ purpose: 'summary' }, async () => { throw new Error('Provider failed'); })).rejects.toThrow('Provider failed');
+    expect(await make().call({ purpose: 'journal' }, provider)).toMatchObject({ timeoutMs: policy.maxCallMs });
+    await expect(make().call({ purpose: 'turn' }, provider)).rejects.toThrow('per-turn');
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(ledger.day.calls).toBe(2);
+    expect(receipts().at(-1).data.outcome).toBe('denied');
+  });
+  it('stops remaining calls when maintainer authority changes, including disabling the role', async () => {
+    const { normalizePersistentMindMaintainer } = await import('../lib/persistentMindMaintainer.js');
+    const { canonicalStringify } = await import('../lib/objects.js');
+    const fingerprint = canonicalStringify(normalizePersistentMindMaintainer({ enabled: true }));
+    mock.root.config.persistentMindMaintainer = { enabled: false };
+    await expect(evaluatePersistentMindCallAdmission({ turnId: TURN_ID, route, maintainerFingerprint: fingerprint }))
+      .resolves.toMatchObject({ ok: false, status: 'degraded', reason: 'Maintainer inference policy changed during the turn' });
   });
 });

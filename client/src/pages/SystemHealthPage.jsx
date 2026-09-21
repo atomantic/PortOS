@@ -177,13 +177,10 @@ function SystemHealthOverview() {
   const t = resolveHealthThresholds(health.thresholds);
   const draftValid =
     draft &&
-    draft.memoryWarn < draft.memoryCritical &&
     draft.diskWarn < draft.diskCritical;
   const draftDirty =
     draft &&
-    (draft.memoryWarn !== t.memoryWarn ||
-      draft.memoryCritical !== t.memoryCritical ||
-      draft.diskWarn !== t.diskWarn ||
+    (draft.diskWarn !== t.diskWarn ||
       draft.diskCritical !== t.diskCritical);
 
   return (
@@ -261,16 +258,12 @@ function SystemHealthOverview() {
             icon={HardDrive}
             label="Memory"
             pct={health.system.memory.usagePercent}
-            warn={t.memoryWarn}
-            critical={t.memoryCritical}
             sub={`${health.system.memory.usedFormatted} / ${health.system.memory.totalFormatted}`}
           />
           <ResourceCard
             icon={Cpu}
             label="CPU Load (1m)"
             pct={Math.min(100, health.system.cpu.usagePercent)}
-            warn={75}
-            critical={100}
             sub={`${health.system.cpu.cores} cores · ${health.system.cpu.loadAvg1m.toFixed(2)} load`}
           />
           {health.system.disk && (
@@ -322,11 +315,9 @@ function SystemHealthOverview() {
               <Zap size={16} />
               Alert thresholds
             </h3>
-            <span className="text-xs text-gray-500">Tune to your machine. Defaults: 85/95 mem, 90/98 disk.</span>
+            <span className="text-xs text-gray-500">Disk capacity alerts. Defaults: 90/98%.</span>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <ThresholdField id="system-health-memory-warn" label="Memory warn %" value={draft?.memoryWarn} onChange={(v) => setDraft(d => ({ ...d, memoryWarn: v }))} />
-            <ThresholdField id="system-health-memory-critical" label="Memory critical %" value={draft?.memoryCritical} onChange={(v) => setDraft(d => ({ ...d, memoryCritical: v }))} />
             <ThresholdField id="system-health-disk-warn" label="Disk warn %" value={draft?.diskWarn} onChange={(v) => setDraft(d => ({ ...d, diskWarn: v }))} />
             <ThresholdField id="system-health-disk-critical" label="Disk critical %" value={draft?.diskCritical} onChange={(v) => setDraft(d => ({ ...d, diskCritical: v }))} />
           </div>
@@ -360,13 +351,13 @@ function ResourceCard({ icon: Icon, label, pct, warn, critical, sub }) {
         <Icon size={14} />
         {label}
       </div>
-      <div className={`text-3xl font-bold ${pctTone(pct, warn, critical)}`}>{Math.round(pct)}%</div>
+      <div className={`text-3xl font-bold ${warn == null ? 'text-port-accent' : pctTone(pct, warn, critical)}`}>{Math.round(pct)}%</div>
       <div className="text-xs text-gray-500 mt-1">{sub}</div>
       <div className="mt-3 h-1.5 bg-port-border rounded-full overflow-hidden">
-        <div className={`h-full ${barTone(pct, warn, critical)} transition-all`} style={{ width: `${Math.min(100, pct)}%` }} />
+        <div className={`h-full ${warn == null ? 'bg-port-accent' : barTone(pct, warn, critical)} transition-all`} style={{ width: `${Math.min(100, pct)}%` }} />
       </div>
       <div className="mt-2 text-[11px] text-gray-600">
-        warn {warn}% · critical {critical}%
+        {warn == null ? 'Usage telemetry — does not affect health' : `warn ${warn}% · critical ${critical}%`}
       </div>
     </div>
   );

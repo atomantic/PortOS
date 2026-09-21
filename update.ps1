@@ -244,14 +244,30 @@ function Safe-Install {
     Stop-UpdateScript 1
 }
 
+# A previous update can advance the superproject and be killed before its
+# submodule step runs. Git then reports the still-old submodule checkout as a
+# dirty gitlink, so the next update would fail at this step forever before it
+# could reach the existing post-pull repair. Reconcile that state first. Git's
+# normal submodule update refuses to overwrite local submodule edits; a user
+# change therefore still reaches the dirty-checkout guard rather than being
+# discarded.
+function Repair-StaleSubmodules {
+    $status = @(git submodule status --recursive 2>$null)
+    $hasDrift = $status | Where-Object { $_ -match '^[+U-]' }
+    if (-not $hasDrift) { return $true }
+
+    Write-SafeHost "🔧 Repairing submodules that are not at the parent checkout's pinned commits..." -ForegroundColor Yellow
+    Invoke-Logged git submodule sync --recursive
+    if ($LASTEXITCODE -ne 0) { return $false }
+    Invoke-Logged git submodule update --init --recursive
+    return $LASTEXITCODE -eq 0
+}
+
 # Pull latest — always switch to main (detached HEAD or feature branch both
 # need to land on main before pulling, or the version won't advance). The
 # rest of the script (install, build, restart) runs on main so the app
-# starts on the freshly-pulled revision. Local edits on the original branch
-# are stashed first so checkout doesn't abort, and we leave them in the
-# stash list afterward — the user can restore with `git stash pop` after
-# the update completes (we don't auto-pop because the rest of the script
-# needs to keep running with main's contents).
+# starts on the freshly-pulled revision. A dirty checkout is refused rather
+# than stashed, so agent or user work cannot be duplicated by a later rebase.
 Step "git-pull" "running" "Pulling latest changes..."
 $originUrl = git remote get-url origin 2>$null
 if ($originUrl) {
@@ -263,33 +279,36 @@ if ($originUrl) {
     # lines, so Write-SafeHost above doesn't reach update.log on its own.
     Add-Content -Path $UpdateLog -Value "🌐 Pulling from origin: $originUrlSafe"
 }
+# Clear locks a PREVIOUS killed update left behind, before anything tries to
+# take them again — see the matching comment in update.sh. The rule for
+# "abandoned" lives in the Node helper so neither shell carries a second copy
+# of it. Never fatal: a failed sweep must not block the update.
+node -e "import('./server/lib/gitStaleLock.js').then(m => m.clearStaleGitLocksIn('.git')).catch(() => {})" 2>$null
+$global:LASTEXITCODE = 0
 $headRef = git symbolic-ref -q HEAD 2>$null
 $currentBranch = if ($headRef) { $headRef -replace "refs/heads/", "" } else { "" }
-$stashedForBranch = ""
-$stashedForCommit = ""
-if ($currentBranch -ne "main") {
-    $hasChanges = $false
-    git diff --quiet 2>$null
+if (-not (Repair-StaleSubmodules)) {
+    Write-SafeHost "❌ Could not repair the checkout's pinned submodules" -ForegroundColor Red
+    Step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
+    Stop-UpdateScript 1
+}
+$hasChanges = $false
+git diff --quiet 2>$null
+if ($LASTEXITCODE -ne 0) { $hasChanges = $true }
+if (-not $hasChanges) {
+    git diff --cached --quiet 2>$null
     if ($LASTEXITCODE -ne 0) { $hasChanges = $true }
-    if (-not $hasChanges) {
-        git diff --cached --quiet 2>$null
-        if ($LASTEXITCODE -ne 0) { $hasChanges = $true }
-    }
-    if (-not $hasChanges) {
-        $untracked = git ls-files --others --exclude-standard
-        if ($untracked) { $hasChanges = $true }
-    }
-    if ($hasChanges) {
-        $branchLabel = if ($currentBranch) { $currentBranch } else { "detached HEAD" }
-        Write-SafeHost "⚠️  Stashing local changes from '$branchLabel' so checkout can proceed" -ForegroundColor Yellow
-        Invoke-Logged git stash push -u -m "portos-update-$([int][double]::Parse((Get-Date -UFormat %s)))"
-        if ($LASTEXITCODE -eq 0) {
-            $stashedForBranch = $branchLabel
-            # Capture the original commit SHA so detached-HEAD users can return
-            # to the exact tree their stash was taken from.
-            $stashedForCommit = git rev-parse HEAD
-        }
-    }
+}
+if (-not $hasChanges) {
+    $untracked = git ls-files --others --exclude-standard
+    if ($untracked) { $hasChanges = $true }
+}
+if ($hasChanges) {
+    Write-SafeHost "❌ Refusing update: checkout has uncommitted changes; commit or restore them first" -ForegroundColor Red
+    Step "git-pull" "failed" "Checkout is dirty; no stash was created"
+    Stop-UpdateScript 1
+}
+if ($currentBranch -ne "main") {
     if (-not $currentBranch) {
         $detachedCommit = git rev-parse --short HEAD
         Write-SafeHost "⚠️  On detached HEAD (commit $detachedCommit) — switching to main for update" -ForegroundColor Yellow
@@ -299,19 +318,18 @@ if ($currentBranch -ne "main") {
     Invoke-Logged git checkout main
     if ($LASTEXITCODE -ne 0) { Stop-UpdateScript $LASTEXITCODE }
 }
+if (-not (Repair-StaleSubmodules)) {
+    Write-SafeHost "❌ Could not repair the main checkout's pinned submodules" -ForegroundColor Red
+    Step "git-pull" "failed" "Pinned submodule checkout could not be synchronized"
+    Stop-UpdateScript 1
+}
 # Record main's pre-pull HEAD — captured AFTER any checkout so it's the commit
 # the installed node_modules was built from (main, which the rest of this script
 # installs/builds), not a feature branch we just left. Diffing this against
 # post-pull HEAD yields exactly the pull's delta on main, so a manifest change
 # the update brings is detected even when launched from another branch.
 $prePullSha = git rev-parse HEAD 2>$null
-# Clear locks a PREVIOUS killed update left behind, before anything tries to
-# take them again — see the matching comment in update.sh. The rule for
-# "abandoned" lives in the Node helper so neither shell carries a second copy
-# of it. Never fatal: a failed sweep must not block the update.
-node -e "import('./server/lib/gitStaleLock.js').then(m => m.clearStaleGitLocksIn('.git')).catch(() => {})" 2>$null
-$global:LASTEXITCODE = 0
-Invoke-Logged git pull --rebase --autostash
+Invoke-Logged git pull --rebase
 if ($LASTEXITCODE -ne 0) { Stop-UpdateScript $LASTEXITCODE }
 Step "git-pull" "done" "Latest changes pulled"
 
@@ -571,15 +589,6 @@ if ($setupGuide) {
     Write-SafeHost ""
 }
 
-if ($stashedForBranch) {
-    Write-SafeHost "ℹ️  Your local changes from '$stashedForBranch' were stashed for the update." -ForegroundColor Cyan
-    if ($stashedForBranch -eq "detached HEAD") {
-        Write-SafeHost "    To restore them: git checkout $stashedForCommit; git stash pop" -ForegroundColor Cyan
-    } else {
-        Write-SafeHost "    To restore them: git checkout '$stashedForBranch'; git stash pop" -ForegroundColor Cyan
-    }
-    Write-SafeHost "    The stash entry is at the top of 'git stash list'." -ForegroundColor Cyan
-}
 
 # Exit non-zero when the install did not come back. This script outlives the
 # server it restarts, so its status is the only signal a caller still has.

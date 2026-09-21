@@ -266,3 +266,10 @@ describe('listAppPullRequests', () => {
     expect(result).toMatchObject({ tracker: 'plan', pullRequests: [], reason: 'unsupported-forge', transient: false });
   });
 });
+
+it('defers at the pagination boundary and rejects mixed malformed ownership rows', async () => {
+  execGh.mockResolvedValue(JSON.stringify(Array.from({ length: 200 }, (_, i) => ({ number: i + 1 }))));
+  expect(await listAppPullRequests(APP)).toMatchObject({ transient: true, reason: 'incomplete-page', pullRequests: [] });
+  execGh.mockResolvedValue(JSON.stringify([{ number: 1 }, { broken: true }]));
+  expect(await listAppPullRequests(APP)).toMatchObject({ transient: true, reason: 'unreadable-response' });
+});

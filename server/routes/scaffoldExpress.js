@@ -1,15 +1,7 @@
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../lib/fileUtils.js';
-
-// Inline CORS middleware snippet for generated projects (no cors package dependency)
-const CORS_SNIPPET = `app.use((req, res, next) => {
-  res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
-});`;
+import { CORS_SNIPPET } from '../lib/scaffoldSnippets.js';
 
 export async function scaffoldExpress(repoPath, dirName, apiPort, addStep) {
   const pkg = {

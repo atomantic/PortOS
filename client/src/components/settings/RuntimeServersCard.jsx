@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Cpu, Box, Zap, Gauge, HardDrive, Play, Square, Download, ArrowUpCircle, Power, PowerOff, RefreshCw, Save, Settings2, ExternalLink, Server } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import { formatCount } from '../../utils/formatters';
 
 /**
  * One control surface for every local LLM server PortOS can run.
@@ -20,6 +21,7 @@ import BrailleSpinner from '../BrailleSpinner';
 
 /** Uniform lifecycle state for a row, from each runtime's own status shape. */
 const STATE_META = {
+  unknown: { label: 'Status unavailable', cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-500' },
   running: { label: 'Running', cls: 'bg-port-success/20 text-port-success', dot: 'bg-port-success animate-pulse' },
   external: { label: 'Running (external)', cls: 'bg-blue-500/20 text-blue-300', dot: 'bg-blue-400' },
   stopped: { label: 'Stopped', cls: 'bg-port-warning/20 text-port-warning', dot: 'bg-port-warning' },
@@ -28,7 +30,7 @@ const STATE_META = {
   unsupported: { label: 'Unavailable on this platform', cls: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-600' },
 };
 
-const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
+const btnClass = 'min-h-[44px] flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors disabled:opacity-50';
 const neutralBtn = `${btnClass} bg-port-border hover:bg-port-border/70 text-white`;
 const accentBtn = `${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent`;
 
@@ -41,7 +43,7 @@ const accentBtn = `${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-po
  * distinction to draw.
  */
 function backendRow({ id, label, icon, data, onStart, onStop, onInstall }) {
-  const state = data?.disabled ? 'disabled' : data?.available ? 'running' : data?.installed ? 'stopped' : 'missing';
+  const state = !data ? 'unknown' : data?.disabled ? 'disabled' : data?.available ? 'running' : data?.installed ? 'stopped' : 'missing';
   return {
     id,
     label,
@@ -49,7 +51,7 @@ function backendRow({ id, label, icon, data, onStart, onStop, onInstall }) {
     state,
     endpoint: data?.baseUrl || null,
     detail: data?.installed && Number.isFinite(data?.modelCount)
-      ? `${data.modelCount} model${data.modelCount === 1 ? '' : 's'} installed`
+      ? `${formatCount(data.modelCount)} model${data.modelCount === 1 ? '' : 's'} installed`
       : null,
     onInstall: !data?.installed && data?.canAutoInstall ? onInstall : null,
     downloadUrl: !data?.installed && !data?.canAutoInstall ? data?.downloadUrl : null,
@@ -68,7 +70,7 @@ function backendRow({ id, label, icon, data, onStart, onStop, onInstall }) {
 function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onInstall, onUpgrade, startBlockedReason, detail }) {
   const external = status?.running && status?.managed === false;
   const updateAvailable = !platformReason && status?.installed && status?.updateAvailable === true;
-  const state = platformReason ? 'unsupported'
+  const state = !status ? 'unknown' : platformReason ? 'unsupported'
     : status?.running ? (external ? 'external' : 'running')
       : status?.installed ? 'stopped' : 'missing';
   return {
@@ -88,6 +90,7 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
     onStart: !platformReason && status?.installed && !status?.running && !startBlockedReason ? onStart : null,
     startBlockedReason: status?.installed && !status?.running ? startBlockedReason : null,
     onStop: !external && status?.running ? onStop : null,
+    model: status?.config?.model || status?.model || null,
     version: status?.version || null,
     latestVersion: status?.latestVersion || null,
     updateAvailable,
@@ -130,7 +133,7 @@ function fleetHostRow({ status, onStop }) {
       : up && !status?.serving
         ? 'Container up, model still loading'
         : up && status?.queue
-          ? `${status.queue.active} generating · ${status.queue.queued} queued`
+          ? `${formatCount(status.queue.active)} generating · ${formatCount(status.queue.queued)} queued`
           : null,
     onStop: status?.stoppable ? onStop : null,
   };
@@ -198,14 +201,14 @@ function IdleWindowField({ id, value, onSave, busy, note }) {
  * handler that takes a launch config (MTPLX's start) would serialize the event
  * into the request body instead of the config.
  */
-function ServerRow({ row, busy, actionInProgress, children }) {
+function ServerRow({ row, busy, actionInProgress, selected, children }) {
   const Icon = row.icon;
   const meta = STATE_META[row.state] || STATE_META.missing;
   return (
-    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-port-bg border border-port-border rounded-lg px-3 py-2">
-      <div className="flex items-center gap-2 min-w-0 sm:w-44 shrink-0">
+    <div role="group" aria-label={row.label} data-runtime-id={row.id} className={`flex flex-col @min-[48rem]:grid @min-[48rem]:grid-cols-[10rem_minmax(0,1fr)_minmax(12rem,20rem)] gap-2 @min-[48rem]:gap-3 bg-port-bg border rounded-lg px-3 py-2 ${selected ? 'border-port-accent' : 'border-port-border'}`}>
+      <div className="flex items-center gap-2 min-w-0 @min-[48rem]:w-full @min-[48rem]:shrink-0">
         <Icon size={14} className="text-port-accent shrink-0" />
-        <span className="text-sm text-white truncate">{row.label}</span>
+        <span className="text-sm text-white break-words">{row.label}</span>
       </div>
       <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
         <span className={`px-2 py-0.5 text-xs rounded flex items-center gap-1.5 ${meta.cls}`}>
@@ -213,8 +216,9 @@ function ServerRow({ row, busy, actionInProgress, children }) {
           {meta.label}{row.pid ? ` (PID ${row.pid})` : ''}
         </span>
         {row.endpoint && (
-          <code className="text-xs text-gray-500 truncate max-w-full">{row.endpoint}</code>
+          <code className="text-xs text-gray-500 break-all max-w-full">{row.endpoint}</code>
         )}
+        {row.model && <span className="text-xs text-gray-400 break-all">Model: {row.model}</span>}
         {row.version && <span className="text-xs text-gray-500">v{row.version}</span>}
         {row.updateAvailable && row.latestVersion && (
           <span
@@ -237,7 +241,6 @@ function ServerRow({ row, busy, actionInProgress, children }) {
         {row.detail && <span className="text-xs text-gray-500">{row.detail}</span>}
       </div>
       <div className="flex items-center gap-2 flex-wrap shrink-0">
-        {children}
         {row.onInstall && (
           <button
             onClick={() => row.onInstall()}
@@ -309,6 +312,7 @@ function ServerRow({ row, busy, actionInProgress, children }) {
             Update available
           </a>
         )}
+        {children}
       </div>
     </div>
   );
@@ -343,6 +347,8 @@ export default function RuntimeServersCard({
   onToggleKeepLoaded,
   fleetHostStatus,
   onStopFleetHost,
+  selectedRuntime,
+  onSelectRuntime,
 }) {
   // Read off each daemon's own status payload — the same place `runAtStartup`
   // and Ollama's `disabled` come from — so there is no second settings fetch on
@@ -390,7 +396,7 @@ export default function RuntimeServersCard({
       // llama-server takes a REQUIRED model path, and which GGUF (plus which
       // drafter and spec type) is a real choice — so there is no honest one-click
       // Start here. The launcher below owns it.
-      startBlockedReason: 'Pick a model in Speculative Decoding below to start it',
+      startBlockedReason: 'Choose Configure to pick a model before starting',
     }),
     pm2Row({
       id: 'mtplx',
@@ -410,7 +416,7 @@ export default function RuntimeServersCard({
           : null)
         : null,
       detail: mtplxStatus?.cachedModels?.length
-        ? `${mtplxStatus.cachedModels.length} checkpoint${mtplxStatus.cachedModels.length === 1 ? '' : 's'} cached`
+        ? `${formatCount(mtplxStatus.cachedModels.length)} checkpoint${mtplxStatus.cachedModels.length === 1 ? '' : 's'} cached`
         : null,
     }),
     pm2Row({
@@ -436,7 +442,7 @@ export default function RuntimeServersCard({
         slotstreamStatus?.memoryPlan
           && `target ${slotstreamStatus.memoryPlan.targetGb} GB${slotstreamStatus.memoryPlan.auto ? ' (auto)' : ''} · peak ${slotstreamStatus.memoryPlan.expectedPeakGb} GB · ~${slotstreamStatus.memoryPlan.expectedWarmDecodeToks} tok/s`,
         slotstreamStatus?.cachedModels?.length
-          && `${slotstreamStatus.cachedModels.length} checkpoint${slotstreamStatus.cachedModels.length === 1 ? '' : 's'} cached`,
+          && `${formatCount(slotstreamStatus.cachedModels.length)} checkpoint${slotstreamStatus.cachedModels.length === 1 ? '' : 's'} cached`,
       ].filter(Boolean).join(' · ') || null,
     }),
     // Last, and only once its status has landed: an absent payload would
@@ -445,7 +451,7 @@ export default function RuntimeServersCard({
   ];
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
+    <div className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-medium text-gray-300">Local Runtime Servers</h2>
         <button
@@ -458,13 +464,16 @@ export default function RuntimeServersCard({
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
-      <p className="text-xs text-gray-500">
-        Every local server PortOS can run, in one place. They are not mutually exclusive — install and run as many as you like. Which one a run goes to is a separate choice: the <span className="text-gray-400">Default</span> backend below, or the provider a task names in <Link to="/ai" className="text-port-accent hover:underline">AI Providers</Link>.
+      <p role="status" className="text-xs text-gray-400">
+        {loading ? 'Refreshing runtime status…' : `${formatCount(rows.filter((row) => row.state === 'running' || row.state === 'external').length)} running · ${formatCount(rows.filter((row) => row.state === 'unknown').length)} status unavailable`}
       </p>
 
       <div className="space-y-2">
         {rows.map((row) => (
-          <ServerRow key={row.id} row={row} busy={busy} actionInProgress={actionInProgress}>
+          <ServerRow key={row.id} row={row} busy={busy} actionInProgress={actionInProgress} selected={selectedRuntime === row.id}>
+            {onSelectRuntime && (row.id === 'ollama' || row.id === 'lmstudio' || row.id === 'fleet-host') && (
+              <button onClick={() => onSelectRuntime(row.id)} className={neutralBtn} aria-pressed={selectedRuntime === row.id}><Settings2 size={12} />Configure</button>
+            )}
             {row.id === 'fleet-host' && (
               <Link
                 to="/ai/fleet?fleetStep=host"
@@ -475,6 +484,9 @@ export default function RuntimeServersCard({
                 {fleetHostStatus?.stoppable ? 'Host setup & usage' : 'Set up host'}
               </Link>
             )}
+            {((row.id === 'ollama' && ollamaService?.supported) || (row.pm2 && !['unsupported', 'missing', 'unknown'].includes(row.state))) && (
+            <details className="open:w-full">
+              <summary className="min-h-[44px] content-center cursor-pointer text-xs text-gray-400">Startup &amp; residency</summary>
             {row.id === 'ollama' && ollamaService?.supported && (
               <button
                 onClick={() => onControlOllama(ollamaRunsAtStartup ? 'disable' : 'enable')}
@@ -489,7 +501,7 @@ export default function RuntimeServersCard({
               </button>
             )}
             {(row.id === 'llama' || row.id === 'mtplx' || row.id === 'slotstream') && row.state !== 'unsupported' && row.state !== 'missing' && (
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
                 <IdleWindowField
                   id={row.id}
                   value={idleWindows[row.id] ?? 0}
@@ -516,11 +528,14 @@ export default function RuntimeServersCard({
                 </label>
               </div>
             )}
+            </details>
+            )}
             {(row.id === 'llama' || row.id === 'mtplx' || row.id === 'slotstream') && row.state !== 'unsupported' && (
               <button
                 onClick={row.id === 'llama' ? onConfigureLlama : row.id === 'slotstream' ? onConfigureSlotstream : onConfigureMtplx}
                 className={neutralBtn}
-                title={`Jump to the ${row.label} launcher below`}
+                title={`Configure ${row.label}`}
+                aria-pressed={selectedRuntime === row.id}
               >
                 <Settings2 size={12} />
                 Configure
@@ -530,18 +545,22 @@ export default function RuntimeServersCard({
         ))}
       </div>
 
+      <details>
+      <summary className="min-h-[44px] content-center cursor-pointer text-xs text-gray-400">Startup and idle-release guidance</summary>
       <p className="text-xs text-gray-500">
         <span className="text-gray-400">Idle release</span> puts a model down when nothing has used it for that many minutes — llama.cpp unloads it in place and reloads it on the next request; MTPLX and Slotstream are stopped and restarted on demand. <span className="text-gray-400">Only PortOS traffic counts.</span> A client hitting these ports directly is invisible to the timer and cannot lazily start a stopped server, so set <code className="text-gray-400">0</code> for a daemon you drive from outside PortOS.
       </p>
 
+      </details>
       <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1">
         <button onClick={onSaveStartup} disabled={busy} className={accentBtn} title="Run `pm2 save` so the running PM2 processes are in the list a reboot resurrects">
           {actionInProgress === 'runtime-save-startup' ? <BrailleSpinner /> : <Save size={12} />}
           Save PM2 list for reboot
         </button>
-        <p className="text-xs text-gray-500">
-          llama.cpp, MTPLX and Slotstream run as PM2 processes (<code className="text-gray-400">portos-llama-server</code>, <code className="text-gray-400">portos-mtplx</code>, <code className="text-gray-400">portos-slotstream</code>). Saving snapshots what is running now so it comes back after a reboot — this needs <code className="text-gray-400">pm2 startup</code> to have been run once in a terminal, which is a privileged one-time step PortOS deliberately leaves to you. <span className="text-gray-400">MTPLX and Slotstream are deliberately left out of that snapshot</span>: they start on demand when a request needs them, so resurrecting them at boot would only pin a checkpoint on an idle machine. Ollama and LM Studio manage their own launch-at-login.
-        </p>
+        <details className="text-xs text-gray-500">
+          <summary className="min-h-[44px] content-center cursor-pointer">What is saved for reboot?</summary>
+          <p>llama.cpp, MTPLX and Slotstream run as PM2 processes (<code className="text-gray-400">portos-llama-server</code>, <code className="text-gray-400">portos-mtplx</code>, <code className="text-gray-400">portos-slotstream</code>). Saving snapshots what is running now so it comes back after a reboot — this needs <code className="text-gray-400">pm2 startup</code> to have been run once in a terminal, which is a privileged one-time step PortOS deliberately leaves to you. <span className="text-gray-400">MTPLX and Slotstream are deliberately left out of that snapshot</span>: they start on demand when a request needs them, so resurrecting them at boot would only pin a checkpoint on an idle machine. Ollama and LM Studio manage their own launch-at-login.</p>
+        </details>
       </div>
     </div>
   );

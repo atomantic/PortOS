@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 
 // ── Mock toast ────────────────────────────────────────────────────────────────
 const mockToast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
@@ -64,8 +65,30 @@ const expectTouchTarget = (el, { width = true } = {}) => {
   }
 };
 
-const renderTab = async () => {
-  await act(async () => { render(<NotesTab />); });
+function Location() {
+  return <output data-testid="location">{useLocation().search}</output>;
+}
+
+function HistoryControls() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate(-1)}>Browser back</button>
+      <button type="button" onClick={() => navigate(1)}>Browser forward</button>
+    </>
+  );
+}
+
+const renderTab = async (entry = '/brain/notes') => {
+  await act(async () => {
+    render(
+      <MemoryRouter initialEntries={[entry]}>
+        <NotesTab />
+        <Location />
+        <HistoryControls />
+      </MemoryRouter>,
+    );
+  });
 };
 
 describe('NotesTab header touch targets', () => {
@@ -345,13 +368,296 @@ describe('NotesTab request lifetimes', () => {
     expect(mockToast.success).not.toHaveBeenCalledWith('Note saved');
   });
 
+  it('does not remove the previous vault row when a delete finishes after browser back', async () => {
+    const deleted = deferred();
+    api.deleteNote.mockReturnValueOnce(deleted.promise);
+    await act(async () => {
+      render(
+        <MemoryRouter initialEntries={['/brain/notes?vault=a', '/brain/notes?vault=b&note=first.md']} initialIndex={1}>
+          <NotesTab />
+          <Location />
+          <HistoryControls />
+        </MemoryRouter>,
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));
+    expect(api.deleteNote).toHaveBeenCalledWith('b', 'first.md', { silent: true });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Browser back' })); });
+    expect(screen.getByRole('combobox', { name: 'Vault' })).toHaveValue('a');
+    expect(screen.getByText('first')).toBeInTheDocument();
+    await act(async () => { deleted.resolve(); });
+    expect(screen.getByText('first')).toBeInTheDocument();
+    expect(mockToast.success).not.toHaveBeenCalledWith('Note deleted');
+  });
+
   it('does not start follow-up work when the initial vault request finishes after unmount', async () => {
     const vaults = deferred();
     api.getNotesVaults.mockReturnValueOnce(vaults.promise);
-    const view = render(<NotesTab />);
+    const view = render(<MemoryRouter><NotesTab /></MemoryRouter>);
     view.unmount();
     await act(async () => { vaults.resolve([]); });
     expect(api.detectNotesVaults).not.toHaveBeenCalled();
     expect(api.scanNotesVault).not.toHaveBeenCalled();
+  });
+});
+
+describe('NotesTab URL state and unavailable reads', () => {
+  const note = {
+    path: 'Projects/first.md',
+    name: 'first',
+    folder: 'Projects',
+    size: 12,
+    tags: [],
+    modifiedAt: '2026-09-11T00:00:00Z',
+    content: 'body',
+    body: 'body',
+    backlinks: []
+  };
+  const vaults = [{ id: 'vault-1', name: 'Example Vault', path: '/example/vault' }];
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    api.getNotesVaults.mockResolvedValue(vaults);
+    api.detectNotesVaults.mockResolvedValue([]);
+    api.scanNotesVault.mockResolvedValue({ notes: [note], total: 1 });
+    api.getNotesVaultFolders.mockResolvedValue({ folders: [] });
+    api.getNotesVaultTags.mockResolvedValue({ tags: [] });
+    api.getNote.mockResolvedValue(note);
+    api.searchNotes.mockResolvedValue({ results: [note], total: 1 });
+  });
+
+  it('restores vault, folder, search, and note context from an encoded deep link, then returns to the list', async () => {
+    await renderTab('/brain/notes?vault=vault-1&folder=Projects%2F2026&q=design%20notes&note=Projects%2Ffirst.md');
+
+    expect(await screen.findByRole('heading', { name: 'first' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Vault' })).toHaveValue('vault-1');
+    expect(screen.getByRole('textbox', { name: 'Search notes' })).toHaveValue('design notes');
+
+    const params = new URLSearchParams(screen.getByTestId('location').textContent);
+    expect(params.get('vault')).toBe('vault-1');
+    expect(params.get('folder')).toBe('Projects/2026');
+    expect(params.get('q')).toBe('design notes');
+    expect(params.get('note')).toBe('Projects/first.md');
+    expect(api.scanNotesVault).toHaveBeenCalledWith('vault-1', { folder: 'Projects/2026', limit: 500, silent: true });
+    expect(api.searchNotes).toHaveBeenCalledWith('vault-1', 'design notes', undefined, { silent: true });
+    expect(api.getNote).toHaveBeenCalledWith('vault-1', 'Projects/first.md', { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    const afterBack = new URLSearchParams(screen.getByTestId('location').textContent);
+    expect(afterBack.get('note')).toBeNull();
+    expect(afterBack.get('vault')).toBe('vault-1');
+    expect(screen.queryByRole('heading', { name: 'first' })).toBeNull();
+  });
+
+  it('writes folder, search, and note selection changes into the URL', async () => {
+    api.scanNotesVault.mockResolvedValueOnce({
+      notes: [note, ...Array.from({ length: 20 }, (_, index) => ({ ...note, path: `Projects/extra-${index}.md`, name: `extra-${index}` }))],
+      total: 21,
+    });
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Projects 21' })); });
+    await screen.findByRole('button', { name: 'Show all 21 notes...' });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show all 21 notes...' })); });
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('folder')).toBe('Projects');
+    expect(await screen.findAllByText('first')).toHaveLength(1);
+
+    await act(async () => {
+      fireEvent.change(screen.getByRole('textbox', { name: 'Search notes' }), { target: { value: 'needle' } });
+      fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search notes' }), { key: 'Enter' });
+    });
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('q')).toBe('needle');
+
+    await act(async () => { fireEvent.click((await screen.findAllByText('first'))[0]); });
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('note')).toBe('Projects/first.md');
+  });
+
+  it('replays note selection through browser back and forward', async () => {
+    const rootNote = { ...note, path: 'first.md', folder: '' };
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [rootNote], total: 1 });
+    api.getNote.mockResolvedValueOnce(rootNote);
+    await renderTab();
+
+    await act(async () => { fireEvent.click(screen.getByText('first')); });
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('note')).toBe('first.md');
+    expect(await screen.findByRole('heading', { name: 'first' })).toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Browser back' })); });
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('note')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'first' })).toBeNull();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Browser forward' })); });
+    expect(await screen.findByRole('heading', { name: 'first' })).toBeInTheDocument();
+  });
+
+  it('keeps vault failure distinct from an empty vault and retries it', async () => {
+    api.getNotesVaults.mockRejectedValueOnce(new Error('temporary outage'));
+    await renderTab();
+
+    expect(await screen.findByText('Notes vaults are unavailable')).toBeInTheDocument();
+    expect(screen.queryByText(/No notes yet/)).toBeNull();
+
+    api.getNotesVaults.mockResolvedValueOnce(vaults);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(await screen.findByRole('combobox', { name: 'Vault' })).toHaveValue('vault-1');
+  });
+
+  it('keeps the selected vault when retrying a failed vault list', async () => {
+    api.getNotesVaults.mockRejectedValueOnce(new Error('temporary outage'));
+    await renderTab('/brain/notes?vault=vault-2');
+
+    expect(await screen.findByText('Notes vaults are unavailable')).toBeInTheDocument();
+
+    api.getNotesVaults.mockResolvedValueOnce([
+      ...vaults,
+      { id: 'vault-2', name: 'Second Vault', path: '/second/vault' },
+    ]);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByRole('combobox', { name: 'Vault' })).toHaveValue('vault-2');
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('vault')).toBe('vault-2');
+  });
+
+  it('clears the previous vault list before loading a newly added vault', async () => {
+    const oldNote = { ...note, path: 'old.md', name: 'old', folder: '' };
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [oldNote], total: 1 });
+    await renderTab('/brain/notes?vault=vault-1');
+    expect(await screen.findByText('old')).toBeInTheDocument();
+
+    let resolveScan;
+    const newScan = new Promise(resolve => { resolveScan = resolve; });
+    api.scanNotesVault.mockReturnValue(newScan);
+    api.addNotesVault.mockResolvedValueOnce({ id: 'vault-2', name: 'Second Vault' });
+    api.getNotesVaults.mockResolvedValueOnce([
+      ...vaults,
+      { id: 'vault-2', name: 'Second Vault', path: '/second/vault' },
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage vaults' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Custom vault path' }), {
+      target: { value: '/second/vault' },
+    });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })); });
+
+    expect(screen.getByRole('combobox', { name: 'Vault' })).toHaveValue('vault-2');
+    expect(screen.queryByText('old')).toBeNull();
+    resolveScan({ notes: [], total: 0 });
+  });
+
+  it('keeps scan failure distinct from an empty list and retries the failed region', async () => {
+    api.scanNotesVault.mockRejectedValueOnce(new Error('temporary outage'));
+    await renderTab();
+
+    expect(await screen.findByText('Notes are unavailable')).toBeInTheDocument();
+    expect(screen.queryByText(/No notes yet/)).toBeNull();
+
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [], total: 0 });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(await screen.findByText(/No notes yet/)).toBeInTheDocument();
+    expect(screen.queryByText('Notes are unavailable')).toBeNull();
+  });
+
+  it('does not render the previous folder when the next folder scan fails', async () => {
+    const project = { ...note, path: 'Projects/project.md', name: 'project', folder: 'Projects' };
+    const otherNotes = Array.from({ length: 21 }, (_, index) => ({
+      ...note,
+      path: `Other/other-${index}.md`,
+      name: `other-${index}`,
+      folder: 'Other',
+    }));
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [project, ...otherNotes], total: 22 });
+    await renderTab();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Other 21' })); });
+    await screen.findByRole('button', { name: 'Show all 21 notes...' });
+    api.scanNotesVault.mockRejectedValueOnce(new Error('temporary outage'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show all 21 notes...' })); });
+
+    expect(await screen.findByText('Notes are unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('project')).toBeNull();
+  });
+
+  it('surfaces vault-add, note-create, and note-delete failures without false success', async () => {
+    const rootNote = { ...note, path: 'first.md', name: 'first', folder: '' };
+    api.scanNotesVault.mockResolvedValueOnce({ notes: [rootNote], total: 1 });
+    api.addNotesVault.mockRejectedValueOnce(new Error('vault unavailable'));
+    await renderTab();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage vaults' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Custom vault path' }), { target: { value: '/new/vault' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })); });
+    expect(mockToast.error).toHaveBeenCalledWith('vault unavailable');
+
+    api.createNote.mockRejectedValueOnce(new Error('note unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New note' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'New note path' }), { target: { value: 'new.md' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create' })); });
+    expect(mockToast.error).toHaveBeenCalledWith('note unavailable');
+
+    api.getNote.mockResolvedValueOnce(rootNote);
+    api.deleteNote.mockRejectedValueOnce(new Error('delete unavailable'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Close' })); });
+    await act(async () => { fireEvent.click(screen.getByText('first')); });
+    await screen.findByRole('heading', { name: 'first' });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete note' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true })); });
+    expect(mockToast.error).toHaveBeenCalledWith('delete unavailable');
+    expect(mockToast.success).not.toHaveBeenCalledWith('Note deleted');
+    expect(screen.getByRole('heading', { name: 'first' })).toBeInTheDocument();
+  });
+
+  it('keeps tag-read failures visible through the normal API error feedback', async () => {
+    api.getNotesVaultTags.mockRejectedValueOnce(new Error('tags unavailable'));
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Tags' })); });
+    expect(api.getNotesVaultTags).toHaveBeenCalledWith('vault-1');
+  });
+
+  it('keeps a failed note deep link open for retry instead of showing blank content', async () => {
+    api.getNote.mockRejectedValueOnce(new Error('temporary outage'));
+    await renderTab('/brain/notes?vault=vault-1&note=Projects%2Ffirst.md&context=keep');
+
+    expect(await screen.findByText('Note is unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Select a note to view')).toBeNull();
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('note')).toBe('Projects/first.md');
+
+    api.getNote.mockResolvedValueOnce(note);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(await screen.findByRole('heading', { name: 'first' })).toBeInTheDocument();
+  });
+
+  it('lets a failed note deep link return to the mobile list without retrying', async () => {
+    api.getNote.mockRejectedValueOnce(new Error('note no longer exists'));
+    await renderTab('/brain/notes?vault=vault-1&note=Projects%2Ffirst.md&context=keep');
+    expect(await screen.findByText('Note is unavailable')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to notes' }));
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('note')).toBeNull();
+    expect(new URLSearchParams(screen.getByTestId('location').textContent).get('context')).toBe('keep');
+    expect(screen.queryByText('Note is unavailable')).toBeNull();
+    const listPanel = screen.getByRole('combobox', { name: 'Vault' }).closest('.border-r');
+    expect(listPanel.className.split(/\s+/)).toContain('flex');
+    expect(listPanel.className.split(/\s+/)).not.toContain('hidden');
+    expect(api.getNote).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps search failure distinct from a successful no-match result and retries it', async () => {
+    api.searchNotes.mockRejectedValueOnce(new Error('temporary outage'));
+    await renderTab();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Projects 1' })); });
+    await screen.findByText('first');
+
+    await act(async () => {
+      fireEvent.change(screen.getByRole('textbox', { name: 'Search notes' }), { target: { value: 'needle' } });
+      fireEvent.keyDown(screen.getByRole('textbox', { name: 'Search notes' }), { key: 'Enter' });
+    });
+    expect(await screen.findByText('Search is unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('No matches found')).toBeNull();
+
+    api.searchNotes.mockResolvedValueOnce({ results: [], total: 0 });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(await screen.findByText('No matches found')).toBeInTheDocument();
+    expect(screen.queryByText('Search is unavailable')).toBeNull();
   });
 });

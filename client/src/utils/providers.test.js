@@ -32,6 +32,7 @@ import {
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
   localToolUseHint,
   withToolUseOptionLabel,
+  withModelCapabilityOptionLabel,
   localBackendForProvider,
   knownProviderContextWindow,
   CODEX_CONTEXT_WINDOW,
@@ -1111,6 +1112,22 @@ describe('withToolUseOptionLabel', () => {
   });
 });
 
+describe('withModelCapabilityOptionLabel', () => {
+  it('combines tool-use and image-analysis badges from shared capability maps', () => {
+    const provider = { id: 'ollama', name: 'Ollama' };
+    expect(withModelCapabilityOptionLabel('example-vlm', 'Example VLM', provider, {
+      toolUseIdsByProvider: { ollama: new Set(['example-vlm']) },
+      visionIdsByProvider: { ollama: new Set(['example-vlm']) },
+    })).toBe('Example VLM · 🔧 tool use · 🖼 image analysis');
+  });
+
+  it('marks CLI providers with image analysis without model-specific metadata', () => {
+    expect(withModelCapabilityOptionLabel('example-model', 'Example model', { type: 'cli', command: 'claude' }, {
+      includeToolUse: false,
+    })).toBe('Example model · 🖼 image analysis');
+  });
+});
+
 describe('localBackendForProvider', () => {
   it('detects Ollama by id, endpoint, or name', () => {
     expect(localBackendForProvider({ id: 'ollama' })).toBe('ollama');
@@ -1343,7 +1360,7 @@ describe('supportsModelRefresh', () => {
       'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-lmstudio',
       'codex-ollama', 'codex-tui',
       'cursor-cli',
-      'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'nvidia-nim', 'ollama',
+      'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-nim', 'ollama',
       'opencode-llama-tui',
       'opencode-lmstudio', 'opencode-lmstudio-tui',
       'opencode-mtplx', 'opencode-mtplx-tui',
@@ -2316,4 +2333,3 @@ describe('isFleetHostConfigured', () => {
     expect(isFleetHostConfigured(host, providers)).toBe(false);
   });
 });
-

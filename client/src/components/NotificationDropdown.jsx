@@ -2,7 +2,9 @@ import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
 import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Sparkles } from 'lucide-react';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, formatCount } from '../utils/formatters';
+import { useActionQueue } from '../hooks/useActionQueue';
+import ActionQueuePreview from './ActionQueuePreview';
 import { isHttpUrl } from '../utils/urlNormalize';
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import useClickOutside from '../hooks/useClickOutside.js';
@@ -70,6 +72,12 @@ export default function NotificationDropdown({
   onClearAll,
   position = 'above' // 'above' prefers opening upward, 'below' downward
 }) {
+  const actionQueue = useActionQueue();
+  const requiredCount = actionQueue.data?.items.filter((item) => item.required === true).length;
+  const partialCount = actionQueue.data?.partial || Boolean(actionQueue.error);
+  const actionCountLabel = requiredCount == null
+    ? (actionQueue.error ? 'actions unavailable' : 'loading actions')
+    : `${partialCount ? 'at least ' : ''}${formatCount(requiredCount)} required actions`;
   const [isOpen, setIsOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const containerRef = useRef(null);
@@ -149,13 +157,13 @@ export default function NotificationDropdown({
         }}
         className="relative inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 p-1.5 rounded-lg text-gray-500 hover:text-white transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
         title="Notifications"
-        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+        aria-label={`Notifications (${actionCountLabel})`}
         aria-expanded={isOpen}
       >
-        <Bell size={18} className={unreadCount > 0 ? 'text-yellow-400' : 'text-gray-500'} aria-hidden="true" />
-        {unreadCount > 0 && (
+        <Bell size={18} className={requiredCount > 0 ? 'text-yellow-400' : 'text-gray-500'} aria-hidden="true" />
+        {(requiredCount > 0 || partialCount) && (
           <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] flex items-center justify-center text-[9px] font-bold rounded-full bg-port-warning text-port-on-warning px-0.5" aria-hidden="true">
-            {unreadCount > 9 ? '9+' : unreadCount}
+            {requiredCount == null ? '?' : `${formatCount(requiredCount)}${partialCount ? '+' : ''}`}
           </span>
         )}
       </button>
@@ -215,6 +223,8 @@ export default function NotificationDropdown({
 
           {/* Notification list */}
           <div className="max-h-[60dvh] overflow-y-auto sm:max-h-96">
+            <ActionQueuePreview compact queue={actionQueue} onSelect={() => setIsOpen(false)} />
+            <h3 className="px-4 py-2 text-sm text-port-text-muted">Notification history</h3>
             {notifications.length === 0 ? (
               <div className="px-4 py-8 text-center text-gray-500">
                 No notifications

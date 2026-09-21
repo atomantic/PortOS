@@ -73,7 +73,7 @@ describe('SystemHealthWidget', () => {
     expect(screen.getByRole('link', { name: /Details/ })).toHaveAttribute('href', '/system-resources/overview');
   });
 
-  it('uses configured health thresholds for metric colors', () => {
+  it('keeps memory neutral while honoring configured disk thresholds', () => {
     const health = {
       ...HEALTH,
       system: {
@@ -85,7 +85,7 @@ describe('SystemHealthWidget', () => {
     };
     renderWidget({ health, refetchHealth: vi.fn() });
 
-    expect(screen.getByText('80%')).toHaveClass('text-port-warning');
+    expect(screen.getByText('80%')).toHaveClass('text-port-accent');
     expect(screen.getByText('91%')).toHaveClass('text-port-success');
   });
 
@@ -97,7 +97,7 @@ describe('SystemHealthWidget', () => {
     };
     renderWidget({ health, refetchHealth: vi.fn() });
 
-    expect(screen.getByText('80%')).toHaveClass('text-port-success');
+    expect(screen.getByText('80%')).toHaveClass('text-port-accent');
   });
 
   it('dismisses a warning as resolved and refetches health', async () => {

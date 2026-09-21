@@ -39,11 +39,27 @@ describe('data.reference seed file', () => {
     const upgraded = reloadMediaModels();
     for (const id of ids) expect(upgraded.video.mlx.find((entry) => entry.id === id)).toBeDefined();
     const v2 = upgraded.video.mlx.find((entry) => entry.id === 'fasth3_v2_int6');
-    expect(v2).toMatchObject({ steps: 8, samplerLocked: true, fastvideoVsa: true, fastvideoMlxFormat: 'int6' });
+    expect(v2).toMatchObject({ steps: 8, samplerLocked: true, fastvideoVsa: true, fastvideoMlxFormat: 'int6', supportedModes: ['text'] });
     expect(v2.termsGate.id).toBe('minimax-h3-community-license-2026-08-02');
     upgraded.video.mlx = upgraded.video.mlx.filter((entry) => entry.id !== v2.id);
     writeFileSync(registryFile, JSON.stringify(upgraded));
     expect(reloadMediaModels().video.mlx.some((entry) => entry.id === v2.id)).toBe(false);
+  });
+
+  it('adds Qwen 2.1 to an existing registry without changing the selected legacy model', async () => {
+    const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+    registry.image = registry.image.filter((m) => m.id !== 'qwen-image-2.1');
+    registry._shippedDefaults.image.list = registry._shippedDefaults.image.list.filter((id) => id !== 'qwen-image-2.1');
+    const legacy = registry.image.find((m) => m.id === 'qwen-image');
+    legacy.steps = 23;
+    writeFileSync(registryFile, JSON.stringify(registry));
+    const upgraded = reloadMediaModels();
+    expect(upgraded.image.find((m) => m.id === 'qwen-image-2.1')).toMatchObject({
+      repo: 'Qwen/Qwen-Image-2.1', runner: 'qwen', pipelineClass: 'QwenImage21Pipeline',
+      steps: 40, guidance: 1, cfgDisabled: true,
+    });
+    expect(upgraded.image.find((m) => m.id === 'qwen-image')).toEqual(legacy);
   });
 
   it('matches the runtime-seeded DEFAULT_REGISTRY', async () => {
@@ -52,6 +68,24 @@ describe('data.reference seed file', () => {
     const live = loadMediaModels();
     const { _shippedDefaults: _omit, ...liveSeed } = live;
     expect(sample).toEqual(liveSeed);
+  });
+});
+
+describe('FastH3 V2 runtime-mode compatibility correction', () => {
+  it('loads shipped V2 as text-only while preserving forks and custom declarations', async () => {
+    const { loadMediaModels, reloadMediaModels } = await import('./mediaModels.js');
+    const registry = loadMediaModels();
+    const shipped = registry.video.mlx.find((entry) => entry.id === 'fasth3_v2_int6');
+    shipped.supportedModes = ['text', 'image'];
+    const fork = { ...shipped, id: 'fasth3_v2_int8', repo: 'example/FastH3-fork' };
+    const custom = { ...shipped, id: 'custom-fasth3', supportedModes: ['text', 'fflf'] };
+    registry.video.mlx = registry.video.mlx.filter((entry) => entry.id !== fork.id);
+    registry.video.mlx.push(fork, custom);
+    writeFileSync(registryFile, JSON.stringify(registry));
+    const models = reloadMediaModels().video.mlx;
+    expect(models.find((entry) => entry.id === shipped.id).supportedModes).toEqual(['text']);
+    expect(models.find((entry) => entry.id === fork.id)).toMatchObject(fork);
+    expect(models.find((entry) => entry.id === custom.id)).toMatchObject(custom);
   });
 });
 
@@ -1622,6 +1656,7 @@ describe('video registry upgrade chain', () => {
       'upgradeMiniMaxH3OutputControls',
       'upgradeLtx25AudioControls',
       'upgradeFastMetalDownloadSizes',
+      'upgradeFastH3V2RuntimeModes',
       'backfillRuntime',
       'upgradeLegacyCudaLtxRuntime',
       'upgradeLtx25CudaMemoryFloor',
@@ -1644,5 +1679,25 @@ describe('video registry upgrade chain', () => {
 
     expect(registry.video.mlx.find((m) => m.id === 'ltx_video').runtime).toBeUndefined();
     expect(registry.video.cuda.find((m) => m.id === 'ltx_video').runtime).toBe('cuda_video');
+  });
+});
+
+describe('catalog availability', () => {
+  it('persists disabled built-in and custom models while retaining management access', async () => {
+    const registry = await import('./mediaModels.js');
+    const builtin = registry.getImageModels()[0];
+    registry.setMediaModelEnabled(builtin.id, false);
+    registry.addUserModelEntry({ id: 'example-custom', name: 'Example', runner: 'flux2', source: 'user' }, { kind: 'image' });
+    registry.setMediaModelEnabled('example-custom', false);
+    const video = registry.getVideoModels()[0];
+    registry.setMediaModelEnabled(video.id, false);
+    registry.reloadMediaModels();
+    expect(registry.getVideoModels().some(m => m.id === video.id)).toBe(false);
+    expect(registry.getVideoModels({ includeDisabled: true }).find(m => m.id === video.id).enabled).toBe(false);
+    expect(registry.getImageModels().some(m => [builtin.id, 'example-custom'].includes(m.id))).toBe(false);
+    expect(registry.getImageModels({ includeDisabled: true }).find(m => m.id === builtin.id).enabled).toBe(false);
+    registry.setMediaModelEnabled(builtin.id, true);
+    expect(registry.getImageModels().some(m => m.id === builtin.id)).toBe(true);
+    expect(() => registry.setMediaModelEnabled('missing', false)).toThrow(/Unknown/);
   });
 });

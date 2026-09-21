@@ -26,7 +26,7 @@ import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { detectForgeCli } from '../lib/gitForge.js';
 import { normalizeForkHead } from '../lib/forkHead.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified } from '../lib/prDisposition.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../lib/reviewerConfig.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
 // SAME agent coalesce onto one run instead of tripping over each other.
@@ -1001,7 +1001,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // Empty → null so the prompt builder's "nothing configured" path is unambiguous.
   const narrowPins = (pins, roster) => {
     const out = Object.fromEntries(effectiveReviewers
-      .filter(r => roster.includes(r) && pins?.[r])
+      .filter(r => (roster.includes(r) || isProviderReviewer(r)) && pins?.[r])
       .map(r => [r, pins[r]]));
     return Object.keys(out).length ? out : null;
   };

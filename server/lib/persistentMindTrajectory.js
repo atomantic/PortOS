@@ -27,6 +27,7 @@ export const PERSISTENT_MIND_EVENT_KINDS = Object.freeze([
   // overall answer. Older builds fold this kind as a no-op, so adding it is not
   // an envelope change.
   'mind.model.call',
+  'mind.maintainer.reservation',
   'mind.model.result',
   'mind.thought',
   'mind.reply',
@@ -614,10 +615,13 @@ export function normalizePersistentMindCallUsage(raw) {
  * dependency graph: a refused summary must leave its range UNATTEMPTED, while a
  * summarizer that really ran and failed seals a failed rollup.
  */
-export function buildPersistentMindCallDenial({ reason, status, requiresResubmission = false }) {
+export function buildPersistentMindCallDenial({ reason, status, code = 'policy', disposition = 'hold', retryAt = null, requiresResubmission = false }) {
   return Object.assign(new Error(reason), {
     persistentMindCallDenied: true,
     deniedStatus: status,
+    denialCode: code,
+    retryDisposition: disposition,
+    retryAt,
     requiresResubmission: requiresResubmission === true,
   });
 }

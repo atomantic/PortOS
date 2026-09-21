@@ -42,6 +42,12 @@ is the single gate a release ships behind.
 
 ### Hidden-content gate
 
+`npm run pregate` runs this same scanner before lint or tests, using its resolved
+merge base. It checks committed, staged, and unstaged diffs separately, plus
+untracked files, without changing the index or file contents. The scan remains
+active with `--skip-lint` or an empty test plan; `--plan-only` lists it without
+executing it. A diff read failure fails the gate.
+
 The `impact` job runs `node scripts/scan-diff-hidden-content.js` before it
 plans anything, and every other job needs `impact` — so a finding stops the
 whole run, before a reviewer (human, `/do:pr` reviewer, or PR bot) ever reads
@@ -578,7 +584,7 @@ be "unclassified changed files" and forced the complete matrix on every edit.
 Vitest's import graph cannot reach into them, but ~45 suites pin their
 contracts by reading the `.py` source as text (argparse flags, MLX pins, model
 paths). The planner now resolves the suites naming each changed script with
-`git grep` (`pythonReferencePattern`) and runs exactly them in `files` mode,
+`git grep` (`sourceReferencePattern`) and runs exactly them in `files` mode,
 failing closed to the full suite for a script nothing names. A `.py` outside
 `scripts/` is still unclassified.
 
@@ -870,7 +876,10 @@ full CI automatically when its impact cannot be classified safely.
 Since CI may auto-commit changelog archives, always rebase before pushing:
 
 ```bash
-git pull --rebase --autostash && git push
+git fetch origin main
+git rebase origin/main
+npm run pregate
+git push
 ```
 
 ## Adapting for Sub-Projects

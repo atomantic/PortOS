@@ -29,8 +29,8 @@ beforeEach(() => {
 // reported "All required packages installed" for an unrenderable machine.
 describe('diagnoseLocalRuntime remedies', () => {
   it('offers the runtime install for a model whose shared torch venv is unhealthy', async () => {
-    models.value = [{ ...mflux, id: 'z-image', runner: 'z-image' }];
-    settings.value = { imageGen: { local: { modelId: 'z-image' } } };
+    models.value = [{ ...mflux, id: 'qwen-image-2.1', runner: 'qwen', pipelineClass: 'QwenImage21Pipeline' }];
+    settings.value = { imageGen: { local: { modelId: 'qwen-image-2.1' } } };
     isFlux2VenvHealthy.mockResolvedValue(false);
 
     await expect(diagnoseLocalRuntime()).resolves.toMatchObject({
@@ -38,6 +38,20 @@ describe('diagnoseLocalRuntime remedies', () => {
       runtime: 'torch-venv',
       remedy: { kind: 'install-torch-venv', venvPath: '/test/venv-flux2/bin/python3' },
     });
+    expect(isFlux2VenvHealthy).toHaveBeenCalledWith('QwenImage21Pipeline');
+  });
+
+  it('says the runtime needs an UPDATE when the venv works but predates the model pipeline', async () => {
+    // Otherwise the banner claims nothing is installed while the installer it
+    // launches answers "already installed — nothing to do".
+    models.value = [{ ...mflux, id: 'qwen-image-2.1', runner: 'qwen', pipelineClass: 'QwenImage21Pipeline' }];
+    settings.value = { imageGen: { local: { modelId: 'qwen-image-2.1' } } };
+    isFlux2VenvHealthy.mockImplementation(async (cls) => !cls);
+
+    const verdict = await diagnoseLocalRuntime();
+    expect(verdict.readiness).toBe('unavailable');
+    expect(verdict.reason).toContain('too old for QwenImage21Pipeline');
+    expect(verdict.remedy).toMatchObject({ kind: 'install-torch-venv', label: 'Update runtime' });
   });
 
   it('offers the pip install, with the pip-spec names, for a missing mflux package', async () => {

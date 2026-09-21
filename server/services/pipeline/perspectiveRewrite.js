@@ -19,7 +19,9 @@
  */
 
 import { join } from 'path';
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
+import { contentHash } from './contentHash.js';
+import { assertValidIssueId } from '../../lib/pipelineIds.js';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
@@ -64,18 +66,6 @@ const clampNum = (v, min, max, fallback = 0) => {
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.round(n)));
 };
-
-// Snapshot content hash — pins the analyzed draft so a later edit flips a
-// rewrite to `stale`. One-liner matching editorialAnalysis.contentHash.
-const contentHash = (text) => createHash('sha256').update(text || '').digest('hex');
-
-// Defense-in-depth: refuse path-traversal-shaped ids before interpolating into
-// the on-disk path. Issue ids are `iss-<uuid>` — restrict to a safe charset.
-function assertValidIssueId(id) {
-  if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(id)) {
-    throw new Error(`Invalid issue id: ${id}`);
-  }
-}
 
 const rewritesDir = () => join(PATHS.data, 'pipeline-pov-rewrites');
 const docPath = (issueId) => join(rewritesDir(), `${issueId}.json`);

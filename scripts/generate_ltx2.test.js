@@ -1345,6 +1345,35 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
     '        self.model_dir = model_dir',
   ];
 
+  it('filters optional constructor flags at the process boundary without masking required arguments', () => {
+    const result = runJson([
+      'import contextlib, io, json',
+      'class StrictExtendPipe:',
+      '    def __init__(self, model_dir):',
+      '        self.model_dir = model_dir',
+      'class StreamingTextImagePipe:',
+      '    def __init__(self, model_dir, *, low_ram_streaming=False, gemma_model_id=None):',
+      '        self.model_dir = model_dir',
+      '        self.low_ram_streaming = low_ram_streaming',
+      '        self.gemma_model_id = gemma_model_id',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    strict = runner.build_pipeline_options(StrictExtendPipe, "extend", {"low_ram_streaming": True})',
+      '    streaming = runner.build_pipeline_options(StreamingTextImagePipe, "one-stage", {"low_ram_streaming": True})',
+      'StrictExtendPipe(model_dir="model", **strict)',
+      'required_failure = False',
+      'try:',
+      '    StrictExtendPipe(**strict)',
+      'except TypeError:',
+      '    required_failure = True',
+      'print(json.dumps({"strict": strict, "streaming": streaming, "requiredFailure": required_failure, "stderr": err.getvalue()}))',
+    ]);
+    expect(result.strict).toEqual({});
+    expect(result.streaming).toEqual({ low_ram_streaming: true });
+    expect(result.requiredFailure).toBe(true);
+    expect(result.stderr).toContain('Skipping unsupported optional constructor option(s) for extend: low_ram_streaming');
+  });
+
   // ── resolve_streaming_policy: pure, no MLX/IO ───────────────────────────
   it('resident always resolves inactive, whatever the pipeline supports', () => {
     const result = runJson([
@@ -1430,7 +1459,7 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
     expect(output).toMatch(/before loading weights/);
   });
 
-  it('degrades an auto request to resident with a STATUS explanation on an unsupported pipeline', () => {
+  it('reports a dropped constructor option when auto streaming meets an unsupported pipeline', () => {
     const result = runJson([
       ...RESIDENT_ONLY_PIPELINE,
       'import contextlib, io, json',
@@ -1440,11 +1469,13 @@ describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
       'err = io.StringIO()',
       'with contextlib.redirect_stderr(err):',
       '    policy = runner.configure_streaming_policy(args, ResidentOnlyPipe, "extend")',
-      'print(json.dumps({"policy": policy, "stderr": err.getvalue()}))',
+      '    options = runner._pipeline_optional_kwargs(ResidentOnlyPipe, "extend", policy)',
+      'print(json.dumps({"policy": policy, "options": options, "stderr": err.getvalue()}))',
     ]);
     expect(result.policy.active).toBe(false);
     expect(result.policy.supports).toBe(false);
-    expect(result.stderr).toMatch(/^STATUS:Block streaming not used:/);
+    expect(result.options).toEqual({});
+    expect(result.stderr).toContain('Skipping unsupported optional constructor option(s) for extend: low_ram_streaming');
   });
 
   it('reports an enabled STATUS line and installs the policy for the reassert path', () => {

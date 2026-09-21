@@ -9,6 +9,15 @@ const root = join(import.meta.dirname, '..');
 const readSeed = async () => JSON.parse(await readFile(join(root, 'data.reference/model-comparison.json'), 'utf8'));
 
 describe('model comparison seed scope', () => {
+  it('keeps Grok 4.7 context-tier prices distinct from historical benchmark measurements', async () => {
+    const rows = (await readSeed()).observations.filter(row => row.model === 'grok-4.7');
+    expect(rows.map(row => [row.inputPerMillion.value, row.outputPerMillion.value])).toEqual([[2, 6], [4, 12]]);
+    expect(new Set(rows.map(row => row.configuration)).size).toBe(2);
+    for (const row of rows) {
+      expect(row.inputPerMillion.source.url).toBe('https://docs.x.ai/developers/models/grok-4.7');
+      for (const metric of ['quality', 'costPerTask', 'reasoningPerMillion', 'responseSeconds', 'tokensPerSecond', 'quota']) expect(row[metric]).toBeNull();
+    }
+  });
   it('ships only models a shipped provider can dispatch', async () => {
     const [seed, scope] = await Promise.all([readSeed(), inScopeModels()]);
     const outOfScope = [...new Set(seed.observations.map(row => row.model))].filter(model => !scope.has(model));

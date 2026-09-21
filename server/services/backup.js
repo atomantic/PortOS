@@ -21,7 +21,6 @@ import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { getBackendName } from './memoryBackend.js';
 import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
-import { getIo } from './socket.js';
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 
@@ -142,6 +141,7 @@ const queueStateWrite = createFileWriteQueue();
 // matches any `loras/` directory anywhere under data/ (e.g. a user's
 // brain/.../loras/ collection), which would silently exclude unrelated user data.
 export const DEFAULT_EXCLUDES = [
+  { path: '/python/laya-mlx/', reason: 'Rebuildable Laya-MLX experiment runtime and pinned model weights', overridable: false },
   { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies staged for agent prompts — derived from the bundled submodule, regenerated on demand', overridable: false },
@@ -592,7 +592,8 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     // Loud-on-failure: surface a degraded DB dump as a warning toast, even on
     // unattended scheduled runs (which pass io=null) via the module-level io.
     if (pgResult.status === 'failed') {
-      const errIo = io || getIo();
+      // Keep socket/auth initialization out of backup metadata reads and tests.
+      const errIo = io || (await import('./socket.js')).getIo();
       if (errIo) {
         emitErrorEvent(errIo, new ServerError(
           `Backup DB dump failed: ${pgResult.reason}`,

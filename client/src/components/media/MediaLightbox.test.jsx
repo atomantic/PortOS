@@ -119,6 +119,59 @@ describe('MediaLightbox overlay portal', () => {
   });
 });
 
+describe('MediaLightbox touch gestures', () => {
+  it('keeps native pinch input from navigating the gallery', () => {
+    const onPrevious = vi.fn();
+    const onNext = vi.fn();
+    render(
+      <MediaLightbox
+        item={imageItem}
+        onClose={() => {}}
+        onPrevious={onPrevious}
+        onNext={onNext}
+        hasPrevious
+        hasNext
+      />
+    );
+
+    const surface = screen.getByRole('img').parentElement;
+    expect(surface.style.touchAction).toBe('manipulation');
+
+    fireEvent.touchStart(surface, { touches: [{ clientX: 300, clientY: 400 }] });
+    fireEvent.touchStart(surface, {
+      touches: [
+        { clientX: 300, clientY: 400 },
+        { clientX: 500, clientY: 400 },
+      ],
+    });
+    fireEvent.touchEnd(surface, {
+      touches: [{ clientX: 300, clientY: 400 }],
+      changedTouches: [{ clientX: 80, clientY: 400 }],
+    });
+    fireEvent.touchEnd(surface, {
+      touches: [],
+      changedTouches: [{ clientX: 80, clientY: 400 }],
+    });
+
+    expect(onPrevious).not.toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it('keeps one-finger horizontal swipes for gallery navigation', () => {
+    const onNext = vi.fn();
+    render(<MediaLightbox item={imageItem} onClose={() => {}} onNext={onNext} hasNext />);
+
+    const surface = screen.getByRole('img').parentElement;
+    fireEvent.touchStart(surface, { touches: [{ clientX: 300, clientY: 400 }] });
+    fireEvent.touchEnd(surface, {
+      touches: [],
+      changedTouches: [{ clientX: 80, clientY: 400 }],
+    });
+
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('MediaLightbox Escape cascade', () => {
   it('exits full screen without closing the lightbox', () => {
     const onClose = vi.fn();

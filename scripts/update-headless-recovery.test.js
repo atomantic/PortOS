@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import { mkdirSync, writeFileSync, copyFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -51,6 +51,9 @@ async function makeSandbox({
   chmodSync(join(repo, 'update.sh'), 0o755);
   writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'sandbox', version: '0.0.0' }));
   writeFileSync(join(repo, 'ecosystem.config.cjs'), 'module.exports = { apps: [] };\n');
+  // Mirror the production ignore rule so update.sh's own runtime log does not
+  // turn an otherwise clean synthetic checkout into a dirty one.
+  writeFileSync(join(repo, '.gitignore'), 'data/*\n');
 
   // Records every pm2 invocation the script makes, in order. When stallDelete is
   // set the `delete` call logs and then BLOCKS until the test deletes the release
@@ -105,6 +108,12 @@ if (${stallDelete} && args.startsWith('delete')) {
     writeFileSync(join(bin, 'pm2'), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(calls)}\n`);
     chmodSync(join(bin, 'pm2'), 0o755);
   }
+
+  // The updater now refuses dirty checkouts instead of stashing them. Commit
+  // the synthetic fixture so this test still exercises the headless recovery
+  // window rather than the dirty-checkout guard.
+  execFileSync('git', ['add', '.'], { cwd: repo });
+  execFileSync('git', ['commit', '-m', 'fixture'], { cwd: repo, stdio: 'ignore' });
 
   return { scratch, repo, bin, calls, forceClean, releaseFile };
 }
