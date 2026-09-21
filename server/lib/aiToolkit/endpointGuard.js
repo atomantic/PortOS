@@ -67,7 +67,7 @@ const ALLOWED_PROVIDER_HOSTS = new Set([
   'api.fireworks.ai',
   'api.cerebras.ai',
   'api.orcarouter.ai',
-  'integrate.api.nvidia.com', // NVIDIA NIM (bundled `nvidia-nim` / `nvidia-kimi` providers)
+  'integrate.api.nvidia.com', // NVIDIA NIM
 ]);
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;

@@ -580,17 +580,6 @@ const TUPLES = [
     },
   },
 
-  // --- Direct API definitions (no harness program) -----------------------------
-  {
-    id: 'nvidia-kimi', harnessId: 'direct', method: 'api', service: { definitionId: 'nvidia-nim', slug: 'nvidia-kimi', credentials: { apiKey: '' } },
-    overrides: {
-      name: 'NVIDIA Kimi K2.5', enabled: false,
-      models: ['moonshotai/kimi-k2.5', 'moonshotai/kimi-k2-instruct', 'moonshotai/kimi-k2-thinking'],
-      defaultModel: 'moonshotai/kimi-k2.5', lightModel: 'moonshotai/kimi-k2-instruct', mediumModel: 'moonshotai/kimi-k2.5', heavyModel: 'moonshotai/kimi-k2-thinking',
-      fallbackProvider: null, timeout: 300000,
-      envVars: {}, apiKey: '',
-    },
-  },
   {
     id: 'cerebras', harnessId: 'direct', method: 'api', service: { definitionId: 'cerebras', credentials: { apiKey: '' } },
     overrides: {
@@ -671,7 +660,7 @@ export const PROVIDER_ORDER = [
   'codex', 'codex-tui', 'codex-ollama', 'codex-lmstudio',
   'claude-code-tui', 'claude-code-tui-bedrock',
   'antigravity-tui', 'antigravity-cli',
-  'nvidia-kimi', 'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
+  'cerebras', 'lmstudio', 'ollama', 'mtplx', 'slotstream',
   'grok', 'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui', 'cursor-cli', 'cursor-tui',
 ];
 

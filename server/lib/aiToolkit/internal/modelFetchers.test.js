@@ -18,7 +18,7 @@ const SHIPPED_REFRESHABLE = [
   'pi-cli', 'pi-tui',
   'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
   'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
-  'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'nvidia-nim', 'ollama',
+  'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-nim', 'ollama',
   'slotstream',
   'opencode-llama-tui',
   'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama', 'opencode-ollama-tui',

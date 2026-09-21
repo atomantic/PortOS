@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   clearHistory: vi.fn(async () => ({ cleared: 12, preserved: 3 })),
   archiveMemories: vi.fn(async () => ({ archived: 4, preserved: 2 })),
   clearRollups: vi.fn(async () => ({ cleared: 2 })),
+  clearJournal: vi.fn(async () => ({ cleared: 0 })),
   resetRuntime: vi.fn(async () => ({ status: 'thinking' })),
 }));
 
@@ -15,6 +16,9 @@ vi.mock('./agentRunEventLog.js', () => ({
 vi.mock('./persistentMindContext.js', () => ({
   archivePersistentMindMemories: (...args) => mocks.archiveMemories(...args),
   clearPersistentMindRollups: (...args) => mocks.clearRollups(...args),
+}));
+vi.mock('./persistentMindJournal.js', () => ({
+  clearPersistentMindJournal: (...args) => mocks.clearJournal(...args),
 }));
 vi.mock('./persistentMindSupervisor.js', () => ({
   resetPersistentMindRuntimeResidue: (...args) => mocks.resetRuntime(...args),
@@ -36,6 +40,7 @@ describe('persistent mind maintenance', () => {
 
     expect(mocks.archiveMemories).toHaveBeenCalledWith('cos-persistent-mind');
     expect(mocks.clearRollups).toHaveBeenCalledWith('cos-persistent-mind');
+    expect(mocks.clearJournal).toHaveBeenCalledWith('cos-persistent-mind');
     expect(mocks.clearHistory).toHaveBeenCalledWith({
       mindId: 'cos-persistent-mind',
       preserveTurnId: 'turn-current',

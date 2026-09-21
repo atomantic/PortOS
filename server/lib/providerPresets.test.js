@@ -171,10 +171,11 @@ describe('planPresetBackfill over the shipped samples', () => {
     expect(patches.slotstream).toMatchObject({ harnessId: 'direct', method: 'api' });
   });
 
-  it('turns two records sharing one endpoint into two narrowings of one instance', () => {
-    expect(patches['nvidia-nim'].serviceId).toBe(patches['nvidia-kimi'].serviceId);
-    expect(patches['nvidia-nim'].catalogNarrowing).toEqual(SAMPLES['nvidia-nim'].models);
-    expect(patches['nvidia-kimi'].catalogNarrowing).toEqual(SAMPLES['nvidia-kimi'].models);
+  it('keeps the NIM OpenCode pair on one gateway instance', () => {
+    expect(patches['opencode-nvidia-nim'].serviceId).toBe(patches['opencode-nvidia-nim-tui'].serviceId);
+    expect(patches['opencode-nvidia-nim']).toMatchObject({ harnessId: 'opencode', method: 'cli' });
+    expect(patches['opencode-nvidia-nim-tui']).toMatchObject({ harnessId: 'opencode', method: 'tui' });
+    expect(patches['nvidia-nim']).toMatchObject({ harnessId: 'direct', method: 'api' });
   });
 
   it('leaves each unmappable or drifting record legacy with a reason, never a guess', () => {
