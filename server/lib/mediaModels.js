@@ -470,6 +470,25 @@ export const upgradeFastMetalDownloadSizes = (list) => {
   return list.map((entry) => FASTMETAL_DOWNLOAD_SIZE_PROFILES.reduce(upgradeFastMetalEntry, entry));
 };
 
+const FASTH3_V2_IMAGE_MODE_REPO = 'FastVideo/FastVideo-FastH3-8-Step-V2';
+const FASTH3_V2_IMAGE_MODE_IDS = new Set(['fasth3_v2_int8', 'fasth3_v2_int6']);
+
+// FastH3 V2 is the only FastH3 MLX lane with the verified image-conditioning
+// path. Older persisted registries inherited ['text'] from the preview source
+// rows, so upgrade those shipped rows while preserving forks and any explicit
+// user capability override.
+export const upgradeFastH3V2ImageModes = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry)
+      || !FASTH3_V2_IMAGE_MODE_IDS.has(entry.id)
+      || entry.repo !== FASTH3_V2_IMAGE_MODE_REPO
+      || (Array.isArray(entry.supportedModes) && entry.supportedModes.length > 0
+        && JSON.stringify(entry.supportedModes) !== JSON.stringify(['text']))) return entry;
+    return { ...entry, supportedModes: ['text', 'image'] };
+  });
+};
+
 // Existing installs already persisted the shipped LTX-2.5 row before its A2V
 // duration contract was declared. Backfill only the untouched pinned model and
 // only absent keys: a user-repointed fork or an explicit local override remains
@@ -1426,6 +1445,7 @@ const VIDEO_REGISTRY_UPGRADES = Object.freeze([
   // disclosure block: this row corrects the stale `estimatedDownloadGb` inside
   // an already-persisted one, and the decorator would never revisit it.
   Object.freeze({ name: 'upgradeFastMetalDownloadSizes', apply: upgradeFastMetalDownloadSizes }),
+  Object.freeze({ name: 'upgradeFastH3V2ImageModes', apply: upgradeFastH3V2ImageModes }),
   Object.freeze({ name: 'backfillRuntime', apply: backfillRuntime }),
   // CUDA-only, and in this order: the legacy `ltx_video` row is repointed at the
   // `cuda_video` runtime first, then the LTX-2.5 memory floor is raised.

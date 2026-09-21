@@ -39,7 +39,7 @@ describe('data.reference seed file', () => {
     const upgraded = reloadMediaModels();
     for (const id of ids) expect(upgraded.video.mlx.find((entry) => entry.id === id)).toBeDefined();
     const v2 = upgraded.video.mlx.find((entry) => entry.id === 'fasth3_v2_int6');
-    expect(v2).toMatchObject({ steps: 8, samplerLocked: true, fastvideoVsa: true, fastvideoMlxFormat: 'int6' });
+    expect(v2).toMatchObject({ steps: 8, samplerLocked: true, fastvideoVsa: true, fastvideoMlxFormat: 'int6', supportedModes: ['text', 'image'] });
     expect(v2.termsGate.id).toBe('minimax-h3-community-license-2026-08-02');
     upgraded.video.mlx = upgraded.video.mlx.filter((entry) => entry.id !== v2.id);
     writeFileSync(registryFile, JSON.stringify(upgraded));
@@ -68,6 +68,18 @@ describe('data.reference seed file', () => {
     const live = loadMediaModels();
     const { _shippedDefaults: _omit, ...liveSeed } = live;
     expect(sample).toEqual(liveSeed);
+  });
+});
+
+describe('FastH3 V2 image-mode compatibility upgrade', () => {
+  it('upgrades shipped V2 rows but preserves forks and explicit custom modes', async () => {
+    const { upgradeFastH3V2ImageModes } = await import('./mediaModels.js');
+    const shipped = { id: 'fasth3_v2_int6', repo: 'FastVideo/FastVideo-FastH3-8-Step-V2', supportedModes: ['text'] };
+    const fork = { ...shipped, repo: 'example/FastH3-fork' };
+    const custom = { ...shipped, supportedModes: ['text', 'fflf'] };
+    expect(upgradeFastH3V2ImageModes([shipped, fork, custom])).toEqual([
+      { ...shipped, supportedModes: ['text', 'image'] }, fork, custom,
+    ]);
   });
 });
 
@@ -1638,6 +1650,7 @@ describe('video registry upgrade chain', () => {
       'upgradeMiniMaxH3OutputControls',
       'upgradeLtx25AudioControls',
       'upgradeFastMetalDownloadSizes',
+      'upgradeFastH3V2ImageModes',
       'backfillRuntime',
       'upgradeLegacyCudaLtxRuntime',
       'upgradeLtx25CudaMemoryFloor',
