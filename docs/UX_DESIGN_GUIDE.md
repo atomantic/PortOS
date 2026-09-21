@@ -230,14 +230,14 @@ Use focused behavior tests at rendered interactions and route boundaries plus vi
 
 [Epic #7791](https://github.com/atomantic/PortOS/issues/7791) owns the bounded first rollout. Merging this specification does not complete the epic or its implementation tasks. Each task waits for the specification PR to merge; later prerequisites are sequencing choices so pilots inform the next surface, not claims that all work is technically coupled.
 
-| Task | Prerequisites after specification merge |
-| --- | --- |
-| [#7792 — Models navigation and icons](https://github.com/atomantic/PortOS/issues/7792) | None |
-| [#7793 — Jev task views](https://github.com/atomantic/PortOS/issues/7793) | Models navigation |
-| [#7794 — Performance results workspace](https://github.com/atomantic/PortOS/issues/7794) | Models navigation and Jev pilot |
-| [#7795 — Runtimes operations roster](https://github.com/atomantic/PortOS/issues/7795) | Performance pilot |
-| [#7796 — CoS queue-first Tasks](https://github.com/atomantic/PortOS/issues/7796) | Performance pilot |
-| [#7797 — Settings, Brain and Apps follow-up audit](https://github.com/atomantic/PortOS/issues/7797) | Runtimes and CoS pilot outcomes |
+| Task | Prerequisites after specification merge | Status/evidence |
+| --- | --- | --- |
+| [#7792 — Models navigation and icons](https://github.com/atomantic/PortOS/issues/7792) | None | Shipped in merged PR #7808 |
+| [#7793 — Jev task views](https://github.com/atomantic/PortOS/issues/7793) | Models navigation | Shipped in merged PR #7839; synthetic responsive evidence is in the audit |
+| [#7794 — Performance results workspace](https://github.com/atomantic/PortOS/issues/7794) | Models navigation and Jev pilot | Shipped in merged PR #7841 |
+| [#7795 — Runtimes operations roster](https://github.com/atomantic/PortOS/issues/7795) | Performance pilot | Shipped in merged PR #7851; [synthetic validation](validation/7795-runtimes-workspace.md) |
+| [#7796 — CoS queue-first Tasks](https://github.com/atomantic/PortOS/issues/7796) | Performance pilot | Shipped in merged PR #7850 |
+| [#7797 — Settings, Brain and Apps follow-up audit](https://github.com/atomantic/PortOS/issues/7797) | Runtimes and CoS pilot outcomes | Audit shipped with [#7858](https://github.com/atomantic/PortOS/issues/7858), [#7859](https://github.com/atomantic/PortOS/issues/7859), and [#7860](https://github.com/atomantic/PortOS/issues/7860) as implementation slices |
 
 Runtimes and CoS can proceed independently once their shared prerequisite is complete. The final audit files evidence-backed follow-ups; it does not silently expand this epic into an implementation promise for every page. Check live issue state and remove `blocked` only when the listed prerequisites have been met.
 

@@ -1,14 +1,14 @@
 # Admin workspace UX audit
 
-Date: 2026-09-20. Scope: a representative sample to establish reusable patterns, not a completed audit of every PortOS route. All examples in deliverables must be synthetic; no live record names, topology, saved settings, or measurement results are reproduced here.
+Date: 2026-09-21. Scope: a representative sample to establish reusable patterns, not a completed audit of every PortOS route. All examples in deliverables must be synthetic; no live record names, topology, saved settings, or measurement results are reproduced here.
 
 ## Evidence and limits
 
 - Jev: user-supplied desktop screenshot, live navigation, and checkout component review.
 - Performance: live 1,280px-wide browser screenshot/rendered content and checkout component review.
-- Runtimes: live browser screenshot and checkout component review.
+- Runtimes: live browser screenshot, checkout component review, and the synthetic validation record in [the Runtimes pilot](validation/7795-runtimes-workspace.md).
 - CoS Tasks: live browser screenshot and checkout page/task component review.
-- Apps detail, Brain shell, Settings shell: source review only; observations about their rendered behavior remain hypotheses to validate.
+- Settings General and Backup, Brain Threads and Notes, and the Apps list and detail: current source and rendered-test review only; observations about their rendered behavior remain hypotheses to validate.
 - The live application displayed a client/server build mismatch. Its visual evidence and the current checkout are complementary snapshots; no runtime reconciliation or model actions were performed.
 - These are heuristic findings. No user task timings, complete accessibility audit, or production responsive test pass has been performed.
 
@@ -88,3 +88,33 @@ place. The pilot provides a composition example, not a new universal component.
 ### Runtimes operations pilot (#7795)
 
 The roster now selects runtime configuration by URL, preserves form/progress owners across selection, and keeps setup guidance in a named disclosure. See [task map and synthetic validation evidence](validation/7795-runtimes-workspace.md) for observed layout, interaction checks, and evidence limits.
+
+## Follow-up audit: Settings, Brain and Apps (#7797)
+
+This is a bounded source-and-test audit after the Runtimes and CoS pilots. `Observed` means a behavior or composition was verified in the current checkout; `proposed` means a follow-up is required before the pattern is treated as shipped. The audit records page-family assignments and preserves existing route, icon, feature, privacy, and persistence contracts. It does not implement a universal layout or redesign these surfaces in place.
+
+| Surface and evidence | Page family and three primary tasks | Before → after content map | Navigation, scroll, and state contract | Error boundary and follow-up |
+| --- | --- | --- | --- | --- |
+| Settings General — `client/src/pages/Settings.jsx`, `client/src/components/settings/GeneralTab.jsx` | Configuration. Set timezone; set or clear location; choose interface theme. | Three independent cards are already bounded by the Settings shell → group timezone and location as the recurring configuration work, with theme as a secondary preference that does not compete with save feedback. | `/settings/general` stays canonical, with the Settings icon from `NAV_PRESENTATION` and legacy tab redirects. The Settings content region owns the normal scroll. Independent saves, dirty indicators, and the unsaved-changes guard remain visible. | Load failure currently toasts and establishes empty baselines; field validation and save failure must keep the affected group dirty and actionable. Follow-up: [#7858](https://github.com/atomantic/PortOS/issues/7858). |
+| Settings Backup — `client/src/pages/Settings.jsx`, `client/src/components/settings/BackupTab.jsx` | Operations + Configuration. Inspect backup health; configure schedule/destination/excludes; run or restore a backup. | A long form already contains status, schedule, disclosures, snapshots, and restore controls → put health and the next safe action first, with configuration and recovery detail disclosed below. | `/settings/backup` stays canonical with the Download icon. The Settings content region remains the primary scroll owner; the action bar may stay sticky without covering errors. Saved destination/schedule state, Run Now gating, dry-run restore, and destructive-action confirmation remain unchanged. | `loadFailed` already has an explicit unavailable panel; degraded database status, invalid restore input, and failed restore must remain distinct from an empty snapshot list. Follow-up: [#7858](https://github.com/atomantic/PortOS/issues/7858). |
+| Brain Threads — `client/src/pages/Brain.jsx`, `client/src/components/brain/tabs/ThreadsTab.jsx` | Collection. Capture an open loop; triage by status/tag/search; edit, link, or complete a selected thread. | The collection and URL-backed drawer are an adopted pattern → retain the full-bleed collection, add an explicit unavailable/retry state, and keep the drawer as the selected record's task surface. | `/brain/threads` remains a direct icon destination using ListTodo and `TabPills mobileCompact`. Threads owns its full-bleed scroll. `status`, `tag`, `q`, `thread`, and `threadTab` remain URL-backed; drafts/save/delete and browser Back remain observable. | List failure currently falls through to the same empty copy as “Nothing tracked yet”; a failed refresh must preserve the distinction and offer retry. Follow-up: [#7859](https://github.com/atomantic/PortOS/issues/7859). |
+| Brain Notes — `client/src/pages/Brain.jsx`, `client/src/components/brain/tabs/NotesTab.jsx` | Document or canvas. Switch vault/folder; search and open a note; edit, create, delete, and save. | A local split pane provides vault/list/editor work → retain independent editor and list scrolling while making vault/note selection URL-shareable and keeping the active note visible on narrow screens. | `/brain/notes` remains a direct FileText destination with `TabPills mobileCompact`. The full-bleed shell owns the workspace; list and editor panes keep their own scroll only because this is a genuine list/detail editor. Note drafts, force-save, and request-lifetime behavior remain. | Vault, scan, and read failures currently become empty or stale state; delete failure can also report success after a swallowed request. Follow-up: [#7859](https://github.com/atomantic/PortOS/issues/7859) captures the deep-link and truthful-state repair. |
+| Apps list — `client/src/pages/Apps.jsx`, `client/src/lib/layoutRoutes.js` | Collection. Inspect health; start/stop/restart or launch; open Manage/archive. | Rows currently mix collection identity/actions with repository, configuration, PM2, and board detail → keep identity, health, primary lifecycle actions, and Manage in the collection; route deep diagnostics to the detail workspace. | `/apps` remains the collection route with archive state in `?view=archived`, existing operation banners, and normal Layout scrolling. Keep lifecycle feedback, overflow confirmation, and feature-aware action availability. | `getApps` failure currently renders `No apps registered`, which is indistinguishable from a genuine empty collection. Follow-up: [#7860](https://github.com/atomantic/PortOS/issues/7860) separates unavailable, empty, and loaded states. |
+| App detail — `client/src/pages/AppDetail.jsx`, `client/src/components/apps/AppDetailView.jsx` | Operations + Workbench. Identify status and execute lifecycle/build/launch; inspect task, Git, quality, and configuration tabs. | The route-backed detail workspace already gives deep work a home → preserve its header, contextual lifecycle action, edit drawer, and feature-gated tabs while making unavailable distinct from missing. | `/apps/:id/:tab` and its aliases remain shareable. `TabPills mobileCompact`, unique tab icons, full-width detail scrolling, and `?edit=1`/`appTab` drawer state remain. No provider work starts from navigation. | Any failed detail request currently becomes “App not found”; a transport/server failure needs retry while a confirmed 404 keeps recovery to Apps. Follow-up: [#7860](https://github.com/atomantic/PortOS/issues/7860). |
+
+### Adopted lessons from the pilots
+
+- Runtimes and CoS now demonstrate that selected work belongs in the URL and that local form/progress owners must survive sibling-view changes; the six surfaces above must preserve that contract where they already have it.
+- Desktop destinations keep icon prefixes, and fixed mobile destinations keep their distinct `TabPills mobileCompact` icons and accessible names. A supplemental sheet cannot replace direct navigation.
+- Empty, loading, unavailable, partial, stale, and confirmed-missing states are different evidence states. The Threads, Notes, Apps list, and App detail gaps are concrete follow-up work, not a reason to infer a universal component.
+- Saved-state gates and destructive recovery are behavior boundaries: Settings Backup must not run or restore against unresolved state, Brain edits must preserve drafts, and Apps lifecycle actions must report their actual operation state.
+
+### Follow-up issue register
+
+| Issue | Bounded slice | Current status |
+| --- | --- | --- |
+| [#7858](https://github.com/atomantic/PortOS/issues/7858) | Settings General and Backup composition, save/error evidence, and responsive validation. | Open; follows this audit. |
+| [#7859](https://github.com/atomantic/PortOS/issues/7859) | Brain Notes deep links plus Threads/Notes unavailable and empty-state truthfulness. | Open; follows this audit. |
+| [#7860](https://github.com/atomantic/PortOS/issues/7860) | Apps collection-first hierarchy plus truthful list/detail unavailable states. | Open; follows this audit. |
+
+The [synthetic validation record](validation/7797-settings-brain-apps-audit.md) lists the existing test evidence, remaining viewport checks, and compatibility checklist. These follow-ups are deliberately implementation slices; #7797 is complete when the audit and evidence register are published, not when those later UI changes merge.
