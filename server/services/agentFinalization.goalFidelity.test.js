@@ -98,7 +98,7 @@ import { resolveForgeForRepo } from './git.js';
 import { getAgentRecord } from './cosAgentLifecycle.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_REASON } from '../lib/primaryCheckoutGuard.js';
 import { finalizeAgent } from './agentFinalization.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents, emitLog } from './cosEvents.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
@@ -214,6 +214,131 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(args.objective).not.toContain('done');
     expect(args.diff).toBe('diff --git a/a.js b/a.js');
     expect(args.backend).toBe('ollama');
+  });
+
+  describe('dependency audit summary with work outside the diff (#7899)', () => {
+    // Synthetic reconstruction: the deliverable is a completed inventory and
+    // audit, with no warranted bump. The only committed change is its note.
+    const task = {
+      id: 'dependency-audit', taskType: 'internal',
+      description: 'Inventory all security alerts, resolve open automated dependency PRs, then audit dependencies.',
+      metadata: {
+        analysisType: 'dependency-updates',
+        prompt: 'Paginate the alert and PR inventories. Report unavailable scanners as coverage gaps. Update dependencies only when warranted.',
+      },
+    };
+    const auditDiff = [
+      'diff --git a/docs/DEPS.md b/docs/DEPS.md',
+      'index abc1234..def5678 100644',
+      '--- a/docs/DEPS.md',
+      '+++ b/docs/DEPS.md',
+      '@@ -1,3 +1,3 @@',
+      ' # Dependency audit',
+      '-**Last audited:** previous sweep',
+      '-**Verdict:** prior audit results',
+      '+**Last audited:** routine sweep; no open security alerts',
+      '+**Verdict:** dependencies current; a peer-constrained upgrade remains tracked.',
+      '',
+    ].join('\n');
+    const outputBuffer = 'Paginated alerts: 0. Open PR inventory (limit 500): 0. Dependency guards passed. Python scanner unavailable; coverage gap disclosed.';
+    const finish = (overrides = {}) => finalize({ task, outputBuffer, ...overrides });
+
+    beforeEach(() => {
+      execGit.mockResolvedValue({ stdout: 'https://github.com/example/project.git', exitCode: 0 });
+      resolveForgeForRepo.mockResolvedValue({ cli: 'gh', host: 'github.com', owner: 'example', env: { GH_TOKEN: 'synthetic-token' } });
+      execGh.mockResolvedValue('[[]]');
+      runWindowDiffMock.mockResolvedValue({ diff: auditDiff, base: 'abc', truncated: false, reason: null });
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({
+        verdict: 'rethink', missing: ['Security inventory and bot PR resolution'],
+        unrequested: ['The audit note'], evidence: 'Only an audit note is visible.',
+      }));
+    });
+
+    it('declines the diff-only judgement after independent empty inventories, without inventing a ship verdict or follow-up', async () => {
+      runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({
+        verdict: 'fix-first', missing: ['Security inventory and bot PR resolution'],
+        unrequested: ['The audit note'], evidence: 'Only an audit note is visible.',
+      }));
+      await finish();
+
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toBeUndefined();
+      expect(execGh.mock.calls).toEqual(['dependabot/alerts', 'pulls'].map(resource => [
+        ['api', '--hostname', 'github.com', '--paginate', '--slurp', `repos/example/project/${resource}?state=open&per_page=100`],
+        30_000, { cwd: '/example/worktree', env: { GH_TOKEN: 'synthetic-token' } },
+      ]));
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('not judgeable from a diff'), expect.any(Object));
+      expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
+      expect(runGoalFidelityFollowUpMock).not.toHaveBeenCalled();
+      expect(updateTaskMock).toHaveBeenCalledWith(task.id, { status: 'completed' }, 'internal');
+    });
+
+    it.each([
+      ['an open alert on a later page', 'dependabot/alerts', '[[], [{"number":42}]]'],
+      ['an open PR', 'pulls', '[[{"number":7}]]'],
+      ['an access-error response', 'dependabot/alerts', '{"message":"Forbidden"}'],
+      ['no pages returned', 'pulls', '[]'],
+      ['a malformed response', 'pulls', 'not JSON'],
+    ])('retains review and its hold for %s even when the transcript claims zero', async (_label, resource, response) => {
+      execGh.mockImplementation(async args => args.at(-1).includes(`/${resource}?`) ? response : '[[]]');
+      await finish();
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledWith(expect.objectContaining({ diff: auditDiff }));
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+    });
+
+    it('does not fall back to ambient credentials when the owner-pinned resolver fails', async () => {
+      resolveForgeForRepo.mockRejectedValue(new Error('Credential unavailable'));
+      await finish();
+      expect(execGh).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+    });
+
+    it('keeps unsupported forges on the ordinary review path without calling GitHub', async () => {
+      execGit.mockResolvedValue({ stdout: 'https://gitlab.example.com/example/project.git', exitCode: 0 });
+      resolveForgeForRepo.mockResolvedValue({ cli: 'glab', host: 'gitlab.example.com', owner: 'example' });
+      await finish();
+      expect(execGh).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+    });
+
+    it.each([
+      ['a dependency bump', `${auditDiff}diff --git a/package.json b/package.json\n+{"dependencies":{"example":"2.0.0"}}\n`, false],
+      ['an unrelated documentation edit', `${auditDiff}+Remove the supported installation instructions.\n`, false],
+      ['a different document', auditDiff.replaceAll('docs/DEPS.md', 'docs/INSTALL.md'), false],
+      ['a file mode change', auditDiff.replace('index ', 'old mode 100644\nnew mode 100755\nindex '), false],
+      ['a truncated diff', auditDiff, true],
+    ])('still judges %s without consulting forge inventories', async (_label, diff, truncated) => {
+      runWindowDiffMock.mockResolvedValue({ diff, base: 'abc', truncated, reason: null });
+      await finish();
+      expect(execGh).not.toHaveBeenCalled();
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledWith(expect.objectContaining({ diff }));
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+    });
+
+    it('still holds an ordinary implementation task that delivered only the audit note', async () => {
+      await finish({ task: { id: 'feature-task', taskType: 'internal', description: 'Implement dependency inventory automation', metadata: {} } });
+      expect(execGh).not.toHaveBeenCalled();
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+    });
+
+    it('judges selected issue requirements when a dependency task is also marked as a claim', async () => {
+      execGit.mockResolvedValue({ stdout: 'claim/issue-42', exitCode: 0 });
+      execGh.mockResolvedValue(JSON.stringify({ number: 42, title: 'Implement inventory', body: 'Implement automated dependency inventory.' }));
+      await finish({ task: { ...task, metadata: { ...task.metadata, claimFlow: true } } });
+      expect(execGh).toHaveBeenCalledTimes(1);
+      expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledWith(expect.objectContaining({
+        objective: expect.stringContaining('Implement automated dependency inventory.'), diff: auditDiff,
+      }));
+      expect(completion()).toMatchObject({ success: false, completionReason: GOAL_FIDELITY_CATEGORY });
+    });
+
+    it('respects the disabled gate before performing extra forge queries', async () => {
+      getGoalFidelityConfigMock.mockResolvedValue(null);
+      await finish();
+      expect(execGh).not.toHaveBeenCalled();
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

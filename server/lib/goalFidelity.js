@@ -90,6 +90,29 @@ export function taskObjective(task) {
 }
 
 /**
+ * The audit-note-only shape from #7899: exactly the two summary fields in an
+ * existing DEPS document. It cannot evidence forge queries or scanner runs.
+ * This is NOT an audit pass: the caller must also establish empty forge
+ * inventories before declining diff-only review. Any other edit, file, mode
+ * change, or truncated diff stays subject to ordinary fidelity review.
+ */
+export function isDependencyAuditSummaryDiff({ diff, truncated }) {
+  if (truncated || typeof diff !== 'string') return false;
+  const header = /^diff --git a\/docs\/DEPS\.md b\/docs\/DEPS\.md\nindex [a-f\d]+\.\.[a-f\d]+ 100644\n--- a\/docs\/DEPS\.md\n\+\+\+ b\/docs\/DEPS\.md\n/;
+  if (!header.test(diff)) return false;
+  const lines = diff.replace(header, '').trimEnd().split('\n');
+  if (!lines[0]?.startsWith('@@ ')) return false;
+  const changed = [];
+  for (const line of lines) {
+    if (line.startsWith(' ') || /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(line)) continue;
+    const field = line.match(/^([+-])\*\*(Last audited|Verdict):\*\* .+/);
+    if (!field) return false;
+    changed.push(`${field[1]}${field[2]}`);
+  }
+  return changed.length === 4 && new Set(changed).size === 4;
+}
+
+/**
  * Resolve the goal-fidelity settings block into `{ enabled, backend, model,
  * effort }`, or `null` when the gate cannot run.
  *
