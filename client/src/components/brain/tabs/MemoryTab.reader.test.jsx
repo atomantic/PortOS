@@ -5,7 +5,7 @@ import MemoryTab from './MemoryTab';
 
 const api = vi.hoisted(() => ({
   getBrainMemories: vi.fn(), getMemoryBackendStatus: vi.fn().mockResolvedValue({ backend: 'postgres' }),
-  getChatgptArchive: vi.fn()
+  getChatgptArchive: vi.fn(), deleteBrainMemory: vi.fn()
 }));
 vi.mock('../../../services/api', () => api);
 vi.mock('../../../services/apiBrain', () => api);
@@ -101,5 +101,53 @@ describe('Brain memory reader', () => {
     expect(screen.getByTestId('location').textContent).toBe('/brain/memory');
     expect(screen.queryByRole('complementary')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+
+describe('Brain deletion preserves the list', () => {
+  it('waits for success, collapses only the deleted row and keeps search and siblings mounted', async () => {
+    let resolveDelete;
+    api.deleteBrainMemory.mockImplementation(() => new Promise(resolve => { resolveDelete = resolve; }));
+    api.getBrainMemories.mockResolvedValue([
+      { id: 'example-a', title: 'Example first' }, { id: 'example-b', title: 'Example second' }
+    ]);
+    mount();
+    const first = await screen.findByRole('button', { name: 'Read Example first' });
+    const second = screen.getByRole('button', { name: 'Read Example second' });
+    const region = screen.getByRole('region', { name: 'Memory entries' });
+    const search = screen.getByRole('textbox', { name: /Search/ });
+    fireEvent.change(search, { target: { value: 'Example' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete', exact: true })[0]);
+    const confirm = screen.getByTitle('Confirm delete');
+    confirm.focus();
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(api.deleteBrainMemory).toHaveBeenCalledTimes(1);
+    expect(first.isConnected).toBe(true);
+    resolveDelete({});
+    await waitFor(() => expect(first.closest('[inert]')).toBeTruthy());
+    expect(second.isConnected).toBe(true);
+    await waitFor(() => expect(first.isConnected).toBe(false));
+    expect(document.activeElement.contains(second)).toBe(true);
+    expect(screen.getByRole('region', { name: 'Memory entries' })).toBe(region);
+    expect(screen.getByRole('button', { name: 'Read Example second' })).toBe(second);
+    expect(search.value).toBe('Example');
+    expect(api.getBrainMemories).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a failed deletion visible and allows retry with reduced motion', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+    api.getBrainMemories.mockResolvedValue([{ id: 'example-a', title: 'Example first' }]);
+    api.deleteBrainMemory.mockRejectedValueOnce(new Error('Example failure')).mockResolvedValueOnce({});
+    mount();
+    await screen.findByRole('button', { name: 'Read Example first' });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));
+    fireEvent.click(screen.getByTitle('Confirm delete'));
+    await waitFor(() => expect(api.deleteBrainMemory).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', { name: 'Read Example first' }).closest('[inert]')).toBeNull();
+    fireEvent.click(screen.getByTitle('Confirm delete'));
+    await waitFor(() => expect(screen.getByText(/No memories yet/)).toBeTruthy());
+    expect(api.getBrainMemories).toHaveBeenCalledTimes(1);
   });
 });

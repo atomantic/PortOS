@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router';
 import * as api from '../../../services/api';
 import {Plus,
@@ -28,6 +28,7 @@ import { timeAgo, formatDateNumeric } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import CopyableId from '../../ui/CopyableId';
+import CollapsibleListItem from '../../ui/CollapsibleListItem';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
 // Progressive list: imported ChatGPT corpora routinely top 1k+ records with
@@ -62,6 +63,11 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   const closeReader = () => navigate(basePath + location.search);
   const [activeType, setActiveType] = useState(fixedType || recordType || 'memories');
   const [records, setRecords] = useState([]);
+  const [removingIds, setRemovingIds] = useState(new Set());
+  const pendingDeletes = useRef(new Set());
+  const currentType = useRef(activeType);
+  currentType.current = activeType;
+  const fetchGeneration = useRef(0);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -75,13 +81,14 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     if (recordType && MEMORY_TABS.some(tab => tab.id === recordType)) setActiveType(recordType);
   }, [recordType]);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
-  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const { isConfirming, requestDelete, cancelDelete } = useConfirmDelete();
 
   useEffect(() => {
     if (fixedType) setActiveType(fixedType);
   }, [fixedType]);
 
   const fetchRecords = useCallback(async () => {
+    const generation = ++fetchGeneration.current;
     setLoading(true);
     let data = [];
 
@@ -105,6 +112,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         break;
     }
 
+    if (generation !== fetchGeneration.current) return;
     // Filter out archived records
     data = data.filter(r => !r.archived);
     setRecords(data);
@@ -113,6 +121,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
 
   useEffect(() => {
     fetchRecords();
+    return () => { fetchGeneration.current += 1; };
   }, [fetchRecords]);
 
   const fetchBackendStatus = useCallback(() => {
@@ -134,13 +143,14 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     const q = searchQuery.toLowerCase();
     if (!q) return records;
     return records.filter((r) => {
+      if (removingIds.has(`${activeType}:${r.id}`)) return true;
       const fields = [
         r.name, r.title, r.context, r.content, r.notes, r.oneLiner,
         r.nextAction, r.mood, ...(r.tags || []), ...(r.followUps || []),
       ];
       return fields.some((f) => f?.toLowerCase().includes(q));
     });
-  }, [records, searchQuery]);
+  }, [records, searchQuery, removingIds, activeType]);
 
   const handleSave = async () => {
     let result;
@@ -237,6 +247,9 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   };
 
   const handleDelete = async (id) => {
+    const key = `${activeType}:${id}`;
+    if (pendingDeletes.current.has(key)) return;
+    pendingDeletes.current.add(key);
     let failed = false;
     switch (activeType) {
       case 'people':
@@ -271,10 +284,11 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         break;
     }
 
-    if (!failed) {
+    pendingDeletes.current.delete(key);
+    if (!failed && currentType.current === activeType) {
       toast.success('Deleted');
       if (recordId === id) closeReader();
-      fetchRecords();
+      setRemovingIds(previous => new Set(previous).add(key));
       onRefresh?.();
     }
   };
@@ -728,7 +742,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             question="Delete this entry? This cannot be undone."
             confirmTitle="Confirm delete"
             cancelTitle="Cancel delete"
-            onConfirm={() => confirmDelete(() => handleDelete(record.id))}
+            onConfirm={() => handleDelete(record.id)}
             onCancel={cancelDelete}
           />
         )}
@@ -886,8 +900,21 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
                 : `No ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'} yet. Add one or capture thoughts in the Inbox.`}
             </p>
           ) : (
-            <div className="space-y-2">
-              {filteredRecords.slice(0, visibleCount).map(record => renderRecord(record))}
+            <div>
+              {filteredRecords.filter((record, index) => index < visibleCount || removingIds.has(`${activeType}:${record.id}`)).map(record => (
+                <CollapsibleListItem key={`${activeType}:${record.id}`}
+                  removing={removingIds.has(`${activeType}:${record.id}`)}
+                  onExited={() => {
+                    setRecords(previous => previous.filter(item => item.id !== record.id));
+                    setRemovingIds(previous => {
+                      const next = new Set(previous);
+                      next.delete(`${activeType}:${record.id}`);
+                      return next;
+                    });
+                  }}>
+                  {renderRecord(record)}
+                </CollapsibleListItem>
+              ))}
               {filteredRecords.length > visibleCount && (
                 <button
                   type="button"
