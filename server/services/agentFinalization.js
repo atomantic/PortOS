@@ -736,7 +736,14 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     : taskObjective(task);
   if (!objective) return noFidelityVerdict(claimFlow ? 'Claimed issue requirements unavailable; claim workflow is not a code objective.' : null);
 
-  const { diff, reason, truncated } = await runWindowDiff(workspacePath, startedAt, { maxChars: MAX_FIDELITY_DIFF_CHARS });
+  // Retain the actual compared commits for an investigator on another checkout.
+  // Pin before reading the diff so a moving HEAD cannot misattribute the review.
+  const headResult = await execGit(['rev-parse', 'HEAD'], workspacePath, { ignoreExitCode: true, timeout: 10_000 }).catch(() => null);
+  const head = headResult?.exitCode === 0 && /^[a-f0-9]{40,64}$/.test(headResult.stdout.trim())
+    ? headResult.stdout.trim() : null;
+  const { diff, base, reason, truncated } = await runWindowDiff(workspacePath, startedAt, {
+    maxChars: MAX_FIDELITY_DIFF_CHARS, ...(head ? { head } : {}),
+  });
   // `reason` = git could not answer; `''` = the run committed nothing. Both skip
   // the review, and neither is a finding: a run with no diff is judged by the
   // commit criterion, which is the check that actually owns that question.
@@ -752,6 +759,8 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');
   return {
     verdict: result.verdict,
+    // Handoff only: do not persist the task prompt again in the run record.
+    context: { objective, base, head },
     review: {
       verdict: result.verdict,
       missing: result.missing,
@@ -1248,7 +1257,7 @@ export async function finalizeAgent({
   // not evaluate that graph just to be told there is nothing to act on.
   if (goalFidelityFollowUpApplies(fidelity.review, 'any-finding')) {
     const followUp = await import('./goalFidelityFollowUp.js')
-      .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review }))
+      .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review, context: fidelity.context }))
       .catch(err => {
         emitLog('warn', `⚠️ Goal-fidelity follow-up failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
         return null;

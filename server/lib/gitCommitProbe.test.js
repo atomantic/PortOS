@@ -154,6 +154,22 @@ describe('runWindowDiff (#5994)', () => {
     expect(await runWindowDiff('/tmp/ws', SINCE)).toMatchObject({ diff: null, reason: 'could not read the run window diff' });
   });
 
+  it('uses a pinned review head for both ancestry and the diff when HEAD can move', async () => {
+    const head = 'a'.repeat(40);
+    const base = 'b'.repeat(40);
+    vi.mocked(resolveRemoteDefaultRef).mockResolvedValue({ ref: 'origin/main', sha: base });
+    vi.mocked(execGit)
+      .mockResolvedValueOnce(baseOk)
+      .mockResolvedValueOnce(baseOk)
+      .mockResolvedValueOnce({ exitCode: 0, stdout: 'pinned diff', stderr: '' });
+    expect(await runWindowDiff('/tmp/ws', SINCE, { head })).toMatchObject({ base, diff: 'pinned diff' });
+    expect(execGit.mock.calls.map(([args]) => args)).toEqual([
+      ['rev-list', '-n', '1', '--before=2026-08-08T18:23:30.000Z', head],
+      ['merge-base', head, base],
+      ['diff', '--no-color', '--no-ext-diff', `${base}..${head}`],
+    ]);
+  });
+
   it('declines (never throws) with a reason for an unusable window, an unresolvable base, and a rejecting git', async () => {
     expect(await runWindowDiff('', SINCE)).toMatchObject({ diff: null, reason: 'no workspace path' });
     expect(await runWindowDiff('/tmp/ws', NaN)).toMatchObject({ diff: null, reason: 'no run window' });

@@ -346,7 +346,7 @@ export function buildGoalFidelityFalsePositiveReportBlock({ apiBase, findingFing
     '',
     agentApiAuthNote(),
     '',
-    '`gap` is what the REVIEWER could not see, not what you did about it — it is what the queued calibration is keyed on, so pick the one that names the missing context. Reports sharing a gap fold into one calibration task. Then finish: say in your summary that the finding was overturned and that you reported it, and ship nothing else.',
+    '`gap` is what the REVIEWER could not see, not what you did about it — it is what the queued calibration is keyed on, so pick the one that names the missing context. Reports sharing a gap fold into one calibration task. After reporting, complete any tracked issue resolution required by the investigation before finishing. Say in your summary that the finding was overturned and that you reported it, and ship nothing else.',
   ].join('\n');
 }
 

@@ -140,8 +140,8 @@ describe('goalFidelityIssueMarker', () => {
   // dedup read as "nothing filed" on every run.
   it('is a single token with no forge search metacharacters', () => {
     const marker = goalFidelityIssueMarker('goal-fidelity:user:comics/add-retry-caps');
-    expect(marker).toBe('portosgf-goal-fidelity-user-comics-add-retry-caps');
-    expect(marker).toMatch(/^[a-z0-9-]+$/);
+    expect(marker).toMatch(/^portosgf-[a-f0-9]{40}$/);
+    expect(marker).not.toContain('comics');
   });
 
   it('distinct fingerprints keep distinct markers', () => {
@@ -171,18 +171,22 @@ describe('issueMatchesGoalFidelityMarker', () => {
 
   it('round-trips against the body the filer actually writes', () => {
     const { body } = buildGoalFidelityIssue({
+      context: CONTEXT,
       task: { description: 'Add retry caps' }, review: review(), fingerprint,
     });
     expect(issueMatchesGoalFidelityMarker({ body }, fingerprint)).toBe(true);
   });
 });
 
+const CONTEXT = { base: 'a'.repeat(40), head: 'b'.repeat(40) };
+
 describe('buildGoalFidelityIssue', () => {
   const fingerprint = 'goal-fidelity:user:comics/add-retry-caps';
 
   it('names the verdict, the objective, and both item lists', () => {
     const { title, body } = buildGoalFidelityIssue({
-      task: { description: 'Add retry caps to the queue\nplus detail' },
+      context: CONTEXT,
+      task: { description: 'Add retry caps to the queue\nplus detail', metadata: { prompt: 'Verify persisted retries.' } },
       review: review({ unrequested: ['a new settings page'] }),
       fingerprint,
     });
@@ -191,6 +195,8 @@ describe('buildGoalFidelityIssue', () => {
     expect(body).toContain('a new settings page');
     expect(body).toContain('The diff rewrites the scheduler instead.');
     expect(body).toContain('`ollama`');
+    expect(body).toContain('plus detail');
+    expect(body).toContain('Verify persisted retries.');
   });
 
   // A marker parked at the bottom drops out of exactly the long issues most
@@ -198,6 +204,7 @@ describe('buildGoalFidelityIssue', () => {
   // rescan ever sees them.
   it('puts the dedup marker in the first 500 characters', () => {
     const { body } = buildGoalFidelityIssue({
+      context: CONTEXT,
       task: { description: 'Add retry caps' },
       review: review({ missing: Array.from({ length: 10 }, (_, i) => 'x'.repeat(400) + i) }),
       fingerprint,
@@ -207,6 +214,7 @@ describe('buildGoalFidelityIssue', () => {
 
   it('says so explicitly when the review judged a truncated diff', () => {
     const { body } = buildGoalFidelityIssue({
+      context: CONTEXT,
       task: { description: 'Add retry caps' }, review: review({ diffTruncated: true }), fingerprint,
     });
     expect(body).toContain('TRUNCATED diff');
@@ -214,6 +222,7 @@ describe('buildGoalFidelityIssue', () => {
 
   it('bounds the title and the body', () => {
     const { title, body } = buildGoalFidelityIssue({
+      context: CONTEXT,
       task: { description: 'x'.repeat(5_000) },
       review: review({ missing: Array.from({ length: 40 }, () => 'y'.repeat(400)) }),
       fingerprint,
@@ -224,6 +233,7 @@ describe('buildGoalFidelityIssue', () => {
 
   it('reads as a finding even when the review named nothing specific', () => {
     const { body } = buildGoalFidelityIssue({
+      context: CONTEXT,
       task: { description: 'Add retry caps' },
       review: review({ missing: [], unrequested: [], evidence: '' }),
       fingerprint,
