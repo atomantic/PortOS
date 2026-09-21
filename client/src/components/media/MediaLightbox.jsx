@@ -202,7 +202,7 @@ export default function MediaLightbox({
   // Reset refine modal when the previewed item changes.
   useEffect(() => { setRefineOpen(false); setPromptFromOpen(false); }, [item?.key]);
 
-  const { onTouchStart, onTouchEnd } = useSwipeNav({ onPrevious, onNext, hasPrevious, hasNext });
+  const { onTouchStart, onTouchEnd, onTouchCancel } = useSwipeNav({ onPrevious, onNext, hasPrevious, hasNext });
 
   if (!item) return null;
   const isVideo = item.kind === 'video';
@@ -355,6 +355,12 @@ export default function MediaLightbox({
           className="flex-1 bg-black flex items-center justify-center min-h-0 relative"
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
+          onTouchCancel={onTouchCancel}
+          // Keep native pinch/pan available for inspecting an image. The
+          // swipe hook explicitly opts out once a second finger or a zoomed
+          // visual viewport appears, so native zoom cannot turn into gallery
+          // navigation while the browser is handling the gesture.
+          style={{ touchAction: 'manipulation' }}
         >
           {isVideo ? (
             /* Mobile playback contract:
