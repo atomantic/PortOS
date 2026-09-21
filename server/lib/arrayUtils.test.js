@@ -1,5 +1,22 @@
 import { describe, it, expect, vi } from 'vitest';
-import { shuffle, dedupeByKey } from './arrayUtils.js';
+import { asArray, shuffle, dedupeByKey } from './arrayUtils.js';
+
+describe('asArray', () => {
+  it('preserves array identity and contents, including empty arrays', () => {
+    for (const input of [[], [null, 0, false, '']]) {
+      Object.freeze(input);
+      expect(asArray(input)).toBe(input);
+    }
+  });
+
+  it('rejects non-arrays without sharing mutable fallback state', () => {
+    asArray(null).push('previous fallback');
+    const inputs = [undefined, null, false, 0, 'value', {}, { 0: 'value', length: 1 }, new Set(['value']), new Uint8Array([1])];
+    for (const input of inputs) {
+      expect(asArray(input)).toEqual([]);
+    }
+  });
+});
 
 describe('shuffle', () => {
   it('returns a new array — never mutates the input', () => {

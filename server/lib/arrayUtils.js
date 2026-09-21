@@ -2,6 +2,9 @@
  * Array utilities — pure, side-effect-free helpers shared across services.
  */
 
+/** Return array inputs unchanged, or a fresh empty array for anything else. */
+export const asArray = (value) => (Array.isArray(value) ? value : []);
+
 /**
  * Fisher-Yates shuffle. Returns a new array in randomized order; never
  * mutates the input. Use this everywhere an array needs a uniform random
