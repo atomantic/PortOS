@@ -21,7 +21,7 @@
  */
 
 import { join } from 'path';
-import { createHash } from 'crypto';
+import { contentHash } from './contentHash.js';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
@@ -86,10 +86,6 @@ const UNASSIGNED_PLOTLINE = Object.freeze({ id: '_unassigned', label: 'Unassigne
 
 const nowIso = () => new Date().toISOString();
 const colorForIndex = (i) => PLOTLINE_COLORS[i % PLOTLINE_COLORS.length];
-
-// Content hash — pins the analyzed manuscript so a later edit flips the outline
-// to `stale`. One-liner matching editorialAnalysis.contentHash.
-const contentHash = (text) => createHash('sha256').update(text || '').digest('hex');
 
 // Defense-in-depth: refuse path-traversal-shaped ids before they reach the
 // on-disk outline path. Series ids are `ser-<uuid>` — restrict to a safe charset.

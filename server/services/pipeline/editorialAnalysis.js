@@ -16,7 +16,7 @@
  */
 
 import { join } from 'path';
-import { createHash } from 'crypto';
+import { contentHash } from './contentHash.js';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { runStagedLLM, resolveStageContext } from '../stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
@@ -47,11 +47,6 @@ const NOTE_MAX = 500;
 const ANALYSIS_OUTPUT_RESERVE_TOKENS = 4_000;
 
 const nowIso = () => new Date().toISOString();
-
-// Snapshot content hash — sourceContentHash pins the analyzed draft so a later
-// edit flips the issue to `stale`. One-liner (matches writersRoom/local.js's
-// contentHash) — not worth a shared lib module + barrel entry.
-const contentHash = (text) => createHash('sha256').update(text || '').digest('hex');
 
 // Defense-in-depth: refuse path-traversal-shaped ids before interpolating into
 // the on-disk snapshot path. Issue ids are `iss-<uuid>` — restrict to a safe

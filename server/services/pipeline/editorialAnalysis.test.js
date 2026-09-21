@@ -94,7 +94,8 @@ describe('analyzeIssue', () => {
     expect(snap.providerId).toBe('mock-provider');
     expect(snap.runId).toBe('run-1');
     expect(snap.sourceStage).toBe('prose');
-    expect(snap.sourceContentHash).toBeTruthy();
+    // Keep existing persisted snapshot hashes compatible across refactors.
+    expect(snap.sourceContentHash).toBe('33d5cbd89afe65179526fec2bf154661bc0ae43e248397ee2421134e8aed35fe');
     // Canon must be resolved from the SERIES OBJECT (not the seriesId string) —
     // a regression to getSeriesCanon(issue.seriesId) would silently drop the
     // character hints in production while a loose mock stayed green.
