@@ -52,7 +52,7 @@ describe('updateSubmodule', () => {
 
   it('updates without committing when commit is not requested', async () => {
     scriptGit();
-    const { updateSubmodule } = await import('./git.js');
+    const { updateSubmodule } = await import('./gitSubmodules.js');
 
     const result = await updateSubmodule(SUB, { repoPath: REPO });
 
@@ -64,7 +64,7 @@ describe('updateSubmodule', () => {
 
   it('commits the pointer bump on the default branch when commit is requested', async () => {
     scriptGit();
-    const { updateSubmodule } = await import('./git.js');
+    const { updateSubmodule } = await import('./gitSubmodules.js');
 
     const result = await updateSubmodule(SUB, { repoPath: REPO, commit: true });
 
@@ -83,7 +83,7 @@ describe('updateSubmodule', () => {
 
   it('refuses to commit when the repo is checked out on another branch', async () => {
     scriptGit({ defaultBranch: 'main', currentBranch: 'feature/wip' });
-    const { updateSubmodule } = await import('./git.js');
+    const { updateSubmodule } = await import('./gitSubmodules.js');
 
     const result = await updateSubmodule(SUB, { repoPath: REPO, commit: true });
 
@@ -99,7 +99,7 @@ describe('updateSubmodule', () => {
 
   it('reports no-changes instead of creating an empty commit', async () => {
     scriptGit({ stagedPointer: false });
-    const { updateSubmodule } = await import('./git.js');
+    const { updateSubmodule } = await import('./gitSubmodules.js');
 
     const result = await updateSubmodule(SUB, { repoPath: REPO, commit: true });
 
@@ -120,7 +120,7 @@ describe('updateSubmodule', () => {
       return scripted(args, cwd, options);
     });
     clearStaleGitLock.mockReturnValue('/Users/me/project/.git/modules/lib/dep/index.lock');
-    const { updateSubmodule } = await import('./git.js');
+    const { updateSubmodule } = await import('./gitSubmodules.js');
 
     const result = await updateSubmodule(SUB, { repoPath: REPO });
 
@@ -139,7 +139,7 @@ describe('updateSubmodule', () => {
       return ok(' 1111111222222233333334444444555555566 lib/dep (heads/main)\n');
     });
     clearStaleGitLock.mockReturnValue(null);
-    const { updateSubmodule } = await import('./git.js');
+    const { updateSubmodule } = await import('./gitSubmodules.js');
 
     await expect(updateSubmodule(SUB, { repoPath: REPO })).rejects.toThrow(/Unable to create/);
     expect(callsFor('submodule').filter(([args]) => args[1] === 'update')).toHaveLength(1);
@@ -147,19 +147,24 @@ describe('updateSubmodule', () => {
 
   it('rejects a path that is not a submodule of the repo', async () => {
     scriptGit();
-    const { updateSubmodule } = await import('./git.js');
+    const { updateSubmodule } = await import('./gitSubmodules.js');
 
     await expect(updateSubmodule('lib/other', { repoPath: REPO })).rejects.toThrow(/Unknown submodule path/);
     expect(callsFor('submodule').filter(([args]) => args[1] === 'update')).toHaveLength(0);
   });
 
-  it('exports submodule operations directly from gitSubmodules.js', async () => {
+  it('keeps submodule operations on their declaring service', async () => {
     const direct = await import('./gitSubmodules.js');
     const facade = await import('./git.js');
-    expect(direct.getSubmodules).toBe(facade.getSubmodules);
-    expect(direct.getSubmoduleOverview).toBe(facade.getSubmoduleOverview);
-    expect(direct.getSubmodulePaths).toBe(facade.getSubmodulePaths);
-    expect(direct.updateSubmodule).toBe(facade.updateSubmodule);
+    expect(Object.keys(direct)).toEqual(expect.arrayContaining([
+      'getSubmodules',
+      'getSubmoduleOverview',
+      'getSubmodulePaths',
+      'updateSubmodule'
+    ]));
+    expect(facade.getSubmodules).toBeUndefined();
+    expect(facade.getSubmoduleOverview).toBeUndefined();
+    expect(facade.getSubmodulePaths).toBeUndefined();
+    expect(facade.updateSubmodule).toBeUndefined();
   });
 });
-

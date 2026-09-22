@@ -14,10 +14,6 @@ vi.mock('../services/git.js', () => ({
   push: vi.fn().mockResolvedValue({ pushed: true }),
   getGitInfo: vi.fn().mockResolvedValue({}),
   getBranches: vi.fn().mockResolvedValue([]),
-  getSubmodules: vi.fn().mockResolvedValue([]),
-  getSubmoduleOverview: vi.fn().mockResolvedValue({ submodules: [], defaultBranch: 'main' }),
-  getSubmodulePaths: vi.fn().mockResolvedValue([]),
-  updateSubmodule: vi.fn().mockResolvedValue({ newCommit: 'abc', committed: false }),
   getAppById: vi.fn(),
   updateBranches: vi.fn().mockResolvedValue({}),
   getBranchComparison: vi.fn().mockResolvedValue({}),
@@ -31,6 +27,13 @@ vi.mock('../services/git.js', () => ({
   checkoutRemoteBranch: vi.fn().mockResolvedValue({}),
   deleteMergedBranches: vi.fn().mockResolvedValue({}),
   deleteBranch: vi.fn().mockResolvedValue({})
+}));
+
+vi.mock('../services/gitSubmodules.js', () => ({
+  getSubmodules: vi.fn().mockResolvedValue([]),
+  getSubmoduleOverview: vi.fn().mockResolvedValue({ submodules: [], defaultBranch: 'main' }),
+  getSubmodulePaths: vi.fn().mockResolvedValue([]),
+  updateSubmodule: vi.fn().mockResolvedValue({ newCommit: 'abc', committed: false })
 }));
 
 vi.mock('../services/apps.js', () => ({
@@ -63,6 +66,7 @@ import { existsSync, statSync, realpathSync } from 'fs';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import * as cosAgentLifecycleService from '../services/cosAgentLifecycle.js';
 import * as gitService from '../services/git.js';
+import * as gitSubmoduleService from '../services/gitSubmodules.js';
 
 function makeApp() {
   const app = express();
@@ -318,7 +322,7 @@ describe('git routes — submodules', () => {
   });
 
   it('GET /submodules/status without repoPath reads the PortOS checkout', async () => {
-    gitService.getSubmoduleOverview.mockResolvedValue({
+    gitSubmoduleService.getSubmoduleOverview.mockResolvedValue({
       submodules: [{ path: 'lib/dep', name: 'dep' }],
       defaultBranch: 'main'
     });
@@ -329,7 +333,7 @@ describe('git routes — submodules', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ submodules: [{ path: 'lib/dep', name: 'dep' }], defaultBranch: 'main' });
     // Undefined, not a string — the service falls back to the PortOS checkout.
-    expect(gitService.getSubmoduleOverview).toHaveBeenCalledWith(undefined);
+    expect(gitSubmoduleService.getSubmoduleOverview).toHaveBeenCalledWith(undefined);
   });
 
   it('GET /submodules/status?repoPath scopes the read to that repo', async () => {
@@ -338,7 +342,7 @@ describe('git routes — submodules', () => {
       .get(`/api/git/submodules/status?repoPath=${encodeURIComponent(WORKSPACE)}`);
 
     expect(res.status).toBe(200);
-    expect(gitService.getSubmoduleOverview).toHaveBeenCalledWith(WORKSPACE);
+    expect(gitSubmoduleService.getSubmoduleOverview).toHaveBeenCalledWith(WORKSPACE);
   });
 
   it('GET /submodules/status rejects a repoPath outside allowed roots', async () => {
@@ -350,11 +354,11 @@ describe('git routes — submodules', () => {
       .get('/api/git/submodules/status?repoPath=%2Fetc');
 
     expect(res.status).toBe(403);
-    expect(gitService.getSubmoduleOverview).not.toHaveBeenCalled();
+    expect(gitSubmoduleService.getSubmoduleOverview).not.toHaveBeenCalled();
   });
 
   it('POST /submodules/update forwards repoPath + commit and echoes the commit result', async () => {
-    gitService.updateSubmodule.mockResolvedValue({
+    gitSubmoduleService.updateSubmodule.mockResolvedValue({
       newCommit: 'def4567',
       committed: true,
       commitSha: 'aaa1111',
@@ -369,7 +373,7 @@ describe('git routes — submodules', () => {
       .send({ path: 'lib/dep', repoPath: WORKSPACE, commit: true });
 
     expect(res.status).toBe(200);
-    expect(gitService.updateSubmodule).toHaveBeenCalledWith('lib/dep', { repoPath: WORKSPACE, commit: true });
+    expect(gitSubmoduleService.updateSubmodule).toHaveBeenCalledWith('lib/dep', { repoPath: WORKSPACE, commit: true });
     expect(res.body).toEqual({
       success: true,
       newCommit: 'def4567',
@@ -380,7 +384,7 @@ describe('git routes — submodules', () => {
       currentBranch: 'main'
     });
     // The service owns the known-submodule check; the route must not re-list.
-    expect(gitService.getSubmodulePaths).not.toHaveBeenCalled();
+    expect(gitSubmoduleService.getSubmodulePaths).not.toHaveBeenCalled();
   });
 
   it('POST /submodules/update defaults commit to false when the flag is absent', async () => {
@@ -390,7 +394,7 @@ describe('git routes — submodules', () => {
       .send({ path: 'lib/dep' });
 
     expect(res.status).toBe(200);
-    expect(gitService.updateSubmodule).toHaveBeenCalledWith('lib/dep', { repoPath: undefined, commit: false });
+    expect(gitSubmoduleService.updateSubmodule).toHaveBeenCalledWith('lib/dep', { repoPath: undefined, commit: false });
   });
 
   it('POST /submodules/update rejects a missing path with a 400', async () => {
@@ -398,11 +402,11 @@ describe('git routes — submodules', () => {
     const res = await request(app).post('/api/git/submodules/update').send({});
 
     expect(res.status).toBe(400);
-    expect(gitService.updateSubmodule).not.toHaveBeenCalled();
+    expect(gitSubmoduleService.updateSubmodule).not.toHaveBeenCalled();
   });
 
   it('POST /submodules/update surfaces the service 400 for an unknown submodule path', async () => {
-    gitService.updateSubmodule.mockRejectedValue(
+    gitSubmoduleService.updateSubmodule.mockRejectedValue(
       Object.assign(new Error('Unknown submodule path: lib/other'), { status: 400, code: 'VALIDATION_ERROR' })
     );
 
@@ -425,6 +429,6 @@ describe('git routes — submodules', () => {
       .send({ path: 'lib/dep', repoPath: '/etc' });
 
     expect(res.status).toBe(403);
-    expect(gitService.updateSubmodule).not.toHaveBeenCalled();
+    expect(gitSubmoduleService.updateSubmodule).not.toHaveBeenCalled();
   });
 });

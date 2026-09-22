@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { existsSync, statSync, realpathSync } from 'fs';
 import { resolve } from 'path';
 import * as git from '../services/git.js';
+import * as gitSubmodules from '../services/gitSubmodules.js';
 import * as appsService from '../services/apps.js';
 import { getAgents } from '../services/cosAgentLifecycle.js';
 import { protectedAgentIds } from '../services/agentState.js';
@@ -68,7 +69,7 @@ const router = Router();
 router.get('/submodules/status', asyncHandler(async (req, res) => {
   const { repoPath } = validateRequest(submoduleStatusQuerySchema, req.query);
   if (repoPath) assertAllowedWorkspace(repoPath);
-  res.json(await git.getSubmoduleOverview(repoPath));
+  res.json(await gitSubmodules.getSubmoduleOverview(repoPath));
 }));
 
 // POST /api/git/submodules/update - Update a specific submodule
@@ -77,7 +78,7 @@ router.post('/submodules/update', asyncHandler(async (req, res) => {
   if (repoPath) assertAllowedWorkspace(repoPath);
   // The service owns the "is this a real submodule of that repo?" check and
   // throws a 400 ServerError — re-listing them here would just spawn git twice.
-  const result = await git.updateSubmodule(path, { repoPath, commit });
+  const result = await gitSubmodules.updateSubmodule(path, { repoPath, commit });
   res.json({ success: true, ...result });
 }));
 
