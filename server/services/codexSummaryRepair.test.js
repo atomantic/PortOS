@@ -111,6 +111,19 @@ describe('repairCodexTaskSummary', () => {
     expect(persisted.metadata.simplifySummary).toBeNull();
   });
 
+  it('returns null without throwing when metadata.json is malformed or empty', async () => {
+    const wonky = 'x'.repeat(25_000);
+    const output = 'apply patch\ntokens used\n100\nThe real summary.';
+    const agent = { id: 'agent-test', metadata: { taskSummary: wonky } };
+
+    for (const body of ['{not json', '', '   ', 'null', '[]']) {
+      await writeFile(join(agentDir, 'output.txt'), output);
+      await writeFile(join(agentDir, 'metadata.json'), body);
+      await expect(repairCodexTaskSummary(agentDir, agent)).resolves.toBeNull();
+      expect(await readFile(join(agentDir, 'metadata.json'), 'utf-8')).toBe(body);
+    }
+  });
+
   it('repairs when only simplifySummary is wonky (taskSummary already small)', async () => {
     const wonkySimplify = 'y'.repeat(25_000);
     const output = 'apply patch\ntokens used\n100\nFinal summary.';
