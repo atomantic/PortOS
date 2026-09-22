@@ -43,6 +43,7 @@ import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
 import { CodexRoutingNotice, GatewayKeyHint } from './ProviderNotices';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import ProviderEnvVars from './ProviderEnvVars';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist".
 // The editor states the same thing in its own inline banner, in prose.
@@ -637,16 +638,11 @@ export default function ProviderCard({
             </p>
           )}
           {provider.envVars && Object.keys(provider.envVars).length > 0 && (
-            <div className="text-xs mt-1">
-              <span className="text-gray-400">Env:</span>
-              {Object.entries(provider.envVars).map(([k, v]) => (
-                <div key={k}>
-                  <code className="ml-1 text-orange-400">
-                    {k}={provider.secretEnvVars?.includes(k) ? (v === '' ? '(not set)' : '***') : v}
-                  </code>
-                </div>
-              ))}
-            </div>
+            <ProviderEnvVars
+              envVars={provider.envVars}
+              secretEnvVars={provider.secretEnvVars}
+              className="mt-1"
+            />
           )}
         </div>
 

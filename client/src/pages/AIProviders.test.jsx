@@ -773,6 +773,35 @@ describe('handleAddSample error handling', () => {
     expect(reEnabledAddBtn).not.toBeDisabled();
     expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Failed to add provider: Failed to create provider'));
   });
+
+  it('renders sample preset envVars using ProviderEnvVars with collapse affordance', async () => {
+    const longVal = 'y'.repeat(120);
+    api.getSampleProviders.mockResolvedValue({
+      providers: [
+        {
+          id: 'sample-long-env',
+          name: 'Sample Long Env',
+          type: 'cli',
+          command: 'opencode',
+          enabled: true,
+          models: ['model-1'],
+          envVars: {
+            OPENCODE_CONFIG_CONTENT: longVal,
+          },
+        },
+      ],
+    });
+
+    await renderPage();
+    await clickLoadSamples();
+
+    expect(await screen.findByText('Sample Long Env')).toBeInTheDocument();
+    expect(screen.getByText('Env:')).toBeInTheDocument();
+    const expandBtn = screen.getByRole('button', { name: /expand opencode_config_content value/i });
+    expect(expandBtn).toBeInTheDocument();
+    fireEvent.click(expandBtn);
+    expect(screen.getByRole('button', { name: /collapse opencode_config_content value/i })).toBeInTheDocument();
+  });
 });
 
 describe('handleAddAllSamples partial failure handling', () => {

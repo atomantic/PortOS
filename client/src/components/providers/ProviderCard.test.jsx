@@ -390,3 +390,24 @@ describe('ProviderCard default highlight', () => {
   });
 });
 
+describe('ProviderCard envVars rendering', () => {
+  it('renders provider envVars using ProviderEnvVars component with collapse capability', () => {
+    const longVal = 'x'.repeat(120);
+    renderCard(wrapper({
+      envVars: {
+        OPENCODE_CONFIG_CONTENT: longVal,
+        SECRET_KEY: 'secret123',
+      },
+      secretEnvVars: ['SECRET_KEY'],
+    }));
+
+    expect(screen.getByText('Env:')).toBeInTheDocument();
+    expect(screen.getByText('SECRET_KEY=***')).toBeInTheDocument();
+    const expandBtn = screen.getByRole('button', { name: /expand opencode_config_content value/i });
+    expect(expandBtn).toBeInTheDocument();
+
+    fireEvent.click(expandBtn);
+    expect(screen.getByRole('button', { name: /collapse opencode_config_content value/i })).toBeInTheDocument();
+  });
+});
+

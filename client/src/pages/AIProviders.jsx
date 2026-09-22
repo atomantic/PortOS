@@ -21,6 +21,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import OverflowMenu from '../components/ui/OverflowMenu';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import ProviderCard from '../components/providers/ProviderCard';
+import ProviderEnvVars from '../components/providers/ProviderEnvVars';
 import ProviderForm from '../components/providers/ProviderForm';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 import FleetProviderSetup from '../components/providers/FleetProviderSetup';
@@ -957,16 +958,11 @@ export default function AIProviders() {
                         </p>
                       )}
                       {provider.envVars && Object.keys(provider.envVars).length > 0 && (
-                        <div className="mt-0.5">
-                          <span>Env:</span>
-                          {Object.entries(provider.envVars).map(([k, v]) => (
-                            <div key={k}>
-                              <code className="ml-1 text-orange-400">
-                                {k}={provider.secretEnvVars?.includes(k) ? (v === '' ? '(not set)' : '***') : v}
-                              </code>
-                            </div>
-                          ))}
-                        </div>
+                        <ProviderEnvVars
+                          envVars={provider.envVars}
+                          secretEnvVars={provider.secretEnvVars}
+                          className="mt-0.5"
+                        />
                       )}
                     </div>
                   </div>
