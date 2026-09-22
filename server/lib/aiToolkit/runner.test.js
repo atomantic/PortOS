@@ -750,9 +750,10 @@ describe('AI Toolkit runner service', () => {
     vi.stubGlobal('fetch', fetch);
 
     const onRunFailed = vi.fn();
+    const onRunCanceled = vi.fn();
     const runner = createRunnerService({
       dataDir,
-      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed }
+      hooks: { ensureProviderReady: async () => ({ success: true }), onRunFailed, onRunCanceled }
     });
 
     let done;
@@ -782,6 +783,7 @@ describe('AI Toolkit runner service', () => {
     // A cancellation is evidence about the operator, not the provider: no
     // failure hook, so nothing benches the provider or escalates a task.
     expect(onRunFailed).not.toHaveBeenCalled();
+    expect(onRunCanceled).toHaveBeenCalledWith({ runId: 'run-stopped' });
     expect(await runner.isRunActive('run-stopped')).toBe(false);
     // Persisted too — /runs replays the record, not the in-memory result.
     const persisted = JSON.parse(await readFile(join(dataDir, 'runs', 'run-stopped', 'metadata.json'), 'utf-8'));

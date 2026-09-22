@@ -15,10 +15,10 @@ vi.mock('../services/socket', () => ({
 }));
 
 const getUpdateStatus = vi.fn();
-const getActiveProcessing = vi.fn();
+const getSystemActivity = vi.fn();
 const ignoreUpdateVersion = vi.fn(() => Promise.resolve({}));
 vi.mock('../services/api', () => ({
-  getActiveProcessing: (...a) => getActiveProcessing(...a),
+  getSystemActivity: (...a) => getSystemActivity(...a),
   PORTOS_APP_ID: 'portos-default',
   getUpdateStatus: (...a) => getUpdateStatus(...a),
   ignoreUpdateVersion: (...a) => ignoreUpdateVersion(...a),
@@ -36,6 +36,13 @@ vi.mock('./ui/Toast', () => ({ default: Object.assign((...a) => toastFn(...a), {
 
 import UpdateBanners from './UpdateBanners';
 import { __internal } from '../hooks/useUpdateChecker';
+import { __resetSystemActivityForTests, SYSTEM_ACTIVITY_COALESCE_MS } from '../hooks/useSystemActivity';
+
+const idleActivity = { activity: { idle: true, activeCount: 0, queuedCount: 0, blockers: [] } };
+const busyActivity = (extra = {}) => ({
+  ...extra,
+  activity: { idle: false, activeCount: 1, queuedCount: extra.jobs?.some((job) => job.status === 'queued') ? 1 : 0, blockers: [] },
+});
 
 const renderBanners = () => render(<MemoryRouter><UpdateBanners /></MemoryRouter>);
 
@@ -46,14 +53,18 @@ beforeEach(() => {
   navigate.mockClear();
   toastFn.mockClear();
   ignoreUpdateVersion.mockClear();
-  getActiveProcessing.mockReset();
-  getActiveProcessing.mockResolvedValue({ agents: { active: 0 }, jobs: [], extras: { imageTo3d: [] } });
+  getSystemActivity.mockReset();
+  getSystemActivity.mockResolvedValue(idleActivity);
   getUpdateStatus.mockReset();
   getUpdateStatus.mockResolvedValue({});
   localStorage.clear();
 });
 
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => {
+  cleanup();
+  __resetSystemActivityForTests();
+  vi.useRealTimers();
+});
 
 describe('UpdateBanners', () => {
   it('renders nothing when the install is current', async () => {
@@ -64,28 +75,36 @@ describe('UpdateBanners', () => {
   });
 
   it.each([
-    ['agents', { agents: { active: 1 } }],
-    ['media renders', { jobs: [{ id: 'render', status: 'running' }] }],
-    ['queued media', { jobs: [{ id: 'render', status: 'queued' }] }],
-    ['3D renders', { extras: { imageTo3d: [{ id: 'model' }] } }],
-  ])('hides both advisories during %s and restores them when work drains', async (_label, busy) => {
+    ['agents', busyActivity({ agents: { active: 1 } })],
+    ['media renders', busyActivity({ jobs: [{ id: 'render', status: 'running' }] })],
+    ['queued media', busyActivity({ jobs: [{ id: 'render', status: 'queued' }] })],
+    ['3D renders', busyActivity({ extras: { imageTo3d: [{ id: 'model' }] } })],
+    ['an LLM run', busyActivity({ llm: { trusted: true, active: 1 } })],
+    ['a backup', busyActivity({ backup: { inProgress: true } })],
+  ])('hides both advisories during %s and restores them when the verdict drains', async (_label, busy) => {
     vi.useFakeTimers();
     getUpdateStatus.mockResolvedValue({
       installState: { outOfSync: true, currentCommit: 'abc123' },
       updateAvailable: true, currentVersion: '1.0.0', latestRelease: { version: '1.1.0' },
     });
-    getActiveProcessing.mockResolvedValue(busy);
+    getSystemActivity.mockResolvedValue(busy);
     renderBanners();
     await flush();
     expect(screen.queryByRole('status')).toBeNull();
 
-    getActiveProcessing.mockResolvedValue({ agents: { active: 0 }, jobs: [] });
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    getSystemActivity.mockResolvedValue(idleActivity);
+    await act(async () => {
+      handlers.get('system:activity')();
+      await vi.advanceTimersByTimeAsync(SYSTEM_ACTIVITY_COALESCE_MS);
+    });
     expect(screen.getByRole('button', { name: 'Reconcile' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Update' })).toBeTruthy();
 
-    getActiveProcessing.mockResolvedValue(busy);
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    getSystemActivity.mockResolvedValue(busy);
+    await act(async () => {
+      handlers.get('system:activity')();
+      await vi.advanceTimersByTimeAsync(SYSTEM_ACTIVITY_COALESCE_MS);
+    });
     expect(screen.queryByRole('status')).toBeNull();
     expect(localStorage.getItem(__internal.OUT_OF_SYNC_DISMISS_KEY)).toBeNull();
     expect(ignoreUpdateVersion).not.toHaveBeenCalled();
@@ -94,12 +113,39 @@ describe('UpdateBanners', () => {
   it('waits for the first activity snapshot before showing an advisory', async () => {
     getUpdateStatus.mockResolvedValue({ installState: { outOfSync: true, currentCommit: 'abc123' } });
     let resolveActivity;
-    getActiveProcessing.mockReturnValue(new Promise(resolve => { resolveActivity = resolve; }));
+    getSystemActivity.mockReturnValue(new Promise(resolve => { resolveActivity = resolve; }));
     renderBanners();
     await flush();
     expect(screen.queryByRole('status')).toBeNull();
-    await act(async () => { resolveActivity({ agents: { active: 0 }, jobs: [] }); });
+    await act(async () => { resolveActivity(idleActivity); });
     expect(screen.getByRole('button', { name: 'Reconcile' })).toBeTruthy();
+  });
+
+  it('hides an advisory again when a later activity read fails', async () => {
+    vi.useFakeTimers();
+    getUpdateStatus.mockResolvedValue({ installState: { outOfSync: true, currentCommit: 'abc123' } });
+    renderBanners();
+    await flush();
+    expect(screen.getByRole('button', { name: 'Reconcile' })).toBeTruthy();
+
+    getSystemActivity.mockRejectedValue(new Error('activity unavailable'));
+    await act(async () => {
+      handlers.get('system:activity')();
+      await vi.advanceTimersByTimeAsync(SYSTEM_ACTIVITY_COALESCE_MS);
+    });
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(localStorage.getItem(__internal.OUT_OF_SYNC_DISMISS_KEY)).toBeNull();
+  });
+
+  it('does not poll processing while an advisory sits idle', async () => {
+    vi.useFakeTimers();
+    getUpdateStatus.mockResolvedValue({ installState: { outOfSync: true, currentCommit: 'abc123' } });
+    renderBanners();
+    await flush();
+    const reads = getSystemActivity.mock.calls.length;
+    expect(reads).toBeGreaterThan(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(getSystemActivity).toHaveBeenCalledTimes(reads);
   });
 
   it('renders the out-of-sync advisory inline (no toast)', async () => {

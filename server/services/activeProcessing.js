@@ -152,21 +152,21 @@ export async function getSystemActivity() {
   return { ...slices, activity: summarizeSystemActivity(slices) };
 }
 
-export async function getActiveProcessing() {
-  const [capability, activity, loadedModels] = await Promise.all([
-    getCudaCapability(),
-    getSystemActivity(),
-    getLoadedModels().catch(() => []),
-  ]);
+/**
+ * GPU samples have no lifecycle event — nvidia-smi is a poll. Kept off
+ * `getSystemActivity()` so the shared activity read stays bounded, and so the
+ * dashboard inspector can poll this alone while it is on screen.
+ */
+export async function getGpuTelemetry() {
+  const capability = await getCudaCapability();
   const utilization = capability.status === 'available' ? await getCudaUtilization() : { status: capability.status, gpus: [] };
-  const gpuBusy = Boolean(getRunningJob());
+  const running = getRunningJob();
   return {
-    ...activity,
     updatedAt: new Date().toISOString(),
     gpu: {
       status: capability.status,
-      laneBusy: gpuBusy,
-      laneKind: getRunningJob()?.kind || null,
+      laneBusy: Boolean(running),
+      laneKind: running?.kind || null,
       gpus: (utilization.gpus.length ? utilization.gpus : capability.gpus).map((gpu) => ({
         name: gpu.name,
         utilizationPercent: gpu.utilizationPercent ?? null,
@@ -174,6 +174,19 @@ export async function getActiveProcessing() {
         memoryTotalMib: gpu.memoryTotalMib ?? gpu.vramMib ?? null,
       })),
     },
+  };
+}
+
+export async function getActiveProcessing() {
+  const [telemetry, activity, loadedModels] = await Promise.all([
+    getGpuTelemetry(),
+    getSystemActivity(),
+    getLoadedModels().catch(() => []),
+  ]);
+  return {
+    ...activity,
+    updatedAt: telemetry.updatedAt,
+    gpu: telemetry.gpu,
     extras: { ...activity.extras, ollama: loadedModels },
   };
 }

@@ -2614,6 +2614,8 @@ describe('runBackup lifecycle', () => {
     proc.emit('close', 0);
     await pending;
     expect(isBackupInProgress()).toBe(false);
+    const { drainActivityNotesForTests } = await import('./systemActivityNotify.js');
+    expect(drainActivityNotesForTests().map((note) => note.phase)).toEqual(['start', 'completion']);
   });
 
   // A snapshot mid-assembly would tar/rsync as a truncated tree that looks like
@@ -2758,6 +2760,8 @@ describe('runBackup lifecycle', () => {
     expect(state.status).toBe('error');
     expect(state.error).toMatch(/rsync exited with code 23/);
     expect(state.pgBackup).toBeNull();
+    const { drainActivityNotesForTests } = await import('./systemActivityNotify.js');
+    expect(drainActivityNotesForTests().map((note) => note.phase)).toEqual(['start', 'failure']);
     // No manifest is written for a failed run.
     const fsp = await actualFs();
     await expect(fsp.stat(joinPath(await findSnapshotDir(), 'manifest.json'))).rejects.toThrow();

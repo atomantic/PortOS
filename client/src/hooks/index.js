@@ -173,6 +173,7 @@ export * from './useVisibilityEvent.js';
 // === UI / interaction ===
 export * from './useArmedAction.js';
 export * from './useAutoRefetch.js';
+export * from './useSystemActivity.js';
 export * from './useCmdKSearch.js';
 export * from './useCooldownTick.js';
 export { default as useDrawerTab } from './useDrawerTab.js';

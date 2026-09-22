@@ -104,6 +104,7 @@ export const registerAppHandlers = (socket, io) => {
 
   socket.on('app:standardize', async (rawData) => {
     let operatingAppId = null;
+    let outcome = 'failure';
     try {
       const data = validateSocketData(appStandardizeSchema, rawData, socket, 'app:standardize');
       if (!data) return;
@@ -187,13 +188,14 @@ export const registerAppHandlers = (socket, io) => {
           processes: analysis.proposedChanges.processes
         }
       });
+      outcome = 'completion';
       console.log(`✅ Socket standardize complete for ${app.name}`);
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:standardize]: ${message}`);
       io.emit('app:standardize:error', { appId: operatingAppId, message });
     } finally {
-      if (operatingAppId) endAppOperation(io, operatingAppId);
+      if (operatingAppId) endAppOperation(io, operatingAppId, outcome);
     }
   });
 
