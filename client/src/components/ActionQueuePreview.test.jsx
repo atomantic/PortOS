@@ -39,6 +39,8 @@ describe('canonical action previews', () => {
   it('shares IDs and required counts across the bell and saved widgets; history controls cannot complete actions', async () => {
     show();
     const bell = await screen.findByRole('button', { name: 'Notifications (1 required actions)' });
+    const daily = screen.getByRole('region', { name: "Today's actions" });
+    expect(within(daily).getByRole('heading', { name: "Today's actions", level: 2 })).toBeInTheDocument();
     fireEvent.click(bell);
     const panel = screen.getByRole('region', { name: 'Notifications' });
     expect(mock.getReviewQueue).toHaveBeenCalledTimes(1);

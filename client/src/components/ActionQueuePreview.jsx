@@ -28,7 +28,7 @@ export default function ActionQueuePreview({ title = 'Actions', sources, queue, 
   return (
     <section className={compact ? '@container p-4' : '@container bg-port-card border border-port-border rounded-xl p-4'} aria-labelledby={heading}>
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <h3 id={heading} className="text-sm font-semibold text-port-text">{title}</h3>
+        <h2 id={heading} className="text-sm font-semibold text-port-text">{title}</h2>
         {data && <span className="text-xs text-port-warning">{lowerBound ? 'At least ' : ''}{formatCount(required.length)} required</span>}
       </div>
       {loading && !data && <p role="status" className="text-sm text-port-text-muted">Loading actions…</p>}
