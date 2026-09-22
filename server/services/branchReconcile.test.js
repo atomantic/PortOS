@@ -100,7 +100,7 @@ vi.mock('./supersededBackup.js', () => ({
 
 import {
   classifyBranch, classifyBranches, cleanupMerged, reconcile, gatherBranchState, worktreeProtectionReason,
-  isAbandonedAgentWorktree, resolveLiveOwnerReason, gatherDivergence,
+  isAbandonedAgentWorktree, isAbandonedClaimWorktree, resolveLiveOwnerReason, gatherDivergence,
   actionOn, filterActionable, desiredEndState, formatInFlightForPrompt, actionableSignature,
   limitBranchesForAgent,
   branchPriorityRank, prioritizeBranches, worktreeProtectionExpiresAt, describeIdleReconcilePark,
@@ -185,6 +185,18 @@ describe('classifyBranch', () => {
       isMerged: false, hasUpstream: true, worktreeDirty: true, abandonedAgentWorktree: true,
       liveOwnerReason: null, openPr: null
     })).toBe('ABANDONED_WIP');
+  });
+  it('drives an inactive dirty claim worktree even when its branch tip is merged', () => {
+    expect(classifyBranch({
+      isMerged: true, hasUpstream: false, worktreeDirty: true, abandonedClaimWorktree: true,
+      liveOwnerReason: null, openPr: null
+    })).toBe('ABANDONED_WIP');
+  });
+  it('never lets a live-owner verdict be overridden by an abandoned-worktree hint', () => {
+    expect(classifyBranch({
+      isMerged: true, worktreeDirty: true, abandonedClaimWorktree: true,
+      liveOwnerReason: 'worktree-active-agent', openPr: null
+    })).toBe('MERGED');
   });
   it('local-only bare pointer (no upstream, no commits of its own) → WIP', () => {
     expect(classifyBranch({ isMerged: false, openPr: null, hasUpstream: false, worktreeDirty: false })).toBe('WIP');
@@ -593,6 +605,24 @@ describe('isAbandonedAgentWorktree', () => {
   });
 });
 
+describe('isAbandonedClaimWorktree', () => {
+  it('recognizes an unlocked claim tree only with authoritative liveness', () => {
+    const dirty = { path: '/wt/claim-issue-42', worktreeDirty: true };
+    expect(isAbandonedClaimWorktree({ ...dirty, activeAgentIds: new Set() })).toBe(true);
+    expect(isAbandonedClaimWorktree({ ...dirty, activeAgentIds: new Set(['claim-issue-42']) })).toBe(false);
+    expect(isAbandonedClaimWorktree({ ...dirty, locked: true, activeAgentIds: new Set() })).toBe(false);
+    expect(isAbandonedClaimWorktree({ ...dirty })).toBe(false);
+    expect(isAbandonedClaimWorktree({ ...dirty, worktreeDirty: false, activeAgentIds: new Set() })).toBe(false);
+  });
+
+  it('never treats an agent or ordinary sibling tree as a claim', () => {
+    const activeAgentIds = new Set();
+    expect(isAbandonedClaimWorktree({ path: '/wt/agent-deadbeef', worktreeDirty: true, activeAgentIds })).toBe(false);
+    expect(isAbandonedClaimWorktree({ path: '/wt/next-issue-42', worktreeDirty: true, activeAgentIds })).toBe(false);
+    expect(isAbandonedClaimWorktree({ path: '', worktreeDirty: true, activeAgentIds })).toBe(false);
+  });
+});
+
 describe('resolveLiveOwnerReason', () => {
   const live = new Set(['agent-aaaaaaaa']);
 
@@ -608,11 +638,9 @@ describe('resolveLiveOwnerReason', () => {
   });
 
   it('lets a LIVE owner outrank the claim exception, not the other way round', () => {
-    // activeAgentIds holds `agent-<id>` keys, so a claim basename can only land
-    // there out of contract — but the gate tests liveness BEFORE the claim, so
-    // if one ever did, the branch is held rather than dispatched. That is the
-    // intended direction: never hand a branch to an agent while something says
-    // a process still owns it.
+    // The scheduler adds live claim-worktree basenames to activeAgentIds, and
+    // the gate tests liveness BEFORE the claim exception. Never hand a branch
+    // to an agent while something says a process still owns it.
     expect(resolveLiveOwnerReason({ path: '/wt/claim-fix-thing', activeAgentIds: new Set(['claim-fix-thing']) }))
       .toBe('worktree-active-agent');
   });
@@ -1145,6 +1173,30 @@ describe('reconcile', () => {
     const res = await reconcile('/repo', { activeAgentIds: new Set() });
     expect(res.inFlight.map((i) => i.state)).toEqual(['ABANDONED_WIP']);
     expect(res.cleaned).toEqual([]);
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(git.deleteBranch).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an inactive dirty claim worktree as in-flight instead of parking it as human-owned', async () => {
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-42', isDefault: false, current: false, tracking: null, merged: true }
+    ]);
+    wt.listWorktrees.mockResolvedValue([
+      { path: '/repo/data/cos/worktrees/claim-issue-42', branch: 'refs/heads/claim/issue-42' }
+    ]);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    execGit.mockResolvedValue({ stdout: ' M server/services/thing.js\n', exitCode: 0 });
+
+    const res = await reconcile('/repo', { activeAgentIds: new Set() });
+
+    expect(res.inFlight.map((i) => i.state)).toEqual(['ABANDONED_WIP']);
+    expect(res.inFlight[0]).toMatchObject({
+      branch: 'claim/issue-42',
+      worktreePath: '/repo/data/cos/worktrees/claim-issue-42',
+      abandonedClaimWorktree: true,
+    });
+    expect(res.cleaned).toEqual([]);
+    expect(res.skipped).toEqual([]);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
   });

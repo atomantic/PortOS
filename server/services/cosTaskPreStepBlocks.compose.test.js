@@ -91,7 +91,12 @@ vi.mock('./agentState.js', async (importActual) => ({
   getActiveAgentIds: vi.fn(() => []),
 }));
 
+vi.mock('./cos.js', () => ({
+  getAgents: vi.fn(async () => []),
+}));
+
 import { generateManagedAppImprovementTaskForType } from './cosTaskGenerator.js';
+import { getAgents } from './cos.js';
 
 const APP = { id: 'app-1', name: 'Example App', repoPath: '/tmp/example-repo' };
 const STATE = { config: { confidenceAutoApproval: { enabled: false }, idleReviewPriority: 'MEDIUM' } };
@@ -112,6 +117,7 @@ const generate = () =>
 describe('generateManagedAppImprovementTaskForType composes the extracted pre-step layer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getAgents.mockResolvedValue([]);
     getPerpetualDrainState.mockResolvedValue({ signature: null, dispatchCount: 0 });
     reconcileMock.mockResolvedValue(scan());
   });
@@ -134,5 +140,25 @@ describe('generateManagedAppImprovementTaskForType composes the extracted pre-st
     reconcileMock.mockResolvedValue(scan({ inFlight: [] }));
     expect(await generate()).toBeNull();
     expect(parkPerpetual).toHaveBeenCalled();
+  });
+
+  it('protects a live claim worktree by passing its recorded path token to reconcile', async () => {
+    getAgents.mockResolvedValue([
+      { id: 'agent-live', status: 'running', workspacePath: '/repo/data/cos/worktrees/claim-issue-99' }
+    ]);
+    reconcileMock.mockResolvedValue(scan({ inFlight: [] }));
+
+    await generate();
+
+    expect(reconcileMock.mock.calls.at(-1)[1].activeAgentIds).toEqual(
+      new Set(['agent-live', 'claim-issue-99'])
+    );
+  });
+
+  it('does not reconcile when the live-agent state cannot be read', async () => {
+    getAgents.mockRejectedValue(new Error('state unavailable'));
+
+    expect(await generate()).toBeNull();
+    expect(reconcileMock).not.toHaveBeenCalled();
   });
 });

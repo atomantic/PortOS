@@ -27,7 +27,7 @@ import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteBranch } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees } from './worktreeManager.js';
-import { isAgentWorktreeId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
+import { isAgentWorktreeId, isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { isForgeNoAccessError, logForgeNoAccessOnce } from '../lib/forgeAccessErrors.js';
@@ -134,7 +134,7 @@ const PR_LIST_LIMIT = 200;
 /**
  * Pure classifier: map one branch's git/PR facts to a reconcile state.
  * First match wins.
- *   ABANDONED_WIP — dirty worktree of a DEAD CoS agent → agent finishes the work
+ *   ABANDONED_WIP — dirty worktree of an INACTIVE PortOS run → agent finishes it
  *   MERGED     — work is fully in the default branch → deterministic cleanup
  *   CONFLICTED — open PR with merge conflicts        → agent resolves
  *   IN_REVIEW  — open PR, otherwise                  → agent drives to merge
@@ -142,7 +142,7 @@ const PR_LIST_LIMIT = 200;
  *                (pushed-with-no-PR, or never pushed but holding commits)
  *   WIP        — bare pointer, dirty, or LIVE-owned   → skip + report (never touch)
  *
- * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, liveOwnerReason?:string|null, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
+ * @param {{ hasUpstream:boolean, ahead?:number|null, hasOrigin?:boolean, isMerged:boolean, worktreeDirty:boolean, abandonedAgentWorktree?:boolean, abandonedClaimWorktree?:boolean, liveOwnerReason?:string|null, openPr:({mergeable?:string}|null), prStateUnavailable?:boolean }} input
  *   `ahead` is the branch's own commit count over the default branch (null =
  *   unreadable), and `hasOrigin` says the repo has a remote to push that work to.
  *   Together they are what make a never-pushed branch actionable — see the
@@ -153,10 +153,10 @@ const PR_LIST_LIMIT = 200;
  *   `liveOwnerReason` is `resolveLiveOwnerReason`'s verdict for the branch — non-null
  *   means an active CoS agent or deliberate lock owns it right now, whether or not
  *   its worktree still exists. A clean `claim-*` directory is only a claim marker;
- *   dirty claim trees still remain WIP through the ordinary dirty-tree guard.
+ *   an inactive dirty claim is actionable only when `abandonedClaimWorktree` is true.
  * @returns {'ABANDONED_WIP'|'MERGED'|'CONFLICTED'|'IN_REVIEW'|'NEEDS_PR'|'WIP'}
  */
-export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, isMerged, worktreeDirty, abandonedAgentWorktree, liveOwnerReason = null, openPr, prStateUnavailable = false }) {
+export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, isMerged, worktreeDirty, abandonedAgentWorktree, abandonedClaimWorktree, liveOwnerReason = null, openPr, prStateUnavailable = false }) {
   // A dead agent's worktree that still holds uncommitted work is the ONE dirty
   // case that must be driven rather than skipped — and it must be caught BEFORE
   // the `isMerged` test, because an agent that exited without committing leaves
@@ -166,7 +166,13 @@ export function classifyBranch({ hasUpstream, ahead = null, hasOrigin = false, i
   // correctly refused to delete a dirty worktree, so they were only ever
   // reported as `skipped` and never appeared in-flight. The work sat there
   // indefinitely while every run logged "nothing in-flight".
-  if (worktreeDirty && abandonedAgentWorktree) return 'ABANDONED_WIP';
+  // Dirty work is normally protected, but a dirty claim tree is the one
+  // exception branch-reconcile can safely hand to its coordinator: claim
+  // worktrees have no durable agent id, and the caller supplied an authoritative
+  // active-agent set before marking this tree abandoned. Keep the live-owner gate
+  // in front of the exception so a contradictory caller can never dispatch onto
+  // a tree it also says is owned right now.
+  if (worktreeDirty && !liveOwnerReason && (abandonedAgentWorktree || abandonedClaimWorktree)) return 'ABANDONED_WIP';
   if (isMerged) return 'MERGED';
   // A branch with a LIVE owner belongs to an active CoS agent or an explicitly
   // locked worktree. It may keep moving (commits, a PR opened, a rebase) for as
@@ -391,6 +397,34 @@ export function isAbandonedAgentWorktree({ path, locked, activeAgentIds }) {
 }
 
 /**
+ * Is this a dirty human-claim worktree that branch-reconcile may hand to a
+ * coordinator sub-agent?
+ *
+ * Claim worktrees deliberately use a `claim-*` directory rather than the
+ * `agent-*` id that lets the ordinary abandonment check prove ownership. The
+ * branch-reconcile dispatch path already treats a claim directory as a marker,
+ * not as a durable live-process handle; with an authoritative active-agent Set,
+ * a dirty claim with no lock/active owner is therefore actionable work rather
+ * than a merged branch to park behind the human-claim cleanup grace period.
+ *
+ * Missing or non-Set liveness is unknown and fails closed. This helper never
+ * authorizes cleanup — it only lets classifyBranch expose the dirty tree as
+ * ABANDONED_WIP so a sub-agent can inspect and finish it in place.
+ *
+ * @param {{ path:string, locked?:boolean, worktreeDirty?:boolean, activeAgentIds?:Set<string> }} input
+ * @returns {boolean}
+ */
+export function isAbandonedClaimWorktree({ path, locked, worktreeDirty = false, activeAgentIds }) {
+  if (!worktreeDirty || !(activeAgentIds instanceof Set) || !isHumanClaimWorktree(worktreeAgentId(path))) return false;
+  return worktreeOwnershipReason({
+    path,
+    locked,
+    activeAgentIds,
+    allowLiveClaim: true,
+  }) === null;
+}
+
+/**
  * Why this branch must be left ALONE this cycle — the dispatch-side counterpart to
  * `worktreeProtectionReason`'s teardown gate. Three cases that gate doesn't cover:
  *
@@ -412,14 +446,15 @@ export function isAbandonedAgentWorktree({ path, locked, activeAgentIds }) {
  *    claim flow has no durable local agent id for its branch, so treating the
  *    directory's existence as liveness hides clean, open-PR claims after the
  *    claim agent has exited — exactly the branches branch-reconcile exists to
- *    finish. So this side passes `allowLiveClaim`, while cleanup keeps the hold
- *    through `worktreeProtectionReason` until the claim is stale or provably
- *    shipped. A lock still outranks it: the gate tests the lock BEFORE the
- *    claim, so a locked claim tree reports `worktree-locked` on its own — and
- *    so does a live agent, on the same ordering. `activeAgentIds` holds
- *    `agent-<id>` keys (case 2 above reads them as such), so a claim basename
- *    can only appear there out of contract; if one ever did, holding the branch
- *    is the fail-safe answer and the intended precedence.
+ *    finish. So this side passes `allowLiveClaim`; a dirty claim is then
+ *    surfaced as `ABANDONED_WIP` by `isAbandonedClaimWorktree`, while cleanup
+ *    keeps its destructive hold through `worktreeProtectionReason` until the
+ *    claim is stale or provably shipped. A lock still outranks it: the gate
+ *    tests the lock BEFORE the claim, so a locked claim tree reports
+ *    `worktree-locked` on its own — and so does a live agent, on the same
+ *    ordering. The scheduler augments `activeAgentIds` with the basenames of
+ *    live agents' recorded worktree paths, so a claim basename held by a live
+ *    agent still wins over the dispatch-side carve-out.
  *
  * A branch with no worktree at all and no live owner is simply free (null).
  *
@@ -732,7 +767,9 @@ async function worktreeAgeMs(worktreePath) {
  * @param {string} repoPath
  * @param {{ defaultBranch:string, activeAgentIds?:Set<string>, remoteHeads?:Map<string,string>|null, hasOrigin?:boolean, origin?:object|null }} ctx
  *   `activeAgentIds` distinguishes a live agent's worktree from an abandoned one (see
- *   `isAbandonedAgentWorktree`); omitting it leaves every agent worktree protected.
+ *   `isAbandonedAgentWorktree`); the scheduler also includes live worktree basenames
+ *   so claim paths owned by an active run remain protected. Omitting it leaves every
+ *   agent worktree protected.
  *   `remoteHeads` is `listRemoteHeads`' answer when the caller already has it;
  *   omitted, this reads it itself when the repo has an origin, and `null`
  *   (unreadable remote, or no origin to read) is carried through as "we could
@@ -745,7 +782,8 @@ async function worktreeAgeMs(worktreePath) {
  *   pin for the standalone case. Both feed `getOpenPrsByHead` — see #7540.
  * @returns {Promise<object[]>} one entry per candidate branch:
  *   { branch, tip, hasUpstream, hasOrigin, tracking, upstreamGone, isMerged, hasWorktree, worktreePath,
- *     worktreeDirty, dirtyPaths, behind, ahead, collisionPaths, abandonedAgentWorktree, openPr }
+ *     worktreeDirty, dirtyPaths, behind, ahead, collisionPaths, abandonedAgentWorktree,
+ *     abandonedClaimWorktree, openPr }
  */
 export async function gatherBranchState(repoPath, { defaultBranch, activeAgentIds = null, remoteHeads: providedRemoteHeads, hasOrigin: providedHasOrigin, origin: providedOrigin, forgeExec = null, forgeAccount = null } = {}) {
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
@@ -849,6 +887,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       ahead: divergence.ahead,
       collisionPaths: divergence.collisionPaths,
       abandonedAgentWorktree: isAbandonedAgentWorktree({ path: worktreePath, locked: worktreeLocked, activeAgentIds }),
+      abandonedClaimWorktree: isAbandonedClaimWorktree({ path: worktreePath, locked: worktreeLocked, worktreeDirty, activeAgentIds }),
       openPr: prsByHead.get(b.name) || null,
       prStateUnavailable
     });
@@ -1119,7 +1158,8 @@ async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClai
  *   explicitly. `reapRemotes` (default false) additionally deletes merged
  *   branches left on `origin` that nothing local points at; off, they are only
  *   reported — see `reapOrphanedRemotes`. `activeAgentIds` protects in-use CoS
- *   agent worktrees. `forgeAccount` is the managed app record's explicit gh
+ *   agent worktrees and any live worktree basename tokens supplied by the caller.
+ *   `forgeAccount` is the managed app record's explicit gh
  *   account pin, so an app whose repo belongs to another GitHub account is
  *   polled with a credential that can actually see it (#7540); unset, the
  *   owner-match in `forgeAuth.resolveForgeForRepo` still applies.
