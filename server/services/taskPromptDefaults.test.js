@@ -658,9 +658,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // issue labels — the same per-issue routing DISPATCH_HINT_FANOUT_GUIDANCE
   // already gives the claim swarm's Phase B, imported verbatim rather than
   // retyped so the two consumers can't drift on vocabulary.
-  it('branch-reconcile v5 routes each fan-out sub-agent by its own branch\'s dispatch labels', () => {
+  it('branch-reconcile v7 routes each fan-out sub-agent by its own branch\'s dispatch labels and aligns superseded instructions', () => {
     const current = DEFAULT_TASK_PROMPTS['branch-reconcile'];
-    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(6);
+    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(7);
     expect(current).toContain(DISPATCH_HINT_FANOUT_GUIDANCE);
     expect(current).toContain('Dispatch each sub-agent at ITS OWN branch\'s recommended model and effort');
     // Still carries every v3 behavior — v4 only adds the routing guidance.

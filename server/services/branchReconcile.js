@@ -321,13 +321,14 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
  * @param {{ path:string, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number, staleClaimIdleMs?:number }} input
  * @returns {string|null}
  */
-export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS }) {
+export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false }) {
   if (!path) return null;
   return worktreeOwnershipReason({
     path,
     locked,
     activeAgentIds,
     allowStaleClaim: true,
+    allowLiveClaim,
     ageMs,
     staleClaimIdleMs,
   });
@@ -335,23 +336,23 @@ export function worktreeProtectionReason({ path, locked, activeAgentIds, ageMs, 
 
 /**
  * When `worktreeProtectionReason`'s hold on this worktree lapses by itself, as an
- * ISO instant — or null when it takes an outside change (a lock released, an
- * agent exiting) that we cannot schedule.
+ * ISO instant — or null when only an outside change can clear it.
  *
  * The exact mirror of the gate above, so cleanup can report not just THAT a
  * merged branch was held back but WHEN it stops being held. Policy lives in
  * worktreeOwnership.js; this only supplies this caller's defaults.
  *
- * @param {{ path:string|null, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number|null, staleClaimIdleMs?:number }} input
+ * @param {{ path:string|null, locked?:boolean, activeAgentIds?:Set<string>, ageMs?:number|null, staleClaimIdleMs?:number, allowLiveClaim?:boolean }} input
  * @returns {string|null} ISO timestamp
  */
-export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS }) {
+export function worktreeProtectionExpiresAt({ path, locked, activeAgentIds, ageMs, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false }) {
   if (!path) return null;
   return worktreeHoldExpiresAt({
     path,
     locked,
     activeAgentIds,
     allowStaleClaim: true,
+    allowLiveClaim,
     ageMs,
     staleClaimIdleMs,
   });
@@ -1008,6 +1009,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
     }
     const retired = await retireBranch(repoPath, b, {
       activeAgentIds,
+      allowLiveClaim: true,
       label: `🔀 branch-reconcile: remove superseded worktree for ${b.branch}`,
       // The dirty tree IS this branch's deliverable — an abandoned agent worktree
       // has no commits of its own — so refusing on it would make the reap a no-op
@@ -1054,7 +1056,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *
  * @param {string} repoPath
  * @param {object} b - a gathered branch entry
- * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, label: string, requireCleanWorktree?: boolean, prepare?: () => Promise<any> }} opts
+ * @param {{ activeAgentIds?: Set<string>, staleClaimIdleMs?: number, allowLiveClaim?: boolean, label: string, requireCleanWorktree?: boolean, prepare?: () => Promise<any> }} opts
  *   `prepare` runs after every gate has passed and before the first irreversible
  *   step, and aborts the retirement by resolving to `{ error }`. That is the only
  *   place work like "write a recoverable backup" belongs: earlier it is paid for
@@ -1069,7 +1071,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
  *   copies them out before anything is removed. Never set it false without both.
  * @returns {Promise<{ ok: true, prepared?: any } | { ok: false, reason: string, retryAt?: string }>}
  */
-async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, label, requireCleanWorktree = true, prepare }) {
+async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, prepare }) {
   if (b.worktreePath) {
     // Never tear down a worktree that's locked, a RECENT human /claim session, or
     // an active CoS agent workspace. An abandoned claim worktree (clean and older
@@ -1081,6 +1083,7 @@ async function retireBranch(repoPath, b, { activeAgentIds = new Set(), staleClai
       activeAgentIds,
       ageMs: b.worktreeAgeMs,
       staleClaimIdleMs,
+      allowLiveClaim,
     };
     const protectedReason = worktreeProtectionReason(gate);
     if (protectedReason) {
