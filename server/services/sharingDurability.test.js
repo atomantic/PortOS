@@ -131,6 +131,48 @@ describe.each(cases)('%s preserves unreadable data', (_name, getPath, fixture, m
   });
 });
 
+it('merges same-date daily-log tenants without duplicating them on replay', async () => {
+  const path = join(PATHS.meatspace, 'daily-log.json');
+  const date = '2026-01-02';
+  await seed(path, {
+    lastEntryDate: date,
+    entries: [{
+      date,
+      body: { weightLbs: 170 },
+      alcohol: { drinks: [{ name: 'Example beer', oz: 12, abv: 5, count: 1 }] },
+    }],
+    custom: true,
+  });
+
+  const remote = {
+    'daily-log.json': {
+      entries: [{
+        date,
+        body: { fatPct: 20 },
+        alcohol: { drinks: [{ name: 'Example wine', oz: 5, abv: 12, count: 1 }] },
+        nicotine: { items: [{ product: 'Example gum', mgPerUnit: 2, count: 2 }] },
+      }],
+    },
+  };
+  const first = await dataSync.applyRemote('meatspace', remote);
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  const entry = saved.entries[0];
+
+  expect(first).toEqual({ applied: true, count: 1 });
+  expect(entry.body).toEqual({ weightLbs: 170, fatPct: 20 });
+  expect(entry.alcohol.drinks).toHaveLength(2);
+  expect(entry.alcohol.standardDrinks).toBe(2);
+  expect(entry.nicotine.items).toHaveLength(1);
+  expect(entry.nicotine.totalMg).toBe(4);
+  expect(saved.lastEntryDate).toBe(date);
+  expect(saved.custom).toBe(true);
+
+  const replay = await dataSync.applyRemote('meatspace', remote);
+  const replayed = JSON.parse(await readFile(path, 'utf8'));
+  expect(replay).toEqual({ applied: false, count: 0 });
+  expect(replayed.entries[0]).toEqual(entry);
+});
+
 // An unreadable shared identity must not leave a new local registry entry.
 it('does not register a bucket whose existing identity cannot be read', async () => {
   const other = join(tempRoot, 'other');

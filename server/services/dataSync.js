@@ -9,7 +9,7 @@
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { isPlainObject } from '../lib/objects.js';
+import { canonicalStringify, isEmptyScalar, isPlainObject } from '../lib/objects.js';
 import { snapshotChecksum } from '../lib/snapshotChecksum.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
@@ -111,7 +111,7 @@ const STORY_BUILDER_DIR = join(PATHS.data, 'story-builder');
 const STORY_BUILDER_EPOCH_KEY = '__storyBuilderEpoch';
 
 const MEATSPACE_FILES = {
-  'daily-log.json': { arrayKey: 'entries', idField: 'date' },
+  'daily-log.json': { arrayKey: 'entries', idField: 'date', mergeRecord: mergeMeatspaceDailyLogEntry },
   'blood-tests.json': { arrayKey: 'tests', idField: 'date' },
   'epigenetic-tests.json': { arrayKey: 'tests', idField: 'date' },
   'eyes.json': { arrayKey: 'exams', idField: 'date' },
@@ -126,11 +126,98 @@ const computeChecksum = snapshotChecksum;
 
 // --- Merge Helpers ---
 
+const roundToHundredth = (value) => Math.round(value * 100) / 100;
+
+// Keep a non-empty local scalar when a peer has a conflicting value, but fill
+// gaps from the peer. This preserves local edits while still combining fields
+// added independently on two machines.
+const mergeNonEmptyObject = (local, remote) => {
+  const remoteObject = isPlainObject(remote) ? remote : {};
+  const merged = { ...remoteObject };
+  for (const [key, value] of Object.entries(isPlainObject(local) ? local : {})) {
+    if (isEmptyScalar(value) && !isEmptyScalar(remoteObject[key])) continue;
+    merged[key] = value;
+  }
+  return merged;
+};
+
+const mergeUniqueRecords = (local, remote) => {
+  const merged = [];
+  const seen = new Set();
+  for (const record of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
+    const key = canonicalStringify(record);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(record);
+  }
+  return merged;
+};
+
+const mergeDailyLogCategory = (local, remote, listKey, totalKey, totalForItem) => {
+  const localCategory = isPlainObject(local) ? local : {};
+  const remoteCategory = isPlainObject(remote) ? remote : {};
+  const merged = mergeNonEmptyObject(localCategory, remoteCategory);
+  const hasList = Array.isArray(localCategory[listKey]) || Array.isArray(remoteCategory[listKey]);
+  if (!hasList) return merged;
+
+  const records = mergeUniqueRecords(localCategory[listKey], remoteCategory[listKey]);
+  merged[listKey] = records;
+  if (records.length > 0) {
+    merged[totalKey] = roundToHundredth(records.reduce((total, record) => total + totalForItem(record), 0));
+  } else if (isEmptyScalar(merged[totalKey])) {
+    merged[totalKey] = 0;
+  }
+  return merged;
+};
+
+const standardDrinksFor = (drink) => {
+  const oz = drink?.oz || 0;
+  const abv = drink?.abv || 0;
+  const count = drink?.count || 1;
+  return ((oz * count * (abv / 100)) / 0.6);
+};
+
+const nicotineMilligramsFor = (item) => (item?.mgPerUnit ?? 0) * (item?.count ?? 1);
+
+// Daily-log entries are one date-keyed record shared by several independent
+// tenants. A date collision therefore needs a tenant merge instead of the
+// generic date-keyed "keep local" behavior used by the other meatspace files.
+function mergeMeatspaceDailyLogEntry(local, remote) {
+  const localEntry = isPlainObject(local) ? local : {};
+  const remoteEntry = isPlainObject(remote) ? remote : {};
+  const merged = mergeNonEmptyObject(localEntry, remoteEntry);
+
+  if (isPlainObject(localEntry.alcohol) || isPlainObject(remoteEntry.alcohol)) {
+    merged.alcohol = mergeDailyLogCategory(
+      localEntry.alcohol,
+      remoteEntry.alcohol,
+      'drinks',
+      'standardDrinks',
+      standardDrinksFor,
+    );
+  }
+  if (isPlainObject(localEntry.nicotine) || isPlainObject(remoteEntry.nicotine)) {
+    merged.nicotine = mergeDailyLogCategory(
+      localEntry.nicotine,
+      remoteEntry.nicotine,
+      'items',
+      'totalMg',
+      nicotineMilligramsFor,
+    );
+  }
+  if (isPlainObject(localEntry.body) || isPlainObject(remoteEntry.body)) {
+    merged.body = mergeNonEmptyObject(localEntry.body, remoteEntry.body);
+  }
+  return merged;
+}
+
 /**
  * Merge two arrays of records by a key field. LWW by timestampField when both
  * sides have the same record. Records unique to either side are kept (union).
+ * A mergeRecord callback can combine same-key records for domains whose record
+ * is itself a container for independent sub-records.
  */
-function mergeArraysByKey(localArr, remoteArr, idField, timestampField) {
+function mergeArraysByKey(localArr, remoteArr, idField, timestampField, mergeRecord) {
   const localMap = new Map();
   for (const item of localArr) {
     localMap.set(item[idField], item);
@@ -145,6 +232,12 @@ function mergeArraysByKey(localArr, remoteArr, idField, timestampField) {
       // New record from remote — add it
       localMap.set(key, remoteItem);
       changed = true;
+    } else if (mergeRecord) {
+      const mergedItem = mergeRecord(localItem, remoteItem);
+      if (canonicalStringify(mergedItem) !== canonicalStringify(localItem)) {
+        localMap.set(key, mergedItem);
+        changed = true;
+      }
     } else if (timestampField) {
       // Both have it — LWW
       const localTs = localItem[timestampField] || '';
@@ -323,12 +416,21 @@ async function applyMeatspaceRemote(remoteData) {
       // Array merge
       const localArr = local?.[config.arrayKey] || [];
       const remoteArr = remoteFile[config.arrayKey] || [];
-      const { merged, changed } = mergeArraysByKey(localArr, remoteArr, config.idField, null);
+      const { merged, changed } = mergeArraysByKey(
+        localArr,
+        remoteArr,
+        config.idField,
+        null,
+        config.mergeRecord,
+      );
 
       if (changed) {
         // Sort by idField (usually date)
         merged.sort((a, b) => (a[config.idField] || '').localeCompare(b[config.idField] || ''));
-        const mergedFile = { ...(local || {}), [config.arrayKey]: merged };
+        const mergedFile = { ...(remoteFile || {}), ...(local || {}), [config.arrayKey]: merged };
+        if (filename === 'daily-log.json') {
+          mergedFile.lastEntryDate = merged[merged.length - 1]?.[config.idField] || null;
+        }
         await atomicWrite(filePath, mergedFile);
         totalApplied++;
       }
