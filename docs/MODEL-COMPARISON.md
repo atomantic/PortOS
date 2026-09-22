@@ -2,7 +2,7 @@
 
 Open **Models → Comparison** (`/models/comparison`) to compare sourced provider/model/effort configurations. The chart separates benchmark versions and offers published benchmark cost per task or an explicit uncached token workload estimate. Provider, model and effort filters are bookmarkable query parameters. The table is the accessible equivalent of the chart and retains missing-data rows.
 
-The catalog contains comprehensive public configurations across major providers (OpenAI, Google, Anthropic, Meta, DeepSeek, Mistral, Alibaba, etc.) from Artificial Analysis, with the September 5, 2026 v4.2 snapshot retained and a verified September 10, 2026 v4.3 snapshot added. Models with multiple evaluated reasoning efforts are connected along effort curves, with standardized end-to-end response times and configurable linear or logarithmic cost scaling.
+The catalog contains comprehensive public configurations across major providers (OpenAI, Google, Anthropic, Meta, DeepSeek, Mistral, Alibaba, etc.) from Artificial Analysis, with the September 5, 2026 v4.2 and September 10, 2026 v4.3 snapshots retained, plus a September 22, 2026 v4.3.2 refresh for GPT-6 Astra, Sol and Luna, GPT-5.6 Terra, and Claude Opus 5.5. The refresh keeps only metrics published for each model effort; unavailable measurements stay null. Models with multiple evaluated reasoning efforts are connected along effort curves, with standardized end-to-end response times and configurable linear or logarithmic cost scaling.
 
 ## Sources and interpretation
 

@@ -37,7 +37,9 @@ const providersPath = join(root, 'data.reference/providers.json');
  * current frontier a user reads their own model choice against. Kept short on
  * purpose; this is not a place to re-accumulate the full index.
  */
-export const FRONTIER_ANCHORS = ['claude-fable-5.1', 'claude-fable-5'];
+export const FRONTIER_ANCHORS = [
+  'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'gpt-6-luna', 'gpt-6-sol',
+];
 
 export async function inScopeModels() {
   const providers = JSON.parse(await readFile(providersPath, 'utf8'));
