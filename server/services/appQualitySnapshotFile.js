@@ -54,7 +54,7 @@ async function readSnapshotEntry(repoPath, filename, deps = {}) {
 }
 
 /** Parsed `.quality.json`, or null for every failure mode. Never throws.
- *  Legacy filename resolution lives in `readQualitySnapshotSource`. */
+ *  Legacy filename resolution lives in `readStoredQualitySnapshot`. */
 export async function readAppQualitySnapshotFile(repoPath, deps = {}) {
   if (!repoPath) return null;
   const entry = await readSnapshotEntry(repoPath, APP_QUALITY_SNAPSHOT_FILENAME, deps);
@@ -63,19 +63,6 @@ export async function readAppQualitySnapshotFile(repoPath, deps = {}) {
   // module statically, so a lib import here lands in the suite import budget.
   const parsed = await Promise.resolve().then(() => JSON.parse(entry.body)).catch(() => null);
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-}
-
-/** `.quality.json`, or the legacy filename only when that file is absent.
- *  Oversize and unreadable primary files do not fall through. */
-export async function readQualitySnapshotSource(repoPath, deps = {}) {
-  if (!repoPath) return null;
-  const primary = await readSnapshotEntry(repoPath, APP_QUALITY_SNAPSHOT_FILENAME, deps);
-  if (primary.status === 'text') return { filename: APP_QUALITY_SNAPSHOT_FILENAME, text: primary.body };
-  if (primary.status === 'oversize') return { filename: APP_QUALITY_SNAPSHOT_FILENAME, oversize: true, text: null };
-  const legacy = await readSnapshotEntry(repoPath, LEGACY_QUALITY_SNAPSHOT_FILENAME, deps);
-  if (legacy.status === 'text') return { filename: LEGACY_QUALITY_SNAPSHOT_FILENAME, text: legacy.body };
-  if (legacy.status === 'oversize') return { filename: LEGACY_QUALITY_SNAPSHOT_FILENAME, oversize: true, text: null };
-  return null;
 }
 
 async function readClassified(repoPath, filename, deps) {
@@ -263,6 +250,11 @@ async function landOrReuse(app, git, defaultBranch, deps, next, count, options =
   const legacyOnBranch = options.removeLegacy
     ? await readGitSnapshot(git, app.repoPath, `origin/${QUALITY_SNAPSHOT_BRANCH}:${APP_QUALITY_LEGACY_SNAPSHOT_FILENAME}`)
     : { status: 'absent' };
+  // The snapshot branch can hold a future file the default branch does not.
+  // Force-pushing canonical v2 over it would discard a format we do not read.
+  if (REWRITE_BLOCKED.has(onBranch.status) || REWRITE_BLOCKED.has(legacyOnBranch.status)) {
+    return untouched(app, REWRITE_BLOCKED.has(onBranch.status) ? onBranch.status : legacyOnBranch.status);
+  }
   if (sameSnapshot(onBranch, next) && legacyOnBranch.status === 'absent') {
     const reused = await reuseOpenSnapshotPr(app, git, defaultBranch, deps);
     if (reused.published) lastPublishedBody.set(app.repoPath, next);
