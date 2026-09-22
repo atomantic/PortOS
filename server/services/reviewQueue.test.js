@@ -13,8 +13,8 @@ const messageDrafts = { listDrafts: vi.fn(), approveDraft: vi.fn() };
 const proactiveAlerts = { generateNonProductAlerts: vi.fn(), resolveHealthAlert: vi.fn() };
 const productMetrics = { getProductEngagement: vi.fn() };
 const backup = { getState: vi.fn() };
-const reviewService = { getItems: vi.fn(), dismissByReferenceId: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
-const notifications = { getNotifications: vi.fn() };
+const reviewService = { getItems: vi.fn(), dismissByReferenceId: vi.fn(), dismissItem: vi.fn(), completeItem: vi.fn(), reopenItem: vi.fn() };
+const notifications = { getNotifications: vi.fn(), removeNotification: vi.fn() };
 // Mocked so the meta-field / buildQueue cases don't pull the brain/cos/identity
 // stack in transitively (askPromote imports all three). The promoteAskQueueItem
 // suite drives this mock directly.
@@ -91,10 +91,11 @@ function resetEmpty() {
   productMetrics.getProductEngagement.mockResolvedValue({ actions: [] });
   backup.getState.mockResolvedValue({ status: 'ok', error: null });
   reviewService.getItems.mockResolvedValue([]);
-  reviewService.dismissByReferenceId.mockResolvedValue(undefined);
+  reviewService.dismissByReferenceId.mockResolvedValue([]);
   reviewService.completeItem.mockResolvedValue({ id: 'todo-1', status: 'completed' });
   reviewService.reopenItem.mockResolvedValue({ id: 'todo-1', status: 'pending' });
   notifications.getNotifications.mockResolvedValue([]);
+  notifications.removeNotification.mockResolvedValue({ success: true });
   identity.getGoals.mockResolvedValue({ goals: [] });
   stackerNews.listPendingReviewActions.mockResolvedValue([]);
   x.listPendingReviewActions.mockResolvedValue([]);
@@ -576,7 +577,7 @@ describe('reviewQueue.buildQueue', () => {
       source: 'notifications',
       actionKind: 'plan.question',
       summary: 'Choose a direction',
-      operations: [{ id: 'review', available: false }],
+      operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
     });
     expect(queue.items.find(item => item.id === 'briefing:briefing-notification')).toBeUndefined();
   });
@@ -1321,5 +1322,64 @@ describe('reviewQueue.resolveQueueItem', () => {
   it('maps a CoS approve {error} result to a 409', async () => {
     cosTaskStore.approveTask.mockResolvedValue({ error: 'Task does not require approval' });
     await expect(resolveQueueItem('cos:sys-1')).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('permanently resolves a goal-fidelity hold by dismissing the stored obligation (#8007)', async () => {
+    reviewService.dismissByReferenceId.mockResolvedValue([{ id: 'review-1', status: 'dismissed' }]);
+    notifications.getNotifications.mockResolvedValue([]);
+
+    const result = await resolveQueueItem('goal-fidelity:agent-1', 'complete');
+
+    expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('agent-1');
+    expect(result).toMatchObject({ source: 'goal-fidelity', id: 'goal-fidelity:agent-1', operation: 'complete', resolved: true });
+  });
+
+  it('resolves a plan-question hold by retiring its notification, not just the stored item', async () => {
+    reviewService.dismissByReferenceId.mockResolvedValue([]);
+    notifications.getNotifications.mockResolvedValue([
+      { id: 'plan-notification', type: 'plan_question', metadata: { agentId: 'agent-1' } },
+      { id: 'other-notification', type: 'plan_question', metadata: { agentId: 'other-agent' } },
+    ]);
+
+    await expect(resolveQueueItem('plan:agent-1', 'complete')).resolves.toMatchObject({ resolved: true });
+
+    expect(notifications.removeNotification).toHaveBeenCalledTimes(1);
+    expect(notifications.removeNotification).toHaveBeenCalledWith('plan-notification');
+  });
+
+  it('resolves an autopilot-paused hold keyed on its compound seriesId:runId reference', async () => {
+    reviewService.dismissByReferenceId.mockResolvedValue([]);
+    notifications.getNotifications.mockResolvedValue([
+      { id: 'pause-notification', type: 'autopilot_paused', metadata: { autopilotPauseSeriesId: 'series-1', runId: 'run-1' } },
+    ]);
+
+    await resolveQueueItem('autopilot:series-1:run-1', 'complete');
+
+    expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('series-1:run-1');
+    expect(notifications.removeNotification).toHaveBeenCalledWith('pause-notification');
+  });
+
+  it('resolves a content-review hold from its stored review item', async () => {
+    reviewService.dismissByReferenceId.mockResolvedValue([{ id: 'review-2', status: 'dismissed' }]);
+    notifications.getNotifications.mockResolvedValue([]);
+
+    await expect(resolveQueueItem('content:malware-scan:report-1', 'complete')).resolves.toMatchObject({ resolved: true });
+    expect(reviewService.dismissByReferenceId).toHaveBeenCalledWith('malware-scan:report-1');
+  });
+
+  it('404s a source-owned hold complete when nothing matches (already resolved elsewhere)', async () => {
+    reviewService.dismissByReferenceId.mockResolvedValue([]);
+    notifications.getNotifications.mockResolvedValue([]);
+
+    await expect(resolveQueueItem('goal-fidelity:gone', 'complete')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('resolves a legacy uncorrelated alert by dismissing it by its own id', async () => {
+    reviewService.dismissItem.mockResolvedValue({ id: 'legacy-1', status: 'dismissed' });
+
+    await expect(resolveQueueItem('review:legacy-1', 'complete')).resolves.toMatchObject({
+      source: 'review', operation: 'complete', resolved: true,
+    });
+    expect(reviewService.dismissItem).toHaveBeenCalledWith('legacy-1');
   });
 });

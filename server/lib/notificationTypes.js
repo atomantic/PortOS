@@ -49,7 +49,7 @@ export const NOTIFICATION_ACTION_POLICY = Object.freeze({
     actionKind: 'content.review',
     referenceFields: ['prNumber', 'reviewId', 'referenceId'],
     required: true,
-    operations: [{ id: 'review', label: 'Review', available: false }],
+    operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
   },
   [NOTIFICATION_TYPES.PLAN_QUESTION]: {
     label: 'Plan question',
@@ -59,7 +59,7 @@ export const NOTIFICATION_ACTION_POLICY = Object.freeze({
     referenceFields: ['agentId', 'appId', 'referenceId'],
     fallbackDrillTo: '/cos',
     required: true,
-    operations: [{ id: 'review', label: 'Review', available: false }],
+    operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
   },
   [NOTIFICATION_TYPES.AUTOPILOT_PAUSED]: {
     label: 'Paused automation',
@@ -69,7 +69,7 @@ export const NOTIFICATION_ACTION_POLICY = Object.freeze({
     referenceFields: ['autopilotPauseSeriesId', 'runId'],
     compoundReference: true,
     required: true,
-    operations: [{ id: 'resume', label: 'Resume', available: false }],
+    operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
   },
 });
 

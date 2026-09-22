@@ -74,7 +74,7 @@ export function adaptStoredReviewItem(item) {
       required: true,
       sourceOwned: true,
       drillTo: link || `/cos/agents/${encodeURIComponent(sourceRef)}`,
-      operations: [operation('review', 'Review', false)],
+      operations: [operation('complete', 'Mark resolved')],
       meta: { category: 'goal-fidelity' },
     });
   }
@@ -104,7 +104,7 @@ export function adaptStoredReviewItem(item) {
       required: true,
       sourceOwned: true,
       drillTo: link || '/cos',
-      operations: [operation('review', 'Review', false)],
+      operations: [operation('complete', 'Mark resolved')],
       meta: { category: 'plan-question' },
     });
   }
@@ -121,7 +121,7 @@ export function adaptStoredReviewItem(item) {
       required: true,
       sourceOwned: true,
       drillTo: link || `/pipeline/series/${encodeURIComponent(seriesId)}`,
-      operations: [operation('resume', 'Resume', false)],
+      operations: [operation('complete', 'Mark resolved')],
       meta: { category: 'autopilot-paused' },
     });
   }
@@ -137,7 +137,7 @@ export function adaptStoredReviewItem(item) {
       required: true,
       sourceOwned: true,
       drillTo: link || '/review',
-      operations: [operation('review', 'Review', false)],
+      operations: [operation('complete', 'Mark resolved')],
       meta: { category: 'content-review' },
     });
   }
@@ -155,12 +155,12 @@ export function adaptStoredReviewItem(item) {
     sourceOwned: true,
     triageOnly: true,
     drillTo: link || '/review',
-    operations: [operation('triage', 'Review', false)],
+    operations: [operation('complete', 'Mark resolved')],
     meta: { category: 'legacy-review-triage', triage: true },
   });
 }
 
-const notificationReference = (notification, policy) => {
+export const notificationReference = (notification, policy) => {
   const metadata = notification?.metadata && typeof notification.metadata === 'object'
     ? notification.metadata
     : {};

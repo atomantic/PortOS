@@ -29,7 +29,7 @@ describe('review action adapters', () => {
     });
   });
 
-  it('keeps uncorrelated legacy alerts as explicit triage, not generic completion', () => {
+  it('gives an uncorrelated legacy alert a permanent resolve, not the generic todo completion', () => {
     const item = adaptStoredReviewItem({
       id: 'legacy-1',
       type: 'alert',
@@ -43,7 +43,7 @@ describe('review action adapters', () => {
       actionKind: 'review.triage',
       triageOnly: true,
       sourceOwned: true,
-      operations: [{ id: 'triage', available: false }],
+      operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
     });
   });
 
@@ -60,6 +60,25 @@ describe('review action adapters', () => {
       id: 'review:legacy-linked',
       actionKind: 'review.triage',
       drillTo: '/review/legacy-linked',
+    });
+  });
+
+  it('gives a goal-fidelity hold a permanent resolve operation (#8007)', () => {
+    const item = adaptStoredReviewItem({
+      id: 'review-3',
+      type: 'alert',
+      title: 'Goal-fidelity hold: run agent-1 may have built the wrong thing',
+      status: 'pending',
+      metadata: { referenceId: 'agent-1', category: 'goal-fidelity', agentId: 'agent-1' },
+    });
+
+    expect(item).toMatchObject({
+      id: 'goal-fidelity:agent-1',
+      sourceRef: 'agent-1',
+      actionKind: 'goal-fidelity.review',
+      required: true,
+      sourceOwned: true,
+      operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
     });
   });
 
@@ -113,5 +132,41 @@ describe('review action adapters', () => {
       message: 'Choose a direction',
       metadata: {},
     })).toBeNull();
+  });
+
+  it('gives a plan-question notification a permanent resolve operation (#8007)', () => {
+    const item = adaptNotification({
+      id: 'notification-3',
+      type: NOTIFICATION_TYPES.PLAN_QUESTION,
+      title: 'Plan question',
+      message: 'Choose a direction',
+      link: '/apps/example/documents',
+      metadata: { agentId: 'agent-1' },
+    });
+
+    expect(item).toMatchObject({
+      id: 'plan:agent-1',
+      sourceRef: 'agent-1',
+      required: true,
+      operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+    });
+  });
+
+  it('gives a paused-autopilot notification a permanent resolve operation (#8007)', () => {
+    const item = adaptNotification({
+      id: 'notification-4',
+      type: NOTIFICATION_TYPES.AUTOPILOT_PAUSED,
+      title: 'Autopilot paused',
+      description: 'Needs human review',
+      link: '/pipeline/series/series-1',
+      metadata: { autopilotPauseSeriesId: 'series-1', runId: 'run-1' },
+    });
+
+    expect(item).toMatchObject({
+      id: 'autopilot:series-1:run-1',
+      sourceRef: 'series-1:run-1',
+      required: true,
+      operations: [{ id: 'complete', label: 'Mark resolved', available: true }],
+    });
   });
 });
