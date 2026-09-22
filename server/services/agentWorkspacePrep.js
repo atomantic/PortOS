@@ -44,6 +44,7 @@ import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 import { isNonCommittingCoordinatorTask } from './taskTypeHooks.js';
+import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -368,6 +369,23 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   let jiraTicket = null;
   let jiraBranchName = null;
   let worktreeInfo = null;
+  // A relaunched claim keeps the `claim-*` directory the previous run cut.
+  // Moving it (the ordinary adopt path) would rename it to `agent-<id>` and
+  // break the claim prompt's own cleanup path. Use it where it sits, and skip
+  // every later provisioner so a checked-out claim branch cannot fall through
+  // to the shared checkout.
+  const claimWorkspace = claimContinuationWorkspace({
+    metadata: task.metadata,
+    pathExists: existsSync,
+    worktreesRoot: PATHS.worktrees,
+  });
+  if (claimWorkspace) {
+    workspacePath = claimWorkspace.workspacePath;
+    worktreeInfo = claimWorkspace.worktreeInfo;
+    emitLog('info', `🌳 Agent ${agentId} is continuing the claim worktree ${worktreeInfo.branchName}`, {
+      agentId, taskId: task.id, worktreePath: workspacePath, branchName: worktreeInfo.branchName,
+    });
+  }
   const explicitOpenPR = isTruthyMeta(task.metadata?.openPR);
   const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || explicitOpenPR;
   // A task pointed at an existing branch must run in a worktree whatever isolated
@@ -384,7 +402,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   const forkHead = resolveTaskForkHead(task.metadata);
   const wantsWorktree = explicitWorktree || !!existingBranch;
 
-  if (!isReadOnly) {
+  if (!isReadOnly && !claimWorkspace) {
     // Isolated tasks fetch their base in createWorktree; never rebase the
     // shared checkout as a side effect of preparing a separate workspace.
     const pullResult = wantsWorktree ? { skipped: 'isolated-task' } : await git.ensureLatest(workspacePath).catch(err => {
@@ -513,7 +531,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   // run repository commands and the action stage's provider-specific sandbox
   // needs it for tests/patch inspection. Never let `readOnly` turn an explicit
   // isolation request into the live application checkout.
-  if (wantsWorktree && !jiraBranchName) {
+  if (wantsWorktree && !jiraBranchName && !claimWorkspace) {
     const worktreeOutcome = await prepareRequestedWorktree({
       agentId,
       workspacePath,
@@ -525,7 +543,7 @@ export async function prepareAgentWorkspace({ agentId, task }) {
     if (worktreeOutcome.outcome !== 'ready') return worktreeOutcome;
     workspacePath = worktreeOutcome.workspacePath;
     worktreeInfo = worktreeOutcome.worktreeInfo;
-  } else if (!isReadOnly && !jiraBranchName && !isFalsyMeta(task.metadata?.useWorktree)) {
+  } else if (!claimWorkspace && !isReadOnly && !jiraBranchName && !isFalsyMeta(task.metadata?.useWorktree)) {
       const { getAgents } = await import('./cos.js');
       const allAgents = await getAgents();
       const runningAgents = allAgents.filter(a => a.status === 'running');

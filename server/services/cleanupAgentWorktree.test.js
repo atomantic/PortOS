@@ -47,7 +47,8 @@ vi.mock('./cos.js', () => ({
   getTaskById: vi.fn().mockResolvedValue(null),
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true }),
   getAgent: vi.fn().mockResolvedValue(null),
-  getAgentRecord: vi.fn().mockResolvedValue(null)
+  getAgentRecord: vi.fn().mockResolvedValue(null),
+  getAgents: vi.fn().mockResolvedValue([])
 }));
 
 vi.mock('./appActivity.js', () => ({
@@ -163,7 +164,8 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   cleanupOrphanedWorktrees: vi.fn(),
   // Real: the resume path's "is this dirt real work?" answer must be the SAME
   // classifier removeWorktree preserves a tree on, and it's a pure function.
-  classifyWorktreeDirt: (await importOriginal()).classifyWorktreeDirt
+  classifyWorktreeDirt: (await importOriginal()).classifyWorktreeDirt,
+  listWorktrees: vi.fn().mockResolvedValue([])
 }));
 
 vi.mock('./jira.js', () => ({
@@ -242,8 +244,8 @@ import { existsSync as existsSyncMock } from 'fs';
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
 import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
-import { getAgent, getAgentRecord, getTaskById, addTask, forceSpawnTask, updateTask } from './cos.js';
-import { removeWorktree } from './worktreeManager.js';
+import { getAgent, getAgentRecord, getAgents, getTaskById, addTask, forceSpawnTask, updateTask } from './cos.js';
+import { listWorktrees, removeWorktree } from './worktreeManager.js';
 import { PATHS } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { resolveReviewerConfig } from '../lib/reviewerConfig.js';
@@ -1407,7 +1409,7 @@ describe('resolveTaskResumePatch / recordTaskResumePointer', () => {
     await recordTaskResumePointer({ task, agentId: 'agent-x', agentMetadata });
 
     expect(updateTask).toHaveBeenCalledWith('task-1', {
-      metadata: { existingBranch: undefined, resumedFromAgentId: undefined, resumeWorktreePath: undefined }
+      metadata: { existingBranch: undefined, resumedFromAgentId: undefined, resumeWorktreePath: undefined, claimResumeInPlace: undefined }
     }, 'user');
   });
 
@@ -1433,6 +1435,46 @@ describe('resolveTaskResumePatch / recordTaskResumePointer', () => {
 
   // Reasoning agents run in a worktree whose edits are deliberately thrown away —
   // resuming one would resurrect code the discard guarantee exists to drop.
+  it('points a relaunched claim at the claim worktree the previous run already cut', async () => {
+    const claimPath = '/mock/root/data/cos/worktrees/claim-portos-issue-42';
+    listWorktrees.mockResolvedValue([
+      { path: claimPath, branch: 'refs/heads/claim/issue-42' },
+    ]);
+    getAgents.mockResolvedValue([{ id: 'agent-old', status: 'paused', metadata: { workspacePath: '/repo' } }]);
+    const task = {
+      id: 'task-1', taskType: 'user',
+      metadata: { claimFlow: true, claimTarget: '42' },
+    };
+
+    await recordTaskResumePointer({
+      task, agentId: 'agent-old',
+      agentMetadata: { isWorktree: false, workspacePath: '/repo' },
+    });
+
+    expect(updateTask).toHaveBeenCalledWith('task-1', {
+      metadata: {
+        existingBranch: 'claim/issue-42',
+        resumedFromAgentId: 'agent-old',
+        resumeWorktreePath: claimPath,
+        claimResumeInPlace: true,
+      },
+    }, 'user');
+  });
+
+  it('leaves a claim relaunch clean when another paused agent is already in that worktree', async () => {
+    const claimPath = '/mock/root/data/cos/worktrees/claim-portos-issue-42';
+    listWorktrees.mockResolvedValue([{ path: claimPath, branch: 'refs/heads/claim/issue-42' }]);
+    getAgents.mockResolvedValue([{ id: 'agent-other', status: 'paused', metadata: { workspacePath: claimPath } }]);
+
+    await recordTaskResumePointer({
+      task: { id: 'task-1', metadata: { claimFlow: true, claimTarget: '42' } },
+      agentId: 'agent-old',
+      agentMetadata: { isWorktree: false, workspacePath: '/repo' },
+    });
+
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   it('skips throwaway (discardWorktree) tasks', async () => {
     const task = { id: 'task-1', metadata: { discardWorktree: true } };
 
@@ -1642,7 +1684,7 @@ describe('resumePointerMetadata', () => {
   // pointer would attach attempt 3 to already-merged work.
   it('clears a pointer this mechanism wrote once there is nothing left to resume', () => {
     expect(resumePointerMetadata(null, 'agent-y', { metadata: { resumedFromAgentId: 'agent-x' } })).toEqual({
-      existingBranch: undefined, resumedFromAgentId: undefined, resumeWorktreePath: undefined
+      existingBranch: undefined, resumedFromAgentId: undefined, resumeWorktreePath: undefined, claimResumeInPlace: undefined
     });
   });
 

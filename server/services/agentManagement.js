@@ -634,7 +634,7 @@ const REPLACEMENT_RUNTIME_METADATA_KEYS = new Set([
   'lastErrorCategory', 'lastFailureAt', 'cooldownUntil', 'totalSpawnCount',
   'orphanRetryCount', 'lastOrphanedAt', 'lastOrphanedAgentId', 'worktreeBusyAttempts',
   LAST_SPAWNED_AT_KEY, 'interruptedByRestart', 'lastInterruptedAt', 'lastInterruptedAgentId',
-  'outputHookDispatchedAt', 'existingBranch', 'resumedFromAgentId', 'resumeWorktreePath',
+  'outputHookDispatchedAt', 'existingBranch', 'resumedFromAgentId', 'resumeWorktreePath', 'claimResumeInPlace',
   'autoRetryCount', 'autoRetriedByInvestigation', 'autoRetriedAt', 'autoRetryExhaustedAt',
   'resolution', 'autoExpiredReason', 'autoExpiredAt',
   REQUEUED_AT_KEY, RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY,

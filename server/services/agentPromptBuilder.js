@@ -38,6 +38,8 @@ import {
   buildActionOutputCompletionSection,
   buildAuditOutputCompletionSection,
   buildClaimFlowCompletionSection,
+  buildClaimResumeOverride,
+  claimResumeContext,
   buildReleaseFlowCompletionSection,
   buildAuditFlowCompletionSection,
   buildCliCompletionSection,
@@ -600,6 +602,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
       leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
       prCompletion: task.metadata?.prCompletion || null,
+      claimResume: claimResumeContext(task, worktreeInfo),
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, sentinelPath }),
@@ -1074,6 +1077,11 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // suppressed in buildTaskBlock since cwd already reveals it. Shared with the
   // full path via buildTaskBlock.
   const taskBlock = buildTaskBlock(task, { screenshotsAsList: true });
+  // Ahead of the stored claim prompt, which still says to exit when the issue
+  // is already in progress. That sentence is right for a fresh claim and wrong
+  // for the relaunch that is here to finish the previous run's worktree.
+  const claimResume = claimResumeContext(task, worktreeInfo);
+  if (claimResume) taskSections.push(buildClaimResumeOverride(claimResume));
   taskSections.push(taskBlock.description);
   if (taskBlock.targetApp) taskSections.push(taskBlock.targetApp);
 
@@ -1145,6 +1153,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       isTui, sentinelPath: lightSentinelPath(), reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
       leavePrOpen: resolvePrCompletion(task.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task),
       prCompletion: task.metadata?.prCompletion || null,
+      claimResume: claimResumeContext(task, worktreeInfo),
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
