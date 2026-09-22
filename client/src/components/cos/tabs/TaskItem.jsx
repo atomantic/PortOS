@@ -30,7 +30,7 @@ import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import Modal from '../../ui/Modal';
 import CollapsibleText from '../../ui/CollapsibleText';
-import { estimateCosDuration, describeEstimateScope } from '../../../lib/cosDurationEstimate';
+import { estimateCosDuration, describeEstimateBasis } from '../../../lib/cosDurationEstimate';
 import InstancePicker from '../InstancePicker';
 import EffortSelect from '../EffortSelect';
 import RelaunchAgentModal from './RelaunchAgentModal';
@@ -247,11 +247,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
     });
     if (!estimate) return null;
     // This card renders whole minutes; the shared estimator answers in ms.
-    return {
-      ...estimate,
-      estimatedMin: Math.round(estimate.estimatedMs / 60000),
-      avgMin: Math.round(estimate.avgMs / 60000)
-    };
+    return { ...estimate, estimatedMin: Math.round(estimate.estimatedMs / 60000) };
   }, [durations, task, taskSource, taskProvider, taskModel, taskEffort, displayStatus]);
 
   const handleStatusChange = async (newStatus, blockedReasonText = '', successMessage = `Task marked as ${newStatus}`) => {
@@ -462,14 +458,14 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
             {durationEstimate && (
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-port-accent/10 text-port-accent/80 rounded"
-                title={`Based on ${durationEstimate.basedOn} completed ${describeEstimateScope(durationEstimate)}`}
+                title={describeEstimateBasis(durationEstimate)}
               >
                 <Timer size={10} aria-hidden="true" />
                 {formatDurationMin(durationEstimate.estimatedMin, { approximate: true })}
               </span>
             )}
             {/* Success rate indicator for pending tasks */}
-            {durationEstimate && durationEstimate.successRate !== undefined && durationEstimate.isTypeSpecific && (
+            {durationEstimate && durationEstimate.successRate !== undefined && durationEstimate.basis !== 'overall' && (
               (() => {
                 const style = getSuccessRateStyle(durationEstimate.successRate);
                 return (

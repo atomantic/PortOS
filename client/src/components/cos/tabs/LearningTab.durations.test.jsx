@@ -9,26 +9,8 @@
  * and inflated the count beside the heading.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
-import LearningTab from './LearningTab';
-
-const api = vi.hoisted(() => ({
-  getCosLearning: vi.fn(),
-  getCosLearningPerformance: vi.fn(),
-  getCosLearningSkipped: vi.fn(),
-  getCosLearningDurations: vi.fn(),
-  getCosLearningRouting: vi.fn(),
-  getCosLearningConfidence: vi.fn(),
-  getCosFeedbackStats: vi.fn(),
-  getDismissedCosRecommendations: vi.fn(),
-  resetCosTaskTypeLearning: vi.fn(),
-}));
-
-vi.mock('../../../services/api', () => api);
-vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+import { describe, expect, it } from 'vitest';
+import { taskTypeDurationRows } from './LearningTab';
 
 const row = (avgDurationMs, completed) => ({
   avgDurationMs,
@@ -39,38 +21,23 @@ const row = (avgDurationMs, completed) => ({
   successRate: 100,
 });
 
-describe('LearningTab — duration table reserved keys', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    api.getCosLearning.mockResolvedValue({ totals: { completed: 9, succeeded: 9, avgDurationMs: 60000 }, recommendations: [] });
-    api.getCosLearningPerformance.mockResolvedValue({ topPerformers: [], needsAttention: [], skipped: [] });
-    api.getCosLearningSkipped.mockResolvedValue({ skippedCount: 0, skippedTypes: [] });
-    api.getCosLearningRouting.mockResolvedValue({ byModelTier: {} });
-    api.getCosLearningConfidence.mockResolvedValue({
-      levels: { high: [], medium: [], low: [], new: [] },
-      thresholds: { highThreshold: 80, lowThreshold: 50, minSamples: 5 },
-      summary: { high: 0, medium: 0, low: 0, new: 0, total: 0, requireApproval: 0 },
-    });
-    api.getCosFeedbackStats.mockResolvedValue({ total: 0 });
-    api.getDismissedCosRecommendations.mockResolvedValue({ dismissed: [] });
-    api.getCosLearningDurations.mockResolvedValue({
-      'self-improve:release-check': row(120000, 6),
+describe('taskTypeDurationRows', () => {
+  it('keeps only real task types, slowest first, whatever reserved keys ride along', () => {
+    const rows = taskTypeDurationRows({
       'user-task': row(60000, 3),
+      'self-improve:release-check': row(120000, 6),
       _overall: row(90000, 9),
       _byExecution: { 'self-improve:release-check|ollama|local-coder|low': row(480000, 4) },
       _byExecutionProviderModel: { 'self-improve:release-check|ollama|local-coder': row(480000, 4) },
     });
+
+    // Both the table and the "(N task types)" count read this list, so its length
+    // is the count — no reserved key can inflate it and none renders a blank row.
+    expect(rows.map(([taskType]) => taskType)).toEqual(['self-improve:release-check', 'user-task']);
   });
 
-  it('counts and lists only real task types, never a reserved aggregate', async () => {
-    render(<MemoryRouter><LearningTab /></MemoryRouter>);
-    await userEvent.click(await screen.findByText('Duration Estimates'));
-
-    expect(screen.getByText('(2 task types)')).toBeInTheDocument();
-    expect(screen.getByText('self-improve:release-check')).toBeInTheDocument();
-    expect(screen.getByText('user-task')).toBeInTheDocument();
-    for (const reserved of ['_overall', '_byExecution', '_byExecutionProviderModel']) {
-      expect(screen.queryByText(reserved), `${reserved} is an aggregate, not a task type`).not.toBeInTheDocument();
-    }
+  it('answers an empty list before any history has loaded', () => {
+    expect(taskTypeDurationRows(null)).toEqual([]);
+    expect(taskTypeDurationRows({})).toEqual([]);
   });
 });

@@ -54,43 +54,40 @@ export { ENVIRONMENTAL_ERROR_CATEGORIES };
  * the `environmentalFailures` key. No-op when the failure carries no category.
  */
 /**
- * Fold one completion's duration into its execution-scoped bucket (issue #8001).
- * Pure — mutates and returns `data`. A null `key` (the run's provider or model was
- * never recorded) is a no-op: a partial key would merge unlike runs into one
- * estimate, which is exactly the blur this dimension exists to remove.
- *
- * Mirrors the `byTaskType` bucket's duration shape and reuses `calculateDurationETA`,
- * so the two dimensions can never disagree about what an ETA is. Deliberately carries
- * NO `recentOutcomes` ring — this bucket feeds the ETA only; the LI success-rate
- * signal keeps reading `byTaskType`.
- *
- * The caller applies the environmental-failure gate (#2618) before reaching here, so
- * an outage teaches this dimension nothing either.
+ * The empty duration bucket every ETA-shaped aggregate starts from. One literal so
+ * `byTaskType` and `byTaskTypeExecution` cannot persist different shapes on their
+ * first write — they already had: the task-type initializer relied on `|| 0` for the
+ * success-only fields while the execution one seeded them.
  */
-export function recordExecutionDuration(data, { key, success, duration = 0, at } = {}) {
-  if (!key) return data;
-  if (!data.byTaskTypeExecution) data.byTaskTypeExecution = {};
-  if (!data.byTaskTypeExecution[key]) {
-    data.byTaskTypeExecution[key] = {
-      completed: 0,
-      succeeded: 0,
-      failed: 0,
-      totalDurationMs: 0,
-      successDurationMs: 0,
-      successMaxDurationMs: 0,
-      avgDurationMs: 0,
-      maxDurationMs: 0,
-      p80DurationMs: 0,
-      lastCompleted: null,
-      successRate: 0
-    };
-  }
-  const metrics = data.byTaskTypeExecution[key];
+const emptyDurationBucket = () => ({
+  completed: 0,
+  succeeded: 0,
+  failed: 0,
+  totalDurationMs: 0,
+  successDurationMs: 0,
+  successMaxDurationMs: 0,
+  avgDurationMs: 0,
+  maxDurationMs: 0,
+  p80DurationMs: 0,
+  lastCompleted: null,
+  successRate: 0
+});
+
+/**
+ * Fold one completion into an ETA-shaped duration bucket. Pure — mutates and returns
+ * `metrics`. The single place the "success-only durations drive the ETA" rule lives:
+ * a failed agent often loops long in an error path, so only successful runs feed
+ * `calculateDurationETA`. Shared by the `byTaskType` and `byTaskTypeExecution` folds
+ * below so the two dimensions can never disagree about what an ETA is.
+ *
+ * The bounded `recentOutcomes` ring stays at the call site — only `byTaskType` carries
+ * one (it feeds LI's windowed success rate, which the duration-only execution bucket
+ * has no part in).
+ */
+function foldDurationOutcome(metrics, { success, duration = 0, at } = {}) {
   metrics.completed++;
   if (success) {
     metrics.succeeded++;
-    // Success-only durations drive the ETA — a failed agent often loops long in an
-    // error path and would skew the estimate (same rule as `byTaskType`).
     metrics.successDurationMs = (metrics.successDurationMs || 0) + duration;
     metrics.successMaxDurationMs = Math.max(metrics.successMaxDurationMs || 0, duration);
   } else {
@@ -100,6 +97,23 @@ export function recordExecutionDuration(data, { key, success, duration = 0, at }
   Object.assign(metrics, calculateDurationETA(metrics));
   metrics.lastCompleted = at || new Date().toISOString();
   metrics.successRate = Math.round((metrics.succeeded / metrics.completed) * 100);
+  return metrics;
+}
+
+/**
+ * Fold one completion's duration into its execution-scoped bucket (issue #8001).
+ * Pure — mutates and returns `data`. A null `key` (the run's provider or model was
+ * never recorded) is a no-op: a partial key would merge unlike runs into one
+ * estimate, which is exactly the blur this dimension exists to remove.
+ *
+ * The caller applies the environmental-failure gate (#2618) before reaching here, so
+ * an outage teaches this dimension nothing either.
+ */
+function recordExecutionDuration(data, { key, success, duration = 0, at } = {}) {
+  if (!key) return data;
+  if (!data.byTaskTypeExecution) data.byTaskTypeExecution = {};
+  if (!data.byTaskTypeExecution[key]) data.byTaskTypeExecution[key] = emptyDurationBucket();
+  foldDurationOutcome(data.byTaskTypeExecution[key], { success, duration, at });
   return data;
 }
 
@@ -522,15 +536,7 @@ export async function recordTaskCompletion(agent, task) {
     // Initialize task type bucket if needed
     if (!data.byTaskType[taskType]) {
       data.byTaskType[taskType] = {
-        completed: 0,
-        succeeded: 0,
-        failed: 0,
-        totalDurationMs: 0,
-        avgDurationMs: 0,
-        maxDurationMs: 0,
-        p80DurationMs: 0,
-        lastCompleted: null,
-        successRate: 0,
+        ...emptyDurationBucket(),
         // Bounded recency ring (issue #2460) — feeds the windowed rate LI reads.
         recentOutcomes: []
       };
@@ -549,21 +555,7 @@ export async function recordTaskCompletion(agent, task) {
     }
 
     // Update task type metrics
-    const typeMetrics = data.byTaskType[taskType];
-    typeMetrics.completed++;
-    if (outcomeSuccess) {
-      typeMetrics.succeeded++;
-      // Only include successful durations in ETA calculations — failed agents often
-      // run long in error loops and skew estimates
-      typeMetrics.successDurationMs = (typeMetrics.successDurationMs || 0) + duration;
-      typeMetrics.successMaxDurationMs = Math.max(typeMetrics.successMaxDurationMs || 0, duration);
-    } else {
-      typeMetrics.failed++;
-    }
-    typeMetrics.totalDurationMs += duration;
-    Object.assign(typeMetrics, calculateDurationETA(typeMetrics));
-    typeMetrics.lastCompleted = new Date().toISOString();
-    typeMetrics.successRate = Math.round((typeMetrics.succeeded / typeMetrics.completed) * 100);
+    const typeMetrics = foldDurationOutcome(data.byTaskType[taskType], { success: outcomeSuccess, duration });
     // Append this run to the bounded recency ring (issue #2460). The lifetime
     // counters above never decay; the ring lets LI read a recency-windowed rate so
     // a since-resolved failure burst ages out of the "is work needed" signal

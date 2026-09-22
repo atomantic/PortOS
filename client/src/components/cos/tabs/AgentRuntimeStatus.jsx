@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 import { Activity, Clock, Hourglass, MessageSquare, Skull, Terminal } from 'lucide-react';
 import { formatDateTime, formatDurationMs, formatMonthDay, formatTimeOfDay } from '../../../utils/formatters';
-import { describeEstimateScope } from '../../../lib/cosDurationEstimate';
+import { describeEstimateBasis } from '../../../lib/cosDurationEstimate';
 
 const ETA_PRESENTATION = {
   inline: {
@@ -66,7 +66,7 @@ export function AgentRuntimeStatus({
       {!inactive && durationEstimate ? (
         <span
           className="flex items-center gap-1.5 text-gray-500 whitespace-nowrap"
-          title={`Based on ${durationEstimate.basedOn} completed ${describeEstimateScope(durationEstimate)} (avg: ${formatDurationMs(durationEstimate.avgMs)}, est: ${formatDurationMs(durationEstimate.estimatedMs)})`}
+          title={`${describeEstimateBasis(durationEstimate)} (avg: ${formatDurationMs(durationEstimate.avgMs)}, est: ${formatDurationMs(durationEstimate.estimatedMs)})`}
         >
           <Clock size={12} aria-hidden="true" className="shrink-0" />
           <span className="font-mono">{formatDurationMs(duration)}</span>

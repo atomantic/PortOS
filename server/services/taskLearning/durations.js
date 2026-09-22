@@ -12,7 +12,7 @@ import {
   calculateDurationETA,
   executionDurationKey,
   executionKeyPrefix,
-  executionKeyMatchesPrefix
+  executionKeyPrefixOf
 } from './store.js';
 
 // Minimum completions before an execution-scoped bucket (issue #8001) is trusted
@@ -26,16 +26,31 @@ const MIN_OVERALL_SAMPLES = 3;
 const confidenceFor = (completed) => (completed >= 10 ? 'high' : completed >= 5 ? 'medium' : 'low');
 
 /**
+ * Group an execution map by the `taskType|providerId|model` identity its keys
+ * carry, collapsing the effort segment. Pure. The ONE grouping in this module:
+ * the rung-2 lookup and the `_byExecutionProviderModel` payload rollup both read
+ * it, so the estimate the server computes and the one the client looks up cannot
+ * be derived two different ways. A malformed key groups nowhere.
+ */
+function groupExecutionBucketsByProviderModel(executionBuckets, { minCompleted = 1 } = {}) {
+  const groups = new Map();
+  for (const [key, metrics] of Object.entries(executionBuckets)) {
+    if (!metrics || (metrics.completed || 0) < minCompleted) continue;
+    const prefix = executionKeyPrefixOf(key);
+    if (!prefix) continue;
+    if (!groups.has(prefix)) groups.set(prefix, []);
+    groups.get(prefix).push(metrics);
+  }
+  return groups;
+}
+
+/**
  * Sum a set of execution buckets into one aggregate, re-deriving the ETA stats
  * from the RAW success totals via `calculateDurationETA` rather than averaging
  * already-averaged numbers (which would weight a 1-run bucket like a 50-run one).
  * Pure. Returns null when the set is empty.
- *
- * Shared by the rung-2 lookup below and the `_byExecutionProviderModel` rollup
- * `getAllTaskDurations` publishes, so the server's own reader and the payload the
- * client estimates from cannot drift.
  */
-export function aggregateExecutionBuckets(buckets) {
+function aggregateExecutionBuckets(buckets) {
   const list = (buckets || []).filter(Boolean);
   if (list.length === 0) return null;
   const agg = list.reduce((acc, m) => ({
@@ -114,15 +129,10 @@ export async function getTaskDurationEstimate(taskDescription, { providerId, mod
   // little history of its own, the provider+model history is still far sharper
   // than lumping every provider's runs of this task type together.
   const prefix = executionKeyPrefix({ taskType, providerId, model });
-  if (prefix) {
-    const providerModel = aggregateExecutionBuckets(
-      Object.entries(executionBuckets)
-        .filter(([key]) => executionKeyMatchesPrefix(key, prefix))
-        .map(([, metrics]) => metrics)
-    );
-    if (providerModel && providerModel.completed >= MIN_EXECUTION_SAMPLES) {
-      return toEstimate(providerModel, { taskType, basis: 'provider-model' });
-    }
+  const group = prefix ? groupExecutionBucketsByProviderModel(executionBuckets).get(prefix) : null;
+  const providerModel = group ? aggregateExecutionBuckets(group) : null;
+  if (providerModel && providerModel.completed >= MIN_EXECUTION_SAMPLES) {
+    return toEstimate(providerModel, { taskType, basis: 'provider-model' });
   }
 
   // Rung 3 — data for this specific task type, whatever it ran on.
@@ -194,24 +204,18 @@ export async function getAllTaskDurations() {
   // same `calculateDurationETA` the server's own cascade uses, so the client
   // estimator is a pure lookup and cannot re-derive the ETA math differently.
   const executionBuckets = data.byTaskTypeExecution || {};
-  const byExecution = {};
-  const providerModelGroups = new Map();
-  for (const [key, metrics] of Object.entries(executionBuckets)) {
-    if (!metrics || (metrics.completed || 0) < 1) continue;
-    byExecution[key] = toDurationRow(metrics);
-    // The key is `taskType|providerId|model|effort` — everything but the effort
-    // segment is the rollup identity.
-    const prefix = key.slice(0, key.lastIndexOf('|'));
-    if (!prefix) continue;
-    if (!providerModelGroups.has(prefix)) providerModelGroups.set(prefix, []);
-    providerModelGroups.get(prefix).push(metrics);
-  }
+  const byExecution = Object.fromEntries(
+    Object.entries(executionBuckets)
+      .filter(([, metrics]) => metrics && (metrics.completed || 0) >= 1)
+      .map(([key, metrics]) => [key, toDurationRow(metrics)])
+  );
   // Published only when there is something in them, the same discipline `_overall`
   // follows — an install with no learned history still answers a bare `{}`.
   if (Object.keys(byExecution).length > 0) {
     durations._byExecution = byExecution;
     durations._byExecutionProviderModel = Object.fromEntries(
-      [...providerModelGroups].map(([prefix, buckets]) => [prefix, toDurationRow(aggregateExecutionBuckets(buckets))])
+      [...groupExecutionBucketsByProviderModel(executionBuckets)]
+        .map(([prefix, buckets]) => [prefix, toDurationRow(aggregateExecutionBuckets(buckets))])
     );
   }
 

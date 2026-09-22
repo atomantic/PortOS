@@ -32,12 +32,25 @@ const EXECUTION_KEY_SEPARATOR = '|';
 // Minimum completions before an execution-scoped bucket outranks the broader
 // task-type average — MIRRORS the server's MIN_EXECUTION_SAMPLES. One run of a
 // specific provider/model/effort says less than a rich task-type history does.
-export const MIN_EXECUTION_SAMPLES = 3;
+//
+// Rungs 3 and 4 deliberately carry NO threshold here: `getAllTaskDurations`
+// already filters what it publishes, and the cards have always shown whatever
+// task-type row arrived. The server's own reader applies its thresholds against
+// the RAW store, which this payload is a projection of — so the mirror is the key
+// composition, the cascade ORDER, and this execution-rung bar, not every gate.
+const MIN_EXECUTION_SAMPLES = 3;
 
-const nonEmptyKeyPart = (value) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+// A key part must be a non-empty string that cannot itself contain the separator
+// (MIRRORS the server): otherwise `a|p|m|x` is both "model m at effort x" and
+// "model m|x at no effort", and the rollup would match an unrelated identity.
+const nonEmptyKeyPart = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed && !trimmed.includes(EXECUTION_KEY_SEPARATOR) ? trimmed : null;
+};
 
 /** `taskType|providerId|model`, or null when any part is missing. Pure. */
-export function executionProviderModelKey({ taskType, providerId, model } = {}) {
+export function executionKeyPrefix({ taskType, providerId, model } = {}) {
   const parts = [nonEmptyKeyPart(taskType), nonEmptyKeyPart(providerId), nonEmptyKeyPart(model)];
   if (parts.some((part) => part === null)) return null;
   return parts.join(EXECUTION_KEY_SEPARATOR);
@@ -45,7 +58,7 @@ export function executionProviderModelKey({ taskType, providerId, model } = {}) 
 
 /** `taskType|providerId|model|effort`, or null when any required part is missing. Pure. */
 export function executionDurationKey({ taskType, providerId, model, effort } = {}) {
-  const prefix = executionProviderModelKey({ taskType, providerId, model });
+  const prefix = executionKeyPrefix({ taskType, providerId, model });
   if (prefix === null) return null;
   return `${prefix}${EXECUTION_KEY_SEPARATOR}${nonEmptyKeyPart(effort) ?? EXECUTION_EFFORT_NONE}`;
 }
@@ -59,27 +72,28 @@ const shape = (row, { taskType, basis }) => ({
   successRate: row.successRate,
   taskType,
   basis,
-  // Kept for the existing call sites: true for anything sharper than the
-  // all-tasks average, which is what the cards gate their per-type chips on.
-  isTypeSpecific: basis !== 'overall',
 });
 
+// How each rung's history is described in the cards' tooltips. The overall rung
+// names no task type — it is every task type — which is why the phrase, not just
+// the qualifier, lives in this table.
 const BASIS_SCOPE = {
   execution: 'runs on this provider, model and effort',
   'provider-model': 'runs on this provider and model',
   'task-type': 'runs across all providers',
+  overall: 'runs across all tasks',
 };
 
 /**
- * Human-readable phrase for the history an estimate was drawn from, for the
- * cards' tooltips: which task type, and what NARROWED it. Reads as the object of
- * "Based on N completed …", so the user can tell an execution-specific estimate
- * from one averaged over every provider. Pure.
+ * The cards' shared "Based on N completed …" clause: how much history the estimate
+ * rests on, and what narrowed it. One sentence in one place, so the agent card and
+ * the pending-task chip cannot describe the same estimate differently. Pure.
  */
-export function describeEstimateScope(estimate) {
+export function describeEstimateBasis(estimate) {
   if (!estimate) return '';
-  const scope = BASIS_SCOPE[estimate.basis];
-  return scope ? `${estimate.taskType} ${scope}` : 'runs across all tasks';
+  const scope = BASIS_SCOPE[estimate.basis] || BASIS_SCOPE.overall;
+  const subject = estimate.basis === 'overall' ? scope : `${estimate.taskType} ${scope}`;
+  return `Based on ${estimate.basedOn} completed ${subject}`;
 }
 
 /**
@@ -90,7 +104,8 @@ export function describeEstimateScope(estimate) {
  * @param {Object|null} args.task - task-shaped input for `extractCosTaskType`
  * @param {Object|null} [args.agentMetadata] - the run's `metadata` (providerId / model / effort)
  * @returns {{estimatedMs:number, avgMs:number, basedOn:number, successRate:number|undefined,
- *   taskType:string, basis:string, isTypeSpecific:boolean}|null} null when nothing is learned yet
+ *   taskType:string, basis:'execution'|'provider-model'|'task-type'|'overall'}|null}
+ *   null when nothing is learned yet
  */
 export function estimateCosDuration({ durations, task, agentMetadata = null } = {}) {
   if (!durations) return null;
@@ -113,7 +128,7 @@ export function estimateCosDuration({ durations, task, agentMetadata = null } = 
   }
 
   // Rung 2 — same provider + model, summed across effort levels by the server.
-  const rollupKey = executionProviderModelKey(identity);
+  const rollupKey = executionKeyPrefix(identity);
   const rollup = rollupKey ? durations._byExecutionProviderModel?.[rollupKey] : null;
   if (hasDuration(rollup) && rollup.completed >= MIN_EXECUTION_SAMPLES) {
     return shape(rollup, { taskType, basis: 'provider-model' });
@@ -125,7 +140,7 @@ export function estimateCosDuration({ durations, task, agentMetadata = null } = 
 
   // Rung 4 — the overall average.
   const overallData = durations._overall;
-  if (hasDuration(overallData)) return shape(overallData, { taskType: 'all tasks', basis: 'overall' });
+  if (hasDuration(overallData)) return shape(overallData, { taskType, basis: 'overall' });
 
   return null;
 }

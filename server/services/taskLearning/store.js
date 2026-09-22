@@ -66,7 +66,14 @@ const EXECUTION_KEY_SEPARATOR = '|';
 // prune `byTaskType` gets is not enough on its own — see `saveLearningData`.
 export const EXECUTION_BUCKET_CAP = 200;
 
-const nonEmptyKeyPart = (value) => (typeof value === 'string' && value.trim() ? value.trim() : null);
+// A key part must be a non-empty string that cannot itself contain the separator:
+// otherwise `a|p|m|x` is both "model m at effort x" and "model m|x at no effort",
+// and the provider+model rollup would sum two unrelated identities together.
+const nonEmptyKeyPart = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed && !trimmed.includes(EXECUTION_KEY_SEPARATOR) ? trimmed : null;
+};
 
 /**
  * Compose the `taskType|providerId|model` prefix shared by every effort level of
@@ -93,14 +100,15 @@ export function executionDurationKey({ taskType, providerId, model, effort } = {
 }
 
 /**
- * True when `key` is an execution bucket for the given `taskType|providerId|model`
- * identity, at any effort level. Pure — the reader's rung-2 rollup uses this so
- * "same provider+model, different effort" can never be matched by a prefix that
- * merely starts with the same characters.
+ * The `taskType|providerId|model` identity a stored execution key belongs to — the
+ * parse counterpart of `executionKeyPrefix`, so composition and decomposition live
+ * and change together. Null for anything that is not a well-formed key (a
+ * hand-edited learning.json), which the reader drops rather than mis-grouping. Pure.
  */
-export function executionKeyMatchesPrefix(key, prefix) {
-  if (typeof key !== 'string' || typeof prefix !== 'string' || !prefix) return false;
-  return key.startsWith(`${prefix}${EXECUTION_KEY_SEPARATOR}`);
+export function executionKeyPrefixOf(key) {
+  if (typeof key !== 'string') return null;
+  const parts = key.split(EXECUTION_KEY_SEPARATOR);
+  return parts.length === 4 ? parts.slice(0, 3).join(EXECUTION_KEY_SEPARATOR) : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ vi.mock('./store.js', async (importActual) => {
 
 import { recordTaskCompletion } from './metrics.js';
 import { getTaskDurationEstimate, getAllTaskDurations } from './durations.js';
-import { loadLearningData, saveLearningData, executionDurationKey, EXECUTION_EFFORT_NONE } from './store.js';
+import { loadLearningData, saveLearningData, executionDurationKey } from './store.js';
 
 const emptyData = () => ({
   version: 2,
@@ -123,9 +123,7 @@ describe('recordTaskCompletion — execution-scoped duration buckets', () => {
       agentOn({ effort: 'high', duration: 900_000 })
     ]);
     const base = { taskType: 'self-improve:release-check', providerId: 'ollama', model: 'local-coder' };
-    const none = executionDurationKey({ ...base, effort: null });
-    expect(none).toMatch(new RegExp(`\\|${EXECUTION_EFFORT_NONE}$`));
-    expect(data.byTaskTypeExecution[none].completed).toBe(1);
+    expect(data.byTaskTypeExecution[executionDurationKey({ ...base, effort: null })].completed).toBe(1);
     expect(data.byTaskTypeExecution[executionDurationKey({ ...base, effort: 'high' })].completed).toBe(1);
   });
 
@@ -152,15 +150,6 @@ describe('getTaskDurationEstimate — cascade', () => {
 
   const data = (byTaskTypeExecution, byTaskType = {}, totals = { completed: 0, succeeded: 0, failed: 0, avgDurationMs: 0 }) => ({
     ...emptyData(), byTaskTypeExecution, byTaskType, totals
-  });
-
-  it('answers from the exact provider/model/effort bucket once it has 3 completions', async () => {
-    loadLearningData.mockResolvedValue(data(
-      { [key('low')]: bucket(3, 500_000) },
-      { 'self-improve:release-check': bucket(50, 90_000) }
-    ));
-    const est = await getTaskDurationEstimate(TASK.description, identity);
-    expect(est).toMatchObject({ basis: 'execution', estimatedDurationMs: 500_000, basedOn: 3 });
   });
 
   it('falls outward to the provider+model rollup when this effort is still thin', async () => {

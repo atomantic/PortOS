@@ -43,6 +43,8 @@ import {
   loadDismissedRecommendations,
   saveDismissedRecommendations,
   executionDurationKey,
+  executionKeyPrefix,
+  executionKeyPrefixOf,
   EXECUTION_EFFORT_NONE,
   EXECUTION_BUCKET_CAP
 } from './store.js';
@@ -726,6 +728,23 @@ describe('execution duration keys and bounding (#8001)', () => {
     expect(executionDurationKey({ ...identity, providerId: null, effort: 'low' })).toBeNull();
     expect(executionDurationKey({ ...identity, model: '', effort: 'low' })).toBeNull();
     expect(executionDurationKey({ ...identity, taskType: undefined, effort: 'low' })).toBeNull();
+  });
+
+  it('refuses a part carrying the separator, which would make the key ambiguous', () => {
+    // `a|p|m|x` must mean exactly one thing. Were a model id allowed to carry the
+    // separator, it would be both "model m at effort x" and "model m|x at no
+    // effort", and the provider+model rollup would sum two unrelated identities.
+    expect(executionDurationKey({ ...identity, model: 'local|coder', effort: 'low' })).toBeNull();
+    expect(executionDurationKey({ ...identity, effort: 'low|high' }))
+      .toBe(`self-improve:release-check|ollama|local-coder|${EXECUTION_EFFORT_NONE}`);
+  });
+
+  it('round-trips a key back to the provider+model identity it belongs to', () => {
+    const key = executionDurationKey({ ...identity, effort: 'high' });
+    expect(executionKeyPrefixOf(key)).toBe(executionKeyPrefix(identity));
+    // A hand-edited learning.json must group nowhere rather than mis-group.
+    expect(executionKeyPrefixOf('not-a-key')).toBeNull();
+    expect(executionKeyPrefixOf(undefined)).toBeNull();
   });
 
   describe('saveLearningData bounding', () => {
