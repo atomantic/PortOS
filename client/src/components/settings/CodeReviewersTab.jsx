@@ -257,12 +257,12 @@ export default function CodeReviewersTab({ view } = {}) {
         <>
           {Object.entries(reviewerConfigFaults).map(([reviewer, fault]) => (
             <Banner key={`config-${reviewer}`} tone="warning" size="sm" align="left">
-              {reviewer} cannot review on this install ({fault.code}). The review loop is currently a no-op for this reviewer. {fault.code === 'NO_MODEL'
+              {reviewer}: the last review attempt failed ({fault.code}). A successful review clears this warning. {fault.code === 'NO_MODEL'
                 ? 'Select a model on Review chain.'
                 : fault.code === 'REVIEWER_ACCESS_DENIED'
                   ? 'Select an accessible service or model, or correct provider access. A successful review clears this warning.'
                   : fault.code === 'REVIEWER_UNSUPPORTED'
-                    ? 'Switch the provider to API mode or choose a supported tool-free review harness.'
+                    ? 'Check that the provider has a runnable command or API transport.'
                     : 'Enable or configure the reviewer in Settings → Code Reviewers.'}
             </Banner>
           ))}
@@ -295,7 +295,7 @@ export default function CodeReviewersTab({ view } = {}) {
               />
             </div>
           ) : (
-            <div role="tabpanel" id="code-review-task-follow-up" aria-labelledby="tab-follow-up" className="bg-port-card border border-port-border rounded-xl p-4">
+            <div role="tabpanel" id="code-review-task-follow-up" aria-labelledby="tab-follow-up">
               <GoalFidelityControls
                 value={goalFidelity}
                 modelOptions={modelOptions}

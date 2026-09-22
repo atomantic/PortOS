@@ -21,7 +21,7 @@ export default function CodeReviewHelp() {
         <p>Clearing every tier turns AI review off. Forge reviewers in the section below the tiers stay in place.</p>
       </Section>
       <Section title="Order inside a tier">
-        <p>Tool-free reviewers run before standalone CLI and Copilot reviewers. A move that would put a CLI reviewer ahead of a tool-free one is put back into that order.</p>
+        <p>Configured providers and local models run before standalone CLI and Copilot reviewers. A move that would put a CLI reviewer ahead of a configured provider or local model is put back into that order.</p>
         <p>Model, effort, optional, and max-round pins belong to the reviewer, not the tier. The same reviewer in two tiers shares one pin.</p>
       </Section>
       <Section title="Moving tiers and reviewers">
@@ -31,6 +31,10 @@ export default function CodeReviewHelp() {
       <Section title="Providers and legacy backends">
         <p>Add a configured provider, then set its model and effort on the row. The account and transport stay attached to that provider. Choose Custom… on the model menu to type an id that is not in the catalog.</p>
         <p>Standalone / legacy backend is the direct CLI, local runtime, and Copilot list. Those identities do not pick a provider account.</p>
+      </Section>
+      <Section title="Review access">
+        <p>CLI providers review in the task checkout and may inspect surrounding code using their normal harness capabilities. They are instructed to report findings without applying changes; this is not an enforced sandbox. API providers receive the diff without repository tools. A tool-free transport is not required for code review.</p>
+        <p>Public claim-comment screening remains a separate, enforced tool-free stage.</p>
       </Section>
       <Section title="Row controls">
         <p>Optional (~opt) still runs the reviewer, but an inconclusive result does not block the merge. A hard failure still does.</p>

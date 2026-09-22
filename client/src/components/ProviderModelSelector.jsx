@@ -66,6 +66,7 @@
  * @param {boolean} [props.modelDisabled] - Disable only the model selector (e.g.
  *   when the selected provider has no models). Composes with `disabled`.
  * @param {boolean} [props.compact] - Hide labels for inline/toolbar use
+ * @param {boolean} [props.dense] - Compact desktop fields while preserving mobile sizing
  * @param {string} [props.emptyProviderOption] - When set, prepends an option with
  *   value `""` and this label, letting the caller represent a "no explicit
  *   provider / use the default" choice. Omit (the default) to force a selection.
@@ -160,6 +161,7 @@ export default function ProviderModelSelector({
   loading = false,
   modelDisabled = false,
   compact = false,
+  dense = false,
   emptyProviderOption,
   emptyModelOption,
   alwaysShowModel = false,
@@ -373,6 +375,7 @@ export default function ProviderModelSelector({
     ? (showEffort ? 'flex flex-col sm:flex-row sm:items-center gap-2' : 'flex items-center gap-2')
     : 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),24rem))] items-start gap-2';
   const wrapperClass = layout === 'stacked' ? 'flex flex-col gap-1' : rowClass;
+  const selectClass = dense ? `${SELECT_CLASS} sm:min-h-8 sm:py-1 sm:text-xs` : SELECT_CLASS;
   return (
     <div className={wrapperClass}>
       <div className="flex-1 min-w-0">
@@ -385,7 +388,7 @@ export default function ProviderModelSelector({
           title={compact ? label : undefined}
           aria-label={compact ? label : undefined}
           aria-describedby={describedBy}
-          className={SELECT_CLASS}
+          className={selectClass}
         >
           {/* Rendered even when the caller forces a selection: mid-fetch there
               is nothing else to offer, and a genuinely empty select reads as the
@@ -416,7 +419,7 @@ export default function ProviderModelSelector({
             disabled={disabled || modelDisabled || loading}
             title={compact ? modelLabel : undefined}
             aria-label={compact ? modelLabel : undefined}
-            className={SELECT_CLASS}
+            className={selectClass}
           >
             {emptyModelOption != null && <option value="">{selectedProvider?.defaultModel ? `${emptyModelOption} — ${selectedProvider.defaultModel}` : emptyModelOption}</option>}
             {modelOptions.map(m => {
@@ -464,7 +467,7 @@ export default function ProviderModelSelector({
             onChange={onEffortChange}
             disabled={disabled || loading}
             optionFilter={effortAllowed}
-            className={SELECT_CLASS}
+            className={selectClass}
           />
         </div>
       )}

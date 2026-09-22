@@ -84,14 +84,15 @@ describe('reviewLifecycle reviewer invocation details', () => {
     getHttpsEnabledAtBoot.mockReturnValue({ value: false, initialized: true });
   });
 
-  it('uses resolved provider pins for both claim review and the public-comment gate', () => {
+  it('uses resolved provider pins for code review without requiring them to screen public comments', () => {
     const token = 'provider:example-reviewer';
     const section = buildLocalReviewerInstructions([token], { [token]: 'example-model' }, { [token]: 'high' }, { claimCommentGate: true });
     expect(section).toContain('--arg model example-model');
     expect(section).toContain('--arg effort high');
-    expect(section.match(/inheritDefaults: false/g)).toHaveLength(2);
+    expect(section.match(/inheritDefaults: false/g)).toHaveLength(1);
+    expect(section).not.toContain('## Tool-Free Public Comment Gate');
     const cleared = buildLocalReviewerInstructions([token], {}, {}, { claimCommentGate: true });
-    expect(cleared.match(/inheritDefaults: false/g)).toHaveLength(2);
+    expect(cleared.match(/inheritDefaults: false/g)).toHaveLength(1);
     expect(cleared).not.toContain('--arg model');
     expect(cleared).not.toContain('--arg effort');
   });

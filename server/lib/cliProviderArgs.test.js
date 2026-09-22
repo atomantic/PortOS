@@ -360,3 +360,16 @@ describe('cliProviderArgs', () => {
     });
   });
 });
+
+// Reviewer selections must win over a provider's saved argv while preserving its account/config.
+it('builds exact reviewer model and effort pins after removing only baked selections', async () => {
+  const { stripProviderPinArgs } = await import('./providerModels.js');
+  for (const command of ['claude', 'agy', 'codex']) {
+    const args = stripProviderPinArgs(['--model=old-model', '--effort', 'low', '-c', 'model_reasoning_effort="low"', '--config=model="old-model"', '--config', 'unrelated=true'], { model: true, effort: true });
+    expect(args).toEqual(['--config', 'unrelated=true']);
+    const built = buildCliArgs({ command, args, defaultModel: 'review-model', effort: 'high' });
+    expect(built).toContain('review-model');
+    expect(built.join(' ')).not.toContain('old-model');
+    expect(built.join(' ')).not.toContain('low');
+  }
+});
