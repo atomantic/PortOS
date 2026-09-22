@@ -1,5 +1,5 @@
 import { it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_SNAPSHOT_MAX_BYTES, QUALITY_SNAPSHOT_BRANCH,
   readAppQualitySnapshotFile, readStoredQualitySnapshot, publishAppQualitySnapshot,
@@ -377,7 +377,7 @@ it('reads v1, v2, and the legacy filename without falling past a canonical file'
   const v2 = canonical();
   const read = files => readStoredQualitySnapshot('/repo/example-app', {
     readFile: async path => {
-      const name = path.slice(path.lastIndexOf('/') + 1);
+      const name = basename(path);
       if (!Object.hasOwn(files, name)) throw new Error('ENOENT');
       return files[name];
     },
