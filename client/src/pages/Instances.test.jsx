@@ -372,6 +372,10 @@ describe('Instances page connection drawers', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add', exact: true }));
     await waitFor(() => expect(api.addPeer).toHaveBeenCalled());
     expect(screen.getByLabelText('Peer address')).toHaveValue('192.0.2.30');
+    // The rejected addPeer call keeps the mode buttons disabled (adding=true)
+    // until its catch/finally settles — wait for that before switching modes,
+    // or a slow microtask under load leaves this click a no-op (#7978).
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tailcat', exact: true })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Tailcat', exact: true }));
     fireEvent.change(screen.getByLabelText('Tailcat address'), { target: { value: 'tcEXAMPLE' } });
     fireEvent.click(screen.getByRole('button', { name: 'They dial us' }));
