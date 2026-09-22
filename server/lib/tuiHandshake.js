@@ -1550,13 +1550,15 @@ export function createToolPermissionGate() {
 // counter about once a second for as long as ANY tool or API call is in flight,
 // and the provider that barely repaints its chrome at all (OpenCode, ~8 times
 // across a 74MB transcript) is streaming that 74MB through this same stream.
-// Three unbroken minutes of NOTHING is a composer at rest under both.
+// Ten unbroken minutes of NOTHING is a composer at rest under both.
 //
-// Three minutes rather than the old ceiling's scale because the cost asymmetry
-// runs one way: a nudge that was not needed is queued into the composer and read
-// as "keep going", while a nudge that never comes leaves the run holding its
-// lane forever.
-export const STALL_NUDGE_IDLE_MS = 3 * 60 * 1000;
+// Bumped from 3 → 10 minutes: three minutes triggered too many false positives
+// on agents doing long tool calls or extended thinking steps. The cost asymmetry
+// still runs one way — a nudge that was not needed is queued into the composer
+// and read as "keep going", while a nudge that never comes leaves the run
+// holding its lane forever — but ten minutes gives enough headroom to avoid
+// interrupting work in progress.
+export const STALL_NUDGE_IDLE_MS = 10 * 60 * 1000;
 // How much output AFTER a nudge proves the session took the hint. Long enough to
 // exclude the bracketed-paste echo of the nudge itself (which lands within a
 // second or so), short enough that a session that genuinely resumed clears its
