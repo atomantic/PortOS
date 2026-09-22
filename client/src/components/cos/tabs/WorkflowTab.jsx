@@ -114,9 +114,17 @@ function Axis({ timeline, hours, timezone }) {
     <div className="relative h-9 border-b border-port-border/60 text-[10px] text-gray-500">
       {Array.from({ length: divisions + 1 }, (_, index) => {
         const at = new Date(start + ((end - start) * index) / divisions);
+        const isFirst = index === 0;
+        const isLast = index === divisions;
         return (
-          <div key={index} className="absolute bottom-1 -translate-x-1/2 whitespace-nowrap" style={{ left: `${(index / divisions) * 100}%` }}>
-            {index === 0 ? 'Now' : hours === 168 ? formatWeekdayShort(at, { timeZone: timezone }) : `+${index * 3}h`}
+          <div
+            key={index}
+            className={`absolute bottom-1 whitespace-nowrap ${
+              isFirst ? 'left-2 translate-x-0' : isLast ? 'right-2 translate-x-0' : '-translate-x-1/2'
+            }`}
+            style={isFirst || isLast ? undefined : { left: `${(index / divisions) * 100}%` }}
+          >
+            {isFirst ? 'Now' : hours === 168 ? formatWeekdayShort(at, { timeZone: timezone }) : `+${index * 3}h`}
           </div>
         );
       })}
@@ -171,7 +179,7 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
 
   return (
     <div className={`border-b border-port-border/40 transition-colors last:border-b-0 ${selected ? 'bg-port-accent/8' : ''}`}>
-      <div className={`grid w-full grid-cols-[14rem_minmax(42rem,1fr)] ${selected ? '' : 'hover:bg-white/[0.025]'}`}>
+      <div className={`grid w-full grid-cols-[14rem_1fr] ${selected ? '' : 'hover:bg-white/[0.025]'}`}>
         <div className="flex min-w-0 items-center gap-1.5 border-r border-port-border/50 px-3 py-2.5">
           {canExpand ? (
             <button
@@ -246,7 +254,7 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
               <span
                 key={occurrence.id}
                 className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 border-2 border-port-bg shadow ${shape} ${fill} ${ring}`}
-                style={{ left: `${timelinePercent(occurrence.at, timeline)}%` }}
+                style={{ left: `clamp(0.6rem, ${timelinePercent(occurrence.at, timeline)}%, calc(100% - 0.6rem))` }}
                 title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${scopedApps ? ` · for ${scopedApps}` : ''}${meta ? ` · ${meta.detail}` : ''}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
               />
             );
@@ -305,10 +313,10 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
   // source of truth for what's open" convention as ScheduleTab's ?task=.
   const [searchParams, setSearchParams] = useSearchParams();
   const hoursParam = Number.parseInt(searchParams.get('hours'), 10);
-  const hours = [24, 168].includes(hoursParam) ? hoursParam : 24;
+  const hours = [24, 168].includes(hoursParam) ? hoursParam : 168;
   const setHours = useCallback((next) => {
     const params = new URLSearchParams(searchParams);
-    if (next === 24) params.delete('hours');
+    if (next === 168) params.delete('hours');
     else params.set('hours', String(next));
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
@@ -394,19 +402,61 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
   }, [graph]);
 
   const selectedNode = selectedId && graph ? graph.nodes.find(node => node.id === selectedId) : null;
-  const collisionCount = graph?.timeline?.occurrences.filter(item => item.collision).length || 0;
+
+  const unpinnedQueue = model?.flexible.length > 0 && (
+    <section className="rounded-lg border border-dashed border-port-border/60 bg-port-card/20 p-3">
+      <div className="flex items-center gap-2 text-xs font-medium text-gray-400"><RotateCcw className="h-3.5 w-3.5" /> Unpinned runner queue</div>
+      <p className="mt-1 text-[11px] text-gray-600">These active on-demand tasks do not promise a clock time.</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {model.flexible.map(node => {
+          const canExpand = node.kind === 'task' && (node.totalAppCount || 0) > 0;
+          const isSelected = selectedId === node.id;
+          return (
+            <span key={node.id} className={`inline-flex items-center rounded border text-xs ${isSelected ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-bg/40'}`}>
+              <button type="button" onClick={() => setSelectedId(node.id)} className={`px-2.5 py-1.5 ${isSelected ? 'text-port-accent' : 'text-gray-400 hover:text-white'}`}>
+                {node.label} <span className="text-gray-600">· {node.schedule?.type}</span>
+                {canExpand && <span className={`ml-1 ${node.enabledAppCount > 0 ? 'text-port-accent' : 'text-gray-500'}`}>{node.enabledAppCount || 0}/{node.totalAppCount}</span>}
+              </button>
+              {canExpand && (
+                <button
+                  type="button"
+                  onClick={() => toggleExpand(node.id)}
+                  aria-expanded={expandedIds.has(node.id)}
+                  aria-label={`${expandedIds.has(node.id) ? 'Hide' : 'Show'} per-app options for ${node.label}`}
+                  title={`${node.enabledAppCount || 0} of ${node.totalAppCount} apps enabled`}
+                  className="flex h-full items-center border-l border-port-border/60 px-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
+                >
+                  <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expandedIds.has(node.id) ? 'rotate-90' : ''}`} />
+                </button>
+              )}
+            </span>
+          );
+        })}
+      </div>
+      {model.flexible.filter(node => expandedIds.has(node.id) && node.kind === 'task' && (node.totalAppCount || 0) > 0).map(node => (
+        <div key={node.id} className="mt-2 rounded border border-port-border/60 bg-port-bg/20 px-3 py-3">
+          <div className="mb-2 text-xs font-medium text-gray-300">{node.label} <span className="text-gray-600">· per-app options</span></div>
+          <AppOverridePanel node={node} apps={apps} providers={providers} providersLoaded={providersLoaded} onUpdateOverride={handleUpdateOverride} onBulkToggleOverride={handleBulkToggleOverride} />
+        </div>
+      ))}
+    </section>
+  );
+
+  const legend = (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-600">
+      <span><AlertTriangle className="mr-1 inline h-3 w-3 text-port-warning" />A ring means another launch is within 15 minutes; actual overlap depends on runtime.</span>
+      <span><Clock3 className="mr-1 inline h-3 w-3 text-amber-300" />An amber marker at Now means the task is already due (catch-up, first run, or overdue) — it launches on the next check rather than waiting for its next cadence slot.</span>
+      <span><CalendarDays className="mr-1 inline h-3 w-3" />A round marker launches only for the apps that pin their own cron for this task — the task&apos;s global row may still read &ldquo;on demand&rdquo;. Hover the cadence under the task name to see which app runs when.</span>
+      <span><TimerReset className="mr-1 inline h-3 w-3" />A perpetual task gets one bar per recurrence showing a nominal hour of runtime — the drain keeps going while backlog remains, so a run can outlast its bar. A filled bar at Now means it is draining already.</span>
+    </div>
+  );
 
   return (
     <div className="space-y-4">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <Workflow className="h-5 w-5 text-port-accent" />
-            <h2 className="text-xl font-semibold text-white">Schedule Timeline</h2>
-          </div>
-          <p className="mt-1 max-w-3xl text-sm text-gray-400">
-            See the real launch order across active task types and system jobs. Select any track to change its timing, frequency, or dependencies without leaving this page.
-          </p>
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Workflow className="h-5 w-5 text-port-accent" />
+          <h2 className="text-xl font-semibold text-white">Schedule Timeline</h2>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex rounded border border-port-border bg-port-card p-1">
@@ -425,117 +475,73 @@ export default function WorkflowTab({ apps, providers, providersLoaded }) {
 
       {graph && model && (
         <>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <div className="rounded border border-port-border/60 bg-port-card/30 px-3 py-2">
-              <span className="block text-[10px] uppercase tracking-wider text-gray-500">Active schedules</span>
-              <span className="mt-0.5 block text-lg font-semibold text-white">{model.scheduled.length}</span>
-            </div>
-            <div className="rounded border border-port-border/60 bg-port-card/30 px-3 py-2">
-              <span className="block text-[10px] uppercase tracking-wider text-gray-500">Launches in view</span>
-              <span className="mt-0.5 block text-lg font-semibold text-white">{graph.timeline.occurrences.length}</span>
-            </div>
-            <div className={`rounded border px-3 py-2 ${collisionCount ? 'border-port-warning/40 bg-port-warning/5' : 'border-port-border/60 bg-port-card/30'}`}>
-              <span className="block text-[10px] uppercase tracking-wider text-gray-500">Tight handoffs</span>
-              <span className={`mt-0.5 block text-lg font-semibold ${collisionCount ? 'text-port-warning' : 'text-white'}`}>{collisionCount}</span>
-              <span className="text-[10px] text-gray-600">launches within 15 min</span>
-            </div>
-          </div>
-
           <NextUp occurrences={graph.timeline.occurrences} nodeMap={model.nodeMap} hours={hours} timezone={graph.timezone} onSelect={setSelectedId} />
 
-          <div className={`grid items-start gap-4 ${selectedNode ? '2xl:grid-cols-[minmax(0,1fr)_20rem]' : ''}`}>
-            <div className="min-w-0 space-y-3">
-              <section className="overflow-hidden rounded-lg border border-port-border/60 bg-port-card/30">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-port-border/60 px-3 py-2 text-[10px] text-gray-500">
-                  <div className="flex items-center gap-3">
-                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-purple-400" /> pinned</span>
-                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-cyan-400" /> interval job</span>
-                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rotate-45 rounded-sm bg-amber-300" /> reset/recheck</span>
-                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-amber-400" /> due now (catch-up)</span>
-                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" /> round = per-app schedule</span>
-                    <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded-sm border border-dashed border-amber-400/50 bg-amber-500/15" /> perpetual drain (~1h)</span>
-                  </div>
-                  <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" />{graph.timezone}</span>
+          <div className={`grid items-start gap-4 ${selectedNode ? 'lg:grid-cols-[minmax(0,1fr)_20rem]' : ''}`}>
+            <section className="min-w-0 overflow-hidden rounded-lg border border-port-border/60 bg-port-card/30">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-port-border/60 px-3 py-2 text-[10px] text-gray-500">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-purple-400" /> pinned</span>
+                  <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-cyan-400" /> interval job</span>
+                  <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rotate-45 rounded-sm bg-amber-300" /> reset/recheck</span>
+                  <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-amber-400" /> due now (catch-up)</span>
+                  <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" /> round = per-app schedule</span>
+                  <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded-sm border border-dashed border-amber-400/50 bg-amber-500/15" /> perpetual drain (~1h)</span>
                 </div>
-                <div className="overflow-x-auto">
-                  <div className="min-w-[56rem]">
-                    <div className="grid grid-cols-[14rem_minmax(42rem,1fr)] bg-port-bg/30">
-                      <div className="flex items-end border-r border-port-border/50 px-3 pb-1 text-[10px] uppercase tracking-wider text-gray-600">Active tracks</div>
-                      <Axis timeline={graph.timeline} hours={hours} timezone={graph.timezone} />
-                    </div>
-                    {model.scheduled.map(node => (
-                      <TimelineRow
-                        key={node.id}
-                        node={node}
-                        occurrences={model.occurrencesByNode.get(node.id) || []}
-                        windows={model.windowsByNode.get(node.id) || []}
-                        timeline={graph.timeline}
-                        hours={hours}
-                        timezone={graph.timezone}
-                        selected={selectedId === node.id}
-                        apps={apps}
-                        providers={providers}
-                        providersLoaded={providersLoaded}
-                        expanded={expandedIds.has(node.id)}
-                        onSelect={setSelectedId}
-                        onToggleExpand={toggleExpand}
-                        onUpdateOverride={handleUpdateOverride}
-                        onBulkToggleOverride={handleBulkToggleOverride}
-                      />
-                    ))}
-                    {model.scheduled.length === 0 && <div className="py-10 text-center text-sm text-gray-500">No active timed schedules in this range.</div>}
-                  </div>
-                </div>
-              </section>
-
-              {model.flexible.length > 0 && (
-                <section className="rounded-lg border border-dashed border-port-border/60 bg-port-card/20 p-3">
-                  <div className="flex items-center gap-2 text-xs font-medium text-gray-400"><RotateCcw className="h-3.5 w-3.5" /> Unpinned runner queue</div>
-                  <p className="mt-1 text-[11px] text-gray-600">These active on-demand tasks do not promise a clock time.</p>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {model.flexible.map(node => {
-                      const canExpand = node.kind === 'task' && (node.totalAppCount || 0) > 0;
-                      const isSelected = selectedId === node.id;
-                      return (
-                        <span key={node.id} className={`inline-flex items-center rounded border text-xs ${isSelected ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-bg/40'}`}>
-                          <button type="button" onClick={() => setSelectedId(node.id)} className={`px-2.5 py-1.5 ${isSelected ? 'text-port-accent' : 'text-gray-400 hover:text-white'}`}>
-                            {node.label} <span className="text-gray-600">· {node.schedule?.type}</span>
-                            {canExpand && <span className={`ml-1 ${node.enabledAppCount > 0 ? 'text-port-accent' : 'text-gray-500'}`}>{node.enabledAppCount || 0}/{node.totalAppCount}</span>}
-                          </button>
-                          {canExpand && (
-                            <button
-                              type="button"
-                              onClick={() => toggleExpand(node.id)}
-                              aria-expanded={expandedIds.has(node.id)}
-                              aria-label={`${expandedIds.has(node.id) ? 'Hide' : 'Show'} per-app options for ${node.label}`}
-                              title={`${node.enabledAppCount || 0} of ${node.totalAppCount} apps enabled`}
-                              className="flex h-full items-center border-l border-port-border/60 px-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
-                            >
-                              <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expandedIds.has(node.id) ? 'rotate-90' : ''}`} />
-                            </button>
-                          )}
-                        </span>
-                      );
-                    })}
-                  </div>
-                  {model.flexible.filter(node => expandedIds.has(node.id) && node.kind === 'task' && (node.totalAppCount || 0) > 0).map(node => (
-                    <div key={node.id} className="mt-2 rounded border border-port-border/60 bg-port-bg/20 px-3 py-3">
-                      <div className="mb-2 text-xs font-medium text-gray-300">{node.label} <span className="text-gray-600">· per-app options</span></div>
-                      <AppOverridePanel node={node} apps={apps} providers={providers} providersLoaded={providersLoaded} onUpdateOverride={handleUpdateOverride} onBulkToggleOverride={handleBulkToggleOverride} />
-                    </div>
-                  ))}
-                </section>
-              )}
-
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-600">
-                <span><AlertTriangle className="mr-1 inline h-3 w-3 text-port-warning" />A ring means another launch is within 15 minutes; actual overlap depends on runtime.</span>
-                <span><Clock3 className="mr-1 inline h-3 w-3 text-amber-300" />An amber marker at Now means the task is already due (catch-up, first run, or overdue) — it launches on the next check rather than waiting for its next cadence slot.</span>
-                <span><CalendarDays className="mr-1 inline h-3 w-3" />A round marker launches only for the apps that pin their own cron for this task — the task&apos;s global row may still read &ldquo;on demand&rdquo;. Hover the cadence under the task name to see which app runs when.</span>
-                <span><TimerReset className="mr-1 inline h-3 w-3" />A perpetual task gets one bar per recurrence showing a nominal hour of runtime — the drain keeps going while backlog remains, so a run can outlast its bar. A filled bar at Now means it is draining already.</span>
+                <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" />{graph.timezone}</span>
               </div>
-            </div>
+              <div className="overflow-x-auto">
+                <div className="min-w-[36rem]">
+                  <div className="grid grid-cols-[14rem_1fr] bg-port-bg/30">
+                    <div className="flex items-end border-r border-port-border/50 px-3 pb-1 text-[10px] uppercase tracking-wider text-gray-600">Active tracks</div>
+                    <Axis timeline={graph.timeline} hours={hours} timezone={graph.timezone} />
+                  </div>
+                  {model.scheduled.map(node => (
+                    <TimelineRow
+                      key={node.id}
+                      node={node}
+                      occurrences={model.occurrencesByNode.get(node.id) || []}
+                      windows={model.windowsByNode.get(node.id) || []}
+                      timeline={graph.timeline}
+                      hours={hours}
+                      timezone={graph.timezone}
+                      selected={selectedId === node.id}
+                      apps={apps}
+                      providers={providers}
+                      providersLoaded={providersLoaded}
+                      expanded={expandedIds.has(node.id)}
+                      onSelect={setSelectedId}
+                      onToggleExpand={toggleExpand}
+                      onUpdateOverride={handleUpdateOverride}
+                      onBulkToggleOverride={handleBulkToggleOverride}
+                    />
+                  ))}
+                  {model.scheduled.length === 0 && <div className="py-10 text-center text-sm text-gray-500">No active timed schedules in this range.</div>}
+                </div>
+              </div>
+            </section>
 
-            {selectedNode && <ScheduleEditor node={selectedNode} allNodes={graph.nodes} timezone={graph.timezone} onClose={() => setSelectedId(null)} onSaved={fetchGraph} />}
+            {selectedNode && (
+              <div className="lg:col-start-2 lg:row-start-1 lg:row-span-3">
+                <ScheduleEditor
+                  node={selectedNode}
+                  allNodes={graph.nodes}
+                  timezone={graph.timezone}
+                  onClose={() => setSelectedId(null)}
+                  onSaved={fetchGraph}
+                />
+              </div>
+            )}
+
+            {unpinnedQueue && (
+              <div className="min-w-0 lg:col-start-1">
+                {unpinnedQueue}
+              </div>
+            )}
+
+            <div className="min-w-0 lg:col-start-1">
+              {legend}
+            </div>
           </div>
         </>
       )}
