@@ -595,6 +595,29 @@ async function runAgentSpawn(task) {
     // separate condition the provider reports for itself. All we do is raise the
     // estimate and say so.
     //
+    // Task-level OpenCode/Ollama generation controls override provider defaults
+    // for this one run. The child-environment composer turns these into the
+    // dynamic `agent.build` config instead of mutating saved provider state.
+    const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
+    // Ollama 400s the whole request when a model that never implements thinking
+    // is asked to think, so a non-reasoning local model dispatched at any effort
+    // level dies on its first turn with exit 1 and no output. Resolved here,
+    // once, on the provider EVERY spawn path shares — so the two carriers of the
+    // level (the `--effort` argv and OpenCode's `agent.*.reasoningEffort` config)
+    // drop it together. Resolve task-over-provider defaults before recording the
+    // run so the registered effort and every launch path use the same value.
+    // The argv builders no-op it for providers without an effort control.
+    //
+    // Resolved BEFORE the duration estimate below (#8001): that lookup keys off
+    // the effort this run will actually execute at, and the learning store records
+    // the same post-drop `taskEffort` through `buildAgentRegistration`. Reading a
+    // pre-drop level here would look up a bucket nothing ever writes.
+    const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
+      requestedProvider,
+      selectedModel,
+      requestedProvider.effort || null,
+    );
+
     // Cloud runs take no async hop at all: `localEndpointOfProvider` answers null
     // for anything not on this machine, and `planLocalPromptBudget` is skipped.
     const localEndpoint = localEndpointOfProvider(provider);
@@ -602,12 +625,20 @@ async function runAgentSpawn(task) {
       ? planLocalPromptBudget({
         prompt,
         endpoint: localEndpoint,
-        // The learned per-task-type average — the estimate being raised. A
+        // The learned average for THIS run's execution identity — task type ×
+        // provider × model × effort, falling outward to the plain task-type
+        // average when that bucket is still thin (#8001). The identity matters
+        // most for exactly this caller: the estimate being raised is a local
+        // model's, and a cloud run of the same task type is no guide to it. A
         // dynamic import for the same reason the workspace snapshot above uses
         // one: it keeps the task-learning graph out of this hot module's load
         // path, and a failed read means "nothing learned", not "zero".
         baseDurationMs: await import('./taskLearning.js')
-          .then((tl) => tl.getTaskDurationEstimate(task.description))
+          .then((tl) => tl.getTaskDurationEstimate(task.description, {
+            providerId: provider.id,
+            model: selectedModel,
+            effort: taskEffort,
+          }))
           .then((estimate) => estimate?.estimatedDurationMs ?? null)
           .catch(() => null),
       })
@@ -700,23 +731,6 @@ async function runAgentSpawn(task) {
         : resolveRepoForgeTarget(workspacePath),
       sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
     ]);
-    // Task-level OpenCode/Ollama generation controls override provider defaults
-    // for this one run. The child-environment composer turns these into the
-    // dynamic `agent.build` config instead of mutating saved provider state.
-    const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
-    // Ollama 400s the whole request when a model that never implements thinking
-    // is asked to think, so a non-reasoning local model dispatched at any effort
-    // level dies on its first turn with exit 1 and no output. Resolved here,
-    // once, on the provider EVERY spawn path shares — so the two carriers of the
-    // level (the `--effort` argv and OpenCode's `agent.*.reasoningEffort` config)
-    // drop it together. Resolve task-over-provider defaults before recording the
-    // run so the registered effort and every launch path use the same value.
-    // The argv builders no-op it for providers without an effort control.
-    const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
-      requestedProvider,
-      selectedModel,
-      requestedProvider.effort || null,
-    );
     await registerAgent(agentId, task.id, buildAgentRegistration({
       task,
       provider,

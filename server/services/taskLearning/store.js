@@ -40,6 +40,78 @@ export function calculateDurationETA(metrics) {
 }
 
 // ---------------------------------------------------------------------------
+// Execution-scoped duration buckets (issue #8001)
+//
+// `byTaskType` averages every run of a task type together, so the same
+// `self-improve:release-check` on a slow local Ollama model and on a fast cloud
+// model land in one bucket and the card's "N min remaining" is wrong for both.
+// The provider/model/effort a run actually executed on is the largest single
+// driver of its wall-clock time, so `byTaskTypeExecution` keys a second,
+// duration-only aggregate by that concrete identity. It is a FLAT map under one
+// composed key rather than a 4-level nest: cheaper to prune, iterate and cap.
+//
+// Duration only — no `recentOutcomes` ring. The LI success-rate signal keeps
+// reading `byTaskType`; this dimension exists solely to sharpen the ETA.
+// ---------------------------------------------------------------------------
+
+// Effort sentinel for a provider with no effort control. The repo's absent-vs-empty
+// rule: a run at no effort level must be its own bucket, never a key ending in a
+// bare separator that an `''` and an `undefined` would both produce.
+export const EXECUTION_EFFORT_NONE = 'default';
+
+const EXECUTION_KEY_SEPARATOR = '|';
+
+// Ceiling on retained execution buckets. This dimension multiplies task types by
+// every provider/model/effort the install has ever run, so the <2-completions/30-day
+// prune `byTaskType` gets is not enough on its own — see `saveLearningData`.
+export const EXECUTION_BUCKET_CAP = 200;
+
+// A key part must be a non-empty string that cannot itself contain the separator:
+// otherwise `a|p|m|x` is both "model m at effort x" and "model m|x at no effort",
+// and the provider+model rollup would sum two unrelated identities together.
+const nonEmptyKeyPart = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed && !trimmed.includes(EXECUTION_KEY_SEPARATOR) ? trimmed : null;
+};
+
+/**
+ * Compose the `taskType|providerId|model` prefix shared by every effort level of
+ * one execution identity. Returns null when any part is missing — a partial key
+ * would silently merge unlike runs. Pure.
+ */
+export function executionKeyPrefix({ taskType, providerId, model } = {}) {
+  const parts = [nonEmptyKeyPart(taskType), nonEmptyKeyPart(providerId), nonEmptyKeyPart(model)];
+  if (parts.some((part) => part === null)) return null;
+  return parts.join(EXECUTION_KEY_SEPARATOR);
+}
+
+/**
+ * Compose the full `byTaskTypeExecution` key for one run. Returns null when the
+ * task type, provider or model is missing, so the recorder can skip the write
+ * instead of banking a run under a key that means nothing. A missing/blank
+ * effort becomes the explicit `EXECUTION_EFFORT_NONE` sentinel. Pure — the ONE
+ * place writer and reader compose this key, so they cannot drift.
+ */
+export function executionDurationKey({ taskType, providerId, model, effort } = {}) {
+  const prefix = executionKeyPrefix({ taskType, providerId, model });
+  if (prefix === null) return null;
+  return `${prefix}${EXECUTION_KEY_SEPARATOR}${nonEmptyKeyPart(effort) ?? EXECUTION_EFFORT_NONE}`;
+}
+
+/**
+ * The `taskType|providerId|model` identity a stored execution key belongs to — the
+ * parse counterpart of `executionKeyPrefix`, so composition and decomposition live
+ * and change together. Null for anything that is not a well-formed key (a
+ * hand-edited learning.json), which the reader drops rather than mis-grouping. Pure.
+ */
+export function executionKeyPrefixOf(key) {
+  if (typeof key !== 'string') return null;
+  const parts = key.split(EXECUTION_KEY_SEPARATOR);
+  return parts.length === 4 ? parts.slice(0, 3).join(EXECUTION_KEY_SEPARATOR) : null;
+}
+
+// ---------------------------------------------------------------------------
 // Recent-outcomes ring (issue #2460)
 //
 // Lifetime `byTaskType` counters (completed/succeeded/failed/successRate) are
@@ -259,6 +331,14 @@ const DEFAULT_LEARNING_DATA = {
   // Metrics by self-improvement task type
   byTaskType: {},
 
+  // Duration-only metrics by task type × the concrete execution identity the run
+  // used (issue #8001) — a flat map keyed by `executionDurationKey`. Additive:
+  // older learning.json files predate this key and load fine; the recording path
+  // initializes it on first use, exactly as `failureSignatures` /
+  // `environmentalFailures` / `correlationWindow` did. Bounded by the prune +
+  // EXECUTION_BUCKET_CAP sweep in `saveLearningData`.
+  byTaskTypeExecution: {},
+
   // Metrics by model tier
   byModelTier: {},
 
@@ -342,10 +422,34 @@ export async function saveLearningData(data) {
 
   // Prune task types with fewer than 2 completions and last seen > 30 days ago
   const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const isStaleThinBucket = (stats) =>
+    (stats?.completed || 0) < 2 && stats?.lastCompleted && new Date(stats.lastCompleted).getTime() < cutoff;
   if (data.byTaskType) {
     for (const [type, stats] of Object.entries(data.byTaskType)) {
-      if ((stats.completed || 0) < 2 && stats.lastCompleted && new Date(stats.lastCompleted).getTime() < cutoff) {
-        delete data.byTaskType[type];
+      if (isStaleThinBucket(stats)) delete data.byTaskType[type];
+    }
+  }
+
+  // Same prune for the execution dimension (issue #8001), plus a hard cap: this
+  // map is task types MULTIPLIED by every provider/model/effort the install has
+  // run, so the thin/stale sweep alone can't bound it — a long-lived install that
+  // keeps switching models would accumulate a bucket per combination forever.
+  // Over the cap, the least-recently-completed buckets go first: they are the ones
+  // whose estimate is least likely to describe how the install runs today.
+  if (data.byTaskTypeExecution) {
+    for (const [key, stats] of Object.entries(data.byTaskTypeExecution)) {
+      if (isStaleThinBucket(stats)) delete data.byTaskTypeExecution[key];
+    }
+    const keys = Object.keys(data.byTaskTypeExecution);
+    if (keys.length > EXECUTION_BUCKET_CAP) {
+      // An undated bucket sorts oldest (0) — it carries no evidence of recency,
+      // so it is the first thing to give up when the map is over budget.
+      const byRecency = keys.sort((a, b) => (
+        (Date.parse(data.byTaskTypeExecution[a]?.lastCompleted) || 0)
+        - (Date.parse(data.byTaskTypeExecution[b]?.lastCompleted) || 0)
+      ));
+      for (const key of byRecency.slice(0, keys.length - EXECUTION_BUCKET_CAP)) {
+        delete data.byTaskTypeExecution[key];
       }
     }
   }

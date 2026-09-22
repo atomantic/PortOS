@@ -30,7 +30,7 @@ import Modal from '../../ui/Modal';
 import CollapsibleText from '../../ui/CollapsibleText';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
-import { extractCosTaskType } from '../../../lib/cosTaskType';
+import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { isAgentFeedbackUpdateTarget, isSystemAgent as isSystemAgentRecord } from '../../../lib/cosAgentFeedback';
 import AgentResultLine from '../AgentResultLine';
 import { DEFAULT_REVIEWER, normalizeReviewers } from '../constants';
@@ -471,37 +471,19 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   // Calculate duration estimate for running agents
   // Uses P80 (80th percentile approximation) for progress bars to prevent premature 100%
   const durationEstimate = useMemo(() => {
-    if (inactive || !durations) return null;
-
-    const taskType = extractCosTaskType({
-      description: agent.metadata?.taskDescription,
-      taskType: agent.metadata?.taskType,
-      metadata: agent.metadata
+    if (inactive) return null;
+    // The shared 4-rung cascade (#8001): this run's provider/model/effort first,
+    // falling outward to the plain task-type average. `TaskItem` estimates through
+    // the same module, so a pending task and the agent it becomes agree.
+    return estimateCosDuration({
+      durations,
+      task: {
+        description: agent.metadata?.taskDescription,
+        taskType: agent.metadata?.taskType,
+        metadata: agent.metadata
+      },
+      agentMetadata: agent.metadata
     });
-    const typeData = durations[taskType];
-    const overallData = durations._overall;
-
-    if (typeData && typeData.avgDurationMs) {
-      return {
-        estimatedMs: typeData.p80DurationMs || typeData.avgDurationMs,
-        avgMs: typeData.avgDurationMs,
-        basedOn: typeData.completed,
-        taskType,
-        isTypeSpecific: true
-      };
-    }
-
-    if (overallData && overallData.avgDurationMs) {
-      return {
-        estimatedMs: overallData.p80DurationMs || overallData.avgDurationMs,
-        avgMs: overallData.avgDurationMs,
-        basedOn: overallData.completed,
-        taskType: 'all tasks',
-        isTypeSpecific: false
-      };
-    }
-
-    return null;
   }, [inactive, durations, agent.metadata]);
 
   // Calculate progress percentage using P80-based estimate
