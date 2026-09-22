@@ -145,8 +145,6 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
 
   return (
     <div className="space-y-3 min-w-0">
-      <p className="text-xs text-gray-400">The first tier with every member unpaused is selected. Even one paused member skips that tier. If all tiers contain a paused member, the first configured tier is selected; its paused reviewers still report unavailable. Empty tiers are drafts and disappear on save. Status previews this draft; changes apply when saved.</p>
-      <p className="text-xs text-gray-500">Drag a handle with a pointer or touch, or press Space, use arrow keys, then Space to drop (Escape cancels). Move controls also work without dragging. Tool-free reviewers always run first within each tier; pins are shared wherever the same identity appears.</p>
       <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragEnd={drop}
         accessibility={{
           screenReaderInstructions: { draggable: 'Press Space to pick up. Use arrow keys to move between reviewers or tiers. Press Space to drop, or Escape to cancel. Tool-free reviewers always run first.' },
@@ -177,7 +175,7 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
                       onChange(pruneRemoved(next));
                     }}>Remove tier</button>
                 </div>
-                <ReviewerPicker {...pickerProps} reviewers={group.reviewers} onChange={value => updateTier(group, value)} disabled={disabled} showUsernames={false} showRunFlags={false}
+                <ReviewerPicker {...pickerProps} reviewers={group.reviewers} onChange={value => updateTier(group, value)} disabled={disabled} showUsernames={false} showRunFlags={false} showIntro={false}
                   renderReviewer={(token, row) => <DraggableReviewItem key={token} id={memberId(group.id, token)}
                     data={{ kind: 'member', groupId: group.id, token, label: `${token} in ${name}` }} disabled={disabled} handles={handles}>
                     {memberHandle => <div className="min-w-0 border-t border-port-border/50 py-1">
@@ -200,10 +198,13 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
         </div>
       </DndContext>
       {!allReviewers.length && <p className="text-xs text-gray-400">AI review is disabled. Forge reviewers below are preserved.</p>}
-      <button type="button" disabled={disabled} className="min-h-11 px-3 text-sm text-port-accent border border-port-border rounded disabled:opacity-40"
-        onClick={() => changeGroups([...groups, { id: `${id}-tier-${serial.current++}`, reviewers: [] }], 'Empty tier added.')}>Add tier</button>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" disabled={disabled} className="min-h-11 px-3 text-sm text-port-accent border border-port-border rounded disabled:opacity-40"
+          onClick={() => changeGroups([...groups, { id: `${id}-tier-${serial.current++}`, reviewers: [] }], 'Empty tier added.')}>Add tier</button>
+        <p className="text-xs text-gray-500">Empty tiers are drafts and are dropped when you save.</p>
+      </div>
       <p role="status" className="text-xs text-gray-400">{announcement}</p>
-      <ReviewerPicker {...pickerProps} reviewers={allReviewers} onChange={onChange} disabled={disabled} showReviewers={false} />
+      <ReviewerPicker {...pickerProps} reviewers={allReviewers} onChange={onChange} disabled={disabled} showReviewers={false} showIntro={false} />
     </div>
   );
 }

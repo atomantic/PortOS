@@ -72,6 +72,9 @@ requests that omit this flag continue to inherit the saved defaults.
 ## Primary and fallback tiers
 
 Models → Code Reviewers edits saved priority as Primary, Fallback 1, and so on.
+The page splits that chain from the follow-up objective check. Shared rules
+(which tier runs, dragging, pin sharing, forge reviewers) live in How code
+review works, not repeated above each tier.
 Add a tier, choose a configured provider, then set its model, effort, optional
 status and round cap on the same row controls used by task and schedule pickers.
 Standalone / legacy backend retains direct CLI, local runtime and Copilot

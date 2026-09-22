@@ -1,9 +1,11 @@
 import { Suspense } from 'react';
-import { useParams, Navigate } from 'react-router';
+import { useLocation, useParams, Navigate } from 'react-router';
 import { Cpu } from 'lucide-react';
+import { getSectionNavTabForPath } from '../../../server/lib/navManifest.js';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
-import ModelsTabsHeader, { ModelsDesktopNavigator } from '../components/models/ModelsTabsHeader';
+import ModelsTabsHeader, { ModelsDesktopNavigator, TABS } from '../components/models/ModelsTabsHeader';
+import { NAV_PRESENTATION } from '../lib/navPresentation.js';
 import Image3dRuntimes from '../components/models/Image3dRuntimes';
 import ModelStatusTab from '../components/models/ModelStatusTab';
 import SubscriptionsTab from '../components/models/SubscriptionsTab';
@@ -85,6 +87,7 @@ const TAB_DETAIL = {
 
 export default function Models({ fixedTab, fixedRecordId } = {}) {
   const params = useParams();
+  const { pathname } = useLocation();
   const tab = fixedTab || params.tab;
   const recordId = fixedRecordId || params.recordId;
   const taskView = params.taskView || params.view || (fixedTab === 'performance' && params.assessmentKey ? 'results' : undefined);
@@ -104,12 +107,19 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
   // `library` and `abuse`); tabs that do not recognize it render their index.
   const DetailContent = recordId && Object.hasOwn(TAB_DETAIL, activeTab) ? TAB_DETAIL[activeTab] : null;
   const TabContent = TAB_CONTENT[activeTab];
+  // The shell names the destination you are on (Code Reviewers, Performance),
+  // matching the section navigator. "Models" stays the area, not the page title.
+  // A task view under that destination keeps the destination name; the page's
+  // own task row names the view.
+  const destination = getSectionNavTabForPath('Models', pathname)
+    || TABS.find((item) => item.id === activeTab);
+  const DestinationIcon = NAV_PRESENTATION[destination?.to]?.icon || Cpu;
 
   return (
     <div className="flex h-full min-w-0 overflow-hidden">
       <ModelsDesktopNavigator activeTab={activeTab} />
       <div className="flex flex-col h-full min-w-0 flex-1">
-        <PageHeader icon={Cpu} title="Models" />
+        <PageHeader icon={DestinationIcon} title={destination?.label || 'Models'} />
 
         <ModelsTabsHeader activeTab={activeTab} desktop={false} />
 
