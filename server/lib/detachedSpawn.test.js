@@ -658,6 +658,50 @@ describe('spawnDetached', () => {
       const res = await reapDetached(controlDir, { graceMs: 200, pollMs: 25 });
       expect(res.reaped).toBe(false);
     });
+
+    // NOTE on why this is a source guard and not a behavioral one. The property
+    // is "elapsed wall-clock bounds the loop", and it only diverges from the old
+    // tick count when a pass costs MORE than pollMs in real time — i.e. on a
+    // loaded machine. Fake timers cannot express that: advancing N ms of fake
+    // time yields both N ms elapsed AND N/pollMs iterations, so the two
+    // implementations agree by construction (a first draft of this test passed
+    // against the tick-counting loop, which is how that was found). A real-time
+    // test cannot be cheap either — the hard cap's floor is graceMs + 5000, so
+    // any run to the cap costs 5s of wall-clock. So this pins the shape, in the
+    // spirit of lib/importScoping.test.js, rather than adding a 5s sleep.
+    it('bounds both poll loops on WALL-CLOCK deadlines, not accumulated poll ticks', async () => {
+      const raw = await readFile(
+        new URL('./detachedSpawn.js', import.meta.url),
+        'utf8',
+      );
+      // Scan CODE only. The comments above both loops name the shape they
+      // replaced — `waited += pollMs` — so a scan of the raw file matches the
+      // very prose explaining the fix and fails on a correct tree.
+      const source = raw
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+      // Positive control: the loops this guards still exist to be guarded.
+      expect(source).toContain('export async function reapDetached');
+      expect(source).toContain('const awaitPid = async () =>');
+      expect(source.match(/await sleep\(pollMs\)/g).length).toBeGreaterThanOrEqual(2);
+
+      // The regression shape: a counter advanced by the NOMINAL cadence, then
+      // compared against a duration. Under load each pass costs more than
+      // pollMs, so the real cap stretches by the oversubscription factor.
+      expect(
+        /waited\s*\+=\s*pollMs/.test(source),
+        'detachedSpawn.js is accumulating poll ticks again (`waited += pollMs`). That '
+          + 'measures the loop\'s own cadence, not elapsed time, so REAP_GRACE_MS and '
+          + 'pidTimeoutMs both stretch on a loaded machine — and the hard cap stops '
+          + 'bounding boot, which is the only reason it exists (#7951). Compare '
+          + 'Date.now() against a deadline instead.',
+      ).toBe(false);
+
+      // And the shape that replaced it, so deleting the loops does not pass.
+      expect(source).toContain('Date.now() < hardDeadline');
+      expect(source).toContain('Date.now() < pidDeadline');
+    });
+
   });
 
   describe('reapAndCleanDetachedDirs', () => {
@@ -672,13 +716,56 @@ describe('spawnDetached', () => {
       await waitUntil(async () => (await aliveByPs(hA.pid)) && (await aliveByPs(hB.pid)));
       // pollMs matches the per-job cadence the rest of this suite spawns with;
       // the default 250ms sentinel poll costs a quarter-second per dir here.
-      const res = await reapAndCleanDetachedDirs(parent, { pollMs: 25 });
+      // graceMs is explicit for the same reason the single-dir reap tests above
+      // set it (#7951): the sweep reaps SEQUENTIALLY, and each dir is capped at
+      // graceMs + 5000, so the 12s production default makes this one case cost
+      // up to 34s — past any sane testTimeout. It normally finishes in ~150ms
+      // because SIGTERM lands immediately, but on a machine loaded enough that
+      // the exit is not observed before the grace elapses, both dirs wait out
+      // the full escalation and the file times out with nothing wrong. What
+      // this test asserts is that the sweep reaps every dir and removes it, not
+      // how long production waits before SIGKILL — reapDetached's own tests
+      // cover the escalation.
+      const res = await reapAndCleanDetachedDirs(parent, { pollMs: 25, graceMs: 3000 });
       expect(res.reaped).toBe(2);
       expect(res.scanned).toBe(2);
       expect(await stat(a).then(() => true).catch(() => false)).toBe(false);
       expect(await stat(b).then(() => true).catch(() => false)).toBe(false);
-      await Promise.all([closedA, closedB]);
-    });
+      // Settle the handles, but do NOT require 'close' (#7951). Every assertion
+      // above is already done; this only exists so the tailers are not left
+      // polling. It cannot be an unconditional await: the sweep REMOVES each
+      // control dir, and a handle learns its job ended by reading the `exit`
+      // sentinel inside that dir. If the tailer has not observed the sentinel
+      // before the rm — which is a race it wins on an idle machine and loses on
+      // a loaded one — 'close' can never fire, and the await hangs until the
+      // test times out no matter how large that budget is. That is what made
+      // this case blow a 60s allowance while asserting nothing slow.
+      await Promise.all([closedA, closedB].map((closed) => Promise.race([
+        closed.catch(() => {}),
+        new Promise((resolve) => { setTimeout(resolve, 1000); }),
+      ])));
+    // This case gets its own timeout because its worst case genuinely exceeds
+    // the suite's 30s budget — it is the heaviest case in the file, and the
+    // number below is derived, not padded (#7951):
+    //
+    //   2 x spawnDetached, each bounded by PID_TIMEOUT_MS ......... 20s
+    //   waitUntil(...) for both children to be live ...............  5s
+    //   reapAndCleanDetachedDirs, 2 dirs SEQUENTIALLY at
+    //     graceMs 3000 + the 5000 hard-cap margin .................. 16s
+    //   bounded settle of the two handles ......................... 1s
+    //                                                              ----
+    //                                                               42s
+    //
+    // Every term is now BOUNDED — that is the point. An earlier version of this
+    // case ended on an unconditional `await` for both 'close' events, which the
+    // dir removal above can make unreachable, so it could exceed any budget.
+    //
+    // It costs ~150ms when the machine is idle; every term above is a ceiling
+    // that only a heavily loaded box approaches. Raising the GLOBAL budget to
+    // cover this one case would blind every other test, so the allowance is
+    // scoped here. If this starts timing out again, the cost moved — measure
+    // which term grew rather than raising this number.
+    }, 60000);
 
     it('returns zero for a missing or empty parent', async () => {
       const parent = await tmpControlDir();

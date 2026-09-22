@@ -50,6 +50,19 @@ const resetSettings = () => {
   writeFileSync(join(tempRoot, 'auth-sessions.json'), '{"tokens":[]}\n');
 };
 
+// Pay the route graph's cold transform+import at FILE SCOPE, before any test is
+// registered (#7951). `beforeEach` calls `vi.resetModules()` so each test builds
+// a fresh app, but only the FIRST load in the worker transforms the graph; the
+// re-imports after it are sub-second. Left inside the test, that first load is
+// charged against the 10s `testTimeout` and the file failed with "Test timed out
+// in 10000ms" under a full-suite run while asserting nothing slow. Module
+// collection is not budgeted, so warming it here leaves the tests paying only
+// the cheap re-import. These instances are intentionally discarded by the
+// `vi.resetModules()` in `beforeEach` — they exist for the transform cache
+// alone. Guarded by `lib/importScoping.test.js`.
+await import('./peerSync.js');
+await import('../services/auth.js');
+
 const buildApp = async () => {
   const { authGate } = await import('../services/authGate.js');
   const peerSyncRoutes = (await import('./peerSync.js')).default;

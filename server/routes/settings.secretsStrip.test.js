@@ -36,6 +36,19 @@ const readSettingsFile = () => {
   return JSON.parse(raw);
 };
 
+// Pay `./settings.js`'s cold transform+import at FILE SCOPE, before any test is
+// registered (#7951). `buildApp()` calls `vi.resetModules()` so every test gets
+// a fresh module instance, but only the FIRST load in the worker pays vitest's
+// transform pipeline for the whole graph — measured under a full-suite run at
+// 28.2s for that first import and 530-970ms for each reset-and-reimport after
+// it. Charged against the 10s `testTimeout`, the first test in the file failed
+// with "Test timed out in 10000ms" while asserting nothing slow; module
+// collection is not budgeted, so warming it here leaves every test paying only
+// the sub-second re-import. This module instance is intentionally discarded by
+// the `vi.resetModules()` below — it exists for the transform cache alone.
+// Guarded by `lib/importScoping.test.js`.
+await import('./settings.js');
+
 const buildApp = async () => {
   vi.resetModules();
   const { default: settingsRoutes } = await import('./settings.js');
