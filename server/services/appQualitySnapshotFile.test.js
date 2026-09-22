@@ -297,6 +297,25 @@ it('rewrites a v1 snapshot to canonical v2 and leaves a semantically identical v
   expect(identical.addWorktree).not.toHaveBeenCalled();
 });
 
+it('does not replace a future snapshot already on the publish branch', async () => {
+  const future = JSON.stringify({ schemaVersion: 3, repository: 'a'.repeat(64) });
+  const deps = testDeps({
+    git: gitDouble({
+      execGit: vi.fn(async (args) => {
+        if (args[0] === 'show' && String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`)) {
+          return { exitCode: 0, stdout: future, stderr: '' };
+        }
+        return missingShow;
+      }),
+    }),
+  });
+  expect(await publishAppQualitySnapshot(app, deps)).toEqual({
+    published: false, reason: 'unsupported-format', path: '.quality.json',
+  });
+  expect(deps.writeFile).not.toHaveBeenCalled();
+  expect(deps.addWorktree).not.toHaveBeenCalled();
+});
+
 it('leaves a future, unrecognized, or unreadable snapshot in place', async () => {
   const future = testDeps({
     git: gitDouble({ execGit: showFiles({ '.quality.json': JSON.stringify({ schemaVersion: 3, repository: 'a'.repeat(64) }) }) }),
