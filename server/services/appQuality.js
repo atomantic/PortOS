@@ -39,7 +39,8 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
     console.error(`❌ App quality unavailable: ${err.message}`);
     return null;
   });
-  // Shipped evidence: any app's committed `.quality.json`.
+  // Shipped evidence: `.quality.json`, or a historical `quality-snapshot.json`
+  // when the canonical file is absent.
   // One unreadable checkout (git spawn failure, timeout) must cost that app its release
   // records, never the whole list — same posture as the peer collect below.
   const releases = await Promise.all(apps.map(app => readReleaseQuality(deps, app).catch(() => [])));

@@ -143,4 +143,16 @@ describe('AppQuality snapshot publishing', () => {
     await waitFor(() => expect(toast).toHaveBeenCalledWith('Snapshot already up to date in .quality.json'));
     expect(toast.success).not.toHaveBeenCalled();
   });
+
+  it('says an unsupported snapshot file was left in place', async () => {
+    publishAppQualitySnapshot.mockResolvedValue({ success: true, published: false, reason: 'unsupported-format', path: '.quality.json' });
+    render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
+    await screen.findByText(/No scored assessments/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot now' }));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(
+      'The committed quality file is in an unsupported format. Publish left it in place.'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
 });

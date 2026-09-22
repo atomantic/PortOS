@@ -17,6 +17,8 @@ const PUBLISH_SKIPPED = {
   'no-remote': 'App repo has no origin remote to open a pull request against',
   'no-default-branch': 'Could not resolve the repository default branch',
   'pr-failed': 'Could not open a quality snapshot pull request',
+  'unsupported-format': 'The committed quality file is in an unsupported format. Publish left it in place.',
+  'invalid-evidence': 'The current measurements could not be written as a snapshot. Publish left the file in place.',
 };
 
 export default function AppQuality({ app, detail = false }) {
