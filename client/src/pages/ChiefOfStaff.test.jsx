@@ -33,9 +33,7 @@ const api = vi.hoisted(() => ({
   getCodeReviewDefaults: vi.fn(),
   getRiggedAvatars: vi.fn(),
   // AgentsTab, reached by the mobile-select navigation test below.
-  getCosAgentDates: vi.fn(),
   getCosCompletedAgents: vi.fn(),
-  getCosAgentsByDate: vi.fn(),
   getCosPendingAgentFeedback: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -123,9 +121,7 @@ beforeEach(() => {
   api.getCosPopularTemplates.mockResolvedValue([]);
   api.getCodeReviewDefaults.mockResolvedValue({});
   api.getRiggedAvatars.mockResolvedValue({ records: [] });
-  api.getCosAgentDates.mockResolvedValue({ dates: [] });
   api.getCosCompletedAgents.mockResolvedValue({ items: [], total: 0, nextCursor: null });
-  api.getCosAgentsByDate.mockResolvedValue([]);
   api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
   localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
   localLlm.getToolUseModels.mockResolvedValue({ models: [] });

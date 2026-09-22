@@ -7,9 +7,7 @@ import { MemoryRouter, Routes, Route } from 'react-router';
 vi.mock('../../../services/api', () => ({
   getCosLearningDurations: vi.fn(),
   getCosAgent: vi.fn(),
-  getCosAgentDates: vi.fn(),
   getCosCompletedAgents: vi.fn(),
-  getCosAgentsByDate: vi.fn(),
   getCosPendingAgentFeedback: vi.fn(),
   hydrateCosAgentDescription: vi.fn(async (agent) => agent),
   clearCompletedCosAgents: vi.fn(),
@@ -107,9 +105,7 @@ const renderTab = (agents, onRefresh = vi.fn(), initialEntry = '/cos/agents') =>
 beforeEach(() => {
   vi.clearAllMocks();
   api.getCosLearningDurations.mockResolvedValue({});
-  api.getCosAgentDates.mockResolvedValue({ dates: [], latest: null });
   api.getCosCompletedAgents.mockResolvedValue({ items: [], total: 0, nextCursor: null });
-  api.getCosAgentsByDate.mockResolvedValue([]);
   api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
   api.hydrateCosAgentDescription.mockImplementation(async (agent) => agent);
 });
@@ -372,7 +368,6 @@ describe('AgentsTab bounded archive loading', () => {
     renderTab([]);
     await screen.findByText('Archived task');
     expect(api.getCosCompletedAgents).toHaveBeenCalledWith(expect.objectContaining({ limit: 25, cursor: null }));
-    expect(api.getCosAgentDates).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Load older agents' }));
     await screen.findByRole('alert');
     expect(screen.getByText('Archived task')).toBeInTheDocument();

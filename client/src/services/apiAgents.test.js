@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { startMaintenanceRun, getCosAgentDates, hydrateCosAgentDescription, triggerCosJob } from './apiAgents';
+import { startMaintenanceRun, hydrateCosAgentDescription, triggerCosJob } from './apiAgents';
 
 // Exercise the real API wrapper through HTTP serialization: mocking the wrapper
 // in the form test cannot catch a selected mode being dropped before POST.
@@ -54,17 +54,6 @@ it('falls back to the clipped record when the hydration read fails', async () =>
 
   const agent = { id: 'agent-1', metadata: { taskDescription: 'preview', taskDescriptionTruncated: true } };
   expect(await hydrateCosAgentDescription(agent)).toBe(agent);
-});
-
-it('asks for the newest bucket alongside the bucket list when hydrating', async () => {
-  const fetchMock = okJson({ dates: [], latest: null });
-  vi.stubGlobal('fetch', fetchMock);
-
-  await getCosAgentDates({ hydrate: true });
-  expect(fetchMock.mock.calls[0][0]).toContain('/cos/agents/history?hydrate=1');
-
-  await getCosAgentDates();
-  expect(fetchMock.mock.calls[1][0]).not.toContain('hydrate');
 });
 
 // The one place a card's ad-hoc values become a request body. Every component

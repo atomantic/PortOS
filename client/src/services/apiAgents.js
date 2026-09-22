@@ -235,12 +235,6 @@ export const forceHealthCheck = (options = {}) => request('/cos/health/check', {
 export const getCosAgents = ({ active = false, ...options } = {}) => request(`/cos/agents${active ? '?active=1' : ''}`, options);
 export const getCosCompletedAgents = ({ cursor, limit = 25, feedback = false, ...options } = {}) =>
   request(`/cos/agents/${feedback ? 'feedback/pending' : 'completed'}${runEventQuery({ limit, cursor })}`, options);
-// `hydrate` also returns the newest bucket as `latest: { date, agents }`, so the
-// Agents tab reaches its first archived card in ONE round trip instead of
-// waiting for this response to name the date it must then ask for.
-export const getCosAgentDates = ({ hydrate = false } = {}) =>
-  request(`/cos/agents/history${hydrate ? '?hydrate=1' : ''}`);
-export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
 export const getCosPendingAgentFeedback = ({ countOnly, ...options } = {}) => request(`/cos/agents/feedback/pending${countOnly ? '?countOnly=1' : ''}`, options);
 // `lines` caps the transcript TAIL the server hydrates (server default: 1000
 // lines / 512 KB). Pass it when the record is wanted for its metadata rather
