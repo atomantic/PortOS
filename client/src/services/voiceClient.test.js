@@ -417,6 +417,113 @@ describe('voice playback cancellation', () => {
     });
   });
 
+  describe('continuous startup rollback', () => {
+    let previousMediaDevices;
+    let previousAudioSession;
+    let tracks;
+    let getUserMedia;
+
+    beforeEach(() => {
+      previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+      previousAudioSession = Object.getOwnPropertyDescriptor(navigator, 'audioSession');
+      tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
+      getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => tracks });
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: { getUserMedia },
+      });
+      Object.defineProperty(navigator, 'audioSession', {
+        configurable: true,
+        value: { type: 'auto' },
+      });
+    });
+
+    afterEach(async () => {
+      await voiceClient.stopContinuous();
+      if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
+      else delete navigator.mediaDevices;
+      if (previousAudioSession) Object.defineProperty(navigator, 'audioSession', previousAudioSession);
+      else delete navigator.audioSession;
+    });
+
+    // Each stage leaves a different set of acquired resources to unwind.
+    it.each(['constructor', 'source', 'worklet node', 'connection', 'resume', 'module'])(
+      'releases the microphone and permits retry after a %s failure', async (stage) => {
+        const error = new Error(`${stage} failed`);
+        const fail = () => { throw error; };
+        const context = new FakeAudioContext();
+        const close = vi.spyOn(context, 'close');
+        vi.spyOn(window, 'AudioContext').mockImplementationOnce(function () {
+          if (stage === 'constructor') throw error;
+          return context;
+        });
+        if (stage === 'source') vi.spyOn(context, 'createMediaStreamSource').mockImplementationOnce(fail);
+        if (stage === 'worklet node') {
+          vi.spyOn(globalThis, 'AudioWorkletNode').mockImplementationOnce(function () { throw error; });
+        }
+        if (stage === 'connection') vi.spyOn(FakeAudioWorkletNode.prototype, 'connect').mockImplementationOnce(fail);
+        if (stage === 'resume') {
+          context.state = 'suspended';
+          vi.spyOn(context, 'resume').mockRejectedValueOnce(error);
+        }
+        if (stage === 'module') context.audioWorklet.addModule.mockRejectedValueOnce(error);
+        const createUrl = vi.spyOn(URL, 'createObjectURL');
+        const revokeUrl = vi.spyOn(URL, 'revokeObjectURL');
+
+        await expect(voiceClient.startContinuous()).rejects.toBe(error);
+
+        tracks.forEach((track) => expect(track.stop).toHaveBeenCalledOnce());
+        expect(navigator.audioSession.type).toBe('auto');
+        expect(voiceClient.isContinuous()).toBe(false);
+        expect(close).toHaveBeenCalledTimes(stage === 'constructor' ? 0 : 1);
+        createUrl.mock.results.forEach(({ value }) => expect(revokeUrl).toHaveBeenCalledWith(value));
+        await voiceClient.stopContinuous();
+        tracks.forEach((track) => expect(track.stop).toHaveBeenCalledOnce());
+
+        const retryTrack = { stop: vi.fn() };
+        getUserMedia.mockResolvedValueOnce({ getTracks: () => [retryTrack] });
+        await voiceClient.startContinuous();
+        expect(getUserMedia).toHaveBeenCalledTimes(2);
+        expect(voiceClient.isContinuous()).toBe(true);
+        expect(navigator.audioSession.type).toBe('play-and-record');
+        expect(retryTrack.stop).not.toHaveBeenCalled();
+        await voiceClient.stopContinuous();
+        expect(retryTrack.stop).toHaveBeenCalledOnce();
+        expect(navigator.audioSession.type).toBe('auto');
+      },
+    );
+
+    it.each(['resolve', 'reject'])('does not stop a retry when a disposed startup later %ss', async (outcome) => {
+      let resolveModule;
+      let rejectModule;
+      const context = new FakeAudioContext();
+      context.audioWorklet.addModule.mockImplementationOnce(() => new Promise((resolve, reject) => {
+        resolveModule = resolve;
+        rejectModule = reject;
+      }));
+      vi.spyOn(window, 'AudioContext').mockImplementationOnce(function () { return context; });
+      const pending = voiceClient.startContinuous();
+      await vi.waitFor(() => expect(context.audioWorklet.addModule).toHaveBeenCalledOnce());
+      voiceClient.disposeCaptureOwner();
+      const retryTrack = { stop: vi.fn() };
+      getUserMedia.mockResolvedValueOnce({ getTracks: () => [retryTrack] });
+      await voiceClient.startContinuous();
+
+      if (outcome === 'reject') {
+        const error = new Error('old module failed');
+        const rejection = expect(pending).rejects.toBe(error);
+        rejectModule(error);
+        await rejection;
+      } else {
+        resolveModule();
+        await expect(pending).resolves.toBeNull();
+      }
+      expect(voiceClient.isContinuous()).toBe(true);
+      expect(navigator.audioSession.type).toBe('play-and-record');
+      expect(retryTrack.stop).not.toHaveBeenCalled();
+    });
+  });
+
   it('ignores Web Speech results and restart errors after owner disposal', () => {
     const routeFinal = vi.fn();
     const onError = vi.fn();
