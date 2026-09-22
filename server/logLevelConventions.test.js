@@ -75,6 +75,7 @@ const NO_ENTRY = String.fromCodePoint(0x26d4);          // no entry
 const FAILURE_MARKERS = [CROSS_MARK, NO_ENTRY];
 
 const CONSOLE_LOG_OPEN = /\bconsole\s*\.\s*log\s*\(/g;
+const CONSOLE_LOG_SHAPE = /\bconsole\s*\.\s*log\s*\(/;
 
 /**
  * Every `console.log(…)` call in `src`, as `{ line, args }` where `args` keeps
@@ -137,9 +138,13 @@ describe('failure lines log at error level (#7945)', () => {
   it('finds the console.log calls it is meant to read', () => {
     // Proves the extractor still recognizes real call sites — without this the
     // scan below could go vacuously green if `consoleLogCalls` stopped matching.
-    const withLogs = trackedServerSources().filter((file) => (
-      consoleLogCalls(readFileSync(join(SERVER_ROOT, file), 'utf8')).length > 0
-    ));
+    // Most server modules do not log at all. A cheap lexical pre-filter keeps
+    // this guard from lexing 30 MB of unrelated source on every worker while
+    // `consoleLogCalls` remains the authority for what counts as a call.
+    const withLogs = trackedServerSources().filter((file) => {
+      const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
+      return CONSOLE_LOG_SHAPE.test(src) && consoleLogCalls(src).length > 0;
+    });
     expect(withLogs.length).toBeGreaterThan(100);
   });
 
@@ -147,7 +152,7 @@ describe('failure lines log at error level (#7945)', () => {
     const violations = [];
     for (const file of trackedServerSources()) {
       const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
-      if (!src.includes('console.log')) continue;
+      if (!CONSOLE_LOG_SHAPE.test(src)) continue;
       if (!FAILURE_MARKERS.some((marker) => src.includes(marker))) continue;
       for (const hit of findMislabeledFailureLogs(src)) violations.push(`server/${file} ${hit}`);
     }
