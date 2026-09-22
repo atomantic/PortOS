@@ -592,12 +592,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // release-check READS the changelog rather than writing it, so its fix is the
   // mirror image: an unreleased set that lives in uncollected fragments must not
   // read as "not enough work accumulated for a release".
-  it('release-check v13 fixes failing tests/CI instead of halting', () => {
+  it('release-check v14 names releases from their biggest user-visible wins', () => {
     const current = DEFAULT_TASK_PROMPTS['release-check'];
-    expect(PROMPT_VERSIONS['release-check']).toBeGreaterThanOrEqual(13);
+    expect(PROMPT_VERSIONS['release-check']).toBeGreaterThanOrEqual(14);
     expect(current).toContain('Reconcile Missing Releases');
     expect(current).toContain('Unpublished release detected');
     expect(current).toContain('--latest=false');
+    expect(current).toContain('one or two biggest user-visible wins');
+    expect(current).toContain('# Release vX.Y.Z - <Fun Name>');
+    expect(current).toContain('GitHub Actions workflow extracts this heading');
     expect(current).toContain('per-branch fragments');
     expect(current).toContain('assembled');
     // release-check is a generic {appName} prompt — it runs against managed apps,

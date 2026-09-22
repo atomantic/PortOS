@@ -46,10 +46,18 @@ the versioned file directly (see Maintenance below).
 
 ## Format
 
+The release agent chooses `{Fun Name}` after reviewing the complete release
+range and identifying its one or two biggest user-visible wins. Keep it short,
+memorable, playful, and accurate — for example, `Performant Dragon` for a
+release centered on faster, lower-bandwidth Chief of Staff page loads. The
+first heading is also the source for the GitHub release title, so keep the
+exact ` - ` separator and update the notes and published title together when
+correcting an existing release.
+
 Each changelog file should follow this structure:
 
 ```markdown
-# Release v{version}
+# Release v{version} - {Fun Name}
 
 Released: YYYY-MM-DD
 

@@ -2929,8 +2929,19 @@ Check for existing release tags that lack a corresponding GitHub Release:
    - Report it explicitly as "Unpublished release detected: vX.Y.Z".
    - Find its changelog body (for example, \`.changelog/vX.Y.Z.md\` or \`.changelog/vX.Y.x.md\`).
    - Check whether a newer version exists.
+   - When publishing it, pass the complete named heading without its leading # as the GitHub title with --title, not only the version.
    - Publish it with \`gh release create "vX.Y.Z"\`, using \`--notes-file\` or \`--body-file\`; pass \`--latest=false\` when a newer release exists, and \`--latest\` only for the newest version.
 4. Report missing releases reconciled before continuing.
+
+## Release naming and notes
+
+When the canonical release workflow compiles the notes for a new release, the agent in charge of the release MUST choose the release name. Read the complete release range and identify the one or two biggest user-visible wins — especially performance, reliability, accessibility, or bandwidth improvements — then choose a short, memorable, fun name that is accurate to those wins (for example, \`Performant Dragon\`). The name is a theme, not a new product claim: do not invent benefits, use private data, repeat implementation jargon, or settle for a generic label such as \`Update\`.
+
+The versioned changelog's first heading MUST be exactly:
+
+\`# Release vX.Y.Z - <Fun Name>\`
+
+Use the ASCII \` - \` separator, keep the name on one line, and keep the same name in the release notes and GitHub release title. Do not leave the bare \`# Release vX.Y.Z\` heading or put the name only in a later section; the GitHub Actions workflow extracts this heading to title the release. If correcting an already-published release, update the changelog body and GitHub release title together.
 
 The canonical workflow owns readiness and should count both the current changelog and any uncollected per-branch fragments (for example, \`.changelog/next/\`) across the assembled notes. If the changelog README documents a preview/collect command, use only that documented command — Do NOT guess a command name. If fewer than two substantive entries remain, stop without creating a release PR.
 

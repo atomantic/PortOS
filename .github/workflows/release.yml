@@ -170,6 +170,16 @@ jobs:
           \`\`\`"
           fi
 
+          # The release agent names the release in the first changelog heading.
+          # Resolve it before truncating the body so the GitHub title stays tied
+          # to the complete notes, not to whichever lines fit the size limit.
+          FULL_CHANGELOG_FILE="$RUNNER_TEMP/release-changelog.md"
+          printf '%s\n' "$CHANGELOG" > "$FULL_CHANGELOG_FILE"
+          RELEASE_TITLE=$(node scripts/release-title.js "$VERSION" "$FULL_CHANGELOG_FILE")
+          if [ "$RELEASE_TITLE" = "Release v${VERSION}" ]; then
+            echo "::warning::release notes have no named first heading; using the fallback title '$RELEASE_TITLE'"
+          fi
+
           # Write the body to a FILE consumed via body_path (NOT an action input
           # env var). A large changelog (this repo's run hard, ~175KB) blows two
           # separate ceilings when passed as `body:`: GitHub caps a release body
@@ -190,13 +200,14 @@ jobs:
               "$VERSION" "$SRC_FILE" "$FULL_URL" >> "$BODY_FILE"
           fi
           echo "body_path=$BODY_FILE" >> $GITHUB_OUTPUT
+          echo "release_title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
 
       - name: Create Release
         if: steps.release-check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
-          name: v${{ steps.package-version.outputs.version }}
+          name: ${{ steps.changelog.outputs.release_title }}
           body_path: ${{ steps.changelog.outputs.body_path }}
           draft: false
           prerelease: false

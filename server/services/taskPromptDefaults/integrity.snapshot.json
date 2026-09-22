@@ -43,7 +43,7 @@
     "react-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
-    "release-check": "5a82eec9f86ad05185ed77a42dbfd9d4",
+    "release-check": "cd936b9a4fb76273b36ec54c3ed6d5ba",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "security": "c5e35a12eeb06e6afe4617f4428fa1ab",
     "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
@@ -93,7 +93,7 @@
     "react-lifecycle": 2,
     "reference-watch": 3,
     "refresh-local-llm-catalog": 4,
-    "release-check": 13,
+    "release-check": 14,
     "repo-sync": 1,
     "security": 3,
     "simplify": 1,
@@ -335,7 +335,8 @@
       "afa9039cfbff21d77d601dc74eb5b81f",
       "2d2a6700c23b73bf738c2aa915e37277",
       "64be10f6ac7bcf74d4fc257089fc179b",
-      "644e5f2f6df1daf06f3792a81ba7a51a"
+      "644e5f2f6df1daf06f3792a81ba7a51a",
+      "5a82eec9f86ad05185ed77a42dbfd9d4"
     ],
     "security": [
       "b199739b21a8c45ed3778b2339ebf55f",
