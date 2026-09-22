@@ -43,6 +43,11 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No failed-read write-back: legacy birth-date migration skips unreadable input; birth-date mirror mutations preflight with a strict read."
   },
   {
+    "key": "meatspaceDailyLog.js :: DAILY_LOG_FILE",
+    "reason": "No non-strict write-back: UI reads stay tolerant, but mutateDailyLog is the only writer and always reads with strict: true before atomicWrite.",
+    "issue": "#8032"
+  },
+  {
     "key": "mediaSketches.js :: jsonPathFor ( key )",
     "reason": "No write-back cycle: the read projects the canvas; explicit save replaces the complete canvas supplied by the user."
   },
