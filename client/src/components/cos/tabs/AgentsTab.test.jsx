@@ -8,6 +8,7 @@ vi.mock('../../../services/api', () => ({
   getCosLearningDurations: vi.fn(),
   getCosAgent: vi.fn(),
   getCosAgentDates: vi.fn(),
+  getCosCompletedAgents: vi.fn(),
   getCosAgentsByDate: vi.fn(),
   getCosPendingAgentFeedback: vi.fn(),
   hydrateCosAgentDescription: vi.fn(async (agent) => agent),
@@ -75,7 +76,7 @@ vi.mock('./RelaunchAgentModal', () => ({
     </button>
   ),
 }));
-vi.mock('../../ui/InlineConfirmRow', () => ({ default: () => null }));
+vi.mock('../../ui/InlineConfirmRow', () => ({ default: ({ question }) => <p>{question}</p> }));
 
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
@@ -107,6 +108,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.getCosLearningDurations.mockResolvedValue({});
   api.getCosAgentDates.mockResolvedValue({ dates: [], latest: null });
+  api.getCosCompletedAgents.mockResolvedValue({ items: [], total: 0, nextCursor: null });
   api.getCosAgentsByDate.mockResolvedValue([]);
   api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
   api.hydrateCosAgentDescription.mockImplementation(async (agent) => agent);
@@ -280,7 +282,8 @@ describe('AgentsTab feedback review queue', () => {
     const archived = completedAgent('agent-archived', 'An older pending run');
     api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [archived], count: 1 });
 
-    renderTab([]);
+    api.getCosCompletedAgents.mockResolvedValue({ items: [archived], total: 1, nextCursor: null });
+    renderTab([], vi.fn(), '/cos/agents?feedback=needs-feedback');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Needs feedback: 1' })).toBeInTheDocument());
     expect(screen.getByText('An older pending run')).toBeInTheDocument();
   });
@@ -335,10 +338,7 @@ describe('AgentsTab feedback review queue', () => {
   it('removes an archived run from the queue immediately after feedback', async () => {
     const user = userEvent.setup();
     const onRefresh = vi.fn();
-    api.getCosAgentDates.mockResolvedValue({
-      dates: [{ date: '2026-07-13', count: 1 }],
-      latest: { date: '2026-07-13', agents: [completedAgent('archived', 'Archived task')] },
-    });
+    api.getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('archived', 'Archived task')], total: 1, nextCursor: null });
 
     renderTab([], onRefresh);
     await act(async () => {});
@@ -363,37 +363,23 @@ it('opens an agent deep link even after it has left the recent agent list', asyn
   expect(api.getCosAgent).toHaveBeenCalledWith('archived-example', { silent: true });
 });
 
-// The archive list and its newest bucket arrive together: the tab cannot name the
-// date it needs until the bucket list answers, so asking separately costs a
-// second serial round trip before any archived card can paint.
-describe('AgentsTab archive loading', () => {
-  it('paints the newest bucket from the bucket-list response, with no follow-up request', async () => {
-    api.getCosAgentDates.mockResolvedValue({
-      dates: [{ date: '2026-07-13', count: 1 }, { date: '2026-07-12', count: 4 }],
-      latest: { date: '2026-07-13', agents: [completedAgent('archived', 'Archived task')] },
-    });
-
-    renderTab([]);
-
-    await screen.findByText('Archived task');
-    expect(api.getCosAgentDates).toHaveBeenCalledWith({ hydrate: true });
-    expect(api.getCosAgentsByDate).not.toHaveBeenCalled();
-  });
-
-  it('loads an older bucket on demand, one request per date', async () => {
+describe('AgentsTab bounded archive loading', () => {
+  it('loads a bounded first page and preserves rows and cursor after a failed next page', async () => {
     const user = userEvent.setup();
-    api.getCosAgentDates.mockResolvedValue({
-      dates: [{ date: '2026-07-13', count: 1 }, { date: '2026-07-12', count: 1 }],
-      latest: { date: '2026-07-13', agents: [completedAgent('archived', 'Archived task')] },
-    });
-    api.getCosAgentsByDate.mockResolvedValue([completedAgent('older', 'Older task')]);
-
+    api.getCosCompletedAgents.mockResolvedValueOnce({ items: [completedAgent('archived', 'Archived task')], total: 2, nextCursor: 'next' })
+      .mockRejectedValueOnce(new Error('Temporary failure'))
+      .mockResolvedValueOnce({ items: [completedAgent('older', 'Older task')], total: 2, nextCursor: null });
     renderTab([]);
     await screen.findByText('Archived task');
-    await user.click(screen.getByRole('button', { name: /Load/ }));
-
+    expect(api.getCosCompletedAgents).toHaveBeenCalledWith(expect.objectContaining({ limit: 25, cursor: null }));
+    expect(api.getCosAgentDates).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Load older agents' }));
+    await screen.findByRole('alert');
+    expect(screen.getByText('Archived task')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry loading' }));
     await screen.findByText('Older task');
-    expect(api.getCosAgentsByDate).toHaveBeenCalledWith('2026-07-12');
+    expect(api.getCosCompletedAgents.mock.calls.slice(1).map(([args]) => args.cursor)).toEqual(['next', 'next']);
+    expect(screen.getByText('All results loaded')).toBeInTheDocument();
   });
 });
 
@@ -425,4 +411,14 @@ describe('AgentsTab hydrates a clipped description before reusing it', () => {
     expect(api.hydrateCosAgentDescription).toHaveBeenCalledWith(clipped);
     expect(api.resumeCosAgent.mock.calls[0][1].description).toBe('[Resume] Half-finished work, in full');
   });
+});
+
+
+it('makes the clear scope explicit when the feedback filter hides completed records', async () => {
+  api.getCosCompletedAgents.mockResolvedValue({ items: [completedAgent('filtered', 'Pending feedback')], total: 1, nextCursor: null });
+  renderTab([], vi.fn(), '/cos/agents?feedback=needs-feedback');
+  await screen.findByText('Pending feedback');
+  await userEvent.click(screen.getByRole('button', { name: 'Clear all completed agents' }));
+  expect(screen.getByText(/including records outside the current filter and unloaded pages/)).toBeInTheDocument();
+  expect(screen.queryByText(/removes 1 agent record/)).not.toBeInTheDocument();
 });

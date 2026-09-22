@@ -287,7 +287,7 @@ export async function getAgentIdsForDates(dates) {
 }
 
 // Get completed agents for a specific date bucket
-export async function getAgentsByDate(date) {
+export async function getAgentsByDate(date, { repairSummaries = true } = {}) {
   const dateDir = join(AGENTS_DIR, date);
   if (!existsSync(dateDir)) return [];
 
@@ -308,7 +308,7 @@ export async function getAgentsByDate(date) {
       const id = raw.id || raw.agentId || entry.name;
       const { output, ...rest } = raw;
       const agent = { ...rest, id, status: raw.status || 'completed' };
-      const repaired = await repairCodexTaskSummary(join(dateDir, entry.name), agent);
+      const repaired = repairSummaries && await repairCodexTaskSummary(join(dateDir, entry.name), agent);
       if (repaired) agent.metadata = { ...agent.metadata, taskSummary: repaired };
       agents.push(agent);
     });
@@ -316,4 +316,32 @@ export async function getAgentsByDate(date) {
   }
 
   return agents.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
+}
+
+
+// Cursor order is archive day, completion timestamp, then id. Only visit the
+// cursor's day and older days until one extra record proves another page exists.
+// Legacy archives store ordering metadata per record, so one visited day must
+// still be read to sort it; no transcript or unrelated older day is hydrated.
+export async function getCompletedAgentPage({ liveAgents = [], limit = 25, cursor } = {}) {
+  const idx = await loadAgentIndex();
+  const live = liveAgents.filter(agent => agent.status === 'completed');
+  const dayOf = agent => (agent.completedAt || agent.startedAt || '1970-01-01').slice(0, 10);
+  const keyOf = (agent, day) => `${day}|${agent.completedAt || ''}|${agent.id}`;
+  const days = [...new Set([...idx.values(), ...live.map(dayOf)])].sort().reverse();
+  const total = new Set([...idx.keys(), ...live.map(agent => agent.id)]).size;
+  const items = [];
+  for (const day of days) {
+    if (cursor && day > cursor.slice(0, 10)) continue;
+    const records = new Map((await getAgentsByDate(day, { repairSummaries: false })).map(agent => [agent.id, agent]));
+    for (const agent of live) if ((idx.get(agent.id) || dayOf(agent)) === day) records.set(agent.id, agent);
+    const candidates = [...records.values()].filter(agent => agent.status === 'completed')
+      .map(agent => ({ agent, key: keyOf(agent, day) }))
+      .filter(entry => !cursor || entry.key < cursor)
+      .sort((a, b) => a.key < b.key ? 1 : a.key > b.key ? -1 : 0);
+    items.push(...candidates.slice(0, limit + 1 - items.length));
+    if (items.length > limit) break;
+  }
+  return { items: items.slice(0, limit).map(entry => entry.agent), total,
+    nextCursor: items.length > limit ? items[limit - 1].key : null };
 }

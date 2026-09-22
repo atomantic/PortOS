@@ -295,6 +295,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   // bare `#7640` against the run's tracker through the one resolver.
   const linkifyIssues = useMemo(() => agentIssueLinkifier(agent), [agent]);
   const [fullOutput, setFullOutput] = useState(null);
+  const [fullMetadata, setFullMetadata] = useState(null);
   const [loadingOutput, setLoadingOutput] = useState(false);
   // Pipeline stage output: track which stage tab is active and cached outputs per stage agentId
   const [activeStageTab, setActiveStageTab] = useState(null);
@@ -414,7 +415,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     }
   }, [agent.id]);
 
-  useAutoRefetch(fetchStats, 5000, { enabled: !inactive && !remote, pollOnly: true });
+  useAutoRefetch(fetchStats, 5000, { enabled: expanded && !inactive && !remote, pollOnly: true });
 
   const handlePause = async () => {
     if (!onPause) return;
@@ -451,7 +452,10 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
     setLoadingOutput(true);
     api.getCosAgent(agent.id)
       .then(data => {
-        if (current()) setFullOutput(toTranscript(data));
+        if (current()) {
+          setFullOutput(toTranscript(data));
+          setFullMetadata(data.metadata || null);
+        }
       })
       .catch(() => {
         // Fall back to agent's stored output
@@ -717,7 +721,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
           </div>
           {/* Actions - right side */}
           <div className="flex items-center gap-2 shrink-0 ml-0 sm:ml-auto">
-            {(output.length > 0 || inactive) && (
+            {(output.length > 0 || inactive || !remote) && (
               <button
                 onClick={() => setExpanded(!expanded)}
                 className="text-gray-500 hover:text-white transition-colors text-xs whitespace-nowrap"
@@ -1060,7 +1064,13 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               <Sparkles size={10} aria-hidden="true" className="text-emerald-400" />
               Task Summary
             </div>
-            {agent.metadata?.taskSummary && <MarkdownOutput content={agent.metadata.taskSummary} linkifyText={linkifyIssues} />}
+            {agent.metadata?.taskSummary && <MarkdownOutput content={fullMetadata?.taskSummary ?? agent.metadata.taskSummary} linkifyText={linkifyIssues} />}
+            {agent.metadata?.taskSummaryTruncated && !fullMetadata?.taskSummary && (
+              <p className="mt-1 text-xs text-port-text-muted">
+                Summary preview. {!remote && <button type="button" className="text-port-accent hover:underline" disabled={loadingOutput}
+                  onClick={() => { setFullOutput(null); setExpanded(true); }}>Load full summary</button>}
+              </p>
+            )}
             {agent.metadata?.malwareScan?.reportUrl && (
               <a
                 href={api.normalizeBrainScanReportPath(agent.metadata.malwareScan.reportUrl)}

@@ -36,7 +36,7 @@ describe('bounded media history', () => {
     fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
     await screen.findByRole('alert');
     expect(screen.getByText('Picture 0')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading' }));
     await screen.findByText('Picture 60');
     expect(fetchPage).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 60 }), { silent: true });
     fireEvent.change(screen.getByLabelText('Search media history'), { target: { value: 'Picture 60' } });

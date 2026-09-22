@@ -167,7 +167,7 @@ export const updateCosConfig = (config, options = {}) => request('/cos/config', 
 });
 // Today's per-domain autonomy usage (#711) for the Domain Budgets panel.
 export const getCosBudgetUsage = (options = {}) => request('/cos/budget-usage', options);
-export const getCosTasks = (options) => request('/cos/tasks', options);
+export const getCosTasks = ({ view, source, cursor, limit, selected, ...options } = {}) => request(`/cos/tasks${runEventQuery({ view, source, cursor, limit, selected })}`, options);
 export const addCosTask = (task, options = {}) => request('/cos/tasks', {
   method: 'POST',
   body: JSON.stringify(task),
@@ -232,14 +232,16 @@ export const deleteOrchestrationProfile = (id, options = {}) => request(`/settin
 });
 export const getCosHealth = () => request('/cos/health');
 export const forceHealthCheck = (options = {}) => request('/cos/health/check', { method: 'POST', ...options });
-export const getCosAgents = (options) => request('/cos/agents', options);
+export const getCosAgents = ({ active = false, ...options } = {}) => request(`/cos/agents${active ? '?active=1' : ''}`, options);
+export const getCosCompletedAgents = ({ cursor, limit = 25, feedback = false, ...options } = {}) =>
+  request(`/cos/agents/${feedback ? 'feedback/pending' : 'completed'}${runEventQuery({ limit, cursor })}`, options);
 // `hydrate` also returns the newest bucket as `latest: { date, agents }`, so the
 // Agents tab reaches its first archived card in ONE round trip instead of
 // waiting for this response to name the date it must then ask for.
 export const getCosAgentDates = ({ hydrate = false } = {}) =>
   request(`/cos/agents/history${hydrate ? '?hydrate=1' : ''}`);
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
-export const getCosPendingAgentFeedback = (options = {}) => request('/cos/agents/feedback/pending', options);
+export const getCosPendingAgentFeedback = ({ countOnly, ...options } = {}) => request(`/cos/agents/feedback/pending${countOnly ? '?countOnly=1' : ''}`, options);
 // `lines` caps the transcript TAIL the server hydrates (server default: 1000
 // lines / 512 KB). Pass it when the record is wanted for its metadata rather
 // than its log.
@@ -366,7 +368,7 @@ export const generateCosDigest = (weekId = null) => request('/cos/digest/generat
 export const getCosActivityCalendar = (weeks = 12, options) => request(`/cos/activity-calendar?weeks=${weeks}`, options);
 export const getCosQuickSummary = (options) => request('/cos/quick-summary', options);
 export const getCosRecentTasks = (limit = 10, options) => request(`/cos/recent-tasks?limit=${limit}`, options);
-export const getCosActionableInsights = (options) => request('/cos/actionable-insights', options);
+export const getCosActionableInsights = ({ cachedHealth = false, ...options } = {}) => request(`/cos/actionable-insights${cachedHealth ? '?cachedHealth=1' : ''}`, options);
 export const getCosGoalProgressSummary = (options) => request('/cos/goal-progress/summary', options);
 
 // Auto-Fix Telemetry (issue #2328) — aggregated from persisted metadata.diagnostics

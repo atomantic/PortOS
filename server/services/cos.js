@@ -1,3 +1,5 @@
+import { unclaimedTaskIds, runningAgentsByTaskId } from '../lib/cosSpawnWindow.js';
+import { getPendingTaskIds as readPendingTaskIds } from './cosTaskStore.js';
 import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
  * Chief of Staff (CoS) Service
@@ -67,7 +69,7 @@ export { cosEvents, emitLog };
 // is what forced the `await import()` forwarders in `cosAgentLifecycle.js`.
 // Callers ask `agentOrchestrator.js` for those (#3450).
 export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgent, getAgentRecord, getAgentPrompt, terminateAgent, sendBtwToAgent, cleanupZombieAgents, deleteAgent } from './cosAgentLifecycle.js';
-export { getAgentDates, getAgentsByDate, pruneOldAgentArchives } from './cosAgentIndex.js';
+export { getAgentDates, getAgentsByDate, getCompletedAgentPage, pruneOldAgentArchives } from './cosAgentIndex.js';
 export {
   submitAgentFeedback,
   getFeedbackStats,
@@ -219,6 +221,7 @@ export async function getStatus() {
     config: state.config,
     stats: { ...state.stats, tasksCompleted },
     activeAgents,
+    pendingTasks: unclaimedTaskIds(await readPendingTaskIds(), runningAgentsByTaskId(Object.values(state.agents))).length,
     pausedAgents,
     provider: provider ? { id: provider.id, name: provider.name } : null
   };
