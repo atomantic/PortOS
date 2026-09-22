@@ -56,6 +56,29 @@ describe('mergeUpdatedTaskInterval', () => {
     });
     expect(schedule.tasks['plan-feature'].dataInputs).toEqual(['project-goals']);
   });
+
+  it('replaces stale derived status when a mutation returns its post-write status', () => {
+    const status = {
+      shouldRun: false,
+      reason: 'cron-cooldown',
+      cronExpression: '0 3 * * 0,1,3,4,5,6',
+      nextRunAt: '2026-09-23T10:00:00.000Z',
+    };
+    const schedule = {
+      tasks: {
+        'release-check': {
+          type: 'cron',
+          cronExpression: '0 3 * * 0-6',
+          status: { shouldRun: false, nextRunAt: '2026-09-22T10:00:00.000Z' },
+        },
+      },
+    };
+
+    expect(mergeUpdatedTaskInterval(schedule, 'release-check', {
+      type: 'cron',
+      cronExpression: status.cronExpression,
+    }, status).tasks['release-check'].status).toEqual(status);
+  });
 });
 
 describe('ScheduleTab on-demand feedback', () => {

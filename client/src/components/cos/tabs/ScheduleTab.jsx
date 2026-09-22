@@ -12,7 +12,7 @@ import TaskConfigDrawer from './schedule/TaskConfigDrawer';
 import MaintenanceRunForm from './schedule/MaintenanceRunForm';
 import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, DEFAULT_SORT_ID, suggestedOrderSteps } from './schedule/scheduleConstants';
 
-export function mergeUpdatedTaskInterval(schedule, taskType, interval) {
+export function mergeUpdatedTaskInterval(schedule, taskType, interval, status) {
   if (!schedule) return schedule;
   return {
     ...schedule,
@@ -21,6 +21,7 @@ export function mergeUpdatedTaskInterval(schedule, taskType, interval) {
       [taskType]: {
         ...(schedule.tasks?.[taskType] || {}),
         ...interval,
+        ...(status !== undefined ? { status } : {}),
       },
     },
   };
@@ -110,7 +111,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
     // Apply the authoritative response before resolving so a rapid second edit
     // reads the value that was just persisted instead of overwriting it from a
     // stale render while a background refetch is still in flight.
-    setSchedule(current => mergeUpdatedTaskInterval(current, taskType, result.interval));
+    setSchedule(current => mergeUpdatedTaskInterval(current, taskType, result.interval, result.status));
     return true;
   }, []);
 
