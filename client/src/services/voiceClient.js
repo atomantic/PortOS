@@ -994,68 +994,62 @@ export const startContinuous = async (callbacks = {}) => {
   continuousStream = nextStream;
   detectAudioRoute(continuousStream).catch(() => {});
 
-  // Everything from here on can reject — a refused resume, a worklet module that
-  // fails to compile — and `continuousCtx` is already assigned by then, so an
-  // unwound setup would leave the mic open, the claim held, AND every later
-  // Start returning at the `if (continuousCtx) return` guard with no way back
-  // short of a reload. Tear the whole partial setup down before rethrowing.
-  const unwindSetup = async (err) => {
-    await stopContinuous();
+  // Constructors and graph wiring can throw synchronously too. Roll back every
+  // partial setup, including one that acquired the mic but never got a context.
+  let blobUrl = null;
+  try {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    continuousCtx = new Ctor();
+    await resumeAudioContext(continuousCtx);
+    if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) return null;
+
+    // Inline worklet module so we don't need a separate file in the build.
+    blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
+    await continuousCtx.audioWorklet.addModule(blobUrl);
+    if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) return null;
+
+    continuousSource = continuousCtx.createMediaStreamSource(continuousStream);
+    continuousWorkletNode = new AudioWorkletNode(continuousCtx, 'vad-processor');
+
+    const sampleRate = continuousCtx.sampleRate;
+    preRollLimit = Math.max(1, Math.ceil((VAD.preRollMs / 1000) * sampleRate / 128));
+    preRoll = new Array(preRollLimit);
+    preRollIdx = 0;
+    preRollFilled = 0;
+    speechChunks = [];
+    vadState = 'idle';
+    silenceStartedAt = 0;
+    speechStartedAt = 0;
+    onsetFrames = 0;
+    calibrating = true;
+    calibrationSamples = [];
+    calibrationUntil = performance.now() + VAD.calibrationMs;
+    onRms = VAD.minOnRms;
+    offRms = VAD.minOffRms;
+
+    const capture = {
+      ownerGeneration,
+      generation,
+      callbacks,
+      context: continuousCtx,
+    };
+    continuousCapture = capture;
+    continuousWorkletNode.port.onmessage = (e) => handleFrame(e.data, capture);
+    continuousSource.connect(continuousWorkletNode);
+    // Worklet output must be pulled by the graph or process() stops running;
+    // sinking through a zero-gain node keeps it alive without echoing the mic.
+    const sink = continuousCtx.createGain();
+    sink.gain.value = 0;
+    continuousWorkletNode.connect(sink).connect(continuousCtx.destination);
+    continuousStartPendingGeneration = null;
+  } catch (err) {
+    // A disposed or stopped generation already released its resources. Its late
+    // rejection must not stop a newer capture that has since started.
+    if (continuousGeneration === generation) await stopContinuous();
     throw err;
-  };
-
-  const Ctor = window.AudioContext || window.webkitAudioContext;
-  continuousCtx = new Ctor();
-  await resumeAudioContext(continuousCtx).catch(unwindSetup);
-  if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) {
-    await stopContinuous();
-    return null;
+  } finally {
+    if (blobUrl !== null) URL.revokeObjectURL(blobUrl);
   }
-
-  // Inline worklet module so we don't need a separate file in the build
-  const blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
-  await continuousCtx.audioWorklet.addModule(blobUrl)
-    .catch(async (err) => { URL.revokeObjectURL(blobUrl); await unwindSetup(err); });
-  URL.revokeObjectURL(blobUrl);
-  if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) {
-    await stopContinuous();
-    return null;
-  }
-
-  continuousSource = continuousCtx.createMediaStreamSource(continuousStream);
-  continuousWorkletNode = new AudioWorkletNode(continuousCtx, 'vad-processor');
-
-  const sampleRate = continuousCtx.sampleRate;
-  preRollLimit = Math.max(1, Math.ceil((VAD.preRollMs / 1000) * sampleRate / 128));
-  preRoll = new Array(preRollLimit);
-  preRollIdx = 0;
-  preRollFilled = 0;
-  speechChunks = [];
-  vadState = 'idle';
-  silenceStartedAt = 0;
-  speechStartedAt = 0;
-  onsetFrames = 0;
-  calibrating = true;
-  calibrationSamples = [];
-  calibrationUntil = performance.now() + VAD.calibrationMs;
-  onRms = VAD.minOnRms;
-  offRms = VAD.minOffRms;
-
-  const capture = {
-    ownerGeneration,
-    generation,
-    callbacks,
-    context: continuousCtx,
-  };
-  continuousCapture = capture;
-  continuousStartPendingGeneration = null;
-  continuousWorkletNode.port.onmessage = (e) => handleFrame(e.data, capture);
-  continuousSource.connect(continuousWorkletNode);
-  // Worklet output must be pulled by the graph or process() stops running;
-  // sinking through a zero-gain node keeps it alive without echoing the mic.
-  const sink = continuousCtx.createGain();
-  sink.gain.value = 0;
-  continuousWorkletNode.connect(sink).connect(continuousCtx.destination);
 };
 
 export const stopContinuous = async () => {
@@ -1074,20 +1068,12 @@ export const stopContinuous = async () => {
   continuousWorkletNode = null;
   continuousSource = null;
   continuousCapture = null;
-  if (!ctx) {
-    captureStream?.getTracks().forEach((track) => track.stop());
-    if (release) release();
-    if (releaseContinuousSession === release) releaseContinuousSession = null;
-    if (continuousSessionGeneration === generation) continuousSessionGeneration = null;
-    return;
-  }
   try {
     source?.disconnect();
     workletNode?.disconnect();
     workletNode && (workletNode.port.onmessage = null);
   } catch { /* ignore teardown errors */ }
   captureStream?.getTracks().forEach((track) => track.stop());
-  await Promise.resolve(ctx.close?.()).catch(() => {});
   if (release) release();
   if (releaseContinuousSession === release) releaseContinuousSession = null;
   if (continuousSessionGeneration === generation) continuousSessionGeneration = null;
@@ -1099,6 +1085,8 @@ export const stopContinuous = async () => {
   onsetFrames = 0;
   calibrating = false;
   calibrationSamples = [];
+  // Reset shared state before awaiting close so a retry owns fresh VAD state.
+  await Promise.resolve().then(() => ctx?.close?.()).catch(() => {});
 };
 
 export const isContinuous = () => continuousCtx !== null;
