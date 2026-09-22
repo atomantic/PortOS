@@ -263,6 +263,17 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider({ id: 'opencode-ollama', command: 'opencode' })).toBeNull();
     });
 
+    it('drops the rung a gateway model rejects (NIM 400s Kimi K3 on "medium")', () => {
+      const nim = { id: 'opencode-nvidia-nim-tui', command: 'opencode', gatewayBacked: 'nvidia-nim' };
+      expect(effortLevelsForProvider(nim, 'moonshotai/kimi-k3')).toEqual(['low', 'high', 'max']);
+      // The rejection is Moonshot's, so the narrowing follows the model to any front end.
+      expect(effortLevelsForProvider({ id: 'opencode-ollama', command: 'opencode', ollamaBacked: true }, 'kimi-k3'))
+        .toEqual(['low', 'high', 'max']);
+      // Every other model keeps the portable ladder, including the neighbouring K2 family.
+      expect(effortLevelsForProvider(nim, 'moonshotai/kimi-k2.5')).toEqual(['low', 'medium', 'high']);
+      expect(effortLevelsForProvider(nim, null)).toEqual(['low', 'medium', 'high']);
+    });
+
     it('returns the cursor ladder for cursor ids and the cursor-agent command', () => {
       expect(effortLevelsForProvider({ id: 'cursor-cli', command: 'cursor-agent' })).toBe(CURSOR_EFFORT_LEVELS);
       expect(effortLevelsForProvider({ id: 'cursor-tui' })).toBe(CURSOR_EFFORT_LEVELS);

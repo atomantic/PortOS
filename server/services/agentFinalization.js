@@ -47,6 +47,7 @@ import {
   MAX_OBJECTIVE_CHARS,
   formatGoalFidelitySummary,
   goalFidelityHoldsRun,
+  goalFidelityLogMarker,
   isDependencyAuditSummaryDiff,
   mergeOutcomeObjective,
   mergeOutcomeReview,
@@ -1201,7 +1202,7 @@ export async function finalizeAgent({
     return { drifted: false };
   });
   if (drift.drifted) {
-    emitLog('warn', `⚠️ ${drift.message} — reported by ${agentId}; PortOS will not repair it automatically`, {
+    emitLog('warn', `${drift.message} — reported by ${agentId}; PortOS will not repair it automatically`, {
       agentId, taskId: task?.id, category: drift.category
     });
   } else if (drift.unattributed) {
@@ -1210,7 +1211,7 @@ export async function finalizeAgent({
     // human's terminal, `update.sh`'s pull) moved it. Unreviewed commits on the
     // primary are still worth surfacing, but this run did not cause them, so it is
     // warn-logged WITHOUT downgrading an otherwise-successful run to a failure.
-    emitLog('warn', `⚠️ ${drift.message} — not attributable to ${agentId}; surfacing without failing the run`, {
+    emitLog('warn', `${drift.message} — not attributable to ${agentId}; this run stays successful`, {
       agentId, taskId: task?.id
     });
   } else if (drift.fastForwarded) {
@@ -1279,17 +1280,17 @@ export async function finalizeAgent({
   const fidelity = verdict.success && !isPrivateSecurityTask(task)
     ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
       .catch(err => {
-        emitLog('warn', `⚠️ Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
+        emitLog('warn', `Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
         return { verdict: null, review: null, error: err.message };
       })
     : { verdict: null, review: null, error: null };
   const fidelityDowngrade = goalFidelityHoldsRun(fidelity.review);
   if (fidelity.review) {
-    emitLog(fidelityDowngrade ? 'warn' : 'info', `${fidelityDowngrade ? '🎯' : '✅'} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
+    emitLog(fidelityDowngrade ? 'warn' : 'info', `${goalFidelityLogMarker(fidelity.review)} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
       agentId, taskId: task?.id, verdict: fidelity.verdict
     });
   } else if (fidelity.error) {
-    emitLog('warn', `⚠️ Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
+    emitLog('warn', `Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   }
   if (fidelityDowngrade) {
     const analysis = goalFidelityAnalysis(fidelity.review);
@@ -1317,7 +1318,7 @@ export async function finalizeAgent({
     const followUp = await import('./goalFidelityFollowUp.js')
       .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review, context: fidelity.context }))
       .catch(err => {
-        emitLog('warn', `⚠️ Goal-fidelity follow-up failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
+        emitLog('warn', `Goal-fidelity follow-up failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
         return null;
       });
     if (followUp?.ran) {

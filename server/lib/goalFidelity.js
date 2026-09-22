@@ -209,6 +209,17 @@ export function goalFidelityHoldsRun(review) {
 }
 
 /**
+ * Marker for the one-line verdict log. A checkmark is only for `ship`.
+ * `fix-first` still records the run as a success, but it found something
+ * missing — logging it with the same mark as a clean ship reads as "all good".
+ */
+export function goalFidelityLogMarker(review) {
+  if (goalFidelityHoldsRun(review)) return '🎯';
+  if (review?.verdict === 'ship') return '✅';
+  return '🧩';
+}
+
+/**
  * One-line human summary of a verdict, for a log line, an agent card, or the
  * Review Hub alert. Counts rather than the items themselves — the items are
  * untrusted free text and belong in a rendered list, not in a log line.

@@ -108,7 +108,12 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
     : 0;
   const decision = shouldSpeak(cfg, nowMinutes, { solicited });
   if (!decision.ok) {
-    console.log(`🔕 voice: proactive suppressed (${decision.reason}) "${trimmed.slice(0, 60)}"`);
+    // Voice off, or proactive speech off, is the install's steady configuration.
+    // Logging it on every task dequeue drowns the server log in lines that
+    // describe a choice already made. Quiet hours and oversized text are events.
+    if (decision.reason !== 'voice-disabled' && decision.reason !== 'proactive-disabled') {
+      console.log(`🔕 voice: proactive suppressed (${decision.reason}) "${trimmed.slice(0, 60)}"`);
+    }
     return decision;
   }
 
