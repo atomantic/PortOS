@@ -165,13 +165,13 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   return (
     <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="text-2xl" aria-hidden="true">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="shrink-0 text-2xl" aria-hidden="true">
             <Bot className={`w-6 h-6 ${status.running ? 'text-port-success' : 'text-gray-500'}`} />
           </div>
-          <div>
-            <h3 className="text-lg font-semibold text-white">Chief of Staff</h3>
+          <div className="min-w-0">
+            <h3 className="text-base @sm:text-lg font-semibold leading-tight text-white">Chief of Staff</h3>
             <p className="text-sm text-gray-500">
               {status.running
                 ? status.paused ? 'Paused' : 'Active'
@@ -186,7 +186,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
         </div>
         <Link
           to="/cos/tasks"
-          className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
+          className="flex shrink-0 items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
           <span className="hidden @xs:inline">View Details</span>
           <ChevronRight size={16} />
