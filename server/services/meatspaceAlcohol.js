@@ -8,7 +8,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { DAILY_LOG_FILE, loadMeatspaceDailyLog } from './meatspaceDailyLog.js';
+import { loadMeatspaceDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlPush,
@@ -146,12 +146,6 @@ export function computeRollingAverages(entries, sex = 'male') {
  */
 const loadDailyLog = (options) => loadMeatspaceDailyLog({ ...options, label: 'Alcohol' });
 
-async function saveDailyLog(log) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(DAILY_LOG_FILE, log);
-  averageCache = null; // Invalidate cache
-}
-
 // === Exported Service Functions ===
 
 export async function getAlcoholSummary() {
@@ -211,21 +205,22 @@ export async function logDrink({ name, oz, abv, count = 1, date }) {
     return { drink, standardDrinks, date: targetDate, dayTotal: entry?.alcohol?.standardDrinks || standardDrinks };
   }
 
-  const log = await loadDailyLog({ strict: true });
-  let entry = log.entries.find(e => e.date === targetDate);
-  if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
-  if (!entry.alcohol) entry.alcohol = { drinks: [], standardDrinks: 0 };
+  const result = await mutateDailyLog((log) => {
+    let entry = log.entries.find(e => e.date === targetDate);
+    if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
+    if (!entry.alcohol) entry.alcohol = { drinks: [], standardDrinks: 0 };
 
-  const existing = entry.alcohol.drinks.find(d => d.name === drink.name && d.oz === drink.oz && d.abv === drink.abv);
-  if (existing) existing.count = (existing.count || 1) + count;
-  else entry.alcohol.drinks.push(drink);
+    const existing = entry.alcohol.drinks.find(d => d.name === drink.name && d.oz === drink.oz && d.abv === drink.abv);
+    if (existing) existing.count = (existing.count || 1) + count;
+    else entry.alcohol.drinks.push(drink);
 
-  recalcAlcoholTotal(entry);
-  log.entries.sort((a, b) => a.date.localeCompare(b.date));
-  log.lastEntryDate = log.entries.at(-1).date;
-  await saveDailyLog(log);
+    recalcAlcoholTotal(entry);
+    return { drink, standardDrinks, date: targetDate, dayTotal: entry.alcohol.standardDrinks };
+  }, { label: 'Alcohol' });
+
+  averageCache = null;
   console.log(`🍺 Logged drink: ${name || 'unnamed'} ${oz}oz @ ${abv}% (${standardDrinks} std) on ${targetDate}`);
-  return { drink, standardDrinks, date: targetDate, dayTotal: entry.alcohol.standardDrinks };
+  return result;
 }
 
 function recalcAlcoholTotal(entry) {
@@ -254,52 +249,58 @@ export async function updateDrink(date, index, updates) {
              date: effectiveDate };
   }
 
-  const log = await loadDailyLog({ strict: true });
-  const entry = log.entries.find(e => e.date === date);
-  if (!entry?.alcohol?.drinks?.[index]) return null;
+  const result = await mutateDailyLog((log) => {
+    const entry = log.entries.find(e => e.date === date);
+    if (!entry?.alcohol?.drinks?.[index]) return null;
 
-  const drink = entry.alcohol.drinks[index];
-  if (updates.name !== undefined) drink.name = updates.name;
-  if (updates.oz !== undefined) drink.oz = updates.oz;
-  if (updates.abv !== undefined) drink.abv = updates.abv;
-  if (updates.count !== undefined) drink.count = updates.count;
+    const drink = entry.alcohol.drinks[index];
+    if (updates.name !== undefined) drink.name = updates.name;
+    if (updates.oz !== undefined) drink.oz = updates.oz;
+    if (updates.abv !== undefined) drink.abv = updates.abv;
+    if (updates.count !== undefined) drink.count = updates.count;
 
-  // Move to different date if requested
-  const newDate = updates.date;
-  if (newDate && newDate !== date) {
-    entry.alcohol.drinks.splice(index, 1);
-    if (entry.alcohol.drinks.length === 0) {
-      delete entry.alcohol;
-      // Remove entry entirely if no other data keys remain
-      if (Object.keys(entry).length <= 1) {
-        log.entries = log.entries.filter(e => e !== entry);
+    // Move to different date if requested
+    const newDate = updates.date;
+    if (newDate && newDate !== date) {
+      entry.alcohol.drinks.splice(index, 1);
+      if (entry.alcohol.drinks.length === 0) {
+        delete entry.alcohol;
+        // Remove entry entirely if no other data keys remain
+        if (Object.keys(entry).length <= 1) {
+          log.entries = log.entries.filter(e => e !== entry);
+        }
+      } else {
+        recalcAlcoholTotal(entry);
       }
-    } else {
-      recalcAlcoholTotal(entry);
+
+      let targetEntry = log.entries.find(e => e.date === newDate);
+      if (!targetEntry) {
+        targetEntry = { date: newDate };
+        log.entries.push(targetEntry);
+      }
+      if (!targetEntry.alcohol) targetEntry.alcohol = { drinks: [], standardDrinks: 0 };
+      targetEntry.alcohol.drinks.push(drink);
+      recalcAlcoholTotal(targetEntry);
+
+      log.entries.sort((a, b) => a.date.localeCompare(b.date));
+      log.lastEntryDate = log.entries[log.entries.length - 1].date;
+
+      return { drink, dayTotal: targetEntry.alcohol.standardDrinks, date: newDate };
     }
 
-    let targetEntry = log.entries.find(e => e.date === newDate);
-    if (!targetEntry) {
-      targetEntry = { date: newDate };
-      log.entries.push(targetEntry);
-    }
-    if (!targetEntry.alcohol) targetEntry.alcohol = { drinks: [], standardDrinks: 0 };
-    targetEntry.alcohol.drinks.push(drink);
-    recalcAlcoholTotal(targetEntry);
+    recalcAlcoholTotal(entry);
+    return { drink, dayTotal: entry.alcohol.standardDrinks };
+  }, { label: 'Alcohol' });
 
-    log.entries.sort((a, b) => a.date.localeCompare(b.date));
-    log.lastEntryDate = log.entries[log.entries.length - 1].date;
-
-    await saveDailyLog(log);
-    console.log(`📝 Moved drink from ${date}[${index}] to ${newDate}: ${drink.name || 'unnamed'} ${drink.oz}oz @ ${drink.abv}%`);
-    return { drink, dayTotal: targetEntry.alcohol.standardDrinks, date: newDate };
+  if (!result) return null;
+  averageCache = null;
+  const drinkLabel = `${result.drink?.name || 'unnamed'} ${result.drink?.oz}oz @ ${result.drink?.abv}%`;
+  if (result.date && result.date !== date) {
+    console.log(`📝 Moved drink from ${date}[${index}] to ${result.date}: ${drinkLabel}`);
+  } else {
+    console.log(`📝 Updated drink on ${date}[${index}]: ${drinkLabel}`);
   }
-
-  recalcAlcoholTotal(entry);
-
-  await saveDailyLog(log);
-  console.log(`📝 Updated drink on ${date}[${index}]: ${drink.name || 'unnamed'} ${drink.oz}oz @ ${drink.abv}%`);
-  return { drink, dayTotal: entry.alcohol.standardDrinks };
+  return result;
 }
 
 export async function removeDrink(date, index) {
@@ -311,15 +312,20 @@ export async function removeDrink(date, index) {
     return removed;
   }
 
-  const log = await loadDailyLog({ strict: true });
-  const entry = log.entries.find(e => e.date === date);
-  if (!entry?.alcohol?.drinks?.[index]) return null;
+  const result = await mutateDailyLog((log) => {
+    const entry = log.entries.find(e => e.date === date);
+    if (!entry?.alcohol?.drinks?.[index]) return null;
 
-  const removed = entry.alcohol.drinks.splice(index, 1)[0];
-  if (entry.alcohol.drinks.length === 0) delete entry.alcohol;
-  else recalcAlcoholTotal(entry);
-  await saveDailyLog(log);
-  return removed;
+    const removed = entry.alcohol.drinks.splice(index, 1)[0];
+    if (entry.alcohol.drinks.length === 0) delete entry.alcohol;
+    else recalcAlcoholTotal(entry);
+    return removed;
+  }, { label: 'Alcohol' });
+
+  if (!result) return null;
+  averageCache = null;
+  console.log(`🗑️ Removed drink from ${date}[${index}]: ${result.name || 'unnamed'} ${result.oz}oz @ ${result.abv}%`);
+  return result;
 }
 
 // === Custom Drink Buttons ===

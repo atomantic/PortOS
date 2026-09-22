@@ -31,12 +31,12 @@ vi.mock('./mortalLoomStore.js', () => ({
   mlUpsertHealthMetricByDate: vi.fn()
 }));
 
-import { readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { readDailyLogIfEnabled } from './mortalLoomStore.js';
 import { DAILY_LOG_FILE, readLocalDailyLog, loadMeatspaceDailyLog } from './meatspaceDailyLog.js';
-import { getDailyAlcohol } from './meatspaceAlcohol.js';
-import { getDailyNicotine } from './meatspaceNicotine.js';
-import { getBodyHistory } from './meatspaceHealth.js';
+import { getAlcoholSummary, getDailyAlcohol, logDrink, updateDrink } from './meatspaceAlcohol.js';
+import { getDailyNicotine, getNicotineSummary, logNicotine } from './meatspaceNicotine.js';
+import { addBodyEntry, getBodyHistory } from './meatspaceHealth.js';
 
 // Built with join() rather than a literal: the module builds it the same way, and
 // win32 separators would make a hardcoded POSIX path fail on the Windows runner.
@@ -193,5 +193,109 @@ describe('caller delegation (#4112)', () => {
   it('labels a body-history strict failure as Health', async () => {
     readJSONFile.mockResolvedValue({ entries: 'nope' });
     await expect(getBodyHistory({ strict: true })).rejects.toThrow(/Health daily log malformed/);
+  });
+});
+
+// Concurrent alcohol, nicotine, and body writers share one file. The queue has to
+// hold the whole read-modify-write, and a miss or a bad read must not replace it.
+describe('serialized daily-log writes (#8032)', () => {
+  beforeEach(() => {
+    readJSONFile.mockReset();
+    atomicWrite.mockReset();
+    atomicWrite.mockResolvedValue(undefined);
+  });
+
+  function useLogStore(initial) {
+    let store = structuredClone(initial);
+    readJSONFile.mockImplementation(async () => structuredClone(store));
+    atomicWrite.mockImplementation(async (file, data) => {
+      if (String(file).endsWith('daily-log.json')) store = structuredClone(data);
+    });
+    return () => store;
+  }
+
+  it('keeps alcohol, nicotine, and body fields when the three writers overlap', async () => {
+    let store = {
+      entries: [{
+        date: '2024-01-01',
+        alcohol: { drinks: [{ name: 'Kept', oz: 12, abv: 5, count: 1 }], standardDrinks: 1 }
+      }],
+      lastEntryDate: '2024-01-01'
+    };
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    readJSONFile.mockImplementation(async () => {
+      activeReads += 1;
+      maxActiveReads = Math.max(maxActiveReads, activeReads);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const snapshot = structuredClone(store);
+      activeReads -= 1;
+      return snapshot;
+    });
+    atomicWrite.mockImplementation(async (file, data) => {
+      if (String(file).endsWith('daily-log.json')) store = structuredClone(data);
+    });
+
+    await Promise.all([
+      logDrink({ name: 'Example Lager', oz: 12, abv: 5, count: 1, date: '2024-06-01' }),
+      logNicotine({ product: 'Example Pouch', mgPerUnit: 3, count: 2, date: '2024-06-01' }),
+      addBodyEntry({ date: '2024-06-01', weightLbs: 175 })
+    ]);
+
+    expect(maxActiveReads).toBe(1);
+    const kept = store.entries.find((entry) => entry.date === '2024-01-01');
+    const day = store.entries.find((entry) => entry.date === '2024-06-01');
+    expect(kept.alcohol.drinks[0].name).toBe('Kept');
+    expect(day.alcohol.drinks).toEqual([
+      expect.objectContaining({ name: 'Example Lager', oz: 12, abv: 5, count: 1 })
+    ]);
+    expect(day.nicotine).toMatchObject({
+      items: [expect.objectContaining({ product: 'Example Pouch', mgPerUnit: 3, count: 2 })],
+      totalMg: 6
+    });
+    expect(day.body).toEqual({ weightLbs: 175 });
+    expect(store.lastEntryDate).toBe('2024-06-01');
+  });
+
+  it('does not rewrite the log when the drink index is missing', async () => {
+    readJSONFile.mockResolvedValue({
+      entries: [{
+        date: '2024-06-01',
+        alcohol: { drinks: [{ name: 'Example Lager', oz: 12, abv: 5, count: 1 }], standardDrinks: 1 }
+      }],
+      lastEntryDate: '2024-06-01'
+    });
+    await expect(updateDrink('2024-06-01', 3, { oz: 20 })).resolves.toBeNull();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('does not write a body entry when the daily log is unreadable', async () => {
+    readJSONFile.mockRejectedValue(new Error('Unreadable JSON file: /mock/data/meatspace/daily-log.json'));
+    await expect(addBodyEntry({ date: '2024-06-01', weightLbs: 175 })).rejects.toThrow(/Unreadable JSON file/);
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('labels a body-write failure as Health and does not replace the log', async () => {
+    readJSONFile.mockResolvedValue({ entries: 'nope' });
+    await expect(addBodyEntry({ date: '2024-06-01', weightLbs: 175 }))
+      .rejects.toThrow(/Health daily log malformed/);
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('drops the alcohol summary cache after a local write', async () => {
+    const current = useLogStore({ entries: [], lastEntryDate: null });
+    await logDrink({ name: 'Example Lager', oz: 12, abv: 5, count: 1, date: '2024-06-01' });
+    expect((await getAlcoholSummary()).today).toBe(1);
+    await logDrink({ name: 'Example Wine', oz: 5, abv: 12, count: 1, date: '2024-06-01' });
+    expect((await getAlcoholSummary()).today).toBe(2);
+    expect(current().entries.find((entry) => entry.date === '2024-06-01').alcohol.drinks).toHaveLength(2);
+  });
+
+  it('drops the nicotine summary cache after a local write', async () => {
+    useLogStore({ entries: [], lastEntryDate: null });
+    await logNicotine({ product: 'Example Pouch', mgPerUnit: 3, count: 1, date: '2024-06-01' });
+    expect((await getNicotineSummary()).today).toBe(3);
+    await logNicotine({ product: 'Example Pouch', mgPerUnit: 4, count: 1, date: '2024-06-01' });
+    expect((await getNicotineSummary()).today).toBe(7);
   });
 });

@@ -7,7 +7,7 @@
 
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { DAILY_LOG_FILE, loadMeatspaceDailyLog } from './meatspaceDailyLog.js';
+import { loadMeatspaceDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlPush,
@@ -105,12 +105,6 @@ function recalcDayTotal(entry) {
  */
 const loadDailyLog = (options) => loadMeatspaceDailyLog({ ...options, label: 'Nicotine' });
 
-async function saveDailyLog(log) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(DAILY_LOG_FILE, log);
-  averageCache = null;
-}
-
 // === Exported Service Functions ===
 
 export async function getNicotineSummary() {
@@ -165,21 +159,22 @@ export async function logNicotine({ product, mgPerUnit, count = 1, date }) {
     return { item, totalMg, date: targetDate, dayTotal: entry?.nicotine?.totalMg || totalMg };
   }
 
-  const log = await loadDailyLog({ strict: true });
-  let entry = log.entries.find(e => e.date === targetDate);
-  if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
-  if (!entry.nicotine) entry.nicotine = { items: [], totalMg: 0 };
+  const result = await mutateDailyLog((log) => {
+    let entry = log.entries.find(e => e.date === targetDate);
+    if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
+    if (!entry.nicotine) entry.nicotine = { items: [], totalMg: 0 };
 
-  const existing = entry.nicotine.items.find(i => i.product === item.product && i.mgPerUnit === item.mgPerUnit);
-  if (existing) existing.count = (existing.count || 1) + count;
-  else entry.nicotine.items.push(item);
-  recalcDayTotal(entry);
+    const existing = entry.nicotine.items.find(i => i.product === item.product && i.mgPerUnit === item.mgPerUnit);
+    if (existing) existing.count = (existing.count || 1) + count;
+    else entry.nicotine.items.push(item);
+    recalcDayTotal(entry);
 
-  log.entries.sort((a, b) => a.date.localeCompare(b.date));
-  log.lastEntryDate = log.entries.at(-1).date;
-  await saveDailyLog(log);
+    return { item, totalMg, date: targetDate, dayTotal: entry.nicotine.totalMg };
+  }, { label: 'Nicotine' });
+
+  averageCache = null;
   console.log(`🚬 Logged nicotine: ${product || 'unnamed'} ${mgPerUnit}mg x${count} (${totalMg}mg) on ${targetDate}`);
-  return { item, totalMg, date: targetDate, dayTotal: entry.nicotine.totalMg };
+  return result;
 }
 
 export async function updateNicotine(date, index, updates) {
@@ -201,51 +196,57 @@ export async function updateNicotine(date, index, updates) {
              date: effectiveDate };
   }
 
-  const log = await loadDailyLog({ strict: true });
-  const entry = log.entries.find(e => e.date === date);
-  if (!entry?.nicotine?.items?.[index]) return null;
+  const result = await mutateDailyLog((log) => {
+    const entry = log.entries.find(e => e.date === date);
+    if (!entry?.nicotine?.items?.[index]) return null;
 
-  const item = entry.nicotine.items[index];
-  if (updates.product !== undefined) item.product = updates.product;
-  if (updates.mgPerUnit !== undefined) item.mgPerUnit = updates.mgPerUnit;
-  if (updates.count !== undefined) item.count = updates.count;
+    const item = entry.nicotine.items[index];
+    if (updates.product !== undefined) item.product = updates.product;
+    if (updates.mgPerUnit !== undefined) item.mgPerUnit = updates.mgPerUnit;
+    if (updates.count !== undefined) item.count = updates.count;
 
-  // Move to different date if requested
-  const newDate = updates.date;
-  if (newDate && newDate !== date) {
-    entry.nicotine.items.splice(index, 1);
-    if (entry.nicotine.items.length === 0) {
-      delete entry.nicotine;
-      // Remove entry entirely if no other data keys remain
-      if (Object.keys(entry).length <= 1) {
-        log.entries = log.entries.filter(e => e !== entry);
+    // Move to different date if requested
+    const newDate = updates.date;
+    if (newDate && newDate !== date) {
+      entry.nicotine.items.splice(index, 1);
+      if (entry.nicotine.items.length === 0) {
+        delete entry.nicotine;
+        // Remove entry entirely if no other data keys remain
+        if (Object.keys(entry).length <= 1) {
+          log.entries = log.entries.filter(e => e !== entry);
+        }
+      } else {
+        recalcDayTotal(entry);
       }
-    } else {
-      recalcDayTotal(entry);
+
+      let targetEntry = log.entries.find(e => e.date === newDate);
+      if (!targetEntry) {
+        targetEntry = { date: newDate };
+        log.entries.push(targetEntry);
+      }
+      if (!targetEntry.nicotine) targetEntry.nicotine = { items: [], totalMg: 0 };
+      targetEntry.nicotine.items.push(item);
+      recalcDayTotal(targetEntry);
+
+      log.entries.sort((a, b) => a.date.localeCompare(b.date));
+      log.lastEntryDate = log.entries[log.entries.length - 1].date;
+
+      return { item, dayTotal: targetEntry.nicotine.totalMg, date: newDate };
     }
 
-    let targetEntry = log.entries.find(e => e.date === newDate);
-    if (!targetEntry) {
-      targetEntry = { date: newDate };
-      log.entries.push(targetEntry);
-    }
-    if (!targetEntry.nicotine) targetEntry.nicotine = { items: [], totalMg: 0 };
-    targetEntry.nicotine.items.push(item);
-    recalcDayTotal(targetEntry);
+    recalcDayTotal(entry);
+    return { item, dayTotal: entry.nicotine.totalMg };
+  }, { label: 'Nicotine' });
 
-    log.entries.sort((a, b) => a.date.localeCompare(b.date));
-    log.lastEntryDate = log.entries[log.entries.length - 1].date;
-
-    await saveDailyLog(log);
-    console.log(`📝 Moved nicotine from ${date}[${index}] to ${newDate}: ${item.product || 'unnamed'} ${item.mgPerUnit}mg x${item.count}`);
-    return { item, dayTotal: targetEntry.nicotine.totalMg, date: newDate };
+  if (!result) return null;
+  averageCache = null;
+  const itemLabel = `${result.item?.product || 'unnamed'} ${result.item?.mgPerUnit}mg x${result.item?.count}`;
+  if (result.date && result.date !== date) {
+    console.log(`📝 Moved nicotine from ${date}[${index}] to ${result.date}: ${itemLabel}`);
+  } else {
+    console.log(`📝 Updated nicotine on ${date}[${index}]: ${itemLabel}`);
   }
-
-  recalcDayTotal(entry);
-
-  await saveDailyLog(log);
-  console.log(`📝 Updated nicotine on ${date}[${index}]: ${item.product || 'unnamed'} ${item.mgPerUnit}mg x${item.count}`);
-  return { item, dayTotal: entry.nicotine.totalMg };
+  return result;
 }
 
 export async function removeNicotine(date, index) {
@@ -257,15 +258,20 @@ export async function removeNicotine(date, index) {
     return removed;
   }
 
-  const log = await loadDailyLog({ strict: true });
-  const entry = log.entries.find(e => e.date === date);
-  if (!entry?.nicotine?.items?.[index]) return null;
+  const result = await mutateDailyLog((log) => {
+    const entry = log.entries.find(e => e.date === date);
+    if (!entry?.nicotine?.items?.[index]) return null;
 
-  const removed = entry.nicotine.items.splice(index, 1)[0];
-  if (entry.nicotine.items.length === 0) delete entry.nicotine;
-  else recalcDayTotal(entry);
-  await saveDailyLog(log);
-  return removed;
+    const removed = entry.nicotine.items.splice(index, 1)[0];
+    if (entry.nicotine.items.length === 0) delete entry.nicotine;
+    else recalcDayTotal(entry);
+    return removed;
+  }, { label: 'Nicotine' });
+
+  if (!result) return null;
+  averageCache = null;
+  console.log(`🗑️ Removed nicotine from ${date}[${index}]: ${result.product || 'unnamed'} ${result.mgPerUnit}mg x${result.count}`);
+  return result;
 }
 
 // === Custom Product Buttons ===
