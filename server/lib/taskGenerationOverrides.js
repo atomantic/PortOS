@@ -30,7 +30,7 @@ const MAX_TEMPERATURE = 2;
 export function applyTaskGenerationOverrides(provider, metadata) {
   const temperature = metadata?.temperature === '' ? NaN : Number(metadata?.temperature);
   const thinking = metadata?.thinking;
-  return {
+  const overridden = {
     ...provider,
     ...(Number.isFinite(temperature) && temperature >= MIN_TEMPERATURE && temperature <= MAX_TEMPERATURE
       ? { temperature }
@@ -40,4 +40,22 @@ export function applyTaskGenerationOverrides(provider, metadata) {
       ? { effort: metadata.effort.trim() }
       : {}),
   };
+
+  // Gateway-backed providers carry their inherited API key as a
+  // non-enumerable, execution-only property. The spread above deliberately
+  // omits it so the credential cannot be persisted or serialized, but this
+  // copy is about to be executed for this run and still needs the key. Without
+  // carrying it forward, NVIDIA NIM/OpenRouter/OpenCode runs reach the gateway
+  // without Authorization after any task passes through this helper.
+  const apiKeyDescriptor = provider && typeof provider === 'object'
+    ? Object.getOwnPropertyDescriptor(provider, 'apiKey')
+    : null;
+  if (apiKeyDescriptor && !apiKeyDescriptor.enumerable) {
+    Object.defineProperty(overridden, 'apiKey', {
+      ...apiKeyDescriptor,
+      configurable: true,
+    });
+  }
+
+  return overridden;
 }
