@@ -7,7 +7,7 @@
 
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { DAILY_LOG_FILE, loadMeatspaceDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
+import { loadMeatspaceDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlPush,
@@ -105,12 +105,6 @@ function recalcDayTotal(entry) {
  */
 const loadDailyLog = (options) => loadMeatspaceDailyLog({ ...options, label: 'Nicotine' });
 
-async function saveDailyLog(log) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(DAILY_LOG_FILE, log);
-  averageCache = null;
-}
-
 // === Exported Service Functions ===
 
 export async function getNicotineSummary() {
@@ -177,7 +171,8 @@ export async function logNicotine({ product, mgPerUnit, count = 1, date }) {
 
     return { item, totalMg, date: targetDate, dayTotal: entry.nicotine.totalMg };
   }, { label: 'Nicotine' });
-  
+
+  averageCache = null;
   console.log(`🚬 Logged nicotine: ${product || 'unnamed'} ${mgPerUnit}mg x${count} (${totalMg}mg) on ${targetDate}`);
   return result;
 }
@@ -240,11 +235,17 @@ export async function updateNicotine(date, index, updates) {
     }
 
     recalcDayTotal(entry);
-    
     return { item, dayTotal: entry.nicotine.totalMg };
   }, { label: 'Nicotine' });
-  
-  console.log(`📝 Updated nicotine on ${date}[${index}]: ${result?.item?.product || 'unnamed'} ${result?.item?.mgPerUnit}mg x${result?.item?.count}`);
+
+  if (!result) return null;
+  averageCache = null;
+  const itemLabel = `${result.item?.product || 'unnamed'} ${result.item?.mgPerUnit}mg x${result.item?.count}`;
+  if (result.date && result.date !== date) {
+    console.log(`📝 Moved nicotine from ${date}[${index}] to ${result.date}: ${itemLabel}`);
+  } else {
+    console.log(`📝 Updated nicotine on ${date}[${index}]: ${itemLabel}`);
+  }
   return result;
 }
 
@@ -264,11 +265,12 @@ export async function removeNicotine(date, index) {
     const removed = entry.nicotine.items.splice(index, 1)[0];
     if (entry.nicotine.items.length === 0) delete entry.nicotine;
     else recalcDayTotal(entry);
-    
     return removed;
   }, { label: 'Nicotine' });
-  
-  console.log(`🗑️ Removed nicotine from ${date}[${index}]: ${result?.product || 'unnamed'} ${result?.mgPerUnit}mg x${result?.count}`);
+
+  if (!result) return null;
+  averageCache = null;
+  console.log(`🗑️ Removed nicotine from ${date}[${index}]: ${result.product || 'unnamed'} ${result.mgPerUnit}mg x${result.count}`);
   return result;
 }
 

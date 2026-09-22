@@ -8,7 +8,7 @@
 
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { DAILY_LOG_FILE, readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
+import { readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
@@ -103,7 +103,7 @@ export async function addBodyEntry({ date, ...body }) {
     entry.body = { ...(entry.body || {}), ...body };
     return { date: targetDate, ...entry.body };
   }, { label: 'Health' });
-  
+
   console.log(`⚖️ Body entry added for ${targetDate}`);
   return result;
 }

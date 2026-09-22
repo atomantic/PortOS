@@ -86,6 +86,8 @@ export async function loadMeatspaceDailyLog({ strict = false, label = 'MeatSpace
  * 5. Atomically writing the updated log back to `DAILY_LOG_FILE`.
  *
  * @param {(log: { entries: object[], lastEntryDate: string|null }) => Promise<any>|any} mutatorFn
+ *   Return `null` when the targeted record is absent. That skips the write so a
+ *   miss cannot rewrite the file. Any other return, including `undefined`, persists.
  * @param {{ label?: string }} [options]
  * @returns {Promise<any>} The result of mutatorFn, or the updated log if mutatorFn returns undefined.
  */
@@ -93,9 +95,7 @@ export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
   return queueDailyLogWrite(async () => {
     const log = await readLocalDailyLog({ strict: true, label });
     const result = await mutatorFn(log);
-    if (result === false || result === null) {
-      return result;
-    }
+    if (result === null) return result;
     if (Array.isArray(log?.entries)) {
       log.entries.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
       log.lastEntryDate = log.entries.length > 0 ? (log.entries[log.entries.length - 1]?.date || null) : null;

@@ -8,7 +8,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { DAILY_LOG_FILE, loadMeatspaceDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
+import { loadMeatspaceDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlPush,
@@ -146,12 +146,6 @@ export function computeRollingAverages(entries, sex = 'male') {
  */
 const loadDailyLog = (options) => loadMeatspaceDailyLog({ ...options, label: 'Alcohol' });
 
-async function saveDailyLog(log) {
-  await ensureDir(MEATSPACE_DIR);
-  await atomicWrite(DAILY_LOG_FILE, log);
-  averageCache = null; // Invalidate cache
-}
-
 // === Exported Service Functions ===
 
 export async function getAlcoholSummary() {
@@ -223,7 +217,8 @@ export async function logDrink({ name, oz, abv, count = 1, date }) {
     recalcAlcoholTotal(entry);
     return { drink, standardDrinks, date: targetDate, dayTotal: entry.alcohol.standardDrinks };
   }, { label: 'Alcohol' });
-  
+
+  averageCache = null;
   console.log(`🍺 Logged drink: ${name || 'unnamed'} ${oz}oz @ ${abv}% (${standardDrinks} std) on ${targetDate}`);
   return result;
 }
@@ -294,11 +289,17 @@ export async function updateDrink(date, index, updates) {
     }
 
     recalcAlcoholTotal(entry);
-    
     return { drink, dayTotal: entry.alcohol.standardDrinks };
   }, { label: 'Alcohol' });
-  
-  console.log(`📝 Updated drink on ${date}[${index}]: ${result?.drink?.name || 'unnamed'} ${result?.drink?.oz}oz @ ${result?.drink?.abv}%`);
+
+  if (!result) return null;
+  averageCache = null;
+  const drinkLabel = `${result.drink?.name || 'unnamed'} ${result.drink?.oz}oz @ ${result.drink?.abv}%`;
+  if (result.date && result.date !== date) {
+    console.log(`📝 Moved drink from ${date}[${index}] to ${result.date}: ${drinkLabel}`);
+  } else {
+    console.log(`📝 Updated drink on ${date}[${index}]: ${drinkLabel}`);
+  }
   return result;
 }
 
@@ -318,11 +319,12 @@ export async function removeDrink(date, index) {
     const removed = entry.alcohol.drinks.splice(index, 1)[0];
     if (entry.alcohol.drinks.length === 0) delete entry.alcohol;
     else recalcAlcoholTotal(entry);
-    
     return removed;
   }, { label: 'Alcohol' });
-  
-  console.log(`🗑️ Removed drink from ${date}[${index}]: ${result?.name || 'unnamed'} ${result?.oz}oz @ ${result?.abv}%`);
+
+  if (!result) return null;
+  averageCache = null;
+  console.log(`🗑️ Removed drink from ${date}[${index}]: ${result.name || 'unnamed'} ${result.oz}oz @ ${result.abv}%`);
   return result;
 }
 
