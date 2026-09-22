@@ -437,6 +437,20 @@
       }
     },
     {
+      "measurementId": "3337e7ffed6afdbf3ed541c5adda2c8a6d96945260fe7df93a5b8c0b04c2a111",
+      "assessedAt": "2026-09-22T16:24:54.078Z",
+      "report": {
+        "version": 1,
+        "category": "module-hygiene",
+        "score": 62,
+        "worstSeverity": 5,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 8110,
+        "totalFiles": 8110
+      }
+    },
+    {
       "measurementId": "79e6da253105d7801fe4848611a988089553c2c0ffc9dbef51163d09f896cd42",
       "assessedAt": "2026-09-11T05:26:52.844Z",
       "report": {
