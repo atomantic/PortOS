@@ -337,7 +337,12 @@ export const entityQuerySchema = z.object({
   cursor: z.preprocess((val) => (val === '' || val === null || val === 'null' ? undefined : val), z.string().max(512).optional()),
   limit: z.coerce.number().int().min(1).max(100).optional().default(25),
   offset: z.coerce.number().int().min(0).optional().default(0),
-  includeArchived: z.coerce.boolean().optional().default(false)
+  includeArchived: z.preprocess(
+    (value) => (typeof value === 'string'
+      ? value === 'true' ? true : value === 'false' ? false : value
+      : value),
+    z.boolean()
+  ).optional().default(false)
 });
 
 // --- Extracted field schemas for AI classification ---
