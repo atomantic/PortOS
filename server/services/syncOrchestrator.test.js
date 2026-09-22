@@ -161,6 +161,11 @@ describe('syncOrchestrator', () => {
     // this reset a later test inherits a prior test's (mutated) cursor and the
     // catalog rebuild/reset detection fires on it.
     readJSONFile.mockImplementation(async () => ({}));
+    // Default so clearPeerSchemaGap's `await getPeers()` (a best-effort lookup
+    // on every successful, non-blocked catalog drain) resolves to an array
+    // instead of throwing on undefined; tests that care about the peer lookup
+    // override this explicitly.
+    getPeers.mockResolvedValue([]);
     vi.useFakeTimers();
     mockFetch.mockReset();
     vi.stubGlobal('fetch', mockFetch);
@@ -523,6 +528,39 @@ describe('syncOrchestrator', () => {
       // ingredient has landed.
       expect(result.catalog.catalogSeqs.ingredients).toBe('5');
       expect(result.catalog.catalogSeqs.refs ?? '0').toBe('0');
+    });
+
+    it('clears a previously recorded schema gap after a successful catalog drain', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ingredients: [{ id: 'cat-chr-2' }],
+          maxSequences: { scraps: '0', ingredients: '3', sources: '0', refs: '0', relations: '0', tags: '0', media: '0' },
+          hasMore: false,
+          portosMeta: { schemaVersions: { catalog: 1 } },
+        }),
+      });
+      applyCatalogChanges.mockResolvedValueOnce({
+        scraps: { inserted: 0, updated: 0 }, ingredients: { inserted: 1, updated: 0 },
+        sources: { applied: 0 }, refs: { applied: 0 }, relations: { applied: 0 },
+        tags: { inserted: 0, updated: 0 }, media: { applied: 0 }, errors: [],
+      });
+      const { updatePeer } = await import('./instances.js');
+      getPeers.mockResolvedValue([{
+        ...catalogPeer,
+        id: 'local-peer-row',
+        instanceId: catalogPeer.instanceId,
+        schemaGaps: {
+          catalog: { detectedAt: '2026-01-01T00:00:00.000Z', ahead: [{ category: 'catalog' }], behind: [], senderPortosVersion: '99.0.0' },
+        },
+      }]);
+
+      await syncWithPeer(catalogPeer);
+
+      // A successful, non-blocked drain clears the gap it previously recorded —
+      // this fails if clearPeerSchemaGap early-returns (e.g. on an unmocked
+      // getPeers, or a peer lookup that never matches).
+      expect(updatePeer).toHaveBeenCalledWith('local-peer-row', { schemaGaps: null });
     });
 
     it('records a schema gap and stops draining when the sender is ahead on catalog', async () => {
