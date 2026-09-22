@@ -26,7 +26,19 @@ let releaseWebSpeechSession = null;
 let stream = null;
 let recorder = null;
 let chunks = [];
+let recorderGeneration = 0;
+let recorderStartPendingGeneration = null;
+let recorderSessionGeneration = null;
 let audioCtx = null;
+
+// Capture engines are module-level because the widget can be hidden and shown
+// without recreating the browser resources. The widget itself is not immortal:
+// navigation can unmount it while a permission request, recorder event, VAD
+// conversion, or Web Speech restart is still pending. A new owner generation
+// makes those late continuations inert before the old owner starts teardown.
+let captureOwnerGeneration = 0;
+
+const isOwnerCurrent = (generation) => generation === captureOwnerGeneration;
 // One owner for shared playback. Server-turn admission is independent of the
 // two invalidation lifetimes: cancellation retires decode/queue work AND
 // pending synthesis fetches; a new synthetic reply retires only older fetches.
@@ -407,7 +419,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 socket.on('voice:transcript', beginServerTurnAudio);
 
 export const startCapture = async () => {
-  if (recorder) return;
+  if (recorder || recorderStartPendingGeneration !== null) return;
+  const ownerGeneration = captureOwnerGeneration;
+  const generation = ++recorderGeneration;
+  recorderStartPendingGeneration = generation;
   // Barge-in: abort any in-flight turn and silence current playback
   socket.emit('voice:interrupt');
   cancelVoicePlayback();
@@ -415,11 +430,13 @@ export const startCapture = async () => {
   // Claimed BEFORE getUserMedia — an output-only session already in force would
   // refuse the request outright.
   releaseCaptureSession?.();
-  releaseCaptureSession = acquireAudioSession('play-and-record');
+  const sessionRelease = acquireAudioSession('play-and-record');
+  releaseCaptureSession = sessionRelease;
+  recorderSessionGeneration = generation;
 
   // autoGainControl is critical — without it, quiet mics record near-silent audio
   // that whisper transcribes as [BLANK_AUDIO].
-  stream = await navigator.mediaDevices.getUserMedia({
+  const nextStream = await navigator.mediaDevices.getUserMedia({
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
@@ -429,37 +446,81 @@ export const startCapture = async () => {
     // A denied/failed mic never reaches stopCapture (`recorder` is still null),
     // so the claim is handed back here or it pins the document record-capable
     // for the rest of the session.
-    releaseCaptureSession?.();
-    releaseCaptureSession = null;
+    if (recorderSessionGeneration === generation) {
+      sessionRelease();
+      releaseCaptureSession = null;
+      recorderSessionGeneration = null;
+    }
+    recorderStartPendingGeneration = null;
     throw err;
   });
+  if (!isOwnerCurrent(ownerGeneration) || recorderGeneration !== generation) {
+    nextStream.getTracks().forEach((track) => track.stop());
+    if (recorderSessionGeneration === generation) {
+      sessionRelease();
+      releaseCaptureSession = null;
+      recorderSessionGeneration = null;
+    }
+    if (recorderStartPendingGeneration === generation) recorderStartPendingGeneration = null;
+    return null;
+  }
+  stream = nextStream;
   // Run after permission is granted — `enumerateDevices` only returns
   // device labels post-grant, and the headset heuristic relies on labels.
   detectAudioRoute(stream).catch(() => {});
   const mimeType = pickMime();
-  chunks = [];
-  recorder = new MediaRecorder(stream, { mimeType });
-  recorder.addEventListener('dataavailable', (e) => { if (e.data.size > 0) chunks.push(e.data); });
-  recorder.start(250);
+  const recordedChunks = [];
+  chunks = recordedChunks;
+  const nextRecorder = new MediaRecorder(stream, { mimeType });
+  recorder = nextRecorder;
+  recorderStartPendingGeneration = null;
+  nextRecorder.addEventListener('dataavailable', (e) => {
+    if (isOwnerCurrent(ownerGeneration) && recorderGeneration === generation && e.data.size > 0) {
+      recordedChunks.push(e.data);
+    }
+  });
+  nextRecorder.start(250);
   return { mimeType };
 };
 
 export const stopCapture = async ({ submit = true } = {}) => {
-  if (!recorder) return null;
+  const generation = recorderGeneration;
   const rec = recorder;
+  const capturedStream = stream;
+  const recordedChunks = chunks;
+  if (!rec) {
+    if (recorderStartPendingGeneration === generation) recorderStartPendingGeneration = null;
+    recorderGeneration += 1;
+    chunks = [];
+    capturedStream?.getTracks().forEach((track) => track.stop());
+    stream = null;
+    if (recorderSessionGeneration === generation) {
+      releaseCaptureSession?.();
+      releaseCaptureSession = null;
+      recorderSessionGeneration = null;
+    }
+    return null;
+  }
   recorder = null;
+  recorderStartPendingGeneration = null;
+  chunks = [];
+  // Stop the tracks before awaiting MediaRecorder's final event. Navigation
+  // teardown must release the microphone even if a browser delays that event.
+  capturedStream?.getTracks().forEach((track) => track.stop());
+  stream = null;
+  if (recorderSessionGeneration === generation) {
+    releaseCaptureSession?.();
+    releaseCaptureSession = null;
+    recorderSessionGeneration = null;
+  }
 
   await new Promise((resolve) => {
     rec.addEventListener('stop', resolve, { once: true });
     rec.stop();
   });
-  stream?.getTracks().forEach((t) => t.stop());
-  stream = null;
-  releaseCaptureSession?.();
-  releaseCaptureSession = null;
+  if (recorderGeneration === generation) recorderGeneration += 1;
 
-  const blob = new Blob(chunks, { type: rec.mimeType });
-  chunks = [];
+  const blob = new Blob(recordedChunks, { type: rec.mimeType });
   // Mode-switch cancellation (e.g. user toggled hands-free mid-utterance):
   // drop the buffered audio instead of submitting a partial sentence.
   if (!submit) return null;
@@ -717,7 +778,10 @@ let continuousCtx = null;
 let continuousStream = null;
 let continuousWorkletNode = null;
 let continuousSource = null;
-let continuousCallbacks = null;
+let continuousCapture = null;
+let continuousGeneration = 0;
+let continuousStartPendingGeneration = null;
+let continuousSessionGeneration = null;
 let vadState = 'idle';
 let speechChunks = [];
 // Fixed-size ring buffer of the last `preRollLimit` frames; avoids the
@@ -741,7 +805,15 @@ class VADProcessor extends AudioWorkletProcessor {
 registerProcessor('vad-processor', VADProcessor);
 `;
 
-const submitUtterance = async () => {
+const isContinuousCaptureCurrent = (capture) => Boolean(
+  capture
+  && capture.ownerGeneration === captureOwnerGeneration
+  && capture.generation === continuousGeneration
+  && continuousCapture === capture,
+);
+
+const submitUtterance = async (capture) => {
+  if (!isContinuousCaptureCurrent(capture)) return;
   if (!speechChunks.length) return;
   const chunksToSubmit = speechChunks;
   speechChunks = [];
@@ -751,14 +823,15 @@ const submitUtterance = async () => {
   let off = 0;
   for (const c of chunksToSubmit) { samples.set(c, off); off += c.length; }
 
-  const rate = continuousCtx?.sampleRate || 48000;
+  const rate = capture.context?.sampleRate || 48000;
   const { wav, peak } = await float32ToWav16k(samples, rate);
+  if (!isContinuousCaptureCurrent(capture)) return;
   if (!wav || wav.byteLength < 800) {
-    continuousCallbacks?.onSubmit?.({ submitted: false, peak });
+    capture.callbacks?.onSubmit?.({ submitted: false, peak });
     return;
   }
   socket.emit('voice:turn', { audio: wav, mimeType: 'audio/wav' });
-  continuousCallbacks?.onSubmit?.({ submitted: true, peak, size: wav.byteLength });
+  capture.callbacks?.onSubmit?.({ submitted: true, peak, size: wav.byteLength });
 };
 
 const finishCalibration = () => {
@@ -783,7 +856,8 @@ const snapshotPreRoll = () => {
   return out;
 };
 
-const handleFrame = (frame) => {
+const handleFrame = (frame, capture) => {
+  if (!isContinuousCaptureCurrent(capture)) return;
   let sum = 0;
   for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
   const rms = Math.sqrt(sum / frame.length);
@@ -816,7 +890,7 @@ const handleFrame = (frame) => {
     const effectiveConfirmMs = inEcho ? VAD.bargeInOnsetConfirmMs : VAD.onsetConfirmMs;
     if (rms > effectiveOnRms) {
       onsetFrames += 1;
-      const frameMs = (frame.length / (continuousCtx?.sampleRate || 48000)) * 1000;
+      const frameMs = (frame.length / (capture.context?.sampleRate || 48000)) * 1000;
       if (onsetFrames * frameMs >= effectiveConfirmMs) {
         // Confirmed speech onset — barge-in + start capturing
         vadState = 'speaking';
@@ -828,7 +902,7 @@ const handleFrame = (frame) => {
           cancelVoicePlayback();
         }
         speechChunks = snapshotPreRoll();
-        continuousCallbacks?.onSpeechStart?.();
+        capture.callbacks?.onSpeechStart?.();
       }
     } else {
       onsetFrames = 0;
@@ -845,11 +919,11 @@ const handleFrame = (frame) => {
     vadState = 'idle';
     silenceStartedAt = 0;
     onsetFrames = 0;
-    continuousCallbacks?.onSpeechEnd?.();
+    capture.callbacks?.onSpeechEnd?.();
     if (speechChunks.length) {
-      submitUtterance().catch((err) => console.warn('[voice] watchdog submit failed:', err));
+      submitUtterance(capture).catch((err) => console.warn('[voice] watchdog submit failed:', err));
     } else {
-      continuousCallbacks?.onSubmit?.({ submitted: false, peak: 0, discarded: true });
+      capture.callbacks?.onSubmit?.({ submitted: false, peak: 0, discarded: true });
     }
     return;
   }
@@ -861,14 +935,14 @@ const handleFrame = (frame) => {
       vadState = 'idle';
       silenceStartedAt = 0;
       onsetFrames = 0;
-      continuousCallbacks?.onSpeechEnd?.();
+      capture.callbacks?.onSpeechEnd?.();
       if (speechMs >= VAD.minSpeechMs) {
-        submitUtterance().catch((err) => console.warn('[voice] submit failed:', err));
+        submitUtterance(capture).catch((err) => console.warn('[voice] submit failed:', err));
       } else {
         // Too short to submit — notify the widget so it leaves 'thinking'
         // instead of waiting for a server response that won't arrive.
         speechChunks = [];
-        continuousCallbacks?.onSubmit?.({ submitted: false, peak: 0, discarded: true });
+        capture.callbacks?.onSubmit?.({ submitted: false, peak: 0, discarded: true });
       }
     }
   } else {
@@ -877,28 +951,47 @@ const handleFrame = (frame) => {
 };
 
 export const startContinuous = async (callbacks = {}) => {
-  if (continuousCtx) return;
-  continuousCallbacks = callbacks;
+  if (continuousCtx || continuousStartPendingGeneration !== null) return;
+  const ownerGeneration = captureOwnerGeneration;
+  const generation = ++continuousGeneration;
+  continuousStartPendingGeneration = generation;
 
   // Claimed BEFORE getUserMedia — an output-only session already in force would
   // refuse the request outright — and handed back on failure, since a denied mic
   // never reaches stopContinuous (`continuousCtx` is still null).
   releaseContinuousSession?.();
-  releaseContinuousSession = acquireAudioSession('play-and-record');
+  const sessionRelease = acquireAudioSession('play-and-record');
+  releaseContinuousSession = sessionRelease;
+  continuousSessionGeneration = generation;
 
   // AGC is intentionally OFF here — it boosts silence to maintain a target
   // output level, which destroys the energy-difference signal the VAD needs.
-  continuousStream = await navigator.mediaDevices.getUserMedia({
+  const nextStream = await navigator.mediaDevices.getUserMedia({
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: false,
     },
   }).catch((err) => {
-    releaseContinuousSession?.();
-    releaseContinuousSession = null;
+    if (continuousSessionGeneration === generation) {
+      sessionRelease();
+      releaseContinuousSession = null;
+      continuousSessionGeneration = null;
+    }
+    continuousStartPendingGeneration = null;
     throw err;
   });
+  if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) {
+    nextStream.getTracks().forEach((track) => track.stop());
+    if (continuousSessionGeneration === generation) {
+      sessionRelease();
+      releaseContinuousSession = null;
+      continuousSessionGeneration = null;
+    }
+    if (continuousStartPendingGeneration === generation) continuousStartPendingGeneration = null;
+    return null;
+  }
+  continuousStream = nextStream;
   detectAudioRoute(continuousStream).catch(() => {});
 
   // Everything from here on can reject — a refused resume, a worklet module that
@@ -914,12 +1007,20 @@ export const startContinuous = async (callbacks = {}) => {
   const Ctor = window.AudioContext || window.webkitAudioContext;
   continuousCtx = new Ctor();
   await resumeAudioContext(continuousCtx).catch(unwindSetup);
+  if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) {
+    await stopContinuous();
+    return null;
+  }
 
   // Inline worklet module so we don't need a separate file in the build
   const blobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
   await continuousCtx.audioWorklet.addModule(blobUrl)
     .catch(async (err) => { URL.revokeObjectURL(blobUrl); await unwindSetup(err); });
   URL.revokeObjectURL(blobUrl);
+  if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) {
+    await stopContinuous();
+    return null;
+  }
 
   continuousSource = continuousCtx.createMediaStreamSource(continuousStream);
   continuousWorkletNode = new AudioWorkletNode(continuousCtx, 'vad-processor');
@@ -940,7 +1041,15 @@ export const startContinuous = async (callbacks = {}) => {
   onRms = VAD.minOnRms;
   offRms = VAD.minOffRms;
 
-  continuousWorkletNode.port.onmessage = (e) => handleFrame(e.data);
+  const capture = {
+    ownerGeneration,
+    generation,
+    callbacks,
+    context: continuousCtx,
+  };
+  continuousCapture = capture;
+  continuousStartPendingGeneration = null;
+  continuousWorkletNode.port.onmessage = (e) => handleFrame(e.data, capture);
   continuousSource.connect(continuousWorkletNode);
   // Worklet output must be pulled by the graph or process() stops running;
   // sinking through a zero-gain node keeps it alive without echoing the mic.
@@ -950,20 +1059,38 @@ export const startContinuous = async (callbacks = {}) => {
 };
 
 export const stopContinuous = async () => {
-  if (!continuousCtx) return;
-  try {
-    continuousSource?.disconnect();
-    continuousWorkletNode?.disconnect();
-    continuousWorkletNode && (continuousWorkletNode.port.onmessage = null);
-  } catch { /* ignore teardown errors */ }
-  continuousStream?.getTracks().forEach((t) => t.stop());
-  await continuousCtx.close().catch(() => {});
-  releaseContinuousSession?.();
-  releaseContinuousSession = null;
+  const generation = continuousGeneration;
+  continuousGeneration += 1;
+  continuousStartPendingGeneration = null;
+  const ctx = continuousCtx;
+  const captureStream = continuousStream;
+  const workletNode = continuousWorkletNode;
+  const source = continuousSource;
+  const release = continuousSessionGeneration === generation
+    ? releaseContinuousSession
+    : null;
   continuousCtx = null;
   continuousStream = null;
   continuousWorkletNode = null;
   continuousSource = null;
+  continuousCapture = null;
+  if (!ctx) {
+    captureStream?.getTracks().forEach((track) => track.stop());
+    if (release) release();
+    if (releaseContinuousSession === release) releaseContinuousSession = null;
+    if (continuousSessionGeneration === generation) continuousSessionGeneration = null;
+    return;
+  }
+  try {
+    source?.disconnect();
+    workletNode?.disconnect();
+    workletNode && (workletNode.port.onmessage = null);
+  } catch { /* ignore teardown errors */ }
+  captureStream?.getTracks().forEach((track) => track.stop());
+  await Promise.resolve(ctx.close?.()).catch(() => {});
+  if (release) release();
+  if (releaseContinuousSession === release) releaseContinuousSession = null;
+  if (continuousSessionGeneration === generation) continuousSessionGeneration = null;
   speechChunks = [];
   preRoll = null;
   preRollIdx = 0;
@@ -972,7 +1099,6 @@ export const stopContinuous = async () => {
   onsetFrames = 0;
   calibrating = false;
   calibrationSamples = [];
-  continuousCallbacks = null;
 };
 
 export const isContinuous = () => continuousCtx !== null;
@@ -998,6 +1124,7 @@ const SpeechRecognition = typeof window !== 'undefined'
 
 let webSpeechRecognition = null;
 let webSpeechShouldListen = false;
+let webSpeechGeneration = 0;
 // Chrome fires onend immediately when a mic error, OS permission flicker, or
 // driver glitch prevents recognition from ever binding. Blindly calling
 // start() from onend in that state hot-loops the CPU. Count consecutive
@@ -1023,6 +1150,8 @@ const resolveRecognitionLang = (configured) => {
 export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
   if (!SpeechRecognition) return;
   stopWebSpeechCapture();
+  const ownerGeneration = captureOwnerGeneration;
+  const generation = ++webSpeechGeneration;
 
   // Barge-in: abort any in-flight turn and silence current playback
   socket.emit('voice:interrupt');
@@ -1036,6 +1165,7 @@ export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
   recognition.lang = resolveRecognitionLang(language);
 
   recognition.onresult = (event) => {
+    if (!isOwnerCurrent(ownerGeneration) || webSpeechGeneration !== generation || webSpeechRecognition !== recognition) return;
     let interim = '';
     let final = '';
     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -1071,7 +1201,10 @@ export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
   };
 
   recognition.onend = () => {
-    if (!webSpeechShouldListen) return;
+    if (!webSpeechShouldListen
+      || !isOwnerCurrent(ownerGeneration)
+      || webSpeechGeneration !== generation
+      || webSpeechRecognition !== recognition) return;
     webSpeechRestartFailures += 1;
     if (webSpeechRestartFailures >= WEB_SPEECH_MAX_RESTART_FAILURES) {
       // Full teardown, not a bare flag flip: every caller-side cleanup is gated
@@ -1087,13 +1220,17 @@ export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
     const delay = Math.min(50 * 2 ** (webSpeechRestartFailures - 1), 800);
     clearTimeout(webSpeechRestartTimer);
     webSpeechRestartTimer = setTimeout(() => {
-      if (webSpeechShouldListen && webSpeechRecognition === recognition) {
+      if (webSpeechShouldListen
+        && isOwnerCurrent(ownerGeneration)
+        && webSpeechGeneration === generation
+        && webSpeechRecognition === recognition) {
         recognition.start();
       }
     }, delay);
   };
 
   recognition.onerror = (event) => {
+    if (!isOwnerCurrent(ownerGeneration) || webSpeechGeneration !== generation || webSpeechRecognition !== recognition) return;
     if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
       // Same reason as onend's restart-cap branch: release the claim here or a
       // denied mic leaves the session pinned record-capable forever.
@@ -1117,12 +1254,13 @@ export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
 };
 
 export const stopWebSpeechCapture = () => {
+  webSpeechGeneration += 1;
   webSpeechShouldListen = false;
   clearTimeout(webSpeechRestartTimer);
   webSpeechRestartTimer = null;
   webSpeechRestartFailures = 0;
   if (webSpeechRecognition) {
-    webSpeechRecognition.stop();
+    try { webSpeechRecognition.stop(); } catch { /* already stopped */ }
     webSpeechRecognition = null;
   }
   releaseWebSpeechSession?.();
@@ -1130,3 +1268,64 @@ export const stopWebSpeechCapture = () => {
 };
 
 export const isWebSpeechCapturing = () => webSpeechShouldListen;
+
+/**
+ * Invalidate the widget that currently owns capture before its React cleanup
+ * awaits the normal cancel path. This is intentionally synchronous: a late
+ * permission result, recorder event, VAD conversion, or Web Speech restart
+ * must be unable to emit a turn or call a dead widget during that gap.
+ */
+export const disposeCaptureOwner = () => {
+  captureOwnerGeneration += 1;
+
+  const activeRecorder = recorder;
+  recorder = null;
+  recorderGeneration += 1;
+  recorderStartPendingGeneration = null;
+  chunks = [];
+  stream?.getTracks().forEach((track) => track.stop());
+  stream = null;
+  releaseCaptureSession?.();
+  releaseCaptureSession = null;
+  recorderSessionGeneration = null;
+  try { activeRecorder?.stop(); } catch { /* already stopped */ }
+
+  const context = continuousCtx;
+  const captureStream = continuousStream;
+  const workletNode = continuousWorkletNode;
+  const source = continuousSource;
+  continuousGeneration += 1;
+  continuousStartPendingGeneration = null;
+  continuousCapture = null;
+  continuousCtx = null;
+  continuousStream = null;
+  continuousWorkletNode = null;
+  continuousSource = null;
+  try {
+    source?.disconnect();
+    workletNode?.disconnect();
+    workletNode && (workletNode.port.onmessage = null);
+  } catch { /* ignore teardown errors */ }
+  captureStream?.getTracks().forEach((track) => track.stop());
+  Promise.resolve(context?.close?.()).catch(() => {});
+  releaseContinuousSession?.();
+  releaseContinuousSession = null;
+  continuousSessionGeneration = null;
+  speechChunks = [];
+  preRoll = null;
+  preRollIdx = 0;
+  preRollFilled = 0;
+  vadState = 'idle';
+  calibrating = false;
+  calibrationSamples = [];
+
+  const recognition = webSpeechRecognition;
+  webSpeechRecognition = null;
+  webSpeechGeneration += 1;
+  webSpeechShouldListen = false;
+  clearTimeout(webSpeechRestartTimer);
+  webSpeechRestartTimer = null;
+  try { recognition?.stop(); } catch { /* already stopped */ }
+  releaseWebSpeechSession?.();
+  releaseWebSpeechSession = null;
+};

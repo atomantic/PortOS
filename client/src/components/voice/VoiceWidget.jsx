@@ -5,6 +5,7 @@ import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
+  disposeCaptureOwner,
   onProactiveSpeech, captureScreenForVision, sendScreenshotResult,
   enableVisionCapture, disableVisionCapture, isVisionCaptureEnabled, onVisionCaptureEnded,
   speakSynthesized, onVoiceOutputPrimary, claimVoiceOutput,
@@ -74,6 +75,7 @@ export default function VoiceWidget() {
   const handleStartRef = useRef(null);
   const handleStopRef = useRef(null);
   const handleCancelRef = useRef(null);
+  const disposedRef = useRef(false);
   // VoiceToggleButton fetches voice config independently, so it can show and
   // dispatch ENGAGE_EVENT before this widget's own getVoiceConfig() resolves
   // and `enabled` flips true. handleStart short-circuits while disabled, which
@@ -135,6 +137,7 @@ export default function VoiceWidget() {
   useEffect(() => {
     getVoiceConfig()
       .then((cfg) => {
+        if (disposedRef.current) return;
         setEnabled(!!cfg?.enabled);
         setHotkey(cfg?.hotkey || 'Space');
         if (cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
@@ -236,15 +239,18 @@ export default function VoiceWidget() {
         ));
       }),
       onVoiceEvent('voice:idle', (d) => {
+        if (disposedRef.current) return;
         // voice:idle fires when the server finishes *sending* TTS; local
         // playback may still be running. Wait for drain so stage doesn't
         // flip off 'speaking' while audio is still playing.
         if (d?.reason === 'reset') setHistory([]);
         whenPlaybackDrained().then(() => {
+          if (disposedRef.current) return;
           setStage((current) => (ACTIVE_STAGES.has(current) ? current : restState()));
         });
       }),
       onVoiceEvent('voice:error', (d) => {
+        if (disposedRef.current) return;
         toast.error(`Voice: ${d.message}`);
         setStage(restState());
       }),
@@ -263,7 +269,9 @@ export default function VoiceWidget() {
         if (next) {
           // Defer to next tick so the local stage / dictation state has
           // settled before handleStart reads it.
-          setTimeout(() => { handleStartRef.current?.(); }, 0);
+          setTimeout(() => {
+            if (!disposedRef.current) handleStartRef.current?.();
+          }, 0);
         } else if (isWebSpeechCapturing() || isCapturing() || isContinuous()) {
           handleStopRef.current?.();
         }
@@ -301,6 +309,7 @@ export default function VoiceWidget() {
       // data URL, or null when no stream is authorized / a frame grab failed;
       // always reply so the server-side waiter resolves rather than timing out.
       onVoiceEvent('voice:screenshot:request', async (payload) => {
+        if (disposedRef.current) return;
         const requestId = payload && typeof payload === 'object' ? payload.requestId : undefined;
         if (!isVisionCaptureEnabled()) {
           toast('Voice: click the screen button in the voice controls so I can see your screen.', { icon: '🖥️' });
@@ -309,6 +318,7 @@ export default function VoiceWidget() {
           return;
         }
         const dataUrl = await captureScreenForVision();
+        if (disposedRef.current) return;
         if (!dataUrl) {
           toast('Voice: screen capture was unavailable.', { icon: '📷' });
           setVisionEnabled(isVisionCaptureEnabled());
@@ -354,6 +364,7 @@ export default function VoiceWidget() {
   // (navigate + speak, or speak). Returns true when handled; false means "send
   // to the server pipeline as usual". Reads config via refs so it stays stable.
   const runFastPath = useCallback(async (text) => {
+    if (disposedRef.current) return false;
     const fp = fastPathRef.current;
     if (!fp?.enabled) return false;
     // Ensure the nav manifest is loaded (retries if an earlier fetch failed) so
@@ -371,19 +382,24 @@ export default function VoiceWidget() {
     } catch {
       return false;
     }
+    if (disposedRef.current) return false;
     if (decision.tier === TIER.SERVER) return false;
 
     // A fast tier owns this turn. Stop any lingering playback, speak the reply
     // through the same queue as server TTS, and settle the stage on drain.
     const speak = (line) => {
+      if (disposedRef.current) return;
       interrupt();
       setHistory((h) => [...h, { role: 'assistant', text: line }].slice(-MAX_HISTORY));
       setStage('speaking');
       speakSynthesized(line, ttsRef.current)
         .catch(() => {})
-        .finally(() => whenPlaybackDrained().then(() => setStage((c) => (
-          ACTIVE_STAGES.has(c) ? c : (isWebSpeechCapturing() ? 'listening' : 'idle')
-        ))));
+        .finally(() => whenPlaybackDrained().then(() => {
+          if (disposedRef.current) return;
+          setStage((c) => (
+            ACTIVE_STAGES.has(c) ? c : (isWebSpeechCapturing() ? 'listening' : 'idle')
+          ));
+        }));
     };
 
     if (decision.tier === TIER.TRIGGER && decision.kind === 'navigate') {
@@ -406,6 +422,7 @@ export default function VoiceWidget() {
   useEffect(() => {
     if (!enabled) return undefined;
     return onProactiveSpeech(({ sentence, priority }) => {
+      if (disposedRef.current) return;
       setHistory((h) => [...h, { role: 'assistant', text: sentence, proactive: true }].slice(-MAX_HISTORY));
       const icon = priority === 'high' ? '🔔' : '🤖';
       toast(`${icon} ${sentence.length > 80 ? `${sentence.slice(0, 80)}…` : sentence}`);
@@ -413,7 +430,7 @@ export default function VoiceWidget() {
   }, [enabled]);
 
   const handleStart = useCallback(async () => {
-    if (!enabled) return;
+    if (!enabled || disposedRef.current) return;
 
     // Web Speech API mode — browser handles STT, sends text directly
     if (useWebSpeech) {
@@ -422,8 +439,11 @@ export default function VoiceWidget() {
       setInterimTranscript('');
       startWebSpeechCapture({
         language: sttLanguage,
-        onInterim: (text) => setInterimTranscript(text),
+        onInterim: (text) => {
+          if (!disposedRef.current) setInterimTranscript(text);
+        },
         onFinal: (text) => {
+          if (disposedRef.current) return;
           setInterimTranscript('');
           setHistory((h) => [...h, { role: 'user', text }].slice(-MAX_HISTORY));
           setStage('thinking');
@@ -433,10 +453,12 @@ export default function VoiceWidget() {
         // Gated on the live ref so toggling fast resolution in Settings takes
         // effect on the next utterance without restarting the recognizer.
         routeFinal: async (text) => {
+          if (disposedRef.current) return;
           const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
-          if (!handled) sendText(text, 'voice');
+          if (!disposedRef.current && !handled) sendText(text, 'voice');
         },
         onError: (err) => {
+          if (disposedRef.current) return;
           toast.error(`Mic: ${err}`);
           setStage('idle');
         },
@@ -448,9 +470,14 @@ export default function VoiceWidget() {
       if (isContinuous()) return;
       setStage('handsfree');
       await startContinuous({
-        onSpeechStart: () => setStage('capturing'),
-        onSpeechEnd: () => setStage('thinking'),
+        onSpeechStart: () => {
+          if (!disposedRef.current) setStage('capturing');
+        },
+        onSpeechEnd: () => {
+          if (!disposedRef.current) setStage('thinking');
+        },
         onSubmit: ({ submitted, peak }) => {
+          if (disposedRef.current) return;
           if (!submitted) {
             setStage('handsfree');
             return;
@@ -458,6 +485,7 @@ export default function VoiceWidget() {
           warnIfQuiet(peak);
         },
       }).catch((err) => {
+        if (disposedRef.current) return;
         toast.error(`Mic: ${err.message}`);
         setStage('idle');
       });
@@ -466,12 +494,14 @@ export default function VoiceWidget() {
     if (isCapturing()) return;
     setStage('listening');
     await startCapture().catch((err) => {
+      if (disposedRef.current) return;
       toast.error(`Mic: ${err.message}`);
       setStage('idle');
     });
   }, [enabled, handsFree, useWebSpeech, sttLanguage, runFastPath]);
 
   const handleStop = useCallback(async () => {
+    if (disposedRef.current) return;
     if (useWebSpeech) {
       stopWebSpeechCapture();
       setInterimTranscript('');
@@ -480,16 +510,19 @@ export default function VoiceWidget() {
     }
     if (handsFree && isContinuous()) {
       await stopContinuous();
+      if (disposedRef.current) return;
       setStage('idle');
       return;
     }
     if (!isCapturing()) return;
     setStage('thinking');
     const r = await stopCapture().catch((err) => {
+      if (disposedRef.current) return null;
       toast.error(`Mic: ${err.message}`);
       setStage('idle');
       return null;
     });
+    if (disposedRef.current) return;
     if (!r) {
       setStage('idle');
       return;
@@ -505,16 +538,17 @@ export default function VoiceWidget() {
   // state, so a synchronous cancel followed by a quick re-engage can have
   // the in-flight stop tear down the *new* capture's tracks. Awaiting the
   // teardown serializes engage/disengage and prevents that race.
-  const handleCancel = useCallback(async () => {
+  const handleCancel = useCallback(async ({ updateUi = true } = {}) => {
+    const canUpdateUi = updateUi && !disposedRef.current;
     if (useWebSpeech) {
       if (isWebSpeechCapturing()) stopWebSpeechCapture();
-      setInterimTranscript('');
+      if (canUpdateUi) setInterimTranscript('');
     } else {
       if (isContinuous()) await stopContinuous().catch(() => {});
       if (isCapturing()) await stopCapture({ submit: false }).catch(() => {});
     }
     interrupt();
-    setStage('idle');
+    if (canUpdateUi) setStage('idle');
   }, [useWebSpeech]);
 
   // Keep the refs the dictation/engage/disengage listeners use pointed at the
@@ -525,6 +559,32 @@ export default function VoiceWidget() {
   useLayoutEffect(() => { handleStartRef.current = handleStart; }, [handleStart]);
   useLayoutEffect(() => { handleStopRef.current = handleStop; }, [handleStop]);
   useLayoutEffect(() => { handleCancelRef.current = handleCancel; }, [handleCancel]);
+
+  // Route changes can unmount the widget without changing `enabled`, so the
+  // switchable-effect cleanup above is not enough. Invalidate module-level
+  // capture callbacks synchronously, then invoke the latest cancel closure for
+  // the awaited teardown/interrupt path. The cleanup never updates React state
+  // because the owner is already marked disposed.
+  useEffect(() => {
+    disposedRef.current = false;
+    return () => {
+      disposedRef.current = true;
+      pendingEngageRef.current = false;
+      disposeCaptureOwner();
+      const teardown = handleCancelRef.current?.({ updateUi: false });
+      if (teardown && typeof teardown.then === 'function') {
+        cancelInFlightRef.current = teardown;
+        teardown.then(
+          () => {
+            if (cancelInFlightRef.current === teardown) cancelInFlightRef.current = null;
+          },
+          () => {
+            if (cancelInFlightRef.current === teardown) cancelInFlightRef.current = null;
+          },
+        );
+      }
+    };
+  }, []);
 
   const handleClear = () => {
     resetConversation();
