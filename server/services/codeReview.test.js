@@ -50,6 +50,9 @@ import {
   runLocalGoalFidelityReview,
   getGoalFidelityConfig,
   runLocalCodeReview,
+  getLocalCodeReviewTimeoutMs,
+  LOCAL_CODE_REVIEW_TIMEOUT_FLOOR_MS,
+  LOCAL_CODE_REVIEW_TIMEOUT_CEILING_MS,
   getReviewerCliInstalled,
   getReviewerConfigHealth,
   reportReviewerFailure,
@@ -606,6 +609,42 @@ describe('codeReview helpers', () => {
       const r = await runLocalCodeReview({ backend: 'lmstudio', model: 'm', diff: '   ' })
       expect(r.ok).toBe(false)
       expect(r.error).toMatch(/Empty diff/)
+    })
+
+    it('scales the default timeout with diff size and enforces its ceiling', () => {
+      const small = getLocalCodeReviewTimeoutMs('x'.repeat(1024))
+      const large = getLocalCodeReviewTimeoutMs('x'.repeat(20 * 1024))
+      const huge = getLocalCodeReviewTimeoutMs('x'.repeat(200 * 1024))
+
+      expect(small).toBe(LOCAL_CODE_REVIEW_TIMEOUT_FLOOR_MS)
+      expect(large).toBeGreaterThan(small)
+      expect(huge).toBe(LOCAL_CODE_REVIEW_TIMEOUT_CEILING_MS)
+    })
+
+    it('reports a backend that never answers with the effective budget and diff size', async () => {
+      const abortError = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })
+      global.fetch = vi.fn().mockRejectedValue(abortError)
+      const diff = 'x'.repeat(20 * 1024)
+      const result = await runLocalCodeReview({ backend: 'ollama', model: 'm', diff })
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toContain('backend never answered')
+      expect(result.error).toContain(`timed out after ${getLocalCodeReviewTimeoutMs(diff)}ms`)
+      expect(result.error).toContain('20 KiB (20480 bytes) diff')
+    })
+
+    it('distinguishes a reachable backend whose response body does not finish', async () => {
+      const abortError = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: vi.fn().mockRejectedValue(abortError),
+      })
+      const result = await runLocalCodeReview({ backend: 'lmstudio', model: 'm', diff: 'x'.repeat(2048) })
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toContain('backend was reachable but did not finish')
+      expect(result.error).toContain('2 KiB (2048 bytes) diff')
     })
 
     it('omits reasoning_effort entirely when no effort is pinned — absent is the only spelling of the model default', async () => {

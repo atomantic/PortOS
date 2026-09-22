@@ -276,7 +276,9 @@ it('shuts down the Codex app-server child and cleans up scratch resources after 
 
     expect(timeoutRes.code).toBe(1);
     const timeoutStdout = JSON.parse(timeoutRes.stdout.trim());
-    expect(timeoutStdout).toMatchObject({ ok: false, error: expect.stringMatching(/turn did not finish/i) });
+    expect(timeoutStdout).toMatchObject({ ok: false, error: expect.stringMatching(/did not finish/i) });
+    expect(timeoutStdout.error).toContain('250ms');
+    expect(timeoutStdout.error).toContain('1 KiB');
     expect(timeoutRes.stderr).toContain('Codex app-server stopped');
 
     const pid2 = parseInt(await readFile(pidFile2, 'utf8'), 10);
