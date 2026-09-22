@@ -142,6 +142,21 @@ describe('catalogAge', () => {
   it('answers null when nothing usable is cached', () => {
     expect(catalogAge([])).toBeNull();
   });
+
+  // The two accessors must answer from the SAME entry: the log line reports the
+  // age of the catalog whose ids were persisted. When they each filtered and
+  // sorted separately the pair could drift and describe different files, so the
+  // shared selector is pinned here rather than only in each accessor's own test.
+  it('reports the age of the very entry whose ids were selected', () => {
+    const entries = [
+      catalogFile({ fetchedAt: 100, models: [model('from-older')] }),
+      catalogFile({ fetchedAt: 9_000, models: [model('from-newer')] }),
+      // Newest of all, but an unsupported schema — neither accessor may pick it.
+      catalogFile({ fetchedAt: 50_000, version: 3, models: [model('from-unreadable')] }),
+    ];
+    expect(selectCatalogModels(entries)).toEqual(['from-newer']);
+    expect(catalogAge(entries)).toBe(9_000);
+  });
 });
 
 describe('usesThirdPartyBackend', () => {

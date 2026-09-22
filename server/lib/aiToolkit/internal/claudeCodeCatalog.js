@@ -88,6 +88,19 @@ export function isSupportedCatalog(parsed, surface = CLAUDE_CODE_SURFACE) {
 }
 
 /**
+ * The one entry both accessors below answer from: the freshest cache file that
+ * parses as a catalog for `surface`. Shared rather than restated, because
+ * `catalogAge` reports the age OF the entry `selectCatalogModels` read — two
+ * copies of this filter-and-sort could drift and make the logged timestamp
+ * describe a different file than the ids.
+ */
+function freshestCatalog(entries, surface) {
+  return (Array.isArray(entries) ? entries : [])
+    .filter((entry) => isSupportedCatalog(entry, surface))
+    .sort((a, b) => (Number(b.fetchedAt) || 0) - (Number(a.fetchedAt) || 0))[0] || null;
+}
+
+/**
  * Pick the model ids out of the cache files the caller read.
  *
  * `entries` is every parsed `<configDir>/cache/model-catalog/*.json`. There can
@@ -104,11 +117,7 @@ export function isSupportedCatalog(parsed, surface = CLAUDE_CODE_SURFACE) {
  * record at a retired id.
  */
 export function selectCatalogModels(entries, { cliVersion = '', surface = CLAUDE_CODE_SURFACE } = {}) {
-  const usable = (Array.isArray(entries) ? entries : [])
-    .filter((entry) => isSupportedCatalog(entry, surface))
-    .sort((a, b) => (Number(b.fetchedAt) || 0) - (Number(a.fetchedAt) || 0));
-
-  const freshest = usable[0];
+  const freshest = freshestCatalog(entries, surface);
   if (!freshest) return [];
 
   const ids = freshest.catalog.config.models
@@ -128,9 +137,7 @@ export function selectCatalogModels(entries, { cliVersion = '', surface = CLAUDE
  * on its own schedule whenever a session runs; PortOS never writes this file.
  */
 export function catalogAge(entries, { surface = CLAUDE_CODE_SURFACE } = {}) {
-  const freshest = (Array.isArray(entries) ? entries : [])
-    .filter((entry) => isSupportedCatalog(entry, surface))
-    .sort((a, b) => (Number(b.fetchedAt) || 0) - (Number(a.fetchedAt) || 0))[0];
+  const freshest = freshestCatalog(entries, surface);
   return freshest ? Number(freshest.fetchedAt) || null : null;
 }
 
