@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
@@ -22,7 +22,9 @@ import {
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useLocalStorageBool } from '../../../hooks';
+import { usePagedCollection } from '../../../hooks/usePagedCollection';
 
 import {
   DESTINATIONS,
@@ -60,8 +62,9 @@ export default function InboxTab({ onRefresh, settings }) {
   // A bare repo URL is cloned on capture, which unlocks the two post-clone
   // agent opt-ins (malware scan / repo study) — shared with Quick Capture.
   const repoIntake = useRepoIntake(inputText, linkNote);
-  const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [serverCounts, setServerCounts] = useState(null);
+  const [optimisticEntries, setOptimisticEntries] = useState([]);
+  const deletedIdsRef = useRef(new Set());
   const [showNeedsReview, setShowNeedsReview] = useState(true);
   const [showFiled, setShowFiled] = useState(true);
   const [fixingId, setFixingId] = useState(null);
@@ -74,20 +77,47 @@ export default function InboxTab({ onRefresh, settings }) {
   const inputRef = useRef(null);
   const tempIdCounter = useRef(0);
 
-  const fetchInbox = useCallback(async () => {
-    const data = await api.getBrainInbox().catch(() => ({ entries: [] }));
-    const serverEntries = data.entries || [];
-    // Preserve any optimistic entries still pending API confirmation
-    setEntries(prev => {
-      const pending = prev.filter(e => e.id.startsWith('_pending_'));
-      return pending.length ? [...pending, ...serverEntries] : serverEntries;
-    });
-    setLoading(false);
+  const fetchInboxPage = useCallback(async ({ cursor, signal }) => {
+    const data = await api.getBrainInbox({ cursor, limit: 50, signal }).catch(() => ({ items: [], entries: [] }));
+    if (data.counts) {
+      setServerCounts(data.counts);
+    }
+    const items = data.items || data.entries || [];
+    return {
+      items,
+      total: data.total ?? items.length,
+      nextCursor: data.nextCursor ?? null
+    };
   }, []);
 
+  const paged = usePagedCollection(fetchInboxPage);
+
+  const entries = useMemo(() => {
+    const deleted = deletedIdsRef.current;
+    const map = new Map();
+    for (const entry of optimisticEntries) {
+      if (!deleted.has(entry.id)) {
+        map.set(entry.id, entry);
+      }
+    }
+    for (const item of paged.items) {
+      if (!deleted.has(item.id)) {
+        if (!map.has(item.id)) {
+          map.set(item.id, item);
+        }
+      }
+    }
+    return [...map.values()];
+  }, [optimisticEntries, paged.items]);
+
+  // Listen for reconnect to reconcile missed events
   useEffect(() => {
-    fetchInbox();
-  }, [fetchInbox]);
+    const handleConnect = () => {
+      paged.refreshFirst();
+    };
+    socket.on('connect', handleConnect);
+    return () => socket.off('connect', handleConnect);
+  }, [paged.refreshFirst]);
 
   // Listen for background classification results
   useEffect(() => {
@@ -99,13 +129,13 @@ export default function InboxTab({ onRefresh, settings }) {
       } else {
         toast(`Low confidence (${Math.round((data.confidence || 0) * 100)}%) — needs review`, { icon: '🤔' });
       }
-      fetchInbox();
+      paged.refreshFirst();
       onRefresh?.();
     };
 
     socket.on('brain:classified', handleClassified);
     return () => socket.off('brain:classified', handleClassified);
-  }, [fetchInbox, onRefresh]);
+  }, [paged.refreshFirst, onRefresh]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -130,7 +160,7 @@ export default function InboxTab({ onRefresh, settings }) {
       ...(asCreative ? { creative: true } : {})
     };
     setInputText('');
-    setEntries(prev => [optimisticEntry, ...prev]);
+    setOptimisticEntries(prev => [optimisticEntry, ...prev]);
 
     // `intakeFor` re-derives from the submitted text, so a sticky tick can't ride
     // along on a capture that is no longer a repo URL.
@@ -141,14 +171,19 @@ export default function InboxTab({ onRefresh, settings }) {
     if (note) captureOptions.note = note;
     const result = await api.captureBrainThought(text, undefined, undefined, captureOptions, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to capture thought');
-      setEntries(prev => prev.filter(e => e.id !== tempId));
+      setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
       return null;
     });
 
     if (inputRef.current) inputRef.current.dataset.lastSubmit = '';
 
     if (result) {
-      setEntries(prev => prev.map(e => e.id === tempId ? result.inboxLog : e));
+      if (result.inboxLog) {
+        setOptimisticEntries(prev => prev.map(e => e.id === tempId ? result.inboxLog : e));
+      } else {
+        setOptimisticEntries(prev => prev.filter(e => e.id !== tempId));
+      }
+      paged.refreshFirst();
       // A capture that was just a URL is filed to Links synchronously — no
       // brain:classified event follows, so announce the outcome here.
       if (result.link) toast.success(result.message || 'Saved to Links');
@@ -166,7 +201,7 @@ export default function InboxTab({ onRefresh, settings }) {
 
     if (result) {
       toast.success(`Filed to ${destination}`);
-      fetchInbox();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -182,7 +217,7 @@ export default function InboxTab({ onRefresh, settings }) {
 
     if (result) {
       toast.success(result.message || 'Reclassified');
-      fetchInbox();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -202,7 +237,7 @@ export default function InboxTab({ onRefresh, settings }) {
       toast.success(`Moved to ${fixDestination}`);
       setFixingId(null);
       setFixDestination('');
-      fetchInbox();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -227,7 +262,7 @@ export default function InboxTab({ onRefresh, settings }) {
       toast.success('Entry updated');
       setEditingId(null);
       setEditText('');
-      fetchInbox();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -238,16 +273,21 @@ export default function InboxTab({ onRefresh, settings }) {
   };
 
   const handleDelete = async (entryId) => {
+    deletedIdsRef.current.add(entryId);
+    setOptimisticEntries(prev => prev.filter(e => e.id !== entryId));
     let failed = false;
     await api.deleteBrainInboxEntry(entryId, { silent: true }).catch(err => {
       toast.error(err.message || 'Failed to delete');
       failed = true;
     });
-    if (failed) return;
+    if (failed) {
+      deletedIdsRef.current.delete(entryId);
+      return;
+    }
 
     toast.success('Entry deleted');
     setConfirmingDeleteId(null);
-    setEntries(prev => prev.filter(e => e.id !== entryId));
+    paged.refreshFirst();
     onRefresh?.();
   };
 
@@ -259,7 +299,7 @@ export default function InboxTab({ onRefresh, settings }) {
 
     if (result) {
       toast.success('Marked as done');
-      fetchInbox();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -303,7 +343,7 @@ export default function InboxTab({ onRefresh, settings }) {
     navigate('/catalog/ingest', { state: { prefill } });
   };
 
-  if (loading) {
+  if (!paged.loaded && paged.loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <BrailleSpinner text="Loading" />
@@ -314,11 +354,11 @@ export default function InboxTab({ onRefresh, settings }) {
   // Compact per-status overview rendered in the desktop rail so the page reads
   // as a dashboard rather than a centered document.
   const overviewStats = [
-    { label: 'Needs review', value: needsReviewEntries.length, className: 'text-port-warning' },
-    { label: 'Classifying', value: classifyingEntries.length, className: 'text-port-accent' },
-    { label: 'Filed', value: filedEntries.length, className: 'text-port-success' },
-    { label: 'Done', value: doneEntries.length, className: 'text-gray-400' },
-    { label: 'Errors', value: errorEntries.length, className: 'text-port-error' }
+    { label: 'Needs review', value: serverCounts?.needs_review ?? needsReviewEntries.length, className: 'text-port-warning' },
+    { label: 'Classifying', value: serverCounts?.classifying ?? classifyingEntries.length, className: 'text-port-accent' },
+    { label: 'Filed', value: serverCounts ? ((serverCounts.filed || 0) + (serverCounts.corrected || 0)) : filedEntries.length, className: 'text-port-success' },
+    { label: 'Done', value: serverCounts?.done ?? doneEntries.length, className: 'text-gray-400' },
+    { label: 'Errors', value: serverCounts?.error ?? errorEntries.length, className: 'text-port-error' }
   ];
 
   return (
@@ -430,7 +470,7 @@ export default function InboxTab({ onRefresh, settings }) {
             <span className="text-sm font-medium text-gray-300">Overview</span>
             <button
               type="button"
-              onClick={() => { fetchInbox(); onRefresh?.(); }}
+              onClick={() => { paged.refreshFirst(); onRefresh?.(); }}
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
               title="Refresh inbox"
               aria-label="Refresh inbox"
@@ -457,7 +497,7 @@ export default function InboxTab({ onRefresh, settings }) {
             >
               {showNeedsReview ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               <AlertCircle size={16} />
-              Needs Review ({needsReviewEntries.length})
+              Needs Review ({serverCounts?.needs_review ?? needsReviewEntries.length})
             </button>
 
             {showNeedsReview && (
@@ -961,6 +1001,14 @@ export default function InboxTab({ onRefresh, settings }) {
             )}
           </div>
         )}
+
+        {/* Infinite Scroll Footer */}
+        <InfiniteScrollFooter
+          hasMore={paged.hasMore}
+          loading={paged.loading}
+          error={paged.error}
+          onLoadMore={paged.loadMore}
+        />
       </div>
     </div>
   );

@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import MemoryTab from './MemoryTab';
 
 const api = vi.hoisted(() => ({
-  getBrainMemories: vi.fn(), getMemoryBackendStatus: vi.fn().mockResolvedValue({ backend: 'postgres' }),
+  getBrainMemories: vi.fn(), getBrainMemory: vi.fn().mockResolvedValue(null), getMemoryBackendStatus: vi.fn().mockResolvedValue({ backend: 'postgres' }),
   getChatgptArchive: vi.fn(), deleteBrainMemory: vi.fn()
 }));
 vi.mock('../../../services/api', () => api);
@@ -118,6 +118,7 @@ describe('Brain deletion preserves the list', () => {
     const region = screen.getByRole('region', { name: 'Memory entries' });
     const search = screen.getByRole('textbox', { name: /Search/ });
     fireEvent.change(search, { target: { value: 'Example' } });
+    const callsBeforeDelete = api.getBrainMemories.mock.calls.length;
     fireEvent.click(screen.getAllByRole('button', { name: 'Delete', exact: true })[0]);
     const confirm = screen.getByTitle('Confirm delete');
     confirm.focus();
@@ -133,7 +134,8 @@ describe('Brain deletion preserves the list', () => {
     expect(screen.getByRole('region', { name: 'Memory entries' })).toBe(region);
     expect(screen.getByRole('button', { name: 'Read Example second' })).toBe(second);
     expect(search.value).toBe('Example');
-    expect(api.getBrainMemories).toHaveBeenCalledTimes(1);
+    // Deletion collapses the row locally without triggering an additional fetch from the server
+    expect(api.getBrainMemories).toHaveBeenCalledTimes(callsBeforeDelete);
   });
 
   it('keeps a failed deletion visible and allows retry with reduced motion', async () => {

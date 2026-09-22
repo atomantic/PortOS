@@ -803,21 +803,67 @@ async function appendJsonl(type, record) {
 // API (capturedAt sort, status counts) on top of the generic entity primitives.
 
 /**
+ * One page of inbox entries (newest-first by capturedAt), optional status/search filters and cursor pagination.
+ */
+export async function getInboxPage(options = {}) {
+  const { status, search, cursor, limit = 50, offset = 0 } = options;
+  const boundedLimit = Math.min(Math.max(1, limit), 100);
+  const rows = await resolveRecordIndex(summaryIndex, 'inbox', 0);
+  const searchLower = search ? search.trim().toLowerCase() : null;
+
+  const matching = rows.filter(([id, summary]) => {
+    if (!summary) return false;
+    if (status && summary.status !== status) return false;
+    if (searchLower) {
+      const textMatch = summary.capturedText?.toLowerCase().includes(searchLower);
+      const titleMatch = summary.title?.toLowerCase().includes(searchLower);
+      if (!textMatch && !titleMatch) return false;
+    }
+    return true;
+  });
+
+  // Bulk captures can share one timestamp. The id tiebreak keeps adjacent
+  // cursor/offset pages stable so an entry is never duplicated or skipped.
+  matching.sort(([idA, a], [idB, b]) => (b.capturedAtMs - a.capturedAtMs) || idA.localeCompare(idB));
+  const total = matching.length;
+
+  const keyOf = (id, s) => `${String(s.capturedAtMs).padStart(15, '0')}_${id}`;
+
+  let remaining = matching;
+  if (cursor) {
+    remaining = matching.filter(([id, s]) => keyOf(id, s) < cursor);
+  } else if (offset > 0) {
+    remaining = matching.slice(offset);
+  }
+
+  const pageRows = remaining.slice(0, boundedLimit);
+  const pageIds = pageRows.map(([id]) => id);
+  const page = await Promise.all(pageIds.map((id) => getById('inbox', id)));
+  const entries = page.filter(Boolean);
+
+  const hasMore = remaining.length > boundedLimit;
+  const nextCursor = hasMore && pageRows.length > 0
+    ? keyOf(pageRows[pageRows.length - 1][0], pageRows[pageRows.length - 1][1])
+    : null;
+
+  return {
+    entries,
+    items: entries,
+    total,
+    nextCursor
+  };
+}
+
+/**
  * Get all inbox log entries (newest-first by capturedAt), optional status filter.
  */
 export async function getInboxLog(options = {}) {
-  const { status, limit = 50, offset = 0 } = options;
-  const rows = await resolveRecordIndex(summaryIndex, 'inbox', 0);
-  const matching = rows.filter(([, summary]) => summary && (!status || summary.status === status));
-
-  // Bulk captures can share one timestamp. The id tiebreak keeps adjacent
-  // offset pages stable so an entry is never duplicated or skipped.
-  matching.sort(([idA, a], [idB, b]) => (b.capturedAtMs - a.capturedAtMs) || idA.localeCompare(idB));
-
-  const pageIds = matching.slice(offset, offset + limit).map(([id]) => id);
-  const page = await Promise.all(pageIds.map((id) => getById('inbox', id)));
-  // A record deleted between resolving the index and loading its body is null.
-  return page.filter(Boolean);
+  const page = await getInboxPage(options);
+  const arr = page.entries;
+  arr.total = page.total;
+  arr.nextCursor = page.nextCursor;
+  arr.items = page.items;
+  return arr;
 }
 
 /**
@@ -1088,9 +1134,51 @@ const projectSummary = (record) => (record && !isTombstone(record)
   ? {
     status: record.status,
     capturedAtMs: safeDate(record.capturedAt),
+    capturedText: record.capturedText || record.text || '',
+    title: record.title || record.extracted?.title || record.extracted?.name || '',
   }
   : null);
 const summaryIndex = createRecordIndex(projectSummary);
+
+export const MEMORY_LIST_CONTENT_CHARS = 300;
+
+/**
+ * Compact row projection for memory cards. Transcripts and long notes can reach
+ * thousands of characters; the card only renders a short teaser, so clamp the
+ * content at the transport boundary to keep list pages bounded. Full records
+ * remain available from GET /api/brain/memories/:id.
+ */
+export function toMemoryListItem(memory) {
+  if (!memory) return memory;
+  if (typeof memory.content !== 'string') return memory;
+  if (memory.content.length <= MEMORY_LIST_CONTENT_CHARS) return memory;
+  return {
+    ...memory,
+    content: memory.content.slice(0, MEMORY_LIST_CONTENT_CHARS),
+    contentTruncated: true,
+  };
+}
+
+const projectEntitySummary = (record) => (record && !isTombstone(record)
+  ? {
+    status: record.status || null,
+    archived: !!record.archived,
+    sortKey: memoryRecencyMs(record) || safeDate(record.updatedAt || record.createdAt),
+    searchText: [
+      record.name,
+      record.title,
+      record.context,
+      typeof record.content === 'string' ? record.content.slice(0, 500) : '',
+      record.notes,
+      record.oneLiner,
+      record.nextAction,
+      record.mood,
+      ...(Array.isArray(record.tags) ? record.tags : []),
+      ...(Array.isArray(record.followUps) ? record.followUps : []),
+    ].filter(Boolean).join(' ').toLowerCase(),
+  }
+  : null);
+const entitySummaryIndex = createRecordIndex(projectEntitySummary);
 
 const resolveLinkSummaries = () => resolveRecordIndex(linkSummaryIndex, 'links', 0);
 
@@ -1142,6 +1230,66 @@ export async function getLinkByUrl(url) {
   const rows = await resolveLinkSummaries();
   const hit = rows.find(([, summary]) => summary && summary.url === url);
   return hit ? readLink(getById('links', hit[0])) : null;
+}
+
+/**
+ * One page of entity records (people, projects, ideas, admin, memories) with
+ * stable cursor pagination, query-wide search, status filter, and compact row
+ * projections for memory list items.
+ */
+export async function getEntityPage(type, options = {}) {
+  const {
+    status,
+    search,
+    cursor,
+    limit = 25,
+    offset = 0,
+    includeArchived = false,
+  } = options;
+  const boundedLimit = Math.min(Math.max(1, limit), 100);
+  const rows = await resolveRecordIndex(entitySummaryIndex, type, 0);
+  const searchLower = search ? search.trim().toLowerCase() : null;
+
+  const matching = rows.filter(([, summary]) => {
+    if (!summary) return false;
+    if (!includeArchived && summary.archived) return false;
+    if (status && summary.status !== status) return false;
+    if (searchLower && !summary.searchText.includes(searchLower)) return false;
+    return true;
+  });
+
+  // Sort newest-first with id as stable tiebreak
+  matching.sort(([idA, a], [idB, b]) => (b.sortKey - a.sortKey) || idA.localeCompare(idB));
+  const total = matching.length;
+
+  const keyOf = (id, s) => `${String(s.sortKey).padStart(15, '0')}_${id}`;
+
+  let remaining = matching;
+  if (cursor) {
+    remaining = matching.filter(([id, s]) => keyOf(id, s) < cursor);
+  } else if (offset > 0) {
+    remaining = matching.slice(offset);
+  }
+
+  const pageRows = remaining.slice(0, boundedLimit);
+  const pageIds = pageRows.map(([id]) => id);
+  const rawPage = await Promise.all(pageIds.map((id) => getById(type, id)));
+  let items = rawPage.filter(Boolean);
+
+  if (type === 'memories') {
+    items = items.map(toMemoryListItem);
+  }
+
+  const hasMore = remaining.length > boundedLimit;
+  const nextCursor = hasMore && pageRows.length > 0
+    ? keyOf(pageRows[pageRows.length - 1][0], pageRows[pageRows.length - 1][1])
+    : null;
+
+  return {
+    items,
+    total,
+    nextCursor,
+  };
 }
 
 // Buckets (bookmark groups for links)

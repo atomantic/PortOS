@@ -12,12 +12,15 @@ vi.mock('../services/brain.js', () => ({
   // Capture & Inbox
   captureThought: vi.fn(),
   getInboxLog: vi.fn(),
+  getInboxPage: vi.fn(),
   getInboxLogById: vi.fn(),
   getInboxLogCounts: vi.fn(),
   resolveReview: vi.fn(),
   fixClassification: vi.fn(),
   retryClassification: vi.fn(),
   markInboxSentToCatalog: vi.fn(),
+  getEntityPage: vi.fn(),
+  toMemoryListItem: vi.fn((m) => m),
   // People
   getPeople: vi.fn(),
   getPersonById: vi.fn(),
