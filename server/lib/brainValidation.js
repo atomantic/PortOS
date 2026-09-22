@@ -324,8 +324,20 @@ export const settingsUpdateInputSchema = partialWithoutDefaults(brainSettingsSch
 // Inbox query schema
 export const inboxQuerySchema = z.object({
   status: inboxStatusEnum.optional(),
+  search: z.string().max(500).optional(),
+  cursor: z.preprocess((val) => (val === '' || val === null || val === 'null' ? undefined : val), z.string().max(512).optional()),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   offset: z.coerce.number().int().min(0).optional().default(0)
+});
+
+// Entity collection query schema (people, projects, ideas, admin, memories)
+export const entityQuerySchema = z.object({
+  status: z.string().max(50).optional(),
+  search: z.string().max(500).optional(),
+  cursor: z.preprocess((val) => (val === '' || val === null || val === 'null' ? undefined : val), z.string().max(512).optional()),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(25),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+  includeArchived: z.coerce.boolean().optional().default(false)
 });
 
 // --- Extracted field schemas for AI classification ---
