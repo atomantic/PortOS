@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import express from 'express';
 import { createServer } from 'http';
 import { mkdtemp, rm, readdir, readFile, unlink, writeFile } from 'fs/promises';
@@ -96,12 +96,20 @@ const PNG_FIXTURE = Buffer.from(
   'hex',
 );
 
-beforeAll(async () => {
-  imagesSandbox = await mkdtemp(join(tmpdir(), 'portos-imagegen-multipart-images-'));
-  refsSandbox = await mkdtemp(join(tmpdir(), 'portos-imagegen-multipart-refs-'));
-  ({ default: imageGenRoutes } = await import('./imageGen.js'));
-  ({ enqueueJob } = await import('../services/mediaJobQueue/index.js'));
-});
+// The sandbox roots and the route import are resolved at FILE SCOPE, not in a
+// `beforeAll` hook (#7951). `./imageGen.js` is a large closure, and its first
+// cold load pays vitest's transform pipeline for the whole graph: measured at
+// 29.8s under a full-suite run against ~445ms in a quiet process. Inside a hook
+// that is charged against `hookTimeout` and the file fails with "Hook timed out
+// in 10000ms" and zero failing assertions; at file scope the same work happens
+// during module collection, which is not budgeted. The ordering the hook
+// provided is preserved — top-level `await` runs these statements in sequence,
+// so both sandboxes exist before the `fileUtils.js` mock factory reads them on
+// the route's first import. Guarded by `lib/importScoping.test.js`.
+imagesSandbox = await mkdtemp(join(tmpdir(), 'portos-imagegen-multipart-images-'));
+refsSandbox = await mkdtemp(join(tmpdir(), 'portos-imagegen-multipart-refs-'));
+({ default: imageGenRoutes } = await import('./imageGen.js'));
+({ enqueueJob } = await import('../services/mediaJobQueue/index.js'));
 
 afterAll(async () => {
   await rm(imagesSandbox, { recursive: true, force: true });

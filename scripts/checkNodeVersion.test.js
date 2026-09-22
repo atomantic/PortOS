@@ -76,7 +76,20 @@ describe('satisfiesMinNode', () => {
   });
 
   it('defaults to the running interpreter, which must itself satisfy the range', () => {
-    expect(satisfiesMinNode()).toBe(true);
+    // Keep the assertion — CI must run a supported Node, and every other case
+    // here passes an explicit version, so this is the only one that proves the
+    // no-argument default reads `process.versions.node` at all. What it must
+    // NOT do is fail as a bare `expected false to be true` (#7951): on a
+    // developer machine one release behind, that reads like a regression in the
+    // branch under test and costs a round of triage in a suite the change never
+    // touched. Name the environment instead.
+    expect(
+      satisfiesMinNode(),
+      `This interpreter is Node ${process.versions.node}, which does not satisfy `
+        + `package.json engines.node (${SUPPORTED_NODE_RANGE}). That is an environment `
+        + 'mismatch on this machine, not a defect in the code under test — upgrade Node '
+        + 'to a supported release. CI runs a supported Node, where this passes.',
+    ).toBe(true);
   });
 });
 
