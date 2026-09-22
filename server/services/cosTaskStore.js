@@ -670,6 +670,7 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
     if (shouldStripTaskTargetBranch(updatedMetadata)) delete updatedMetadata.existingBranch;
     delete updatedMetadata.resumedFromAgentId;
     delete updatedMetadata.resumeWorktreePath;
+    delete updatedMetadata.claimResumeInPlace;
   }
 
   // Stamp the moment a RUNNING task is requeued (#3376). `in_progress → pending`

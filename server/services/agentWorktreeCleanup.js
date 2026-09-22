@@ -14,9 +14,10 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
-import { addTask, forceSpawnTask, updateTask } from './cos.js';
+import { addTask, forceSpawnTask, getAgents, updateTask } from './cos.js';
 import * as git from './git.js';
-import { removeWorktree, classifyWorktreeDirt } from './worktreeManager.js';
+import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeManager.js';
+import { claimContinuationPointer } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
@@ -685,8 +686,37 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
  * @param {{task: object, agentId: string, agentMetadata: object}} params
  * @returns {Promise<object>} metadata patch to merge into an `updateTask` call
  */
+/**
+ * A claim-flow relaunch continues the `claim-*` worktree the paused run already
+ * cut for its pinned target. Resolved before the CoS-worktree bail: claim agents
+ * record `isWorktree: false` because PortOS did not provision the directory, and
+ * that bail is what used to requeue the relaunch onto a clean checkout.
+ *
+ * Fails closed (null → the caller keeps the ordinary "start clean" answer) when
+ * the agent list cannot be read. An empty list would look like "nobody is in
+ * that tree."
+ */
+async function resolveClaimContinuationPatch({ task, agentId, agentMetadata }) {
+  const source = agentMetadata?.sourceWorkspace || agentMetadata?.workspacePath;
+  if (!source) return null;
+  const agents = await getAgents().catch(() => null);
+  if (!agents) return null;
+  const worktrees = await listWorktrees(source).catch(() => []);
+  const pointer = claimContinuationPointer({
+    task, agentId, worktrees, agents, worktreesRoot: PATHS.worktrees,
+  });
+  if (!pointer) return null;
+  emitLog('info', `🔁 Task ${task.id} will resume in the claim worktree ${pointer.resumeWorktreePath} (${pointer.existingBranch}) instead of starting clean`, {
+    taskId: task.id, agentId, branchName: pointer.existingBranch, worktreePath: pointer.resumeWorktreePath,
+  });
+  return pointer;
+}
+
 export async function resolveTaskResumePatch({ task, agentId, agentMetadata }) {
   if (!task?.id || !agentId) return {};
+  if (isTruthyMeta(task.metadata?.discardWorktree)) return {};
+  const claimContinuation = await resolveClaimContinuationPatch({ task, agentId, agentMetadata });
+  if (claimContinuation) return claimContinuation;
   // Persistent feature-agent worktrees are never torn down, and throwaway
   // reasoning worktrees are deliberately discarded — neither leaves work to resume.
   // These runs are NOT evaluated at all, which is why they return the empty patch
@@ -694,7 +724,6 @@ export async function resolveTaskResumePatch({ task, agentId, agentMetadata }) {
   // worktree (see agentWorkspacePrep's degrade path) must KEEP its pointer, since
   // the tree it names is still sitting there for the attempt after this one.
   if (!agentMetadata?.isWorktree || agentMetadata?.isPersistentWorktree) return {};
-  if (isTruthyMeta(task.metadata?.discardWorktree)) return {};
 
   // The agent's own recorded path is authoritative; the `<worktrees>/<agentId>`
   // convention is the fallback for a record written before it was stamped (same
@@ -749,7 +778,12 @@ export function resumePointerMetadata(pointer, agentId, task) {
   // literal string `"null"` — which reads back as a truthy `existingBranch` and
   // sends the next attempt looking for a branch named "null". The keys are still
   // present on the returned patch, so callers can tell a clear from a no-op.
-  return { existingBranch: undefined, resumedFromAgentId: undefined, resumeWorktreePath: undefined };
+  return {
+    existingBranch: undefined,
+    resumedFromAgentId: undefined,
+    resumeWorktreePath: undefined,
+    claimResumeInPlace: undefined,
+  };
 }
 
 /**

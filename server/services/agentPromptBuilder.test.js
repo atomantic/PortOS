@@ -453,6 +453,42 @@ describe('claim-flow completion handoff', () => {
     expect(prompt).toContain('do not wait for a human or require MERGED status');
   });
 
+  it('tells a relaunched claim to finish the worktree the previous run already started', () => {
+    const prompt = buildLightContextPrompt(
+      makeTask({
+        description: 'Claim issue 42',
+        metadata: {
+          claimFlow: true,
+          useWorktree: false,
+          openPR: false,
+          claimResumeInPlace: true,
+          existingBranch: 'claim/issue-42',
+          resumeWorktreePath: '/data/cos/worktrees/claim-portos-issue-42',
+          resumedFromAgentId: 'agent-previous',
+          prompt: 'if the issue is already in progress, exit cleanly',
+        },
+      }),
+      '/repo',
+      {
+        worktreePath: '/data/cos/worktrees/claim-portos-issue-42',
+        branchName: 'claim/issue-42',
+        existingBranch: true,
+        claimResumeInPlace: true,
+      },
+      isTruthyMeta,
+      { isTui: true, providerId: 'grok-tui', providerCommand: 'grok' },
+    );
+
+    const overrideAt = prompt.indexOf('## Relaunch — finish the claim already started');
+    const exitAt = prompt.indexOf('if the issue is already in progress, exit cleanly');
+    expect(overrideAt).toBeGreaterThan(-1);
+    expect(exitAt).toBeGreaterThan(overrideAt);
+    expect(prompt).toContain('`/data/cos/worktrees/claim-portos-issue-42`');
+    expect(prompt).toContain('`claim/issue-42`');
+    expect(prompt).toContain('`agent-previous`');
+    expect(prompt).toContain('finish this task\'s existing claim');
+  });
+
   it('keeps self-managed claim work out of the generic false/false handoff', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ metadata: { claimFlow: true, useWorktree: false, openPR: false, simplify: true } }),

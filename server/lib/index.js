@@ -442,6 +442,7 @@ export * from './taskRequeue.js';
 export * from './taskRetryHold.js';
 export * from './taskStatusTransition.js';
 export * from './taskTargetBranch.js';
+export * from './claimContinuation.js';
 export * from './scheduledTaskTypes.js';
 export * from './scheduleRunOrder.js';
 export * from './taskTargetScope.js';
