@@ -11,6 +11,8 @@
  * read that the live-activity inspector polls only while it is visible.
  */
 
+import { isTestRunner } from '../lib/runtimeEnv.js';
+
 const ACTIVITY_SOURCES = new Set([
   'agents', 'media', 'imageTo3d', 'llm', 'mind', 'appOperations', 'backup', 'update',
 ]);
@@ -22,7 +24,7 @@ let seq = 0;
 let timer = null;
 let pending = null;
 const notes = [];
-const captureTestNotes = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
+const captureTestNotes = isTestRunner();
 let armed = false;
 let previousMind = null;
 const unsubs = [];

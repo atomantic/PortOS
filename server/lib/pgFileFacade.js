@@ -4,7 +4,7 @@
  * PortOS has six near-identical storage dispatchers (pipeline series/issues,
  * story builder, universe builder, catalog user-types, writers room) that each
  * pick between a PostgreSQL backend (normal installs) and a file/escape-hatch
- * backend (MEMORY_BACKEND=file or NODE_ENV=test — both UNSUPPORTED for
+ * backend (MEMORY_BACKEND=file or isTestRunner() — both UNSUPPORTED for
  * production). They all reimplemented the same three pieces: the env predicate
  * that chooses the backend, the promise-memoized lazy selection, and the PG
  * bring-up sequence (health check → ensureSchema → one-time migration → import
@@ -21,13 +21,14 @@
  */
 
 import { checkHealth, ensureSchema } from './db.js';
+import { isTestRunner } from './runtimeEnv.js';
 
 /**
  * True when the file/escape-hatch backend should be used instead of PostgreSQL.
  * Dev/test only — see the Storage backend policy in AGENTS.md.
  */
 export function isFileBackend() {
-  return process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
+  return process.env.MEMORY_BACKEND === 'file' || isTestRunner();
 }
 
 /**
@@ -103,7 +104,7 @@ export function createPgFileFacade({ makeFile, makePg, isFile = isFileBackend })
  *
  * Test-mode detection stays per-store (`isTestMode`) because the stores
  * genuinely differ today: Sprites keys on `isTestRunner()` (`NODE_ENV==='test'`
- * OR `VITEST` — the stronger signal), CD/Music Video on `NODE_ENV==='test'` only
+ * OR `VITEST` — the stronger signal), CD/Music Video on `isTestRunner()` too
  * via the shared `isFileBackend()`. Unifying on `isTestRunner()` would be a
  * strengthening, but it changes what their existing backend-selection suites
  * observe (vitest always sets `VITEST`), so semantics are preserved exactly here
