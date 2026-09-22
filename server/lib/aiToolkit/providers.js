@@ -1,6 +1,7 @@
 import { composeBootstrapSpawn } from './internal/credentialBootstrap.js';
 import { expandModePair, modeSiblingPayload, providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
-import { readFile, rename } from 'fs/promises';
+import { readFile, readdir, rename } from 'fs/promises';
+import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { join, dirname, delimiter, isAbsolute } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
@@ -28,6 +29,12 @@ import { canRefreshModels, ollamaRefreshGroupKey, resolveModelFetcher } from './
 import { modelCatalogUpdate, modelContextWindowPatch, parseModelCatalog, toModelCatalog } from './internal/modelCatalog.js';
 import { normalizeModelAccess } from './internal/modelAccess.js';
 import { isCompositeProviderId } from './internal/providerRef.js';
+import {
+  CLAUDE_CATALOG_SUBPATH,
+  catalogAge,
+  claudeConfigDir,
+  selectCatalogModels,
+} from './internal/claudeCodeCatalog.js';
 
 // Re-exported (rather than defined here) so the model-fetcher table can key its
 // ollama row on the same predicate without importing back into this module.
@@ -1879,24 +1886,73 @@ export function createProviderService(config = {}) {
       return checked.filter(Boolean);
     },
 
-    async _fetchAnthropicModels(_provider) {
-      return [
-        'claude-opus-5',
-        'claude-opus-4-8',
-        'claude-opus-4-7',
-        'claude-sonnet-5',
-        'claude-sonnet-4-6',
-        'claude-opus-4-5-20251101',
-        'claude-sonnet-4-5-20250929',
-        'claude-sonnet-4-20250514',
-        'claude-haiku-4-5-20251001',
-        'claude-3-5-haiku-latest',
-        'claude-3-5-sonnet-20241022',
-        'claude-3-5-sonnet-20240620',
-        'claude-3-opus-20240229',
-        'claude-3-sonnet-20240229',
-        'claude-3-haiku-20240307'
-      ];
+    /**
+     * Read the model catalog the installed Claude Code caches for THIS account.
+     *
+     * Every other vendor in the fetcher table answers a `models` subcommand;
+     * `claude` ships none, so this reads the file the binary writes instead —
+     * `<configDir>/cache/model-catalog/*.json`, refreshed by the CLI whenever a
+     * session runs. See internal/claudeCodeCatalog.js for why that file and not
+     * `/v1/models` (which needs an API key a subscription record does not have).
+     *
+     * THROWS rather than falling back to a hardcoded list, the same posture
+     * `_execCliModelList` documents: `refreshProviderModels` persists whatever
+     * comes back and the card toasts "Models refreshed", so degrading to a
+     * static list would silently re-stamp the stale answer the user clicked
+     * Refresh to escape. Throwing leaves the stored catalog untouched and puts
+     * the real cause — "run `claude` once so it caches its catalog" — in the
+     * toast. The shipped `data.reference/providers.json` list remains the SEED
+     * for a fresh install, exactly as the antigravity catalog is.
+     */
+    async _fetchAnthropicModels(provider) {
+      const env = { ...process.env, ...provider?.envVars };
+      const configDir = claudeConfigDir(env, homedir());
+      if (!configDir) throw new Error('Cannot locate the Claude Code config directory (no HOME and no CLAUDE_CONFIG_DIR)');
+      const catalogDir = join(configDir, ...CLAUDE_CATALOG_SUBPATH);
+
+      const files = await readdir(catalogDir).catch(() => null);
+      if (!files) {
+        throw new Error(`Claude Code has not cached a model catalog yet (${catalogDir} is missing) — run \`claude\` once, then refresh`);
+      }
+
+      const entries = (await Promise.all(
+        files.filter((name) => name.endsWith('.json')).map(async (name) => {
+          const raw = await readFile(join(catalogDir, name), 'utf8').catch(() => null);
+          if (raw === null) return null;
+          try {
+            return JSON.parse(raw);
+          } catch {
+            // One unreadable file must not lose a sibling that parses — the
+            // directory holds one entry per signed-in account.
+            return null;
+          }
+        }),
+      )).filter(Boolean);
+
+      const models = selectCatalogModels(entries, { cliVersion: await this._claudeCliVersion(provider) });
+      if (models.length === 0) {
+        throw new Error(`No usable Claude Code model catalog in ${catalogDir} — run \`claude\` once, then refresh`);
+      }
+
+      const age = catalogAge(entries);
+      console.log(`📋 Claude Code catalog: ${models.length} models (cached ${age ? new Date(age).toISOString() : 'unknown'})`);
+      return models;
+    },
+
+    /**
+     * The installed binary's version, used only to drop catalog entries whose
+     * `min_claude_code_version` this build cannot select. Best-effort: an
+     * unreadable version means "no floor" (see `versionAtLeast`), so a failed
+     * probe widens the list rather than emptying it.
+     */
+    async _claudeCliVersion(provider) {
+      const spawned = resolveProbeSpawn(provider, 'claude', ['--version']);
+      const { command, args } = prepareWindowsSafeSpawn(spawned.command, spawned.args);
+      const { stdout } = await execFileAsync(command, args, {
+        timeout: 10000,
+        env: { ...process.env, ...provider?.envVars },
+      }).catch(() => ({ stdout: '' }));
+      return (/(\d+\.\d+\.\d+)/.exec(stdout || '') || [])[1] || '';
     },
 
     async _fetchGeminiModels(provider) {

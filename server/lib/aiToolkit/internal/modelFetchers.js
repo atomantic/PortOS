@@ -1,4 +1,5 @@
 import { commandBasename } from './commandBasename.js';
+import { usesThirdPartyBackend } from './claudeCodeCatalog.js';
 /**
  * The single per-vendor table behind model refresh.
  *
@@ -143,11 +144,13 @@ export const MODEL_FETCHERS = [
   },
   {
     key: 'claude',
-    // Raw-string equality, NOT a basename: `_fetchAnthropicModels` returns a
-    // static list, so widening this to every binary named `claude` on disk is a
-    // separate call from widening the vendors that probe their own CLI.
-    cliMatch: (p) => p?.command === 'claude',
-    cliNameMatch: (p) => displayName(p).includes('claude'),
+    // Raw-string equality, NOT a basename. `_fetchAnthropicModels` reads the
+    // catalog the INSTALLED Claude Code caches for the signed-in account, so a
+    // differently-named binary on disk would be answered for by whichever
+    // `claude` owns `~/.claude` — widening this is a separate call from
+    // widening the vendors that probe their own CLI.
+    cliMatch: (p) => p?.command === 'claude' && !usesThirdPartyBackend(p),
+    cliNameMatch: (p) => displayName(p).includes('claude') && !usesThirdPartyBackend(p),
     fetch: '_fetchAnthropicModels',
   },
   {
