@@ -35,4 +35,9 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // authored (or peer-inherited) work; a shipped seed would land first and the
   // migration would rewrite shipped defaults where their ledger should be.
   'eidoverse/foundations.json',
+  // Migration 406 derives the CoS archive's completion-order projection from the
+  // install's own agent metadata. A shipped seed would land first (setup-data
+  // runs before migrations) and the backfill would then merge this install's
+  // runs into another machine's rows.
+  'cos/agents/index.order.json',
 ]);
