@@ -74,6 +74,7 @@ export {
   getFeedbackStats,
   getPendingAgentFeedback,
   getPendingAgentFeedbackCount,
+  getPendingAgentFeedbackPage,
   initializeAgentFeedback,
   extractTaskType,
 } from './cosAgentFeedback.js';

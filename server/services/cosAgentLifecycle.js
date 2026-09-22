@@ -20,7 +20,7 @@ import { atomicWrite, ensureDir, readFileTail, safeJSONParse, tryReadFile } from
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
-import { loadAgentIndex, saveAgentIndex, getAgentDir } from './cosAgentIndex.js';
+import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder } from './cosAgentIndex.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 export async function registerAgent(agentId, taskId, metadata = {}) {
@@ -137,6 +137,9 @@ async function archiveCompletedAgent(agentId, agent) {
   // is cheap (a small map, atomically written) and repairs exactly that.
   const idx = await loadAgentIndex();
   idx.set(agentId, dateStr);
+  // Project the completion order BEFORE saving: `saveAgentIndex` prunes the
+  // projection to the ids the index owns, so recording after it is a no-op.
+  await recordArchivedAgentOrder([{ ...agent, id: agentId }]);
   await saveAgentIndex();
 }
 
@@ -746,6 +749,7 @@ export async function cleanupZombieAgents() {
 
       // Persist zombie-cleaned agents to date-bucketed dirs and update index
       const idx = await loadAgentIndex();
+      const archived = [];
       for (const agentId of cleaned) {
         const agent = state.agents[agentId];
         const dateStr = agent.completedAt?.slice(0, 10);
@@ -775,7 +779,9 @@ export async function cleanupZombieAgents() {
         }
 
         idx.set(agentId, dateStr);
+        archived.push({ ...agent, id: agentId });
       }
+      await recordArchivedAgentOrder(archived);
       await saveAgentIndex();
 
       console.log(`🧹 Cleaned up ${cleaned.length} zombie agents: ${cleaned.join(', ')}`);

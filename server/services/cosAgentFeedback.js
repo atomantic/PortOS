@@ -14,6 +14,12 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
 import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { loadAgentIndex, getAgentDir } from './cosAgentIndex.js';
+import {
+  loadCompletionOrderIndex,
+  markCompletionFeedbackResolved,
+  projectArchivedAgent,
+  recordArchivedCompletions,
+} from './cosAgentCompletionIndex.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { recordUserAction } from './userActions.js';
 import {
@@ -94,18 +100,19 @@ function unavailableFeedbackRef(ref, reason) {
 }
 
 /**
- * Reconcile the durable references with live state and indexed archive records.
- * The only broad read here is live state plus the referenced archive files; it
- * never scans the historical archive looking for work.
+ * The durable references to consider, paired with live state.
+ *
+ * Enrollment happens here rather than only on the `agent:completed` event so a
+ * live completion stays discoverable when the event arrived during a restart
+ * window or before the migration ran — every reader of the pending set needs
+ * that, so it belongs on the one path all of them take.
  */
-export async function getPendingAgentFeedback({ includeUnavailable = false } = {}) {
+async function collectPendingFeedbackRefs() {
   const state = await loadState();
   const refs = await listPendingAgentFeedbackRefs();
   const refsById = new Map(refs.map((ref) => [ref.agentId, ref]));
   const liveById = new Map(Object.entries(state?.agents || {}).map(([id, agent]) => [agent.id || id, agent]));
 
-  // Enrollment is also performed here so a live completion remains discoverable
-  // when an event arrived during a restart window or before the migration ran.
   for (const [agentId, agent] of liveById) {
     if (!isAgentFeedbackEligible(agent)) continue;
     const ref = { agentId, archiveDate: feedbackArchiveDate(agent) };
@@ -113,9 +120,23 @@ export async function getPendingAgentFeedback({ includeUnavailable = false } = {
     await upsertPendingAgentFeedbackRef(ref);
   }
 
+  return { refsById, liveById };
+}
+
+/**
+ * Reconcile the durable references with live state and indexed archive records.
+ * The only broad read here is live state plus the referenced archive files; it
+ * never scans the historical archive looking for work.
+ */
+export async function getPendingAgentFeedback({ includeUnavailable = false } = {}) {
+  const { refsById, liveById } = await collectPendingFeedbackRefs();
+
   const idx = refsById.size > 0 ? await loadAgentIndex() : new Map();
   const agents = [];
   const unavailable = [];
+  // This path already paid for the archive read, so hand what it learned to the
+  // eligibility projection the scalar/paged readers answer from.
+  const learned = [];
 
   for (const ref of refsById.values()) {
     const live = liveById.get(ref.agentId);
@@ -157,6 +178,7 @@ export async function getPendingAgentFeedback({ includeUnavailable = false } = {
       if (includeUnavailable) unavailable.push(unavailableFeedbackRef({ ...ref, archiveDate }, 'deleted'));
       continue;
     }
+    if (idx.has(ref.agentId)) learned.push([ref.agentId, projectArchivedAgent(archived.agent)]);
     if (!isAgentFeedbackTarget(archived.agent) || hasValidFeedback(archived.agent)) {
       await removePendingAgentFeedbackRef(ref.agentId);
       continue;
@@ -164,11 +186,86 @@ export async function getPendingAgentFeedback({ includeUnavailable = false } = {
     agents.push(archived.agent);
   }
 
+  if (learned.length > 0) await recordArchivedCompletions(learned);
   return { agents, unavailable, count: agents.length };
 }
 
+/**
+ * Which pending references are still actionable, resolved WITHOUT reading the
+ * archive: a live record answers from state, an archived one from the
+ * completion-order projection. Only a reference the projection has never seen —
+ * a fresh federation import, or an install that has not run the backfill — costs
+ * one metadata read, and that read teaches the projection so the next call is
+ * free. Deliberately read-only apart from live enrollment: the scalar badge and
+ * the paged list must not reconcile the durable store, which
+ * `getPendingAgentFeedback` owns.
+ */
+async function resolveEligiblePendingFeedback() {
+  const { refsById, liveById } = await collectPendingFeedbackRefs();
+  if (refsById.size === 0) return [];
+  const idx = await loadAgentIndex();
+  const order = await loadCompletionOrderIndex();
+  const eligible = [];
+  const learned = [];
+
+  for (const ref of refsById.values()) {
+    const live = liveById.get(ref.agentId);
+    if (live) {
+      if (isAgentFeedbackEligible(live)) eligible.push({ agentId: ref.agentId, agent: live });
+      continue;
+    }
+
+    const archiveDate = idx.get(ref.agentId) || ref.archiveDate;
+    if (!archiveDate) continue;
+
+    // The projection's keyspace is the index's, so consult it only for an id the
+    // index still owns — anything else would be learned and immediately pruned.
+    const indexed = idx.has(ref.agentId);
+    const projected = indexed ? order.get(ref.agentId) : null;
+    if (projected) {
+      if (projected.feedbackEligible) eligible.push({ agentId: ref.agentId, archiveDate });
+      continue;
+    }
+
+    const archived = await readArchivedAgent(ref.agentId, archiveDate);
+    if (archived.kind !== 'found') continue;
+    if (indexed) learned.push([ref.agentId, projectArchivedAgent(archived.agent)]);
+    if (isAgentFeedbackTarget(archived.agent) && !hasValidFeedback(archived.agent)) {
+      eligible.push({ agentId: ref.agentId, archiveDate, agent: archived.agent });
+    }
+  }
+
+  if (learned.length > 0) await recordArchivedCompletions(learned);
+  return eligible;
+}
+
 export async function getPendingAgentFeedbackCount() {
-  return (await getPendingAgentFeedback()).count;
+  return (await resolveEligiblePendingFeedback()).length;
+}
+
+/**
+ * One bounded page of pending feedback, newest agent id first — the same order
+ * and cursor the route used when it sliced the fully-hydrated list. Only the
+ * returned rows are read off disk.
+ */
+export async function getPendingAgentFeedbackPage({ limit = 25, cursor } = {}) {
+  const eligible = await resolveEligiblePendingFeedback();
+  const remaining = eligible
+    .filter((entry) => !cursor || entry.agentId < cursor)
+    .sort((a, b) => (a.agentId < b.agentId ? 1 : a.agentId > b.agentId ? -1 : 0));
+
+  const items = [];
+  for (const entry of remaining.slice(0, limit)) {
+    if (entry.agent) { items.push(entry.agent); continue; }
+    const archived = await readArchivedAgent(entry.agentId, entry.archiveDate);
+    if (archived.kind === 'found') items.push(archived.agent);
+  }
+
+  return {
+    items,
+    total: eligible.length,
+    nextCursor: remaining.length > limit ? remaining[limit - 1].agentId : null,
+  };
 }
 
 // Submit feedback for a completed agent.
@@ -241,6 +338,9 @@ export async function submitAgentFeedback(agentId, feedback) {
 
   const { feedbackData, clearPendingRef, ...response } = result;
   if (clearPendingRef) await removePendingAgentFeedbackRef(agentId);
+  // A rated archive is no longer an eligible target; clearing the projected bit
+  // keeps the scalar badge correct without re-reading the record.
+  await markCompletionFeedbackResolved(agentId);
   await recordUserAction({
     type: 'cos.agent.feedback',
     target: agentId,

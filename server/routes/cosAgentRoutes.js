@@ -101,20 +101,23 @@ router.get('/agents/history/:date', asyncHandler(async (req, res) => {
 // GET /api/cos/agents/feedback/pending - Reconciled durable feedback actions.
 // The queue owns the action mutation; this endpoint feeds the Agents tab with
 // the same live/archive predicate and count without loading every date bucket.
+//
+// The scalar badge and the paged list answer from the completion-order
+// eligibility projection and hydrate only the rows they return; the unpaged
+// form is the one that also reconciles the durable references and reports the
+// archives it could not read.
 router.get('/agents/feedback/pending', asyncHandler(async (req, res) => {
   const { limit, cursor, countOnly } = validateRequest(z.object({
     countOnly: z.literal('1').optional(),
     limit: z.coerce.number().int().min(1).max(100).optional(),
     cursor: z.string().max(512).optional(),
   }), req.query);
-  const pending = await cos.getPendingAgentFeedback({ includeUnavailable: true });
-  if (countOnly) return res.json({ count: pending.count });
+  if (countOnly) return res.json({ count: await cos.getPendingAgentFeedbackCount() });
   if (limit) {
-    const ordered = pending.agents.sort((a, b) => a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
-    const remaining = ordered.filter(agent => !cursor || agent.id < cursor);
-    return res.json({ items: toAgentListItems(remaining.slice(0, limit)), total: pending.count,
-      nextCursor: remaining.length > limit ? remaining[limit - 1].id : null });
+    const page = await cos.getPendingAgentFeedbackPage({ limit, cursor });
+    return res.json({ ...page, items: toAgentListItems(page.items) });
   }
+  const pending = await cos.getPendingAgentFeedback({ includeUnavailable: true });
   res.json({
     count: pending.count,
     agents: toAgentListItems(pending.agents),
