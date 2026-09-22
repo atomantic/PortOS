@@ -233,7 +233,8 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
     const duration = new Date(endTime).getTime() - new Date(startTime).getTime();
     const output = outputBuffer.join('') + (error ? `\n[ERROR] ${error}` : '');
 
-    console.log(`${success ? '✅ [Autofixer] Fix produced' : '❌ [Autofixer] Fix failed'} for ${processName} (exit code: ${exitCode})`);
+    const log = success ? console.log : console.error;
+    log(`${success ? '✅ [Autofixer] Fix produced' : '❌ [Autofixer] Fix failed'} for ${processName} (exit code: ${exitCode})`);
 
     const metadata = {
       sessionId,

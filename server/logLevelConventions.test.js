@@ -1,5 +1,6 @@
 /**
- * Repo-wide guard: a failure line may not be logged through `console.log`.
+ * Long-running Node process guard: a failure line may not be logged through
+ * `console.log`.
  *
  * ## The bug class
  *
@@ -40,9 +41,13 @@
  *
  * ## What this guard CANNOT see
  *
- * It is a lexer-assisted source scan, not a scope-aware AST pass. It reads the
- * ARGUMENT TEXT (comment bodies blanked) of a literal `console.log(` call,
- * which means:
+ * The guard intentionally covers only the long-running Node process trees
+ * (`server/` and `autofixer/`). One-shot operator/CI scripts (`scripts/`) and
+ * the browser tree (`client/`) do not feed the stderr-based process monitors
+ * this rule protects, so they stay outside this inventory. Within the covered
+ * trees, this is a lexer-assisted source scan, not a scope-aware AST pass. It
+ * reads the ARGUMENT TEXT (comment bodies blanked) of a literal `console.log(`
+ * call, which means:
  *
  *   - A message built into a variable first (`const line = `FAILMARK …`;
  *     console.log(line);`) is invisible. That is the same shape the mixed-sink
@@ -78,7 +83,7 @@ const CONSOLE_LOG_OPEN = /\bconsole\s*\.\s*log\s*\(/g;
 const CONSOLE_LOG_SHAPE = /\bconsole\s*\.\s*log\s*\(/;
 
 /**
- * Every `console.log(…)` call in `src`, as `{ line, args }` where `args` keeps
+ * Every `console.log(…)` call in the covered process trees, as `{ line, args }` where `args` keeps
  * the literal text (the markers live inside template strings, which
  * `blankLiterals` would erase) but has COMMENT bodies blanked, so a marker
  * written in a comment beside the message is not read as part of it.
@@ -112,21 +117,24 @@ export function findMislabeledFailureLogs(src) {
     .map(({ line, args }) => `line ${line}: ${args.replace(/\s+/g, ' ').trim().slice(0, 120)}`);
 }
 
-// Every module extension the tree actually ships, not just `.js`: the operator
-// scripts under `server/scripts/` are `.mjs`, and one of them was logging a
-// failure through `console.log` while a `*.js`-only scan reported the tree
-// clean.
+// Every module extension the covered process trees actually ship, not just
+// `.js`. The repository root is important: using `server/` as cwd silently
+// excludes the sibling `autofixer/` daemon.
+const REPO_ROOT = dirname(SERVER_ROOT);
+const PROCESS_ROOTS = ['server/', 'autofixer/'];
 const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
-  cwd: SERVER_ROOT,
+  cwd: REPO_ROOT,
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,
-}).split('\n').filter((f) => f && !f.includes('.test.'));
+}).split('\n').filter((f) => f && PROCESS_ROOTS.some((root) => f.startsWith(root)) && !f.includes('.test.'));
 
 describe('failure lines log at error level (#7945)', () => {
-  it('scans the server tree', () => {
+  it('scans both long-running Node process trees', () => {
     // A broken `git ls-files` (wrong cwd, detached checkout) would otherwise let
     // every assertion below pass by scanning nothing at all.
-    expect(trackedServerSources().length).toBeGreaterThan(200);
+    const sources = trackedServerSources();
+    expect(sources.length).toBeGreaterThan(200);
+    expect(PROCESS_ROOTS.every((root) => sources.some((file) => file.startsWith(root)))).toBe(true);
   });
 
   it('scans every module extension the tree ships, not only .js', () => {
@@ -142,7 +150,7 @@ describe('failure lines log at error level (#7945)', () => {
     // this guard from lexing 30 MB of unrelated source on every worker while
     // `consoleLogCalls` remains the authority for what counts as a call.
     const withLogs = trackedServerSources().filter((file) => {
-      const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
+      const src = readFileSync(join(REPO_ROOT, file), 'utf8');
       return CONSOLE_LOG_SHAPE.test(src) && consoleLogCalls(src).length > 0;
     });
     expect(withLogs.length).toBeGreaterThan(100);
@@ -151,10 +159,10 @@ describe('failure lines log at error level (#7945)', () => {
   it('has no console.log carrying a failure marker', () => {
     const violations = [];
     for (const file of trackedServerSources()) {
-      const src = readFileSync(join(SERVER_ROOT, file), 'utf8');
+      const src = readFileSync(join(REPO_ROOT, file), 'utf8');
       if (!CONSOLE_LOG_SHAPE.test(src)) continue;
       if (!FAILURE_MARKERS.some((marker) => src.includes(marker))) continue;
-      for (const hit of findMislabeledFailureLogs(src)) violations.push(`server/${file} ${hit}`);
+      for (const hit of findMislabeledFailureLogs(src)) violations.push(`${file} ${hit}`);
     }
 
     expect(
