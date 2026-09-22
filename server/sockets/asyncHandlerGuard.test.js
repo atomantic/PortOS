@@ -113,8 +113,13 @@ export function findUnguardedHandlerAwaits(src) {
       .map((chain) => `line ${handler.line} '${handler.event}': ${chain}`));
 }
 
+// `.mjs`/`.cjs` alongside `.js`: nothing under this directory ships those
+// extensions today, but a `.js`-only filter would silently drop one that did
+// (#7953) — the recognizer test below proves the filter itself, not just the
+// current directory contents, actually accepts them.
+const SOCKET_FILE_RE = /\.(?:js|mjs|cjs)$/;
 const socketFiles = readdirSync(HERE)
-  .filter((f) => f.endsWith('.js') && !f.includes('.test.'))
+  .filter((f) => SOCKET_FILE_RE.test(f) && !f.includes('.test.'))
   .sort();
 
 describe('async socket handlers own their rejections (#5661)', () => {
@@ -129,6 +134,15 @@ describe('async socket handlers own their rejections (#5661)', () => {
     expect(handlers.map((h) => h.event)).toEqual(expect.arrayContaining([
       'voice:call:detach', 'logs:subscribe', 'shell:start', 'app:update',
     ]));
+  });
+
+  // Nothing under this directory ships `.mjs`/`.cjs` today, so the scan above
+  // cannot prove the filter would catch one that did — assert the filter
+  // itself, not just this directory's current contents (#7953).
+  it('would scan a .mjs or .cjs handler file, not just .js', () => {
+    expect(SOCKET_FILE_RE.test('example.mjs')).toBe(true);
+    expect(SOCKET_FILE_RE.test('example.cjs')).toBe(true);
+    expect(SOCKET_FILE_RE.test('example.test.mjs')).toBe(true);
   });
 
   it('has no unguarded await in any async socket handler', () => {

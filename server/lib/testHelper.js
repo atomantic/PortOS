@@ -187,15 +187,23 @@ export function mockTextResponse(body = '', { ok = true, status = 200, contentTy
   };
 }
 
+/** Non-test module extensions this tree ships: `.mjs` under `server/scripts/`, `.cjs` nowhere yet but supported. */
+const SOURCE_EXTENSIONS = ['.js', '.mjs', '.cjs'];
+
 /**
- * Every non-test `.js` file under `server/`, as server-relative paths.
+ * Every non-test source file under `server/` (`.js`, `.mjs`, `.cjs`), as
+ * server-relative paths.
  *
  * Shared by the source-scanning guard suites — `spawnCwd.test.js` (every
- * cwd-passing spawn pins PWD, #3193) and `cliChildEnv.test.js` (every AI-CLI
- * spawn composes its env through the shared builder, #3194). Those two guards
- * deliberately overlap, so they must agree on what "a source file" is: a change
- * to the ignore rules here (a new extension, a skipped directory) has to apply
- * to both, or one guard silently stops covering files the other still checks.
+ * cwd-passing spawn pins PWD, #3193), `cliChildEnv.test.js` (every AI-CLI
+ * spawn composes its env through the shared builder, #3194), and
+ * `childProcess.guards.test.js` (every spawn routes through the shared
+ * wrapper, #5678). Those guards deliberately overlap, so they must agree on
+ * what "a source file" is: a change to the ignore rules here (a new
+ * extension, a skipped directory) has to apply to all of them, or one guard
+ * silently stops covering files the others still check. A `.js`-only walk
+ * missed the operator scripts under `server/scripts/`, which are `.mjs`
+ * (#7953).
  *
  * @param {string} [dir] - directory to walk (defaults to the `server/` root)
  * @returns {string[]} paths relative to `server/`, e.g. `services/runner.js`
@@ -221,7 +229,8 @@ export function collectServerSources(dir = SERVER_DIR) {
     if (entry.name === 'node_modules' || entry.name.startsWith('.')) return [];
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) return collectServerSources(abs);
-    if (!entry.name.endsWith('.js') || entry.name.endsWith('.test.js')) return [];
+    const ext = SOURCE_EXTENSIONS.find((e) => entry.name.endsWith(e));
+    if (!ext || entry.name.endsWith(`.test${ext}`)) return [];
     // POSIX separators always. These relative paths are IDENTIFIERS, not paths
     // to open: guard suites compare them against literals like
     // 'cos-runner/index.js' and list them in EXEMPT/DELEGATES tables. On
