@@ -766,7 +766,7 @@ interface the same way and hold to the same checklist.
 Duplicate findings are noise. Do NOT file:
 
 - **Raw console errors / broken elements / failed requests** — \`ui-bugs\` owns these.
-- **Viewport breakage** (overflow, sub-44px tap targets, horizontal scroll) — \`mobile-responsive\` owns these.
+- **Touch-only mechanics** (hover-only controls and tap-target sizing) — \`mobile-responsive\` owns these. Responsive layout failures ARE part of this UX audit; deduplicate against findings from that sibling task.
 - **ARIA labels, contrast ratios, keyboard traps** — \`accessibility\` owns these.
 
 Mention an overlap only when it is the *cause* of a UX failure you are filing
@@ -787,9 +787,14 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 
 3. **Walk each main route** with Playwright MCP. For every route:
    - \`browser_navigate\` to it, then \`browser_snapshot\` to read the structure.
-   - \`browser_resize\` to **1440x900** (desktop) and **375x812** (mobile) and
+   - \`browser_resize\` to **1440x900**, **1280x800**, **1024x768**, **768x1024**, **390x844**, and **320x812** and
      snapshot at each — the fold differs, and a buried primary action is the
      single most common finding.
+
+   - Test with the navigation sidebar expanded and collapsed, and at 200% zoom.
+   - Resize dashboard widgets and embedded panels to 240px, 320px, and 480px wide on a desktop viewport. Viewport breakpoints do not prove a narrow container fits.
+   - Inspect empty, populated, loading, and error states with synthetic long names, URLs, and action labels. Check bounding rectangles and scrollWidth/clientWidth on the page AND cards: overflow-hidden can conceal unreachable controls even when the document has no horizontal scrollbar. Exempt only intentional local scroll regions such as tables/timelines; verify their keyboard access.
+   - Record route/widget, viewport AND container width, state, sidebar mode, blocked action, and responsible component. Report unvisited routes/states as untested, never as passing.
 
 4. **Evaluate each route against this named checklist.** Cite the checklist
    number in the finding so results are reproducible rather than vibes:
@@ -812,6 +817,8 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    7. **Information hierarchy matches the user's task** — what they came for is
       the most prominent thing, not the densest table or the newest feature.
 
+   8. **Narrow-container reflow** — no overlapping cards, clipped controls, off-screen actions, or page-level horizontal scroll. Toolbars wrap, flexible children shrink, long strings wrap or have an accessible full-value path, and side panels stack before squeezing the primary work. Consult the app's design standard; for PortOS use docs/UX_DESIGN_GUIDE.md.
+
 5. **File ONE item per finding** using the "Record" mechanics under "Where to
    record findings" above. Each finding must carry:
 
@@ -819,7 +826,7 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
      naming the screen and the problem (e.g.
      \`ux-settings-save-below-fold-on-mobile\`); ≤80 chars total; unique against
      every existing \`[ux-…]\` slug (re-check before each record).
-   - **The screen/route** you audited and which checklist item (1–7) it failed.
+   - **The screen/route** you audited and which checklist item (1–8) it failed.
    - **What the user is trying to do** on that screen.
    - **Why the current design impedes it** — 1–2 sentences, concrete and
      observable, referencing what you saw in the snapshot.

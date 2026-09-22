@@ -195,13 +195,13 @@ export default function DataDog() {
   }
 
   return (
-    <div className="p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
+    <div className="@container/page min-w-0 p-4 sm:p-6">
+      <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
         <h1 className="text-xl sm:text-2xl font-bold text-white">DataDog Integration</h1>
         {!editingInstance && (
           <button
             onClick={handleCreate}
-            className="w-full sm:w-auto px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded"
+            className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded"
           >
             + Add DataDog Instance
           </button>
@@ -224,13 +224,13 @@ export default function DataDog() {
           <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
             <button
               onClick={handleDeleteCancel}
-              className="w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
+              className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
             >
               Cancel
             </button>
             <button
               onClick={handleDeleteConfirm}
-              className="w-full sm:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
+              className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
             >
               Delete
             </button>
@@ -238,7 +238,7 @@ export default function DataDog() {
         </div>
       </Modal>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
+      <div className="grid grid-cols-1 @5xl/page:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
         {editingInstance ? (
           <div className="bg-gray-800 rounded-lg p-4 sm:p-6 min-w-0">
             <h2 className="text-lg sm:text-xl font-bold text-white mb-4">
@@ -334,14 +334,14 @@ export default function DataDog() {
                 <button
                   onClick={handleSave}
                   disabled={saving || !formData.name || !formData.site || (editingInstance === 'new' && (!formData.apiKey || !formData.appKey))}
-                  className="w-full sm:w-auto px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-port-success hover:bg-port-success/80 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {saving ? 'Saving...' : 'Save'}
                 </button>
                 <button
                   onClick={handleCancel}
                   disabled={saving}
-                  className="w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded disabled:opacity-50"
+                  className="max-w-full w-full @sm/page:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -350,7 +350,7 @@ export default function DataDog() {
           </div>
         ) : null}
 
-        <div className="space-y-4 lg:col-start-2 lg:row-start-1">
+        <div className="space-y-4 @5xl/page:col-start-2 @5xl/page:row-start-1">
           {Object.values(instances).length === 0 ? (
             <div className="bg-gray-800 rounded-lg p-8 text-center">
               <p className="text-gray-400">No DataDog instances configured.</p>

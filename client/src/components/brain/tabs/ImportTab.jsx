@@ -441,8 +441,8 @@ function StepReview({ preview, isZip, fileMeta, tagsInput, setTagsInput, skipEmp
   const remaining = conversations.length - sample.length;
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+    <div className="@container/import min-w-0 space-y-4">
+      <div className="grid grid-cols-1 @5xl/import:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
         {/* Left — preview of what was found */}
         <div className="space-y-4 min-w-0">
           {isZip ? (
@@ -498,7 +498,7 @@ function StepReview({ preview, isZip, fileMeta, tagsInput, setTagsInput, skipEmp
         </div>
 
         {/* Right — import options */}
-        <div className="space-y-4 lg:sticky lg:top-4 self-start">
+        <div className="space-y-4 @5xl/import:sticky @5xl/import:top-4 self-start">
           <p className="text-sm text-gray-300">
             Each conversation becomes a Memory entry in Brain → Memory. The full transcript
             {isZip ? ' (with inline images and asset links)' : ''} is also archived to

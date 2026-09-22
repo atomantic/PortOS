@@ -7,7 +7,7 @@ export default function AppsGridWidget({ dashboardState }) {
   const archivedCount = apps.length - activeApps.length;
   if (apps.length === 0) {
     return (
-      <div className="@container relative bg-port-card border border-port-border rounded-xl p-8 @lg:p-12 text-center">
+      <div className="relative bg-port-card border border-port-border rounded-xl p-4 text-center">
         <div className="flex justify-center mb-4 text-port-accent/70">
           <MicroGlyph variant="reticle" size={48} state="accent" />
         </div>
@@ -23,11 +23,11 @@ export default function AppsGridWidget({ dashboardState }) {
     );
   }
   return (
-    <div className="@container space-y-2">
+    <div className="@container min-w-0 space-y-2">
       <p className="text-xs text-gray-500">
         {activeApps.length} app{activeApps.length !== 1 ? 's' : ''} registered{archivedCount > 0 ? ` (${archivedCount} archived)` : ''}
       </p>
-      <div className="grid grid-cols-1 @sm:grid-cols-2 @lg:grid-cols-3 @3xl:grid-cols-4 @5xl:grid-cols-5 @7xl:grid-cols-6 gap-3">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-3">
         {sortedApps.map((app) => (
           <AppTile key={app.id} app={app} onUpdate={refetch} />
         ))}

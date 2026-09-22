@@ -163,7 +163,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   };
 
   return (
-    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
+    <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 mb-4">
         <div className="flex min-w-0 items-center gap-3">

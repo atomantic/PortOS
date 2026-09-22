@@ -268,3 +268,15 @@ A growing collection must remain usable with hundreds, thousands, or more record
 - Verify the public behavior: initial and next-page request limits, unrelated-tab silence, no duplicate concurrent loads, stale-response rejection, retry without skipped pages, end-of-results, deep links, and keyboard/mobile access. Measure transfer and rendered-row count using synthetic large fixtures; never put private records into tests or reports.
 
 Adoption is incremental. CoS uses the shared request and footer primitives; Media History reuses the footer with its existing `useGalleryPage` server-filtered adapter; existing collection surfaces require scoped migrations rather than a claim that this document alone makes them conform.
+
+## Narrow monitors and embedded containers
+
+Responsive acceptance is based on **available content width**, not just screen width. An expanded sidebar, inspector, drawer or dashboard grid can leave a 240–480px panel on a desktop monitor. A viewport `sm:` row still activates there and can push controls outside its card.
+
+- Put a named `@container` on the page or reusable component root and query that container for internal layout. A container cannot query itself: apply variants to descendants. Keep device/viewport affordances separate from content layout.
+- Stack fixed side rails until the container fits both a useful primary column and the rail plus gaps. Use `minmax(0,1fr)` for flexible grid tracks and `min-w-0` on shrinking flex/grid children. Container thresholds must account for padding and gaps.
+- Toolbars and action groups wrap; search inputs have `min-w-0` and a bounded width. Keep labels, actions, focus order and all filter choices available. Long user strings wrap (`overflow-wrap:anywhere`) or truncate with an accessible full-value path.
+- Dashboard widgets must work at 240, 320 and 480px container widths on a 1440px desktop. Prefer content-sized auto-fit grids with a minimum clamped to `100%`; a six-column app grid must not remain six columns in a small tile.
+- Never fix overflow by hiding it at the page/card root. Intentional tables, timelines and code panes may scroll locally, with keyboard access and a visible cue. Measure both scroll dimensions and child rectangles: clipping can hide a defect without increasing document scroll width.
+
+Before accepting a new or changed page, check 320, 390, 768, 1024, 1280 and 1440px viewports, expanded/collapsed navigation, 200% zoom, and narrow embedded containers. Exercise empty, populated, loading and failure states, long synthetic names/URLs and all action groups. Record the route/component, viewport and container width, state and observed result; mark untested states explicitly. The scheduled UX audit includes these checks and deduplicates findings with the mobile-responsive audit. Structural convention tests supplement real browser geometry checks; passing them does not certify every route.

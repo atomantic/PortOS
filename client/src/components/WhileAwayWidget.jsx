@@ -114,7 +114,7 @@ export default function WhileAwayWidget() {
   const windowSince = sinceRef.current || data.sinceIso;
 
   return (
-    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
+    <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">
       {/* Header */}
       <div className="flex items-center justify-between mb-3 gap-3">
         <div className="flex items-center gap-3 min-w-0">

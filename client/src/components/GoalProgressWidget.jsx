@@ -81,7 +81,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
   if (loading || !goals.length) return null;
 
   return (
-    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
+    <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <Target className="w-6 h-6 text-port-accent" aria-hidden="true" />
