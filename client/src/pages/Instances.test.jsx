@@ -279,6 +279,44 @@ describe('PeerCard snapshot progress', () => {
     expect(screen.queryByText('Coverage unavailable')).not.toBeInTheDocument();
   });
 
+  // #7943: a cycle in which every category failed leaves lastSyncAt at its
+  // previous value and records lastSyncError. Without rendering it, the card
+  // showed "synced N minutes ago" for a peer that had been broken for weeks.
+  it('renders lastSyncError beside the timestamp, and nothing when the cycle was clean', async () => {
+    const failed = {
+      cursors: {
+        [peer.instanceId]: {
+          checksums: { universe: 'old', pipeline: 'same' },
+          lastSyncAt: '2026-01-01T00:00:00.000Z',
+          lastSyncError: 'universe: peer DB was rebuilt',
+        },
+      },
+    };
+    const view = renderUI(<PeerCard peer={peer} syncStatus={failed} onRefresh={vi.fn()} />);
+    await act(async () => {});
+    expect(screen.getByText(/Last sync failed: universe: peer DB was rebuilt/)).toBeInTheDocument();
+
+    view.rerender(<PeerCard peer={peer} syncStatus={syncStatus} onRefresh={vi.fn()} />);
+    expect(screen.queryByText(/Last sync failed/)).not.toBeInTheDocument();
+  });
+
+  // A failed cycle applies nothing, so a totalApplied-only refetch gate would
+  // never pull the new error string onto the card.
+  it('refetches on a complete event that carries an error but applied nothing', async () => {
+    const onRefresh = vi.fn();
+    renderUI(<PeerCard peer={peer} syncStatus={syncStatus} onRefresh={onRefresh} />);
+    await act(async () => {});
+    const [, handleProgress] = socket.on.mock.calls.find(([event]) => event === 'sync:progress');
+
+    await act(async () => handleProgress({ phase: 'complete', peerId: peer.instanceId, totalApplied: 0, error: null }));
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    await act(async () => handleProgress({
+      phase: 'complete', peerId: peer.instanceId, totalApplied: 0, error: 'universe: peer DB was rebuilt',
+    }));
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
   // A slow or failed subscription endpoint must not hide a known mismatch.
   it('shows known status while subscriptions are unresolved and after they fail', async () => {
     let rejectSubscriptions;
@@ -334,6 +372,10 @@ describe('Instances page connection drawers', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add', exact: true }));
     await waitFor(() => expect(api.addPeer).toHaveBeenCalled());
     expect(screen.getByLabelText('Peer address')).toHaveValue('192.0.2.30');
+    // The rejected addPeer call keeps the mode buttons disabled (adding=true)
+    // until its catch/finally settles — wait for that before switching modes,
+    // or a slow microtask under load leaves this click a no-op (#7978).
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tailcat', exact: true })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Tailcat', exact: true }));
     fireEvent.change(screen.getByLabelText('Tailcat address'), { target: { value: 'tcEXAMPLE' } });
     fireEvent.click(screen.getByRole('button', { name: 'They dial us' }));

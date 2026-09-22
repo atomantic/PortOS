@@ -790,10 +790,42 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/cancel-current-ci-run.js
 
+  node-minimum:
+    name: Node minimum compatibility
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Use the minimum supported Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.22.2
+
+      - name: Verify the runtime gate
+        run: node scripts/checkNodeVersion.js
+
+      # Resolve every committed npm lockfile on the minimum runtime. The
+      # workspace-level contract test below is the fail-closed engine check;
+      # installs stay script-free so native rebuilds cannot turn this contract
+      # job into a second application test suite.
+      - name: Install all workspaces
+        run: |
+          npm ci --ignore-scripts
+          npm ci --ignore-scripts --prefix client
+          npm ci --ignore-scripts --prefix server
+          npm ci --ignore-scripts --prefix autofixer
+
+      - name: Run the Node compatibility contract
+        run: npm run test:fast --prefix server -- ../scripts/checkNodeVersion.test.js ../scripts/node-version-drift.test.js
+
   gate:
     name: CI Gate
     if: always()
-    needs: [impact, server, client, lint, database, windows-server]
+    needs: [impact, server, client, lint, database, windows-server, node-minimum]
     runs-on: ubuntu-latest
     # READ, not write: the reporter only lists this run's jobs, to name the one
     # whose STEP failed when the fail-fast cancel beat GitHub to writing the job
@@ -830,6 +862,7 @@ jobs:
           CI_GATE_RESULT_LINT: ${{ needs.lint.result }}
           CI_GATE_RESULT_DATABASE: ${{ needs.database.result }}
           CI_GATE_RESULT_WINDOWS_SERVER: ${{ needs.windows-server.result }}
+          CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}
         run: node scripts/ci-gate-report.js
 
   full-gate:

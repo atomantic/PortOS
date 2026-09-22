@@ -244,12 +244,17 @@ router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
     if (settings.runAfter.length === 0) settings.runAfter = null;
   }
   const result = await taskSchedule.updateTaskInterval(taskType, settings);
+  // The persisted interval is only half of the response the Schedule page
+  // needs. `status.nextRunAt` is derived from the cron expression and the
+  // user's timezone, so return its post-write value instead of making the
+  // client keep the old countdown after a schedule edit.
+  const status = await taskSchedule.shouldRunTask(taskType);
   await logCosScheduleUpdate({
     target: taskType,
     patch: settings,
     source: { route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method },
   });
-  res.json({ success: true, taskType, interval: result });
+  res.json({ success: true, taskType, interval: result, status });
 }));
 
 // GET /api/cos/schedule/due - Get all tasks that are due to run

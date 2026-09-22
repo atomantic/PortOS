@@ -77,7 +77,7 @@ export async function runAppUpdate({
         acknowledgePersistentMindImageBackup,
       }).then(() => null, (err) => err);
       if (refusal) {
-        endAppOperation(io, app.id);
+        endAppOperation(io, app.id, 'cancellation');
         operatingAppId = null;
         return { ok: false, reason: 'refused', appId: app.id, code: refusal.code || null, message: refusal.message };
       }
@@ -139,6 +139,8 @@ export async function runAppUpdate({
     }
     return { ok: true };
   } finally {
-    if (operatingAppId && !result?.selfUpdateStarted) endAppOperation(io, operatingAppId);
+    if (operatingAppId && !result?.selfUpdateStarted) {
+      endAppOperation(io, operatingAppId, result?.success === true ? 'completion' : 'failure');
+    }
   }
 }

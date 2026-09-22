@@ -591,7 +591,11 @@ app.post('/spawn', async (req, res) => {
     const output = agent?.outputBuffer || '';
     const paused = agent?.paused === true;
 
-    console.log(`${paused ? '⏸️' : code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}${paused ? ' after pause' : ''}`);
+    // A non-zero exit is a failure line, so it belongs on stderr where a
+    // stderr-based monitor can see it (#7945). A pause or a clean exit is
+    // ordinary progress and stays on stdout.
+    const logExit = !paused && code !== 0 ? console.error : console.log;
+    logExit(`${paused ? '⏸️' : code === 0 ? '✅' : '❌'} Agent ${agentId} exited with code ${code}${paused ? ' after pause' : ''}`);
 
     // Save output to agent directory
     const agentDir = join(AGENTS_DIR, agentId);

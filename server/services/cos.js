@@ -1,3 +1,4 @@
+import { getPendingTaskIds as readPendingTaskIds } from './cosTaskStore.js';
 import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
  * Chief of Staff (CoS) Service
@@ -21,7 +22,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../lib/cosSpawnWindow.js';
+import { unclaimedTaskIds, runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../lib/cosSpawnWindow.js';
 import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
 import { clearStaleActiveAgents } from './appActivity.js';
 // The single Priority-0 on-demand loop body, shared with the evaluateTasks
@@ -67,12 +68,13 @@ export { cosEvents, emitLog };
 // is what forced the `await import()` forwarders in `cosAgentLifecycle.js`.
 // Callers ask `agentOrchestrator.js` for those (#3450).
 export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgent, getAgentRecord, getAgentPrompt, terminateAgent, sendBtwToAgent, cleanupZombieAgents, deleteAgent } from './cosAgentLifecycle.js';
-export { getAgentDates, getAgentsByDate, pruneOldAgentArchives } from './cosAgentIndex.js';
+export { getAgentDates, getAgentsByDate, getCompletedAgentPage, pruneOldAgentArchives } from './cosAgentIndex.js';
 export {
   submitAgentFeedback,
   getFeedbackStats,
   getPendingAgentFeedback,
   getPendingAgentFeedbackCount,
+  getPendingAgentFeedbackPage,
   initializeAgentFeedback,
   extractTaskType,
 } from './cosAgentFeedback.js';
@@ -219,6 +221,7 @@ export async function getStatus() {
     config: state.config,
     stats: { ...state.stats, tasksCompleted },
     activeAgents,
+    pendingTasks: unclaimedTaskIds(await readPendingTaskIds(), runningAgentsByTaskId(Object.values(state.agents))).length,
     pausedAgents,
     provider: provider ? { id: provider.id, name: provider.name } : null
   };

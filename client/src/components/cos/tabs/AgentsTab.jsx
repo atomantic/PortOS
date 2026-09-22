@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router';
-import { Trash2, Search, X, ChevronDown, MessageSquare } from 'lucide-react';
+import { Trash2, Search, X, MessageSquare } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
 import RelaunchAgentModal from './RelaunchAgentModal';
-import BrailleSpinner from '../../BrailleSpinner';
+import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
+import { usePagedCollection } from '../../../hooks/usePagedCollection';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { agentResumeMessage } from '../../../lib/agentResumeOutcome';
 import { isAgentFeedbackEligible } from '../../../lib/cosAgentFeedback';
@@ -34,7 +35,7 @@ const RESUME_MESSAGES = {
 
 const needsAgentFeedback = isAgentFeedbackEligible;
 
-export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
+export default function AgentsTab({ completedRevision = 0, agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
   const { agentId } = useParams();
   const [focusedAgent, setFocusedAgent] = useState(null);
   const [focusLoading, setFocusLoading] = useState(false);
@@ -53,15 +54,9 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
   const [durations, setDurations] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [feedbackUpdates, setFeedbackUpdates] = useState({});
-  const [pendingFeedbackAgents, setPendingFeedbackAgents] = useState([]);
+
   const [pendingFeedbackCount, setPendingFeedbackCount] = useState(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
-
-  // Date-based lazy loading for completed agents
-  const [dateBuckets, setDateBuckets] = useState([]); // [{ date, count }, ...]
-  const [loadedAgents, setLoadedAgents] = useState([]); // agents loaded so far
-  const [loadedDates, setLoadedDates] = useState(new Set()); // dates already fetched
-  const [loadingMore, setLoadingMore] = useState(false);
 
   // Filter selection is URL-backed so actionable insights can open the exact
   // review queue and the filtered state remains bookmarkable/shareable.
@@ -72,6 +67,14 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     else next.delete('feedback');
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  const fetchCompletedPage = useCallback(({ cursor, signal }) => api.getCosCompletedAgents({
+    cursor, signal, limit: 25, feedback: feedbackFilter === 'needs-feedback', silent: true,
+  }), [feedbackFilter]);
+  const history = usePagedCollection(fetchCompletedPage);
+  useEffect(() => { if (completedRevision) history.refreshFirst(); }, [completedRevision, history.refreshFirst]);
+  const loadedAgents = history.items;
+  const refresh = useCallback(() => { history.reload(); onRefresh(); }, [history.reload, onRefresh]);
 
   // Fetch duration estimates for progress indicators
   useEffect(() => {
@@ -84,76 +87,35 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
   // queue and supplies a count even when those cards are not otherwise loaded.
   useEffect(() => {
     let cancelled = false;
-    api.getCosPendingAgentFeedback({ silent: true })
+    api.getCosPendingAgentFeedback({ countOnly: true, silent: true })
       .then((result) => {
         if (cancelled) return;
-        setPendingFeedbackAgents(Array.isArray(result?.agents) ? result.agents : []);
         setPendingFeedbackCount(Number.isFinite(result?.count) ? result.count : null);
       })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
-  // Fetch date buckets on mount, with the most recent one hydrated in the SAME
-  // response. The tab always wants that bucket but can't name its date until the
-  // bucket list arrives, so asking separately costs a second serial round trip
-  // before any archived card can paint — the whole visible delay on a slow link.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const result = await api.getCosAgentDates({ hydrate: true }).catch(() => ({ dates: [] }));
-      if (cancelled) return;
-      const dates = result.dates || [];
-      setDateBuckets(dates);
-      if (!result.latest) return;
-      setLoadedAgents(result.latest.agents || []);
-      setLoadedDates(new Set([result.latest.date]));
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  const handleLoadMore = useCallback(async () => {
-    // Find next unloaded date
-    const nextDate = dateBuckets.find(d => !loadedDates.has(d.date));
-    if (!nextDate) return;
-
-    setLoadingMore(true);
-    const agents = await api.getCosAgentsByDate(nextDate.date).catch(() => []);
-    setLoadedAgents(prev => [...prev, ...agents]);
-    setLoadedDates(prev => new Set([...prev, nextDate.date]));
-    setLoadingMore(false);
-  }, [dateBuckets, loadedDates]);
-
   const handleKill = async (agentId) => {
     const result = await api.killCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Agent force killed');
-    onRefresh();
+    refresh();
   };
 
   const handlePause = async (agentId) => {
     const result = await api.pauseCosAgent(agentId, 'Paused from CoS agent list', { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Agent paused');
-    onRefresh();
+    refresh();
   };
 
   const handleDelete = useCallback(async (agentId) => {
     const result = await api.deleteCosAgent(agentId, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
-    setLoadedAgents(prev => {
-      const deleted = prev.find(a => a.id === agentId);
-      if (deleted?.completedAt) {
-        const dateStr = deleted.completedAt.slice(0, 10);
-        setDateBuckets(buckets => buckets.map(d =>
-          d.date === dateStr ? { ...d, count: Math.max(0, d.count - 1) } : d
-        ).filter(d => d.count > 0));
-      }
-      return prev.filter(a => a.id !== agentId);
-    });
     toast.success('Agent removed');
-    onRefresh();
-  }, [onRefresh]);
+    refresh();
+  }, [refresh]);
 
   // ResumeAgentModal builds a NEW task prompt out of `metadata.taskDescription`,
   // and the listing carries a bounded copy of it (server/lib/cosAgentListProjection.js).
@@ -177,21 +139,10 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
   const handleFeedbackChange = useCallback((updatedAgent) => {
     if (updatedAgent?.id && updatedAgent.feedback) {
       setFeedbackUpdates(prev => ({ ...prev, [updatedAgent.id]: updatedAgent.feedback }));
-      setLoadedAgents(prev => prev.map(agent =>
-        agent.id === updatedAgent.id ? { ...agent, feedback: updatedAgent.feedback } : agent
-      ));
     }
-    setPendingFeedbackAgents(prev => {
-      const wasPending = prev.some(agent => agent.id === updatedAgent?.id);
-      if (wasPending && !needsAgentFeedback(updatedAgent)) {
-        setPendingFeedbackCount(count => (typeof count === 'number' ? Math.max(0, count - 1) : count));
-      }
-      return needsAgentFeedback(updatedAgent)
-        ? prev.map(agent => agent.id === updatedAgent.id ? updatedAgent : agent)
-        : prev.filter(agent => agent.id !== updatedAgent?.id);
-    });
-    onRefresh();
-  }, [onRefresh]);
+    if (!needsAgentFeedback(updatedAgent)) setPendingFeedbackCount(count => count == null ? count : Math.max(0, count - 1));
+    refresh();
+  }, [refresh]);
 
   // A PAUSED agent resumes IN PLACE (see `resumeAgent` in agentManagement.js):
   // the server requeues that agent's own task on the worktree its run left behind.
@@ -219,18 +170,15 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     toast.success(agentResumeMessage(result, RESUME_MESSAGES,
       result.created === false ? 'Resumed — nothing new was queued' : `Created ${type === 'internal' ? 'system ' : ''}resume task`));
     setResumingAgent(null);
-    onRefresh();
+    refresh();
   };
 
   const handleClearCompleted = async () => {
     setConfirmingClear(false);
     const result = await api.clearCompletedCosAgents({ silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
-    setLoadedAgents([]);
-    setLoadedDates(new Set());
-    setDateBuckets([]);
     toast.success('Cleared completed agents');
-    onRefresh();
+    refresh();
   };
 
   // Running agents come from props (real-time via parent socket updates)
@@ -252,20 +200,11 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     for (const agent of recentCompleted) addAgent(agent);
     // Then disk-loaded agents
     for (const agent of loadedAgents) addAgent(agent);
-    // Finally the durable pending index, which may contain an older archived
-    // run that has not been loaded through the date-bucket pager yet.
-    for (const agent of pendingFeedbackAgents) addAgent(agent);
-    return merged.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
-  }, [recentCompleted, loadedAgents, pendingFeedbackAgents, feedbackUpdates]);
 
-  const totalCount = useMemo(() => {
-    const indexTotal = dateBuckets.reduce((sum, d) => sum + d.count, 0);
-    // Add any recent completed agents from state that may not yet be indexed
-    const stateOnlyCount = recentCompleted.filter(a =>
-      !loadedAgents.some(la => la.id === a.id)
-    ).length;
-    return indexTotal + stateOnlyCount;
-  }, [dateBuckets, recentCompleted, loadedAgents]);
+    return merged.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
+  }, [recentCompleted, loadedAgents, feedbackUpdates]);
+
+  const totalCount = history.total ?? allCompleted.length;
 
   // Search runs over what the listing carries. `metadata.taskDescription` is
   // bounded at AGENT_LIST_DESCRIPTION_CHARS server-side, which leaves over 90% of
@@ -294,10 +233,6 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     : Math.max(pendingFeedbackCount, locallyVisibleNeedsFeedback);
 
   const selectedAgent = agents.find(agent => agent.id === agentId) || (focusedAgent?.id === agentId ? focusedAgent : null);
-  const hasMoreDates = dateBuckets.some(d => !loadedDates.has(d.date));
-  const remainingCount = dateBuckets
-    .filter(d => !loadedDates.has(d.date))
-    .reduce((sum, d) => sum + d.count, 0);
 
   return (
     <div className="space-y-6">
@@ -363,13 +298,13 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
       )}
 
       {/* Completed Agents */}
-      {(totalCount > 0 || recentCompleted.length > 0 || pendingFeedbackAgents.length > 0) && (
+      {(totalCount > 0 || !history.loaded || history.error || history.hasMore || allCompleted.length > 0 || feedbackFilter !== 'all' || pendingFeedbackCount > 0) && (
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-white">
               Completed Agents
               <span className="text-sm text-gray-500 font-normal ml-2">
-                ({formatCount(totalCount)} total)
+                ({formatCount(totalCount)} {history.total == null ? 'loaded' : 'total'})
               </span>
             </h3>
             <button
@@ -384,9 +319,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
           {confirmingClear && (
             <InlineConfirmRow
               className="mb-3"
-              question={totalCount > 0
-                ? `Clear ALL completed agents? This removes ${formatCount(totalCount)} agent record${totalCount === 1 ? '' : 's'} and cannot be undone.`
-                : 'Clear ALL completed agents? This cannot be undone.'}
+              question="Clear ALL completed agents, including records outside the current filter and unloaded pages? This cannot be undone."
               confirmText="Clear all"
               confirmTitle="Confirm clear all completed agents"
               cancelTitle="Cancel clear"
@@ -410,7 +343,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
             <button
               type="button"
               onClick={() => setFeedbackFilter('needs-feedback')}
-              disabled={needsFeedbackCount === 0 && feedbackFilter !== 'needs-feedback'}
+
               aria-label={`Needs feedback: ${needsFeedbackCount}`}
               aria-pressed={feedbackFilter === 'needs-feedback'}
               className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors disabled:opacity-50 ${
@@ -464,29 +397,11 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
                 {feedbackFilter === 'needs-feedback' && !searchQuery
                   ? 'All loaded agent runs have feedback.'
                   : `No loaded agents match "${searchQuery}"`}
-                {hasMoreDates && (
-                  <div className="mt-2 text-xs">
-                    {formatCount(remainingCount)} agents in older dates not yet loaded
-                  </div>
-                )}
+
               </div>
             )}
-            {!searchQuery && hasMoreDates && (
-              <button
-                onClick={handleLoadMore}
-                disabled={loadingMore}
-                className="col-span-full w-full py-2 text-sm text-port-accent hover:text-white bg-port-card border border-port-border rounded-lg transition-colors flex items-center justify-center gap-1 disabled:opacity-50"
-              >
-                {loadingMore ? (
-                  <BrailleSpinner text="Loading" />
-                ) : (
-                  <>
-                    <ChevronDown size={14} />
-                    Load older agents ({formatCount(remainingCount)} remaining)
-                  </>
-                )}
-              </button>
-            )}
+            <InfiniteScrollFooter hasMore={history.hasMore} loading={history.loading} error={history.error}
+              onLoadMore={history.loadMore} autoLoad={!searchQuery} label="Load older agents" />
           </div>
         </div>
       )}
@@ -498,7 +413,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
           providers={providers}
           providersLoaded={providersLoaded}
           apps={apps}
-          onDone={onRefresh}
+          onDone={refresh}
           onClose={() => setRelaunchingAgent(null)}
         />
       )}

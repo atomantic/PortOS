@@ -1107,10 +1107,7 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
           re-fetched what was already on screen. */}
       <div className="flex items-center gap-2">
         <Gauge size={16} className="text-port-accent" />
-        <div>
-          <h2 className="text-sm font-medium text-gray-300">Model Performance</h2>
-          <p className="text-[11px] text-gray-500">Compare measured evidence first, then run a focused check when the result leaves a question.</p>
-        </div>
+        <p className="text-[11px] text-gray-500">Compare measured evidence first, then run a focused check when the result leaves a question.</p>
         {loading && <BrailleSpinner />}
       </div>
 

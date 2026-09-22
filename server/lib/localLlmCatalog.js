@@ -593,6 +593,20 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/DeepSeek-R1-Distill-Qwen-32B-GGUF'
   },
   {
+    key: 'deepseek-r1-70b',
+    name: 'DeepSeek-R1 70B',
+    category: 'reasoning',
+    recommendedFor: ['reasoning'],
+    params: '70B',
+    size: '43 GB',
+    family: 'deepseek',
+    description: "DeepSeek's open reasoning model distilled into a 70B Llama architecture — flagship chain-of-thought reasoning for high-memory workstations.",
+    capabilities: ['chat', 'reasoning'],
+    context: 131072,
+    ollama: 'deepseek-r1:70b',
+    lmstudio: 'lmstudio-community/DeepSeek-R1-Distill-Llama-70B-GGUF'
+  },
+  {
     key: 'phi-4-14b',
     name: 'Phi-4 14B',
     category: 'reasoning',
@@ -650,6 +664,20 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Llama-3.3-70B-Instruct-GGUF'
   },
   {
+    key: 'llama4-scout-17b',
+    name: 'Llama 4 Scout 17B',
+    category: 'general',
+    recommendedFor: ['general', 'vision', 'multilingual'],
+    params: '17B / MoE 16E',
+    size: '11.2 GB',
+    family: 'llama',
+    description: "Meta's natively multimodal Llama 4 Scout — 17B active MoE architecture with vision, tools, multilingual support, and long-context capabilities.",
+    capabilities: ['chat', 'tools', 'vision', 'multilingual'],
+    context: 131072,
+    ollama: 'llama4:scout',
+    lmstudio: 'lmstudio-community/Llama-4-Scout-17B-16E-Instruct-GGUF'
+  },
+  {
     key: 'qwen3.5-122b-a10b',
     name: 'Qwen3.5 122B-A10B',
     category: 'general',
@@ -697,6 +725,20 @@ export const LOCAL_LLM_CATALOG = [
     context: 131072,
     ollama: 'qwen2.5-coder:7b',
     lmstudio: 'lmstudio-community/Qwen2.5-Coder-7B-Instruct-GGUF'
+  },
+  {
+    key: 'qwen2.5-coder-14b',
+    name: 'Qwen2.5-Coder 14B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning'],
+    params: '14B',
+    size: '9.0 GB',
+    family: 'qwen',
+    description: "Alibaba's 14B open coding model — high-quality code generation, debugging, and multi-file context handling for 16GB+ hardware.",
+    capabilities: ['chat', 'code', 'tools'],
+    context: 131072,
+    ollama: 'qwen2.5-coder:14b',
+    lmstudio: 'lmstudio-community/Qwen2.5-Coder-14B-Instruct-GGUF'
   },
   {
     key: 'qwen2.5-coder-32b',

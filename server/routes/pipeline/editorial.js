@@ -200,8 +200,9 @@ const comparativeRankRunSchema = z.object({
   rounds: z.coerce.number().int().min(1).max(8).optional(),
 });
 
-// Stored ranking: { status:'complete', ranking[], weakest[], matches[], stale, ... }
-// or { status:'none' } / { status:'insufficient' }.
+// Stored ranking: { status:'complete'|'partial', ranking[], weakest[], matches[], stale, ... }
+// A partial ranking is budget-stopped evidence and is never a revision-priority
+// source. Also { status:'none' } / { status:'insufficient' }.
 router.get('/series/:id/editorial/rank', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(await comparativeRank.getComparativeRank(req.params.id));

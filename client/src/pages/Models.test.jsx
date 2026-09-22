@@ -110,6 +110,23 @@ describe('Models', () => {
     expect(await screen.findByText('llms panel')).toBeInTheDocument();
   });
 
+  it('titles the page with the destination instead of the Models section', async () => {
+    renderAt('/models/code-reviewers');
+    expect(screen.getByRole('heading', { level: 1, name: 'Code Reviewers' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: 'Models' })).not.toBeInTheDocument();
+    expect(await screen.findByText('code reviewers panel')).toBeInTheDocument();
+  });
+
+  it('keeps the destination title on a nested task view', () => {
+    renderAt('/models/performance/capabilities');
+    expect(screen.getByRole('heading', { level: 1, name: 'Performance' })).toBeInTheDocument();
+  });
+
+  it('uses the nested destination name for Abuse Guard', () => {
+    renderAt('/models/llms/abuse');
+    expect(screen.getByRole('heading', { level: 1, name: 'Abuse Guard' })).toBeInTheDocument();
+  });
+
   it('passes an explicit Performance task view through the section shell', async () => {
     renderAt('/models/performance/capabilities');
     expect(await screen.findByTestId('assessments-panel')).toHaveAttribute('data-task-view', 'capabilities');

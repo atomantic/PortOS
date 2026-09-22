@@ -111,6 +111,20 @@ export default function SyncToPeerButton({
     if (open) refresh();
   }, [open]);
 
+  // Close on Escape and return focus to the trigger so keyboard users don't
+  // have to Tab back through the popover content.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
   // Both refs: the menu lives in a portal outside wrapperRef, so a trigger-only
   // containment check would read clicks on the menu as outside.
   useClickOutside([wrapperRef, popoverRef], open, () => setOpen(false));
@@ -160,6 +174,8 @@ export default function SyncToPeerButton({
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={nothingToSync}
+        aria-expanded={open}
+        aria-haspopup="true"
         className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${compact ? 'p-1.5' : ''}`}
         title={nothingToSync ? 'Nothing to sync' : 'Sync to a peer instance'}
       >

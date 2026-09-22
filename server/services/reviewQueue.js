@@ -680,6 +680,9 @@ const PRODUCERS = [
       const alertType = typeof alert.type === 'string' && alert.type.trim()
         ? alert.type.trim()
         : null;
+      const drillTo = alert.type === 'system_resource'
+        ? '/system-resources/overview'
+        : alert.link || '/system-resources/overview';
       return {
         id: `health:${alert.id}`,
         ...(alert.investigation ? { investigation: alert.investigation } : {}),
@@ -690,9 +693,12 @@ const PRODUCERS = [
         summary: (alert.detail || alert.message || '').slice(0, 200),
         timestamp: alert.timestamp || null,
         severity: alert.severity === 'critical' ? 'critical' : 'high',
-        drillTo: alert.type === 'system_resource'
-          ? '/system-resources/overview'
-          : alert.link || '/system-resources/overview',
+        drillTo,
+        drillLabel: drillTo.startsWith('/cos/learning')
+          ? 'Open Learning'
+          : drillTo.startsWith('/system-resources/overview')
+            ? 'Open system resources'
+            : 'View details',
         ...(alertType ? { meta: { alertType } } : {})
       };
     }

@@ -82,6 +82,17 @@ describe('chatgptImport service', () => {
     ...overrides
   });
 
+  it('cleans citations before persisting both the preview and full archive', async () => {
+    const conv = sampleConversation();
+    conv.mapping.n2.message.content.parts = ['Answer.citeturn1search0turn1search1 [Source](https://example.com)'];
+    const parsed = parseExport([conv]);
+    await importConversations(parsed);
+    expect(createMemoryEntryMock.mock.calls[0][0].content).toContain('Answer. [Source](https://example.com)');
+    const archive = await readArchivedConversation('conv-1.json');
+    expect(archive.transcript).not.toContain('cite');
+    expect(archive.messages[1].text).toBe('Answer. [Source](https://example.com)');
+  });
+
   describe('extractMessages', () => {
     it('walks the mapping tree from current_node back to root, in order', () => {
       const messages = extractMessages(sampleConversation());

@@ -51,7 +51,7 @@ import { certPaths } from '../lib/certPaths.js';
 import { commandExists } from '../server/lib/commandExists.js';
 import { isStaleGitLock } from '../server/lib/gitStaleLock.js';
 import { scrubHomePath } from '../server/lib/homePath.js';
-import { MIN_NODE, compareVersions, satisfiesMinNode } from './checkNodeVersion.js';
+import { SUPPORTED_NODE_RANGE, compareVersions, satisfiesMinNode } from './checkNodeVersion.js';
 import { MIN_NPM, parseNpmUserAgent, readBundledNpmVersion } from './checkNpmVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { listPendingMigrations } from './run-migrations.js';
@@ -188,8 +188,8 @@ function probePath(root, relativePath, { presentDetail, missingDetail }) {
 async function probeNode() {
   const version = process.versions.node;
   return satisfiesMinNode(version)
-    ? { available: true, detail: `v${version} (floor ${MIN_NODE})` }
-    : { available: false, detail: `v${version} is below the ${MIN_NODE} floor — see .nvmrc` };
+    ? { available: true, detail: `v${version} (supported ${SUPPORTED_NODE_RANGE})` }
+    : { available: false, detail: `v${version} is outside ${SUPPORTED_NODE_RANGE} — see .nvmrc` };
 }
 
 /**

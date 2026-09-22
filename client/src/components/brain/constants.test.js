@@ -24,6 +24,6 @@ describe('Brain TABS ↔ nav manifest', () => {
   });
 
   it('keeps the full-bleed set derived from the presentation map', () => {
-    expect([...FULL_BLEED_TAB_IDS].sort()).toEqual(['daily-log', 'graph', 'notes', 'threads']);
+    expect([...FULL_BLEED_TAB_IDS].sort()).toEqual(['daily-log', 'graph', 'memory', 'notes', 'threads']);
   });
 });

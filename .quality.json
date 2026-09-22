@@ -479,6 +479,20 @@
       }
     },
     {
+      "measurementId": "f5316a6d7557a33e361dbaee741bb2e1752f3c296f76b21f0379c842bd92fcc6",
+      "assessedAt": "2026-09-21T22:10:15.312Z",
+      "report": {
+        "version": 1,
+        "category": "observability",
+        "score": 55,
+        "worstSeverity": 7,
+        "coverage": "partial",
+        "confidence": "medium",
+        "scannedFiles": 2900,
+        "totalFiles": 4518
+      }
+    },
+    {
       "measurementId": "602a4a5ff34bc32378a90e9a236befa87b739e6601ce623820a2b59bb77f77a8",
       "assessedAt": "2026-09-10T14:41:26.439Z",
       "report": {

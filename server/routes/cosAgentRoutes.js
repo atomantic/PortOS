@@ -48,8 +48,20 @@ router.get('/agents', asyncHandler(async (req, res) => {
   void cos.cleanupZombieAgents().catch((err) => {
     console.error(`🧹 Background zombie cleanup failed: ${err.message}`);
   });
+  const { active } = validateRequest(z.object({ active: z.literal('1').optional() }), req.query);
   const agents = await cos.getAgents();
-  res.json(toAgentListItems(agents));
+  res.json(toAgentListItems(active ? agents.filter(agent => agent.status !== 'completed') : agents));
+}));
+
+// Bounded completed history, including state records not yet archived.
+const completedQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().max(512).regex(/^\d{4}-\d{2}-\d{2}\|[^|]*\|[^|]+$/).optional(),
+});
+router.get('/agents/completed', asyncHandler(async (req, res) => {
+  const query = validateRequest(completedQuerySchema, req.query);
+  const page = await cos.getCompletedAgentPage({ ...query, liveAgents: await cos.getAgents() });
+  res.json({ ...page, items: toAgentListItems(page.items) });
 }));
 
 // GET /api/cos/agents/history - Get available date buckets with counts
@@ -89,7 +101,22 @@ router.get('/agents/history/:date', asyncHandler(async (req, res) => {
 // GET /api/cos/agents/feedback/pending - Reconciled durable feedback actions.
 // The queue owns the action mutation; this endpoint feeds the Agents tab with
 // the same live/archive predicate and count without loading every date bucket.
+//
+// The scalar badge and the paged list answer from the completion-order
+// eligibility projection and hydrate only the rows they return; the unpaged
+// form is the one that also reconciles the durable references and reports the
+// archives it could not read.
 router.get('/agents/feedback/pending', asyncHandler(async (req, res) => {
+  const { limit, cursor, countOnly } = validateRequest(z.object({
+    countOnly: z.literal('1').optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    cursor: z.string().max(512).optional(),
+  }), req.query);
+  if (countOnly) return res.json({ count: await cos.getPendingAgentFeedbackCount() });
+  if (limit) {
+    const page = await cos.getPendingAgentFeedbackPage({ limit, cursor });
+    return res.json({ ...page, items: toAgentListItems(page.items) });
+  }
   const pending = await cos.getPendingAgentFeedback({ includeUnavailable: true });
   res.json({
     count: pending.count,

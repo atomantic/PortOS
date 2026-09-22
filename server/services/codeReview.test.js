@@ -762,6 +762,57 @@ describe('codeReview helpers', () => {
       expect(request.messages[1].content).toContain(injection)
     })
 
+    it('ships a local-admission release when its in-flight regression test proves non-local work can claim the shared slot', async () => {
+      const objective = 'When a local inference agent is running, it must not block non-local inference.'
+      const diff = [
+        'diff --git a/server/services/persistentMindSupervisor.js b/server/services/persistentMindSupervisor.js',
+        '@@ -745,7 +745,7 @@',
+        '-    await runClaimedPersistentMindTurn(turn, mind);',
+        '+    await runClaimedPersistentMindTurn(turn, mind, globalSlot);',
+        '@@ -844,6 +844,7 @@',
+        '+    release = slot.release;',
+        '+    if (localEndpointOfProvider(prepared.provider)) globalSlot?.release();',
+        'diff --git a/server/services/persistentMindSupervisor.test.js b/server/services/persistentMindSupervisor.test.js',
+        '@@ -626,0 +627,12 @@',
+        '+    const running = deferred();',
+        '+    mock.localEndpointOfProvider.mockReturnValue(\'localhost:11434\');',
+        '+    run: vi.fn(() => running.promise),',
+        '+    const probe = acquireCosGlobalSlot({ agents: {}, limit: 1, reservationId: \'ordinary-task\' });',
+        '+    expect(probe.ok).toBe(true);',
+        '+    // The local turn is still running when the unrelated claim succeeds.',
+        '+    running.resolve({});',
+      ].join('\n')
+
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const rubric = request.messages[0].content
+        const evidence = request.messages[1].content
+        const rubricRecognizesShape = rubric.includes('production handoff or release')
+          && rubric.includes('keeps local inference active while probing the unrelated claim')
+        const diffShowsShape = evidence.includes('localEndpointOfProvider')
+          && evidence.includes('running.promise')
+          && evidence.includes('probe.ok')
+        return mockJsonResponse({
+          choices: [{ message: { content: JSON.stringify(rubricRecognizesShape && diffShowsShape
+            ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'the in-flight regression test proves the shared slot is available to unrelated work' }
+            : { verdict: 'rethink', missing: ['non-local inference remains blocked'], unrequested: [], evidence: 'the supporting release was misread' }) } }],
+        })
+      })
+
+      const result = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff })
+
+      expect(result).toMatchObject({
+        ok: true,
+        verdict: 'ship',
+        missing: [],
+        unrequested: [],
+      })
+      const request = JSON.parse(global.fetch.mock.calls[0][1].body)
+      expect(request.messages[1].content).toContain(objective)
+      expect(request.messages[0].content).toContain('production handoff or release')
+      expect(request.messages[0].content).toContain('test-only change')
+    })
+
     it('escapes a diff that carries its own fence so it cannot break out into the objective half', async () => {
       await runLocalGoalFidelityReview({
         backend: 'ollama',

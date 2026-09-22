@@ -15,7 +15,7 @@ import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir, tryReadFile } from '../lib/fileUtils.js';
-import { loadAgentIndex, saveAgentIndex } from './cosAgentIndex.js';
+import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder } from './cosAgentIndex.js';
 
 // Archive stale completed agents from state.json.
 // Completed agents are already persisted to per-agent metadata files on disk
@@ -37,6 +37,7 @@ export async function archiveStaleAgents() {
     if (staleIds.length === 0) return { archived: 0 };
 
     const idx = await loadAgentIndex();
+    const archived = [];
 
     for (const id of staleIds) {
       // Ensure agent is persisted to date-bucketed disk before removing from state
@@ -70,12 +71,16 @@ export async function archiveStaleAgents() {
         }
 
         idx.set(id, dateStr);
+        archived.push({ ...agent, id });
       }
 
       delete state.agents[id];
     }
 
     await saveState(state);
+    // Ordered before `saveAgentIndex`, which prunes the projection to the ids
+    // the index owns.
+    await recordArchivedAgentOrder(archived);
     await saveAgentIndex();
     console.log(`📦 Archived ${staleIds.length} stale agents from state.json (retained on disk)`);
     cosEvents.emit('agents:changed', { action: 'auto-archive', archived: staleIds.length });

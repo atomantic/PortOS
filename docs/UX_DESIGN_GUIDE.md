@@ -27,7 +27,7 @@ Do not start by placing existing JSX blocks into a larger grid. Decide what belo
 - A **section navigator** exposes the area's destinations as icon-prefixed, labeled links. Large areas use a vertical navigator on desktop instead of a horizontally overflowing destination strip. Icons are stable visual anchors, not optional decoration to remove for visual minimalism.
 - One local row of task views is allowed inside a destination, normally 2–5 short labels. If it needs another nested row, promote the destination or use a record detail.
 - Breadcrumbs show ancestry; they do not replace navigation. Search, command palette, and voice are accelerators, never the only discovery path.
-- Page titles name the actual destination: “Jev decision scorer” or “Model performance,” rather than spending a separate header row on “Models” alone.
+- Page titles name the actual destination: “Jev decision scorer” or “Model performance,” rather than spending a separate header row on “Models” alone. The Models shell does this with the active section destination’s label and icon. A destination with two jobs uses a local task row under that title; the title does not change per task, and the destination name is not repeated as the first card heading. Explanations that would be copied onto every group live in one help drawer opened from that row.
 - Keep canonical command IDs, current URLs, aliases, and legacy redirects. Moving a link in navigation does not require moving its route.
 
 ### Models proposal
@@ -248,3 +248,23 @@ The page families, spacing, navigation grouping, and pilot choices are PortOS de
 - [NN/g: Progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) supports moving secondary detail behind explicit requests while keeping primary work clear. Disclosure does not justify hiding sibling destinations.
 - [W3C: Reflow](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html) explains narrow-width/zoom reflow and the exception for two-dimensional tables within their own scroll region.
 - [WCAG 2.2](https://www.w3.org/TR/WCAG22/) supplies the accessibility baseline, including contrast, focus, keyboard access, labels, and target-size requirements. The 44px touch target above is a PortOS design default, not a claim that every WCAG AA target must be 44px.
+
+## List deletion and reading position
+
+Deleting an item keeps the populated list and its scroll container mounted. After server success, use `CollapsibleListItem` to fade and collapse the row, including its spacing, so following content slides up; remove the record locally on exit. Preserve search, filters, pagination and unrelated selection. Refresh summary counts separately. Keep failed deletions visible and actionable, prevent duplicate pending requests, honor reduced motion, and transfer keyboard focus without scrolling. Never show a whole-list loading placeholder as deletion feedback. Brain MemoryTab is the reference implementation across Memories, People, Projects, Ideas and Admin.
+
+
+## Large collections and incremental loading
+
+A growing collection must remain usable with hundreds, thousands, or more records. This applies to Brain inbox and memory, CoS tasks/agents, media and image history, and any new collection surface.
+
+- Use event-driven invalidation for stable collections and reference data. Fetch once when needed, update the affected resource on websocket notification, and recover missed updates on reconnect. Do not attach a recurring whole-page fetch to agents, apps, providers, or history. Poll live telemetry only when its visible inspector needs it; pause when hidden and document any fallback cadence.
+- Fetch only data used by the active route/tab. Shared shells use scalar summaries; inactive panels do not fetch, poll, or refresh collections on socket events. Deduplicate in-flight reads and retire responses after navigation or filter changes.
+- Start with a bounded server page (normally 25–50 records, with a server-enforced ceiling). Send card/row projections, never full transcripts, prompts, binary assets, or duplicated history. Load record details when opened and full editable values before editing. Use thumbnails and lazy image decoding/loading for media lists.
+- Use stable cursor pagination for changing histories (timestamp plus unique id as a tie-breaker); deduplicate appended records by id. Apply filters/search/order on the server before pagination. If search is intentionally local, label it “Search loaded results.” Counts describe their scope; do not equate loaded rows with the total.
+- Reuse `client/src/hooks/usePagedCollection.js` for request state and `client/src/components/ui/InfiniteScrollFooter.jsx` for scrolling. The footer observes the actual visible area, keeps a keyboard-accessible Load more button, announces loading/end states, and pauses automatic fetching on error until an explicit retry. Preserve already loaded rows on a failed next page. Disabled/collapsed collections do not fetch.
+- Filter changes reset the cursor and cancel obsolete requests. Mutation handling must preserve stable identity and prevent deleted records returning from stale requests. Keep deep links to records outside the loaded pages; fetch the selected record directly. Background updates must not restart a growing history on every event or jump the reader's scroll position.
+- Infinite fetching does not bound the DOM: for sessions retaining thousands of rows, use measured virtualization or an explicit bounded page/window with preserved selection and scroll. Do not virtualize small bounded lists without evidence.
+- Verify the public behavior: initial and next-page request limits, unrelated-tab silence, no duplicate concurrent loads, stale-response rejection, retry without skipped pages, end-of-results, deep links, and keyboard/mobile access. Measure transfer and rendered-row count using synthetic large fixtures; never put private records into tests or reports.
+
+Adoption is incremental. CoS uses the shared request and footer primitives; Media History reuses the footer with its existing `useGalleryPage` server-filtered adapter; existing collection surfaces require scoped migrations rather than a claim that this document alone makes them conform.

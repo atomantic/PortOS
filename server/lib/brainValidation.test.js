@@ -27,6 +27,7 @@ import {
   ideaInputSchema,
   adminInputSchema,
   inboxQuerySchema,
+  entityQuerySchema,
   linkRecordSchema,
   linkInputSchema,
   linkUpdateInputSchema,
@@ -499,6 +500,18 @@ describe('brainValidation.js', () => {
 
     it('should reject negative offset', () => {
       expect(inboxQuerySchema.safeParse({ offset: -1 }).success).toBe(false);
+    });
+  });
+
+  describe('entityQuerySchema', () => {
+    it('parses query-string booleans without treating "false" as true', () => {
+      expect(entityQuerySchema.parse({ includeArchived: 'true' }).includeArchived).toBe(true);
+      expect(entityQuerySchema.parse({ includeArchived: 'false' }).includeArchived).toBe(false);
+      expect(entityQuerySchema.parse({}).includeArchived).toBe(false);
+    });
+
+    it('rejects an invalid query-string boolean', () => {
+      expect(entityQuerySchema.safeParse({ includeArchived: 'yes' }).success).toBe(false);
     });
   });
 

@@ -173,19 +173,19 @@ describe('AgentCard runtime presentation', () => {
   it('distinguishes a live process, a zombie, and missing process stats', async () => {
     const runningAgent = { ...runningAt(30_000), pid: 4242 };
     api.getCosAgentStats.mockResolvedValueOnce({ active: true, pid: 4242, state: 'running', cpu: 12.3, memoryMb: 64 });
-    const { unmount } = render(<MemoryRouter><AgentCard agent={runningAgent} /></MemoryRouter>);
+    const { unmount } = render(<MemoryRouter><AgentCard agent={runningAgent} initiallyExpanded /></MemoryRouter>);
     expect(await screen.findByText('12.3%')).toBeInTheDocument();
     expect(screen.getByText('64MB')).toBeInTheDocument();
     expect(screen.queryByText('ZOMBIE')).not.toBeInTheDocument();
     unmount();
 
     api.getCosAgentStats.mockResolvedValueOnce({ active: false, pid: 4242 });
-    const zombie = render(<MemoryRouter><AgentCard agent={runningAgent} /></MemoryRouter>);
+    const zombie = render(<MemoryRouter><AgentCard agent={runningAgent} initiallyExpanded /></MemoryRouter>);
     expect(await screen.findByText('ZOMBIE')).toBeInTheDocument();
     zombie.unmount();
 
     api.getCosAgentStats.mockResolvedValueOnce(null);
-    render(<MemoryRouter><AgentCard agent={runningAgent} /></MemoryRouter>);
+    render(<MemoryRouter><AgentCard agent={runningAgent} initiallyExpanded /></MemoryRouter>);
     await waitFor(() => expect(api.getCosAgentStats).toHaveBeenCalledTimes(3));
     expect(screen.queryByText('ZOMBIE')).not.toBeInTheDocument();
     expect(screen.queryByText(/PID 4242/)).not.toBeInTheDocument();
@@ -1073,4 +1073,24 @@ it('links a task-summary issue reference at the tracker the run was stamped with
   );
   expect(screen.getByRole('link', { name: '#7640' }))
     .toHaveAttribute('href', 'https://github.com/atomantic/PortOS/issues/7640');
+});
+
+
+it('loads process stats only after opening an active agent with no output', async () => {
+  api.getCosAgentStats.mockResolvedValue({ active: true, pid: 4242, state: 'running', cpu: 12.3, memoryMb: 64 });
+  render(<MemoryRouter><AgentCard agent={{ ...agent, status: 'running', completedAt: null, result: null, output: [] }} /></MemoryRouter>);
+  expect(api.getCosAgentStats).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole('button', { name: 'Show', exact: true }));
+  expect(await screen.findByText('12.3%')).toBeInTheDocument();
+});
+
+
+it('loads a clipped summary only when the reader asks for the detail', async () => {
+  api.getCosAgent.mockResolvedValue({ ...agent, metadata: { ...agent.metadata, taskSummary: 'The full summary with its conclusion.' }, output: [] });
+  render(<MemoryRouter><AgentCard agent={{ ...agent, metadata: { ...agent.metadata, taskSummary: 'The preview', taskSummaryTruncated: true } }} completed /></MemoryRouter>);
+  expect(screen.getByText('The preview')).toBeInTheDocument();
+  expect(api.getCosAgent).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole('button', { name: 'Load full summary' }));
+  expect(await screen.findByText('The full summary with its conclusion.')).toBeInTheDocument();
+  expect(screen.queryByText('Summary preview.')).not.toBeInTheDocument();
 });

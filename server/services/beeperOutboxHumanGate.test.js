@@ -39,6 +39,18 @@ function collectSources(dir, out = []) {
   return out;
 }
 
+// Loaded at FILE SCOPE rather than inside the `it()` that asserts on them
+// (#7951). `cosToolRegistry.js` is one of the heaviest graphs in the tree, and
+// its first cold load pays vitest's transform pipeline for all of it: measured
+// at 34.6s under a full-suite run against ~450ms in a quiet process. Charged
+// against the 10s `testTimeout`, that surfaced as a "Test timed out in 10000ms"
+// failure in a guard suite that never touched the code under test; during
+// module collection it is not budgeted at all. Both values are plain constants
+// once loaded, so nothing here needs a per-test instance.
+// Guarded by `lib/importScoping.test.js`.
+const { getCosToolCatalog } = await import('./cosToolRegistry.js');
+const { PERSISTENT_MIND_TOOL_BOUNDARIES } = await import('../lib/persistentMindCapabilities.js');
+
 const SOURCES = collectSources(SERVER_ROOT);
 const PRODUCTION_SOURCES = SOURCES.filter((file) => !file.path.endsWith('.test.js'));
 
@@ -74,16 +86,14 @@ describe('beeper outbox has no agent-initiated send path (#36)', () => {
     expect(callers).toEqual(['routes/beeper.js']);
   });
 
-  it('exposes no beeper tool to the CoS catalog or the voice surface', async () => {
-    const { getCosToolCatalog } = await import('./cosToolRegistry.js');
+  it('exposes no beeper tool to the CoS catalog or the voice surface', () => {
     const catalog = getCosToolCatalog({ scope: 'all' });
     const names = JSON.stringify(catalog);
     expect(catalog.length ?? Object.keys(catalog).length).toBeGreaterThan(3);
     expect(/beeper/i.test(names)).toBe(false);
   });
 
-  it('keeps "no external messaging" in the persistent-mind boundaries', async () => {
-    const { PERSISTENT_MIND_TOOL_BOUNDARIES } = await import('../lib/persistentMindCapabilities.js');
+  it('keeps "no external messaging" in the persistent-mind boundaries', () => {
     expect(PERSISTENT_MIND_TOOL_BOUNDARIES.length).toBeGreaterThan(2);
     expect(PERSISTENT_MIND_TOOL_BOUNDARIES.join(' ')).toContain('external messaging');
   });

@@ -173,6 +173,7 @@ export * from './useVisibilityEvent.js';
 // === UI / interaction ===
 export * from './useArmedAction.js';
 export * from './useAutoRefetch.js';
+export * from './useSystemActivity.js';
 export * from './useCmdKSearch.js';
 export * from './useCooldownTick.js';
 export { default as useDrawerTab } from './useDrawerTab.js';
@@ -233,3 +234,5 @@ export { default as useEidoverseFrame } from './useEidoverseFrame.js';
 export * from './useGalleryPage.js';
 export * from './useAccountSyncStatus.js';
 export * from './useActionQueue.js';
+
+export * from './usePagedCollection.js';

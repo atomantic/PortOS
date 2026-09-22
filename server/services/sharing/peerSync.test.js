@@ -675,6 +675,9 @@ describe('peerSync', () => {
     // An inventory failure must survive both lazy and direct lister boundaries.
     it('marks failed inventories unavailable even when the remaining subset is confirmed', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      // Inventory failures log to stderr (#7943); both streams are checked so
+      // the redaction contract can't be satisfied by moving the leak elsewhere.
+      const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
       vi.mocked(listUniverses).mockRejectedValue(new Error('private database details'));
       vi.mocked(listAuthors).mockRejectedValue(new Error('private author contents'));
       vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }]);
@@ -689,9 +692,10 @@ describe('peerSync', () => {
       ]);
       expect(cov.byKind.universe).toMatchObject({ partial: true });
       expect(JSON.stringify(cov)).not.toContain('private');
-      expect(log.mock.calls.flat().join(' ')).not.toContain('private');
-      expect(log.mock.calls.filter(([message]) => message.includes('coverage unavailable'))).toHaveLength(2);
+      expect([...log.mock.calls, ...errorLog.mock.calls].flat().join(' ')).not.toContain('private');
+      expect(errorLog.mock.calls.filter(([message]) => message.includes('coverage unavailable'))).toHaveLength(2);
       log.mockRestore();
+      errorLog.mockRestore();
     });
 
     it('reports unavailable when subscription storage cannot be read, including empty inventories', async () => {
@@ -1261,6 +1265,7 @@ describe('peerSync', () => {
 
     it('continues peer-online backfill after a kind inventory fails without logging private errors', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
       const { instanceEvents } = await import('../instanceEvents.js');
       const { installPeerSyncListener } = await import('./peerSync.js');
       installPeerSyncListener();
@@ -1274,9 +1279,10 @@ describe('peerSync', () => {
       });
       await __drainForTests();
       expect(await findPeerSubscription('peer-a', 'series', 's1')).not.toBeNull();
-      expect(log).toHaveBeenCalledWith('⚠️ peerSync: backfill inventory unavailable for universe/records');
-      expect(log.mock.calls.flat().join(' ')).not.toContain('private inventory details');
+      expect(errorLog).toHaveBeenCalledWith('⚠️ peerSync: backfill inventory unavailable for universe/records');
+      expect([...log.mock.calls, ...errorLog.mock.calls].flat().join(' ')).not.toContain('private inventory details');
       log.mockRestore();
+      errorLog.mockRestore();
     });
 
     it('converges from peer:online when the toggle fired before instanceId was known', async () => {

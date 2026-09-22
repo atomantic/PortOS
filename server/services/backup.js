@@ -23,9 +23,19 @@ import { emitErrorEvent, ServerError } from '../lib/errorHandler.js';
 import { isSafeSnapshotSource, isSafeSubdirFilter, anchorUserExcludes } from '../lib/sharedSchemas.js';
 import { reloadSettings } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
+import { noteSystemActivity } from './systemActivityNotify.js';
 
 // Module-level state
 let isRunning = false;
+
+// The in-process lock is the activity signal the updater reads. Note the edge
+// in the same assignment so a client cannot keep a stale "backup running"
+// verdict after the lock drops, or miss one that just started. There is no
+// cancel path: a failed run releases the lock as `failure`.
+function setBackupRunning(running, phase) {
+  isRunning = running;
+  noteSystemActivity('backup', phase);
+}
 
 // Backups and restores can legitimately run for hours on large or remote
 // volumes, so a short elapsed-time cap would turn healthy work into failure.
@@ -494,7 +504,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     throw new Error('Backup destination not configured');
   }
 
-  isRunning = true;
+  setBackupRunning(true, 'start');
   let snapshotId = null;
   let snapshotDir;
   let parentMarker;
@@ -517,7 +527,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
     if (snapshotDir) await unlink(failedMarkerPath(snapshotDir)).catch(() => {});
     await clearInProgressMarkers();
     releaseActiveSnapshot();
-    isRunning = false;
+    setBackupRunning(false, 'completion');
     return result;
   };
 
@@ -530,7 +540,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
       : false;
     if (failureRecorded) await clearInProgressMarkers();
     releaseActiveSnapshot();
-    isRunning = false;
+    setBackupRunning(false, 'failure');
     await saveState({ lastRun: new Date().toISOString(), status: 'error', error: err.message, pgBackup: null }).catch(() => {});
     if (io) io.emit('backup:failed', { snapshotId, error: err.message });
     throw err;

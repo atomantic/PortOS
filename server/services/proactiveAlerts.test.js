@@ -175,7 +175,34 @@ describe('proactiveAlerts — current task performance', () => {
       detail: '20% success across the last 5 runs'
     });
     expect(alerts.find(a => a.type === 'learning_health')).toMatchObject({
-      metadata: { skipped: 1, critical: 1 }
+      title: '1 task type being skipped: self-improve:example',
+      detail: 'Very low success rates caused automatic skip (self-improve:example) — review task configuration',
+      metadata: { skipped: 1, critical: 1, taskTypes: ['self-improve:example'] }
+    });
+  });
+
+  it('names multiple skipped task types in title and detail', async () => {
+    const task1 = {
+      taskType: 'internal-task',
+      successRate: 10,
+      completed: 30,
+      rateSource: 'windowed',
+      windowedCompleted: 30
+    };
+    const task2 = {
+      taskType: 'self-improve:claim-issue',
+      successRate: 3,
+      completed: 30,
+      rateSource: 'windowed',
+      windowedCompleted: 30
+    };
+    mock.performance = { needsAttention: [task1, task2], skipped: [task1, task2] };
+
+    const { alerts } = await generateAlerts();
+    expect(alerts.find(a => a.type === 'learning_health')).toMatchObject({
+      title: '2 task types being skipped: internal-task, self-improve:claim-issue',
+      detail: 'Very low success rates caused automatic skip (internal-task, self-improve:claim-issue) — review task configuration',
+      metadata: { skipped: 2, critical: 2, taskTypes: ['internal-task', 'self-improve:claim-issue'] }
     });
   });
 });

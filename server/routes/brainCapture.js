@@ -56,11 +56,20 @@ router.post('/capture', asyncHandler(async (req, res) => {
  */
 router.get('/inbox', asyncHandler(async (req, res) => {
   const data = validateRequest(inboxQuerySchema, req.query);
-  const [entries, counts] = await Promise.all([
+  const [result, counts] = await Promise.all([
     brainService.getInboxLog(data),
     brainService.getInboxLogCounts(),
   ]);
-  res.json({ entries, counts });
+  const entries = Array.isArray(result) ? result : (result?.entries || result?.items || []);
+  const total = result?.total ?? entries.length;
+  const nextCursor = result?.nextCursor ?? null;
+  res.json({
+    entries,
+    items: entries,
+    counts,
+    total,
+    nextCursor
+  });
 }));
 
 /**

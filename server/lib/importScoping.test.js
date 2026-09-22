@@ -38,6 +38,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/codeReview.js', 'lib/validation.js',
+    'reads reviewer vocabulary from its pure declaring module without the validation barrel'],
   ['services/backup.js', 'services/socket.js',
     'loads socket/auth listeners only when a failed scheduled DB dump needs the global socket'],
   ['services/eidoverseWorld.js', 'services/eidoverseWorldSources.js',
@@ -297,6 +299,102 @@ describe('deferred imports stay deferred (#6156)', () => {
   it('still sees the deferred modules from their own entry points', () => {
     expect(reaches('services/persistentMindAdapter.js', 'services/cosToolRegistry.js')).toBe(true);
     expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
+  });
+});
+
+/**
+ * Hoisted test imports (#7951).
+ *
+ * The inverse of DEFERRED, and it defends a runner budget rather than a module
+ * count. A test file that loads a large graph with `await import()` INSIDE an
+ * `it()` or a `beforeAll` pays vitest's transform pipeline for that whole graph
+ * the first time any worker touches it, and that cost is charged against
+ * `testTimeout` / `hookTimeout`. Measured under a full `cd server && npm test`
+ * on macOS, against ~445ms for the same import in a quiet node process:
+ *
+ *   routes/imageGen.js ......... 29,789ms   (beforeAll -> "Hook timed out in 10000ms")
+ *   services/cosToolRegistry.js  34,571ms   (it()      -> "Test timed out in 10000ms")
+ *   routes/settings.js ......... 28,184ms   (it(), then 530-970ms per re-import)
+ *
+ * Under the flat 10s budget these files failed with zero failing assertions, in
+ * suites the change under test never touched — which is exactly how a real
+ * regression rides through a habitually-red `npm test`. Moving the same import
+ * to file scope pays it during module collection, which is not budgeted at all.
+ *
+ * #7951 also raised testTimeout/hookTimeout to 30s, which is what covers the
+ * ~269 test files whose in-test `await import()` is deliberate and cannot be
+ * hoisted. These rows are still the load-bearing half: a 30s budget does not
+ * make a 35s import fit, and the raise is a ceiling for the tail rather than a
+ * licence to put a heavy cold load back inside a timed region. It regresses
+ * silently — pushing one of these imports back into a hook still passes on a
+ * quiet machine and only fails under full-suite contention — so each is pinned
+ * here.
+ *
+ * Asserted BOTH ways, like DEFERRED above: the file must still name the
+ * specifier (a row whose import was deleted is a different change), and the
+ * call must still sit ahead of the first test/hook registration in the file.
+ */
+// [test file, specifier it must import at file scope, why]
+const HOISTED = [
+  ['routes/imageGen.multipart.test.js', './imageGen.js',
+    'the route graph costs ~30s to transform cold, which a beforeAll charges to hookTimeout'],
+  ['services/beeperOutboxHumanGate.test.js', './cosToolRegistry.js',
+    'the CoS tool registry costs ~35s to transform cold, which an it() charges to testTimeout'],
+  ['routes/settings.secretsStrip.test.js', './settings.js',
+    'warms the graph once so each vi.resetModules() re-import costs under a second'],
+  ['routes/peerSyncAuthIntegration.test.js', './peerSync.js',
+    'warms the peer-sync route graph once, for the same vi.resetModules() reason'],
+  ['routes/peerSyncAuthIntegration.test.js', '../services/auth.js',
+    'warms the auth service the first test reaches before it can build an app'],
+];
+
+// Everything up to the first test/hook registration is module-collection scope.
+// Anchored to statement position (start of a line, optionally indented) rather
+// than matched anywhere in the source: `it()` and `beforeAll` are ordinary
+// English in a comment, and a bare \b match finds those too — which is how the
+// first draft of this guard reported a hoisted import as un-hoisted because the
+// comment ABOVE it explained which hook the import had been moved out of.
+const FIRST_REGISTRATION = /^[ \t]*(?:describe|it|test|beforeAll|beforeEach|afterAll|afterEach)\s*(?:\.\w+)?\s*\(/m;
+
+describe('heavy test imports stay hoisted to file scope (#7951)', () => {
+  it.each(HOISTED)('%s imports %s before any test or hook — it %s', (entry, specifier) => {
+    const src = readFileSync(abs(entry), 'utf-8');
+    const call = `import('${specifier}')`;
+    const first = src.indexOf(call);
+    expect(
+      first,
+      `${entry} no longer contains ${call}. If ${specifier} is genuinely unused now, delete `
+        + 'this row — do not move the import back into a test or a hook.',
+    ).toBeGreaterThan(-1);
+
+    const registration = src.search(FIRST_REGISTRATION);
+    expect(
+      registration,
+      `${entry} registers no test or hook, so this row is guarding the wrong file.`,
+    ).toBeGreaterThan(-1);
+
+    // The FIRST load is the one that matters: it is what pays the transform.
+    // A later `import()` of the same specifier from inside a test — which the
+    // `vi.resetModules()` files do deliberately, to get a fresh instance — costs
+    // the sub-second re-import measured above, so those occurrences are fine.
+    expect(
+      first,
+      `${entry} loads ${specifier} first at offset ${first}, after the first test/hook `
+        + `registration at ${registration}. That import's cold transform cost is then `
+        + 'charged against testTimeout/hookTimeout — keep the first load at file scope (#7951).',
+    ).toBeLessThan(registration);
+  });
+
+  // Positive control: the regex must actually FIND a registration in a file
+  // that has one, or every row above would pass by comparing against -1.
+  it('recognizes a test registration in a file that plainly has one', () => {
+    const src = readFileSync(abs('services/beeperOutboxHumanGate.test.js'), 'utf-8');
+    expect(src.search(FIRST_REGISTRATION)).toBeGreaterThan(-1);
+    expect(FIRST_REGISTRATION.test("  it('does a thing', () => {")).toBe(true);
+    expect(FIRST_REGISTRATION.test('beforeAll(async () => {')).toBe(true);
+    expect(FIRST_REGISTRATION.test("const x = await import('./settings.js');")).toBe(false);
+    // The anchoring the first draft lacked: prose is not a registration.
+    expect(FIRST_REGISTRATION.test('// moved out of the `it()` that asserts on them')).toBe(false);
   });
 });
 
@@ -809,7 +907,11 @@ describe('deferred imports stay deferred (#6156)', () => {
 // 116,500 -> 116,600 (reviewer configuration health): the health route's
 // code-review mock adds 47 measured static instantiations across the suite;
 // the production route keeps the service import dynamic to avoid that graph.
-const MAX_STATIC_INSTANTIATIONS = 116900;
+// 116,900 -> 117,300 (parallel-merge drift, unrelated to any single PR): main
+// itself measures 116,920, already 20 over the prior ceiling before this
+// change adds anything — see #7993 for the base-relative guard that would
+// make this fixed number unnecessary. Restores the ~400 headroom convention.
+const MAX_STATIC_INSTANTIATIONS = 117300;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

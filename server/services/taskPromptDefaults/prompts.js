@@ -308,6 +308,32 @@ scale the code actually sees. Say which one you have.
 - **Cache misuse** — a cache that never invalidates, one that never hits because
   its key varies, or an unbounded one that is really a leak.
 
+## Required UI load and idle-network coverage
+
+For apps with a UI, inspect the shared shell and at least one high-volume
+collection route, plus a sibling tab that does not use that collection. Trace
+initial reads, mounted hidden panels, polling timers, websocket invalidations,
+and reconnect recovery. Include Brain inbox/memory, CoS history, and media
+history when those surfaces exist; follow the app's collection-loading standard.
+
+When browser tooling is available, capture a cold route load, navigation to the
+sibling tab, and at least 60 seconds of idle network activity. Report request
+counts and transferred/decoded bytes by endpoint, duplicate or overlapping
+requests, time until useful content renders, and idle bytes per minute. Include
+websocket payloads, not only fetch/XHR. Check apps/providers and other stable
+reference data are invalidated by events rather than repeatedly downloaded.
+Distinguish expected live telemetry from whole-list polling; telemetry should
+be scoped to visible consumers. Use synthetic large collections to verify
+server page limits, compact list projections, lazy details, bounded rendered
+rows, and no full history hydration hidden behind client-side slicing.
+
+Do not claim UI performance passed from source inspection or a small/empty
+fixture alone. If browser access, an authorized session, or usable large-fixture
+evidence is unavailable, explicitly mark UI load/idle transfer UNVERIFIED and
+file a deduplicated coverage-gap issue with the missing check and next step.
+Never copy live personal records, hostnames, tokens, or raw private HAR bodies
+into reports; report redacted endpoint patterns and aggregate measurements.
+
 ## Do not trade correctness or clarity for a gain you cannot measure
 
 Reject micro-optimizations with no measured effect, and any change that makes
@@ -3204,7 +3230,7 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 - **A branch whose "Do:" line ends in a merge is not finished until it IS merged.** Its sub-agent stays alive through CI — waiting out the check run, fixing what goes red, then merging — and reports back only when the PR is merged or a specific check/review is blocking it. "PR opened, left open for review" is a completed STEP, not a completed branch: the PR just sits green until the next run re-drives it. Do not end your own run while a sub-agent is still waiting on CI.
 - Merging is gated by the "Do:" line itself — required CI green, MERGEABLE, and the review that branch's flow ran (\`/do:pr\`'s reviewer loop for a PR this task opens; the named review for one already in review). That gate, not a blanket ban, is what keeps unreviewed work out of the default branch. Merge only via \`gh pr merge\`, never a local \`git merge\` into the default branch.
 - If a sub-agent reports a branch is incomplete, superseded, or blocked, leave it as-is and note it in your summary.
-- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For a SUPERSEDED branch, name the file(s) and what on the default branch replaced it, so the user can delete the branch with confidence. When a PR is left open, name the check or review that blocked it.`,
+- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For a SUPERSEDED branch, record the verdict per the instructions above so PortOS's deterministic pass backs it up, removes its worktree, and deletes the branch. Name the file(s) and what on the default branch replaced it in your summary. When a PR is left open, name the check or review that blocked it.`,
 
   'issue-reconcile': `[Improvement: {appName}] Trusted Issue Reconciliation
 

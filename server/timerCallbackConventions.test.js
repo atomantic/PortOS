@@ -114,7 +114,10 @@ export function findUnguardedTimerAwaits(src) {
   });
 }
 
-const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js'], {
+// Every module extension the tree actually ships, not just `.js`: the operator
+// scripts under `server/scripts/` are `.mjs`, and a `*.js`-only glob would
+// report the tree clean while one of them held an unguarded timer (#7953).
+const trackedServerSources = () => execFileSync('git', ['ls-files', '*.js', '*.mjs', '*.cjs'], {
   cwd: SERVER_ROOT,
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,
@@ -125,6 +128,12 @@ describe('async timer callbacks own their rejections (#5668)', () => {
     // A broken `git ls-files` (wrong cwd, detached checkout) would otherwise let
     // every assertion below pass by scanning nothing at all.
     expect(trackedServerSources().length).toBeGreaterThan(200);
+  });
+
+  it('scans every module extension the tree ships, not only .js', () => {
+    // `server/scripts/` is `.mjs`, and a `*.js`-only glob would call the tree
+    // clean while a script in that extension held an unguarded timer.
+    expect(trackedServerSources().filter((f) => f.endsWith('.mjs')).length).toBeGreaterThan(0);
   });
 
   it('finds the async timer callbacks it is meant to guard', () => {

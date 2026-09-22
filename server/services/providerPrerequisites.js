@@ -264,7 +264,7 @@ export function prerequisitesMetForRouting(provider, providers) {
   const runtimes = runtimeSnapshotFor([providerRuntimeKey(provider)]);
   const { missing } = forProvider(provider, runtimes, gatewayKeyState(providers));
   if (!blocksRouting(missing)) return true;
-  console.log(`⛔ Skipping fallback ${provider?.id || 'provider'}: ${describeMissingPrerequisites(missing)}`);
+  console.warn(`⛔ Skipping fallback ${provider?.id || 'provider'}: ${describeMissingPrerequisites(missing)}`);
   return false;
 }
 

@@ -32,6 +32,7 @@ import { getBuildIdentity, getCachedBuildIdentity, formatBuildIdentity } from '.
 import { setupProcessErrorHandlers, asyncHandler, ServerError, errorEvents } from '../lib/errorHandler.js';
 import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 import { createAIToolkit } from '../lib/aiToolkit/index.js';
+import { attachLlmActivityHooks } from './systemActivityNotify.js';
 import { verifyCollectionVersions } from '../lib/collectionStore.js';
 import { startIdleReaper, stopIdleReaper } from '../lib/managedDaemon.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
@@ -180,7 +181,7 @@ import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLoggin
  */
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
-  const aiToolkitHooks = {
+  const aiToolkitHooks = attachLlmActivityHooks({
     ensureProviderReady: (provider) => ensureProviderReadyForExecution(provider),
     onRunCreated: (metadata) => {
       recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
@@ -226,7 +227,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
         }
       });
     }
-  };
+  });
 
   // The ORDER these run in is `runPreRouteSequence`'s contract (see
   // bootstrapSequence.js); this object is only the "what".

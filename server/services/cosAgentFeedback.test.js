@@ -43,9 +43,12 @@ import {
   getFeedbackStats,
   getPendingAgentFeedback,
   getPendingAgentFeedbackCount,
+  getPendingAgentFeedbackPage,
   initializeAgentFeedback,
   submitAgentFeedback,
 } from './cosAgentFeedback.js';
+import { encodeCompletionOrder } from '../lib/cosAgentCompletionOrder.js';
+import { resetCompletionOrderIndex } from './cosAgentCompletionIndex.js';
 import { cosEvents } from './cosEvents.js';
 import {
   listPendingAgentFeedbackRefs,
@@ -321,5 +324,83 @@ describe('submitAgentFeedback records the rating (#5594)', () => {
     mockCosState.state.agents['agent-1'].status = 'running';
     await expect(submitAgentFeedback('agent-1', { rating: 'positive' })).rejects.toThrow(/completed agents/);
     expect(await listUserActions({ type: 'cos.agent.feedback' })).toEqual([]);
+  });
+});
+
+/**
+ * The scalar badge and the paged list answer from the completion-order
+ * eligibility projection (#7968). Each case here leaves the archive record OFF
+ * disk: a reader that still scans pending metadata to decide eligibility cannot
+ * produce these answers.
+ */
+describe('pending feedback served from the eligibility projection', () => {
+  const orderFile = () => join(mockCosState.agentsDir, 'index.order.json');
+
+  const seedProjection = async (entries) => {
+    await mkdir(mockCosState.agentsDir, { recursive: true });
+    await writeFile(orderFile(), JSON.stringify(encodeCompletionOrder(new Map(entries))));
+    resetCompletionOrderIndex();
+  };
+
+  // Enroll a durable reference the way a live completion does, then evict the
+  // live record so only the archive side remains.
+  const enrollThenEvict = async (agents) => {
+    mockCosState.state.agents = Object.fromEntries(agents.map((agent) => [agent.id, agent]));
+    await getPendingAgentFeedback();
+    mockCosState.state = { agents: {} };
+    for (const agent of agents) mockAgentIndex.entries.set(agent.id, agent.completedAt.slice(0, 10));
+  };
+
+  const pendingAgent = (id, completedAt) => ({
+    id, status: 'completed', completedAt, metadata: { taskType: 'user', taskDescription: `Example run ${id}` },
+  });
+
+  beforeEach(async () => {
+    mockCosState.state = { agents: {} };
+    mockAgentIndex.entries = new Map();
+    resetPendingAgentFeedbackStore();
+    resetCompletionOrderIndex();
+    await rm(join(ledgerRoot, 'cos-pending-agent-feedback.json'), { force: true });
+    await rm(orderFile(), { force: true });
+  });
+
+  afterAll(async () => {
+    await rm(mockCosState.agentsDir, { recursive: true, force: true });
+  });
+
+  it('counts an eligible archived run without reading its metadata', async () => {
+    const agent = pendingAgent('agent-projected-open', '2026-08-10T10:00:00.000Z');
+    await enrollThenEvict([agent]);
+    await seedProjection([[agent.id, { completedAt: agent.completedAt, completed: true, feedbackEligible: true }]]);
+
+    await expect(getPendingAgentFeedbackCount()).resolves.toBe(1);
+  });
+
+  it('stops counting a run the projection records as already rated', async () => {
+    const agent = pendingAgent('agent-projected-rated', '2026-08-11T10:00:00.000Z');
+    await enrollThenEvict([agent]);
+    await seedProjection([[agent.id, { completedAt: agent.completedAt, completed: true, feedbackEligible: false }]]);
+
+    await expect(getPendingAgentFeedbackCount()).resolves.toBe(0);
+  });
+
+  it('pages newest id first and hydrates only the rows it returns', async () => {
+    const agents = ['agent-page-a', 'agent-page-b', 'agent-page-c']
+      .map((id, i) => pendingAgent(id, `2026-08-12T1${i}:00:00.000Z`));
+    await enrollThenEvict(agents);
+    await seedProjection(agents.map((agent) => [agent.id,
+      { completedAt: agent.completedAt, completed: true, feedbackEligible: true }]));
+    // Only the row the page returns exists on disk — `total` still sees all three,
+    // which a reader that hydrated the whole list up front could not report.
+    const newest = agents.at(-1);
+    const dir = join(mockCosState.agentsDir, newest.completedAt.slice(0, 10), newest.id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'metadata.json'), JSON.stringify(newest));
+
+    await expect(getPendingAgentFeedbackPage({ limit: 1 })).resolves.toMatchObject({
+      items: [newest],
+      total: 3,
+      nextCursor: newest.id,
+    });
   });
 });

@@ -14,7 +14,7 @@ const TAB_PRESENTATION = {
   ideas: { icon: Lightbulb },
   'daily-log': { icon: NotebookPen, fullBleed: true },
   links: { icon: Link2 },
-  memory: { icon: Database },
+  memory: { icon: Database, fullBleed: true },
   notes: { icon: FileText, fullBleed: true },
   graph: { icon: Network, fullBleed: true },
   digest: { icon: Calendar },

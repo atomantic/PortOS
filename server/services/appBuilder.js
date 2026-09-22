@@ -122,14 +122,16 @@ export async function buildApp(app) {
       console.log(`📦 Installing ${label} dependencies for ${app.name}`);
       const installResult = await runNpmInstall(subDir);
       if (!installResult.success) {
-        console.log(`❌ npm install (${label}) exit=${installResult.exitCode}: ${installResult.output.slice(-300)}`);
+        console.error(`❌ npm install (${label}) exit=${installResult.exitCode}: ${installResult.output.slice(-300)}`);
         return { success: false, failure: 'install', label, exitCode: installResult.exitCode, output: installResult.output, buildCommand };
       }
     }
   }
 
   const result = await runBuild(cmd, args, app.repoPath);
-  console.log(`${result.success ? '✅' : '❌'} Build ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+  // A failed build is an error line (#7945); a successful one is progress.
+  const logBuild = result.success ? console.log : console.error;
+  logBuild(`${result.success ? '✅' : '❌'} Build ${result.success ? 'complete' : 'failed'} for ${app.name}`);
 
   if (!result.success) {
     return { success: false, failure: 'build', code: result.code, signal: result.signal, output: result.output, buildCommand };

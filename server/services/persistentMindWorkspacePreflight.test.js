@@ -95,7 +95,7 @@ describe('persistent mind workspace preflight', () => {
     await writeManifest(repoPath, 'package.json', { engines });
     const dependencies = createDependencies();
     for (const [nodeVersion, npmVersion, blocked] of [
-      ['24.14.1', '11.11.0', false],
+      ['24.15.0', '11.11.0', false],
       ['26.0.0', '11.12.1', false],
       ['26.0.0', '11.10.1', true],
       ['22.11.0', '11.11.0', true],

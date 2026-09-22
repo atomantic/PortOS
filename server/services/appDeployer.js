@@ -149,7 +149,9 @@ export async function runDeployFlow(
 
   console.log(`🚀 Deploy started for ${app.name} [${flags.join(', ') || 'default'}]`);
   const result = await runDeploy(app, flags, onOutput || (() => {}));
-  console.log(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
+  // A failed deploy is an error line (#7945); a successful one is progress.
+  const logDeploy = result.success ? console.log : console.error;
+  logDeploy(`${result.success ? '✅' : '❌'} Deploy ${result.success ? 'complete' : 'failed'} for ${app.name}`);
 
   return { ok: true, success: result.success, code: result.code };
 }

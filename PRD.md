@@ -241,7 +241,7 @@ CoS MUST assess the actual behavior proposed by external GitHub issues, comments
 
 ## Assumptions & Constraints
 
-- Runs on Node.js ≥22.12.0; PostgreSQL (system `:5432` or Docker `:5561`) is a mandatory runtime dependency for every install.
+- Runs on Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`; PostgreSQL (system `:5432` or Docker `:5561`) is a mandatory runtime dependency for every install.
 - The user operates on a private Tailscale network. A compromised network peer remains a host-access risk, so PortOS strongly recommends the optional instance password and requires explicit acknowledgement when it is absent.
 - The user maintains an arbitrary, unbounded number of federated PortOS installs (including local-inference machines) as sync peers and, where enabled, spare generation capacity — not a single fixed primary/secondary pair.
 - AI provider costs are assumed to run primarily through flat-rate subscriptions (Claude Max, Codex, Google AI Pro, SuperGrok) plus local Ollama/LM Studio inference, not metered per-call billing — this shapes the "no cold-bootstrap LLM calls" policy.

@@ -52,6 +52,7 @@ vi.mock('../services/cos.js', () => ({
   getAgents: vi.fn(),
   getAgentDates: vi.fn(),
   getAgentsByDate: vi.fn(),
+  getCompletedAgentPage: vi.fn(),
   getPendingAgentFeedback: vi.fn(),
   getAgent: vi.fn(),
   deleteAgent: vi.fn(),
@@ -2009,4 +2010,38 @@ describe('CoS Routes', () => {
       expect(cos.getWhileAwayActivity).toHaveBeenCalledWith(undefined);
     });
   });
+describe('CoS scoped collections', () => {
+  it('omits completed task history and every derived copy from the initial queue', async () => {
+    const active = { id: 'active', status: 'pending', description: 'Queued work' };
+    const history = Array.from({ length: 1000 }, (_, i) => ({ id: `done-${i}`, status: 'completed', metadata: { prompt: 'x'.repeat(1000) } }));
+    cos.getAllTasks.mockResolvedValue({ user: { tasks: [active, ...history], grouped: { pending: [active], completed: history } }, cos: null });
+    cos.getAgents.mockResolvedValue([]);
+    const response = await request(app).get('/api/cos/tasks?view=queue');
+    expect(response.status).toBe(200);
+    expect(response.body.user).toMatchObject({ tasks: [active], completedCount: 1000, grouped: { completed: [] } });
+    expect(JSON.stringify(response.body).length).toBeLessThan(1000);
+    const selected = await request(app).get('/api/cos/tasks?view=queue&selected=done-7');
+    expect(selected.body.user.tasks.map(task => task.id)).toEqual(['active', 'done-7']);
+    const page = await request(app).get('/api/cos/tasks?view=completed&limit=25');
+    expect(page.body.items).toHaveLength(25);
+    expect(page.body.total).toBe(1000);
+    const next = await request(app).get(`/api/cos/tasks?view=completed&limit=25&cursor=${page.body.nextCursor}`);
+    expect(next.body.items).toHaveLength(25);
+    expect(new Set([...page.body.items, ...next.body.items].map(task => task.id)).size).toBe(50);
+  });
+
+  it('scopes live agents and validates completed page bounds without changing legacy lists', async () => {
+    cos.getAgents.mockResolvedValue([{ id: 'running', status: 'running' }, { id: 'done', status: 'completed' }]);
+    expect((await request(app).get('/api/cos/agents?active=1')).body.map(agent => agent.id)).toEqual(['running']);
+    expect((await request(app).get('/api/cos/agents')).body).toHaveLength(2);
+    cos.getCompletedAgentPage.mockResolvedValue({ items: [{ id: 'done', output: ['private transcript'], metadata: { taskSummary: 'x'.repeat(100000), simplifySummary: 'y'.repeat(100000) } }], total: 1, nextCursor: null });
+    const page = await request(app).get('/api/cos/agents/completed?limit=25');
+    expect(page.body).toMatchObject({ items: [{ id: 'done', metadata: { taskSummaryTruncated: true, simplifySummaryTruncated: true } }], total: 1, nextCursor: null });
+    expect(page.body.items[0]).not.toHaveProperty('output');
+    expect(JSON.stringify(page.body).length).toBeLessThan(5000);
+    expect((await request(app).get('/api/cos/agents/completed?limit=1000')).status).toBe(400);
+    expect((await request(app).get('/api/cos/agents/completed?cursor=invalid')).status).toBe(400);
+  });
+});
+
 });

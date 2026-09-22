@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
+import { CircleHelp, ListTree, ScanSearch } from 'lucide-react';
 import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
+import Drawer from '../Drawer';
+import TabPills from '../ui/TabPills';
 import * as api from '../../services/api';
 import ReviewerGroupsEditor from '../cos/ReviewerGroupsEditor';
 import GoalFidelityControls from './GoalFidelityControls';
+import CodeReviewHelp from './CodeReviewHelp';
 import useReviewerModelOptions from '../../hooks/useReviewerModelOptions';
 import { reviewerModelsFromDefaults, reviewerModelsToDefaults, reviewerEffortsFromDefaults, reviewerEffortsToDefaults } from '../../lib/reviewerModels';
 import { DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER } from '../../lib/reviewerPins';
@@ -13,13 +17,39 @@ import {
 } from '../cos/constants';
 
 // Global Code Review Defaults — the chain the Review Loop uses when a task or
-// task-type config didn't pin its own reviewers. Owns the Settings › Code
-// Reviewers tab (it used to sit at the top of the AI Providers page, where it
-// buried the provider list under a table most visits didn't need). Every
-// per-reviewer control (model, `~opt`, `~max`) lives in the shared
-// ReviewerPicker table (#3133), so this tab owns only the fetch of the model
-// option lists (via useReviewerModelOptions) and the save.
-export default function CodeReviewersTab() {
+// task-type config didn't pin its own reviewers. Owns Models → Code Reviewers.
+// Every per-reviewer control (model, `~opt`, `~max`) lives in the shared
+// ReviewerPicker table (#3133), so this tab owns the fetch of the model option
+// lists (via useReviewerModelOptions), the save, and which task view is open.
+//
+// Review chain and Follow-up are route-backed task views. The help drawer holds
+// the tier rules once; the cards themselves stay the controls.
+
+const REVIEW_VIEWS = [
+  { id: 'chain', label: 'Review chain', icon: ListTree },
+  { id: 'follow-up', label: 'Follow-up', icon: ScanSearch },
+];
+const CHAIN_PATH = '/models/code-reviewers';
+const FOLLOW_UP_PATH = '/models/code-reviewers/follow-up';
+
+// `null` when the URL is not this page (unit tests render the panel alone).
+// A slug under the page that is not a known view is returned so the caller can
+// replace it with the chain.
+function viewFromPath(pathname) {
+  const path = String(pathname || '').replace(/\/+$/, '');
+  if (path === CHAIN_PATH) return 'chain';
+  if (!path.startsWith(`${CHAIN_PATH}/`)) return null;
+  return path.slice(CHAIN_PATH.length + 1).split('/')[0] || 'chain';
+}
+
+export default function CodeReviewersTab({ view } = {}) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const pathView = viewFromPath(location.pathname);
+  const requested = pathView ?? (view === 'follow-up' ? 'follow-up' : 'chain');
+  const activeView = requested === 'follow-up' ? 'follow-up' : 'chain';
+  const helpOpen = searchParams.get('help') === '1';
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -101,6 +131,24 @@ export default function CodeReviewersTab() {
     return () => { loadVersion.current += 1; };
   }, [loadDefaults]);
 
+  useEffect(() => {
+    if (pathView && pathView !== 'chain' && pathView !== 'follow-up') {
+      navigate({ pathname: CHAIN_PATH, search: location.search }, { replace: true });
+    }
+  }, [location.search, navigate, pathView]);
+
+  const openView = (next) => {
+    navigate({ pathname: next === 'follow-up' ? FOLLOW_UP_PATH : CHAIN_PATH, search: location.search });
+  };
+  const setHelp = (open) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (open) next.set('help', '1');
+      else next.delete('help');
+      return next;
+    }, { replace: true });
+  };
+
   const handleSave = async () => {
     if (saveInFlight.current || loading || loadError) return;
     saveInFlight.current = true;
@@ -147,13 +195,41 @@ export default function CodeReviewersTab() {
   };
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-      <div className="flex items-center gap-2">
-        <ShieldCheck size={16} className="text-port-accent" />
-        <h2 className="text-base font-semibold text-white">Code Review Defaults</h2>
+    <div className="space-y-4 min-w-0">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <TabPills
+          tabs={REVIEW_VIEWS}
+          activeTab={activeView}
+          onChange={openView}
+          ariaLabel="Code review tasks"
+          controlsIdPrefix="code-review-task"
+          mobileCompact
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHelp(true)}
+            className="inline-flex min-h-11 items-center gap-1.5 px-3 text-sm text-gray-300 border border-port-border rounded hover:text-white hover:border-port-accent"
+          >
+            <CircleHelp size={16} aria-hidden="true" />
+            How this works
+          </button>
+          {!loading && (
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || loadError}
+              className="min-h-11 px-3 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded transition-colors"
+            >
+              {saving ? 'Saving…' : 'Save defaults'}
+            </button>
+          )}
+        </div>
       </div>
-      <p className="text-xs text-gray-500">
-        Choose Primary and fallback tiers for CoS tasks and schedules without their own override. Clearing all tiers disables AI reviewers while preserving forge reviewers. Provider reviews retain the selected provider's configuration. Choose <span className="font-mono">Custom…</span> on a reviewer row to enter a model absent from its catalog.
+      <p className="text-sm text-gray-400">
+        {activeView === 'follow-up'
+          ? 'After a run ships, compare its diff with the task it was given.'
+          : 'Primary runs first. One paused reviewer skips that whole tier. Tasks with their own reviewers keep that override.'}
       </p>
 
       {loadError && (
@@ -181,60 +257,64 @@ export default function CodeReviewersTab() {
         <>
           {Object.entries(reviewerConfigFaults).map(([reviewer, fault]) => (
             <Banner key={`config-${reviewer}`} tone="warning" size="sm" align="left">
-              {reviewer} cannot review on this install ({fault.code}). The review loop is currently a no-op for this reviewer. {fault.code === 'NO_MODEL'
-                ? 'Select a model in this tab.'
+              {reviewer}: the last review attempt failed ({fault.code}). A successful review clears this warning. {fault.code === 'NO_MODEL'
+                ? 'Select a model on Review chain.'
                 : fault.code === 'REVIEWER_ACCESS_DENIED'
                   ? 'Select an accessible service or model, or correct provider access. A successful review clears this warning.'
                   : fault.code === 'REVIEWER_UNSUPPORTED'
-                    ? 'Switch the provider to API mode or choose a supported tool-free review harness.'
+                    ? 'Check that the provider has a runnable command or API transport.'
                     : 'Enable or configure the reviewer in Settings → Code Reviewers.'}
             </Banner>
           ))}
-          <ReviewerGroupsEditor
-            groups={reviewerFallbackGroups}
-            onGroupsChange={setReviewerFallbackGroups}
-            reviewerHealth={reviewerHealth}
-            usernames={usernames}
-            optionalReviewers={optionalReviewers}
-            reviewerMaxRounds={reviewerMaxRounds}
-            reviewerModels={reviewerModels}
-            reviewerEfforts={reviewerEfforts}
-            modelOptions={modelOptions}
-            installed={installed}
-            providerReviewUnsupported={providerReviewUnsupported}
-            stopMode={stopMode}
-            reviewerApplies={reviewerApplies}
-            disabled={saving || loadError}
-            onChange={({ usernames: u, optionalReviewers: o, reviewerMaxRounds: m, reviewerModels: dm, reviewerEfforts: de, stopMode: s, reviewerApplies: a }) => {
-              setUsernames(u);
-              setOptionalReviewers(o);
-              setReviewerMaxRounds(m);
-              setReviewerModels(dm);
-              setReviewerEfforts(de);
-              setStopMode(s);
-              setReviewerApplies(a);
-            }}
-          />
-
-          <GoalFidelityControls
-            value={goalFidelity}
-            modelOptions={modelOptions}
-            disabled={saving || loadError}
-            onChange={setGoalFidelity}
-          />
-
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving || loadError}
-              className="px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded transition-colors"
-            >
-              {saving ? 'Saving…' : 'Save defaults'}
-            </button>
-          </div>
+          {activeView === 'chain' ? (
+            <div role="tabpanel" id="code-review-task-chain" aria-labelledby="tab-chain">
+              <ReviewerGroupsEditor
+                groups={reviewerFallbackGroups}
+                onGroupsChange={setReviewerFallbackGroups}
+                reviewerHealth={reviewerHealth}
+                usernames={usernames}
+                optionalReviewers={optionalReviewers}
+                reviewerMaxRounds={reviewerMaxRounds}
+                reviewerModels={reviewerModels}
+                reviewerEfforts={reviewerEfforts}
+                modelOptions={modelOptions}
+                installed={installed}
+                providerReviewUnsupported={providerReviewUnsupported}
+                stopMode={stopMode}
+                reviewerApplies={reviewerApplies}
+                disabled={saving || loadError}
+                onChange={({ usernames: u, optionalReviewers: o, reviewerMaxRounds: m, reviewerModels: dm, reviewerEfforts: de, stopMode: s, reviewerApplies: a }) => {
+                  setUsernames(u);
+                  setOptionalReviewers(o);
+                  setReviewerMaxRounds(m);
+                  setReviewerModels(dm);
+                  setReviewerEfforts(de);
+                  setStopMode(s);
+                  setReviewerApplies(a);
+                }}
+              />
+            </div>
+          ) : (
+            <div role="tabpanel" id="code-review-task-follow-up" aria-labelledby="tab-follow-up">
+              <GoalFidelityControls
+                value={goalFidelity}
+                modelOptions={modelOptions}
+                disabled={saving || loadError}
+                onChange={setGoalFidelity}
+              />
+            </div>
+          )}
         </>
       )}
+      <Drawer
+        open={helpOpen}
+        onClose={() => setHelp(false)}
+        title="How code review works"
+        closeLabel="Close how code review works"
+        size="md"
+      >
+        <CodeReviewHelp />
+      </Drawer>
     </div>
   );
 }

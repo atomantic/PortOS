@@ -68,7 +68,7 @@ export default function GoalFidelityControls({ value, modelOptions, disabled = f
         <span>
           <span className="text-sm text-white">Check finished runs against the task objective</span>
           <span className="block text-xs text-gray-500">
-            After a CoS agent run ships, re-read its accumulated diff against what the task actually asked for — what is missing, what was never requested, whether the work was really verified. A <span className="font-mono">rethink</span> verdict records the run as needing attention instead of complete. Runs only when a local model below (or in the chain above) is available, so leaving it on costs nothing until one is.
+            Compares the shipped diff with the task objective. A rethink verdict marks the run as needing attention.
           </span>
         </span>
       </label>
@@ -150,7 +150,7 @@ export default function GoalFidelityControls({ value, modelOptions, disabled = f
           <span>
             <span className="text-sm text-white">File an issue on the project’s tracker</span>
             <span className="block text-xs text-gray-500">
-              Writes the finding to whichever tracker the app actually uses — GitHub, GitLab, or JIRA — so it outlives the run record. Re-filing is suppressed by a key carried in the issue body: an existing issue for the same finding is reused even after it has been closed, and a tracker PortOS can’t read refuses the filing rather than risking a duplicate.
+              Writes the finding to the project’s tracker. The same finding reuses its existing issue.
             </span>
           </span>
         </label>
@@ -167,7 +167,7 @@ export default function GoalFidelityControls({ value, modelOptions, disabled = f
           <span>
             <span className="text-sm text-white">Queue an agent to reconcile it</span>
             <span className="block text-xs text-gray-500">
-              Adds a CoS task that claims the filed issue — or, with no issue filed, works the finding directly. Runs in a worktree behind a PR, and shares the investigation queue’s duplicate guard and hourly circuit breaker, so a repeated drift can’t spawn one agent per run.
+              Adds a CoS task that checks the finding before it changes anything.
             </span>
           </span>
         </label>

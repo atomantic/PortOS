@@ -135,7 +135,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
   };
 
   return (
-    <aside className="rounded-lg border border-port-border bg-port-card/70 shadow-xl 2xl:sticky 2xl:top-4">
+    <aside className="rounded-lg border border-port-border bg-port-card/70 shadow-xl lg:sticky lg:top-4">
       <div className="flex items-start justify-between gap-3 border-b border-port-border/60 p-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-gray-500">

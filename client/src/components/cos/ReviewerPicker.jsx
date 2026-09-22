@@ -62,7 +62,7 @@ const HEADER_CLASS = `hidden @4xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.
  * Ordered multi-reviewer picker, rendered as one row per reviewer with the five
  * per-reviewer controls as columns: **Provider | Model | Effort | Optional | Max
  * Iterations** (#3133). Add configured providers or standalone legacy backends,
- * reorder with the arrows within each tool-free/CLI boundary, remove with ✕. Maps to slashdo's
+ * reorder with the arrows within each service/standalone boundary, remove with ✕. Maps to slashdo's
  * `--review-with a,b,c` plus the stop-mode / `--reviewer-applies` flags.
  *
  * A second "GitHub reviewers" table collects arbitrary usernames (e.g.
@@ -139,8 +139,7 @@ const HEADER_CLASS = `hidden @4xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.
  *
  * `providerReviewUnsupported` is the same endpoint's provider-backed counterpart
  * (#7660) — `{ 'provider:<id>': 'REVIEWER_UNSUPPORTED' }`, present ONLY for a
- * provider that would refuse a tool-free review outright (a hosted gateway
- * fronting a CLI whose no-tool posture can only be enforced locally). A capable
+ * provider that has no runnable review transport (for example, a missing CLI command). A capable
  * provider is absent rather than `false`, so a caller that never fetched it and
  * a machine where nothing is wrong both read `undefined`. Warn-only like the
  * rest: without it, such a reviewer is only discovered as a review gate that
@@ -171,6 +170,9 @@ export default function ReviewerPicker({
   showRunFlags = true,
   showReviewers = true,
   showUsernames = true,
+  // Page-level help (Code Reviewers) explains tiers once. Compact callers such
+  // as a task form still get the short intro beside the controls.
+  showIntro = true,
   renderReviewer = (_token, row) => row,
 }) {
   const id = useId();
@@ -278,7 +280,7 @@ export default function ReviewerPicker({
       if (providerReviewUnsupported?.[token]) {
         return {
           label: "can't review",
-          title: `${labelFor(token)} has no enforced tool-free review transport on this machine, so a review round would never complete. Switch the provider to its API mode, or pick a reviewer harness that supports one.`
+          title: `${labelFor(token)} has no runnable review transport on this machine. Configure its command or API transport in AI Providers.`
         };
       }
       return null;
@@ -740,28 +742,35 @@ export default function ReviewerPicker({
   return (
     <div className="@container flex flex-col gap-2 w-full">
       {showReviewers && (
-        <div className="space-y-2 min-w-0">
-          <ProviderModelSelector
-            providers={providerRecords}
-            selectedProviderId={addProviderId}
-            onProviderChange={setAddProviderId}
-            emptyProviderOption="Choose a reviewer provider"
-            compose={false}
-            highlightVision={false}
-            loading={modelOptions?.loaded === false}
-            disabled={disabled}
-          />
+        <div className="flex flex-wrap items-end gap-2 min-w-0">
+          <div className="w-full sm:w-80 max-w-full">
+            <ProviderModelSelector
+              dense
+              providers={providerRecords}
+              selectedProviderId={addProviderId}
+              onProviderChange={setAddProviderId}
+              emptyProviderOption="Choose a reviewer provider"
+              compose={false}
+              highlightVision={false}
+              loading={modelOptions?.loaded === false}
+              disabled={disabled}
+            />
+          </div>
           <button type="button" disabled={disabled || !addProviderId || selected.includes(`provider:${addProviderId}`)}
             className="min-h-9 text-sm text-port-accent disabled:opacity-50"
             onClick={() => { add(`provider:${addProviderId}`); setAddProviderId(''); }}>Add provider reviewer</button>
-          <p className="text-xs text-gray-500">Add a configured provider, then choose its model and effort on its row. Its account and transport stay attached to that identity.</p>
+          {showIntro && <p className="text-xs text-gray-500">Add a configured provider, then choose its model and effort on its row. Its account and transport stay attached to that identity.</p>}
           {modelOptions?.providersLoaded === false && modelOptions?.loaded && <p role="alert" className="text-xs text-port-warning">Provider list unavailable. Reload this page to retry; saved reviewers and pins are preserved.</p>}
         </div>
       )}
       {effortNotice && <p role="status" className="text-xs text-port-warning">{effortNotice}</p>}
       {showReviewers && <div className="flex flex-col gap-1">
-        <span className="text-xs text-gray-500">Reviewers (in order):</span>
-        <p className="text-xs text-gray-400">Tool-free first, then standalone CLI / Copilot.</p>
+        {showIntro && (
+          <>
+            <span className="text-xs text-gray-500">Reviewers (in order):</span>
+            <p className="text-xs text-gray-400">Configured providers and local models first, then standalone CLI / Copilot.</p>
+          </>
+        )}
         {selected.length > 0 && (
           <>
             <div className={HEADER_CLASS} aria-hidden="true">
@@ -839,7 +848,7 @@ export default function ReviewerPicker({
         )}
       </div>}
 
-      {showUsernames && (selected.length > 0 || selectedUsernames.length > 0) && (
+      {showIntro && showUsernames && (selected.length > 0 || selectedUsernames.length > 0) && (
         <details className="text-[11px] text-gray-400">
           <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-300">Tip: reviewer controls</summary>
           <p className="mt-1">
@@ -851,7 +860,7 @@ export default function ReviewerPicker({
       {showReviewers && addable.length > 0 && (
         <details className="text-xs text-gray-500">
           <summary className="cursor-pointer min-h-9">Standalone / legacy backend</summary>
-          <p className="mb-2">Direct CLI, local runtime and Copilot identities keep their existing behavior. Prefer a configured provider to select an account and transport.</p>
+          {showIntro && <p className="mb-2">Direct CLI, local runtime and Copilot identities keep their existing behavior. Prefer a configured provider to select an account and transport.</p>}
           <div className="flex flex-wrap items-end gap-2">
             <div className="min-w-0 flex-1 max-w-xs">
               <label htmlFor={`${id}-legacy`} className="block mb-1">Legacy backend</label>

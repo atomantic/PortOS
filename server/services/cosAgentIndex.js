@@ -16,6 +16,12 @@ import { join } from 'path';
 import { AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
+import {
+  loadCompletionOrderIndex,
+  projectArchivedAgent,
+  pruneCompletionOrderIndex,
+  recordArchivedCompletions,
+} from './cosAgentCompletionIndex.js';
 
 const INDEX_FILE = join(AGENTS_DIR, 'index.json');
 
@@ -63,6 +69,25 @@ export async function saveAgentIndex() {
   await atomicWrite(INDEX_FILE, obj).catch(err => {
     console.error(`❌ Failed to save agent index: ${err.message}`);
   });
+  // The completion-order projection is a subset of this keyspace, so every
+  // delete / retention prune / clear-completed sweep drops its rows here rather
+  // than in a call site of its own.
+  await pruneCompletionOrderIndex(new Set(agentIndex.keys()));
+}
+
+/**
+ * Record the completion-order projection for runs that just landed in the
+ * archive. Archive sites call this right after `idx.set(...)` and before
+ * `saveAgentIndex()`, which would otherwise prune an entry whose id the legacy
+ * index does not yet own.
+ */
+export async function recordArchivedAgentOrder(agents) {
+  const pairs = [];
+  for (const agent of agents) {
+    const agentId = agent?.id;
+    if (typeof agentId === 'string' && agentId) pairs.push([agentId, projectArchivedAgent(agent)]);
+  }
+  return recordArchivedCompletions(pairs);
 }
 
 /**
@@ -286,8 +311,25 @@ export async function getAgentIdsForDates(dates) {
   return byDate;
 }
 
+// Read one archived record from its date bucket, normalized the way every
+// archive reader expects: the transcript is dropped (it is hydrated on demand by
+// GET /agents/:id), a missing id falls back to the directory name, and a record
+// written before `status` was persisted reads as completed.
+async function readArchivedAgentMetadata(date, agentDirName, { repairSummaries = true } = {}) {
+  const agentDir = join(AGENTS_DIR, date, agentDirName);
+  const content = await tryReadFile(join(agentDir, 'metadata.json'));
+  if (!content) return null;
+  const raw = safeJSONParse(content, null);
+  if (!raw) return null;
+  const { output, ...rest } = raw;
+  const agent = { ...rest, id: raw.id || raw.agentId || agentDirName, status: raw.status || 'completed' };
+  const repaired = repairSummaries && await repairCodexTaskSummary(agentDir, agent);
+  if (repaired) agent.metadata = { ...agent.metadata, taskSummary: repaired };
+  return agent;
+}
+
 // Get completed agents for a specific date bucket
-export async function getAgentsByDate(date) {
+export async function getAgentsByDate(date, { repairSummaries = true } = {}) {
   const dateDir = join(AGENTS_DIR, date);
   if (!existsSync(dateDir)) return [];
 
@@ -300,20 +342,112 @@ export async function getAgentsByDate(date) {
   for (let i = 0; i < agentDirs.length; i += BATCH_SIZE) {
     const batch = agentDirs.slice(i, i + BATCH_SIZE);
     const reads = batch.map(async (entry) => {
-      const metaPath = join(dateDir, entry.name, 'metadata.json');
-      const content = await tryReadFile(metaPath);
-      if (!content) return;
-      const raw = safeJSONParse(content, null);
-      if (!raw) return;
-      const id = raw.id || raw.agentId || entry.name;
-      const { output, ...rest } = raw;
-      const agent = { ...rest, id, status: raw.status || 'completed' };
-      const repaired = await repairCodexTaskSummary(join(dateDir, entry.name), agent);
-      if (repaired) agent.metadata = { ...agent.metadata, taskSummary: repaired };
-      agents.push(agent);
+      const agent = await readArchivedAgentMetadata(date, entry.name, { repairSummaries });
+      if (agent) agents.push(agent);
     });
     await Promise.allSettled(reads);
   }
 
   return agents.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
+}
+
+/**
+ * One bounded page of completed runs, newest first.
+ *
+ * The cursor is still `archive day | completion timestamp | id`, byte-identical
+ * to what the route round-trips, so a page taken before this projection existed
+ * still resolves after it. What changed is where the ordering comes from: the
+ * completion-order projection holds every archived run's timestamp in memory, so
+ * a warm index answers a page with at most `limit + 1` metadata reads however
+ * many runs share the day — instead of re-reading the whole day for every page
+ * inside it.
+ *
+ * A day that still owns an unprojected id (a fresh federation import, an install
+ * that has not run the backfill) is read in full exactly as before, and only if
+ * the walk actually reaches it; that read backfills the projection so the next
+ * page skips it. The legacy id→date index stays authoritative for WHICH archived
+ * runs exist — it already is for `total`, `getAgentDir`, and every feedback and
+ * report reader — so an archive directory missing from it is repaired by the
+ * date-bucket migration, not discovered here.
+ */
+export async function getCompletedAgentPage({ liveAgents = [], limit = 25, cursor } = {}) {
+  const idx = await loadAgentIndex();
+  const order = await loadCompletionOrderIndex();
+  const live = liveAgents.filter(agent => agent.status === 'completed');
+  const liveById = new Map(live.map(agent => [agent.id, agent]));
+  const dayOf = agent => (agent.completedAt || agent.startedAt || '1970-01-01').slice(0, 10);
+  const keyOf = (day, completedAt, id) => `${day}|${completedAt || ''}|${id}`;
+  const cursorDay = cursor ? cursor.slice(0, 10) : null;
+
+  // Group every candidate by archive day WITHOUT touching disk. A day owning an
+  // id the projection does not know is FLAGGED, not read — the walk below pays
+  // for it only if the requested page actually reaches that day.
+  const byDay = new Map();
+  const dayBucket = (day) => {
+    let bucket = byDay.get(day);
+    if (!bucket) byDay.set(day, bucket = { entries: new Map(), unprojected: false });
+    return bucket;
+  };
+  for (const [agentId, day] of idx) {
+    if (liveById.has(agentId)) continue; // the live record is fresher — added below
+    const projected = order.get(agentId);
+    if (!projected) { dayBucket(day).unprojected = true; continue; }
+    if (!projected.completed) continue;
+    dayBucket(day).entries.set(agentId, { id: agentId, day, key: keyOf(day, projected.completedAt, agentId) });
+  }
+  for (const agent of live) {
+    const day = idx.get(agent.id) || dayOf(agent);
+    dayBucket(day).entries.set(agent.id, { id: agent.id, day, agent, key: keyOf(day, agent.completedAt, agent.id) });
+  }
+
+  const total = new Set([...idx.keys(), ...live.map(agent => agent.id)]).size;
+  const days = [...byDay.keys()].sort().reverse();
+  const newestFirst = (a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0);
+
+  const hydrateDay = async (day, bucket) => {
+    bucket.unprojected = false;
+    const learned = [];
+    for (const agent of await getAgentsByDate(day, { repairSummaries: false })) {
+      learned.push([agent.id, projectArchivedAgent(agent)]);
+      const existing = bucket.entries.get(agent.id);
+      if (existing) { existing.agent ||= agent; continue; }
+      if (agent.status !== 'completed' || !idx.has(agent.id)) continue;
+      bucket.entries.set(agent.id, { id: agent.id, day, agent, key: keyOf(day, agent.completedAt, agent.id) });
+    }
+    await recordArchivedCompletions(learned);
+  };
+
+  let dayCursor = 0;
+  let queued = [];
+  const queueNextDay = async () => {
+    while (queued.length === 0 && dayCursor < days.length) {
+      const day = days[dayCursor++];
+      if (cursorDay && day > cursorDay) continue;
+      const bucket = byDay.get(day);
+      if (bucket.unprojected) await hydrateDay(day, bucket);
+      queued = [...bucket.entries.values()].filter(entry => !cursor || entry.key < cursor).sort(newestFirst);
+    }
+    return queued.length > 0;
+  };
+
+  // limit + 1 rows prove whether another page exists. A row whose metadata went
+  // missing or unparseable between the index read and now is skipped and refilled
+  // from the same ordered queue, so a corrupt archive shortens no page.
+  const selected = [];
+  while (selected.length <= limit && (queued.length > 0 || await queueNextDay())) {
+    const batch = queued.splice(0, limit + 1 - selected.length);
+    const hydrated = await Promise.all(batch.map(async (entry) => (entry.agent ? entry : {
+      ...entry,
+      agent: await readArchivedAgentMetadata(entry.day, entry.id, { repairSummaries: false }),
+    })));
+    for (const entry of hydrated) {
+      if (entry.agent?.status === 'completed') selected.push(entry);
+    }
+  }
+
+  return {
+    items: selected.slice(0, limit).map(entry => entry.agent),
+    total,
+    nextCursor: selected.length > limit ? selected[limit - 1].key : null,
+  };
 }

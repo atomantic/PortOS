@@ -7,6 +7,7 @@ vi.mock('../services/cos.js', () => ({
   getAllTasks: vi.fn(),
   getAgents: vi.fn(async () => []),
   runHealthCheck: vi.fn(),
+  getHealthStatus: vi.fn(),
   getPendingAgentFeedbackCount: vi.fn(),
   getTodayActivity: vi.fn(),
   getRecentTasks: vi.fn()
@@ -94,6 +95,17 @@ describe('CoS Insight Routes', () => {
   });
 
   describe('GET /api/cos/actionable-insights', () => {
+    it('refreshes event-driven insights from persisted health without running process repair', async () => {
+      cos.getAllTasks.mockResolvedValue({ user: null, cos: null });
+      taskLearning.getLearningInsights.mockResolvedValue(null);
+      cos.getHealthStatus.mockResolvedValue({ issues: [] });
+      const response = await request(app).get('/api/cos/actionable-insights?cachedHealth=1');
+      expect(response.status).toBe(200);
+      expect(cos.getHealthStatus).toHaveBeenCalledTimes(1);
+      expect(cos.runHealthCheck).not.toHaveBeenCalled();
+      expect(Array.isArray(response.body.insights)).toBe(true);
+    });
+
     it('should return actionable insights sorted by priority', async () => {
       cos.getAllTasks.mockResolvedValue({
         user: { grouped: { pending: [{ id: 't1', description: 'Task' }], blocked: [] } },

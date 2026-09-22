@@ -1277,37 +1277,56 @@ function ActionDetail({ item, onClose, onResolve, onTriage, triagePending = fals
         )}
 
         <QueueInvestigation item={item} />
-        {item.source === 'health' && <p className="text-sm text-gray-400">Mark resolved after correcting the issue. Earlier runs will no longer count toward run-based alerts; new evidence can raise another alert.</p>}
+        {item.source === 'health' && (
+          <div className="bg-port-card border border-port-border/60 rounded-lg p-3 text-xs text-gray-400 leading-relaxed">
+            Mark resolved after correcting the issue. Earlier runs will no longer count toward run-based alerts; new evidence can raise another alert.
+          </div>
+        )}
         {item.source === 'feedback' && item.available !== false && item.availability !== 'unavailable' && (
           <AgentFeedbackReview key={item.sourceRef} item={item} onSaved={async () => {
             await onSaved?.();
             onClose();
           }} />
         )}
-        {item.source !== 'feedback' && operations.length > 0 && (
-          <section className="flex flex-wrap gap-2">
-            {operations.map((operation) => (
-              <button key={operation.id} type="button" onClick={() => resolve(operation.id)} className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3 py-2 text-sm text-port-success hover:bg-port-success/20">
-                <Check size={14} /> {operation.label}
-              </button>
-            ))}
-          </section>
-        )}
+        {item.source !== 'feedback' && (operations.length > 0 || item.drillTo || item.triageOperations?.length > 0) && (
+          <footer className="pt-4 border-t border-port-border space-y-3">
+            {operations.length > 0 && (
+              <section className="flex flex-wrap gap-2">
+                {operations.map((operation) => (
+                  <button
+                    key={operation.id}
+                    type="button"
+                    onClick={() => resolve(operation.id)}
+                    className="inline-flex items-center gap-2 rounded bg-port-success/10 border border-port-success/30 px-3.5 py-2 text-sm font-medium text-port-success hover:bg-port-success/20 transition-colors"
+                  >
+                    <Check size={14} /> {operation.label}
+                  </button>
+                ))}
+              </section>
+            )}
 
-        <QueueTriageControls
-          item={item}
-          onTriage={async (...args) => {
-            const ok = await onTriage?.(...args);
-            if (ok) onClose();
-            return ok;
-          }}
-          disabled={triagePending}
-        />
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <QueueTriageControls
+                item={item}
+                onTriage={async (...args) => {
+                  const ok = await onTriage?.(...args);
+                  if (ok) onClose();
+                  return ok;
+                }}
+                disabled={triagePending}
+              />
 
-        {item.drillTo && (
-          <button type="button" onClick={() => { onClose(); onDrill(item); }} className="inline-flex items-center gap-2 text-sm text-port-accent hover:underline">
-            <ExternalLink size={14} /> Open source editor
-          </button>
+              {item.drillTo && (
+                <button
+                  type="button"
+                  onClick={() => { onClose(); onDrill(item); }}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-port-accent hover:text-port-accent/80 hover:underline py-1.5 px-2.5 rounded border border-port-accent/30 hover:bg-port-accent/10 transition-colors"
+                >
+                  <ExternalLink size={13} /> {item.drillLabel || (item.source === 'health' ? (item.drillTo?.startsWith('/cos/learning') ? 'Open Learning' : 'View details') : 'Open source')}
+                </button>
+              )}
+            </div>
+          </footer>
         )}
       </div>
     </Drawer>

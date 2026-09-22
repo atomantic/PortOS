@@ -177,6 +177,28 @@ describe('CoS Schedule Routes', () => {
       expect(response.body.success).toBe(true);
     });
 
+    it('returns the post-write readiness status for an updated schedule', async () => {
+      const status = {
+        shouldRun: false,
+        reason: 'cron-cooldown',
+        cronExpression: '0 3 * * 0,1,3,4,5,6',
+        nextRunAt: '2026-09-23T10:00:00.000Z',
+      };
+      taskSchedule.updateTaskInterval.mockResolvedValue({
+        type: 'cron',
+        cronExpression: status.cronExpression,
+      });
+      taskSchedule.shouldRunTask.mockResolvedValue(status);
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/release-check')
+        .send({ type: 'cron', cronExpression: status.cronExpression });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toEqual(status);
+      expect(taskSchedule.shouldRunTask).toHaveBeenCalledWith('release-check');
+    });
+
     it('should return 400 for invalid enabled type', async () => {
       const response = await request(app)
         .put('/api/cos/schedule/task/review')

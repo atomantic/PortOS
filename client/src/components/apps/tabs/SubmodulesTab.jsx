@@ -48,7 +48,7 @@ export default function SubmodulesTab({ repoPath }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [updating, setUpdating] = useState(null);
-  const [commitAfterUpdate, setCommitAfterUpdate] = useState(true);
+  const [commitAfterUpdate, setCommitAfterUpdate] = useState(false);
   const batchUpdating = useRef(false);
 
   const loadSubmodules = useCallback(async (showSpinner = true) => {

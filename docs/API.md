@@ -74,7 +74,7 @@ credentials, local paths, or build identity to these responses.
 |--------|----------|--------------------------------------|
 | GET | `/system/health/details` | Returns an object containing `instanceId` and `version` (each may be `null`) for peer identity and compatibility display. The health summary remains an object so an older prober can retain it as its last-known health snapshot. |
 | GET | `/apps?view=probe` | The periodic probe requests `view=probe`; returns either the legacy app array or `{ apps: [...] }`. Each app entry used by peers retains `id`, `name`, `icon`, `overallStatus`, `uiPort`, `apiPort`, and `type`; fields may be absent or `null` when unknown. Older peers may ignore the query and return the legacy enriched list, which remains compatible with the same field mapping. |
-| GET | `/instances/sync-status?forPeer=<instance-id>` | `forPeer` is optional and remains lenient: an unknown or legacy identifier, blank value, or omitted value must degrade to the unscoped status response rather than fail the probe. A recognized peer receives its `cursorForYou` alongside the normal sync status. |
+| GET | `/instances/sync-status?forPeer=<instance-id>` | `forPeer` is optional and remains lenient: an unknown or legacy identifier, blank value, or omitted value must degrade to the unscoped status response rather than fail the probe. A recognized peer receives its `cursorForYou` alongside the normal sync status — with this install's own `lastSyncError` / `lastSyncSucceeded` stripped, since those carry local diagnostics and the endpoint is reachable by any tailnet machine. |
 
 The separate `/federation/media/v1` surface is already versioned and has its
 own wire contract in [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md).

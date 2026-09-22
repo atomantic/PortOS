@@ -136,7 +136,7 @@ function hostOf(baseUrl) {
       ? `http://localhost${raw}`
       : `http://${raw}`
   // `URL.parse` returns null on invalid input instead of throwing (Node ≥22.1;
-  // the repo's engine floor is 22.12), so no try/catch is needed here.
+  // every supported PortOS runtime is newer), so no try/catch is needed here.
   const url = URL.parse(withScheme)
   if (!url) return null
 

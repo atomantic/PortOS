@@ -561,7 +561,12 @@ export async function spawnDetached(bin, args = [], {
   // close) or throw as unhandled (error), matching ChildProcess async timing.
   let launchError = null;
   const awaitPid = async () => {
-    for (let waited = 0; waited < pidTimeoutMs; waited += pollMs) {
+    // Wall-clock deadline, not `waited += pollMs` — same reason as the reap
+    // loop below (#7951): the loop body reads a file each pass, so a tick count
+    // under-measures real elapsed time on a loaded machine and stretches this
+    // timeout well past pidTimeoutMs.
+    const pidDeadline = Date.now() + pidTimeoutMs;
+    while (Date.now() < pidDeadline) {
       if (launcherSpawnError) { launchError = launcherSpawnError; return; }
       const raw = await readFile(pidFile, 'utf8').catch(() => '');
       const pid = Number.parseInt(raw, 10);
@@ -835,11 +840,23 @@ export async function reapDetached(controlDir, { graceMs = REAP_GRACE_MS, pollMs
   // stale late write (which would prematurely close the new handle). Escalate
   // to SIGKILL at the grace deadline; hard-cap so a wedged supervisor can't
   // hang boot.
-  const hardCapMs = graceMs + 5000;
-  for (let waited = 0; waited < hardCapMs; waited += pollMs) {
+  // Both deadlines are WALL-CLOCK, read from the monotonic-enough Date.now()
+  // rather than accumulated as `waited += pollMs` (#7951). Each pass through
+  // this loop costs `sleep(pollMs)` PLUS a file read, and a `setTimeout(25)` on
+  // a loaded box does not return in 25ms — so counting ticks made both the
+  // grace and the hard cap stretch by whatever factor the machine was
+  // oversubscribed by. That matters beyond the suite: this runs at boot, and
+  // the hard cap exists precisely "so a wedged supervisor can't hang boot",
+  // which a tick count does not actually guarantee. It also made
+  // reapAndCleanDetachedDirs — which sweeps dirs sequentially — blow a 30s test
+  // timeout on a 3s grace.
+  const startedAt = Date.now();
+  const graceDeadline = startedAt + graceMs;
+  const hardDeadline = startedAt + graceMs + 5000;
+  while (Date.now() < hardDeadline) {
     await sleep(pollMs);
     if (await exitWritten()) return { reaped: wasAlive, pid };
-    if (waited >= graceMs && isAlive(pid)) signalPid(pid, 'SIGKILL', killProcessGroup);
+    if (Date.now() >= graceDeadline && isAlive(pid)) signalPid(pid, 'SIGKILL', killProcessGroup);
   }
   return { reaped: wasAlive, pid };
 }

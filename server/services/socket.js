@@ -41,6 +41,7 @@ import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
 import { getBuildId } from '../lib/buildId.js';
 import { authEvents, extractToken, isAuthEnabled, verifySession } from './auth.js';
 import { runEventLogEvents } from './agentRunEventLog.js';
+import { armSystemActivityWatchers, bindSystemActivityIo } from './systemActivityNotify.js';
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -82,7 +83,8 @@ function broadcastToSet(set, event, data) {
 }
 
 function registerSubscriber(socket, namespace, set) {
-  socket.on(`${namespace}:subscribe`, () => {
+  socket.on(`${namespace}:subscribe`, (options) => {
+    if (namespace === 'cos' && ['invalidate', 'full'].includes(options?.taskLists)) socket.cosTaskLists = options.taskLists;
     set.add(socket);
     socket.emit(`${namespace}:subscribed`);
   });
@@ -254,6 +256,12 @@ export function initSocket(io) {
 
   ioInstance = io;
   setupEventForwarding();
+  // Invalidation only. Clients coalesce the frame into one bounded activity
+  // read; a missed frame is repaired by the reconnect read, not by polling.
+  bindSystemActivityIo(io);
+  armSystemActivityWatchers().catch((err) => {
+    console.error(`❌ system activity watchers failed: ${err.message}`);
+  });
 }
 
 // Bridge importer analyze-phase stage progress onto Socket.IO so the Importer
@@ -329,7 +337,19 @@ export function broadcast(io, event, data) {
 }
 
 // Broadcast to CoS subscribers only
-function broadcastToCos(event, data) { broadcastToSet(cosSubscribers, event, data); }
+function broadcastToCos(event, data) {
+  if (!['cos:tasks:user:changed', 'cos:tasks:cos:changed', 'cos:tasks:changed'].includes(event)) {
+    broadcastToSet(cosSubscribers, event, data);
+    return;
+  }
+  for (const socket of cosSubscribers) {
+    if (!socket.connected) { cosSubscribers.delete(socket); continue; }
+    const completedChanged = event === 'cos:tasks:changed' && (data?.task?.status === 'completed'
+      || data?.previousStatus === 'completed' || ['deleted', 'peer-merged'].includes(data?.action));
+    socket.emit(event, socket.cosTaskLists === 'invalidate'
+      ? { invalidated: true, ...(completedChanged ? { completedChanged: true } : {}) } : data);
+  }
+}
 
 // Broadcast to error subscribers only
 function broadcastToErrors(event, data) { broadcastToSet(errorSubscribers, event, data); }
@@ -338,6 +358,9 @@ function broadcastToErrors(event, data) { broadcastToSet(errorSubscribers, event
 function setupCosEventForwarding() {
   // Status events
   cosEvents.on('status', (data) => broadcastToCos('cos:status', data));
+  for (const event of ['config:changed', 'status:paused', 'status:resumed']) {
+    cosEvents.on(event, data => broadcastToCos(`cos:${event}`, data));
+  }
 
   // Log events for real-time UI feedback
   cosEvents.on('log', (data) => broadcastToCos('cos:log', data));

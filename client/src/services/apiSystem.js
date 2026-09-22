@@ -25,6 +25,11 @@ export const triageSystemResources = (payload, options = {}) => request('/system
   ...options,
 });
 export const getActiveProcessing = (options) => request('/system/processing', options);
+// Bounded activity snapshot (no GPU shell-out). Shared by the update banner
+// and the live-activity widget; refreshed from `system:activity`, not a poll.
+export const getSystemActivity = (options) => request('/system/activity', options);
+// nvidia-smi samples. Polled only while the live-activity inspector is visible.
+export const getGpuTelemetry = (options) => request('/system/gpu-telemetry', options);
 export const getNetworkExposure = (options) => request('/network-exposure/status', options);
 export const getCapabilities = (options) => request('/capabilities', options);
 // Machine-local hardware facts used for UI fit and recommendation surfaces.

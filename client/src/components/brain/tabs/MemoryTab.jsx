@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useNavigate, useParams, useLocation } from 'react-router';
 import * as api from '../../../services/api';
 import {Plus,
   Edit2,
@@ -15,6 +15,7 @@ import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import { FormField } from '../../ui/FormField';
 import ConversationViewer from '../ConversationViewer';
+import MemoryImagePreview from '../MemoryImagePreview';
 
 import {
   MEMORY_TABS,
@@ -27,14 +28,11 @@ import { timeAgo, formatDateNumeric } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import CopyableId from '../../ui/CopyableId';
+import CollapsibleListItem from '../../ui/CollapsibleListItem';
+import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
-
-// Progressive list: imported ChatGPT corpora routinely top 1k+ records with
-// multi-KB transcripts. Mounting every card (and its Markdown tree) freezes
-// the tab and can push the DOM past 100k nodes. Show a window, load more on
-// demand; search still runs over the full in-memory set.
-const INITIAL_VISIBLE = 40;
-const LOAD_MORE = 40;
+import { usePagedCollection } from '../../../hooks/usePagedCollection';
+import socket from '../../../services/socket';
 
 // Plain-text teaser for imported transcripts — avoids mounting full markdown
 // for every card. The full thread is one click away via ConversationViewer.
@@ -55,58 +53,148 @@ export function transcriptTeaser(content, maxLen = 220) {
 // federation continue to use the same idea model and API.
 export default function MemoryTab({ onRefresh, fixedType = null }) {
   const navigate = useNavigate();
-  const [activeType, setActiveType] = useState(fixedType || 'memories');
-  const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { recordType, recordId } = useParams();
+  const location = useLocation();
+  const basePath = fixedType ? '/brain/ideas' : '/brain/memory';
+  const closeReader = () => navigate(basePath + location.search);
+  const [activeType, setActiveType] = useState(fixedType || recordType || 'memories');
+  const [removingIds, setRemovingIds] = useState(new Set());
+  const [deletedIds, setDeletedIds] = useState(() => new Set());
+  const pendingDeletes = useRef(new Set());
+  const deletedIdsRef = useRef(new Set());
+  const currentType = useRef(activeType);
+  currentType.current = activeType;
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({});
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [backendStatus, setBackendStatus] = useState(null);
-  // The chatgpt-import conversation currently open in the full-transcript viewer.
-  const [viewerRecord, setViewerRecord] = useState(null);
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
-  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+  const [deepLinkedRecord, setDeepLinkedRecord] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete } = useConfirmDelete();
+
+  useEffect(() => {
+    if (recordType && MEMORY_TABS.some(tab => tab.id === recordType)) setActiveType(recordType);
+  }, [recordType]);
 
   useEffect(() => {
     if (fixedType) setActiveType(fixedType);
   }, [fixedType]);
 
-  const fetchRecords = useCallback(async () => {
-    setLoading(true);
-    let data = [];
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+    }, 250);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
-    const filters = statusFilter ? { status: statusFilter } : undefined;
+  const fetchPage = useCallback(async ({ cursor, signal }) => {
+    let res;
+    const options = {
+      cursor,
+      search: debouncedSearch || undefined,
+      status: statusFilter || undefined,
+      limit: 25,
+      signal
+    };
 
     switch (activeType) {
       case 'people':
-        data = await api.getBrainPeople().catch(() => []);
+        res = await api.getBrainPeople(options).catch(() => ({ items: [] }));
         break;
       case 'projects':
-        data = await api.getBrainProjects(filters).catch(() => []);
+        res = await api.getBrainProjects(options).catch(() => ({ items: [] }));
         break;
       case 'ideas':
-        data = await api.getBrainIdeas(filters).catch(() => []);
+        res = await api.getBrainIdeas(options).catch(() => ({ items: [] }));
         break;
       case 'admin':
-        data = await api.getBrainAdmin(filters).catch(() => []);
+        res = await api.getBrainAdmin(options).catch(() => ({ items: [] }));
         break;
       case 'memories':
-        data = await api.getBrainMemories().catch(() => []);
+      default:
+        res = await api.getBrainMemories(options).catch(() => ({ items: [] }));
         break;
     }
 
-    // Filter out archived records
-    data = data.filter(r => !r.archived);
-    setRecords(data);
-    setLoading(false);
-  }, [activeType, statusFilter]);
+    const items = Array.isArray(res) ? res : (res.items || res[activeType] || []);
+    const unarchived = items.filter(r => !r.archived && !deletedIdsRef.current.has(r.id));
+    return {
+      items: unarchived,
+      total: res.total ?? unarchived.length,
+      nextCursor: res.nextCursor ?? null
+    };
+  }, [activeType, debouncedSearch, statusFilter]);
 
+  const paged = usePagedCollection(fetchPage);
+
+  const records = useMemo(() => {
+    return paged.items.filter(r => !deletedIds.has(r.id) && !deletedIdsRef.current.has(r.id));
+  }, [paged.items, deletedIds]);
+
+  // Reconnect reconciliation: recover missed events
   useEffect(() => {
-    fetchRecords();
-  }, [fetchRecords]);
+    const handleConnect = () => {
+      paged.refreshFirst();
+    };
+    socket.on('connect', handleConnect);
+    return () => socket.off('connect', handleConnect);
+  }, [paged.refreshFirst]);
+
+  // Direct URL deep-link or truncated record detail fetch
+  useEffect(() => {
+    if (!recordId) {
+      setDeepLinkedRecord(null);
+      return;
+    }
+    const existing = records.find(r => r.id === recordId);
+    if (!existing || existing.contentTruncated) {
+      let active = true;
+      const fetchRecord = async () => {
+        let full = null;
+        switch (activeType) {
+          case 'people':
+            full = await api.getBrainPerson(recordId).catch(() => null);
+            break;
+          case 'projects':
+            full = await api.getBrainProject(recordId).catch(() => null);
+            break;
+          case 'ideas':
+            full = await api.getBrainIdea(recordId).catch(() => null);
+            break;
+          case 'admin':
+            full = await api.getBrainAdminItem(recordId).catch(() => null);
+            break;
+          case 'memories':
+          default:
+            full = await api.getBrainMemory(recordId).catch(() => null);
+            break;
+        }
+        if (active) {
+          if (full && !full.archived && !deletedIdsRef.current.has(full.id)) {
+            setDeepLinkedRecord(full);
+          } else {
+            setDeepLinkedRecord(null);
+          }
+        }
+      };
+      fetchRecord();
+      return () => { active = false; };
+    } else {
+      setDeepLinkedRecord(null);
+    }
+  }, [recordId, activeType, records]);
+
+  const viewerRecord = useMemo(() => {
+    if (!recordId) return null;
+    const existing = records.find(r => r.id === recordId);
+    if (deepLinkedRecord && deepLinkedRecord.id === recordId) {
+      return deepLinkedRecord;
+    }
+    return existing || null;
+  }, [recordId, records, deepLinkedRecord]);
 
   const fetchBackendStatus = useCallback(() => {
     api.getMemoryBackendStatus().then(setBackendStatus).catch(() => null);
@@ -116,24 +204,20 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     fetchBackendStatus();
   }, [fetchBackendStatus]);
 
-  // Reset the progressive window whenever the user changes tab/filter/search
-  // so a "Show more" from memories doesn't leave people stuck deep into a
-  // short people list.
-  useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE);
-  }, [activeType, statusFilter, searchQuery]);
+  const loading = !paged.loaded && paged.loading;
 
   const filteredRecords = useMemo(() => {
-    const q = searchQuery.toLowerCase();
+    const q = searchQuery.toLowerCase().trim();
     if (!q) return records;
     return records.filter((r) => {
+      if (removingIds.has(`${activeType}:${r.id}`)) return true;
       const fields = [
         r.name, r.title, r.context, r.content, r.notes, r.oneLiner,
         r.nextAction, r.mood, ...(r.tags || []), ...(r.followUps || []),
       ];
       return fields.some((f) => f?.toLowerCase().includes(q));
     });
-  }, [records, searchQuery]);
+  }, [records, searchQuery, removingIds, activeType]);
 
   const handleSave = async () => {
     let result;
@@ -177,7 +261,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       toast.success('Saved');
       setEditingId(null);
       setEditForm({});
-      fetchRecords();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -224,12 +308,15 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       toast.success('Created');
       setShowAdd(false);
       setAddForm({});
-      fetchRecords();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
 
   const handleDelete = async (id) => {
+    const key = `${activeType}:${id}`;
+    if (pendingDeletes.current.has(key)) return;
+    pendingDeletes.current.add(key);
     let failed = false;
     switch (activeType) {
       case 'people':
@@ -264,9 +351,11 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         break;
     }
 
-    if (!failed) {
+    pendingDeletes.current.delete(key);
+    if (!failed && currentType.current === activeType) {
       toast.success('Deleted');
-      fetchRecords();
+      if (recordId === id) closeReader();
+      setRemovingIds(previous => new Set(previous).add(key));
       onRefresh?.();
     }
   };
@@ -296,7 +385,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     }
     if (result) {
       toast.success('Marked as done');
-      fetchRecords();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -313,9 +402,17 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     });
   };
 
-  const startEdit = (record) => {
+  const startEdit = async (record) => {
     setEditingId(record.id);
-    setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
+    if (activeType === 'memories' && record.contentTruncated) {
+      setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
+      const full = await api.getBrainMemory(record.id).catch(() => null);
+      if (full) {
+        setEditForm({ ...full, tagInput: (full.tags || []).join(', ') });
+      }
+    } else {
+      setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
+    }
   };
 
   const renderForm = (form, setForm, _isEdit = false) => {
@@ -554,14 +651,22 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       );
     }
 
+    const isSelected = recordId === record.id;
     return (
-      <div key={record.id} className="p-4 bg-port-card border border-port-border rounded-lg hover:border-port-border/80 transition-colors">
-        <div className="flex items-start justify-between gap-2">
+      <div
+        key={record.id}
+        className={`p-4 bg-port-card rounded-lg transition-colors ${
+          isSelected
+            ? 'border-2 border-port-accent ring-1 ring-port-accent/30 bg-port-card/90 shadow-sm'
+            : 'border border-port-border hover:border-port-border/80'
+        }`}
+      >
+        <div className="flex flex-col sm:flex-row items-start justify-between gap-2">
           {/* min-w-0: without it a flex child won't shrink below its content's
               intrinsic width, so a long unbreakable code block in an imported
               transcript blows the row out and shoves the action buttons off
               the page. */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 w-full">
             {activeType === 'people' && (
               <>
                 <h3 className="font-medium text-white">{record.name}</h3>
@@ -622,32 +727,30 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
 
             {activeType === 'memories' && (
               <>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-medium text-white">{record.title}</h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="font-medium text-white"><button className="text-left hover:text-port-accent" onClick={() => navigate(`${basePath}/memories/${encodeURIComponent(record.id)}${location.search}`)}>{record.title}</button></h3>
                   {record.mood && (
                     <span className="px-2 py-0.5 text-xs rounded border bg-pink-500/20 text-pink-400 border-pink-500/30">
                       {record.mood}
                     </span>
                   )}
+                  {isSelected && (
+                    <span className="px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase rounded bg-port-accent/20 text-port-accent border border-port-accent/30">
+                      Viewing
+                    </span>
+                  )}
                 </div>
-                {record.content && (
-                  // Imported ChatGPT transcripts can be multi-KB markdown with
-                  // images. Rendering full MarkdownOutput for every card was
-                  // ballooning the Memory tab past 100k DOM nodes. Show a
-                  // plain teaser here; the full thread opens in ConversationViewer.
-                  // Hand-written memories stay plain pre-wrap text.
-                  record.source === 'chatgpt-import'
-                    ? <p className="text-sm text-gray-400 mt-1 line-clamp-3 break-words">{transcriptTeaser(record.content)}</p>
-                    : <p className="text-sm text-gray-400 mt-1 whitespace-pre-wrap break-words">{record.content}</p>
-                )}
-                {record.source === 'chatgpt-import' && record.sourceRef && (
-                  <button
-                    onClick={() => setViewerRecord(record)}
-                    className="mt-2 inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
-                  >
-                    <MessageSquareText size={13} aria-hidden="true" /> View full conversation
-                  </button>
-                )}
+                <button
+                  onClick={() => navigate(`${basePath}/memories/${encodeURIComponent(record.id)}${location.search}`)}
+                  className="mt-1 w-full text-left rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent"
+                  aria-label={`Read ${record.title || 'memory'}`}
+                >
+                  <span className="block text-sm text-gray-400 line-clamp-3 break-words">{transcriptTeaser(record.content)}</span>
+                  <MemoryImagePreview record={record} />
+                  <span className="mt-2 inline-flex min-h-[44px] items-center gap-1 text-xs text-port-accent">
+                    <MessageSquareText size={13} aria-hidden="true" /> Read full entry
+                  </span>
+                </button>
                 {record.tags?.length > 0 && (
                   <div className="flex gap-1 mt-2 flex-wrap">
                     {record.tags.map((tag, i) => (
@@ -714,7 +817,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             question="Delete this entry? This cannot be undone."
             confirmTitle="Confirm delete"
             cancelTitle="Cancel delete"
-            onConfirm={() => confirmDelete(() => handleDelete(record.id))}
+            onConfirm={() => handleDelete(record.id)}
             onCancel={cancelDelete}
           />
         )}
@@ -723,7 +826,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   };
 
   return (
-    <div className="space-y-4">
+    <div className={fixedType ? 'space-y-4' : 'h-full min-h-0 flex flex-col gap-4 overflow-hidden p-3 sm:p-4'}>
       {/* Backend status banner */}
       {backendStatus?.backend === 'file' && (
         <Banner
@@ -748,7 +851,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       )}
 
       {/* Type tabs */}
-      <div className="flex items-center gap-2 flex-wrap">
+      <div className="flex items-center gap-2 flex-wrap shrink-0">
         {!fixedType && MEMORY_TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeType === tab.id;
@@ -756,7 +859,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
           return (
             <button
               key={tab.id}
-              onClick={() => { setActiveType(tab.id); setStatusFilter(''); setSearchQuery(''); }}
+              onClick={() => { closeReader(); setActiveType(tab.id); setStatusFilter(''); setSearchQuery(''); }}
               className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
                 isActive
                   ? `${destInfo.color}`
@@ -811,80 +914,121 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         )}
       </div>
 
-      {/* Search filter */}
-      <div className="relative">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-        <input
-          type="text"
-          placeholder={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}...`}
-          aria-label={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}`}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-9 pr-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white placeholder-gray-500"
-        />
-        {searchQuery && (
-          <button
-            onClick={() => setSearchQuery('')}
-            aria-label="Clear search"
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
-          >
-            <X size={14} />
-          </button>
-        )}
-      </div>
-
-      {/* Add form */}
-      {showAdd && (
-        <div className="p-4 bg-port-card border border-port-accent/50 rounded-lg">
-          <h3 className="font-medium text-white mb-3">Add {DESTINATIONS[activeType].label}</h3>
-          {renderForm(addForm, setAddForm)}
-          <div className="flex items-center gap-2 mt-3">
-            <button
-              onClick={handleAdd}
-              className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
-            >
-              <Plus size={14} />
-              Create
-            </button>
-            <button
-              onClick={() => { setShowAdd(false); setAddForm({}); }}
-              className="px-3 py-1.5 text-gray-400 hover:text-white"
-            >
-              Cancel
-            </button>
+      {/* Main content area: split into list + sidebar preview when an entry is active */}
+      <div className={`flex flex-col lg:flex-row gap-4 ${fixedType ? 'items-start' : 'flex-1 min-h-0 overflow-hidden'}`}>
+        {/* Left column: search, add form, records list */}
+        <div role="region" aria-label="Memory entries" tabIndex={0} className={`flex-1 min-w-0 w-full space-y-4 ${fixedType ? '' : 'min-h-0 overflow-y-auto overscroll-contain'} ${recordId && !loading ? 'hidden lg:block' : 'block'}`}>
+          {/* Search filter */}
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+            <input
+              type="text"
+              placeholder={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}...`}
+              aria-label={`Search ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'}`}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-port-card border border-port-border rounded-lg text-sm text-white placeholder-gray-500"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
-        </div>
-      )}
 
-      {/* Records list */}
-      {loading ? (
-        <div className="flex items-center justify-center h-32">
-          <BrailleSpinner text="Loading" />
-        </div>
-      ) : filteredRecords.length === 0 ? (
-        <p className="text-gray-500 text-center py-8">
-          {searchQuery
-            ? `No matches for "${searchQuery}"`
-            : `No ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'} yet. Add one or capture thoughts in the Inbox.`}
-        </p>
-      ) : (
-        <div className="space-y-2">
-          {filteredRecords.slice(0, visibleCount).map(record => renderRecord(record))}
-          {filteredRecords.length > visibleCount && (
-            <button
-              type="button"
-              onClick={() => setVisibleCount((n) => n + LOAD_MORE)}
-              className="w-full py-2.5 text-xs text-port-accent hover:text-white bg-port-border/30 hover:bg-port-border/50 rounded-lg transition-colors min-h-[44px]"
-            >
-              Show more ({filteredRecords.length - visibleCount} remaining)
-            </button>
+          {/* Add form */}
+          {showAdd && (
+            <div className="p-4 bg-port-card border border-port-accent/50 rounded-lg">
+              <h3 className="font-medium text-white mb-3">Add {DESTINATIONS[activeType].label}</h3>
+              {renderForm(addForm, setAddForm)}
+              <div className="flex items-center gap-2 mt-3">
+                <button
+                  onClick={handleAdd}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
+                >
+                  <Plus size={14} />
+                  Create
+                </button>
+                <button
+                  onClick={() => { setShowAdd(false); setAddForm({}); }}
+                  className="px-3 py-1.5 text-gray-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Records list */}
+          {loading ? (
+            <div className="flex items-center justify-center h-32">
+              <BrailleSpinner text="Loading" />
+            </div>
+          ) : filteredRecords.length === 0 ? (
+            <p className="text-gray-500 text-center py-8">
+              {searchQuery
+                ? `No matches for "${searchQuery}"`
+                : `No ${DESTINATIONS[activeType]?.label?.toLowerCase() || 'records'} yet. Add one or capture thoughts in the Inbox.`}
+            </p>
+          ) : (
+            <div>
+              {filteredRecords.map(record => (
+                <CollapsibleListItem key={`${activeType}:${record.id}`}
+                  removing={removingIds.has(`${activeType}:${record.id}`)}
+                  onExited={() => {
+                    deletedIdsRef.current.add(record.id);
+                    setDeletedIds(previous => new Set(previous).add(record.id));
+                    setRemovingIds(previous => {
+                      const next = new Set(previous);
+                      next.delete(`${activeType}:${record.id}`);
+                      return next;
+                    });
+                  }}>
+                  {renderRecord(record)}
+                </CollapsibleListItem>
+              ))}
+              <InfiniteScrollFooter
+                hasMore={paged.hasMore}
+                loading={paged.loading}
+                error={paged.error}
+                onLoadMore={paged.loadMore}
+              />
+            </div>
           )}
         </div>
-      )}
 
-      {viewerRecord && (
-        <ConversationViewer record={viewerRecord} onClose={() => setViewerRecord(null)} />
-      )}
+        {/* Right column: Sidebar preview for full content */}
+        {recordId && !loading && (
+          <div className={`w-full lg:w-[480px] xl:w-[560px] 2xl:w-[640px] shrink-0 ${fixedType ? '' : 'h-full min-h-0 overflow-y-auto'}`}>
+            {viewerRecord ? (
+              <ConversationViewer
+                key={viewerRecord.id}
+                record={viewerRecord}
+                fillHeight={!fixedType}
+                onClose={closeReader}
+                onEdit={startEdit}
+                onSendToCatalog={handleSendToCatalog}
+              />
+            ) : (
+              <aside
+                aria-label="Preview not found"
+                className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col w-full shadow-lg lg:sticky lg:top-4"
+              >
+                <Banner tone="warning" title="Entry not found">
+                  This entry may have been deleted or archived.
+                  <button onClick={closeReader} className="block min-h-[44px] text-port-accent hover:underline">
+                    Back to entries
+                  </button>
+                </Banner>
+              </aside>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

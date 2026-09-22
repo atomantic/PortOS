@@ -106,7 +106,8 @@ import {
   branchPriorityRank, prioritizeBranches, worktreeProtectionExpiresAt, describeIdleReconcilePark,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
   isMalformedClaimBranch,
-  listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes
+  listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
+  reapSupersededBranches
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
@@ -460,6 +461,12 @@ describe('worktreeProtectionReason', () => {
     // Unreadable mtime fails safe even for a shipped claim.
     expect(at(null, SHIPPED_CLAIM_IDLE_MS)).toBe('worktree-human-claim');
     expect(SHIPPED_CLAIM_IDLE_MS).toBeLessThan(STALE_CLAIM_IDLE_MS);
+  });
+
+  it('allows live claims through when allowLiveClaim is true, but locked and active-agent still hold', () => {
+    expect(worktreeProtectionReason({ path: '/x/claim-foo', allowLiveClaim: true })).toBeNull();
+    expect(worktreeProtectionReason({ path: '/x/claim-foo', allowLiveClaim: true, locked: true })).toBe('worktree-locked');
+    expect(worktreeProtectionReason({ path: '/x/claim-foo', allowLiveClaim: true, activeAgentIds: new Set(['claim-foo']) })).toBe('worktree-active-agent');
   });
 });
 
@@ -1250,11 +1257,10 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.skipped).toContainEqual({ branch: BRANCH, reason: 'backup-failed: disk full' });
   });
 
-  // "Superseded" must never become a way around the worktree protection gate —
-  // it is the same gate cleanupMerged applies. A recent /claim tree is the case
-  // that reaches it: the branch is clean and un-pushed (NEEDS_PR), so nothing
-  // upstream of the reaper holds it back.
-  it('holds the reap while a claim worktree is still inside its idle window', async () => {
+  // Verified-superseded branches are backed up before removal and their work
+  // has already been replaced on the default branch. They must not be held back
+  // by the human claim idle window, but explicit locks and active agents still hold.
+  it('reaps a verified-superseded claim worktree even when inside the claim idle window', async () => {
     const CLAIM = 'claim/issue-5769';
     const CLAIM_TREE = '/repo/data/cos/worktrees/claim-issue-5769';
     git.getBranches.mockResolvedValue([
@@ -1281,12 +1287,55 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     }));
 
     const res = await reconcile('/repo', { activeAgentIds: new Set() });
+    expect(backupSupersededBranchMock).toHaveBeenCalledTimes(1);
+    expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', CLAIM_TREE, expect.anything());
+    expect(git.deleteBranch).toHaveBeenCalledWith('/repo', CLAIM, { local: true });
+    expect(res.reapedSuperseded).toEqual([CLAIM]);
+    expect(res.superseded).toEqual([]);
+  });
+
+  it('holds the reap of a superseded branch when the worktree is locked', async () => {
+    const CLAIM = 'claim/issue-5769';
+    const CLAIM_TREE = '/repo/data/cos/worktrees/claim-issue-5769';
+    const superseded = [{
+      branch: CLAIM,
+      tip: 'aaaaaaa',
+      worktreePath: CLAIM_TREE,
+      worktreeLocked: true,
+      dirtyPaths: [],
+      verdict: {
+        branch: CLAIM, repoPath: '/repo', verdict: 'SUPERSEDED', tip: 'aaaaaaa',
+        dirtyPaths: [], collisionPaths: ['server/services/thing.js'], replacedBy: ['ffffff1']
+      }
+    }];
+
+    const res = await reapSupersededBranches('/repo', 'main', superseded, { activeAgentIds: new Set() });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
     expect(git.deleteBranch).not.toHaveBeenCalled();
     expect(backupSupersededBranchMock).not.toHaveBeenCalled();
-    // Still reported, so a held-back reap is visible rather than silent.
-    expect(res.superseded.map((b) => b.branch)).toEqual([CLAIM]);
-    expect(res.skipped.find((sk) => sk.branch === CLAIM)?.reason).toBeTruthy();
+    expect(res.held.map((b) => b.branch)).toEqual([CLAIM]);
+    expect(res.skipped.find((sk) => sk.branch === CLAIM)?.reason).toBe('worktree-locked');
+  });
+
+  it('holds the reap of a superseded branch when an active CoS agent is running in it', async () => {
+    const superseded = [{
+      branch: BRANCH,
+      tip: 'aaaaaaa',
+      worktreePath: WORKTREE,
+      worktreeLocked: false,
+      dirtyPaths: ['server/services/thing.js'],
+      verdict: {
+        branch: BRANCH, repoPath: '/repo', verdict: 'SUPERSEDED', tip: 'aaaaaaa',
+        dirtyPaths: ['server/services/thing.js'], collisionPaths: ['server/services/thing.js'], replacedBy: ['ffffff1']
+      }
+    }];
+
+    const res = await reapSupersededBranches('/repo', 'main', superseded, { activeAgentIds: new Set(['agent-deadbeef']) });
+    expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+    expect(git.deleteBranch).not.toHaveBeenCalled();
+    expect(backupSupersededBranchMock).not.toHaveBeenCalled();
+    expect(res.held.map((b) => b.branch)).toEqual([BRANCH]);
+    expect(res.skipped.find((sk) => sk.branch === BRANCH)?.reason).toBe('worktree-active-agent');
   });
 
   // `cleanupMerged` means "delete branches whose work is already on main". This
@@ -2125,6 +2174,10 @@ describe('worktreeProtectionExpiresAt', () => {
 
   it('gives no expiry to a non-claim worktree that is not held at all', () => {
     expect(worktreeProtectionExpiresAt({ path: '/repo/data/cos/worktrees/agent-abc12345', ageMs: 2 * DAY, activeAgentIds: new Set() })).toBeNull();
+  });
+
+  it('returns null when allowLiveClaim is true', () => {
+    expect(worktreeProtectionExpiresAt({ path: CLAIM, ageMs: 2 * DAY, allowLiveClaim: true })).toBeNull();
   });
 });
 

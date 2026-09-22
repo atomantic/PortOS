@@ -325,6 +325,7 @@ export * from './zipWriter.js';
 // === Process execution ===
 export * from './agentGuard/index.js';
 export * from './agentOutcome.js';
+export * from './cosAgentCompletionOrder.js';
 export * from './cosAgentFeedback.js';
 export * from './agentOutputMarkers.js';
 export * from './agentRunEvents.js';
@@ -713,3 +714,6 @@ export * from './persistentMindProcessAudit.js';
 export * from './contributionSecurityPolicy.js';
 
 export * from './catalogExtractionDraft.js';
+export * from './markdownImages.js';
+
+export * from './chatgptText.js';

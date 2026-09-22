@@ -1342,8 +1342,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toContain('do NOT post a PR/MR comment saying the review was unavailable or inconclusive');
       expect(prompt).toMatch(/## Review Loop/);
       expect(prompt).toMatch(/request `@alice` as MR reviewer/);
-      expect(prompt).toMatch(/glab mr merge "\$PR_NUMBER" --yes --remove-source-branch/);
-      expect(prompt).toMatch(/glab mr view "\$PR_NUMBER"/);
+      expect(prompt).toMatch(/glab mr merge \$PR_NUMBER --yes --remove-source-branch/);
+      expect(prompt).toMatch(/glab mr view \$PR_NUMBER/);
       expect(prompt.indexOf('### Local Review Before Opening the PR/MR')).toBeLessThan(prompt.indexOf('glab mr create'));
       expect(prompt.indexOf('glab mr create')).toBeLessThan(prompt.indexOf('## Review Loop'));
       expect(prompt).not.toMatch(/gh pr (create|diff|merge|view|checks)/);
@@ -2038,7 +2038,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/--review-with ollama~opt,codex,@alice --review-stop-on-findings/);
       expect(prompt).not.toMatch(/--reviewer-applies/);
       // `codex` and `@alice` are still blocking, so the skip list stays whole.
-      expect(prompt).toContain('Skip the merge if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
+      expect(prompt).toContain('skip the gate if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
       expect(prompt).not.toContain('Every configured reviewer is optional (`~opt`)');
     });
 
@@ -2061,7 +2061,7 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta,
         { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
       // The skip list is NOT relaxed — a surviving `inconclusive` still blocks.
-      expect(prompt).toContain('Skip the merge if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
+      expect(prompt).toContain('skip the gate if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
       expect(prompt).toContain('Every configured reviewer is optional (`~opt`), so a reviewer that timed out or returned no verdict does NOT make the loop inconclusive');
       expect(prompt).toContain('An `inconclusive` that still appears despite that is a real blocker (fixes committed but not pushed), and stands.');
     });
@@ -2075,7 +2075,7 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true });
-      expect(prompt).toContain('Skip the merge if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
+      expect(prompt).toContain('skip the gate if the loop ended `timeout`, `error`, `inconclusive`, `review-blocked`, or `guardrail`');
       expect(prompt).not.toContain('Every configured reviewer is optional (`~opt`)');
     });
 
@@ -2424,7 +2424,8 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'feat', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true });
-      expect(prompt).not.toMatch(/`partial`/);
+      expect(prompt).toContain('reports `clean` (or `too-large`)');
+      expect(prompt).not.toContain('reports `clean`, `partial`');
     });
 
     it('tells the follow-up to request Copilot at its turn when copilot does NOT lead the list', () => {

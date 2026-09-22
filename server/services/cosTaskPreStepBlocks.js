@@ -435,7 +435,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   }
   // Verified-superseded branches are reaped by the reconciler itself and counted
   // in `cleaned`. What is left in `superseded` is the reap's leftovers — held by a
-  // lock, a live agent, or a claim window — so name them rather than letting them
+  // lock or a live agent — so name them rather than letting them
   // vanish into a quiet park; the invisibility is the same failure mode as a
   // lingering worktree reported as "cleaned 0".
   const supersededSuffix = countSuffix(result.superseded, 'branch(es) verified superseded, reap held back');

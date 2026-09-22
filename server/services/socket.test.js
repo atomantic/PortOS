@@ -1,3 +1,4 @@
+import { authEvents } from './auth.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
@@ -139,6 +140,7 @@ describe('socket.js — initSocket', () => {
       if (s.handlers['disconnect']) s.handlers['disconnect']();
     }
     createdSockets.length = 0;
+    authEvents.removeAllListeners('sessions:revoked-all');
   });
 
   beforeEach(() => {
@@ -146,6 +148,26 @@ describe('socket.js — initSocket', () => {
     vi.mocked(registerVoiceHandlers).mockClear();
     io = makeIo();
     initSocket(io);
+  });
+
+  it('sends compact task invalidations to opted-in pages while preserving legacy subscribers', () => {
+    const compact = makeSocket('compact-cos');
+    const legacy = makeSocket('legacy-cos');
+    createdSockets.push(compact, legacy);
+    io.connect(compact); io.connect(legacy);
+    compact.handlers['cos:subscribe']({ taskLists: 'invalidate' });
+    compact.handlers['cos:subscribe'](); // another shared consumer must not widen it
+    legacy.handlers['cos:subscribe']();
+    const payload = { tasks: [{ id: 'example', metadata: { prompt: 'large private prompt' } }] };
+    const forward = queueListeners.cos.find(([event]) => event === 'tasks:user:changed')[1];
+    forward(payload);
+    expect(compact.emitted).toContainEqual(['cos:tasks:user:changed', { invalidated: true }]);
+    expect(legacy.emitted).toContainEqual(['cos:tasks:user:changed', payload]);
+    const forwardChange = queueListeners.cos.find(([event]) => event === 'tasks:changed')[1];
+    forwardChange({ task: { id: 'done', status: 'completed' } });
+    expect(compact.emitted).toContainEqual(['cos:tasks:changed', { invalidated: true, completedChanged: true }]);
+    forwardChange({ task: { id: 'live', status: 'in_progress' } });
+    expect(compact.emitted.at(-1)).toEqual(['cos:tasks:changed', { invalidated: true }]);
   });
 
   it('composes every per-feature handler registrar for a connected socket', () => {

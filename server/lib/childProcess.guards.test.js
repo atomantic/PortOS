@@ -167,6 +167,9 @@ describe('child_process import guard', () => {
   it('scans a non-trivial set of files (guard is not vacuous)', () => {
     expect(allFiles.length).toBeGreaterThan(50);
     expect(candidates.length).toBeGreaterThan(5);
+    // `server/scripts/` is `.mjs`, and a `.js`-only walk would silently drop it
+    // (#7953) — assert the widened extension list actually reaches it.
+    expect(allFiles.some((rel) => rel.endsWith('.mjs'))).toBe(true);
     // Each sibling package must actually be reached. If one is renamed or moved,
     // its rule below would iterate nothing and pass green forever.
     for (const tree of CALL_SITE_TREES) {

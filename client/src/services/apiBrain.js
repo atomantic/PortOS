@@ -22,12 +22,17 @@ export const captureBrainThought = (text, providerOverride, modelOverride, { cre
 export const getBrainInbox = (options = {}) => {
   const params = new URLSearchParams();
   if (options.status) params.set('status', options.status);
+  if (options.search) params.set('search', options.search);
+  if (options.cursor !== undefined && options.cursor !== null) params.set('cursor', options.cursor);
   if (options.limit) params.set('limit', options.limit);
   if (options.offset) params.set('offset', options.offset);
-  // Forward request-level options (e.g. { silent: true }) so background pollers can opt out
-  // of the default error toast. `silent` is the only request-level flag the helper reads;
-  // the rest of `options` is query params handled above.
-  return request(`/brain/inbox?${params}`, { silent: options.silent });
+  const qs = params.toString();
+  // Forward request-level options (e.g. { silent: true, signal }) so background pollers/hooks
+  // can opt out of the default error toast or cancel in-flight requests.
+  return request(`/brain/inbox${qs ? `?${qs}` : ''}`, {
+    silent: options.silent,
+    signal: options.signal
+  });
 };
 export const resolveBrainReview = (inboxLogId, destination, editedExtracted, options = {}) => request('/brain/review/resolve', {
   method: 'POST',
@@ -59,8 +64,19 @@ export const markBrainInboxSentToCatalog = (ids, options) => request('/brain/inb
 });
 
 // Brain - People
-export const getBrainPeople = () => request('/brain/people');
-export const getBrainPerson = (id) => request(`/brain/people/${id}`);
+export const getBrainPeople = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.search) params.set('search', options.search);
+  if (options.cursor !== undefined && options.cursor !== null) params.set('cursor', options.cursor);
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  const qs = params.toString();
+  return request(`/brain/people${qs ? `?${qs}` : ''}`, {
+    silent: options.silent,
+    signal: options.signal
+  });
+};
+export const getBrainPerson = (id, options = {}) => request(`/brain/people/${id}`, options);
 export const createBrainPerson = (data, options = {}) => request('/brain/people', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -74,12 +90,20 @@ export const updateBrainPerson = (id, data, options = {}) => request(`/brain/peo
 export const deleteBrainPerson = (id, options = {}) => request(`/brain/people/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Projects
-export const getBrainProjects = (filters) => {
+export const getBrainProjects = (filters = {}) => {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
-  return request(`/brain/projects?${params}`);
+  if (filters?.search) params.set('search', filters.search);
+  if (filters?.cursor !== undefined && filters?.cursor !== null) params.set('cursor', filters.cursor);
+  if (filters?.limit) params.set('limit', filters.limit);
+  if (filters?.offset) params.set('offset', filters.offset);
+  const qs = params.toString();
+  return request(`/brain/projects${qs ? `?${qs}` : ''}`, {
+    silent: filters?.silent,
+    signal: filters?.signal
+  });
 };
-export const getBrainProject = (id) => request(`/brain/projects/${id}`);
+export const getBrainProject = (id, options = {}) => request(`/brain/projects/${id}`, options);
 export const createBrainProject = (data, options = {}) => request('/brain/projects', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -93,12 +117,20 @@ export const updateBrainProject = (id, data, options = {}) => request(`/brain/pr
 export const deleteBrainProject = (id, options = {}) => request(`/brain/projects/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Ideas
-export const getBrainIdeas = (filters) => {
+export const getBrainIdeas = (filters = {}) => {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
-  return request(`/brain/ideas?${params}`);
+  if (filters?.search) params.set('search', filters.search);
+  if (filters?.cursor !== undefined && filters?.cursor !== null) params.set('cursor', filters.cursor);
+  if (filters?.limit) params.set('limit', filters.limit);
+  if (filters?.offset) params.set('offset', filters.offset);
+  const qs = params.toString();
+  return request(`/brain/ideas${qs ? `?${qs}` : ''}`, {
+    silent: filters?.silent,
+    signal: filters?.signal
+  });
 };
-export const getBrainIdea = (id) => request(`/brain/ideas/${id}`);
+export const getBrainIdea = (id, options = {}) => request(`/brain/ideas/${id}`, options);
 export const createBrainIdea = (data, options = {}) => request('/brain/ideas', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -144,12 +176,20 @@ export const syncIdeaLoomToObsidian = (listId, options = {}) => {
 };
 
 // Brain - Admin
-export const getBrainAdmin = (filters) => {
+export const getBrainAdmin = (filters = {}) => {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
-  return request(`/brain/admin?${params}`);
+  if (filters?.search) params.set('search', filters.search);
+  if (filters?.cursor !== undefined && filters?.cursor !== null) params.set('cursor', filters.cursor);
+  if (filters?.limit) params.set('limit', filters.limit);
+  if (filters?.offset) params.set('offset', filters.offset);
+  const qs = params.toString();
+  return request(`/brain/admin${qs ? `?${qs}` : ''}`, {
+    silent: filters?.silent,
+    signal: filters?.signal
+  });
 };
-export const getBrainAdminItem = (id) => request(`/brain/admin/${id}`);
+export const getBrainAdminItem = (id, options = {}) => request(`/brain/admin/${id}`, options);
 export const createBrainAdminItem = (data, options = {}) => request('/brain/admin', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -163,8 +203,20 @@ export const updateBrainAdminItem = (id, data, options = {}) => request(`/brain/
 export const deleteBrainAdminItem = (id, options = {}) => request(`/brain/admin/${id}`, { method: 'DELETE', ...options });
 
 // Brain - Memories
-export const getBrainMemories = () => request('/brain/memories');
-export const getBrainMemory = (id) => request(`/brain/memories/${id}`);
+export const getBrainMemories = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.status) params.set('status', options.status);
+  if (options.search) params.set('search', options.search);
+  if (options.cursor !== undefined && options.cursor !== null) params.set('cursor', options.cursor);
+  if (options.limit) params.set('limit', options.limit);
+  if (options.offset) params.set('offset', options.offset);
+  const qs = params.toString();
+  return request(`/brain/memories${qs ? `?${qs}` : ''}`, {
+    silent: options.silent,
+    signal: options.signal
+  });
+};
+export const getBrainMemory = (id, options = {}) => request(`/brain/memories/${id}`, options);
 export const createBrainMemory = (data, options = {}) => request('/brain/memories', {
   method: 'POST',
   body: JSON.stringify(data),
@@ -195,8 +247,8 @@ export const uploadChatgptZip = (file, { tags = '', skipEmpty = true, ...options
   formData.append('skipEmpty', skipEmpty ? 'true' : 'false');
   return request('/brain/import/chatgpt/zip', { method: 'POST', body: formData, ...options });
 };
-export const getChatgptArchive = (name) =>
-  request(`/brain/import/chatgpt/archive/${encodeURIComponent(name)}`);
+export const getChatgptArchive = (name, { preview, ...options } = {}) =>
+  request(`/brain/import/chatgpt/archive/${encodeURIComponent(name)}${preview === 'images' ? '?preview=images' : ''}`, options);
 
 // Brain - Digests & Reviews
 export const getBrainLatestDigest = () => request('/brain/digest/latest');

@@ -728,6 +728,9 @@ export function createRunnerService(config = {}) {
         await atomicWrite(metadataPath, metadata).catch((err) => {
           console.error(`❌ API run ${runId} cancel finalize error: ${err.message}`);
         });
+        // Not `onRunFailed`: a Stop must not bench the provider. The host uses
+        // this hook to drop the run from the shared activity snapshot.
+        safeSettle(() => hooks.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
         safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
       };
       // `bound` is 'stall' or 'absolute'. The two mean different things — one

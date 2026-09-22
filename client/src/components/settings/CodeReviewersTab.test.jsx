@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import CodeReviewersTab from './CodeReviewersTab';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
@@ -18,6 +19,14 @@ vi.mock('../ui/Toast', () => ({
     error: vi.fn(),
   },
 }));
+
+const renderTab = (ui, path = '/') => render(
+  <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>,
+);
+
+const openFollowUp = async () => {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Follow-up' }));
+};
 
 describe('CodeReviewersTab', () => {
   beforeEach(() => {
@@ -41,7 +50,7 @@ describe('CodeReviewersTab', () => {
     };
     api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['copilot'], codexModel: 'legacy-model', claudeEffort: 'medium' });
     api.updateSettings.mockResolvedValue({});
-    const view = render(<CodeReviewersTab />);
+    const view = renderTab(<CodeReviewersTab />);
     const provider = await screen.findByLabelText('Provider');
     expect(screen.queryByRole('option', { name: 'Disabled API' })).not.toBeInTheDocument();
     fireEvent.change(provider, { target: { value: 'example-gpu' } });
@@ -59,7 +68,7 @@ describe('CodeReviewersTab', () => {
     });
     view.unmount();
     api.getCodeReviewDefaults.mockResolvedValue(saved);
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
     expect(await screen.findByLabelText('Model for Example GPU')).toHaveValue('coder-b');
     expect(screen.getByLabelText('Reasoning effort for Example GPU')).toHaveValue('high');
     fireEvent.change(screen.getByLabelText('Reasoning effort for Example GPU'), { target: { value: '' } });
@@ -90,7 +99,7 @@ describe('CodeReviewersTab', () => {
       usernames: ['example-bot'], stopMode: 'consensus', reviewerApplies: true,
     });
     api.updateSettings.mockResolvedValue({});
-    const view = render(<CodeReviewersTab />);
+    const view = renderTab(<CodeReviewersTab />);
     const primary = await screen.findByRole('region', { name: 'Primary' });
     expect(within(primary).getByLabelText('Model for Example GPU')).toHaveValue('custom-coder');
     expect(api.updateSettings).not.toHaveBeenCalled();
@@ -120,7 +129,7 @@ describe('CodeReviewersTab', () => {
     expect(screen.queryByRole('region', { name: 'Fallback 2' })).not.toBeInTheDocument();
     view.unmount();
     api.getCodeReviewDefaults.mockResolvedValue(saved);
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
     fireEvent.click(await screen.findByText('Save defaults'));
     await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(2));
     expect(api.updateSettings.mock.lastCall[0].codeReview).toEqual(saved);
@@ -140,7 +149,7 @@ describe('CodeReviewersTab', () => {
     api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], reviewerFallbackGroups: [], usernames: ['example-bot'] });
     let rejectSave;
     api.updateSettings.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
     fireEvent.click(await screen.findByText('Save defaults'));
     expect(screen.getByText('Saving…')).toBeDisabled();
     expect(screen.getByText('Add tier')).toBeDisabled();
@@ -157,7 +166,7 @@ describe('CodeReviewersTab', () => {
 
   it('does not enable save after a malformed defaults response', async () => {
     api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'], reviewerFallbackGroups: [['codex'], null] });
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
     expect(await screen.findByText('Failed to load code review defaults.')).toBeInTheDocument();
     expect(screen.getByText('Save defaults')).toBeDisabled();
     expect(api.updateSettings).not.toHaveBeenCalled();
@@ -173,7 +182,7 @@ describe('CodeReviewersTab', () => {
       reviewerApplies: false,
     });
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
 
     expect(screen.getByText('Loading defaults…')).toBeInTheDocument();
 
@@ -183,17 +192,17 @@ describe('CodeReviewersTab', () => {
     expect(api.getCodeReviewDefaults).toHaveBeenCalledWith({ silent: true });
   });
 
-  it('shows a configuration-fault reviewer as a no-op with the settings fix', async () => {
+  it('shows the last failed review attempt with the settings fix', async () => {
     api.getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['ollama'],
       reviewerConfigFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
     });
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
 
-    expect(await screen.findByText(/ollama cannot review on this install \(NO_MODEL\)/)).toBeInTheDocument();
-    expect(screen.getByText(/review loop is currently a no-op for this reviewer/)).toBeInTheDocument();
-    expect(screen.getByText(/Select a model in this tab/)).toBeInTheDocument();
+    expect(await screen.findByText(/ollama: the last review attempt failed \(NO_MODEL\)/)).toBeInTheDocument();
+    expect(screen.getByText(/A successful review clears this warning/)).toBeInTheDocument();
+    expect(screen.getByText(/Select a model on Review chain/)).toBeInTheDocument();
   });
 
   it('identifies a provider access refusal and its configuration remedy', async () => {
@@ -202,15 +211,15 @@ describe('CodeReviewersTab', () => {
       optionalReviewers: ['opencode'],
       reviewerConfigFaults: { opencode: { code: 'REVIEWER_ACCESS_DENIED', lastFailureAt: 123 } },
     });
-    render(<CodeReviewersTab />);
-    expect(await screen.findByText(/opencode cannot review on this install/)).toHaveTextContent('Select an accessible service or model, or correct provider access.');
+    renderTab(<CodeReviewersTab />);
+    expect(await screen.findByText(/opencode: the last review attempt failed/)).toHaveTextContent('Select an accessible service or model, or correct provider access.');
     expect(screen.getByText(/A successful review clears this warning/)).toBeInTheDocument();
   });
 
   it('renders error banner with Retry button and disables Save button when fetch rejects', async () => {
     api.getCodeReviewDefaults.mockRejectedValue(new Error('Network error'));
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
 
     expect(await screen.findByText('Failed to load code review defaults.')).toBeInTheDocument();
     const retryBtn = screen.getByRole('button', { name: 'Retry' });
@@ -232,7 +241,7 @@ describe('CodeReviewersTab', () => {
         reviewerApplies: false,
       });
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
 
     expect(await screen.findByText('Failed to load code review defaults.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save defaults' })).toBeDisabled();
@@ -259,7 +268,7 @@ describe('CodeReviewersTab', () => {
     });
     api.updateSettings.mockResolvedValue({ success: true });
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
 
     const saveBtn = await screen.findByRole('button', { name: 'Save defaults' });
     fireEvent.click(saveBtn);
@@ -282,7 +291,8 @@ describe('CodeReviewersTab', () => {
     });
     api.updateSettings.mockResolvedValue({});
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
+    await openFollowUp();
     const checkbox = await screen.findByLabelText(/Check finished runs against the task objective/);
     // An install that has never saved the block must read as ON — persisting a
     // stored `false` here would silently switch off a gate nobody turned off.
@@ -315,7 +325,8 @@ describe('CodeReviewersTab', () => {
     });
     api.updateSettings.mockResolvedValue({});
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
+    await openFollowUp();
     fireEvent.click(await screen.findByLabelText(/Check finished runs against the task objective/));
     fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
 
@@ -338,7 +349,8 @@ describe('CodeReviewersTab', () => {
     });
     api.updateSettings.mockResolvedValue({});
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
+    await openFollowUp();
     expect(await screen.findByLabelText(/File an issue on the project/)).toBeChecked();
     expect(screen.getByLabelText(/Queue an agent to reconcile it/)).not.toBeChecked();
     expect(screen.getByLabelText('Act on which verdicts')).toHaveValue('any-finding');
@@ -365,7 +377,8 @@ describe('CodeReviewersTab', () => {
       goalFidelity: { enabled: true },
     });
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
+    await openFollowUp();
     expect(await screen.findByLabelText(/File an issue on the project/)).not.toBeChecked();
     expect(screen.getByLabelText(/Queue an agent to reconcile it/)).not.toBeChecked();
     // The trigger is meaningless until an action is armed.
@@ -385,8 +398,43 @@ describe('CodeReviewersTab', () => {
       goalFidelity: { enabled: false, fileIssue: true },
     });
 
-    render(<CodeReviewersTab />);
+    renderTab(<CodeReviewersTab />);
+    await openFollowUp();
     expect(await screen.findByLabelText(/File an issue on the project/)).toBeDisabled();
     expect(screen.getByLabelText(/Queue an agent to reconcile it/)).toBeDisabled();
+  });
+
+  it('keeps tier instructions in one drawer and splits follow-up onto its own view', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({
+      reviewers: ['codex'],
+      reviewerFallbackGroups: [['codex'], ['ollama']],
+    });
+    renderTab(<CodeReviewersTab />);
+    expect(await screen.findByRole('region', { name: 'Primary' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Fallback 1' })).toBeInTheDocument();
+    expect(screen.getAllByText(/One paused reviewer skips that whole tier/)).toHaveLength(1);
+    expect(screen.queryByText(/Add a configured provider/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tool-free first/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/The first tier with every member unpaused/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Check finished runs against the task objective/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'How this works' }));
+    const help = await screen.findByRole('dialog', { name: 'How code review works' });
+    expect(within(help).getByText(/The first tier whose reviewers are all available runs/)).toBeInTheDocument();
+    expect(within(help).getByText(/Follow-up is a second check/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close how code review works' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'How code review works' })).not.toBeInTheDocument());
+
+    await openFollowUp();
+    expect(screen.queryByRole('region', { name: 'Primary' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Check finished runs against the task objective/)).toBeInTheDocument();
+    expect(screen.getByText(/After a run ships, compare its diff/)).toBeInTheDocument();
+  });
+
+  it('sends an unknown task slug back to the review chain', async () => {
+    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['codex'] });
+    renderTab(<CodeReviewersTab />, '/models/code-reviewers/not-a-view');
+    expect(await screen.findByRole('region', { name: 'Primary' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Review chain' })).toHaveAttribute('aria-selected', 'true');
   });
 });

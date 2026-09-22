@@ -255,6 +255,14 @@ const withResolvedModelAccess = (provider, resolved) => (
  */
 export function createPortOSProviderRoutes(aiToolkit) {
   const router = Router();
+  router.use((req, res, next) => {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      res.once('finish', () => {
+        if (res.statusCode < 400) req.app.get('io')?.emit('providers:changed');
+      });
+    }
+    next();
+  });
 
   router.get('/fleet-host', asyncHandler(async (req, res) => {
     const { getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
