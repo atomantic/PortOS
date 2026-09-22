@@ -40,6 +40,7 @@ import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { AgentProgress, AgentRuntimeStatus } from './AgentRuntimeStatus';
 import { agentIssueLinkifier } from '../../../lib/issueRefs';
+import { harnessLabel, providerHarnessId } from '../../../utils/providerHarnesses';
 
 // Pre-compiled regexes for normalizeDescriptionToMarkdown
 // Avoid lookbehind to support older Safari/iOS runtimes
@@ -58,6 +59,107 @@ const CONFIG_BADGE_KEYS = [
   'configSimplify',
   'configReviewLoop',
 ];
+
+const PROVIDER_BADGE_CLASSES = {
+  provider: 'bg-blue-500/15 text-blue-400',
+  harness: 'bg-cyan-500/15 text-cyan-400',
+  service: 'bg-violet-500/15 text-violet-400',
+  plan: 'bg-fuchsia-500/15 text-fuchsia-400',
+  route: 'bg-slate-500/15 text-slate-300',
+  command: 'bg-indigo-500/15 text-indigo-400',
+  execution: 'bg-emerald-500/15 text-emerald-400',
+  dispatch: 'bg-teal-500/15 text-teal-400',
+  tier: 'bg-orange-500/15 text-orange-400',
+  prompt: 'bg-amber-500/15 text-amber-400',
+  auth: 'bg-rose-500/15 text-rose-400',
+};
+
+function buildProviderConfigBadges(metadata = {}) {
+  const providerId = metadata.providerId || null;
+  const providerType = metadata.providerType || null;
+  const providerCommand = metadata.providerCommand || null;
+  const inferredHarnessId = providerHarnessId({ id: providerId, type: providerType, command: providerCommand });
+  const harnessId = metadata.harnessId ?? inferredHarnessId;
+  const providerName = metadata.providerName || providerId;
+  const providerMethod = metadata.providerMethod || providerType;
+  const dispatch = metadata.useRunner === true || metadata.useRunner === 'true'
+    ? 'Runner'
+    : metadata.useRunner === false || metadata.useRunner === 'false' ? 'Server' : null;
+  const isCredentialBootstrap = metadata.providerHasCredentialBootstrap === true
+    || metadata.providerHasCredentialBootstrap === 'true';
+  const credentialBootstrap = metadata.providerCredentialBootstrapId || (isCredentialBootstrap ? 'bootstrap' : null);
+
+  return [
+    providerName && {
+      key: 'provider',
+      label: 'Provider',
+      value: providerName,
+      title: providerId && providerName !== providerId ? `Provider ${providerName} (${providerId})` : `Provider ${providerName}`,
+    },
+    harnessId && {
+      key: 'harness',
+      label: 'Harness',
+      value: harnessLabel(harnessId),
+      title: `Harness ${harnessId}`,
+    },
+    metadata.serviceId && {
+      key: 'service',
+      label: 'Service',
+      value: metadata.serviceId,
+      title: `Service ${metadata.serviceId}`,
+    },
+    metadata.servicePlan && {
+      key: 'plan',
+      label: 'Plan',
+      value: metadata.servicePlan,
+      title: `Service plan ${metadata.servicePlan}`,
+    },
+    providerMethod && {
+      key: 'route',
+      label: 'Route',
+      value: providerMethod,
+      title: `Provider route ${providerMethod}`,
+    },
+    providerCommand && {
+      key: 'command',
+      label: 'Command',
+      value: providerCommand,
+      title: `Provider command ${providerCommand}`,
+    },
+    metadata.executionMode && {
+      key: 'execution',
+      label: 'Execution',
+      value: metadata.executionMode,
+      title: `Execution mode ${metadata.executionMode}`,
+    },
+    dispatch && {
+      key: 'dispatch',
+      label: 'Dispatch',
+      value: dispatch,
+      title: `${dispatch}-owned child process`,
+    },
+    metadata.modelTier && {
+      key: 'tier',
+      label: 'Tier',
+      value: metadata.modelTier,
+      title: metadata.modelReason ? `Model selection: ${metadata.modelReason}` : `Model tier ${metadata.modelTier}`,
+    },
+    metadata.leanMode && {
+      key: 'prompt',
+      label: 'Prompt',
+      value: 'lean',
+      title: 'Lean prompt mode',
+    },
+    credentialBootstrap && {
+      key: 'auth',
+      label: 'Auth',
+      value: credentialBootstrap,
+      title: credentialBootstrap === 'bootstrap'
+        ? 'Credentials supplied by a bootstrap command'
+        : `Credential bootstrap ${credentialBootstrap}`,
+    },
+  ].filter(Boolean);
+}
 
 const FINISH_SENTINEL_MESSAGE = 'Finish work and write sentinel.';
 
@@ -332,6 +434,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   // instead of reaching a verdict, so it is neither a success nor a failure.
   const isSystemAgent = isSystemAgentRecord(agent);
   const inactive = completed || paused;
+  const providerConfigBadges = buildProviderConfigBadges(agent.metadata);
 
   // Handle feedback submission
   const submitFeedback = useCallback(async (rating) => {
@@ -832,8 +935,17 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         )}
 
         {/* Agent configuration badges */}
-        {(CONFIG_BADGE_KEYS.some(key => agent.metadata?.[key]) || agent.metadata?.effort) && (
+        {(providerConfigBadges.length > 0 || CONFIG_BADGE_KEYS.some(key => agent.metadata?.[key]) || agent.metadata?.effort) && (
           <div className="flex items-center gap-1.5 flex-wrap mb-2">
+            {providerConfigBadges.map(({ key, label, value, title }) => (
+              <span
+                key={key}
+                className={`flex items-center min-w-0 max-w-full [overflow-wrap:anywhere] px-1.5 py-0.5 text-[11px] rounded ${PROVIDER_BADGE_CLASSES[key]}`}
+                title={title}
+              >
+                {label}: {value}
+              </span>
+            ))}
             {agent.metadata?.effort && (
               <span
                 className="flex items-center px-1.5 py-0.5 text-[11px] rounded bg-orange-500/15 text-orange-400"
