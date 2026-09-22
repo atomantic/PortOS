@@ -78,6 +78,7 @@ export function createDequeueCapacity(state, {
 
   const spawnProjectCounts = { ...agentsByProject };
   const spawnLocalEndpointCounts = { ...localEndpointCounts };
+  const spawnedTaskIds = [];
   let spawned = 0;
 
   const admit = (task, ceiling, gateLocalEndpoint) => {
@@ -106,6 +107,7 @@ export function createDequeueCapacity(state, {
     spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
     const endpoint = resolveLocalEndpoint(task);
     if (endpoint) spawnLocalEndpointCounts[endpoint] = (spawnLocalEndpointCounts[endpoint] || 0) + 1;
+    spawnedTaskIds.push(typeof task?.id === 'string' && task.id ? task.id : 'unknown-task');
     spawned++;
   };
 
@@ -121,6 +123,7 @@ export function createDequeueCapacity(state, {
     // Live read of the running spawn count — a getter so callers always see the
     // current total after trackSpawn mutations rather than a stale snapshot.
     get spawned() { return spawned; },
+    get spawnedTaskIds() { return spawnedTaskIds; },
   };
 }
 

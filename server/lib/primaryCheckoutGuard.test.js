@@ -147,6 +147,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('detectPrimaryCheckoutDrift', () => {
     expect(verdict.category).toBe(PRIMARY_CHECKOUT_MUTATED_CATEGORY);
     expect(verdict.commitCount).toBe(2);
     // The message names the drifted branch and the commit count...
+    expect(verdict.message).toContain('Worktree agent mutated');
     expect(verdict.message).toContain('main');
     expect(verdict.message).toContain('2 new commits');
     // ...and the fix names the agent branch plus the exact recovery command.
@@ -170,7 +171,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('detectPrimaryCheckoutDrift', () => {
     expect(verdict.drifted).toBe(false);
     expect(verdict.unattributed).toBe(true);
     expect(verdict.unpushedCount).toBe(1);
-    expect(verdict.message).toContain('main');
+    expect(verdict.message).toContain('moved during a worktree run');
+    expect(verdict.message).not.toContain('Worktree agent mutated');
+    expect(verdict.message).toContain('someone else\'s commit');
     expect(verdict.suggestedFix).toBeUndefined();
   });
 
@@ -738,8 +741,15 @@ describe('prose helpers', () => {
   const current = { path: '/example/repo', branch: 'main', head: 'b'.repeat(40) };
 
   it('singularizes a one-commit drift', () => {
+    expect(formatDriftMessage({ baseline, current, commitCount: 1 })).toContain('Worktree agent mutated');
     expect(formatDriftMessage({ baseline, current, commitCount: 1 })).toContain('(1 new commit)');
     expect(formatDriftRecovery({ current, commitCount: 1, agentBranch: null })).toContain('1 commit ');
+  });
+
+  it('does not accuse the worktree agent when the movement is unattributed', () => {
+    const message = formatDriftMessage({ baseline, current, commitCount: 1, attributed: false });
+    expect(message).toContain('moved during a worktree run');
+    expect(message).not.toContain('Worktree agent mutated');
   });
 
   it('falls back to origin/<branch> only when no upstream was resolved', () => {

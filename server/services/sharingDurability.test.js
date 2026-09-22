@@ -15,7 +15,14 @@ const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-sha
 vi.mock('../lib/fileUtils.js', async (original) => new Proxy(makeProxy(await original()), {
   get: (target, key) => key === 'dataPath' ? (...parts) => join(tempRoot, ...parts) : target[key],
 }));
-vi.mock('./instances.js', () => mockNoPeers({}, { resolveEffectiveCategories: () => ({}), updatePeer: async () => {} }));
+// syncWithPeer logs the peer through instances.js's pure `peerLogLabel`; pull
+// the real one so a log helper cannot turn an injected store fault into a
+// missing-export error. Everything else stays doubled (no live peers).
+vi.mock('./instances.js', async (importOriginal) => mockNoPeers({}, {
+  peerLogLabel: (await importOriginal()).peerLogLabel,
+  resolveEffectiveCategories: () => ({}),
+  updatePeer: async () => {},
+}));
 vi.mock('./instanceIdentity.js', () => mockTestIdentity());
 vi.mock('./sharing/peerSync.js', () => mockNoPeerSync({}, {
   getOutboundCoverageForPeer: async () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() }),
