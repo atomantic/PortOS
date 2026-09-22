@@ -1709,10 +1709,3 @@ export async function getGitInfo(dir) {
   };
 }
 
-export {
-  getSubmodules,
-  getSubmoduleOverview,
-  getSubmodulePaths,
-  updateSubmodule
-} from './gitSubmodules.js';
-
