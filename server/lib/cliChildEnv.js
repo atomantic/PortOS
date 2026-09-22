@@ -358,7 +358,7 @@ export function buildCliChildEnv({
       ? buildPublicReviewActionsCliEnv(composed)
       : composed;
 
-  if (isPublicReviewNoToolProfile(safetyProfile) && provider?.credentialBootstrap?.envCommand) {
+  if ((isPublicReviewNoToolProfile(safetyProfile) || !safetyProfile) && provider?.credentialBootstrap?.envCommand) {
     Object.assign(env, Object.fromEntries(Object.entries(bootstrapEnv || {})
       .filter(([key, value]) => BOOTSTRAP_REVIEW_AUTH_KEYS.has(key) && typeof value === 'string')));
   }

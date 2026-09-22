@@ -106,7 +106,7 @@ const BOOTSTRAP_ENV_TTL_MS = 60_000;
 export async function resolveBootstrapEnv(provider, { safetyProfile = null } = {}) {
   const argv = provider?.credentialBootstrap?.envCommand;
   if (!argv) return {};
-  if (!isPublicReviewNoToolProfile(safetyProfile)) {
+  if (safetyProfile && !isPublicReviewNoToolProfile(safetyProfile)) {
     throw new Error('Bootstrap credentials are available only for tool-free reviews.');
   }
   if (!Array.isArray(argv) || !argv.length || argv.some(value => typeof value !== 'string' || !value || value.includes('\0'))) {

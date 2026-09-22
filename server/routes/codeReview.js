@@ -29,6 +29,7 @@ const localReviewRequestSchema = z.object({
   inheritDefaults: z.boolean().optional(),
   diff: z.string().min(1, 'diff must be non-empty'),
   timeoutMs: z.number().int().positive().max(600000).optional(),
+  cwd: z.string().optional(),
 }).strict().superRefine((body, ctx) => {
   // Blank is "not pinned", not "invalid" — same fallback the sibling `model` field
   // gets from `body.model || configured` below, and what this route's header
@@ -88,6 +89,7 @@ router.post('/local', asyncHandler(async (req, res) => {
     effort,
     diff: body.diff,
     timeoutMs: body.timeoutMs,
+    cwd: body.cwd,
   })
   if (!result.ok) {
     await reportReviewerFailure(body.backend, result)

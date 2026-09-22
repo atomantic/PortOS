@@ -38,3 +38,27 @@ it('shows partial pauses, healthy later tiers, all-paused fallback and expiry wi
   expect(onChange).not.toHaveBeenCalled();
   expect(onGroupsChange).not.toHaveBeenCalled();
 });
+
+it('compacts desktop tier controls while retaining touch targets on mobile', () => {
+  const props = {
+    groups: [
+      { id: 'primary', reviewers: ['codex'] },
+      { id: 'second', reviewers: ['claude'] },
+    ],
+    onChange: vi.fn(),
+    onGroupsChange: vi.fn(),
+  };
+  render(<ReviewerGroupsEditor {...props} />);
+  const primary = screen.getByRole('region', { name: 'Primary' });
+  const earlierBtn = within(primary).getByRole('button', { name: 'Move Primary earlier' });
+  const laterBtn = within(primary).getByRole('button', { name: 'Move Primary later' });
+  const removeBtn = within(primary).getByRole('button', { name: 'Remove Primary' });
+  const addTierBtn = screen.getByRole('button', { name: 'Add tier' });
+  const tierSelect = within(primary).getByRole('combobox', { name: 'Tier for codex in Primary' });
+  const dragHandle = within(primary).getByRole('button', { name: 'Drag Primary' });
+
+  for (const control of [earlierBtn, laterBtn, removeBtn, addTierBtn, tierSelect, dragHandle]) {
+    expect(control.className).toContain('min-h-11');
+    expect(control.className).toContain('sm:min-h-0');
+  }
+});

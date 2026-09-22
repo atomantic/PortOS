@@ -32,7 +32,7 @@ function DraggableReviewItem({ id, data, disabled, handles, children, className 
       {children(
         <button type="button" ref={node => { drag.setActivatorNodeRef(node); if (node) handles.current.set(id, node); else handles.current.delete(id); }}
           {...drag.attributes} {...drag.listeners} disabled={disabled}
-          aria-label={`Drag ${data.label}`} className="touch-none min-h-11 min-w-11 flex items-center justify-center text-gray-400 hover:text-white disabled:opacity-40">
+          aria-label={`Drag ${data.label}`} className="touch-none min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 flex items-center justify-center text-gray-400 hover:text-white disabled:opacity-40">
           <GripVertical size={18} />
         </button>
       )}
@@ -166,9 +166,9 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
                 <div className="flex flex-wrap items-center gap-2">
                   {handle}<h3 className="font-semibold text-sm text-white">{name}</h3>
                   <span className="text-xs text-gray-400">{!group.reviewers.length ? 'Empty draft' : active ? paused.length ? 'Selected · paused members' : 'Active tier' : paused.length ? 'Paused members' : 'Standby'}</span>
-                  <button type="button" disabled={disabled || index === 0} onClick={() => moveTier(index, index - 1)} aria-label={`Move ${name} earlier`} className="min-h-11 px-2 text-xs text-port-accent disabled:opacity-40">Earlier</button>
-                  <button type="button" disabled={disabled || index === groups.length - 1} onClick={() => moveTier(index, index + 1)} aria-label={`Move ${name} later`} className="min-h-11 px-2 text-xs text-port-accent disabled:opacity-40">Later</button>
-                  <button type="button" disabled={disabled} className="min-h-11 px-2 text-xs text-port-error" aria-label={`Remove ${name}`}
+                  <button type="button" disabled={disabled || index === 0} onClick={() => moveTier(index, index - 1)} aria-label={`Move ${name} earlier`} className="min-h-11 sm:min-h-0 px-2 text-xs text-port-accent disabled:opacity-40">Earlier</button>
+                  <button type="button" disabled={disabled || index === groups.length - 1} onClick={() => moveTier(index, index + 1)} aria-label={`Move ${name} later`} className="min-h-11 sm:min-h-0 px-2 text-xs text-port-accent disabled:opacity-40">Later</button>
+                  <button type="button" disabled={disabled} className="min-h-11 sm:min-h-0 px-2 text-xs text-port-error" aria-label={`Remove ${name}`}
                     onClick={() => {
                       const next = groups.filter(item => item.id !== group.id);
                       changeGroups(next, `${name} removed.`, next[Math.min(index, next.length - 1)]?.id);
@@ -183,7 +183,7 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
                         {memberHandle}
                         <label htmlFor={`${id}-${group.id}-${token}-tier`} className="text-xs text-gray-500">Move to tier</label>
                         <select id={`${id}-${group.id}-${token}-tier`} aria-label={`Tier for ${token} in ${name}`} value={group.id} disabled={disabled}
-                          onChange={event => moveMember(group.id, token, event.target.value)} className="min-w-0 max-w-full min-h-11 bg-port-bg border border-port-border rounded text-xs text-gray-300">
+                          onChange={event => moveMember(group.id, token, event.target.value)} className="min-w-0 max-w-full min-h-11 sm:min-h-0 bg-port-bg border border-port-border rounded text-xs text-gray-300 py-1 sm:py-0.5">
                           {groups.map((target, targetIndex) => <option key={target.id} value={target.id}>{tierName(targetIndex)}</option>)}
                         </select>
                         <span className="text-xs text-gray-500">{Number(reviewerHealth[token]?.pausedUntil) > now ? `Paused until ${formatDateTime(reviewerHealth[token].pausedUntil)}` : 'Unpaused'}</span>
@@ -199,7 +199,7 @@ export default function ReviewerGroupsEditor({ groups, onGroupsChange, reviewerH
       </DndContext>
       {!allReviewers.length && <p className="text-xs text-gray-400">AI review is disabled. Forge reviewers below are preserved.</p>}
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" disabled={disabled} className="min-h-11 px-3 text-sm text-port-accent border border-port-border rounded disabled:opacity-40"
+        <button type="button" disabled={disabled} className="min-h-11 sm:min-h-0 px-3 py-1.5 sm:py-1 text-sm text-port-accent border border-port-border rounded disabled:opacity-40"
           onClick={() => changeGroups([...groups, { id: `${id}-tier-${serial.current++}`, reviewers: [] }], 'Empty tier added.')}>Add tier</button>
         <p className="text-xs text-gray-500">Empty tiers are drafts and are dropped when you save.</p>
       </div>

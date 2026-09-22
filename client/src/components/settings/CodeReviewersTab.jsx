@@ -295,7 +295,7 @@ export default function CodeReviewersTab({ view } = {}) {
               />
             </div>
           ) : (
-            <div role="tabpanel" id="code-review-task-follow-up" aria-labelledby="tab-follow-up" className="bg-port-card border border-port-border rounded-xl p-4">
+            <div role="tabpanel" id="code-review-task-follow-up" aria-labelledby="tab-follow-up">
               <GoalFidelityControls
                 value={goalFidelity}
                 modelOptions={modelOptions}

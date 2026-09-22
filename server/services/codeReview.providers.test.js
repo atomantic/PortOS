@@ -94,7 +94,7 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  it('runs saved provider model/effort defaults through the no-tool CLI recipe and task overrides', async () => {
+  it('runs saved provider model/effort defaults through the CLI recipe and task overrides', async () => {
     const cli = { ...provider, type: 'tui', command: 'claude' };
     getProviderById.mockResolvedValue(cli);
     runCliProviderPrompt.mockResolvedValue({ text: '{"type":"result","result":"NO FINDINGS"}', partial: false, streamFormat: 'stream-json' });
@@ -106,11 +106,11 @@ describe('configured provider reviewers', () => {
     expect(defaults.providerEfforts).toEqual({ [backend]: 'high' });
     const task = sanitizeTaskMetadata(resolveReviewerConfig({}, defaults, defaults.reviewers));
     expect(task.reviewerEfforts).toEqual({ [backend]: 'high', claude: 'medium' });
-    const result = await runLocalCodeReview({ backend, model: task.reviewerModels[backend], effort: task.reviewerEfforts[backend], diff: 'example diff' });
+    const result = await runLocalCodeReview({ backend, model: task.reviewerModels[backend], effort: task.reviewerEfforts[backend], diff: 'example diff', cwd: '/mock/caller/cwd' });
     expect(result).toMatchObject({ ok: true, findings: 'NO FINDINGS', effort: 'high' });
     const args = runCliProviderPrompt.mock.calls[0][0];
-    expect(args).toMatchObject({ provider: { ...cli, effort: 'high' }, model: 'pinned-coder', safetyProfile: 'public-review-gate' });
-    await expect(access(args.cwd)).rejects.toThrow();
+    expect(args).toMatchObject({ provider: { ...cli, effort: 'high' }, model: 'pinned-coder', cwd: '/mock/caller/cwd' });
+    expect(args).not.toHaveProperty('safetyProfile');
     expect(callProviderAISimple).not.toHaveBeenCalled();
 
     const override = resolveReviewerConfig({ reviewerEfforts: { [backend]: 'low' } }, defaults, defaults.reviewers);
@@ -145,7 +145,7 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
       provider: expect.objectContaining({ credentialBootstrap: cli.credentialBootstrap }),
       bootstrapEnv: {},
-      safetyProfile: 'public-review-gate',
+      cwd: expect.any(String),
     }));
 
     cli.credentialBootstrap.envCommand = [process.execPath, '-e', 'console.log("ANTHROPIC_AUTH_TOKEN=example-minted-token")'];
@@ -153,7 +153,7 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
     expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
       bootstrapEnv: { ANTHROPIC_AUTH_TOKEN: 'example-minted-token' },
-      safetyProfile: 'public-review-gate',
+      cwd: expect.any(String),
     }));
 
     // A credential command that FAILS is still a failed review, not a silent
@@ -173,13 +173,56 @@ describe('configured provider reviewers', () => {
     expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
-  it('refuses an unsupported harness instead of spawning it with ordinary agent permissions', async () => {
-    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'custom-agent' });
+  it('allows custom configured harnesses for repository review in caller cwd, but refuses unsupported transport types', async () => {
+    const customHarness = { ...provider, type: 'cli', command: 'custom-agent' };
+    getProviderById.mockResolvedValue(customHarness);
+    runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
+    const result = await runLocalCodeReview({ backend, diff: 'example diff', cwd: '/worktree/checkout' });
+    expect(result).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+    expect(runCliProviderPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      provider: customHarness,
+      cwd: '/worktree/checkout',
+    }));
+
+    // An invalid provider transport type is refused
+    getProviderById.mockResolvedValue({ ...provider, type: 'unsupported-transport' });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({
-      ok: false, code: 'REVIEWER_UNSUPPORTED', error: expect.stringContaining('no enforced tool-free'),
+      ok: false, code: 'REVIEWER_UNSUPPORTED', error: expect.stringContaining('not a supported review transport'),
     });
-    expect(runCliProviderPrompt).not.toHaveBeenCalled();
-    expect(callProviderAISimple).not.toHaveBeenCalled();
+  });
+
+  it('refuses unsupported harnesses for public claim review and isolates supported ones in temp dir', async () => {
+    const { runLocalClaimCommentReview } = await import('./codeReview.js');
+    // Custom harness without tool-free recipe fails closed for public claim comments
+    getProviderById.mockResolvedValue({ ...provider, type: 'cli', command: 'custom-agent' });
+    const refused = await runLocalClaimCommentReview({
+      backend,
+      comments: [{ login: 'contributor', body: 'taking this issue' }],
+    });
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'REVIEWER_UNSUPPORTED',
+      error: expect.stringContaining('no enforced tool-free'),
+    });
+
+    // Supported CLI harness (e.g. claude) runs with safetyProfile and temporary directory
+    const supportedCli = { ...provider, type: 'cli', command: 'claude' };
+    getProviderById.mockResolvedValue(supportedCli);
+    runCliProviderPrompt.mockResolvedValue({
+      text: '{"claimant":"contributor","suspicious":false}',
+      partial: false,
+    });
+    const ran = await runLocalClaimCommentReview({
+      backend,
+      comments: [{ login: 'contributor', body: 'taking this issue' }],
+    });
+    expect(ran).toMatchObject({ ok: true, claimant: 'contributor', suspicious: false });
+    const lastCall = runCliProviderPrompt.mock.lastCall[0];
+    expect(lastCall).toMatchObject({
+      provider: supportedCli,
+      safetyProfile: 'public-review-gate',
+    });
+    await expect(access(lastCall.cwd)).rejects.toThrow();
   });
 
   // #7660: a reviewer that can never answer used to be indistinguishable from
@@ -196,17 +239,18 @@ describe('configured provider reviewers', () => {
   });
 
   describe('getProviderReviewUnsupported', () => {
-    it('names only the enabled providers that could never run a tool-free review', async () => {
+    it('names only the enabled providers with unsupported review transports', async () => {
       listProviders.mockResolvedValue([
         provider,
         { ...provider, id: 'hosted-harness', type: 'cli', command: 'custom-agent' },
-        { ...provider, id: 'switched-off', type: 'cli', command: 'custom-agent', enabled: false },
+        { ...provider, id: 'invalid-transport', type: 'unsupported-type' },
+        { ...provider, id: 'switched-off', type: 'unsupported-type', enabled: false },
       ]);
       const unsupported = await getProviderReviewUnsupported();
-      // The capable provider is ABSENT rather than false, so "nobody fetched
-      // this map" and "nothing is wrong here" read the same to a picker.
-      expect(unsupported).toEqual({ 'provider:hosted-harness': 'REVIEWER_UNSUPPORTED' });
+      // Capable providers (API and CLI harnesses) are absent from the map
       expect(unsupported['provider:example-gpu']).toBeUndefined();
+      expect(unsupported['provider:hosted-harness']).toBeUndefined();
+      expect(unsupported).toEqual({ 'provider:invalid-transport': 'REVIEWER_UNSUPPORTED' });
       // A disabled provider is already badged `disabled` by the picker's own
       // provider-record check; reporting it here would badge one fact twice.
       expect(unsupported['provider:switched-off']).toBeUndefined();
@@ -216,6 +260,7 @@ describe('configured provider reviewers', () => {
       const harness = { ...provider, id: 'hosted-harness', type: 'cli', command: 'custom-agent' };
       listProviders.mockResolvedValue([harness]);
       getProviderById.mockResolvedValue(harness);
+      runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: false });
       const warned = await getProviderReviewUnsupported();
       const ran = await runLocalCodeReview({ backend: 'provider:hosted-harness', diff: 'example diff' });
       expect(warned['provider:hosted-harness']).toBe(ran.code);

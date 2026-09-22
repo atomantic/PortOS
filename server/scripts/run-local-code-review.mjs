@@ -25,7 +25,8 @@ try {
   const review = request.kind === 'claim-comments'
     ? runLocalClaimCommentReview
     : runLocalCodeReview;
-  const result = await review({ ...request, model, effort });
+  const cwd = request.cwd || process.cwd();
+  const result = await review({ ...request, model, effort, cwd });
   process.stdout.write(`${JSON.stringify(result)}\n`);
   const recordOutcome = result.ok
     ? reportReviewerSuccess(request.backend)

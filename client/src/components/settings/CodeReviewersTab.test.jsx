@@ -429,6 +429,9 @@ describe('CodeReviewersTab', () => {
     expect(screen.queryByRole('region', { name: 'Primary' })).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Check finished runs against the task objective/)).toBeInTheDocument();
     expect(screen.getByText(/After a run ships, compare its diff/)).toBeInTheDocument();
+    const followUpPanel = screen.getByRole('tabpanel', { name: 'Follow-up' });
+    expect(followUpPanel.className).not.toContain('bg-port-card');
+    expect(followUpPanel.className).not.toContain('border-port-border');
   });
 
   it('sends an unknown task slug back to the review chain', async () => {
