@@ -12,7 +12,7 @@ import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite, writeFileGuarded
 import { createMutex } from '../lib/asyncMutex.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
 import { instanceEvents } from './instanceEvents.js';
-import { getPeers, resolveEffectiveCategories, updatePeer } from './instances.js';
+import { getPeers, peerLogLabel, resolveEffectiveCategories, updatePeer } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
@@ -784,7 +784,7 @@ export async function syncWithPeer(peer) {
 
     const categories = getEffectiveCategories(peer);
     const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
-    console.log(`🔄 Sync starting with ${peer.name || peerId}: categories=${enabledNames.join(',') || 'none'}`);
+    console.log(`🔄 Sync starting with ${peerLogLabel(peer)}: categories=${enabledNames.join(',') || 'none'}`);
     emitSyncProgress({ phase: 'start', peerId });
 
     // Read cursor snapshot outside lock so network I/O doesn't block other peers
@@ -851,7 +851,7 @@ export async function syncWithPeer(peer) {
         enabledDataCats.map(cat =>
           syncDataCategoryFromPeer(peer, peerId, cat, cachedChecksums, scopedInstanceId)
             .catch(err => {
-              logFailureWithStack(`⚠️ ${cat} sync with ${peer.name} failed`, err);
+              logFailureWithStack(`⚠️ ${cat} sync with ${peerLogLabel(peer)} failed`, err);
               recordCategoryFailure(cat, err);
               return { totalApplied: 0, checksum: null };
             })
@@ -905,7 +905,7 @@ export async function syncWithPeer(peer) {
       if (result.totalApplied > 0) parts.push(`${result.totalApplied} ${cat}`);
     }
     if (parts.length > 0) {
-      console.log(`🔄 Synced with ${peer.name}: ${parts.join(', ')} changes`);
+      console.log(`🔄 Synced with ${peerLogLabel(peer)}: ${parts.join(', ')} changes`);
     }
 
     const totalApplied = brainResult.totalApplied + memoryResult.totalApplied
@@ -996,7 +996,7 @@ export async function syncAllPeers() {
   const online = peers.filter(p => p.enabled && hasAnySyncEnabled(p) && p.status === 'online' && p.instanceId);
 
   if (online.length > 0) {
-    const names = online.map(p => p.name || p.instanceId).join(', ');
+    const names = online.map(p => peerLogLabel(p)).join(', ');
     console.log(`🔄 Sync cycle: ${online.length} peer${online.length === 1 ? '' : 's'} online (${names})`);
   }
 
@@ -1059,7 +1059,7 @@ export function initSyncOrchestrator() {
   peerOnlineHandler = (peer) => {
     if (!hasAnySyncEnabled(peer)) return;
     syncWithPeer(peer).catch(err => {
-      logFailureWithStack(`❌ Sync with ${peer.name} failed`, err);
+      logFailureWithStack(`❌ Sync with ${peerLogLabel(peer)} failed`, err);
     });
   };
   instanceEvents.on('peer:online', peerOnlineHandler);

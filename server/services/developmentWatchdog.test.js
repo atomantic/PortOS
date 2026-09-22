@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], save: vi.fn(), branch: '', account: 'atomantic', nextPrs: null, prReads: 0, dependencies: [], dependencyOpen: false, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn() }));
+const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], save: vi.fn(), branch: '', account: 'atomantic', nextPrs: null, prReads: 0, dependencies: [], dependencyOpen: false, execGhFailureOn: null, invalidGhJsonOn: null, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn() }));
 vi.mock('./cosState.js', () => ({ loadState: async () => m.state, saveState: m.save, withStateLock: async fn => fn(), isImprovementEnabled: state => state.config.improvementEnabled }));
 vi.mock('./apps.js', () => ({ getActiveApps: async () => [{ id: 'app', name: 'Example', repoPath: '/example' }] }));
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: m.tasks } }), addTask: async task => { if (m.duplicate) return { id: 'existing', duplicate: true }; const result = { ...task, id: 'queued', status: 'pending' }; m.tasks.push(result); m.adds.push(result); return result; } }));
@@ -18,7 +18,12 @@ vi.mock('./taskSchedule.js', () => ({
   getOnDemandRequests: async () => m.requests,
   recordExecution: (...args) => m.execution(...args),
 }));
-vi.mock('./github.js', () => ({ execGh: async args => args[0] === 'api' ? m.account : JSON.stringify({ body: '', state: m.dependencyOpen ? 'OPEN' : 'CLOSED', labels: m.dependencyOpen ? [{ name: 'in-progress' }] : [] }) }));
+vi.mock('./github.js', () => ({ execGh: async args => {
+  if (args[0] === 'api') return m.account;
+  if (args[0] === m.execGhFailureOn) throw new Error('forge unavailable');
+  if (args[0] === m.invalidGhJsonOn) return 'not json';
+  return JSON.stringify({ body: '', state: m.dependencyOpen ? 'OPEN' : 'CLOSED', labels: m.dependencyOpen ? [{ name: 'in-progress' }] : [] });
+} }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
 vi.mock('./forgeActorTrust.js', () => ({ createGithubActorTrust: async () => ({ isTrusted: async () => true }) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: m.branch }) }));
@@ -36,7 +41,7 @@ import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanc
 
 beforeEach(() => {
   m.state = { config: { improvementEnabled: true, persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };
-  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.branch = ''; m.account = 'atomantic'; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.dependencies = []; m.dependencyOpen = false; m.issueTruncated = false;
+  m.tasks = []; m.prs = []; m.backlog = []; m.peers = []; m.adds = []; m.branch = ''; m.account = 'atomantic'; m.save.mockClear(); m.nextPrs = null; m.prReads = 0; m.dependencies = []; m.dependencyOpen = false; m.execGhFailureOn = null; m.invalidGhJsonOn = null; m.issueTruncated = false;
   m.readiness = { shouldRun: true }; m.requests = []; m.duplicate = false;
   m.metadata.mockReset().mockResolvedValue({ metadata: {} });
   m.prepare.mockReset().mockResolvedValue({
@@ -112,6 +117,25 @@ it('keeps explicit live claim and open dependency evidence out of dispatch', asy
   m.prs = [{ ...orphan, headBranch: 'fix' }]; m.dependencies = [10];
   receipt = await runDevelopmentWatchdog({ force: true });
   expect(receipt.decisions[0].reason).toBe('open-dependency'); expect(m.adds).toEqual([]);
+});
+
+it('turns failed or malformed claim reads into unknown evidence instead of aborting the scan', async () => {
+  m.prs = [orphan]; m.execGhFailureOn = 'issue';
+  let receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.apps[0].pullRequests[0]).toMatchObject({ disposition: 'unknown', reason: 'external-claim-owner-unverified' });
+  m.prs = [orphan]; m.execGhFailureOn = null; m.invalidGhJsonOn = 'issue';
+  receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.apps[0].pullRequests[0]).toMatchObject({ disposition: 'unknown', reason: 'external-claim-owner-unverified' });
+  expect(m.adds).toEqual([]);
+});
+
+it('withholds dispatch when PR or dependency evidence cannot be read', async () => {
+  m.prs = [{ ...orphan, headBranch: 'fix' }]; m.dependencies = [10]; m.execGhFailureOn = 'pr';
+  let receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.decisions[0].reason).toBe('forge-read-failed'); expect(m.adds).toEqual([]);
+  m.execGhFailureOn = 'issue';
+  receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.decisions[0].reason).toBe('dependency-read-failed'); expect(m.adds).toEqual([]);
 });
 
 it('does not repeatedly resolve unchanged PR evidence after its task completes', async () => {

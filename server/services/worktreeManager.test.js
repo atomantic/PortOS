@@ -1009,6 +1009,32 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
     expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
   });
 
+  it('calls an empty branch unused instead of already merged', async () => {
+    hasBranchMergeEvidenceMock.mockResolvedValue(true);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    execGitMock.mockImplementation((args) => {
+      if (args[0] === 'rev-list') return Promise.resolve({ stdout: '0\n', stderr: '', exitCode: 0 });
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') {
+        return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'status') return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        return Promise.resolve({ stdout: '', stderr: '', exitCode: 1 });
+      }
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    });
+
+    await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', {
+      merge: false, preserveBranchWithCommits: true,
+    });
+
+    const lines = log.mock.calls.flat().join('\n');
+    expect(lines).toContain('has no commits beyond');
+    expect(lines).not.toContain('already merged');
+    expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
+    log.mockRestore();
+  });
+
   it('fails CLOSED — keeps the branch when the merged check cannot be determined', async () => {
     hasBranchMergeEvidenceMock.mockRejectedValue(new Error('unknown revision'));
 

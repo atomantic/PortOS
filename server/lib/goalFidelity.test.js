@@ -4,6 +4,7 @@ import {
   MAX_OBJECTIVE_CHARS,
   formatGoalFidelitySummary,
   goalFidelityHoldsRun,
+  goalFidelityLogMarker,
   mergeOutcomeObjective,
   mergeOutcomeReview,
   normalizeGoalFidelityVerdict,
@@ -100,6 +101,14 @@ describe('goalFidelityHoldsRun', () => {
     expect(goalFidelityHoldsRun({ verdict: 'fix-first' })).toBe(false);
     expect(goalFidelityHoldsRun({ verdict: 'ship' })).toBe(false);
     expect(goalFidelityHoldsRun(null)).toBe(false);
+  });
+});
+
+describe('goalFidelityLogMarker', () => {
+  it('reserves the checkmark for a clean ship', () => {
+    expect(goalFidelityLogMarker({ verdict: 'ship' })).toBe('✅');
+    expect(goalFidelityLogMarker({ verdict: 'fix-first', missing: ['a'] })).toBe('🧩');
+    expect(goalFidelityLogMarker({ verdict: 'rethink', missing: ['a'] })).toBe('🎯');
   });
 });
 

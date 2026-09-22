@@ -72,6 +72,7 @@ import {
   GOAL_FIDELITY_ISSUE_LABEL_SPEC,
   buildGoalFidelityFollowUpTask,
   buildGoalFidelityIssue,
+  explainGoalFidelityPublicationRefusal,
   goalFidelityFingerprint,
   goalFidelityFollowUpApplies,
   goalFidelityIssueMarker,
@@ -287,13 +288,10 @@ async function fileFollowUpIssue({ task, review, fingerprint, context }) {
   // Scrubbing token/email shapes cannot authorize publishing that content.
   // Finalization grants this provenance only to a complete fetched claim
   // objective, and it may return only to that same tracker and repository.
-  const publication = context?.publication;
-  if (publication?.source !== 'tracker-issue'
-      || publication.tracker !== tracker
-      || !publication.webHost || publication.webHost !== target?.webHost
-      || !publication.fullName || publication.fullName !== target?.fullName) {
-    return { issue: null, error: 'the reviewed objective has no verified provenance for this tracker; nothing was filed' };
-  }
+  const publicationRefusal = explainGoalFidelityPublicationRefusal({
+    publication: context?.publication, tracker, target,
+  });
+  if (publicationRefusal) return { issue: null, error: publicationRefusal };
 
   const exec = tracker === 'jira' ? null : await resolveForgeContext(app, tracker);
   // The reachability probe runs before anything is read or created: on an

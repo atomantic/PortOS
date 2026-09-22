@@ -1,6 +1,36 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
-import { DONE_SENTINEL_NAME, doneSentinelAgentId, doneSentinelName, doneSentinelPath, extractSentinelPayloadFromTranscript, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
+import { DONE_SENTINEL_NAME, doneSentinelAgentId, doneSentinelName, doneSentinelPath, extractSentinelPayloadFromTranscript, missingSentinelLogMessage, parseSentinelPayload, salvageSentinelPayload } from './agentSentinel.js';
+
+describe('missingSentinelLogMessage', () => {
+  it('names a startup failure as the reason the sentinel was never written', () => {
+    const message = missingSentinelLogMessage({
+      agentId: 'agent-1',
+      reason: 'paste-not-rendered',
+      sentinelPath: '/work/.agent-done-agent-1',
+    });
+    expect(message).toContain('startup failed (paste-not-rendered)');
+    expect(message).not.toContain('finalized');
+  });
+
+  it('reads a missing TUI binary as a startup failure too', () => {
+    // `command-not-found` exits before the prompt was sent — the login-shell
+    // path printing "command not found" — so it is the same no-prompt shape.
+    expect(missingSentinelLogMessage({
+      agentId: 'agent-1',
+      reason: 'command-not-found',
+      sentinelPath: '/work/.agent-done-agent-1',
+    })).toContain('startup failed (command-not-found)');
+  });
+
+  it('keeps the expected path when a run that was working exits without the sentinel', () => {
+    expect(missingSentinelLogMessage({
+      agentId: 'agent-1',
+      reason: 'idle-timeout',
+      sentinelPath: '/work/.agent-done-agent-1',
+    })).toContain('expected /work/.agent-done-agent-1');
+  });
+});
 
 describe('agentSentinel', () => {
   it('exposes the sentinel filename', () => {

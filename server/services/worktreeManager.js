@@ -957,7 +957,16 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       console.log(`🌳 Preserving branch ${branchName} — merge evidence into ${target} was not established, kept so a retry can resume from it`);
       warnings.push(`Branch ${branchName} preserved — merge evidence was not established; kept for a retry`);
     } else {
-      console.log(`🌳 Branch ${branchName} is already merged into ${target} — safe to delete`);
+      // An ancestor of the target includes a branch that never received a commit
+      // of its own. Calling that "already merged" reads as if the agent's work
+      // landed, which is how a startup failure's empty branch looks like churn.
+      const ahead = parseInt((await execGit(
+        ['rev-list', '--count', `${target}..${branchName}`],
+        sourceWorkspace,
+      ).catch(() => ({ stdout: '' }))).stdout.trim(), 10);
+      console.log(ahead === 0
+        ? `🌳 Branch ${branchName} has no commits beyond ${target} — deleting it`
+        : `🌳 Branch ${branchName} is already merged into ${target} — safe to delete`);
     }
   }
   if (hasUnmergedCommits) {
