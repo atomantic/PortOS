@@ -32,7 +32,7 @@ export default function AppQuality({ app, detail = false }) {
     if (result?.failure) return toast.error(result.failure.message || 'Could not publish the quality snapshot');
     if (result?.published) {
       return toast.success(result.prUrl
-        ? 'Quality snapshot pull request opened; it will merge when CI is green'
+        ? 'Quality snapshot pull request opened; it merges immediately'
         : 'Quality snapshot published to .quality.json');
     }
     toast(PUBLISH_SKIPPED[result?.reason] || 'Nothing to publish to .quality.json');

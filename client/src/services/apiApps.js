@@ -12,8 +12,8 @@ export const getApps = ({ includeQuality = false, view, ...options } = {}) => {
 };
 export const getApp = (id, { includeQuality = false, ...options } = {}) => request(includeQuality ? `/apps/${id}?includeQuality=true` : `/apps/${id}`, options);
 export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });
-// Land the app's numeric quality scores as `.quality.json` through a
-// merge-on-green pull request, so other PortOS installs running this app start
+// Land the app's numeric quality scores as `.quality.json` through an
+// immediately-merged pull request, so other PortOS installs running this app start
 // with the latest scores. Opt-in per app (`publishQualitySnapshot`) and
 // user-initiated from the Quality tab, which toasts every outcome itself — so
 // default to silent.

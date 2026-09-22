@@ -130,7 +130,7 @@ describe('AppQuality snapshot publishing', () => {
 
     await waitFor(() => expect(publishAppQualitySnapshot).toHaveBeenCalledWith('example'));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
-      'Quality snapshot pull request opened; it will merge when CI is green'));
+      'Quality snapshot pull request opened; it merges immediately'));
   });
 
   it('explains a refusal instead of claiming a commit that never happened', async () => {

@@ -4,7 +4,7 @@
  * PortOS publishes its own `.quality.json` through the same publisher every other
  * managed app uses — this command is the manual trigger, equivalent to the audit
  * hook the app's `publishQualitySnapshot` toggle automates. The publisher opens
- * a merge-on-green pull request rather than committing on the live checkout.
+ * a pull request and merges it immediately rather than committing on the live checkout.
  *
  * `--migrate` rewrites a v1 file, or a historical `quality-snapshot.json`, to
  * canonical schema v2 using only the rows already in the file. It does not read

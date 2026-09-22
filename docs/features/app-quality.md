@@ -98,7 +98,7 @@ A managed app can publish its recent numeric scores into `.quality.json` at the
 repository root. The file is a bounded projection, not the audit history:
 PostgreSQL keeps every measurement, and the file keeps one row per UTC day and
 category for the same 30-day window the quality panel uses, capped at 4 MiB.
-Publish opens a merge-on-green pull request on `portos/quality-snapshot` and
+Publish opens an immediately-merged pull request on `portos/quality-snapshot` and
 does not commit the live checkout. With no local evidence, a non-empty file is
 left as it is.
 
