@@ -30,13 +30,13 @@ const STATIC_FROM = /^\s*(?:import|export)\b[^;]*?from\s*['"]([^'"]+)['"]/gm;
 const STATIC_BARE = /^\s*import\s*['"]([^'"]+)['"]/gm;
 
 /**
- * Every module specifier `file` statically imports, in source order, verbatim
- * (relative specifiers keep their `./` / `../` prefix; bare package specifiers
- * come through as written). Duplicates are preserved — callers that want a set
- * build one.
+ * Every module specifier in `src`, in source order, verbatim (relative
+ * specifiers keep their `./` / `../` prefix; bare package specifiers come
+ * through as written). Duplicates are preserved — callers that want a set
+ * build one. The file reader and the base/head import-growth guard both call
+ * this so a specifier-shape fix cannot land in only one walker.
  */
-export function staticImportSpecifiers(file) {
-  const src = readFileSync(file, 'utf-8');
+export function staticImportSpecifiersFromSource(src) {
   const out = [];
   for (const re of [STATIC_FROM, STATIC_BARE]) {
     re.lastIndex = 0;
@@ -44,6 +44,11 @@ export function staticImportSpecifiers(file) {
     while ((match = re.exec(src)) !== null) out.push(match[1]);
   }
   return out;
+}
+
+/** `staticImportSpecifiersFromSource` for a file on disk. */
+export function staticImportSpecifiers(file) {
+  return staticImportSpecifiersFromSource(readFileSync(file, 'utf-8'));
 }
 
 /**
