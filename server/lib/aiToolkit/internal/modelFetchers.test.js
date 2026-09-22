@@ -17,7 +17,7 @@ const SHIPPED = JSON.parse(readFileSync(resolve(__dirname, '../../../../data.ref
 const SHIPPED_REFRESHABLE = [
   'pi-cli', 'pi-tui',
   'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
-  'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
+  'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
   'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-nim', 'ollama',
   'slotstream',
   'opencode-llama-tui',
@@ -53,6 +53,15 @@ const SHIPPED_REFRESHABLE = [
 ];
 const SHIPPED_NOT_REFRESHABLE = [
   'claude-code-tui', 'claude-code-tui-bedrock',
+  // #8034 moved this one OUT of the refreshable set on purpose. It is
+  // `command: 'claude'` like the subscription record, so it matched the
+  // anthropic row and a refresh overwrote its `global.anthropic.*` /
+  // `us.anthropic.*` catalog with first-party ids its endpoint rejects —
+  // stranding its own `defaultModel` outside its model list. The catalog that
+  // row now reads (Claude Code's own cache) holds only first-party ids, so
+  // there is nothing correct to answer a Bedrock refresh with; the card offers
+  // no button and the stored catalog stands.
+  'claude-code-bedrock',
   'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui',
   'opencode-zen-cli', 'opencode-zen-tui',
   // Kilo is an OpenCode fork and follows the same split as the Zen wrappers
@@ -359,5 +368,37 @@ describe('MODEL_FETCHERS shape', () => {
     for (const row of MODEL_FETCHERS) {
       expect(typeof service[row.fetch], `${row.key}: no such method ${row.fetch}`).toBe('function');
     }
+  });
+});
+
+describe('claude records pointed at a third-party backend', () => {
+  // #8034: `claude-code-bedrock` is `command: 'claude'` like every other Claude
+  // record, so it matched the anthropic row and a Refresh overwrote its
+  // `global.anthropic.*` / `us.anthropic.*` ids with first-party ones its
+  // endpoint rejects — stranding its own `defaultModel` outside its model list.
+  it('resolves to NO fetcher so the card offers no Refresh button', () => {
+    const bedrock = {
+      id: 'claude-code-bedrock',
+      type: 'cli',
+      command: 'claude',
+      name: 'Claude Code CLI: Bedrock',
+      envVars: { CLAUDE_CODE_USE_BEDROCK: '1' },
+    };
+    expect(resolveModelFetcher(bedrock)).toBeNull();
+    expect(canRefreshModels(bedrock)).toBe(false);
+  });
+
+  it('still resolves a first-party claude record to the anthropic fetcher', () => {
+    const subscription = { id: 'claude-code', type: 'cli', command: 'claude', name: 'Claude Code CLI' };
+    expect(resolveModelFetcher(subscription).fetch).toBe('_fetchAnthropicModels');
+  });
+
+  // The ollama row sits ABOVE the claude row and must keep winning: a `claude`
+  // binary pointed at a local daemon carries no CLAUDE_CODE_USE_* marker, so the
+  // new guard never sees it, but pinning the precedence here makes a future
+  // reorder fail loudly.
+  it('leaves an ollama-backed claude wrapper on the ollama fetcher', () => {
+    const wrapper = { id: 'claude-ollama', type: 'cli', command: 'claude', ollamaBacked: true };
+    expect(resolveModelFetcher(wrapper).fetch).toBe('_fetchOllamaToolCapableModels');
   });
 });
