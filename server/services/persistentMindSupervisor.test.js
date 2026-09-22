@@ -17,6 +17,7 @@ const mock = vi.hoisted(() => ({
   budgetError: null,
   recordUsage: vi.fn(async () => {}),
   acquireSlot: vi.fn(async () => ({ ok: true, release: vi.fn() })),
+  localEndpointOfProvider: vi.fn(() => null),
   appendMindEvent: vi.fn(async (event) => ({ appended: true, event })),
   prepareContext: vi.fn(async () => ({ text: 'bounded context', chars: 15, summaryState: 'not-needed' })),
   updateInProgress: false,
@@ -66,6 +67,7 @@ vi.mock('./domainUsage.js', () => ({
 
 vi.mock('./cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointProviderSlot: (...args) => mock.acquireSlot(...args),
+  localEndpointOfProvider: (...args) => mock.localEndpointOfProvider(...args),
 }));
 
 vi.mock('./agentRunEventLog.js', () => ({
@@ -134,6 +136,8 @@ describe('persistent mind supervisor', () => {
     mock.providerOverride = null;
     mock.providerAvailable = true;
     mock.recordUsage.mockClear();
+    mock.localEndpointOfProvider.mockReset();
+    mock.localEndpointOfProvider.mockReturnValue(null);
     mock.profile = {
       ok: true,
       provider: { id: 'example-cloud', type: 'api' },
@@ -620,6 +624,34 @@ describe('persistent mind supervisor', () => {
     const released = acquireCosGlobalSlot({ agents: {}, limit: 1, reservationId: 'ordinary-task' });
     expect(released.ok).toBe(true);
     released.release();
+  });
+
+  it('releases the shared global slot early for a local-model turn, once its endpoint slot is held', async () => {
+    const running = deferred();
+    mock.localEndpointOfProvider.mockReturnValue('localhost:11434');
+    mock.profile = { ...mock.profile, provider: { id: 'local-ollama', type: 'api' } };
+    await supervisor.registerPersistentMindTurnAdapter({
+      prepare: vi.fn(async () => ({ ok: true, provider: { id: 'local-ollama', type: 'api' } })),
+      run: vi.fn(() => running.promise),
+    });
+    mock.root.config.maxConcurrentAgents = 1;
+    await supervisor.setPersistentMindEnabled(true);
+    await supervisor.startPersistentMind();
+    await supervisor.enqueuePersistentMindMessage({ id: 'message-1', text: 'Think locally.' });
+    const drain = supervisor.drainPersistentMind();
+    await vi.waitFor(() => expect(mock.root.persistentMind.activeTurn).not.toBeNull());
+
+    // The endpoint-scoped local slot now owns GPU serialization for this turn,
+    // so an unrelated agent spawn (e.g. agy, gemini) must be able to claim the
+    // generic global slot while local inference is still running.
+    await vi.waitFor(() => {
+      const probe = acquireCosGlobalSlot({ agents: {}, limit: 1, reservationId: 'ordinary-task' });
+      expect(probe.ok).toBe(true);
+      probe.release();
+    });
+
+    running.resolve({});
+    await drain;
   });
 
   it('does not claim a turn when another admission reserved the final daily action', async () => {

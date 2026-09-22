@@ -48,7 +48,7 @@ export {
 import { cosEvents, emitLog } from './cosEvents.js';
 import { schedule, cancel, getEvent } from './eventScheduler.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
-import { acquireLocalEndpointProviderSlot } from './cosLocalEndpointSlots.js';
+import { acquireLocalEndpointProviderSlot, localEndpointOfProvider } from './cosLocalEndpointSlots.js';
 import { acquireCosActionReservation, acquireCosGlobalSlot } from './cosAdmissionReservations.js';
 import {
   createPersistentMindCallBoundary,
@@ -745,7 +745,7 @@ async function runOnePersistentMindTurn() {
     const turn = await claimNextTurn();
     if (!turn) return;
 
-    await runClaimedPersistentMindTurn(turn, mind);
+    await runClaimedPersistentMindTurn(turn, mind, globalSlot);
   } finally {
     actionReservation?.release?.();
     globalSlot.release();
@@ -753,8 +753,16 @@ async function runOnePersistentMindTurn() {
 }
 
 // Admission owns the global/action reservations until the claimed turn's
-// provider work, error handling, and endpoint cleanup have all settled.
-async function runClaimedPersistentMindTurn(turn, mind) {
+// provider work, error handling, and endpoint cleanup have all settled — with
+// one exception: once a LOCAL-model turn has secured its endpoint-scoped slot
+// (below), the generic global slot is released early. A local turn can run for
+// minutes, far longer than the spawn-setup window the global cap models, and
+// `acquireLocalEndpointProviderSlot` already serializes the real GPU
+// contention on its own. Holding the global slot for the whole generation
+// would otherwise starve unrelated cloud/CLI/TUI agent spawns (e.g. agy,
+// gemini) that never touch this endpoint but share the same
+// `maxConcurrentAgents` budget.
+async function runClaimedPersistentMindTurn(turn, mind, globalSlot) {
   const generation = runtimeGeneration;
   const controller = new AbortController();
   activeAbortController = controller;
@@ -836,6 +844,11 @@ async function runClaimedPersistentMindTurn(turn, mind) {
       return;
     }
     release = slot.release;
+    // Local GPU contention is now serialized by the endpoint slot above, so the
+    // generic global admission slot no longer needs to be held for the
+    // (possibly long) inference that follows. Idempotent: the outer `finally`
+    // still calls `globalSlot.release()` once the turn settles.
+    if (localEndpointOfProvider(prepared.provider)) globalSlot?.release();
     if (!await turnCanContinue(turn.id, generation, controller.signal)) return;
     // Preparation and slot admission may wait. A preset revoked during those
     // waits must be refused before even a context-summary call can begin.
