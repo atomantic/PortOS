@@ -96,8 +96,8 @@ const BOOTSTRAP_ENV_TTL_MS = 60_000;
 /**
  * Materialize credentials independently of a review, for a bootstrap that
  * PRINTS `KEY=value` assignments rather than exec'ing the harness itself. The
- * command gets neither the prompt nor the enforced harness argv. Only no-tool
- * callers may opt in; sandboxed actions must never acquire these credentials.
+ * command gets neither the prompt nor the enforced harness argv. Ordinary provider runs and no-tool
+ * callers may opt in; sandboxed public actions must never acquire these credentials.
  *
  * Optional: a record that only names the ordinary wrap form is credentialed by
  * the wrap (see module doc), and returns `{}` here. Nothing about a review
@@ -106,8 +106,8 @@ const BOOTSTRAP_ENV_TTL_MS = 60_000;
 export async function resolveBootstrapEnv(provider, { safetyProfile = null } = {}) {
   const argv = provider?.credentialBootstrap?.envCommand;
   if (!argv) return {};
-  if (!isPublicReviewNoToolProfile(safetyProfile)) {
-    throw new Error('Bootstrap credentials are available only for tool-free reviews.');
+  if (safetyProfile && !isPublicReviewNoToolProfile(safetyProfile)) {
+    throw new Error('Bootstrap credentials are available only for tool-free reviews or ordinary provider runs.');
   }
   if (!Array.isArray(argv) || !argv.length || argv.some(value => typeof value !== 'string' || !value || value.includes('\0'))) {
     throw new Error('Invalid bootstrap credential command.');

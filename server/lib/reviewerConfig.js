@@ -41,6 +41,7 @@ export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'gr
 // Provider records retain their own identity instead of collapsing to a harness.
 export const isProviderReviewer = (value) => typeof value === 'string' && /^provider:[a-z0-9][a-z0-9-]{0,79}$/.test(value);
 export const isReviewer = (value) => REVIEWER_VALUES.includes(value) || isProviderReviewer(value);
+// Legacy name: identifies bridge-dispatched reviewers, not an enforced tool policy.
 export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value) || isProviderReviewer(value);
 
 /**
@@ -861,11 +862,9 @@ export function claimSafeReviewers(reviewers) {
 }
 
 /**
- * Put tool-free local-LLM reviewers ahead of every reviewer that can execute
- * tools or reach a forge. Public issue comments and contributor diffs cross the
- * trust boundary in that first pass; later reviewers see a chain that has
- * already received a no-tool inspection. Stable partitioning preserves the
- * user's order within the local and non-local groups.
+ * Keep bridge-dispatched providers and local models ahead of standalone/forge
+ * reviewers. The historical export name and stable partition preserve saved
+ * ordering; provider identities no longer imply tool-free execution.
  */
 export function prioritizeToolFreeReviewers(reviewers) {
   const normalized = Array.isArray(reviewers) ? reviewers : [];
