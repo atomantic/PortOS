@@ -8,6 +8,7 @@ import { getCodeReviewDefaults, reportReviewerFailure, reportReviewerSuccess, ru
 
 import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerConfig.js';
+import { stopCodexAppServer } from '../services/codexAppServer.js';
 
 // Provider/runtime diagnostics belong on stderr; stdout is exactly one JSON
 // response for the claim procedure's jq gate.
@@ -47,4 +48,8 @@ try {
   process.stdout.write(`${JSON.stringify({ ok: false, error: err.message })}\n`);
   process.stderr.write(`${err.message}\n`);
   process.exitCode = 1;
+} finally {
+  await stopCodexAppServer().catch((err) => {
+    process.stderr.write(`Unable to stop Codex app-server: ${err.message}\n`);
+  });
 }
