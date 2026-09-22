@@ -44,7 +44,7 @@ import {
   prioritizeToolFreeReviewers,
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
-} from '../lib/validation.js'
+} from '../lib/reviewerConfig.js'
 import {
   MAX_FIDELITY_DIFF_CHARS,
   normalizeGoalFidelityVerdict,
