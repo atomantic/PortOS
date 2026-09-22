@@ -237,6 +237,7 @@ export function useShellSession({ isFullscreen } = {}) {
   const sendCd = useCallback((path) => emitToSession('shell:cd', { path }), [emitToSession]);
   const sendCtrlB = useCallback(() => emitShellInput('\x02'), [emitShellInput]);
   const sendCtrlC = useCallback(() => emitShellInput('\x03'), [emitShellInput]);
+  const sendEsc = useCallback(() => emitShellInput('\x1b'), [emitShellInput]);
   // Arrow keys send CSI or SS3 based on the terminal's DECCKM state (see NAV_KEYS);
   // Enter and any other literal-`seq` keys pass through unchanged. focus:false keeps the
   // soft keyboard down on touch — these buttons exist to replace it, not trigger it.
@@ -951,6 +952,7 @@ export function useShellSession({ isFullscreen } = {}) {
     sendCd,
     sendCtrlB,
     sendCtrlC,
+    sendEsc,
     sendNavKey,
     scrollPage,
     restartSession,

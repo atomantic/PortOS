@@ -58,6 +58,7 @@ export default function Shell() {
     sendCd,
     sendCtrlB,
     sendCtrlC,
+    sendEsc,
     sendNavKey,
     scrollPage,
     restartSession,
@@ -123,11 +124,11 @@ export default function Shell() {
     if (showPasteInput) pasteInputRef.current?.focus();
   }, [showPasteInput]);
 
-  // The two toolbars render the same hot-key strip with the same ten props and
+  // The two toolbars render the same hot-key strip with the same eleven props and
   // differ only in which way its popover opens; spread one object so a new prop
   // reaches both.
   const hotKeyProps = {
-    sendCtrlB, sendCtrlC, handlePaste, sendNavKey, scrollPage,
+    sendCtrlB, sendCtrlC, sendEsc, handlePaste, sendNavKey, scrollPage,
     showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent, sendImage,
   };
 

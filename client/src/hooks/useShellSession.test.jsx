@@ -81,6 +81,14 @@ describe('useShellSession', () => {
     expect(lastEmit('shell:input')).toEqual(['shell:input', { sessionId: 'abc', data: '\x02' }]);
   });
 
+  it('sends Escape to the active terminal session', () => {
+    const { result } = renderHook(() => useShellSession({}), { wrapper });
+    fire('shell:sessions', []);
+    fire('shell:started', { sessionId: 'abc' });
+    act(() => result.current.sendEsc());
+    expect(lastEmit('shell:input')).toEqual(['shell:input', { sessionId: 'abc', data: '\x1b' }]);
+  });
+
   // cd goes over its own event carrying the PATH — the server owns the quoting,
   // because only it knows whether the session runs cmd.exe, PowerShell, or a
   // POSIX shell (the hard-coded POSIX form was unusable on Windows).
