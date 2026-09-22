@@ -299,8 +299,8 @@ describe('credential bootstraps section', () => {
   it('refuses a slug the composite grammar cannot carry', async () => {
     renderTab();
     fireEvent.click(await screen.findByRole('button', { name: /Credential bootstraps/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add bootstrap' }));
-    fireEvent.change(screen.getByLabelText(/Slug/), { target: { value: 'Bad Slug' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add bootstrap' }));
+    fireEvent.change(await screen.findByLabelText(/Slug/), { target: { value: 'Bad Slug' } });
     fireEvent.change(screen.getByLabelText(/Label/), { target: { value: 'x' } });
     fireEvent.change(screen.getByLabelText(/Command/), { target: { value: 'x' } });
     fireEvent.submit(screen.getByRole('form', { name: 'Add bootstrap' }));
