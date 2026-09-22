@@ -26,8 +26,10 @@ Used an isolated Vite harness importing the real components and stylesheet, with
 
 ## Prevention and checks
 
-`client/src/widgetContainerConventions.test.js` discovers widget entrypoints from the registry and rejects viewport-based layout variants while permitting device-specific hover behavior. Existing responsive-grid checks remain in place. `docs/UX_DESIGN_GUIDE.md` defines container sizing, wrapping, long strings, local scrolling, viewport/sidebar/zoom/state acceptance and honest coverage reporting.
+`client/src/dashboardWidgetContainerConventions.test.js` discovers widget entrypoints from the registry and rejects viewport-based layout variants with explicit exceptions for device-specific behavior. Existing responsive-grid checks remain in place. `docs/UX_DESIGN_GUIDE.md` defines container sizing, wrapping, long strings, local scrolling, viewport/sidebar/zoom/state acceptance and honest coverage reporting.
 
 The UX scheduled-task default now includes responsive layout as checklist item 8, a six-viewport matrix, narrow desktop widgets, clipping checks, sidebar/zoom/state checks and cross-audit deduplication. Version 3 retires version 2's hash so existing uncustomized schedules upgrade through the normal store path; customized prompts remain user-owned.
 
 Focused client validation passed 126 tests across 10 suites; prompt compatibility/integrity validation passed 91 tests across two suites. StoryBuilder's existing tests emitted a reproduced localhost request error despite passing; tracked separately in [#8064](https://github.com/atomantic/PortOS/issues/8064).
+
+Rebase reconciliation: PR #8063 independently shipped widget container conversions and a stronger registry guard while this audit was running. Preserve its header sizing and column thresholds, reuse that guard instead of duplicating it, and retain this audit's shrink/wrap fixes and page/prompt/design changes.
