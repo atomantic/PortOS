@@ -1301,10 +1301,6 @@ export async function finalizeAgent({
       error: analysis.message,
       completionReason: GOAL_FIDELITY_CATEGORY,
     });
-    // The Review Hub bridges this into a review alert: a run held because it
-    // built the wrong thing is exactly the case a human has to look at, and the
-    // named missing/unrequested items are what make the hold actionable.
-    cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
   // A finding that lives only in this run's record dies with the agent card
   // nobody opened. When the user has configured it, the follow-up files the
@@ -1339,6 +1335,14 @@ export async function finalizeAgent({
         ...(followUp.taskError ? { taskError: followUp.taskError } : {}),
       };
     }
+  }
+
+  if (fidelityDowngrade && !fidelity.review.followUp?.taskId) {
+    // The Review Hub bridges this into a review alert when no follow-up task
+    // exists. A queued (or deduplicated) CoS investigation already carries the
+    // same finding, including when it is waiting for approval, so a second
+    // dismissible alert only asks the user to triage the same work twice.
+    cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
 
   if (verdict.success && isTruthyMetaFn) {
