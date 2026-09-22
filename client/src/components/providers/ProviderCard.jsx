@@ -414,7 +414,7 @@ export default function ProviderCard({
         )}
         {unified && (
           <div className="text-xs text-gray-400 space-y-1">
-            <p>CLI and TUI share enablement and the model catalog. Edit a mode to configure its arguments and model defaults.</p>
+            <p>CLI and TUI share one provider configuration, including the catalog, model defaults, tier pins, effort, fallback, and generation settings. Edit either mode to update it. Arguments, timeouts, TUI timing, and CLI transport consent stay specific to their mode.</p>
             {modes.filter(mode => mode.id !== provider.id && statuses[mode.id]?.available === false).map(mode => (
               <p key={mode.id} className="text-port-warning">
                 {mode.type.toUpperCase()} benched: {statuses[mode.id].message || statuses[mode.id].reason}{' '}

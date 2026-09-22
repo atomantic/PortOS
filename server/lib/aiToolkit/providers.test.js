@@ -23,18 +23,100 @@ describe('Provider Service', () => {
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
-  it('shares mode enablement and models while preserving mode-specific arguments, defaults and IDs', async () => {
+  it('shares provider settings across modes while preserving mode-specific launch settings and IDs', async () => {
     await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
-      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false, models: ['a'], args: ['--print'], defaultModel: 'a' },
-      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['b'], args: [], defaultModel: 'b' },
+      example: {
+        id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false,
+        models: ['a'], args: ['--print'], defaultModel: 'a', lightModel: 'cli-light',
+        effort: 'high', fallbackProvider: 'remote', fallbackModel: 'fallback-a',
+        temperature: 0.5, contextWindow: 64000,
+        modelContextWindows: { a: 1024 },
+      },
+      'example-tui': {
+        id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true,
+        models: ['b'], args: [], defaultModel: 'b', lightModel: 'tui-light', mediumModel: 'tui-medium',
+        effort: 'low', fallbackProvider: 'tui-fallback', fallbackModel: 'fallback-b',
+        temperature: 0.2, contextWindow: 32000,
+        timeout: 600000, modelContextWindows: { b: 2048 },
+      },
       remote: { id: 'remote', type: 'api', enabled: false, models: ['remote'] },
     } }));
     expect((await providerService.getProviderById('example')).enabled).toBe(true);
+    // Existing pairs with two model configurations converge to the CLI's
+    // settings. Runtime launch settings remain attached to their own mode.
+    expect(await providerService.getProviderById('example')).toMatchObject({
+      models: ['a', 'b'], mediumModel: 'tui-medium', modelContextWindows: { a: 1024, b: 2048 },
+    });
+    expect(await providerService.getProviderById('example-tui')).toMatchObject({
+      models: ['a', 'b'],
+      defaultModel: 'a',
+      lightModel: 'cli-light',
+      mediumModel: 'tui-medium',
+      effort: 'high',
+      fallbackProvider: 'remote',
+      fallbackModel: 'fallback-a',
+      temperature: 0.5, contextWindow: 64000,
+      modelContextWindows: { a: 1024, b: 2048 },
+      args: [], timeout: 600000,
+    });
     expect((await providerService.getActiveProvider()).id).toBe('example-tui');
-    await providerService.updateProvider('example-tui', { enabled: false, models: ['c'], args: ['--interactive'], defaultModel: 'c' });
-    expect(await providerService.getProviderById('example')).toMatchObject({ enabled: false, models: ['c'], args: ['--print'], defaultModel: 'c' });
+    await providerService.updateProvider('example-tui', {
+      enabled: false,
+      models: ['first', 'c'],
+      args: ['--interactive'],
+      defaultModel: 'c',
+      lightModel: 'shared-light',
+      mediumModel: 'shared-medium',
+      effort: 'low',
+      fallbackProvider: 'shared-fallback',
+      fallbackModel: 'fallback-c',
+      secretEnvVars: ['EXAMPLE_TOKEN'],
+      ignoreUserConfig: true,
+      temperature: 0.7,
+      contextWindow: 32768,
+    });
+    expect(await providerService.getProviderById('example')).toMatchObject({
+      enabled: false,
+      models: ['first', 'c'],
+      args: ['--print'],
+      defaultModel: 'c',
+      lightModel: 'shared-light',
+      mediumModel: 'shared-medium',
+      effort: 'low',
+      fallbackProvider: 'shared-fallback',
+      fallbackModel: 'fallback-c',
+      secretEnvVars: ['EXAMPLE_TOKEN'],
+      ignoreUserConfig: true,
+      temperature: 0.7,
+      contextWindow: 32768,
+    });
+    expect(await providerService.getProviderById('example-tui')).toMatchObject({
+      enabled: false,
+      models: ['first', 'c'],
+      args: ['--interactive'],
+      defaultModel: 'c',
+      lightModel: 'shared-light',
+      mediumModel: 'shared-medium',
+      effort: 'low',
+      fallbackProvider: 'shared-fallback',
+      fallbackModel: 'fallback-c',
+      secretEnvVars: ['EXAMPLE_TOKEN'],
+      ignoreUserConfig: true,
+      temperature: 0.7,
+      contextWindow: 32768,
+      timeout: 600000,
+    });
     expect(await providerService.getProviderById('remote')).toMatchObject({ enabled: false, models: ['remote'] });
-    const catalog = vi.spyOn(providerService, 'fetchProviderModelCatalog').mockResolvedValue({ models: ['fresh'], contextWindows: { fresh: 8192 } });
+    const catalog = vi.spyOn(providerService, 'fetchProviderModelCatalog').mockResolvedValue({
+      models: ['fresh'], contextWindows: { fresh: 8192 },
+    });
+    // The preset-card path is a single-provider refresh; its catalog and
+    // context-window update are applied to both stored modes in one update.
+    await providerService.refreshProviderModels('example-tui');
+    expect((await providerService.getProviderById('example')).models).toEqual(['fresh']);
+    expect((await providerService.getProviderById('example-tui')).models).toEqual(['fresh']);
+    expect((await providerService.getProviderById('example')).modelContextWindows).toEqual({ fresh: 8192 });
+    expect((await providerService.getProviderById('example-tui')).modelContextWindows).toEqual({ fresh: 8192 });
     await providerService.refreshProviderModelsBatch(['example-tui']);
     expect((await providerService.getProviderById('example')).models).toEqual(['fresh']);
     expect((await providerService.getProviderById('example-tui')).models).toEqual(['fresh']);

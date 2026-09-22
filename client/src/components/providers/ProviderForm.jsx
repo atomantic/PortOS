@@ -648,8 +648,8 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
                         <span>
                           This command also runs as a TUI
                           <span className="block text-xs text-gray-500">
-                            Creates the interactive mode alongside this one, sharing the command, endpoint,
-                            credentials and models. Only the arguments differ.
+                            Creates both modes from these shared provider and model settings. The TUI keeps its
+                            own arguments and prompt timing.
                           </span>
                         </span>
                       </label>

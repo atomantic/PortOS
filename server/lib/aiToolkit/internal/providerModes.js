@@ -23,6 +23,34 @@ const MODE_KEY_DEFAULTS = { endpoint: '', apiKey: '', envVars: {}, credentialBoo
  */
 export const MODE_GROUPED_KEYS = Object.freeze(Object.keys(MODE_KEY_DEFAULTS));
 
+/**
+ * Provider settings shared by the CLI and TUI modes of a harness. The records
+ * stay separate because saved selections name an execution mode, but a pair
+ * must not carry conflicting model and generation policy.
+ */
+export const MODE_SHARED_SETTINGS_KEYS = Object.freeze([
+  'modelAccess',
+  'defaultModel',
+  'lightModel',
+  'mediumModel',
+  'heavyModel',
+  'ultraModel',
+  'effort',
+  'fallbackProvider',
+  'fallbackModel',
+  'catalogNarrowing',
+  'hardwareRequirements',
+  'modelHardwareRequirements',
+  'secretEnvVars',
+  'ignoreUserConfig',
+  'numCtx',
+  'temperature',
+  'topP',
+  'thinking',
+  'contextWindow',
+  'textTransport',
+]);
+
 /** True when a record NAMES a connection-identity value rather than leaving it at the empty default. */
 function namesModeValue(provider, key) {
   if (key === 'credentialBootstrap') return hasCredentialBootstrap(provider);
@@ -34,6 +62,12 @@ function namesModeValue(provider, key) {
 
 /** A fanned-out value must not ALIAS one object across two stored records. */
 const detachModeValue = value => (value && typeof value === 'object' ? structuredClone(value) : value);
+const hasConfiguredModeValue = (value) => {
+  if (value === undefined || value === null || value === '') return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  return true;
+};
 
 /**
  * Fields belonging to the CLI mode ALONE, which must not ride the shared body
@@ -76,8 +110,8 @@ export function providerModeGroups(providers) {
   return [...groups, ...providers.filter(provider => !paired.has(provider.id)).map(provider => [provider])];
 }
 
-export function sharedModeUpdates(updates, sibling) {
-  // Arguments, timeouts, routing consent and model pins remain mode-specific.
+export function sharedModeUpdates(updates) {
+  // Arguments, timeouts, routing consent and TUI timing remain mode-specific.
   //
   // Every `MODE_GROUPED_KEYS` field is shared for the reason the pairing
   // test above keys on it: endpoint, API key, env vars and bootstrap describe
@@ -87,21 +121,12 @@ export function sharedModeUpdates(updates, sibling) {
   // line and env from — pointed at the old backend with the old credential,
   // and splits the one card in two on the next load. `unifyProviderModes`
   // converges a pair that arrived asymmetric by some other route.
-  // `modelAccess` rides with `models` rather than with the argv: a pair is one
-  // program on one backend, so the entitlement that scopes that backend's
-  // catalog cannot differ between the headless and interactive mode without the
-  // two cards offering different models for the same account. It stays OUT of
-  // MODE_GROUPED_KEYS, though — it is not connection identity, and pairing on it
-  // would split a card the moment one mode was edited first.
-  const shared = Object.fromEntries(['enabled', 'models', 'modelContextWindows', 'modelAccess', ...MODE_GROUPED_KEYS]
+  // A paired harness has one provider configuration as well as one connection.
+  // Mirror shared settings from whichever mode the user edited; clone their
+  // objects so legacy CLI/TUI records don't alias mutable values in memory.
+  const shared = Object.fromEntries(['enabled', 'models', 'modelContextWindows', ...MODE_SHARED_SETTINGS_KEYS, ...MODE_GROUPED_KEYS]
     .filter(key => Object.hasOwn(updates, key))
     .map(key => [key, detachModeValue(updates[key])]));
-  // A caller deliberately repicking a default with a new catalog (the editor
-  // or harness discovery) must repair a removed sibling default too. Ordinary
-  // catalog probes omit defaultModel and retain their existing pin semantics.
-  if (Array.isArray(updates.models) && Object.hasOwn(updates, 'defaultModel') && sibling?.defaultModel && !updates.models.includes(sibling.defaultModel)) {
-    shared.defaultModel = updates.models[0] ?? null;
-  }
   return shared;
 }
 
@@ -161,6 +186,47 @@ export function unifyProviderModes(data) {
   let changed = fillModeSiblingIdentity(providers);
   for (const group of providerModeGroups(providers)) {
     if (group.length < 2) continue;
+    // The CLI is the long-standing representative of a paired card. When an
+    // older install has different shared settings on the two mode records, use
+    // its values when present. If the CLI has no value, retain a configured
+    // TUI value rather than clearing it during the compatibility reconcile.
+    const canonical = group.find(provider => provider.type === 'cli') || group[0];
+    for (const key of MODE_SHARED_SETTINGS_KEYS) {
+      const source = hasConfiguredModeValue(canonical[key])
+        ? canonical
+        : group.find(provider => provider.id !== canonical.id && hasConfiguredModeValue(provider[key]));
+      for (const provider of group) {
+        const value = source?.[key];
+        if (isDeepStrictEqual(provider[key], value)) continue;
+        if (value === undefined) delete provider[key];
+        else provider[key] = detachModeValue(value);
+        changed = true;
+      }
+    }
+    // Context-window observations are catalog metadata. Merge them so the
+    // compatibility reconcile keeps facts learned from either old mode, then
+    // mirror the same detached map to both records.
+    const hasContextWindows = group.some(provider =>
+      provider.modelContextWindows && Object.keys(provider.modelContextWindows).length > 0);
+    if (hasContextWindows) {
+      const modelContextWindows = Object.assign(
+        {},
+        ...group.filter(mode => mode.id !== canonical.id).map(mode => mode.modelContextWindows || {}),
+        canonical.modelContextWindows || {},
+      );
+      for (const provider of group) {
+        if (isDeepStrictEqual(provider.modelContextWindows, modelContextWindows)) continue;
+        provider.modelContextWindows = { ...modelContextWindows };
+        changed = true;
+      }
+    } else {
+      for (const provider of group) {
+        if (Object.hasOwn(provider, 'modelContextWindows')) {
+          delete provider.modelContextWindows;
+          changed = true;
+        }
+      }
+    }
     const enabled = group.some(provider => provider.enabled === true);
     const models = [...new Set(group.flatMap(provider => provider.models || []))];
     for (const provider of group) {
