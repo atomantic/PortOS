@@ -44,6 +44,12 @@ describe('ProviderComposePopover', () => {
     expect(container.textContent).toBe('');
   });
 
+  it('renders the dialog panel on an opaque card surface, so page content cannot bleed through', () => {
+    render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).toMatch('bg-port-card');
+  });
+
   it('renders only the Harness select until a harness is chosen, then narrows step by step', async () => {
     render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
     expect(screen.getByLabelText('Harness')).toBeTruthy();
