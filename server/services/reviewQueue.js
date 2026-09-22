@@ -40,6 +40,7 @@ import * as reviewService from './review.js';
 import * as notifications from './notifications.js';
 import * as stackerNews from './stackerNews.js';
 import * as x from './x.js';
+import { NOTIFICATION_ACTION_POLICY } from '../lib/notificationTypes.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -1055,6 +1056,41 @@ async function resolveThreadAction(id, status) {
   return result;
 }
 
+/**
+ * A required action item may reach the queue as either a stored Review item
+ * (`review.createItem`, category-based) or a notification (type-based, see
+ * `NOTIFICATION_ACTION_POLICY`) — both are keyed under the same `actionSource`
+ * vocabulary, and a queue row never records which origin produced it. Resolve
+ * both projections so "Mark resolved" retires the hold regardless of which
+ * producer raised it.
+ */
+async function resolveNotificationHold(actionSource, sourceRef) {
+  if (!sourceRef) return [];
+  const { notificationReference } = await import('./reviewActionAdapters.js');
+  const records = await notifications.getNotifications({ includeHidden: true });
+  const matches = (Array.isArray(records) ? records : []).filter((notification) => {
+    const policy = NOTIFICATION_ACTION_POLICY[notification.type];
+    return policy?.actionSource === actionSource && notificationReference(notification, policy) === sourceRef;
+  });
+  await Promise.all(matches.map((notification) => notifications.removeNotification(notification.id)));
+  return matches;
+}
+
+/**
+ * Owning primitive for the sourceRef-keyed required holds that have no
+ * domain-specific resolution of their own (goal-fidelity, plan questions,
+ * content reviews, paused autopilot) — a permanent acknowledge/dismiss, not a
+ * change to what the underlying condition means (#8007).
+ */
+async function resolveSourceOwnedHold(actionSource, sourceRef) {
+  const [reviewItems, notificationMatches] = await Promise.all([
+    reviewService.dismissByReferenceId(sourceRef),
+    resolveNotificationHold(actionSource, sourceRef),
+  ]);
+  const resolvedCount = (reviewItems?.length || 0) + notificationMatches.length;
+  return resolvedCount > 0 ? { resolved: resolvedCount } : null;
+}
+
 const SOURCE_ACTIONS = Object.freeze({
   memory: Object.freeze({
     approve: (id) => resolveMemoryAction(id, 'approve'),
@@ -1084,6 +1120,21 @@ const SOURCE_ACTIONS = Object.freeze({
       const { submitAgentFeedback } = await import('./cosAgentFeedback.js');
       return submitAgentFeedback(id, input);
     },
+  }),
+  'goal-fidelity': Object.freeze({
+    complete: (id) => resolveSourceOwnedHold('goal-fidelity', id),
+  }),
+  plan: Object.freeze({
+    complete: (id) => resolveSourceOwnedHold('plan', id),
+  }),
+  content: Object.freeze({
+    complete: (id) => resolveSourceOwnedHold('content', id),
+  }),
+  autopilot: Object.freeze({
+    complete: (id) => resolveSourceOwnedHold('autopilot', id),
+  }),
+  review: Object.freeze({
+    complete: (id) => reviewService.dismissItem(id),
   }),
 });
 
