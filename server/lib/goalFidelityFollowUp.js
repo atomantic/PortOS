@@ -214,6 +214,33 @@ function reviewedChange(context) {
 }
 
 /**
+ * Why a finding must not be copied onto the project's tracker, or `null` when
+ * the publication record matches that tracker and repository.
+ *
+ * A local task's objective is the operator's own prose. Filing it would publish
+ * that prose. A fetched issue may return only to the tracker and repository it
+ * was read from. The sentences name which of those gates closed, because
+ * "no verified provenance" does not tell an operator whether the refusal was
+ * the normal local-task case or a repository mismatch.
+ */
+export function explainGoalFidelityPublicationRefusal({ publication, tracker, target } = {}) {
+  if (publication?.source !== 'tracker-issue') {
+    return 'the objective was not a fetched tracker issue, so nothing was published';
+  }
+  if (publication.tracker !== tracker) {
+    const from = publication.tracker || 'another tracker';
+    const onto = tracker || 'the configured';
+    return `the objective was fetched from ${from}, not this project's ${onto} tracker, so nothing was published`;
+  }
+  const sameHost = publication.webHost && publication.webHost === target?.webHost;
+  const sameRepo = publication.fullName && publication.fullName === target?.fullName;
+  if (!sameHost || !sameRepo) {
+    return 'the objective was fetched from a different repository than this project tracks, so nothing was published';
+  }
+  return null;
+}
+
+/**
  * Public investigation projection: objective, compared commits, and allegation.
  * Only an objective fetched from the target tracker can cross this boundary:
  * text scrubbers cannot recognize arbitrary private record content in a local

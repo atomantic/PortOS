@@ -355,7 +355,10 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   // Reusing it is what keeps the two validation sites from drifting — an
   // inline existsSync here did both of those wrong.
   try {
-    workspacePath = resolveSpawnCwd(workspacePath, ROOT_DIR, `Task ${task.id}`);
+    // The source repo is validated here and logged later, after a worktree (if
+    // any) replaces it. Logging it as the task cwd made every isolated run look
+    // like it was about to edit the primary checkout.
+    workspacePath = resolveSpawnCwd(workspacePath, ROOT_DIR, `Task ${task.id}`, { log: false });
   } catch (err) {
     const reason = `${err.message} (Task blocked before the agent started, so it could not write into the PortOS directory by mistake.)`;
     emitLog('error', `❌ ${reason}`, { taskId: task.id, workspace: workspacePath });

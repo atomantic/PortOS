@@ -52,6 +52,12 @@ describe('resolveSpawnCwd', () => {
     expect(logSpy.mock.calls.flat().join('\n')).toContain('no workspace selected');
   });
 
+  it('can validate without logging when the caller reports the final directory', () => {
+    logSpy.mockClear();
+    expect(resolveSpawnCwd(dir, '/fallback', 'Task sys-1', { log: false })).toBe(dir);
+    expect(logSpy).not.toHaveBeenCalled();
+  });
+
   // The #3180 regression: a workspace was requested but does not exist. The old
   // behavior spawned in the PortOS root anyway, so the agent's relative file
   // writes landed in the wrong repo with no error anywhere.

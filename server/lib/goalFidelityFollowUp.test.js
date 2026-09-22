@@ -4,6 +4,7 @@ import {
   GOAL_FIDELITY_FOLLOW_UP_TRIGGERS,
   buildGoalFidelityFollowUpTask,
   buildGoalFidelityIssue,
+  explainGoalFidelityPublicationRefusal,
   formatGoalFidelityFollowUpSummary,
   goalFidelityFingerprint,
   goalFidelityFollowUpApplies,
@@ -20,6 +21,36 @@ const review = (over = {}) => ({
   backend: 'ollama',
   model: 'qwen3',
   ...over,
+});
+
+describe('explainGoalFidelityPublicationRefusal', () => {
+  const target = { webHost: 'github.com', fullName: 'acme/comics' };
+
+  it('names a local objective instead of a generic provenance failure', () => {
+    expect(explainGoalFidelityPublicationRefusal({ publication: null, tracker: 'github', target }))
+      .toMatch(/not a fetched tracker issue/);
+  });
+
+  it('names a tracker mismatch separately from a repository mismatch', () => {
+    expect(explainGoalFidelityPublicationRefusal({
+      publication: { source: 'tracker-issue', tracker: 'gitlab', webHost: 'github.com', fullName: 'acme/comics' },
+      tracker: 'github',
+      target,
+    })).toMatch(/fetched from gitlab/);
+    expect(explainGoalFidelityPublicationRefusal({
+      publication: { source: 'tracker-issue', tracker: 'github', webHost: 'github.com', fullName: 'other/repo' },
+      tracker: 'github',
+      target,
+    })).toMatch(/different repository/);
+  });
+
+  it('allows a publication that matches the destination', () => {
+    expect(explainGoalFidelityPublicationRefusal({
+      publication: { source: 'tracker-issue', tracker: 'github', webHost: 'github.com', fullName: 'acme/comics' },
+      tracker: 'github',
+      target,
+    })).toBeNull();
+  });
 });
 
 describe('resolveGoalFidelityFollowUp', () => {

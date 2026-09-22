@@ -769,6 +769,15 @@ describe('killSession', () => {
   it('returns false for an unknown session id', () => {
     expect(shell.killSession('nope')).toBe(false);
   });
+
+  it('logs the full session id', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const id = shell.createShellSession(makeSocket('owner'));
+    log.mockClear();
+    expect(shell.killSession(id)).toBe(true);
+    expect(log.mock.calls.flat().join('\n')).toContain(`Killing shell session ${id}`);
+    log.mockRestore();
+  });
 });
 
 describe('detachSocketSessions', () => {
