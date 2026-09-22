@@ -24,10 +24,13 @@
  */
 
 import { join } from 'path';
-import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { readDailyLogIfEnabled } from './mortalLoomStore.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 export const DAILY_LOG_FILE = join(PATHS.meatspace, 'daily-log.json');
+
+export const queueDailyLogWrite = createFileWriteQueue();
 
 // Fresh object per call — callers mutate the log they get back (entry push,
 // lastEntryDate stamp) before writing it, so a shared constant would leak state.
@@ -68,4 +71,37 @@ export async function loadMeatspaceDailyLog({ strict = false, label = 'MeatSpace
   const ml = await readDailyLogIfEnabled({ strict });
   if (ml) return ml;
   return readLocalDailyLog({ strict, label });
+}
+
+/**
+ * Coordinate a serialized read-modify-write cycle on `daily-log.json`.
+ *
+ * Encapsulates:
+ * 1. Serializing writes through `queueDailyLogWrite` so concurrent mutators
+ *    never interleave.
+ * 2. Reading via `readLocalDailyLog({ strict: true, label })` so transient read
+ *    failures fail fast instead of truncating historical entries (#2726).
+ * 3. Invoking `mutatorFn(log)` which may mutate `log` in place.
+ * 4. Sorting `log.entries` by date and updating `log.lastEntryDate`.
+ * 5. Atomically writing the updated log back to `DAILY_LOG_FILE`.
+ *
+ * @param {(log: { entries: object[], lastEntryDate: string|null }) => Promise<any>|any} mutatorFn
+ * @param {{ label?: string }} [options]
+ * @returns {Promise<any>} The result of mutatorFn, or the updated log if mutatorFn returns undefined.
+ */
+export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
+  return queueDailyLogWrite(async () => {
+    const log = await readLocalDailyLog({ strict: true, label });
+    const result = await mutatorFn(log);
+    if (result === false || result === null) {
+      return result;
+    }
+    if (Array.isArray(log?.entries)) {
+      log.entries.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      log.lastEntryDate = log.entries.length > 0 ? (log.entries[log.entries.length - 1]?.date || null) : null;
+    }
+    await ensureDir(PATHS.meatspace);
+    await atomicWrite(DAILY_LOG_FILE, log);
+    return result !== undefined ? result : log;
+  });
 }

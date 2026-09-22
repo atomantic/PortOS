@@ -8,7 +8,7 @@
 
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { DAILY_LOG_FILE, readLocalDailyLog } from './meatspaceDailyLog.js';
+import { DAILY_LOG_FILE, readLocalDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlArrayIfEnabled,
@@ -97,15 +97,15 @@ export async function addBodyEntry({ date, ...body }) {
     return rest;
   }
 
-  const log = await readJSONFile(DAILY_LOG_FILE, { entries: [], lastEntryDate: null });
-  let entry = log.entries.find(e => e.date === targetDate);
-  if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
-  entry.body = { ...(entry.body || {}), ...body };
-  log.entries.sort(byDate);
-  log.lastEntryDate = log.entries.at(-1).date;
-  await writeLocal(DAILY_LOG_FILE, log);
+  const result = await mutateDailyLog((log) => {
+    let entry = log.entries.find(e => e.date === targetDate);
+    if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
+    entry.body = { ...(entry.body || {}), ...body };
+    return { date: targetDate, ...entry.body };
+  }, { label: 'Health' });
+  
   console.log(`⚖️ Body entry added for ${targetDate}`);
-  return { date: targetDate, ...entry.body };
+  return result;
 }
 
 // === Epigenetic Tests ===
