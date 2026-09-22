@@ -524,6 +524,70 @@ describe('AgentCard responsive header', () => {
       cleanup();
     }
   });
+
+  it('shows provider route provenance on active and completed cards', () => {
+    const routeMetadata = {
+      providerId: 'claude-ollama',
+      providerName: 'Claude Ollama',
+      providerType: 'cli',
+      providerMethod: 'cli',
+      providerCommand: 'claude',
+      harnessId: 'claude',
+      serviceId: 'ollama',
+      servicePlan: 'local',
+      providerCredentialBootstrapId: 'example-auth',
+      executionMode: 'runner',
+      useRunner: true,
+      modelTier: 'heavy',
+      leanMode: true,
+      providerHasCredentialBootstrap: true,
+    };
+
+    for (const [cardAgent, isCompleted] of [
+      [{ ...agent, status: 'running', completedAt: null, metadata: { ...agent.metadata, ...routeMetadata } }, false],
+      [{ ...agent, metadata: { ...agent.metadata, ...routeMetadata } }, true],
+    ]) {
+      render(
+        <MemoryRouter>
+          <AgentCard agent={cardAgent} completed={isCompleted} />
+        </MemoryRouter>
+      );
+
+      expect(screen.getByText('Provider: Claude Ollama')).toBeInTheDocument();
+      expect(screen.getByText('Harness: Claude Code')).toBeInTheDocument();
+      expect(screen.getByText('Service: ollama')).toBeInTheDocument();
+      expect(screen.getByText('Plan: local')).toBeInTheDocument();
+      expect(screen.getByText('Route: cli')).toBeInTheDocument();
+      expect(screen.getByText('Command: claude')).toBeInTheDocument();
+      expect(screen.getByText('Execution: runner')).toBeInTheDocument();
+      expect(screen.getByText('Dispatch: Runner')).toBeInTheDocument();
+      expect(screen.getByText('Tier: heavy')).toBeInTheDocument();
+      expect(screen.getByText('Prompt: lean')).toBeInTheDocument();
+      expect(screen.getByText('Auth: example-auth')).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it('derives a known harness for legacy provider metadata', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard
+          agent={{
+            ...agent,
+            metadata: {
+              ...agent.metadata,
+              providerId: 'claude-ollama',
+              providerType: 'cli',
+              providerCommand: 'claude',
+            },
+          }}
+          completed
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('Harness: Claude Code')).toBeInTheDocument();
+  });
 });
 
 describe('AgentCard transcript truncation (#3498)', () => {
