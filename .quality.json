@@ -269,6 +269,20 @@
       }
     },
     {
+      "measurementId": "547d1674e677d34cef896a9f2d47827cf56da6013eea19e292e02a019f024924",
+      "assessedAt": "2026-09-22T16:37:36.903Z",
+      "report": {
+        "version": 1,
+        "category": "code-quality",
+        "score": 76,
+        "worstSeverity": 7,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 7995,
+        "totalFiles": 7995
+      }
+    },
+    {
       "measurementId": "b6e2b7cb6cfea9131f407268e28e2f932309bdb34a740609c0087300de311e45",
       "assessedAt": "2026-09-12T14:56:09.495Z",
       "report": {
@@ -507,6 +521,20 @@
       }
     },
     {
+      "measurementId": "a44f79088ea2801f93b9be174397ef78c84c0263b3191dc32a9d3a897141a53b",
+      "assessedAt": "2026-09-22T19:28:42.988Z",
+      "report": {
+        "version": 1,
+        "category": "observability",
+        "score": 80,
+        "worstSeverity": 4,
+        "coverage": "broad",
+        "confidence": "medium",
+        "scannedFiles": 8149,
+        "totalFiles": 8149
+      }
+    },
+    {
       "measurementId": "602a4a5ff34bc32378a90e9a236befa87b739e6601ce623820a2b59bb77f77a8",
       "assessedAt": "2026-09-10T14:41:26.439Z",
       "report": {
@@ -574,6 +602,20 @@
         "confidence": "high",
         "scannedFiles": 1603,
         "totalFiles": 1603
+      }
+    },
+    {
+      "measurementId": "b7895140384428156ad5ff761bee43e33507584ccf2650d1fe1c1098a148f794",
+      "assessedAt": "2026-09-22T16:24:31.577Z",
+      "report": {
+        "version": 1,
+        "category": "react-lifecycle",
+        "score": 62,
+        "worstSeverity": 8,
+        "coverage": "broad",
+        "confidence": "high",
+        "scannedFiles": 1701,
+        "totalFiles": 1701
       }
     },
     {
