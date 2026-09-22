@@ -208,7 +208,7 @@ export default function GitHub() {
   }
 
   return (
-    <div className="p-4 sm:p-6">
+    <div className="@container/page min-w-0 p-4 sm:p-6">
       <h1 className="text-xl sm:text-2xl font-bold text-white mb-6">GitHub Repos</h1>
 
       {!authStatus?.authenticated && (
@@ -290,11 +290,11 @@ export default function GitHub() {
         </div>
       </Modal>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
+      <div className="grid grid-cols-1 @5xl/page:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
         {/* Repo List */}
-        <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6 min-w-0">
-          <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
+        <div className="bg-port-card rounded-lg border border-port-border @container/repos p-4 sm:p-6 min-w-0">
+          <div className="flex flex-wrap gap-3 mb-4 items-center justify-between">
+            <div className="flex flex-wrap items-center gap-3">
               <h2 className="text-lg font-bold text-white">Repositories</h2>
               {lastSync && (
                 <span className="text-xs text-gray-500">Last sync: {timeAgo(lastSync)}</span>
@@ -360,16 +360,16 @@ export default function GitHub() {
           )}
 
           {/* Search + Filter */}
-          <div className="flex flex-col sm:flex-row gap-2 mb-4">
+          <div className="flex flex-wrap gap-2 mb-4">
             <input
               type="text"
               aria-label="Search repositories"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search repos..."
-              className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+              className="min-w-0 w-full flex-auto px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
             />
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
               {FILTERS.map(f => (
                 <button
                   key={f}
@@ -418,7 +418,7 @@ export default function GitHub() {
               {repoList.map(repo => (
                 <div
                   key={repo.fullName}
-                  className={`flex flex-col sm:flex-row sm:items-center gap-2 p-3 rounded border border-port-border ${
+                  className={`flex flex-col @xl/repos:flex-row @xl/repos:items-center gap-2 p-3 rounded border border-port-border ${
                     repo.isArchived ? 'opacity-50 bg-port-bg/50' : 'bg-port-bg'
                   }`}
                 >
@@ -453,7 +453,7 @@ export default function GitHub() {
                         <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/50 text-red-400 border border-red-800">npm</span>
                       )}
                       {repo.managedSecrets?.map(s => (
-                        <span key={s} className="text-xs px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent border border-port-accent/30">
+                        <span key={s} className="max-w-full [overflow-wrap:anywhere] text-xs px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent border border-port-accent/30">
                           {s}
                         </span>
                       ))}
@@ -462,7 +462,7 @@ export default function GitHub() {
                       <p className="text-xs text-gray-500 mt-0.5 truncate">{repo.description}</p>
                     )}
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex flex-wrap items-center gap-3 shrink-0">
                     <span className="text-xs text-gray-500">{timeAgo(repo.pushedAt)}</span>
                     {!repo.isArchived && (
                       <label className="flex items-center gap-1.5 cursor-pointer">
@@ -494,7 +494,7 @@ export default function GitHub() {
           )}
         </div>
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6 [overflow-wrap:anywhere]">
           {/* Secrets Management */}
           <div className="bg-port-card rounded-lg border border-port-border p-4 sm:p-6">
             <h2 className="text-lg font-bold text-white mb-4">Secrets Management</h2>

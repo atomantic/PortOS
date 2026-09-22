@@ -87,7 +87,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
     !httpsEnabled && bind?.audience === 'all-interfaces';
 
   return (
-    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
+    <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex items-center justify-between gap-2 mb-4">
         <div className="flex min-w-0 items-center gap-3">
           <div className={`p-2 rounded-lg ${httpsEnabled ? 'bg-port-success/10' : 'bg-port-warning/10'}`}>
@@ -129,7 +129,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
             <Shield size={14} />
             Cert mode
           </dt>
-          <dd className="min-w-0 text-left @xs:text-right">
+          <dd className="min-w-0 max-w-full [overflow-wrap:anywhere] text-left @xs:text-right">
             <CertModeBadge mode={cert.mode} host={cert.tailscaleHost} />
           </dd>
         </div>
@@ -187,7 +187,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
             {mic.available ? <Mic size={14} /> : <MicOff size={14} />}
             Voice / mic
           </dt>
-          <dd className="min-w-0 text-left @xs:text-right">
+          <dd className="min-w-0 max-w-full [overflow-wrap:anywhere] text-left @xs:text-right">
             {mic.available ? (
               <div className="flex flex-wrap items-center gap-1 text-port-success @xs:justify-end">
                 <CheckCircle size={14} />

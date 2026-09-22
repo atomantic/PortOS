@@ -34,7 +34,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
     // which used to be indistinguishable from "nothing is scheduled".
     if (error) {
       return (
-        <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6" role="status">
+        <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4" role="status">
           <div className="flex items-center gap-3">
             <Clock className="w-6 h-6 text-gray-500" aria-hidden="true" />
             <div>
@@ -87,7 +87,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
   };
 
   return (
-    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
+    <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
@@ -145,7 +145,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2 text-xs text-gray-500">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span className="flex items-center gap-1">
                   <CheckCircle size={10} className="text-port-success" />
                   Ready
@@ -192,7 +192,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-2 text-xs text-gray-500">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span className="flex items-center gap-1">
                   <Timer size={10} />
                   {task.eligibleInFormatted}

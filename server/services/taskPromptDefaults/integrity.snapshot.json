@@ -52,7 +52,7 @@
     "typing": "bd7cb874b2784395280b116369c7e7ac",
     "ui-bugs": "073bea13a94b0266c53b5f55bb2344b9",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "ac11f692eae40ffe8ddeaeaccbcf75e9"
+    "ux": "b8c0bde4075685625443a405b2c70b50"
   },
   "PROMPT_VERSIONS": {
     "accessibility": 3,
@@ -102,7 +102,7 @@
     "typing": 3,
     "ui-bugs": 3,
     "user-action-review": 2,
-    "ux": 2
+    "ux": 3
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 3,
   "PREVIOUS_DEFAULT_PROMPTS": {
@@ -363,7 +363,8 @@
       "945a716d446d26a03e2805d28bd1ae16"
     ],
     "ux": [
-      "e03d03fc7c16faa5b5db93be2896b9ad"
+      "e03d03fc7c16faa5b5db93be2896b9ad",
+      "ac11f692eae40ffe8ddeaeaccbcf75e9"
     ]
   }
 }

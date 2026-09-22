@@ -29,7 +29,7 @@ export default function HourlyActivityWidget({ dashboardState }) {
   if (totalSessions === 0) return null;
 
   return (
-    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
+    <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex flex-col @sm:flex-row @sm:items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-3">
           <div className="text-2xl" aria-hidden="true">⏰</div>
