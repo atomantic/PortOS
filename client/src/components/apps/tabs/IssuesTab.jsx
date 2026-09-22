@@ -850,7 +850,7 @@ export default function IssuesTab({ appId, appName }) {
                     </div>
                   </div>
 
-                  <div className="shrink-0 flex flex-wrap items-center gap-2 sm:self-start">
+                  <div className="flex flex-wrap items-center gap-2 sm:min-w-0 sm:self-start">
                     {ACTION_ORDER.map(action => {
                       const spec = ISSUE_ACTIONS[action];
                       const run = runs[runKey(action, issue.number)];
