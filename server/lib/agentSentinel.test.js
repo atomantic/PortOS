@@ -13,6 +13,16 @@ describe('missingSentinelLogMessage', () => {
     expect(message).not.toContain('finalized');
   });
 
+  it('reads a missing TUI binary as a startup failure too', () => {
+    // `command-not-found` exits before the prompt was sent — the login-shell
+    // path printing "command not found" — so it is the same no-prompt shape.
+    expect(missingSentinelLogMessage({
+      agentId: 'agent-1',
+      reason: 'command-not-found',
+      sentinelPath: '/work/.agent-done-agent-1',
+    })).toContain('startup failed (command-not-found)');
+  });
+
   it('keeps the expected path when a run that was working exits without the sentinel', () => {
     expect(missingSentinelLogMessage({
       agentId: 'agent-1',

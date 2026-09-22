@@ -92,7 +92,7 @@ export function doneSentinelAgentId(name) {
  *
  * Pure: callers do their own `existsSync` / read.
  */
-const STARTUP_SENTINEL_REASONS = new Set(['paste-not-rendered', 'tui-not-ready']);
+const STARTUP_SENTINEL_REASONS = new Set(['paste-not-rendered', 'tui-not-ready', 'command-not-found']);
 
 /**
  * The operator line for a TUI that ended without its completion sentinel.
