@@ -510,6 +510,50 @@ export function createRunnerService(config = {}) {
         env: childEnv,
         windowsHide: true
       });
+
+      // Same tick as spawn. Node emits 'error' (ENOENT, EACCES, EMFILE) and
+      // does not follow it with 'close' when the process never starts; an
+      // unlistened 'error' is an uncaught exception that exits the server.
+      // A child that dies before reading stdin emits EPIPE on the pipe — that
+      // stream error is the same crash if nobody is listening. 'close' and
+      // 'error' share one settlement so a race cannot double-fire hooks.
+      let settled = false;
+      let timeoutHandle = null;
+      const releaseRun = () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        activeRuns.delete(runId);
+      };
+
+      childProcess.stdin?.on('error', () => {});
+      childProcess.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        releaseRun();
+        console.error(`❌ Run ${runId} spawn error: ${err.message}`);
+        void (async () => {
+          const failMetadata = {
+            endTime: new Date().toISOString(),
+            duration: Date.now() - startTime,
+            exitCode: -1,
+            success: false,
+            error: err.message,
+            outputSize: Buffer.byteLength(output),
+          };
+          try {
+            const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+            Object.assign(metadata, failMetadata);
+            await atomicWrite(outputPath, output);
+            await atomicWrite(metadataPath, metadata);
+            failMetadata.errorCategory = metadata.errorCategory;
+            Object.assign(failMetadata, metadata);
+          } catch (writeErr) {
+            console.error(`❌ Run ${runId} spawn-error finalization failed: ${writeErr.message}`);
+          }
+          safeSettle(() => hooks.onRunFailed?.(failMetadata, err.message, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
+        })();
+      });
+
       if (childProcess.stdin) {
         childProcess.stdin.write(prompt);
         childProcess.stdin.end();
@@ -518,7 +562,7 @@ export function createRunnerService(config = {}) {
       activeRuns.set(runId, childProcess);
       hooks.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
 
-      const timeoutHandle = setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         if (childProcess && !childProcess.killed) {
           console.log(`⏱️ Run ${runId} timed out after ${timeout}ms`);
           killProcessTree(childProcess);
@@ -538,13 +582,14 @@ export function createRunnerService(config = {}) {
       });
 
       childProcess.on('close', async (code) => {
+        if (settled) return;
+        settled = true;
         // Runs outside the request lifecycle — an uncaught throw from
         // atomicWrite/handleProviderError/hooks would surface as an unhandled
         // rejection and crash the process, so guard the body and still settle
         // the caller on failure.
         try {
-          clearTimeout(timeoutHandle);
-          activeRuns.delete(runId);
+          releaseRun();
 
           await atomicWrite(outputPath, output);
 

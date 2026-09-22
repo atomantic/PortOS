@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile } from 'fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import EventEmitter from 'events';
@@ -1713,7 +1713,9 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
-    child.stdin = { write: vi.fn(), end: vi.fn() };
+    child.stdin = new EventEmitter();
+    child.stdin.write = vi.fn();
+    child.stdin.end = vi.fn();
     child.kill = vi.fn();
     child.killed = false;
     return child;
@@ -1756,6 +1758,55 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     // The 'close' handler's atomicWrite calls run after executeCliRun returns
     // — wait for completion before removing dataDir, or rm races the writes.
     await completed;
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('settles a failed spawn once, clears the run, and swallows stdin EPIPE (#8031)', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-spawn-err-'));
+    const runId = 'spawn-enoent';
+    await mkdir(join(dataDir, 'runs', runId), { recursive: true });
+    const onRunFailed = vi.fn();
+    const runner = createRunnerService({ dataDir, hooks: { onRunFailed } });
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+
+    let resolveComplete;
+    const completed = new Promise((resolve) => { resolveComplete = resolve; });
+    const completions = [];
+
+    await runner.executeCliRun({
+      runId,
+      provider: { id: 'missing', command: 'missing-cli', args: [] },
+      prompt: 'test prompt',
+      timeout: 30_000,
+      onComplete: (metadata) => {
+        completions.push(metadata);
+        resolveComplete(metadata);
+      },
+    });
+
+    expect(child.listenerCount('error')).toBeGreaterThan(0);
+    expect(child.stdin.listenerCount('error')).toBeGreaterThan(0);
+    expect(await runner.isRunActive(runId)).toBe(true);
+
+    const spawnErr = new Error('spawn missing-cli ENOENT');
+    spawnErr.code = 'ENOENT';
+    child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    child.emit('error', spawnErr);
+    child.emit('close', null);
+
+    const metadata = await completed;
+    expect(completions).toHaveLength(1);
+    expect(metadata.success).toBe(false);
+    expect(metadata.exitCode).toBe(-1);
+    expect(metadata.error).toBe('spawn missing-cli ENOENT');
+    expect(onRunFailed).toHaveBeenCalledTimes(1);
+    expect(await runner.isRunActive(runId)).toBe(false);
+
+    const persisted = JSON.parse(await readFile(join(dataDir, 'runs', runId, 'metadata.json'), 'utf8'));
+    expect(persisted.success).toBe(false);
+    expect(persisted.exitCode).toBe(-1);
+
     await rm(dataDir, { recursive: true, force: true });
   });
 });
