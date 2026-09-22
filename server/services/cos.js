@@ -1,4 +1,3 @@
-import { unclaimedTaskIds, runningAgentsByTaskId } from '../lib/cosSpawnWindow.js';
 import { getPendingTaskIds as readPendingTaskIds } from './cosTaskStore.js';
 import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 /**
@@ -23,7 +22,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../lib/cosSpawnWindow.js';
+import { unclaimedTaskIds, runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../lib/cosSpawnWindow.js';
 import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
 import { clearStaleActiveAgents } from './appActivity.js';
 // The single Priority-0 on-demand loop body, shared with the evaluateTasks
