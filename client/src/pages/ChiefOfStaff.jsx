@@ -161,6 +161,38 @@ export default function ChiefOfStaff() {
   const [loading, setLoading] = useState(true);
   const [agentState, setAgentState] = useState('sleeping');
   const [speaking, setSpeaking] = useState(false);
+  // Socket events and manual checks share one visible speaking window. Each
+  // burst owns a generation so a stale timer or request completion cannot end
+  // a newer burst early.
+  const speakingTimerRef = useRef(null);
+  const speakingGenerationRef = useRef(0);
+  const setSpeakingFor = useCallback((duration = SPEAKING_MS, generation) => {
+    if (generation !== undefined && generation !== speakingGenerationRef.current) return null;
+    if (speakingTimerRef.current !== null) {
+      clearTimeout(speakingTimerRef.current);
+      speakingTimerRef.current = null;
+    }
+    const nextGeneration = generation ?? speakingGenerationRef.current + 1;
+    speakingGenerationRef.current = nextGeneration;
+    if (duration <= 0) {
+      setSpeaking(false);
+      return nextGeneration;
+    }
+    setSpeaking(true);
+    speakingTimerRef.current = setTimeout(() => {
+      if (speakingGenerationRef.current !== nextGeneration) return;
+      speakingTimerRef.current = null;
+      setSpeaking(false);
+    }, duration);
+    return nextGeneration;
+  }, []);
+  useEffect(() => () => {
+    speakingGenerationRef.current += 1;
+    if (speakingTimerRef.current !== null) {
+      clearTimeout(speakingTimerRef.current);
+      speakingTimerRef.current = null;
+    }
+  }, []);
   const [statusMessage, setStatusMessage] = useState("Idle - waiting for tasks...");
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
@@ -490,8 +522,7 @@ export default function ChiefOfStaff() {
       const taskDesc = data?.metadata?.taskDescription;
       const shortDesc = taskDesc ? taskDesc.substring(0, 60) + (taskDesc.length > 60 ? '...' : '') : 'Working on task...';
       setStatusMessage(`Running: ${shortDesc}`);
-      setSpeaking(true);
-      setTimeout(() => setSpeaking(false), SPEAKING_MS);
+      setSpeakingFor();
       // Track active agent metadata for dynamic avatar resolution
       if (data?.metadata) setActiveAgentMeta(data.metadata);
       // Initialize empty output buffer for new agent
@@ -533,8 +564,7 @@ export default function ChiefOfStaff() {
           : data?.result?.success ? "Task completed successfully"
             : "Task failed - checking errors..."
       );
-      setSpeaking(true);
-      setTimeout(() => setSpeaking(false), SPEAKING_MS);
+      setSpeakingFor();
       // Clear active agent metadata so avatar reverts to default
       setActiveAgentMeta(null);
       // Clean up live output buffer for completed agent to prevent memory growth
@@ -554,8 +584,7 @@ export default function ChiefOfStaff() {
       if (data.issues?.length > 0) {
         setAgentState('investigating');
         setStatusMessage(summarizeHealthIssues(data.issues));
-        setSpeaking(true);
-        setTimeout(() => setSpeaking(false), SPEAKING_MS);
+        setSpeakingFor();
       }
     };
     socket.on('cos:health:check', handleHealthCheck);
@@ -570,8 +599,7 @@ export default function ChiefOfStaff() {
       if (data.message) {
         setStatusMessage(data.message);
         if (data.level === 'success' || data.level === 'error') {
-          setSpeaking(true);
-          setTimeout(() => setSpeaking(false), 1500);
+          setSpeakingFor(1500);
         }
       }
     };
@@ -619,7 +647,7 @@ export default function ChiefOfStaff() {
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
     };
-  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, selectedTask, needsApps, needsProviders, applyApps, applyProviders]);
+  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, selectedTask, needsApps, needsProviders, applyApps, applyProviders, setSpeakingFor]);
 
   const handleStart = async () => {
     const result = await api.startCos({ silent: true }).catch(err => {
@@ -630,8 +658,7 @@ export default function ChiefOfStaff() {
       toast.success('Chief of Staff started');
       setAgentState('thinking');
       setStatusMessage("Starting daemon - scanning for tasks...");
-      setSpeaking(true);
-      setTimeout(() => setSpeaking(false), SPEAKING_MS);
+      setSpeakingFor();
       fetchData();
     }
   };
@@ -686,8 +713,7 @@ export default function ChiefOfStaff() {
       toast.success('Evaluation triggered');
       setAgentState('thinking');
       setStatusMessage("Evaluating tasks...");
-      setSpeaking(true);
-      setTimeout(() => setSpeaking(false), SPEAKING_MS);
+      setSpeakingFor();
     } catch (err) {
       toast.error(err.message);
     }
@@ -779,12 +805,12 @@ export default function ChiefOfStaff() {
   const handleHealthCheck = async () => {
     setAgentState('investigating');
     setStatusMessage("Running system health check...");
-    setSpeaking(true);
+    const speakingGeneration = setSpeakingFor();
     const result = await api.forceHealthCheck({ silent: true }).catch(err => {
       toast.error(err.message);
       return null;
     });
-    setSpeaking(false);
+    setSpeakingFor(0, speakingGeneration);
     if (result) {
       applyHealth({ lastCheck: result.metrics?.timestamp, issues: result.issues });
       // The Health route does not load the Tasks-only insights banner.
