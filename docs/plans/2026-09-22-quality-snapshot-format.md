@@ -1,6 +1,7 @@
 # Compact, versioned quality snapshots
 
-Status: proposed design for the managed-app quality snapshot format. Tracked by
+Status: implemented. The file schema lives in
+`server/services/appQualitySnapshotFormat.js`. Tracked by
 [#8038](https://github.com/atomantic/PortOS/issues/8038).
 
 ## Context

@@ -32,7 +32,8 @@ import { join } from 'path';
 import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
-  // Numeric-only PortOS audit evidence; read-through, never imported into local records.
+  // Numeric-only peer wire payload (v1); read-through, never imported into local records.
+  // Checked-in `.quality.json` is file schema v2 and must not bump this number.
   appQuality: 1,
   // Type-level (storage layout) version for `data/universes/{id}/index.json`.
   // v5 = post-split. Migration 034 introduced it. The independent per-record
@@ -827,6 +828,8 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  *
  * `appQuality`: numeric-only local evidence at GET /api/apps/quality-federation,
  * validated against its exact wire version by collectAppQuality; never written or pushed.
+ * The repository file format is versioned separately (`appQualitySnapshotFormat.js`)
+ * and a file-schema change must not bump this wire version.
  *
  * Do NOT add a real record-push category here to silence the guard — that would
  * leave its push transfers ungated (silent cross-install corruption). Only

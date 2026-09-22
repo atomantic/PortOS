@@ -2,8 +2,12 @@ import { it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 import {
   APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_SNAPSHOT_MAX_BYTES, QUALITY_SNAPSHOT_BRANCH,
-  readAppQualitySnapshotFile, publishAppQualitySnapshot, __resetQualitySnapshotPublishState,
+  readAppQualitySnapshotFile, readStoredQualitySnapshot, publishAppQualitySnapshot,
+  migrateAppQualitySnapshot, __resetQualitySnapshotPublishState,
 } from './appQualitySnapshotFile.js';
+import {
+  APP_QUALITY_LEGACY_SNAPSHOT_FILENAME, qualityFileFromWireSnapshot,
+} from './appQualitySnapshotFormat.js';
 
 const app = { id: 'example-id', repoPath: '/repo/example-app' };
 const worktreePath = '/tmp/portos-quality-test';
@@ -19,6 +23,7 @@ const snapshot = (count = 1) => ({
   })),
 });
 const serialized = body => `${JSON.stringify(body, null, 2)}\n`;
+const canonical = () => qualityFileFromWireSnapshot(snapshot());
 const missingShow = { exitCode: 1, stdout: '', stderr: 'exists' };
 const gitDouble = (overrides = {}) => ({
   isRepo: vi.fn(async () => true),
@@ -80,9 +85,16 @@ it('lands a changed snapshot from a detached worktree so the PR branch stays att
   });
   const [path, body] = deps.writeFile.mock.calls[0];
   expect(path).toBe(join(worktreePath, '.quality.json'));
-  expect(JSON.parse(body)).toEqual(snapshot());
+  expect(body).toBe(canonical());
+  expect(JSON.parse(body)).toMatchObject({
+    schemaVersion: 2,
+    reportVersion: 1,
+    categories: ['security'],
+    measurements: [['2026-09-10T10:00:00Z', 0, 82, 5, 0, 2, 12, 12]],
+  });
   expect(body.endsWith('\n')).toBe(true);
-  expect(body).not.toMatch(/Users|summary|app_id|agent-|github/);
+  expect(body).not.toMatch(/measurementId|Users|summary|app_id|agent-|github/);
+  expect(deps.buildQualitySnapshot).toHaveBeenCalledWith(app, 30, deps);
   expect(deps.addWorktree).toHaveBeenCalledWith(
     ['worktree', 'add', '--detach', worktreePath, 'origin/main'],
     '/repo/example-app',
@@ -116,7 +128,7 @@ it('lands a changed snapshot from a detached worktree so the PR branch stays att
 });
 
 it('skips when origin already has the snapshot and does not write the live checkout', async () => {
-  const body = serialized(snapshot());
+  const body = canonical();
   const deps = testDeps({
     git: gitDouble({
       execGit: vi.fn(async (args) => args[0] === 'show' && String(args[1]).startsWith('origin/main:')
@@ -133,7 +145,7 @@ it('skips when origin already has the snapshot and does not write the live check
 });
 
 it('re-queues an already-open snapshot PR whose branch already has the same bytes', async () => {
-  const body = serialized(snapshot());
+  const body = canonical();
   const deps = testDeps({
     git: gitDouble({
       execGit: vi.fn(async (args) => args[0] === 'show' && String(args[1]).includes(QUALITY_SNAPSHOT_BRANCH)
@@ -258,4 +270,106 @@ it('enables GitLab auto-merge instead of the GitHub pending-merge queue', async 
     ['mr', 'merge', '7', '--yes', '--auto-merge'],
     '/repo/example-app', undefined, { rejectOnError: true },
   );
+});
+
+const showFiles = files => vi.fn(async (args) => {
+  if (args[0] !== 'show') return missingShow;
+  const spec = String(args[1]);
+  const name = spec.slice(spec.lastIndexOf(':') + 1);
+  return Object.hasOwn(files, name)
+    ? { exitCode: 0, stdout: files[name], stderr: '' }
+    : missingShow;
+});
+
+it('rewrites a v1 snapshot to canonical v2 and leaves a semantically identical v2 untouched', async () => {
+  const upgrade = testDeps({ git: gitDouble({ execGit: showFiles({ '.quality.json': serialized(snapshot()) }) }) });
+  expect(await publishAppQualitySnapshot(app, upgrade)).toMatchObject({ published: true, prUrl });
+  expect(upgrade.writeFile.mock.calls[0][1]).toBe(canonical());
+  expect(upgrade.writeFile.mock.calls[0][0]).toBe(join(worktreePath, '.quality.json'));
+
+  __resetQualitySnapshotPublishState();
+  const compact = JSON.stringify(JSON.parse(canonical()));
+  const identical = testDeps({ git: gitDouble({ execGit: showFiles({ '.quality.json': compact }) }) });
+  expect(await publishAppQualitySnapshot(app, identical)).toEqual({
+    published: false, reason: 'no-changes', path: '.quality.json',
+  });
+  expect(identical.writeFile).not.toHaveBeenCalled();
+  expect(identical.addWorktree).not.toHaveBeenCalled();
+});
+
+it('leaves a future, unrecognized, or unreadable snapshot in place', async () => {
+  const future = testDeps({
+    git: gitDouble({ execGit: showFiles({ '.quality.json': JSON.stringify({ schemaVersion: 3, repository: 'a'.repeat(64) }) }) }),
+  });
+  expect(await publishAppQualitySnapshot(app, future)).toEqual({
+    published: false, reason: 'unsupported-format', path: '.quality.json',
+  });
+  expect(future.writeFile).not.toHaveBeenCalled();
+
+  const tsv = testDeps({
+    git: gitDouble({ execGit: showFiles({ '.quality.json': 'category\tscore\nsecurity\t80\n' }) }),
+  });
+  expect((await publishAppQualitySnapshot(app, tsv)).reason).toBe('unsupported-format');
+  expect(tsv.writeFile).not.toHaveBeenCalled();
+
+  const unreadable = testDeps({
+    git: gitDouble({ execGit: vi.fn(async (args) => {
+      if (args[0] === 'show') throw new Error('git output exceeded maxBuffer');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) }),
+  });
+  expect((await publishAppQualitySnapshot(app, unreadable)).reason).toBe('unsupported-format');
+  expect(unreadable.writeFile).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith('📊 Quality snapshot left untouched for app example-id: future');
+});
+
+it('migrates a legacy file to v2 without inventing measurements or writing the live checkout', async () => {
+  const legacyBody = serialized(snapshot());
+  const deps = testDeps({
+    git: gitDouble({ execGit: showFiles({ [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: legacyBody }) }),
+    buildQualitySnapshot: vi.fn(async () => snapshot(3)),
+  });
+  expect(await migrateAppQualitySnapshot(app, deps)).toMatchObject({ published: true, prUrl, hash: 'abc1234' });
+  expect(deps.buildQualitySnapshot).not.toHaveBeenCalled();
+  const [path, body] = deps.writeFile.mock.calls[0];
+  expect(path).toBe(join(worktreePath, '.quality.json'));
+  expect(path.startsWith(app.repoPath)).toBe(false);
+  expect(JSON.parse(body).measurements).toEqual([['2026-09-10T10:00:00Z', 0, 82, 5, 0, 2, 12, 12]]);
+  expect(deps.git.execGit).toHaveBeenCalledWith(
+    ['rm', '-f', '--', APP_QUALITY_LEGACY_SNAPSHOT_FILENAME], worktreePath);
+  expect(deps.git.commit).toHaveBeenCalledWith(worktreePath,
+    'chore: migrate quality snapshot to schema v2 (1 measurements)',
+    { paths: ['.quality.json', APP_QUALITY_LEGACY_SNAPSHOT_FILENAME] });
+
+  __resetQualitySnapshotPublishState();
+  const again = testDeps({
+    git: gitDouble({ execGit: showFiles({ '.quality.json': body }) }),
+    buildQualitySnapshot: vi.fn(async () => { throw new Error('database must stay unread'); }),
+  });
+  expect(await migrateAppQualitySnapshot(app, again)).toEqual({
+    published: false, reason: 'no-changes', path: '.quality.json',
+  });
+  expect(again.writeFile).not.toHaveBeenCalled();
+  expect(again.addWorktree).not.toHaveBeenCalled();
+});
+
+it('reads v1, v2, and the legacy filename without falling past a canonical file', async () => {
+  const v1 = serialized(snapshot());
+  const v2 = canonical();
+  const read = files => readStoredQualitySnapshot('/repo/example-app', {
+    readFile: async path => {
+      const name = path.slice(path.lastIndexOf('/') + 1);
+      if (!Object.hasOwn(files, name)) throw new Error('ENOENT');
+      return files[name];
+    },
+  });
+  expect(APP_QUALITY_LEGACY_SNAPSHOT_FILENAME).toBe('quality-snapshot.json');
+  expect((await read({ '.quality.json': v1 })).status).toBe('v1');
+  expect((await read({ '.quality.json': v2 })).status).toBe('v2');
+  expect((await read({ [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 })).filename).toBe(APP_QUALITY_LEGACY_SNAPSHOT_FILENAME);
+  const both = await read({ '.quality.json': v2, [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 });
+  expect(both.filename).toBe('.quality.json');
+  expect(both.status).toBe('v2');
+  expect((await read({ '.quality.json': 'not-json', [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 })).status).toBe('unrecognized');
+  expect((await read({ '.quality.json': ' '.repeat(APP_QUALITY_SNAPSHOT_MAX_BYTES + 1) })).status).toBe('oversize');
 });
