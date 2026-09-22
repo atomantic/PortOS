@@ -879,6 +879,14 @@ export async function recalculateModelTierMetrics() {
  * Rebuild success-only duration stats from the agent archive.
  * Scans all completed agent metadata to recalculate avgDurationMs, maxDurationMs, and p80DurationMs
  * using only successful agent durations (failed agents often run long in error loops and skew ETAs).
+ *
+ * Also rebuilds `byTaskTypeExecution` (issue #8001) from the SAME archive pass, so the two
+ * dimensions can never disagree about the same runs after a recalc (issue #8010). This REPLACES
+ * the map wholesale rather than merging into it — consistent with how this recalc always
+ * replaces the derived aggregate it rebuilds — using the shared `executionDurationKey` /
+ * `foldDurationOutcome` the live recorder uses, so the rebuilt shape can't drift from the
+ * recorded one. `saveLearningData` applies the existing stale-prune + `EXECUTION_BUCKET_CAP`
+ * sweep to the replaced map on the way out, same as it does for a live write.
  */
 export async function recalculateDurationStats() {
   return withLock(async () => {
@@ -891,6 +899,8 @@ export async function recalculateDurationStats() {
   }
   data.totals.successDurationMs = 0;
   data.totals.successMaxDurationMs = 0;
+
+  const byTaskTypeExecution = {};
 
   let agentCount = 0;
   let successCount = 0;
@@ -947,14 +957,40 @@ export async function recalculateDurationStats() {
       // bypass, banking its duration into the success-only ETAs.
       if (isSkipLearningVerdict(vp)) continue;
       const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
-      if (!outcomeSuccess || duration <= 0) continue;
-
-      successCount++;
       const taskType = extractTaskType({
         description: meta.metadata?.taskDescription,
         metadata: meta.metadata,
         taskType: meta.metadata?.taskType
       });
+
+      // Execution-scoped bucket (issue #8001/#8010): folds every non-environmental
+      // completion — success OR fail, any duration — mirroring the live
+      // `recordExecutionDuration` call, which is NOT gated on success/duration>0 the
+      // way the success-only byTaskType recalc below is. Applies the SAME
+      // environmental-failure gate (#2618) the live recorder uses so an archived
+      // outage never dents this dimension either.
+      const errorCategory = meta.result?.errorAnalysis?.category || null;
+      const errorOrigin = meta.result?.errorAnalysis?.origin ?? null;
+      if (!shouldDivertToEnvironmental(outcomeSuccess, errorCategory, errorOrigin)) {
+        const executionKey = executionDurationKey({
+          taskType,
+          providerId: meta.metadata?.providerId,
+          model: meta.metadata?.model,
+          effort: meta.metadata?.effort ?? null
+        });
+        if (executionKey) {
+          if (!byTaskTypeExecution[executionKey]) byTaskTypeExecution[executionKey] = emptyDurationBucket();
+          foldDurationOutcome(byTaskTypeExecution[executionKey], {
+            success: outcomeSuccess,
+            duration,
+            at: meta.completedAt
+          });
+        }
+      }
+
+      if (!outcomeSuccess || duration <= 0) continue;
+
+      successCount++;
 
       if (data.byTaskType[taskType]) {
         data.byTaskType[taskType].successDurationMs += duration;
@@ -978,6 +1014,8 @@ export async function recalculateDurationStats() {
   if ((data.totals.succeeded || 0) > 0 && data.totals.successDurationMs > 0) {
     Object.assign(data.totals, calculateDurationETA(data.totals));
   }
+
+  data.byTaskTypeExecution = byTaskTypeExecution;
 
   await saveLearningData(data);
 
