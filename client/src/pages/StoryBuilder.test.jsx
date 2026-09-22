@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource';
@@ -48,6 +48,35 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../services/api', () => api);
 
+// Some descendants import Socket.IO directly rather than via the shared
+// service. Keep the test boundary closed for either form of that dependency.
+vi.mock('socket.io-client', () => ({
+  io: vi.fn(() => ({ on: vi.fn(), off: vi.fn(), connected: false })),
+}));
+
+// StoryBuilder imports render-thumbnail controls which subscribe through the
+// application socket client. Keep this route suite at its API boundary: the
+// real client eagerly opens a Socket.IO connection at module load, which turns
+// a passing route test into a localhost request outside its fixtures.
+vi.mock('../services/socket', () => ({
+  default: { on: vi.fn(), off: vi.fn() },
+}));
+
+const mediaJobs = vi.hoisted(() => ({ getMediaJob: vi.fn() }));
+vi.mock('../services/apiMediaJobs', () => mediaJobs);
+
+const unexpectedRequests = [];
+
+const rejectUnexpectedRequest = (input, init = {}) => {
+  const request = input instanceof Request ? input : null;
+  const method = init.method || request?.method || 'GET';
+  const url = typeof input === 'string' || input instanceof URL ? String(input) : input?.url || String(input);
+  const origin = new Error('Unexpected network request origin').stack;
+  const error = new Error(`Unexpected network request: ${method} ${url}\nOrigin stack:\n${origin}`);
+  unexpectedRequests.push(error);
+  return Promise.reject(error);
+};
+
 // useCatalogTypes fetches the merged registry; mock it to "no user types" so the
 // hook resolves deterministically to the built-in six (its static fallback).
 vi.mock('../services/apiCatalogTypes', () => ({
@@ -92,6 +121,8 @@ const renderAt = (entry) => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  unexpectedRequests.length = 0;
+  vi.stubGlobal('fetch', vi.fn(rejectUnexpectedRequest));
   api.getStoryBuilderSteps.mockResolvedValue({ steps: STEPS });
   api.listStorySessions.mockResolvedValue([]);
   api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'Claude', enabled: true, models: ['opus', 'sonnet'] }] });
@@ -118,6 +149,17 @@ beforeEach(() => {
   api.getPipelineSeries.mockResolvedValue({ id: 's1', arc: { logline: 'AL', summary: 'AS', readerMap: { hooks: [{ id: 'rm-1', label: 'Why?' }] } } });
   api.listPipelineIssues.mockResolvedValue([]);
   api.listCatalogIngredientsByIds.mockResolvedValue([]);
+  mediaJobs.getMediaJob.mockResolvedValue({ status: 'queued' });
+});
+
+afterEach(() => {
+  // A caught request is still an isolation failure, so assert the guard here
+  // rather than relying on an incidental ECONNREFUSED warning in test output.
+  try {
+    expect(unexpectedRequests).toEqual([]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 describe('composeSeedFromIngredients', () => {
