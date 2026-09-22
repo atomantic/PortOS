@@ -29,8 +29,8 @@ export default function HourlyActivityWidget({ dashboardState }) {
   if (totalSessions === 0) return null;
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
+      <div className="flex flex-col @sm:flex-row @sm:items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-3">
           <div className="text-2xl" aria-hidden="true">⏰</div>
           <div>
@@ -41,7 +41,7 @@ export default function HourlyActivityWidget({ dashboardState }) {
         {peakDescription && <div className="text-sm text-port-success">{peakDescription}</div>}
       </div>
 
-      <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5 sm:gap-1" role="img" aria-label="Hourly activity heatmap">
+      <div className="grid grid-cols-6 @lg:grid-cols-12 gap-1.5 @lg:gap-1" role="img" aria-label="Hourly activity heatmap">
         {hourlyActivity.map((count, hour) => (
           <div
             key={hour}
@@ -52,11 +52,11 @@ export default function HourlyActivityWidget({ dashboardState }) {
         ))}
       </div>
 
-      <div className="mt-2 grid grid-cols-6 sm:grid-cols-12 gap-1.5 sm:gap-1 text-xs text-gray-500">
+      <div className="mt-2 grid grid-cols-6 @lg:grid-cols-12 gap-1.5 @lg:gap-1 text-xs text-gray-500">
         {hourlyActivity.map((_, hour) => (
           <div key={hour} className="text-center">
-            <span className="hidden sm:inline">{hour % 3 === 0 ? formatHourOfDay(hour, { style: 'tiny' }) : ''}</span>
-            <span className="sm:hidden">{hour % 4 === 0 ? formatHourOfDay(hour, { style: 'tiny' }) : ''}</span>
+            <span className="hidden @lg:inline">{hour % 3 === 0 ? formatHourOfDay(hour, { style: 'tiny' }) : ''}</span>
+            <span className="@lg:hidden">{hour % 4 === 0 ? formatHourOfDay(hour, { style: 'tiny' }) : ''}</span>
           </div>
         ))}
       </div>
@@ -64,11 +64,11 @@ export default function HourlyActivityWidget({ dashboardState }) {
       <div className="mt-4 flex items-center justify-end gap-2 text-xs text-gray-500">
         <span>Less</span>
         <div className="flex gap-1">
-          <div className="w-4 h-4 sm:w-3 sm:h-3 rounded-xs bg-port-border/30" />
-          <div className="w-4 h-4 sm:w-3 sm:h-3 rounded-xs bg-port-success/20" />
-          <div className="w-4 h-4 sm:w-3 sm:h-3 rounded-xs bg-port-success/40" />
-          <div className="w-4 h-4 sm:w-3 sm:h-3 rounded-xs bg-port-success/70" />
-          <div className="w-4 h-4 sm:w-3 sm:h-3 rounded-xs bg-port-success" />
+          <div className="w-4 h-4 @lg:w-3 @lg:h-3 rounded-xs bg-port-border/30" />
+          <div className="w-4 h-4 @lg:w-3 @lg:h-3 rounded-xs bg-port-success/20" />
+          <div className="w-4 h-4 @lg:w-3 @lg:h-3 rounded-xs bg-port-success/40" />
+          <div className="w-4 h-4 @lg:w-3 @lg:h-3 rounded-xs bg-port-success/70" />
+          <div className="w-4 h-4 @lg:w-3 @lg:h-3 rounded-xs bg-port-success" />
         </div>
         <span>More</span>
       </div>

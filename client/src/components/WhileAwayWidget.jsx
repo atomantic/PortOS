@@ -99,7 +99,7 @@ export default function WhileAwayWidget() {
 
   if (loading && !data) {
     return (
-      <div className="bg-port-card border border-port-border rounded-xl p-4 flex items-center justify-center min-h-[120px]">
+      <div className="@container bg-port-card border border-port-border rounded-xl p-4 flex items-center justify-center min-h-[120px]">
         <Loader2 className="w-5 h-5 text-gray-500 animate-spin" />
       </div>
     );
@@ -114,7 +114,7 @@ export default function WhileAwayWidget() {
   const windowSince = sinceRef.current || data.sinceIso;
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
+    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-3 gap-3">
         <div className="flex items-center gap-3 min-w-0">
@@ -122,7 +122,7 @@ export default function WhileAwayWidget() {
             <Moon className="w-5 h-5 text-port-accent" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-lg font-semibold text-white">While You Were Away</h3>
+            <h3 className="text-base @sm:text-lg font-semibold text-white">While You Were Away</h3>
             <p className="text-sm text-gray-500 truncate">
               {total > 0
                 ? `${total} agent run${total !== 1 ? 's' : ''} since ${timeAgo(windowSince)}`
@@ -139,7 +139,7 @@ export default function WhileAwayWidget() {
             aria-label="Mark as seen — reset the window to now"
           >
             <Eye size={13} />
-            <span className="hidden sm:inline">Mark as seen</span>
+            <span className="hidden @sm:inline">Mark as seen</span>
           </button>
         )}
       </div>
