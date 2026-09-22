@@ -1,4 +1,4 @@
-import { OctagonX, ChevronsLeft, ClipboardPaste, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, ChevronsUp, ChevronsDown } from 'lucide-react';
+import { OctagonX, ChevronsLeft, ClipboardPaste, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, ChevronsUp, ChevronsDown, CornerUpLeft } from 'lucide-react';
 import ShellImageDrop from './ShellImageDrop';
 
 // Hot buttons for arrow / Enter entry — handy on touch devices and for driving TUI
@@ -32,7 +32,7 @@ export const SCROLL_KEYS = [
 //
 // `popoverPlacement` is which way the Photo composer opens — 'above' for the
 // fullscreen bar, which is pinned to the bottom of the viewport.
-export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, handlePaste, sendNavKey, scrollPage, showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent, sendImage, popoverPlacement = 'below' }) {
+export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, sendEsc, handlePaste, sendNavKey, scrollPage, showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent, sendImage, popoverPlacement = 'below' }) {
   return (
     <>
       <button
@@ -52,6 +52,15 @@ export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, handlePaste, sen
       >
         <OctagonX size={14} />
         <span className="hidden sm:inline">Ctrl+C</span>
+      </button>
+      <button
+        onClick={sendEsc}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs font-mono transition-colors border border-port-border min-h-[40px] shrink-0"
+        title="Send Escape key"
+        aria-label="Send Escape key"
+      >
+        <CornerUpLeft size={14} />
+        <span className="hidden sm:inline">Esc</span>
       </button>
       <button
         onClick={handlePaste}
