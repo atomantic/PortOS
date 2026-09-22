@@ -22,6 +22,7 @@ let seq = 0;
 let timer = null;
 let pending = null;
 const notes = [];
+const captureTestNotes = process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST);
 let armed = false;
 let previousMind = null;
 const unsubs = [];
@@ -32,7 +33,7 @@ export function bindSystemActivityIo(next) {
 
 export function noteSystemActivity(source, phase) {
   if (!ACTIVITY_SOURCES.has(source) || typeof phase !== 'string' || !phase) return;
-  notes.push({ source, phase });
+  if (captureTestNotes) notes.push({ source, phase });
   pending = { source, phase };
   if (timer) return;
   timer = setTimeout(flushSystemActivity, SYSTEM_ACTIVITY_COALESCE_MS);

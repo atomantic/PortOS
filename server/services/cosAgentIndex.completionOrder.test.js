@@ -171,4 +171,3 @@ describe('projection maintenance', () => {
       .toEqual([agentIdAt(1)]);
   });
 });
-
