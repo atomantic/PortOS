@@ -200,7 +200,7 @@ describe('claim reviewer resolution', () => {
 
   it('gates public GitHub comments through the first tool-free local reviewer', () => {
     const prompt = buildLocalReviewerInstructions(
-      ['ollama', 'lmstudio'],
+      ['provider:example-agent', 'ollama', 'lmstudio'],
       { ollama: 'example-model' },
       { ollama: 'high' },
       { claimCommentGate: true },

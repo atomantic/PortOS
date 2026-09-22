@@ -25,7 +25,7 @@ import { modelPinIsOffered } from './localProviderRuntime.js';
 import { filterCallerModeEligible } from './callerModePolicy.js';
 import { buildVendorSpawnConfig, supportsPublicReviewProvider } from './providerVendors.js';
 import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
-import { resolveCliModel } from './providerModels.js';
+import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
@@ -103,12 +103,13 @@ export function pickCliProvider(providers, config = {}) {
  * @param {number} [args.timeoutMs] - SIGTERM after this many ms (default 300000)
  * @param {(chunk: string, stream: 'stdout'|'stderr') => void} [args.onData] - live output callback
  * @param {NodeJS.ProcessEnv} [args.baseEnv] - base env for the child (default process.env); the shared child-env composer filters inherited variables. Explicit provider.envVars still overlays it.
- * @param {object|null} [args.bootstrapEnv] - Credential-command output for an opted-in tool-free review; filtered by buildCliChildEnv.
+ * @param {object|null} [args.bootstrapEnv] - Credential-command output, filtered by buildCliChildEnv.
+ * @param {boolean} [args.exactPins] - Per-call model/effort selections override saved CLI argv pins.
  * @param {string} [args.safetyProfile] - Optional maintained no-tool profile. Refuses unsupported providers and extra argv; both argv and environment use the same profile.
  * @returns {Promise<{ text: string, exitCode: number, stderr: string, partial: boolean, stderrTail: string } | { error: string, exitCode?: number, stderr?: string, stderrTail?: string }>}
  */
 export function runCliProviderPrompt(args = {}) {
-  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null, bootstrapEnv = null } = args;
+  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null, bootstrapEnv = null, exactPins = false } = args;
 
   if (!provider?.command) {
     return Promise.resolve({ error: 'Provider has no command configured' });
@@ -123,10 +124,14 @@ export function runCliProviderPrompt(args = {}) {
   // Clone with the per-call model as defaultModel so buildCliArgs injects the
   // right --model/-m flag for this provider's CLI convention.
   const effectiveProvider = { ...provider, apiKey: provider.apiKey, defaultModel: model ?? provider.defaultModel };
+  if (exactPins) effectiveProvider.args = stripProviderPinArgs(effectiveProvider.args || [], {
+    model: model != null, effort: Boolean(effectiveProvider.effort),
+  });
   const restrictedConfig = safetyProfile ? buildVendorSpawnConfig(effectiveProvider, {
     safetyProfile, effectiveModel: resolveCliModel(effectiveProvider.defaultModel), effort: effectiveProvider.effort,
   }) : null;
   const builtArgs = restrictedConfig?.args || [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
+  const streamFormat = restrictedConfig?.streamFormat || (builtArgs.some((arg, index) => arg === '--output-format=stream-json' || (arg === '--output-format' && builtArgs[index + 1] === 'stream-json')) ? 'stream-json' : null);
   // Deliver the prompt per provider convention: antigravity gets it as the
   // --print VALUE (no stdin); grok's `--prompt-file /dev/stdin` is fed via stdin
   // on POSIX / a temp file on Windows (useStdin=false); everyone else via stdin.
@@ -233,7 +238,7 @@ export function runCliProviderPrompt(args = {}) {
         return done({ error: (stderr.trim().slice(0, STDERR_TAIL_LIMIT) || `${provider.command} exited with code ${code}`), exitCode: code, stderr, stderrTail });
       }
       done({ text, exitCode: code, stderr, partial: code !== 0, stderrTail,
-        ...(restrictedConfig?.streamFormat ? { streamFormat: restrictedConfig.streamFormat } : {}),
+        ...(streamFormat ? { streamFormat } : {}),
       });
     });
   });

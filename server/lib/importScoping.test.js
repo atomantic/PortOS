@@ -38,6 +38,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['services/codeReview.js', 'lib/validation.js',
+    'reads reviewer vocabulary from its pure declaring module without the validation barrel'],
   ['services/backup.js', 'services/socket.js',
     'loads socket/auth listeners only when a failed scheduled DB dump needs the global socket'],
   ['services/eidoverseWorld.js', 'services/eidoverseWorldSources.js',
@@ -905,7 +907,11 @@ describe('heavy test imports stay hoisted to file scope (#7951)', () => {
 // 116,500 -> 116,600 (reviewer configuration health): the health route's
 // code-review mock adds 47 measured static instantiations across the suite;
 // the production route keeps the service import dynamic to avoid that graph.
-const MAX_STATIC_INSTANTIATIONS = 116900;
+// 116,900 -> 117,300 (parallel-merge drift, unrelated to any single PR): main
+// itself measures 116,920, already 20 over the prior ceiling before this
+// change adds anything — see #7993 for the base-relative guard that would
+// make this fixed number unnecessary. Restores the ~400 headroom convention.
+const MAX_STATIC_INSTANTIATIONS = 117300;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

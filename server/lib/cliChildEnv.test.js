@@ -756,11 +756,15 @@ describe('no spawn site rebuilds the CLI child env by hand', () => {
   });
 });
 
-it('admits only opted-in bootstrap auth in no-tool mode and strips it from actions', () => {
+it('admits only opted-in bootstrap auth in ordinary and no-tool runs and strips it from actions', () => {
   const provider = { command: 'claude', credentialBootstrap: { command: 'token-cli', envCommand: ['token-cli', 'env'] } };
   const bootstrapEnv = { ANTHROPIC_AUTH_TOKEN: 'example-token', ANTHROPIC_BASE_URL: 'https://api.example.com',
     PATH: '/untrusted', NODE_OPTIONS: '--require=untrusted', OPENCODE_CONFIG_CONTENT: '{}', GH_TOKEN: 'example-forge-token' };
   const options = { baseEnv: { PATH: '/safe' }, provider, bootstrapEnv, cwd: '/scratch' };
+  const ordinary = buildCliChildEnv(options);
+  expect(ordinary.ANTHROPIC_AUTH_TOKEN).toBe('example-token');
+  expect(ordinary.PATH).toBe('/safe');
+  expect(ordinary).not.toHaveProperty('NODE_OPTIONS');
   const noTool = buildCliChildEnv({ ...options, safetyProfile: PUBLIC_REVIEW_EXECUTION_PROFILE });
   expect(noTool.ANTHROPIC_AUTH_TOKEN).toBe('example-token');
   expect(noTool.ANTHROPIC_BASE_URL).toBe('https://api.example.com');
