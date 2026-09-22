@@ -10,8 +10,10 @@
  * Backend selection (same posture as the memory backend):
  *   - PostgreSQL (projectsDB.js) for normal installs.
  *   - File (projectsFile.js) only via MEMORY_BACKEND=file (escape hatch) or
- *     NODE_ENV=test — both UNSUPPORTED for production. Tests boot without a DB,
- *     so they exercise the file backend and need no Postgres.
+ *     isTestRunner() (NODE_ENV=test OR VITEST) — both UNSUPPORTED for
+ *     production. Tests boot without a DB, so they exercise the file backend
+ *     and need no Postgres. A suite that simulates production must clear
+ *     VITEST; Vitest sets it in every worker.
  *
  * The first PG init runs a one-time, marker-gated import of any legacy
  * data/creative-director-projects.json rows into the table (see
