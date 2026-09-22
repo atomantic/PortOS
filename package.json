@@ -1,12 +1,11 @@
 {
   "name": "portos",
-  "version": "2.73.0",
+  "version": "2.74.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
   "license": "MIT",
   "type": "module",
-
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0",
     "npm": ">=11.11.0"
