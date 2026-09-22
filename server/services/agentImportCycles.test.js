@@ -134,7 +134,24 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // an orchestrator, the cycle comes straight back — fail loudly and early
     // rather than waiting for the graph walk above to go red for a subtler reason.
     const orchestrators = ['agentLifecycle.js', 'agentCliSpawning.js', 'agentTuiSpawning.js', 'agentManagement.js', 'subAgentSpawner.js'];
-    for (const leaf of ['agentFinalization.js', 'agentRunFinalize.js', 'agentSummaryExtraction.js', 'agentRunnerSync.js', 'agentRunnerOutputBatchers.js']) {
+    // The TUI spawner's own subdirectory leaves are listed too. The graph walk
+    // above would catch a STATIC cycle through them (the adapter imports each
+    // one), but naming them here is what keeps the #8021 seam honest: the
+    // session controller takes its PTY/spooling/persistence/sentinel/finalize
+    // collaborators as arguments precisely so it never needs an edge back into
+    // a spawner, and the cheapest way to lose that is an "it was only one
+    // import" convenience.
+    for (const leaf of [
+      'agentFinalization.js',
+      'agentRunFinalize.js',
+      'agentSummaryExtraction.js',
+      'agentRunnerSync.js',
+      'agentRunnerOutputBatchers.js',
+      'agentTuiSpawning/sessionController.js',
+      'agentTuiSpawning/spawnConfig.js',
+      'agentTuiSpawning/outputSpooler.js',
+      'agentTuiSpawning/finalizeHelpers.js',
+    ]) {
       const back = (graph.get(leaf) || []).filter(dep => orchestrators.includes(dep));
       expect(back, `${leaf} must not import ${back.join(', ')}`).toEqual([]);
     }
