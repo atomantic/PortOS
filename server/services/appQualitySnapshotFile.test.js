@@ -72,7 +72,7 @@ it('reads a committed snapshot and answers null for every unusable file', async 
   expect(QUALITY_SNAPSHOT_BRANCH).toBe('portos/quality-snapshot');
 });
 
-it('lands a changed snapshot on a dedicated branch PR and queues merge-on-green', async () => {
+it('lands a changed snapshot from a detached worktree so the PR branch stays attachable', async () => {
   const deps = testDeps();
   expect(await publishAppQualitySnapshot(app, deps)).toEqual({
     published: true, hash: 'abc1234', path: '.quality.json',
@@ -84,7 +84,7 @@ it('lands a changed snapshot on a dedicated branch PR and queues merge-on-green'
   expect(body.endsWith('\n')).toBe(true);
   expect(body).not.toMatch(/Users|summary|app_id|agent-|github/);
   expect(deps.addWorktree).toHaveBeenCalledWith(
-    ['worktree', 'add', '--no-track', '-B', 'portos/quality-snapshot', worktreePath, 'origin/main'],
+    ['worktree', 'add', '--detach', worktreePath, 'origin/main'],
     '/repo/example-app',
   );
   expect(deps.git.stageFiles).toHaveBeenCalledWith(worktreePath, ['.quality.json']);

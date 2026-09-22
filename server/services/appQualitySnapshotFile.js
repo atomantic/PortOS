@@ -186,7 +186,10 @@ async function landSnapshotPr(app, { body, count, defaultBranch, git, deps }) {
   const run = async () => {
     const baseRef = `origin/${defaultBranch}`;
     await addWorktree(
-      ['worktree', 'add', '--no-track', '-B', QUALITY_SNAPSHOT_BRANCH, worktreePath, baseRef],
+      // Keep the PR branch free for an in-flight merge/review follow-up. The
+      // publisher pushes detached HEAD to the stable remote branch below, so
+      // the temporary checkout must not claim that branch locally.
+      ['worktree', 'add', '--detach', worktreePath, baseRef],
       app.repoPath,
     );
     await (deps.writeFile || atomicWrite)(join(worktreePath, APP_QUALITY_SNAPSHOT_FILENAME), body);
