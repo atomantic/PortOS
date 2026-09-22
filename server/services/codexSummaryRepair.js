@@ -7,7 +7,7 @@
 
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 
 // Any taskSummary above this size is almost certainly a transcript dump —
@@ -43,8 +43,11 @@ export async function repairCodexTaskSummary(agentDir, agent) {
   const metaPath = join(agentDir, 'metadata.json');
   const rawContent = await tryReadFile(metaPath);
   if (!rawContent) return null;
-  const raw = JSON.parse(rawContent);
-  raw.metadata = { ...(raw.metadata || {}), taskSummary: repaired, simplifySummary: null };
+  // A crashed writer can leave truncated JSON. Throwing here rejects the
+  // whole agent index promise (cosAgentIndex.loadAgentIndex).
+  const raw = safeJSONParse(rawContent, null, { logError: false });
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  raw.metadata = { ...(raw.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata) ? raw.metadata : {}), taskSummary: repaired, simplifySummary: null };
   await atomicWrite(metaPath, raw);
 
   const beforeSize = (storedTask?.length || 0) + (storedSimplify?.length || 0);
