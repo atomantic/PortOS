@@ -102,13 +102,12 @@ export function createPgFileFacade({ makeFile, makePg, isFile = isFileBackend })
  * may be called before the boot DB gate, e.g. CD's boot recovery scan), runs the
  * optional one-time migration, then loads the PG module.
  *
- * Test-mode detection stays per-store (`isTestMode`) because the stores
- * genuinely differ today: Sprites keys on `isTestRunner()` (`NODE_ENV==='test'`
- * OR `VITEST` — the stronger signal), CD/Music Video on `isTestRunner()` too
- * via the shared `isFileBackend()`. Unifying on `isTestRunner()` would be a
- * strengthening, but it changes what their existing backend-selection suites
- * observe (vitest always sets `VITEST`), so semantics are preserved exactly here
- * and the unification is left as a separate decision.
+ * The default escape hatch is `isFileBackend()`: `MEMORY_BACKEND=file` or
+ * `isTestRunner()` (`NODE_ENV==='test'` OR `VITEST` is set). A store may pass
+ * `isTestMode` to replace that test signal; the file escape hatch is still
+ * OR-ed in. Sprites passes `isTestRunner`, which matches the default. Vitest
+ * always sets `VITEST`, so a suite that wants Postgres must clear it — setting
+ * `NODE_ENV` away from `test` is not enough.
  *
  * @param {object} opts
  * @param {string} [opts.label]  Store name used in the default unreachable-DB error.
@@ -116,7 +115,7 @@ export function createPgFileFacade({ makeFile, makePg, isFile = isFileBackend })
  * @param {() => Promise<object>} opts.loadDbBackend    Loader for the PostgreSQL backend module.
  * @param {string} [opts.requireDbMessage]  Override for the unreachable-DB error message.
  * @param {() => boolean} [opts.isTestMode]  Test-mode predicate; when omitted the shared
- *   `isFileBackend()` (MEMORY_BACKEND=file OR NODE_ENV=test) is used as-is.
+ *   `isFileBackend()` (`MEMORY_BACKEND=file` OR `isTestRunner()`) is used as-is.
  * @param {() => Promise<void>} [opts.onDbReady]  One-time migration run after `ensureSchema()`
  *   and before the DB backend import (CD's legacy JSON → table import).
  * @returns {{ selectBackend: () => Promise<object>, getBackendName: () => ('file'|'postgres'|null) }}

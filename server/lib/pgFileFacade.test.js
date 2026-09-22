@@ -23,11 +23,13 @@ describe('isFileBackend', () => {
   it('is true under NODE_ENV=test', () => {
     process.env.NODE_ENV = 'test';
     delete process.env.MEMORY_BACKEND;
+    delete process.env.VITEST;
     expect(isFileBackend()).toBe(true);
   });
 
   it('is true under MEMORY_BACKEND=file even when not test', () => {
     process.env.NODE_ENV = 'production';
+    delete process.env.VITEST;
     process.env.MEMORY_BACKEND = 'file';
     expect(isFileBackend()).toBe(true);
   });
@@ -43,6 +45,13 @@ describe('isFileBackend', () => {
     delete process.env.NODE_ENV;
     delete process.env.MEMORY_BACKEND;
     process.env.VITEST = 'true';
+    expect(isFileBackend()).toBe(true);
+  });
+
+  it('is true when VITEST is set even if NODE_ENV is production', () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.MEMORY_BACKEND;
+    process.env.VITEST = '1';
     expect(isFileBackend()).toBe(true);
   });
 });
@@ -169,6 +178,7 @@ describe('createRecordStoreBackendSelector', () => {
 
   it('selects the file backend under MEMORY_BACKEND=file outside test mode', async () => {
     process.env.NODE_ENV = 'production';
+    delete process.env.VITEST;
     process.env.MEMORY_BACKEND = 'file';
     const { loadFileBackend, loadDbBackend } = loaders();
     const { selectBackend, getBackendName } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
@@ -179,6 +189,7 @@ describe('createRecordStoreBackendSelector', () => {
 
   it('honors a custom isTestMode predicate (the isTestRunner posture) and keeps the file escape hatch', async () => {
     process.env.NODE_ENV = 'production';
+    delete process.env.VITEST;
     delete process.env.MEMORY_BACKEND;
     const { loadFileBackend, loadDbBackend } = loaders();
     const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
