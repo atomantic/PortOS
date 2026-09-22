@@ -27,9 +27,10 @@
  *   `ShellProviderLauncher`. Omit for no restriction.
  * @param {string} [props.title] - Panel heading (default: "Compose a custom combination").
  * @param {{harnessId?: string, method?: string, serviceSlug?: string}} [props.initial] -
- *   Pre-select these steps on open — the compatibility matrix on the AI
- *   Providers page (#7567) opens the flow on the pair the user clicked. Each
- *   later step stays open for the user to narrow.
+ *   Pre-select these steps on open — the compatibility matrix (#7567) passes
+ *   the pair the user clicked, and a service card (#8014) passes only
+ *   `serviceSlug`. A service seed is applied once a compatible harness and
+ *   method are chosen; it is not forced onto a harness that cannot reach it.
  * @param {boolean} [props.useOnce] - Offer the "Use once" button (default
  *   true). The AI Providers page has no selection to hand a composite to, so
  *   it offers only "Save as preset".
@@ -63,20 +64,25 @@ export default function ProviderComposePopover({
   const [bootstrapSlug, setBootstrapSlug] = useState('');
   const [presetName, setPresetName] = useState('');
   const [showPresetField, setShowPresetField] = useState(false);
+  const initialHarness = initial?.harnessId || '';
+  const initialMethod = initial?.method || '';
+  const initialService = initial?.serviceSlug || '';
 
-  // Reset to a blank compose every time the popover is (re)opened, so a
-  // previous "Use once" choice never lingers into the next open.
+  // Reset every time the popover is (re)opened, so a previous choice never
+  // lingers. A service seed with no harness and method yet stays out of
+  // `serviceSlug`: model and effort render on that field alone, and would
+  // otherwise appear before the user has a service select to look at.
   useEffect(() => {
     if (!open) return;
-    setHarnessId(initial?.harnessId || '');
-    setMethod(initial?.method || '');
-    setServiceSlug(initial?.serviceSlug || '');
+    setHarnessId(initialHarness);
+    setMethod(initialMethod);
+    setServiceSlug(initialHarness && initialMethod ? initialService : '');
     setModel('');
     setEffort('');
     setBootstrapSlug('');
     setPresetName('');
     setShowPresetField(false);
-  }, [open, initial]);
+  }, [open, initialHarness, initialMethod, initialService]);
 
   const harnesses = useMemo(
     () => (catalog.harnesses || []).filter((harness) => harness.enabled
@@ -87,7 +93,16 @@ export default function ProviderComposePopover({
     const all = catalog.methodsFor(harnessId);
     return allowedMethods ? all.filter((mode) => allowedMethods.includes(mode)) : all;
   }, [catalog, harnessId, allowedMethods]);
-  const services = useMemo(() => catalog.compatiblePairs(harnessId), [catalog, harnessId]);
+  const services = useMemo(
+    () => catalog.compatiblePairs(harnessId).filter((service) => service.enabled !== false),
+    [catalog, harnessId],
+  );
+  const seededServiceFor = (nextHarnessId) => {
+    if (!initialService || !nextHarnessId) return '';
+    const compatible = catalog.compatiblePairs(nextHarnessId)
+      .some((service) => service.slug === initialService && service.enabled !== false);
+    return compatible ? initialService : '';
+  };
   const selectedService = services.find((service) => service.slug === serviceSlug) || null;
   const models = catalog.modelsFor(serviceSlug);
   const effortLevels = catalog.effortLevelsFor(harnessId, model || null);
@@ -121,16 +136,25 @@ export default function ProviderComposePopover({
     setEffort('');
     setBootstrapSlug('');
   };
-  // Clearing/changing the method hides the Service select (gated on
-  // `harnessId && method`), so every field downstream of it must be reset
-  // too — model/effort are gated on `serviceSlug` alone, not on `method`,
-  // and would otherwise stay rendered with a now-orphaned selection.
+  // Clearing the method hides the Service select (gated on harness + method).
+  // Model and effort are gated on `serviceSlug` alone, so the slug has to
+  // clear with the method or they stay on screen for a service the user can
+  // no longer see. Choosing a method again restores a service seed when that
+  // harness can reach it (#8014); a service the user already picked, and that
+  // is still compatible, is kept instead of snapping back to the seed.
   const handleMethodChange = (value) => {
     setMethod(value);
-    setServiceSlug('');
     setModel('');
     setEffort('');
     setBootstrapSlug('');
+    if (!value) {
+      setServiceSlug('');
+      return;
+    }
+    setServiceSlug((current) => {
+      if (current && services.some((service) => service.slug === current)) return current;
+      return seededServiceFor(harnessId);
+    });
   };
   const handleServiceChange = (value) => {
     setServiceSlug(value);
