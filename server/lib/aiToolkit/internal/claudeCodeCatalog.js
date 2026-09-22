@@ -116,7 +116,11 @@ function freshestCatalog(entries, surface) {
  * model `claude` would default to, so a refresh does not silently re-point a
  * record at a retired id.
  */
-export function selectCatalogModels(entries, { cliVersion = '', surface = CLAUDE_CODE_SURFACE } = {}) {
+export function selectCatalogModels(entries, {
+  cliVersion = '',
+  surface = CLAUDE_CODE_SURFACE,
+  applyVersionFloor = true,
+} = {}) {
   const freshest = freshestCatalog(entries, surface);
   if (!freshest) return [];
 
@@ -125,8 +129,10 @@ export function selectCatalogModels(entries, { cliVersion = '', surface = CLAUDE
     // A model the INSTALLED binary is too old to select would be persisted into
     // the record's picker and then rejected at spawn time with the CLI's own
     // "isn't described by this version's model catalog" prose. The catalog
-    // declares that floor per model; honor it.
-    .filter((model) => versionAtLeast(cliVersion, model.min_claude_code_version))
+    // declares that floor per model; honor it. Callers that need to tell "the
+    // cache has ids" from "this binary can select none of them" pass
+    // `applyVersionFloor: false`.
+    .filter((model) => !applyVersionFloor || versionAtLeast(cliVersion, model.min_claude_code_version))
     .map((model) => model.id);
 
   return [...new Set(ids)];

@@ -1929,13 +1929,26 @@ export function createProviderService(config = {}) {
         }),
       )).filter(Boolean);
 
-      const models = selectCatalogModels(entries, { cliVersion: await this._claudeCliVersion(provider) });
+      const cliVersion = await this._claudeCliVersion(provider);
+      const models = selectCatalogModels(entries, { cliVersion });
       if (models.length === 0) {
+        // A cache full of ids this binary's floor rejects is a different
+        // problem from an empty or unreadable cache. "Run claude once" does
+        // not help the first one — the file is already there.
+        const present = selectCatalogModels(entries, { applyVersionFloor: false });
+        if (present.length > 0) {
+          throw new Error(`Claude Code ${cliVersion || 'unknown'} cannot select any model in the cached catalog — upgrade \`claude\`, then refresh`);
+        }
         throw new Error(`No usable Claude Code model catalog in ${catalogDir} — run \`claude\` once, then refresh`);
       }
 
       const age = catalogAge(entries);
-      console.log(`📋 Claude Code catalog: ${models.length} models (cached ${age ? new Date(age).toISOString() : 'unknown'})`);
+      // An out-of-range `fetchedAt` must not fail a refresh that already
+      // selected ids. `Date#toISOString` throws on those, and this log runs
+      // before the list is returned.
+      const stamp = age ? new Date(age) : null;
+      const cached = stamp && !Number.isNaN(stamp.getTime()) ? stamp.toISOString() : 'unknown';
+      console.log(`📋 Claude Code catalog: ${models.length} models (cached ${cached})`);
       return models;
     },
 
@@ -1948,10 +1961,14 @@ export function createProviderService(config = {}) {
     async _claudeCliVersion(provider) {
       const spawned = resolveProbeSpawn(provider, 'claude', ['--version']);
       const { command, args } = prepareWindowsSafeSpawn(spawned.command, spawned.args);
-      const { stdout } = await execFileAsync(command, args, {
+      const pending = execFileAsync(command, args, {
         timeout: 10000,
         env: { ...process.env, ...provider?.envVars },
-      }).catch(() => ({ stdout: '' }));
+      });
+      // Same reason as `_execCliModelList`: an open stdin makes some CLIs wait
+      // out the whole timeout instead of printing `--version`.
+      pending.child?.stdin?.end();
+      const { stdout } = await pending.catch(() => ({ stdout: '' }));
       return (/(\d+\.\d+\.\d+)/.exec(stdout || '') || [])[1] || '';
     },
 
