@@ -152,4 +152,14 @@ describe('updateSubmodule', () => {
     await expect(updateSubmodule('lib/other', { repoPath: REPO })).rejects.toThrow(/Unknown submodule path/);
     expect(callsFor('submodule').filter(([args]) => args[1] === 'update')).toHaveLength(0);
   });
+
+  it('exports submodule operations directly from gitSubmodules.js', async () => {
+    const direct = await import('./gitSubmodules.js');
+    const facade = await import('./git.js');
+    expect(direct.getSubmodules).toBe(facade.getSubmodules);
+    expect(direct.getSubmoduleOverview).toBe(facade.getSubmoduleOverview);
+    expect(direct.getSubmodulePaths).toBe(facade.getSubmodulePaths);
+    expect(direct.updateSubmodule).toBe(facade.updateSubmodule);
+  });
 });
+
