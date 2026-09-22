@@ -36,19 +36,21 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
 }));
 
 vi.mock('./providers.js', () => ({
-  getAllProviders: vi.fn(),
+  listSelectableProviders: vi.fn(),
   getActiveProvider: vi.fn(),
 }));
 
 import { tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { createRun } from './runner.js';
 import { runPromptThroughProvider, resolveProviderAndModel } from './promptRunner.js';
+import { getActiveProvider, listSelectableProviders } from './providers.js';
 import {
   createLoop,
   stopLoop,
   triggerLoop,
   updateLoop,
   getLoops,
+  getAvailableProviders,
   loopEvents
 } from './loops.js';
 
@@ -57,7 +59,8 @@ const mockCreateRun = createRun;
 const mockRunPrompt = runPromptThroughProvider;
 const mockResolveProvider = resolveProviderAndModel;
 const mockGetProviderById = { mockResolvedValue: (v) => mockResolveProvider.mockResolvedValue({ provider: v, selectedModel: null }) };
-const mockGetActiveProvider = mockGetProviderById;
+const mockGetActiveProvider = getActiveProvider;
+const mockListSelectableProviders = listSelectableProviders;
 
 const MOCK_PROVIDER = {
   id: 'claude',
@@ -81,6 +84,7 @@ async function flushAsync(turns = 20) {
 function setupProviderMocks() {
   mockGetProviderById.mockResolvedValue(MOCK_PROVIDER);
   mockGetActiveProvider.mockResolvedValue(MOCK_PROVIDER);
+  mockListSelectableProviders.mockResolvedValue([]);
   mockCreateRun.mockResolvedValue(MOCK_RUN_RESULT);
   // runPromptThroughProvider is fire-and-forget in loops.js (started, then
   // .then chains onComplete). Resolve quickly so the iteration completes.
@@ -121,6 +125,63 @@ describe('loops.js', () => {
     }
     vi.clearAllTimers();
     vi.useRealTimers();
+  });
+
+  describe('getAvailableProviders', () => {
+    it('returns selectable models and keeps only the active disabled provider', async () => {
+      const activeDisabled = {
+        id: 'active-disabled',
+        name: 'Active Disabled',
+        type: 'cli',
+        command: 'codex',
+        defaultModel: 'example-active-model',
+        enabled: false,
+        models: ['example-active-model'],
+        apiKey: 'must-not-leak',
+      };
+      const enabled = {
+        id: 'enabled-provider',
+        name: 'Enabled Provider',
+        type: 'api',
+        defaultModel: 'example-enabled-model',
+        enabled: true,
+        models: ['example-enabled-model', 'example-second-model'],
+        harnessId: 'direct',
+      };
+      const disabled = {
+        id: 'disabled-provider',
+        name: 'Disabled Provider',
+        type: 'api',
+        enabled: false,
+        models: ['example-hidden-model'],
+      };
+      mockListSelectableProviders.mockResolvedValue([activeDisabled, enabled, disabled]);
+      mockGetActiveProvider.mockResolvedValue(activeDisabled);
+
+      const payload = await getAvailableProviders();
+      expect(payload).toEqual({
+        providers: [
+          expect.objectContaining({
+            id: 'active-disabled',
+            enabled: false,
+            models: ['example-active-model'],
+            isActive: true,
+          }),
+          expect.objectContaining({
+            id: 'enabled-provider',
+            enabled: true,
+            models: ['example-enabled-model', 'example-second-model'],
+            isActive: false,
+            harnessId: 'direct',
+          }),
+        ],
+        activeProviderId: 'active-disabled',
+      });
+
+      expect(payload.providers.find(provider => provider.id === 'disabled-provider')).toBeUndefined();
+      expect(payload.providers[0]).not.toHaveProperty('apiKey');
+      expect(mockListSelectableProviders).toHaveBeenCalledOnce();
+    });
   });
 
   // ===========================================================================
