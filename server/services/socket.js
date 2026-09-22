@@ -41,6 +41,7 @@ import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
 import { getBuildId } from '../lib/buildId.js';
 import { authEvents, extractToken, isAuthEnabled, verifySession } from './auth.js';
 import { runEventLogEvents } from './agentRunEventLog.js';
+import { armSystemActivityWatchers, bindSystemActivityIo } from './systemActivityNotify.js';
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -255,6 +256,12 @@ export function initSocket(io) {
 
   ioInstance = io;
   setupEventForwarding();
+  // Invalidation only. Clients coalesce the frame into one bounded activity
+  // read; a missed frame is repaired by the reconnect read, not by polling.
+  bindSystemActivityIo(io);
+  armSystemActivityWatchers().catch((err) => {
+    console.error(`❌ system activity watchers failed: ${err.message}`);
+  });
 }
 
 // Bridge importer analyze-phase stage progress onto Socket.IO so the Importer

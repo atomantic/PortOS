@@ -74,6 +74,7 @@ import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { prepareSourceImage } from './sourceKeying.js';
 import * as store from './db.js';
+import { drainActivityNotesForTests } from '../systemActivityNotify.js';
 import {
   createModel, startGeneration, getModelAsset, getModelFullMesh, getModelUsdz, saveModelUsdz,
   USDZ_MAX_BYTES, recoverInterruptedModels, deleteModel,
@@ -92,6 +93,7 @@ const draftRecord = () => ({
 
 describe('image-to-3D model orchestration', () => {
   beforeEach(() => {
+    drainActivityNotesForTests();
     vi.clearAllMocks();
     claimHeavyLocalJob.mockResolvedValue({ ok: true, holder: {}, release: claimRelease });
     isTrellis2Installed.mockReturnValue(true);
@@ -166,6 +168,7 @@ describe('image-to-3D model orchestration', () => {
     expect(posixPath(current.assetPath)).toBe('/data/image-to-3d/image3d-example/model.glb');
     expect(current.generationOperationId).toBeNull();
     expect(current.runs.at(-1)).toMatchObject({ status: 'completed', percent: 100 });
+    expect(drainActivityNotesForTests().map((note) => note.phase)).toEqual(['start', 'completion', 'drained']);
   });
 
   // A new mesh makes the AR export a lie — it describes the geometry the render
@@ -210,6 +213,7 @@ describe('image-to-3D model orchestration', () => {
     await vi.waitFor(() => expect(current.status).toBe('failed'));
     expect(current.error).toMatch(/exited 1/);
     expect(current.runs.at(-1)).toMatchObject({ status: 'failed' });
+    expect(drainActivityNotesForTests().map((note) => note.phase)).toEqual(['start', 'failure', 'drained']);
   });
 
   it('recoverInterruptedModels never launches a render (no cold-bootstrap)', async () => {
@@ -252,6 +256,7 @@ describe('image-to-3D model orchestration', () => {
     expect(current.status).toBe('generating');
 
     await deleteModel('image3d-example');
+    expect(drainActivityNotesForTests().map((note) => note.phase)).toEqual(['start', 'cancellation', 'drained']);
     // The in-flight subprocess is SIGTERM'd promptly.
     expect(killSpy).toHaveBeenCalled();
     expect(current.deleted).toBe(true);

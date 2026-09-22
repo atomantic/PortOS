@@ -1,8 +1,39 @@
-import { memo } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { AudioLines, Bot, Brain, Cpu, ExternalLink, Film, Image as ImageIcon, Layers3, Package, X } from 'lucide-react';
 import * as api from '../../services/api';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
+import { sameProcessingSnapshot, useSystemActivity } from '../../hooks/useSystemActivity';
+
+export { sameProcessingSnapshot };
+
+// nvidia-smi has no lifecycle event, so utilization cannot ride the activity
+// invalidation. Poll it only while this inspector intersects the viewport;
+// useAutoRefetch also pauses while the tab is hidden. The activity snapshot
+// itself is not polled.
+const GPU_SAMPLE_MS = 3000;
+const sameGpuSample = (a, b) => a?.gpu?.status === b?.gpu?.status
+  && a?.gpu?.laneBusy === b?.gpu?.laneBusy
+  && a?.gpu?.gpus?.[0]?.utilizationPercent === b?.gpu?.gpus?.[0]?.utilizationPercent;
+
+function useElementVisible() {
+  const ref = useRef(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return undefined;
+    if (typeof IntersectionObserver !== 'function') {
+      setVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(([entry]) => {
+      setVisible(Boolean(entry?.isIntersecting));
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, visible];
+}
 
 const elapsed = (startedAt, now = Date.now()) => {
   if (!startedAt) return 'queued';
@@ -12,27 +43,6 @@ const elapsed = (startedAt, now = Date.now()) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 const eta = (etaMs) => (Number.isFinite(etaMs) && etaMs >= 0 ? `~${Math.ceil(etaMs / 60000)}m` : null);
-export const sameProcessingSnapshot = (a, b) => {
-  if (!a || !b) return a === b;
-  return a.agents?.active === b.agents?.active
-    && a.agents?.queued === b.agents?.queued
-    && a.gpu?.status === b.gpu?.status
-    && a.gpu?.laneBusy === b.gpu?.laneBusy
-    && a.gpu?.gpus?.[0]?.utilizationPercent === b.gpu?.gpus?.[0]?.utilizationPercent
-    && a.mind?.thinking === b.mind?.thinking
-    && a.mind?.queued === b.mind?.queued
-    && a.mind?.status === b.mind?.status
-    && (a.appOperations || []).length === (b.appOperations || []).length
-    && a.jobs?.length === b.jobs?.length
-    && (a.extras?.imageTo3d || []).length === (b.extras?.imageTo3d || []).length
-    && (a.jobs || []).every((job, index) => job?.id === b.jobs[index]?.id
-      && job?.status === b.jobs[index]?.status
-      && job?.progress === b.jobs[index]?.progress
-      && job?.position === b.jobs[index]?.position
-      && job?.statusMsg === b.jobs[index]?.statusMsg)
-    && (a.extras?.imageTo3d || []).every((item, index) => item?.id === b.extras?.imageTo3d?.[index]?.id
-      && item?.name === b.extras?.imageTo3d?.[index]?.name);
-};
 
 function JobRow({ job, onCancel }) {
   const tag = job.params?.musicStudio;
@@ -74,12 +84,19 @@ function LaneRow({ to, icon: Icon, label, detail }) {
 }
 
 function ActiveProcessingWidget() {
-  const { data } = useAutoRefetch(() => api.getActiveProcessing({ silent: true }), 3000, {
-    compare: sameProcessingSnapshot,
-  });
+  const [rootRef, visible] = useElementVisible();
+  const { snapshot, status } = useSystemActivity();
+  // Samples only. `enabled: visible` is the "inspector on screen" gate; the
+  // hook's own visibility pause covers a hidden tab. No activity fields here.
+  const { data: telemetry } = useAutoRefetch(
+    () => api.getGpuTelemetry({ silent: true }),
+    GPU_SAMPLE_MS,
+    { enabled: visible, compare: sameGpuSample },
+  );
+  const data = snapshot;
   const cancel = (id) => api.cancelMediaJob(id, { silent: true }).catch(() => undefined);
   const jobs = data?.jobs || [];
-  const gpu = data?.gpu;
+  const gpu = telemetry?.gpu;
   const imageTo3d = data?.extras?.imageTo3d || [];
   const mind = data?.mind;
   const appOperations = data?.appOperations || [];
@@ -88,18 +105,21 @@ function ActiveProcessingWidget() {
   // unattended auto-updater refuses to restart the install on this same verdict,
   // so a second definition here is exactly what that module exists to prevent.
   const activity = data?.activity ?? null;
-  const idle = !activity || activity.idle;
+  // Unknown and failed reads are not idle. The last good rows can stay on
+  // screen, but the idle headline is only the server's confirmed verdict.
+  const confirmed = status === 'ready';
+  const idle = confirmed && activity?.idle === true;
   const runningJobs = jobs.filter((job) => job.status !== 'queued').length;
   return (
     // @container on the widget's OWN root: a dashboard cell is ~250px wide on a
     // 2560px screen, so a viewport breakpoint here would pin the four-up metric
     // row into the narrowest column. See the dashboard AGENTS.md.
-    <div className="@container h-full rounded-xl border border-port-border bg-port-card p-4">
+    <div ref={rootRef} className="@container h-full rounded-xl border border-port-border bg-port-card p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div><h3 className="flex items-center gap-2 text-sm font-semibold text-white"><span className={`relative flex h-6 w-6 items-center justify-center rounded-lg ${idle ? 'bg-port-border/60 text-gray-400' : 'bg-port-accent/15 text-port-accent'}`}><Cpu size={15} />{!idle ? <span className="absolute -right-0.5 -top-0.5 h-2 w-2 animate-ping rounded-full bg-port-accent" /> : null}</span> Live activity</h3><p className="mt-1 text-[11px] text-gray-500">What PortOS is working on right now</p></div>
-        <span className={`rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-wider ${idle ? 'bg-port-border/60 text-gray-500' : 'bg-port-accent/15 text-port-accent'}`}>{idle ? 'idle' : `${activity.activeCount} active${activity.queuedCount ? ` · ${activity.queuedCount} queued` : ''}`}</span>
+        <span className={`rounded-full px-2 py-1 text-[10px] font-medium uppercase tracking-wider ${idle ? 'bg-port-border/60 text-gray-500' : 'bg-port-accent/15 text-port-accent'}`}>{!confirmed ? 'unknown' : idle ? 'idle' : `${activity.activeCount} active${activity.queuedCount ? ` · ${activity.queuedCount} queued` : ''}`}</span>
       </div>
-      {!data ? <p className="text-xs text-gray-500">Checking render lanes…</p> : <>
+      {!confirmed && !data ? <p className="text-xs text-gray-500">Checking render lanes…</p> : !data ? <p className="text-xs text-gray-500">Activity unknown</p> : <>
         {!idle ? <div className="mb-3 grid grid-cols-2 gap-1.5 text-center @xs:grid-cols-4"><Metric icon={Bot} value={activeAgents} label="agents" /><Metric icon={Layers3} value={runningJobs} label="rendering" /><Metric icon={Brain} value={mind?.thinking ? 'yes' : 'no'} label="thinking" /><Metric icon={Cpu} value={gpu?.laneBusy ? 'busy' : 'ready'} label="GPU" /></div> : null}
         {idle ? <Link to="/system-resources/overview" className="flex items-center justify-between rounded-lg border border-port-border bg-port-bg px-3 py-3 text-xs text-gray-400 transition-colors hover:border-port-accent/50 hover:text-gray-200"><span>Nothing is running</span><span>GPU {gpu?.status === 'available' ? 'ready' : gpu?.status || 'unknown'} →</span></Link> : null}
         <div className="space-y-1.5">{jobs.map((job) => <JobRow key={job.id} job={job} onCancel={cancel} />)}</div>

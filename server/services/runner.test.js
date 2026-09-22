@@ -203,9 +203,10 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
   it('records cancellation without scanning output or firing the provider-failure hook', async () => {
     const errorDetection = { analyzeError: vi.fn() };
     const onRunFailed = vi.fn();
+    const onRunCanceled = vi.fn();
     setAIToolkit(fakeToolkit(errorDetection), {
       dataDir: '/tmp/test-runner',
-      hooks: { onRunFailed },
+      hooks: { onRunFailed, onRunCanceled },
     });
 
     const metadata = await finalizeRunRecord({
@@ -225,6 +226,7 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
     });
     expect(errorDetection.analyzeError).not.toHaveBeenCalled();
     expect(onRunFailed).not.toHaveBeenCalled();
+    expect(onRunCanceled).toHaveBeenCalledWith({ runId: 'run-canceled-story' });
   });
 
   // A caller that synthesizes its own run id instead of going through toolkit
@@ -475,10 +477,11 @@ describe('executeCliRun — intentional cancellation', () => {
     spawn.mockReturnValue(child);
     const errorDetection = { analyzeError: vi.fn() };
     const onRunFailed = vi.fn();
+    const onRunCanceled = vi.fn();
     const toolkit = fakeToolkit(errorDetection);
     setAIToolkit(toolkit, {
       dataDir: '/tmp/test-runner',
-      hooks: { onRunFailed },
+      hooks: { onRunFailed, onRunCanceled },
     });
     const onComplete = vi.fn();
     const provider = {
@@ -509,6 +512,7 @@ describe('executeCliRun — intentional cancellation', () => {
     }));
     expect(errorDetection.analyzeError).not.toHaveBeenCalled();
     expect(onRunFailed).not.toHaveBeenCalled();
+    expect(onRunCanceled).toHaveBeenCalledWith({ runId: 'run-cli-canceled' });
   });
 });
 

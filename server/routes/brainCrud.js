@@ -15,22 +15,51 @@ import {
   projectInputSchema,
   ideaInputSchema,
   adminInputSchema,
-  memoryInputSchema
+  memoryInputSchema,
+  entityQuerySchema
 } from '../lib/brainValidation.js';
 
 const router = Router();
+
+async function handleEntityList(req, res, { type, fetchLegacy, fallbackKey }) {
+  // If cursor or search is passed, use stable cursor pagination
+  const isCursorOrSearch = req.query.cursor !== undefined || req.query.search !== undefined;
+  if (isCursorOrSearch) {
+    const query = validateRequest(entityQuerySchema, req.query);
+    const result = await brainService.getEntityPage(type, query);
+    return res.json({
+      [fallbackKey]: result.items,
+      items: result.items,
+      total: result.total,
+      nextCursor: result.nextCursor
+    });
+  }
+
+  // Legacy paths: unpaginated or offset/limit envelope
+  const records = await fetchLegacy(req.query);
+  if (!isPaginationRequested(req.query)) {
+    return res.json(records);
+  }
+
+  const { items, total, limit, offset } = paginateArray(records, req.query, { defaultLimit: 50, maxLimit: 500 });
+  return res.json({
+    [fallbackKey]: items,
+    total,
+    limit,
+    offset
+  });
+}
 
 // =============================================================================
 // PEOPLE CRUD
 // =============================================================================
 
 router.get('/people', asyncHandler(async (req, res) => {
-  const people = await brainService.getPeople();
-  if (!isPaginationRequested(req.query)) {
-    return res.json(people);
-  }
-  const { items, total, limit, offset } = paginateArray(people, req.query, { defaultLimit: 50, maxLimit: 500 });
-  res.json({ people: items, total, limit, offset });
+  await handleEntityList(req, res, {
+    type: 'people',
+    fetchLegacy: () => brainService.getPeople(),
+    fallbackKey: 'people'
+  });
 }));
 
 router.get('/people/:id', asyncHandler(async (req, res) => {
@@ -69,14 +98,14 @@ router.delete('/people/:id', asyncHandler(async (req, res) => {
 // =============================================================================
 
 router.get('/projects', asyncHandler(async (req, res) => {
-  const { status } = req.query;
-  const filters = status ? { status } : undefined;
-  const projects = await brainService.getProjects(filters);
-  if (!isPaginationRequested(req.query)) {
-    return res.json(projects);
-  }
-  const { items, total, limit, offset } = paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 });
-  res.json({ projects: items, total, limit, offset });
+  await handleEntityList(req, res, {
+    type: 'projects',
+    fetchLegacy: (query) => {
+      const status = query?.status || req.query.status;
+      return brainService.getProjects(status ? { status } : undefined);
+    },
+    fallbackKey: 'projects'
+  });
 }));
 
 router.get('/projects/:id', asyncHandler(async (req, res) => {
@@ -115,14 +144,14 @@ router.delete('/projects/:id', asyncHandler(async (req, res) => {
 // =============================================================================
 
 router.get('/ideas', asyncHandler(async (req, res) => {
-  const { status } = req.query;
-  const filters = status ? { status } : undefined;
-  const ideas = await brainService.getIdeas(filters);
-  if (!isPaginationRequested(req.query)) {
-    return res.json(ideas);
-  }
-  const { items, total, limit, offset } = paginateArray(ideas, req.query, { defaultLimit: 50, maxLimit: 500 });
-  res.json({ ideas: items, total, limit, offset });
+  await handleEntityList(req, res, {
+    type: 'ideas',
+    fetchLegacy: (query) => {
+      const status = query?.status || req.query.status;
+      return brainService.getIdeas(status ? { status } : undefined);
+    },
+    fallbackKey: 'ideas'
+  });
 }));
 
 router.get('/ideas/:id', asyncHandler(async (req, res) => {
@@ -161,14 +190,14 @@ router.delete('/ideas/:id', asyncHandler(async (req, res) => {
 // =============================================================================
 
 router.get('/admin', asyncHandler(async (req, res) => {
-  const { status } = req.query;
-  const filters = status ? { status } : undefined;
-  const adminItems = await brainService.getAdminItems(filters);
-  if (!isPaginationRequested(req.query)) {
-    return res.json(adminItems);
-  }
-  const { items, total, limit, offset } = paginateArray(adminItems, req.query, { defaultLimit: 50, maxLimit: 500 });
-  res.json({ admin: items, total, limit, offset });
+  await handleEntityList(req, res, {
+    type: 'admin',
+    fetchLegacy: (query) => {
+      const status = query?.status || req.query.status;
+      return brainService.getAdminItems(status ? { status } : undefined);
+    },
+    fallbackKey: 'admin'
+  });
 }));
 
 router.get('/admin/:id', asyncHandler(async (req, res) => {
@@ -207,12 +236,11 @@ router.delete('/admin/:id', asyncHandler(async (req, res) => {
 // =============================================================================
 
 router.get('/memories', asyncHandler(async (req, res) => {
-  const memories = await brainService.getMemoryEntries();
-  if (!isPaginationRequested(req.query)) {
-    return res.json(memories);
-  }
-  const { items, total, limit, offset } = paginateArray(memories, req.query, { defaultLimit: 50, maxLimit: 500 });
-  res.json({ memories: items, total, limit, offset });
+  await handleEntityList(req, res, {
+    type: 'memories',
+    fetchLegacy: () => brainService.getMemoryEntries(),
+    fallbackKey: 'memories'
+  });
 }));
 
 router.get('/memories/:id', asyncHandler(async (req, res) => {

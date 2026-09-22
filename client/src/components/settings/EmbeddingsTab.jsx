@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Boxes, RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Check } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import { getSettings, updateSettings } from '../../services/apiSystem';
@@ -90,11 +90,6 @@ export default function EmbeddingsTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 text-gray-300">
-        <Boxes size={18} />
-        <h2 className="text-lg font-semibold">Embeddings</h2>
-      </div>
-
       <p className="text-sm text-gray-400">
         Vector embeddings power semantic search across the creative catalog (Characters, Ideas,
         Scenes, …) and the memory system. PortOS expects 768-dimensional vectors;

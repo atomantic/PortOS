@@ -573,6 +573,31 @@ describe('isUpdateInProgress mirror', () => {
     expect(atomicWrite).not.toHaveBeenCalled();
   });
 
+  it('notifies system activity when the update lock starts, is canceled, finishes, or fails', async () => {
+    const { drainActivityNotesForTests } = await import('./systemActivityNotify.js');
+    drainActivityNotesForTests();
+    readJSONFile.mockResolvedValue(persisted());
+    await setUpdateInProgress(true);
+    readJSONFile.mockResolvedValue(persisted({ updateInProgress: true }));
+    await setUpdateInProgress(false);
+    readJSONFile.mockResolvedValue(persisted());
+    await setUpdateInProgress(true);
+    readJSONFile.mockResolvedValue(persisted({ updateInProgress: true }));
+    await recordUpdateResult({ version: '1.2.3', success: true, completedAt: '2026-01-01T00:00:00.000Z', log: '' });
+    readJSONFile.mockResolvedValue(persisted());
+    await setUpdateInProgress(true);
+    readJSONFile.mockResolvedValue(persisted({ updateInProgress: true }));
+    await recordUpdateResult({ version: '1.2.3', success: false, completedAt: '2026-01-01T00:00:00.000Z', log: 'nope' });
+    expect(drainActivityNotesForTests()).toEqual([
+      { source: 'update', phase: 'start' },
+      { source: 'update', phase: 'cancellation' },
+      { source: 'update', phase: 'start' },
+      { source: 'update', phase: 'completion' },
+      { source: 'update', phase: 'start' },
+      { source: 'update', phase: 'failure' },
+    ]);
+  });
+
   it('is cleared by the boot-time stale sweep', async () => {
     readJSONFile.mockResolvedValue(persisted());
     await setUpdateInProgress(true);

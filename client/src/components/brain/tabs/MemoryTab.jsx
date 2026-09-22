@@ -29,14 +29,10 @@ import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import CopyableId from '../../ui/CopyableId';
 import CollapsibleListItem from '../../ui/CollapsibleListItem';
+import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
-
-// Progressive list: imported ChatGPT corpora routinely top 1k+ records with
-// multi-KB transcripts. Mounting every card (and its Markdown tree) freezes
-// the tab and can push the DOM past 100k nodes. Show a window, load more on
-// demand; search still runs over the full in-memory set.
-const INITIAL_VISIBLE = 40;
-const LOAD_MORE = 40;
+import { usePagedCollection } from '../../../hooks/usePagedCollection';
+import socket from '../../../services/socket';
 
 // Plain-text teaser for imported transcripts — avoids mounting full markdown
 // for every card. The full thread is one click away via ConversationViewer.
@@ -62,67 +58,143 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
   const basePath = fixedType ? '/brain/ideas' : '/brain/memory';
   const closeReader = () => navigate(basePath + location.search);
   const [activeType, setActiveType] = useState(fixedType || recordType || 'memories');
-  const [records, setRecords] = useState([]);
   const [removingIds, setRemovingIds] = useState(new Set());
+  const [deletedIds, setDeletedIds] = useState(() => new Set());
   const pendingDeletes = useRef(new Set());
+  const deletedIdsRef = useRef(new Set());
   const currentType = useRef(activeType);
   currentType.current = activeType;
-  const fetchGeneration = useRef(0);
-  const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({});
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [backendStatus, setBackendStatus] = useState(null);
-  const viewerRecord = records.find(record => record.id === recordId);
+  const [deepLinkedRecord, setDeepLinkedRecord] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete } = useConfirmDelete();
+
   useEffect(() => {
     if (recordType && MEMORY_TABS.some(tab => tab.id === recordType)) setActiveType(recordType);
   }, [recordType]);
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
-  const { isConfirming, requestDelete, cancelDelete } = useConfirmDelete();
 
   useEffect(() => {
     if (fixedType) setActiveType(fixedType);
   }, [fixedType]);
 
-  const fetchRecords = useCallback(async () => {
-    const generation = ++fetchGeneration.current;
-    setLoading(true);
-    let data = [];
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+    }, 250);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
-    const filters = statusFilter ? { status: statusFilter } : undefined;
+  const fetchPage = useCallback(async ({ cursor, signal }) => {
+    let res;
+    const options = {
+      cursor,
+      search: debouncedSearch || undefined,
+      status: statusFilter || undefined,
+      limit: 25,
+      signal
+    };
 
     switch (activeType) {
       case 'people':
-        data = await api.getBrainPeople().catch(() => []);
+        res = await api.getBrainPeople(options).catch(() => ({ items: [] }));
         break;
       case 'projects':
-        data = await api.getBrainProjects(filters).catch(() => []);
+        res = await api.getBrainProjects(options).catch(() => ({ items: [] }));
         break;
       case 'ideas':
-        data = await api.getBrainIdeas(filters).catch(() => []);
+        res = await api.getBrainIdeas(options).catch(() => ({ items: [] }));
         break;
       case 'admin':
-        data = await api.getBrainAdmin(filters).catch(() => []);
+        res = await api.getBrainAdmin(options).catch(() => ({ items: [] }));
         break;
       case 'memories':
-        data = await api.getBrainMemories().catch(() => []);
+      default:
+        res = await api.getBrainMemories(options).catch(() => ({ items: [] }));
         break;
     }
 
-    if (generation !== fetchGeneration.current) return;
-    // Filter out archived records
-    data = data.filter(r => !r.archived);
-    setRecords(data);
-    setLoading(false);
-  }, [activeType, statusFilter]);
+    const items = Array.isArray(res) ? res : (res.items || res[activeType] || []);
+    const unarchived = items.filter(r => !r.archived && !deletedIdsRef.current.has(r.id));
+    return {
+      items: unarchived,
+      total: res.total ?? unarchived.length,
+      nextCursor: res.nextCursor ?? null
+    };
+  }, [activeType, debouncedSearch, statusFilter]);
 
+  const paged = usePagedCollection(fetchPage);
+
+  const records = useMemo(() => {
+    return paged.items.filter(r => !deletedIds.has(r.id) && !deletedIdsRef.current.has(r.id));
+  }, [paged.items, deletedIds]);
+
+  // Reconnect reconciliation: recover missed events
   useEffect(() => {
-    fetchRecords();
-    return () => { fetchGeneration.current += 1; };
-  }, [fetchRecords]);
+    const handleConnect = () => {
+      paged.refreshFirst();
+    };
+    socket.on('connect', handleConnect);
+    return () => socket.off('connect', handleConnect);
+  }, [paged.refreshFirst]);
+
+  // Direct URL deep-link or truncated record detail fetch
+  useEffect(() => {
+    if (!recordId) {
+      setDeepLinkedRecord(null);
+      return;
+    }
+    const existing = records.find(r => r.id === recordId);
+    if (!existing || existing.contentTruncated) {
+      let active = true;
+      const fetchRecord = async () => {
+        let full = null;
+        switch (activeType) {
+          case 'people':
+            full = await api.getBrainPerson(recordId).catch(() => null);
+            break;
+          case 'projects':
+            full = await api.getBrainProject(recordId).catch(() => null);
+            break;
+          case 'ideas':
+            full = await api.getBrainIdea(recordId).catch(() => null);
+            break;
+          case 'admin':
+            full = await api.getBrainAdminItem(recordId).catch(() => null);
+            break;
+          case 'memories':
+          default:
+            full = await api.getBrainMemory(recordId).catch(() => null);
+            break;
+        }
+        if (active) {
+          if (full && !full.archived && !deletedIdsRef.current.has(full.id)) {
+            setDeepLinkedRecord(full);
+          } else {
+            setDeepLinkedRecord(null);
+          }
+        }
+      };
+      fetchRecord();
+      return () => { active = false; };
+    } else {
+      setDeepLinkedRecord(null);
+    }
+  }, [recordId, activeType, records]);
+
+  const viewerRecord = useMemo(() => {
+    if (!recordId) return null;
+    const existing = records.find(r => r.id === recordId);
+    if (deepLinkedRecord && deepLinkedRecord.id === recordId) {
+      return deepLinkedRecord;
+    }
+    return existing || null;
+  }, [recordId, records, deepLinkedRecord]);
 
   const fetchBackendStatus = useCallback(() => {
     api.getMemoryBackendStatus().then(setBackendStatus).catch(() => null);
@@ -132,15 +204,10 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     fetchBackendStatus();
   }, [fetchBackendStatus]);
 
-  // Reset the progressive window whenever the user changes tab/filter/search
-  // so a "Show more" from memories doesn't leave people stuck deep into a
-  // short people list.
-  useEffect(() => {
-    setVisibleCount(INITIAL_VISIBLE);
-  }, [activeType, statusFilter, searchQuery]);
+  const loading = !paged.loaded && paged.loading;
 
   const filteredRecords = useMemo(() => {
-    const q = searchQuery.toLowerCase();
+    const q = searchQuery.toLowerCase().trim();
     if (!q) return records;
     return records.filter((r) => {
       if (removingIds.has(`${activeType}:${r.id}`)) return true;
@@ -194,7 +261,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       toast.success('Saved');
       setEditingId(null);
       setEditForm({});
-      fetchRecords();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -241,7 +308,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       toast.success('Created');
       setShowAdd(false);
       setAddForm({});
-      fetchRecords();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -318,7 +385,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     }
     if (result) {
       toast.success('Marked as done');
-      fetchRecords();
+      paged.refreshFirst();
       onRefresh?.();
     }
   };
@@ -335,9 +402,17 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     });
   };
 
-  const startEdit = (record) => {
+  const startEdit = async (record) => {
     setEditingId(record.id);
-    setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
+    if (activeType === 'memories' && record.contentTruncated) {
+      setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
+      const full = await api.getBrainMemory(record.id).catch(() => null);
+      if (full) {
+        setEditForm({ ...full, tagInput: (full.tags || []).join(', ') });
+      }
+    } else {
+      setEditForm({ ...record, tagInput: (record.tags || []).join(', ') });
+    }
   };
 
   const renderForm = (form, setForm, _isEdit = false) => {
@@ -901,11 +976,12 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             </p>
           ) : (
             <div>
-              {filteredRecords.filter((record, index) => index < visibleCount || removingIds.has(`${activeType}:${record.id}`)).map(record => (
+              {filteredRecords.map(record => (
                 <CollapsibleListItem key={`${activeType}:${record.id}`}
                   removing={removingIds.has(`${activeType}:${record.id}`)}
                   onExited={() => {
-                    setRecords(previous => previous.filter(item => item.id !== record.id));
+                    deletedIdsRef.current.add(record.id);
+                    setDeletedIds(previous => new Set(previous).add(record.id));
                     setRemovingIds(previous => {
                       const next = new Set(previous);
                       next.delete(`${activeType}:${record.id}`);
@@ -915,15 +991,12 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
                   {renderRecord(record)}
                 </CollapsibleListItem>
               ))}
-              {filteredRecords.length > visibleCount && (
-                <button
-                  type="button"
-                  onClick={() => setVisibleCount((n) => n + LOAD_MORE)}
-                  className="w-full py-2.5 text-xs text-port-accent hover:text-white bg-port-border/30 hover:bg-port-border/50 rounded-lg transition-colors min-h-[44px]"
-                >
-                  Show more ({filteredRecords.length - visibleCount} remaining)
-                </button>
-              )}
+              <InfiniteScrollFooter
+                hasMore={paged.hasMore}
+                loading={paged.loading}
+                error={paged.error}
+                onLoadMore={paged.loadMore}
+              />
             </div>
           )}
         </div>
