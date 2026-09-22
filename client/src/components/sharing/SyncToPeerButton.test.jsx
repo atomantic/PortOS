@@ -174,4 +174,28 @@ describe('SyncToPeerButton', () => {
     expect(top).toBeGreaterThanOrEqual(8);
     vi.restoreAllMocks();
   });
+
+  it('exposes aria-expanded=false when closed and aria-expanded=true when open', async () => {
+    const user = userEvent.setup();
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
+    const trigger = screen.getByRole('button', { name: /Sync/i });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'true');
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('closes the popover and returns focus to the trigger when Escape is pressed', async () => {
+    const user = userEvent.setup();
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
+    const trigger = screen.getByRole('button', { name: /Sync/i });
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await user.keyboard('{Escape}');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    // Focus returns to the trigger after Escape.
+    expect(document.activeElement).toBe(trigger);
+  });
 });
