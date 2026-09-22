@@ -25,6 +25,8 @@ const { socket, listeners, audio, FakeAudioContext } = vi.hoisted(() => {
     constructor() {
       this.destination = {};
       this.state = 'running';
+      this.sampleRate = 48_000;
+      this.audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
     }
 
     resume() {
@@ -47,6 +49,19 @@ const { socket, listeners, audio, FakeAudioContext } = vi.hoisted(() => {
       audio.sources.push(source);
       return source;
     }
+
+    createMediaStreamSource() {
+      return { connect: vi.fn((target) => target), disconnect: vi.fn() };
+    }
+
+    createGain() {
+      return { gain: { value: 1 }, connect: vi.fn((target) => target) };
+    }
+
+    close() {
+      this.state = 'closed';
+      return Promise.resolve();
+    }
   }
   return { socket, listeners, audio, FakeAudioContext };
 });
@@ -56,10 +71,54 @@ vi.mock('./socket', () => ({ default: socket }));
 let voiceClient;
 let recognition;
 class FakeSpeechRecognition {
-  constructor() { recognition = this; }
-  start() {}
-  stop() {}
-  abort() {}
+  constructor() {
+    recognition = this;
+    this.startCalls = 0;
+    this.stopCalls = 0;
+  }
+  start() { this.startCalls += 1; }
+  stop() { this.stopCalls += 1; }
+  abort() { this.stop(); }
+}
+
+class FakeAudioWorkletNode {
+  constructor() {
+    this.port = { onmessage: null };
+    this.disconnect = vi.fn();
+    FakeAudioWorkletNode.last = this;
+  }
+
+  connect(target) { return target; }
+}
+
+class FakeMediaRecorder {
+  static isTypeSupported() { return true; }
+
+  constructor(stream, { mimeType }) {
+    this.stream = stream;
+    this.mimeType = mimeType;
+    this.handlers = new Map();
+    this.state = 'inactive';
+    FakeMediaRecorder.last = this;
+  }
+
+  addEventListener(event, handler) {
+    const handlers = this.handlers.get(event) || [];
+    handlers.push(handler);
+    this.handlers.set(event, handlers);
+  }
+
+  dispatch(event, payload) {
+    for (const handler of this.handlers.get(event) || []) handler(payload);
+  }
+
+  start() { this.state = 'recording'; }
+
+  stop() {
+    this.state = 'inactive';
+    this.dispatch('dataavailable', { data: { size: 1_000 } });
+    this.dispatch('stop');
+  }
 }
 
 const recognizeFinal = (text) => recognition.onresult({
@@ -80,6 +139,9 @@ describe('voice playback cancellation', () => {
   beforeAll(async () => {
     vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.stubGlobal('SpeechRecognition', FakeSpeechRecognition);
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode);
+    window.AudioContext = FakeAudioContext;
+    window.SpeechRecognition = FakeSpeechRecognition;
     voiceClient = await import('./voiceClient.js');
   });
 
@@ -89,9 +151,11 @@ describe('voice playback cancellation', () => {
     audio.decodeImpl = () => Promise.resolve({});
     audio.sources.length = 0;
     socket.emit.mockClear();
+    voiceClient.disposeCaptureOwner();
   });
 
   afterEach(() => {
+    voiceClient.disposeCaptureOwner();
     voiceClient.stopWebSpeechCapture();
     trigger('voice:output:detached');
     vi.restoreAllMocks();
@@ -293,5 +357,82 @@ describe('voice playback cancellation', () => {
     await voiceClient.whenPlaybackDrained();
     recognizeFinal('wait');
     expect(routeFinal).toHaveBeenCalledWith('wait');
+  });
+
+  it('drops recorder callbacks and releases the mic when its owner is disposed', async () => {
+    const previousRecorder = window.MediaRecorder;
+    const previousGlobalRecorder = globalThis.MediaRecorder;
+    const previousMediaDevices = navigator.mediaDevices;
+    const track = { stop: vi.fn() };
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+    window.MediaRecorder = FakeMediaRecorder;
+    globalThis.MediaRecorder = FakeMediaRecorder;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia },
+    });
+
+    await voiceClient.startCapture();
+    const activeRecorder = FakeMediaRecorder.last;
+    voiceClient.disposeCaptureOwner();
+    activeRecorder.dispatch('dataavailable', { data: { size: 1_000 } });
+
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(voiceClient.isCapturing()).toBe(false);
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:turn', expect.anything());
+
+    window.MediaRecorder = previousRecorder;
+    if (previousGlobalRecorder === undefined) delete globalThis.MediaRecorder;
+    else globalThis.MediaRecorder = previousGlobalRecorder;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: previousMediaDevices,
+    });
+  });
+
+  it('ignores VAD worklet frames and async submissions after owner disposal', async () => {
+    const previousMediaDevices = navigator.mediaDevices;
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+    });
+    const onSpeechStart = vi.fn();
+    const onSubmit = vi.fn();
+
+    await voiceClient.startContinuous({ onSpeechStart, onSubmit });
+    const lateFrame = FakeAudioWorkletNode.last.port.onmessage;
+    voiceClient.disposeCaptureOwner();
+    lateFrame?.({ data: new Float32Array([1, 1, 1, 1]) });
+
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(voiceClient.isContinuous()).toBe(false);
+    expect(onSpeechStart).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:turn', expect.anything());
+
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: previousMediaDevices,
+    });
+  });
+
+  it('ignores Web Speech results and restart errors after owner disposal', () => {
+    const routeFinal = vi.fn();
+    const onError = vi.fn();
+    voiceClient.startWebSpeechCapture({ routeFinal, onError });
+    const oldRecognition = recognition;
+    voiceClient.disposeCaptureOwner();
+
+    oldRecognition.onresult?.({
+      resultIndex: 0,
+      results: [Object.assign([{ transcript: 'late result' }], { isFinal: true })],
+    });
+    oldRecognition.onerror?.({ error: 'not-allowed' });
+
+    expect(oldRecognition.stopCalls).toBe(1);
+    expect(routeFinal).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(voiceClient.isWebSpeechCapturing()).toBe(false);
   });
 });

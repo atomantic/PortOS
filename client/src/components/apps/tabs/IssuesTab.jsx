@@ -121,6 +121,16 @@ function parseRunKey(key) {
 // the chip back on.
 const DEFAULT_HIDDEN_LABELS = ['blocked', 'in-progress'];
 
+// Row background tint for the two claim-state labels. Uses the theme's
+// warning/error tokens (alpha-tinted so every theme keeps its own palette
+// rather than a hardcoded color), blocked taking precedence over in-progress.
+export function issueRowTint(issue) {
+  const names = new Set(issue.labels.map(l => l.name));
+  if (names.has('blocked')) return 'bg-port-error/10';
+  if (names.has('in-progress')) return 'bg-port-warning/10';
+  return 'bg-port-card';
+}
+
 const defaultLabelFilter = () => ({
   mode: 'exclude',
   names: new Set(DEFAULT_HIDDEN_LABELS),
@@ -801,7 +811,7 @@ export default function IssuesTab({ appId, appName }) {
           {issues.map(issue => {
             const isOpen = expanded.has(issue.number);
             return (
-              <div key={issue.number} className="bg-port-card">
+              <div key={issue.number} className={issueRowTint(issue)}>
                 <div className="flex flex-col sm:flex-row sm:items-start gap-3 p-3">
                   <button
                     onClick={() => toggleExpanded(issue.number)}
@@ -850,7 +860,7 @@ export default function IssuesTab({ appId, appName }) {
                     </div>
                   </div>
 
-                  <div className="shrink-0 flex flex-wrap items-center gap-2 sm:self-start">
+                  <div className="flex flex-wrap items-center gap-2 sm:min-w-0 sm:self-start">
                     {ACTION_ORDER.map(action => {
                       const spec = ISSUE_ACTIONS[action];
                       const run = runs[runKey(action, issue.number)];

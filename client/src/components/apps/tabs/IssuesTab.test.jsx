@@ -591,6 +591,35 @@ describe('IssuesTab', () => {
     expect(chip).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('tints the issue card background for in-progress and blocked labels, blocked winning when both are present', async () => {
+    // The tint is theme-aware (port-warning / port-error tokens), so the row
+    // stays readable in every theme instead of shipping a hardcoded color.
+    api.getAppIssues.mockResolvedValue(okPayload([
+      ISSUE,
+      { ...ISSUE, number: 43, title: 'Being worked right now', labels: [{ name: 'in-progress', color: '#0e8a16', description: '' }] },
+      { ...ISSUE, number: 44, title: 'Waiting on a dependency', labels: [{ name: 'blocked', color: '#b60205', description: '' }] },
+      {
+        ...ISSUE, number: 45, title: 'Worked but stuck',
+        labels: [
+          { name: 'in-progress', color: '#0e8a16', description: '' },
+          { name: 'blocked', color: '#b60205', description: '' },
+        ],
+      },
+    ]));
+    await renderTab();
+
+    await screen.findByText('Crash on save');
+    fireEvent.click(screen.getByRole('button', { name: /in-progress/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'blocked (2)' }));
+
+    // The tinted div is the row root — exactly 4 levels above the title button.
+    const rowOf = (title) => screen.getByText(title).closest('div').parentElement.parentElement.parentElement;
+    expect(rowOf('Crash on save').className).toBe('bg-port-card');
+    expect(rowOf('Being worked right now').className).toBe('bg-port-warning/10');
+    expect(rowOf('Waiting on a dependency').className).toBe('bg-port-error/10');
+    expect(rowOf('Worked but stuck').className).toBe('bg-port-error/10');
+  });
+
   it('toggles a label chip off to hide every issue carrying that label', async () => {
     api.getAppIssues.mockResolvedValue(okPayload([
       ISSUE,
