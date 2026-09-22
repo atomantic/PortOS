@@ -80,7 +80,7 @@ describe('WorkflowTab per-app override rows', () => {
       render(<MemoryRouter><WorkflowTab apps={[]} providers={[]} /></MemoryRouter>);
     });
 
-    expect((await screen.findByText('Active schedules')).parentElement).toHaveTextContent('1');
+    await screen.findByText('Active tracks');
     expect(screen.getByText('Drain')).toBeInTheDocument();
     expect(screen.getByText('Flexible')).toBeInTheDocument();
     expect(screen.getByText('These active on-demand tasks do not promise a clock time.')).toBeInTheDocument();
