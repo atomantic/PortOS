@@ -606,7 +606,12 @@ export async function detectPrimaryCheckoutDrift(baseline, { agentBranch = null 
   // run's movement, and the prose ("16 new commits") badly overstates what moved.
   // Say so instead of quoting a number that no longer means what it says.
   const baselineRewritten = !(await isAncestorOrSame(baseline.path, baseline.head, current.head));
-  const message = formatDriftMessage({ baseline, current, commitCount, baselineRewritten });
+  const driftFacts = { baseline, current, commitCount, baselineRewritten };
+  const message = formatDriftMessage(driftFacts);
+  const unattributedMessage = async () => withCommitSubject(
+    formatDriftMessage({ ...driftFacts, attributed: false }),
+    await commitSubject(baseline.path, current.head),
+  );
 
   // Second gate (#3703): stranded commits are only a failure if THIS agent could
   // have produced them. Attribution runs whenever there is (or should be) a
@@ -639,7 +644,7 @@ export async function detectPrimaryCheckoutDrift(baseline, { agentBranch = null 
   // being off `main` still matters — the next spawn baselines against it) but never
   // a failure, per the fail-open asymmetry in the module header.
   if (strandedCount === 0 && current.branch !== agentBranch) {
-    return { drifted: false, unattributed: true, baseline, current, commitCount, unpushedCount, message };
+    return { drifted: false, unattributed: true, baseline, current, commitCount, unpushedCount, message: await unattributedMessage() };
   }
   if (strandedCount === null || strandedCount > 0) {
     const attributed = await isDriftAttributableToAgent(baseline.path, {
@@ -651,7 +656,7 @@ export async function detectPrimaryCheckoutDrift(baseline, { agentBranch = null 
       baselineRewritten,
     });
     if (!attributed) {
-      return { drifted: false, unattributed: true, baseline, current, commitCount, unpushedCount, message };
+      return { drifted: false, unattributed: true, baseline, current, commitCount, unpushedCount, message: await unattributedMessage() };
     }
   }
 
@@ -683,8 +688,14 @@ export async function detectPrimaryCheckoutDrift(baseline, { agentBranch = null 
   };
 }
 
-/** Human-readable "what moved". Pure. */
-export function formatDriftMessage({ baseline, current, commitCount, baselineRewritten = false }) {
+/**
+ * Human-readable "what moved". Pure.
+ *
+ * `attributed: false` is the unattributed outcome: the checkout moved, and this
+ * run's branch does not contain the new commits. The lead must not accuse the
+ * worktree agent — the caller is about to say the movement was someone else's.
+ */
+export function formatDriftMessage({ baseline, current, commitCount, baselineRewritten = false, attributed = true }) {
   const branchPart = current.branch === baseline.branch
     ? `branch ${current.branch}`
     : `branch ${baseline.branch} → ${current.branch}`;
@@ -696,7 +707,28 @@ export function formatDriftMessage({ baseline, current, commitCount, baselineRew
       // rather than passing it off as "N new commits".
       ? `baseline rewritten by a rebase; ${commitCount} commit${commitCount === 1 ? '' : 's'} since the abandoned baseline`
       : `${commitCount} new commit${commitCount === 1 ? '' : 's'}`;
-  return `Worktree agent mutated the primary checkout ${baseline.path}: ${branchPart}, HEAD ${short(baseline.head)} → ${short(current.head)} (${countPart})`;
+  const lead = attributed
+    ? `Worktree agent mutated the primary checkout ${baseline.path}`
+    : `Primary checkout ${baseline.path} moved during a worktree run`;
+  return `${lead}: ${branchPart}, HEAD ${short(baseline.head)} → ${short(current.head)} (${countPart})`;
+}
+
+/** One-line subject of `sha`, or '' when git cannot name it. Never throws. */
+async function commitSubject(repoPath, sha) {
+  if (!repoPath || !sha) return '';
+  const result = await execGit(
+    ['log', '-1', '--format=%s', sha],
+    repoPath,
+    { ignoreExitCode: true, timeout: GIT_TIMEOUT_MS },
+  ).catch(() => null);
+  const subject = firstLine(result);
+  if (!subject) return '';
+  const oneLine = subject.replace(/[\r\n"]/g, ' ').replace(/\s+/g, ' ').trim();
+  return oneLine.length > 80 ? `${oneLine.slice(0, 77)}…` : oneLine;
+}
+
+function withCommitSubject(message, subject) {
+  return subject ? `${message} — "${subject}"` : message;
 }
 
 /**

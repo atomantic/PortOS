@@ -224,6 +224,35 @@ describe('buildOpencodeEnvVars', () => {
     expect(cfg.agent.build).toEqual({ temperature: 0.25, think: true, reasoningEffort: 'high' });
   });
 
+  it('clamps an effort the run model rejects instead of wedging the launch', () => {
+    // NVIDIA NIM: `Unsupported Kimi K3 thinking_effort="medium"; supported
+    // values are low, high, and max` — a 400 the agent hits on its first turn,
+    // with the pasted prompt still sitting in the TUI.
+    const provider = {
+      command: 'opencode',
+      gatewayBacked: 'nvidia-nim',
+      models: ['moonshotai/kimi-k3'],
+      defaultModel: 'moonshotai/kimi-k3',
+      effort: 'medium',
+    };
+    const cfg = JSON.parse(
+      buildOpencodeEnvVars(provider, 'moonshotai/kimi-k3').OPENCODE_CONFIG_CONTENT,
+    );
+    expect(cfg.agent.build).toEqual({ reasoningEffort: 'low' });
+    // The record itself is untouched — the clamp is per-run.
+    expect(provider.effort).toBe('medium');
+  });
+
+  it('leaves an effort the run model accepts exactly as stored', () => {
+    const cfg = JSON.parse(buildOpencodeEnvVars({
+      command: 'opencode',
+      gatewayBacked: 'nvidia-nim',
+      models: ['moonshotai/kimi-k2.5'],
+      effort: 'medium',
+    }, 'moonshotai/kimi-k2.5').OPENCODE_CONFIG_CONTENT);
+    expect(cfg.agent.build).toEqual({ reasoningEffort: 'medium' });
+  });
+
   it('sends llama.cpp its generation defaults, routing thinking through the chat template', () => {
     // The OpenCode llama TUI is the headline case: llama.cpp has no native
     // `think` flag, so a toggle emitted as Ollama's would be silently dropped.

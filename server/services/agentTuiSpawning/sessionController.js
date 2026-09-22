@@ -32,7 +32,7 @@
 import { readFile } from 'fs/promises';
 import { emitLog } from '../cosEvents.js';
 import { HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
-import { parseSentinelPayload } from '../../lib/agentSentinel.js';
+import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agentSentinel.js';
 import { SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
 import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
@@ -939,9 +939,12 @@ export function createTuiSessionController({
     // "never wrote one" would be a false reading of that path — and the
     // remedy it points at is the opposite one (the nudge never landed).
     if (sentinel.path && !terminatedByUser && !wroteSentinel) {
-      emitLog('warn', mergeGateReprompted
-        ? `⚠️ ${agentId} finalized (${reason}) without re-writing its sentinel after the merge-gate nudge — expected ${sentinel.path}`
-        : `⚠️ ${agentId} finalized (${reason}) with no completion sentinel — expected ${sentinel.path}`, { agentId });
+      emitLog('warn', missingSentinelLogMessage({
+        agentId,
+        reason,
+        sentinelPath: sentinel.path,
+        mergeGateReprompted,
+      }), { agentId });
     }
 
     // output.txt has already been incrementally appended via the spooler;

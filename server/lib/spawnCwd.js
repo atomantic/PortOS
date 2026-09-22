@@ -83,10 +83,14 @@ export function resolveAgentCliCwd({ workspacePath, fallbackRoot, task, agentId 
  * @param {string|undefined|null} workspacePath - caller-supplied workspace (app repoPath)
  * @param {string} fallbackRoot - directory to use when no workspace was supplied
  * @param {string} [label] - short run/agent identifier used in the log line
+ * @param {{ log?: boolean }} [options] - `log: false` when the caller logs the
+ *   final directory itself. An agent prep resolves the source repo here and
+ *   then may replace it with a worktree; logging the source as "cwd" reads as
+ *   if the agent were about to edit the primary checkout.
  * @returns {string} the directory to hand to `spawn`/`pty.spawn` as `cwd`
  * @throws {Error} when `workspacePath` was supplied but is not an existing directory
  */
-export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run') {
+export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run', { log = true } = {}) {
   // "Nothing was supplied" and "something blank was supplied" are different
   // answers and must not collapse. `repoPath` is validated only as
   // `z.string().min(1)`, so an app can hold "   " — that is a MISCONFIGURED
@@ -96,7 +100,7 @@ export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run') {
   // the schema still lets through.
   const supplied = typeof workspacePath === 'string' && workspacePath.length > 0;
   if (!supplied) {
-    console.log(`📂 ${label} cwd: ${fallbackRoot} (no workspace selected)`);
+    if (log) console.log(`📂 ${label} cwd: ${fallbackRoot} (no workspace selected)`);
     return fallbackRoot;
   }
 
@@ -128,7 +132,7 @@ export function resolveSpawnCwd(workspacePath, fallbackRoot, label = 'run') {
     );
   }
 
-  console.log(`📂 ${label} cwd: ${requested}`);
+  if (log) console.log(`📂 ${label} cwd: ${requested}`);
   return requested;
 }
 

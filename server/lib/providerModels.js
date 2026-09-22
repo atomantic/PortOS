@@ -133,6 +133,38 @@ export const ANTIGRAVITY_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']
 // to whichever local backend it is wired to (Ollama, llama.cpp, MTPLX,
 // OrcaRouter). Keep it separate from vendor-CLI-only levels.
 export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
+
+// A model behind that gateway can still refuse a rung of the ladder above: the
+// value is forwarded verbatim to the upstream vendor, whose own contract
+// decides. NVIDIA NIM answers Moonshot's Kimi K3 with HTTP 400
+// `Unsupported Kimi K3 thinking_effort="medium"; supported values are low,
+// high, and max` — so an effort the picker offered wedged the agent at launch
+// with the prompt still sitting in the TUI (the same failure shape as codex's
+// `minimal` rejection above, and handled the same way).
+//
+// Keyed on the MODEL, not the gateway: the rejection is Moonshot's contract,
+// so it holds for Kimi K3 behind NIM, OpenRouter, or any other front end.
+// Matched as a family prefix for the reason CODEX_NO_MINIMAL_MODEL_RE is —
+// missing a new spelling reships the 400, while over-matching a build that
+// would have taken `medium` only clamps it one rung down to `low`.
+const OPENCODE_MODEL_EFFORT_LEVELS = Object.freeze([
+  Object.freeze([/(^|\/)kimi-k3([.-]|$)/, Object.freeze(['low', 'high', 'max'])]),
+]);
+
+/**
+ * The effort ladder an OpenCode run offers for one model — the portable
+ * low/medium/high set, narrowed for the models whose upstream vendor rejects a
+ * rung of it. A blank/unknown model gets the full ladder (never an empty one:
+ * "we do not know this model" must not read as "this model has no effort").
+ * @param {string|null|undefined} model - bare or namespace-prefixed id
+ * @returns {readonly string[]}
+ */
+export function opencodeEffortLevelsForModel(model) {
+  const id = String(model || '').trim().toLowerCase();
+  if (!id) return OPENCODE_LOCAL_EFFORT_LEVELS;
+  return OPENCODE_MODEL_EFFORT_LEVELS.find(([re]) => re.test(id))?.[1] ?? OPENCODE_LOCAL_EFFORT_LEVELS;
+}
+
 // Cursor Agent's ladder. Cursor has NO `--effort` flag — the level is a
 // parameter of the model id itself (`gpt-5[effort=max]`), folded in by
 // `foldCursorEffortIntoModel` — so `buildEffortArgs` deliberately emits nothing
@@ -515,7 +547,9 @@ export function foldCursorEffortIntoModel(model, effort) {
  *
  * `model` narrows the Antigravity ladder to the tiers that base model actually
  * offers (agy rejects `gemini-3.1-pro --effort medium`), read off
- * `provider.models`. Omit it — or leave the catalog empty — to get the full
+ * `provider.models`. It ALSO narrows the OpenCode ladder for a model whose
+ * upstream vendor rejects a rung (NVIDIA NIM 400s Kimi K3 on `medium` — see
+ * `opencodeEffortLevelsForModel`). Omit it — or leave the catalog empty — to get the full
  * low/medium/high ladder. Returns null for an Antigravity model the catalog
  * says has no tiers at all (`claude-sonnet-4-6`), so no `--effort` is emitted.
  *
@@ -534,7 +568,7 @@ export function effortLevelsForProvider(provider, model = null) {
   // a bootstrap-wrapped spawn still offers its rungs.
   const harness = provider.harnessId ?? null;
   if (harness === 'opencode' || isOpencodeLocalProvider(provider)) {
-    return isOpencodeLocalProvider(provider) ? OPENCODE_LOCAL_EFFORT_LEVELS : null;
+    return isOpencodeLocalProvider(provider) ? opencodeEffortLevelsForModel(model) : null;
   }
   if (harness === 'codex' || isCodexProvider(provider)) return codexEffortLevelsForModel(model);
   if (harness === 'antigravity' || isAntigravityProvider(provider)) {

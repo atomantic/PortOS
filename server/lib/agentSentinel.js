@@ -92,6 +92,25 @@ export function doneSentinelAgentId(name) {
  *
  * Pure: callers do their own `existsSync` / read.
  */
+const STARTUP_SENTINEL_REASONS = new Set(['paste-not-rendered', 'tui-not-ready', 'command-not-found']);
+
+/**
+ * The operator line for a TUI that ended without its completion sentinel.
+ *
+ * A startup failure never received the prompt, so the missing file is a
+ * consequence, not a second fault. Naming it as "finalized with no sentinel"
+ * reads as an agent that finished the task and skipped the done-signal.
+ */
+export function missingSentinelLogMessage({ agentId, reason, sentinelPath, mergeGateReprompted = false }) {
+  if (STARTUP_SENTINEL_REASONS.has(reason)) {
+    return `${agentId} startup failed (${reason}) before a completion sentinel could be written`;
+  }
+  if (mergeGateReprompted) {
+    return `${agentId} finalized (${reason}) without re-writing its sentinel after the merge-gate nudge — expected ${sentinelPath}`;
+  }
+  return `${agentId} finalized (${reason}) with no completion sentinel — expected ${sentinelPath}`;
+}
+
 export function doneSentinelPath(workspacePath, agentId) {
   if (!workspacePath || typeof workspacePath !== 'string') return null;
   return join(workspacePath, doneSentinelName(agentId));

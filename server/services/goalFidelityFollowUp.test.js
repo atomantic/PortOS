@@ -363,7 +363,7 @@ describe('runGoalFidelityFollowUp — JIRA', () => {
     settings({ fileIssue: true, queueTask: true });
     const result = await run();
     expect(result.issue).toBeNull();
-    expect(result.issueError).toMatch(/verified provenance/);
+    expect(result.issueError).toMatch(/nothing was published/);
     expect(searchIssues).not.toHaveBeenCalled();
     expect(createTicket).not.toHaveBeenCalled();
     expect(result.task).toMatchObject({ id: 'cos-9' });
@@ -486,7 +486,7 @@ describe('runGoalFidelityFollowUp — the queued task', () => {
     const result = await runGoalFidelityFollowUp({ agentId: 'agent-1', task: { ...TASK, description: objective },
       review: REVIEW, context: { base: CONTEXT.base, head: CONTEXT.head, objective } });
     expect(result.issue).toBeNull();
-    expect(result.issueError).toMatch(/verified provenance/);
+    expect(result.issueError).toMatch(/nothing was published/);
     expect(execGh).not.toHaveBeenCalled();
     expect(execGlab).not.toHaveBeenCalled();
     expect(createTicket).not.toHaveBeenCalled();
@@ -503,7 +503,7 @@ describe('runGoalFidelityFollowUp — the queued task', () => {
     const result = await runGoalFidelityFollowUp({ agentId: 'agent-1', task: TASK, review: REVIEW,
       context: { ...CONTEXT, publication: { ...CONTEXT.publication, ...changed } } });
     expect(result.issue).toBeNull();
-    expect(result.issueError).toMatch(/verified provenance/);
+    expect(result.issueError).toMatch(/nothing was published/);
     expect(execGh).not.toHaveBeenCalled();
     expect(result.task).toMatchObject({ id: 'cos-9' });
   });

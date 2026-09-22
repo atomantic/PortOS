@@ -1276,7 +1276,12 @@ export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
   await spawnDequeuePriority3IdleReview(ctx);
 
   if (capacity.spawned > 0) {
-    emitLog('info', `⚡ Dequeued ${capacity.spawned} task(s)`, { spawned: capacity.spawned, availableSlots });
+    const ids = capacity.spawnedTaskIds.join(', ');
+    emitLog('info', `⚡ Dequeued ${capacity.spawned} task(s): ${ids}`, {
+      spawned: capacity.spawned,
+      taskIds: capacity.spawnedTaskIds,
+      availableSlots,
+    });
   }
 }
 

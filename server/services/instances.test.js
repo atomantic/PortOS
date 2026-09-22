@@ -64,6 +64,7 @@ import {
   getPeers,
   getAssignableInstances,
   addPeer,
+  peerLogLabel,
   removePeer,
   updatePeer,
   probePeer,
@@ -170,6 +171,20 @@ describe('instances.js', () => {
       const result = await getPeers();
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('peerLogLabel', () => {
+    it('does not stringify a missing name as NaN', () => {
+      expect(peerLogLabel({ name: 'NaN', host: 'peer-b.example', instanceId: 'abc123def456' })).toBe('peer-b.example');
+      expect(peerLogLabel({ name: NaN, address: '192.0.2.20' })).toBe('192.0.2.20');
+      expect(peerLogLabel({ instanceId: 'abc123def4567890' })).toBe('abc123de…');
+      expect(peerLogLabel({})).toBe('unnamed peer');
+    });
+
+    it('keeps a real name, including the hostname "null"', () => {
+      expect(peerLogLabel({ name: 'null', address: '192.0.2.10' })).toBe('null');
+      expect(peerLogLabel({ name: 'studio', instanceId: 'abc' })).toBe('studio');
     });
   });
 

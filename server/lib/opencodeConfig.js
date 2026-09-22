@@ -37,6 +37,7 @@ import {
   getOpencodeLocalProviderNamespace,
   isOpencodeCommand,
   prefixOpencodeModel,
+  resolveCliEffort,
   parseOpencodeConfigContent,
   OPENCODE_BUILD_AGENT,
   OPENCODE_PUBLIC_REVIEW_AGENT,
@@ -465,6 +466,31 @@ export function buildOpencodeConfigContent(models, base = null, providerKey = 'o
 }
 
 /**
+ * The provider record as a GENERATION source for THIS run's model: identical,
+ * except that a stored effort the model rejects is clamped to the nearest rung
+ * it accepts (`resolveCliEffort`).
+ *
+ * OpenCode forwards `agent.build.reasoningEffort` verbatim to the upstream
+ * vendor, which is the only party that validates it — NVIDIA NIM answers
+ * Moonshot's Kimi K3 with HTTP 400 `Unsupported Kimi K3
+ * thinking_effort="medium"` and the agent wedges at launch with its prompt
+ * still in the TUI. The provider-wide ladder cannot see that; this caller is
+ * the first that knows both the record and the model, so the clamp lands here.
+ *
+ * Returns the input untouched when there is nothing to clamp, so a record with
+ * no effort (and its non-enumerable gateway `apiKey`) rides through unspread.
+ * @param {object|null|undefined} provider
+ * @param {string|null|undefined} model - the model this spawn runs
+ * @returns {object|null|undefined}
+ */
+function generationForModel(provider, model) {
+  const stored = typeof provider?.effort === 'string' ? provider.effort.trim() : '';
+  if (!stored) return provider;
+  const resolved = resolveCliEffort(stored, provider, model || provider?.defaultModel || null);
+  return resolved === stored ? provider : { ...provider, effort: resolved || null };
+}
+
+/**
  * Build dynamic env vars for an OpenCode spawn. Returns an object with
  * `OPENCODE_CONFIG_CONTENT` for a provider that names a backend namespace
  * (Ollama, MTPLX, llama.cpp, vLLM, SGLang, or a hosted gateway) — models map
@@ -509,7 +535,7 @@ export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } =
     provider?.defaultModel,
     model,
   ];
-  const config = buildOpencodeConfig(ids, base, providerKey, provider);
+  const config = buildOpencodeConfig(ids, base, providerKey, generationForModel(provider, model));
   // Pin the auxiliary model OpenCode uses for its OWN side work (session titles,
   // summarization). Left unset it falls back to its built-in default, which is a
   // real hosted model nobody here chose — an OpenRouter run on the free
