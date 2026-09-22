@@ -239,8 +239,13 @@ export default function LearningTab() {
   // Memoize sorted durations to avoid re-sorting on each render
   const sortedDurations = useMemo(() => {
     if (!durations) return [];
+    // `_`-prefixed keys are reserved aggregates, not task types: `_overall`, plus
+    // the execution-scoped maps from #8001. Skipping the whole prefix (rather than
+    // naming `_overall`) is what keeps a new reserved key out of this table —
+    // `_byExecution` has no `avgDurationMs`, so it would render an empty row and
+    // inflate the count beside it.
     return Object.entries(durations)
-      .filter(([key]) => key !== '_overall')
+      .filter(([key]) => !key.startsWith('_'))
       .sort((a, b) => b[1].avgDurationMs - a[1].avgDurationMs);
   }, [durations]);
 
@@ -720,7 +725,7 @@ export default function LearningTab() {
                 <Timer size={16} className="text-port-accent" />
                 <span className="font-medium text-white">Duration Estimates</span>
                 <span className="text-xs text-gray-500">
-                  ({Object.keys(durations).length - 1} task types)
+                  ({sortedDurations.length} task types)
                 </span>
               </button>
               {expandedSections.durations && (

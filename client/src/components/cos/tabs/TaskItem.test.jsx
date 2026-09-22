@@ -39,6 +39,7 @@ describe('TaskItem task source', () => {
     };
     const durations = {
       'self-improve:security': {
+        avgDurationMs: 120000,
         avgDurationMin: 2,
         p80DurationMs: 120000,
         completed: 5,
@@ -48,8 +49,36 @@ describe('TaskItem task source', () => {
 
     render(<TaskItem task={scheduled} isSystem onRefresh={vi.fn()} providers={providers} durations={durations} />);
 
-    expect(screen.getByTitle('Based on 5 completed self-improve:security tasks')).toBeInTheDocument();
+    expect(screen.getByTitle('Based on 5 completed self-improve:security runs across all providers')).toBeInTheDocument();
     expect(screen.getByText('~2m')).toBeInTheDocument();
+  });
+
+  // A pending task already names the provider/model/effort it will run at, so its
+  // ETA can be execution-scoped before the agent spawns (#8001) — through the SAME
+  // shared estimator `AgentCard` uses. Here the task-type average (2m) would be
+  // four times too fast for the model this task is actually pinned to.
+  it('prefers this task provider/model/effort history over the task-type average', () => {
+    const pinned = {
+      ...task,
+      id: 'sys-security-local',
+      description: '[Self-Improvement] security audit: fix exposed configuration',
+      taskType: 'internal',
+      metadata: { analysisType: 'security', provider: 'ollama', model: 'local-coder', effort: 'low' },
+    };
+    const durations = {
+      'self-improve:security': { avgDurationMs: 120000, avgDurationMin: 2, p80DurationMs: 120000, completed: 5, successRate: 100 },
+      _byExecution: {
+        'self-improve:security|ollama|local-coder|low': { avgDurationMs: 480000, avgDurationMin: 8, p80DurationMs: 480000, completed: 4, successRate: 75 },
+      },
+      _byExecutionProviderModel: {
+        'self-improve:security|ollama|local-coder': { avgDurationMs: 480000, avgDurationMin: 8, p80DurationMs: 480000, completed: 4, successRate: 75 },
+      },
+    };
+
+    render(<TaskItem task={pinned} isSystem onRefresh={vi.fn()} providers={providers} durations={durations} />);
+
+    expect(screen.getByTitle('Based on 4 completed self-improve:security runs on this provider, model and effort')).toBeInTheDocument();
+    expect(screen.getByText('~8m')).toBeInTheDocument();
   });
 
   it('uses its queue source for an untyped raw task ETA', () => {
@@ -59,13 +88,13 @@ describe('TaskItem task source', () => {
       description: 'Fix the queued task display',
     };
     const durations = {
-      'user-task': { avgDurationMin: 3, p80DurationMs: 180000, completed: 4, successRate: 100 },
-      'auto-fix': { avgDurationMin: 1, p80DurationMs: 60000, completed: 9, successRate: 100 },
+      'user-task': { avgDurationMs: 180000, avgDurationMin: 3, p80DurationMs: 180000, completed: 4, successRate: 100 },
+      'auto-fix': { avgDurationMs: 60000, avgDurationMin: 1, p80DurationMs: 60000, completed: 9, successRate: 100 },
     };
 
     render(<TaskItem task={rawUserTask} onRefresh={vi.fn()} providers={providers} durations={durations} />);
 
-    expect(screen.getByTitle('Based on 4 completed user-task tasks')).toBeInTheDocument();
+    expect(screen.getByTitle('Based on 4 completed user-task runs across all providers')).toBeInTheDocument();
     expect(screen.getByText('~3m')).toBeInTheDocument();
   });
 

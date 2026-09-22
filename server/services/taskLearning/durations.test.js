@@ -74,7 +74,7 @@ describe('durations.getTaskDurationEstimate', () => {
     const est = await getTaskDurationEstimate('something brand new');
     expect(est).toEqual({
       estimatedDurationMs: null, estimatedDurationMin: null,
-      confidence: 'none', basedOn: 0, taskType: null, successRate: null,
+      confidence: 'none', basedOn: 0, taskType: null, basis: null, successRate: null,
     });
   });
 });

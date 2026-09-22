@@ -89,17 +89,31 @@ describe('AgentCard runtime presentation', () => {
     expect(screen.queryByText(/left$/)).not.toBeInTheDocument();
   });
 
+  // The run this card is for, and the execution-scoped history that describes it
+  // (#8001). Same task type as `durationHistory` above, but four times slower —
+  // so a card that fell back to the task-type average would show the wrong ETA.
+  const SLOW_RUN = { providerId: 'ollama', model: 'local-coder', effort: 'low' };
+  const executionHistory = {
+    ...durationHistory,
+    _byExecution: { 'user-task|ollama|local-coder|low': { avgDurationMs: 180_000, p80DurationMs: 240_000, completed: 6 } },
+    _byExecutionProviderModel: { 'user-task|ollama|local-coder': { avgDurationMs: 180_000, p80DurationMs: 240_000, completed: 6 } },
+  };
+
   it.each([
-    ['type P80', 30_000, durationHistory, '50% complete', /Based on 8 completed user-task tasks \(avg: 45s, est: 1m 0s\)/],
-    ['type average', 60_000, { 'user-task': { avgDurationMs: 60_000, completed: 3 } }, '99% complete', /Based on 3 completed user-task tasks \(avg: 1m 0s, est: 1m 0s\)/],
-    ['overall P80', 60_000, { _overall: durationHistory._overall }, '50% complete', /Based on 20 completed all tasks tasks \(avg: 1m 30s, est: 2m 0s\)/],
-  ])('uses the %s duration fallback', (_label, elapsedMs, durations, progress, title) => {
+    ['this provider/model/effort', 120_000, executionHistory, SLOW_RUN, '50% complete', /Based on 6 completed user-task runs on this provider, model and effort \(avg: 3m 0s, est: 4m 0s\)/],
+    ['type P80', 30_000, durationHistory, {}, '50% complete', /Based on 8 completed user-task runs across all providers \(avg: 45s, est: 1m 0s\)/],
+    ['type average', 60_000, { 'user-task': { avgDurationMs: 60_000, completed: 3 } }, {}, '99% complete', /Based on 3 completed user-task runs across all providers \(avg: 1m 0s, est: 1m 0s\)/],
+    // A run whose provider/model IS named still falls back to the task type when
+    // the execution history is another model's.
+    ['type average for an unlearned model', 30_000, executionHistory, { providerId: 'claude', model: 'opus', effort: 'low' }, '50% complete', /Based on 8 completed user-task runs across all providers \(avg: 45s, est: 1m 0s\)/],
+    ['overall P80', 60_000, { _overall: durationHistory._overall }, {}, '50% complete', /Based on 20 completed runs across all tasks \(avg: 1m 30s, est: 2m 0s\)/],
+  ])('uses the %s duration bucket', (_label, elapsedMs, durations, metadata, progress, title) => {
     vi.useFakeTimers();
     vi.setSystemTime(now);
 
     render(
       <MemoryRouter>
-        <AgentCard agent={runningAt(elapsedMs)} durations={durations} />
+        <AgentCard agent={runningAt(elapsedMs, metadata)} durations={durations} />
       </MemoryRouter>
     );
 

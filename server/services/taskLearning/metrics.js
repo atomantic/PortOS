@@ -24,6 +24,7 @@ import {
   recurrenceMilestoneReached,
   appendRecentOutcome,
   computeWindowedStats,
+  executionDurationKey,
   DEFAULT_WINDOW_MAX_COUNT,
   DEFAULT_WINDOW_MAX_AGE_MS,
   ENVIRONMENTAL_ERROR_CATEGORIES
@@ -52,6 +53,56 @@ export { ENVIRONMENTAL_ERROR_CATEGORIES };
  * the same way. Additive + back-compat: tolerates a learning.json that predates
  * the `environmentalFailures` key. No-op when the failure carries no category.
  */
+/**
+ * Fold one completion's duration into its execution-scoped bucket (issue #8001).
+ * Pure — mutates and returns `data`. A null `key` (the run's provider or model was
+ * never recorded) is a no-op: a partial key would merge unlike runs into one
+ * estimate, which is exactly the blur this dimension exists to remove.
+ *
+ * Mirrors the `byTaskType` bucket's duration shape and reuses `calculateDurationETA`,
+ * so the two dimensions can never disagree about what an ETA is. Deliberately carries
+ * NO `recentOutcomes` ring — this bucket feeds the ETA only; the LI success-rate
+ * signal keeps reading `byTaskType`.
+ *
+ * The caller applies the environmental-failure gate (#2618) before reaching here, so
+ * an outage teaches this dimension nothing either.
+ */
+export function recordExecutionDuration(data, { key, success, duration = 0, at } = {}) {
+  if (!key) return data;
+  if (!data.byTaskTypeExecution) data.byTaskTypeExecution = {};
+  if (!data.byTaskTypeExecution[key]) {
+    data.byTaskTypeExecution[key] = {
+      completed: 0,
+      succeeded: 0,
+      failed: 0,
+      totalDurationMs: 0,
+      successDurationMs: 0,
+      successMaxDurationMs: 0,
+      avgDurationMs: 0,
+      maxDurationMs: 0,
+      p80DurationMs: 0,
+      lastCompleted: null,
+      successRate: 0
+    };
+  }
+  const metrics = data.byTaskTypeExecution[key];
+  metrics.completed++;
+  if (success) {
+    metrics.succeeded++;
+    // Success-only durations drive the ETA — a failed agent often loops long in an
+    // error path and would skew the estimate (same rule as `byTaskType`).
+    metrics.successDurationMs = (metrics.successDurationMs || 0) + duration;
+    metrics.successMaxDurationMs = Math.max(metrics.successMaxDurationMs || 0, duration);
+  } else {
+    metrics.failed++;
+  }
+  metrics.totalDurationMs += duration;
+  Object.assign(metrics, calculateDurationETA(metrics));
+  metrics.lastCompleted = at || new Date().toISOString();
+  metrics.successRate = Math.round((metrics.succeeded / metrics.completed) * 100);
+  return data;
+}
+
 export function recordEnvironmentalFailure(data, { category, taskType } = {}) {
   if (!category) return data;
   if (!data.environmentalFailures) data.environmentalFailures = {};
@@ -527,6 +578,25 @@ export async function recordTaskCompletion(agent, task) {
       success: outcomeSuccess,
       at: typeMetrics.lastCompleted,
       durationMs: Number.isFinite(durationMs) ? durationMs : null
+    });
+
+    // Fold the same duration into the execution-scoped bucket (issue #8001) —
+    // task type × the provider/model/effort this run actually executed on, which
+    // is what makes a local-Ollama release check and a cloud one two estimates
+    // instead of one wrong average. Stamped with the SAME `lastCompleted` the
+    // task-type bucket just took so the prune sweep sees one consistent clock.
+    // `?? null` (not `||`) on effort: a provider with no effort control is
+    // genuinely absent, and the key builder maps that to its own sentinel.
+    recordExecutionDuration(data, {
+      key: executionDurationKey({
+        taskType,
+        providerId: agent.metadata?.providerId,
+        model: agent.metadata?.model,
+        effort: agent.metadata?.effort ?? null
+      }),
+      success: outcomeSuccess,
+      duration,
+      at: typeMetrics.lastCompleted
     });
 
     // Update model tier metrics

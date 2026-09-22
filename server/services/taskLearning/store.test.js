@@ -41,7 +41,10 @@ import {
   saveLearningData,
   clearLearningCache,
   loadDismissedRecommendations,
-  saveDismissedRecommendations
+  saveDismissedRecommendations,
+  executionDurationKey,
+  EXECUTION_EFFORT_NONE,
+  EXECUTION_BUCKET_CAP
 } from './store.js';
 
 afterAll(() => { if (tempRoot) rmSync(tempRoot, { recursive: true, force: true }); });
@@ -695,5 +698,73 @@ describe('taskLearning store strict reads (#4115)', () => {
 
     await saveDismissedRecommendations({ 'rec-1': { dismissedAt: '2026-08-14T00:00:00.000Z' } });
     expect(await loadDismissedRecommendations()).toHaveProperty('rec-1');
+  });
+});
+
+/**
+ * Execution-bucket key + bounding (issue #8001).
+ *
+ * `byTaskTypeExecution` is task types MULTIPLIED by every provider/model/effort
+ * an install has ever run, so it is the one learning aggregate that can grow
+ * without bound. The key builder is the single place writer and reader compose
+ * that key, and `saveLearningData` is the only thing standing between the map
+ * and unbounded growth.
+ */
+describe('execution duration keys and bounding (#8001)', () => {
+  const identity = { taskType: 'self-improve:release-check', providerId: 'ollama', model: 'local-coder' };
+
+  it('maps an absent effort to the explicit sentinel, never an empty segment', () => {
+    for (const effort of [null, undefined, '', '   ']) {
+      expect(executionDurationKey({ ...identity, effort }))
+        .toBe(`self-improve:release-check|ollama|local-coder|${EXECUTION_EFFORT_NONE}`);
+    }
+    expect(executionDurationKey({ ...identity, effort: 'high' }))
+      .toBe('self-improve:release-check|ollama|local-coder|high');
+  });
+
+  it('refuses a partial key rather than merging unlike runs', () => {
+    expect(executionDurationKey({ ...identity, providerId: null, effort: 'low' })).toBeNull();
+    expect(executionDurationKey({ ...identity, model: '', effort: 'low' })).toBeNull();
+    expect(executionDurationKey({ ...identity, taskType: undefined, effort: 'low' })).toBeNull();
+  });
+
+  describe('saveLearningData bounding', () => {
+    const cosDir = () => join(getTempRoot(), 'cos');
+    const thirtyOneDaysAgo = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    const bucket = (completed, lastCompleted) => ({ completed, succeeded: completed, failed: 0, lastCompleted });
+
+    beforeEach(() => {
+      rmSync(getTempRoot(), { recursive: true, force: true });
+      mkdirSync(cosDir(), { recursive: true });
+      clearLearningCache();
+    });
+
+    it('prunes thin stale execution buckets, keeping thin RECENT and proven stale ones', async () => {
+      const data = {
+        byTaskType: {},
+        byTaskTypeExecution: {
+          'a|p|m|low': bucket(1, thirtyOneDaysAgo),                    // thin + stale → pruned
+          'b|p|m|low': bucket(1, new Date().toISOString()),            // thin but recent → kept
+          'c|p|m|low': bucket(9, thirtyOneDaysAgo)                     // stale but proven → kept
+        }
+      };
+      await saveLearningData(data);
+      expect(Object.keys(data.byTaskTypeExecution).sort()).toEqual(['b|p|m|low', 'c|p|m|low']);
+    });
+
+    it('caps the map at EXECUTION_BUCKET_CAP, dropping the least recently completed first', async () => {
+      const byTaskTypeExecution = {};
+      // Every bucket is proven and recent, so ONLY the cap can bound this map.
+      for (let i = 0; i < EXECUTION_BUCKET_CAP + 5; i++) {
+        byTaskTypeExecution[`t${i}|p|m|low`] = bucket(5, new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString());
+      }
+      const data = { byTaskType: {}, byTaskTypeExecution };
+      await saveLearningData(data);
+      const kept = Object.keys(data.byTaskTypeExecution);
+      expect(kept).toHaveLength(EXECUTION_BUCKET_CAP);
+      expect(kept, 'the five oldest go first').not.toContain('t0|p|m|low');
+      expect(kept).not.toContain('t4|p|m|low');
+      expect(kept).toContain('t5|p|m|low');
+    });
   });
 });

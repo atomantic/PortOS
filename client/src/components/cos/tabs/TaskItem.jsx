@@ -30,7 +30,7 @@ import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import Modal from '../../ui/Modal';
 import CollapsibleText from '../../ui/CollapsibleText';
-import { extractCosTaskType } from '../../../lib/cosTaskType';
+import { estimateCosDuration, describeEstimateScope } from '../../../lib/cosDurationEstimate';
 import InstancePicker from '../InstancePicker';
 import EffortSelect from '../EffortSelect';
 import RelaunchAgentModal from './RelaunchAgentModal';
@@ -231,40 +231,28 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
   // Calculate duration estimate for pending tasks
   // Uses P80 estimate when available for more realistic time predictions
   const durationEstimate = useMemo(() => {
-    if (!durations || displayStatus !== 'pending') return null;
+    if (displayStatus !== 'pending') return null;
 
-    // Queue reads return raw parsed tasks without taskType. Supply the queue
-    // source so this estimate stays in the same bucket the server records.
-    const taskType = extractCosTaskType({ ...task, taskType: task.taskType || taskSource });
-    const typeData = durations[taskType];
-    const overallData = durations._overall;
-
-    if (typeData && typeData.avgDurationMin) {
-      const p80Min = typeData.p80DurationMs ? Math.round(typeData.p80DurationMs / 60000) : typeData.avgDurationMin;
-      return {
-        estimatedMin: p80Min,
-        avgMin: typeData.avgDurationMin,
-        basedOn: typeData.completed,
-        taskType,
-        successRate: typeData.successRate,
-        isTypeSpecific: true
-      };
-    }
-
-    if (overallData && overallData.avgDurationMin) {
-      const p80Min = overallData.p80DurationMs ? Math.round(overallData.p80DurationMs / 60000) : overallData.avgDurationMin;
-      return {
-        estimatedMin: p80Min,
-        avgMin: overallData.avgDurationMin,
-        basedOn: overallData.completed,
-        taskType: 'all tasks',
-        successRate: overallData.successRate,
-        isTypeSpecific: false
-      };
-    }
-
-    return null;
-  }, [durations, task, displayStatus]);
+    // The shared 4-rung cascade (#8001) — the same module `AgentCard` estimates
+    // through, so a pending task and the agent it becomes agree. Queue reads
+    // return raw parsed tasks without taskType, so supply the queue source to keep
+    // this estimate in the same bucket the server records.
+    //
+    // A pending task already names the provider/model/effort it will run at, so
+    // the estimate can be execution-scoped before the agent ever spawns.
+    const estimate = estimateCosDuration({
+      durations,
+      task: { ...task, taskType: task.taskType || taskSource },
+      agentMetadata: { providerId: taskProvider, model: taskModel, effort: taskEffort || null }
+    });
+    if (!estimate) return null;
+    // This card renders whole minutes; the shared estimator answers in ms.
+    return {
+      ...estimate,
+      estimatedMin: Math.round(estimate.estimatedMs / 60000),
+      avgMin: Math.round(estimate.avgMs / 60000)
+    };
+  }, [durations, task, taskSource, taskProvider, taskModel, taskEffort, displayStatus]);
 
   const handleStatusChange = async (newStatus, blockedReasonText = '', successMessage = `Task marked as ${newStatus}`) => {
     const updates = { status: newStatus, type: taskSource };
@@ -474,7 +462,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
             {durationEstimate && (
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-port-accent/10 text-port-accent/80 rounded"
-                title={`Based on ${durationEstimate.basedOn} completed ${durationEstimate.taskType} tasks`}
+                title={`Based on ${durationEstimate.basedOn} completed ${describeEstimateScope(durationEstimate)}`}
               >
                 <Timer size={10} aria-hidden="true" />
                 {formatDurationMin(durationEstimate.estimatedMin, { approximate: true })}
