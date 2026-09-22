@@ -1,3 +1,4 @@
+import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
 /**
  * Media History — unified timeline of generated images + videos with filter
  * chips, ffmpeg stitching (videos only), Remix for images and videos,
@@ -203,7 +204,7 @@ export default function MediaHistory() {
         </div>
       </div>
 
-      {page.error && <p role="alert" className="text-port-error">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
+      {page.error && items.length === 0 && <p role="alert" className="text-port-error">{page.error} <button type="button" onClick={page.retry}>Retry</button></p>}
       {loading && items.length === 0 ? (
         <PageSkeleton header="none" label="Loading media history" layout="grid" cards={10} gridColsClass="grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5" />
       ) : filtered.length === 0 ? (
@@ -246,16 +247,9 @@ export default function MediaHistory() {
               );
             })}
           </div>
-          {page.hasMore && (
-            <button
-              type="button"
-              onClick={page.loadMore}
-              disabled={loading}
-              className="w-full py-2.5 text-xs text-port-accent hover:text-white bg-port-border/30 hover:bg-port-border/50 rounded-lg transition-colors min-h-[44px]"
-            >
-              {loading ? 'Loading…' : `Show more (${page.total - items.length} remaining)`}
-            </button>
-          )}
+          <InfiniteScrollFooter hasMore={page.hasMore} loading={loading} error={page.error}
+            onLoadMore={page.error ? page.retry : page.loadMore} autoLoad={!stitchMode}
+            label={`Show more (${page.total - items.length} remaining)`} />
         </>
       )}
 

@@ -153,6 +153,12 @@ const router = Router();
 // caller asked to page through, defeating the bound. A `pagination` block with
 // the true per-source totals is added so the caller can page.
 router.get('/tasks', asyncHandler(async (req, res) => {
+  const query = validateRequest(z.object({
+    view: z.enum(['queue', 'completed']).optional(),
+    source: z.enum(['user', 'internal']).default('user'),
+    selected: z.string().max(512).optional(),
+    cursor: z.string().max(512).optional(),
+  }), req.query);
   const [allTasks, agents] = await Promise.all([
     cos.getAllTasks(),
     cos.getAgents().catch(() => []),
@@ -163,6 +169,26 @@ router.get('/tasks', asyncHandler(async (req, res) => {
     user: settleTaskSourceSpawnWindow(allTasks?.user, runningAgents),
     cos: settleTaskSourceSpawnWindow(allTasks?.cos, runningAgents),
   };
+  if (query.view === 'completed') {
+    const source = query.source === 'internal' ? tasks.cos : tasks.user;
+    const completed = (source?.tasks || []).filter(task => task.status === 'completed')
+      .sort((a, b) => a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
+    const remaining = completed.filter(task => !query.cursor || task.id < query.cursor);
+    const { limit } = validateRequest(z.object({ limit: z.coerce.number().int().min(1).max(100).default(25) }), req.query);
+    return res.json({ items: remaining.slice(0, limit), total: completed.length,
+      nextCursor: remaining.length > limit ? remaining[limit - 1].id : null });
+  }
+  if (query.view === 'queue') {
+    const queueSource = source => {
+      if (!source) return source;
+      const keep = task => task.status !== 'completed' || task.id === query.selected;
+      return { ...source, tasks: (source.tasks || []).filter(keep),
+        completedCount: (source.tasks || []).filter(task => task.status === 'completed').length,
+        grouped: Object.fromEntries(Object.entries(source.grouped || {}).map(([key, rows]) => [key, rows.filter(keep).map(task => ({ id: task.id, status: task.status, spawning: task.spawning }))])),
+        autoApproved: source.autoApproved?.filter(keep).map(task => ({ id: task.id })), awaitingApproval: source.awaitingApproval?.filter(keep).map(task => ({ id: task.id })) };
+    };
+    return res.json({ user: queueSource(tasks.user), cos: queueSource(tasks.cos) });
+  }
   if (!isPaginationRequested(req.query)) {
     return res.json(tasks);
   }

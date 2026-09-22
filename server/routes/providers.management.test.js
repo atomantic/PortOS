@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { Router } from 'express';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorMiddleware, errorEvents } from '../lib/errorHandler.js';
 import { staticImportClosure, specifierMatchesPackage } from '../lib/staticImportGraph.js';
 import { createPortOSProviderRoutes } from './providers.js';
 
@@ -192,5 +192,25 @@ describe('POST /api/providers — creating both execution modes at once', () => 
     const res = await request(app).put('/api/providers/example-agent').send({ enabled: true, modes: BODY.modes });
     expect(res.status).toBe(200);
     expect(updateProvider.mock.calls[0][1]).not.toHaveProperty('modes');
+  });
+});
+
+
+describe('provider configuration invalidation', () => {
+  const handleExpectedError = () => {};
+  beforeEach(() => errorEvents.on('error', handleExpectedError));
+  afterEach(() => errorEvents.off('error', handleExpectedError));
+  it('notifies websocket clients after successful writes, but not reads or rejected writes', async () => {
+    const setActiveProvider = vi.fn().mockResolvedValue(CLAUDE_OLLAMA);
+    const app = appWith({ setActiveProvider, getAllProviders: vi.fn().mockResolvedValue(providersFixture()) });
+    const emit = vi.fn();
+    app.set('io', { emit });
+    expect((await request(app).get('/api/providers')).status).toBe(200);
+    expect(emit).not.toHaveBeenCalledWith('providers:changed');
+    expect((await request(app).put('/api/providers/active').send({ id: 'claude-ollama' })).status).toBe(200);
+    expect(emit).toHaveBeenCalledWith('providers:changed');
+    emit.mockClear();
+    expect((await request(app).put('/api/providers/active').send({})).status).toBe(400);
+    expect(emit).not.toHaveBeenCalledWith('providers:changed');
   });
 });

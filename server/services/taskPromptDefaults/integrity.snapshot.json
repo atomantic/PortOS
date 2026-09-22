@@ -31,7 +31,7 @@
     "model-comparison-refresh": "dc1702b07c7fb8be6165feb776d5acb6",
     "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
     "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
-    "performance": "d7e3a80f42903fbf90be0efc9b559c0b",
+    "performance": "b69bf4cbd2b3c272b5650608c62cede3",
     "plan-feature": "87f71a894757f89354da4e2119e07118",
     "plan-task": "8a53a518714cc4029d751fdad92f9b05",
     "plan-task-claim": "ff9ef899c1b0d13ae2f6d7e31c13a10f",
@@ -85,7 +85,7 @@
     "model-comparison-refresh": 1,
     "module-hygiene": 1,
     "observability": 1,
-    "performance": 3,
+    "performance": 4,
     "plan-feature": 5,
     "plan-task": 19,
     "pr-reviewer": 5,
@@ -274,7 +274,8 @@
     "performance": [
       "c8224243c15f6897ee04be25d172f021",
       "4fea5eb3585bdc150980934b289016bc",
-      "672bd3958b12afb0f382bcebb6dc3b33"
+      "672bd3958b12afb0f382bcebb6dc3b33",
+      "d7e3a80f42903fbf90be0efc9b559c0b"
     ],
     "plan-feature": [
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",

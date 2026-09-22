@@ -33,8 +33,7 @@ const api = vi.hoisted(() => ({
   getCodeReviewDefaults: vi.fn(),
   getRiggedAvatars: vi.fn(),
   // AgentsTab, reached by the mobile-select navigation test below.
-  getCosAgentDates: vi.fn(),
-  getCosAgentsByDate: vi.fn(),
+  getCosCompletedAgents: vi.fn(),
   getCosPendingAgentFeedback: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -122,8 +121,7 @@ beforeEach(() => {
   api.getCosPopularTemplates.mockResolvedValue([]);
   api.getCodeReviewDefaults.mockResolvedValue({});
   api.getRiggedAvatars.mockResolvedValue({ records: [] });
-  api.getCosAgentDates.mockResolvedValue({ dates: [] });
-  api.getCosAgentsByDate.mockResolvedValue([]);
+  api.getCosCompletedAgents.mockResolvedValue({ items: [], total: 0, nextCursor: null });
   api.getCosPendingAgentFeedback.mockResolvedValue({ agents: [], count: null });
   localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
   localLlm.getToolUseModels.mockResolvedValue({ models: [] });
@@ -451,13 +449,7 @@ describe('ChiefOfStaff Learning card skipped label', () => {
   });
 });
 
-// #2654: the banner is now prop-driven, refreshed only through fetchData. There
-// is deliberately no on-demand insights refresh: /cos/actionable-insights runs a
-// health check that AUTO-RESTARTS errored processes and re-emits cos:health:check,
-// so an on-demand refresh would either loop (from the socket handler) or fire a
-// second process-restart (from the manual "Run Check" button). These guards pin
-// that neither the socket handler nor the manual button re-fetches insights, plus
-// the lastCheck guard that stops a stale fetchData read clobbering fresher health.
+// Health routes consume health directly without loading the Tasks-only insights.
 describe('ChiefOfStaff insight freshness (#2654)', () => {
   const getSocketHandler = (event) => {
     const entry = socketStub.on.mock.calls.find(([evt]) => evt === event);
@@ -467,7 +459,7 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
   it('does NOT re-fetch insights on a socket health-check (no feedback loop)', async () => {
     await renderSettledConfigTab();
     // The initial fetchData pulls insights once; wait for it before firing.
-    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
+    await waitFor(() => expect(api.getCosHealth).toHaveBeenCalled());
     const before = api.getCosActionableInsights.mock.calls.length;
 
     const handleHealthCheck = getSocketHandler('cos:health:check');
@@ -481,13 +473,13 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     await act(async () => { await Promise.resolve(); });
 
     // A socket-driven re-fetch here would loop against the health-checking
-    // endpoint — the count must stay put; the poll refreshes the banner instead.
+    // endpoint — the count must stay put; the Tasks route refreshes its own banner.
     expect(api.getCosActionableInsights.mock.calls.length).toBe(before);
   });
 
   it('does NOT re-fetch insights on the manual "Run Check" button (no second process-restart)', async () => {
     await renderSettledAt('health');
-    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
+    await waitFor(() => expect(api.getCosHealth).toHaveBeenCalled());
     const before = api.getCosActionableInsights.mock.calls.length;
 
     const button = await screen.findByRole('button', { name: /Run Check/i });
@@ -495,7 +487,7 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
 
     // The button runs its own health check via forceHealthCheck and shows the
     // result — but must NOT also hit the insights endpoint, which would run a
-    // second process-restarting health check ~1s later. Banner refreshes on poll.
+    // second process-restarting health check ~1s later. The Tasks route refreshes its own banner.
     await waitFor(() => expect(api.forceHealthCheck).toHaveBeenCalledWith({ silent: true }));
     await act(async () => { await Promise.resolve(); });
     expect(api.getCosActionableInsights.mock.calls.length).toBe(before);
@@ -530,7 +522,7 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
 
     // Next fetchData (apps:changed) reads a STALE, older, issue-free health.
     api.getCosHealth.mockResolvedValue({ lastCheck: '2026-01-01T00:00:01Z', issues: [] });
-    const handleAppsChanged = getSocketHandler('apps:changed');
+    const handleAppsChanged = getSocketHandler('cos:config:changed');
     expect(handleAppsChanged).toBeTypeOf('function');
     await act(async () => {
       handleAppsChanged();
@@ -538,7 +530,7 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     });
 
     // The guard keeps the fresher health — the issue must NOT disappear.
-    await waitFor(() => expect(api.getApps.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(api.getCosHealth.mock.calls.length).toBeGreaterThan(1));
     expect(screen.getByText('FRESH_ISSUE')).toBeInTheDocument();
     expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
   });
@@ -554,13 +546,13 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     // A read with no (parseable) lastCheck must not overwrite the timestamped,
     // fresher health — Date.parse('') is NaN, which must NOT win the guard.
     api.getCosHealth.mockResolvedValue({ issues: [] });
-    const handleAppsChanged = getSocketHandler('apps:changed');
+    const handleAppsChanged = getSocketHandler('cos:config:changed');
     await act(async () => {
       handleAppsChanged();
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(api.getApps.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(api.getCosHealth.mock.calls.length).toBeGreaterThan(1));
     expect(screen.getByText('FRESH_ISSUE')).toBeInTheDocument();
     expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
   });
@@ -575,13 +567,13 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
 
     // A failed health read (rejects → .catch → null) must not blank the banner.
     api.getCosHealth.mockRejectedValue(new Error('boom'));
-    const handleAppsChanged = getSocketHandler('apps:changed');
+    const handleAppsChanged = getSocketHandler('cos:config:changed');
     await act(async () => {
       handleAppsChanged();
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(api.getApps.mock.calls.length).toBeGreaterThan(1));
+    await waitFor(() => expect(api.getCosHealth.mock.calls.length).toBeGreaterThan(1));
     expect(screen.getByText('FRESH_ISSUE')).toBeInTheDocument();
     expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
   });
@@ -653,16 +645,15 @@ describe('ChiefOfStaff task-change subscriptions', () => {
 
   it('refreshes the queue without re-running the health-checking insights read', async () => {
     await renderSettledTasksTab();
-    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
+    await waitFor(() => expect(api.getCosHealth).toHaveBeenCalled());
     const insightsBefore = api.getCosActionableInsights.mock.calls.length;
 
     await act(async () => { getSocketHandler('cos:tasks:changed')({ type: 'internal', action: 'updated' }); });
     await waitFor(() => expect(api.getCosAgents.mock.calls.length).toBeGreaterThan(1), { timeout: 2000 });
 
-    // /cos/actionable-insights runs a health check that AUTO-RESTARTS errored PM2
-    // processes. Every task add, status flip, delete and lease heartbeat emits
-    // `tasks:changed`, so this handler must never reach that endpoint.
-    expect(api.getCosActionableInsights.mock.calls.length).toBe(insightsBefore);
+    // Invalidation must request persisted health, never the legacy repair path.
+    expect(api.getCosActionableInsights.mock.calls.length).toBe(insightsBefore + 1);
+    expect(api.getCosActionableInsights).toHaveBeenLastCalledWith({ cachedHealth: true, silent: true });
   });
 });
 
@@ -735,7 +726,7 @@ describe('ChiefOfStaff task unblock freshness', () => {
   });
 });
 
-// fetchData reads 8 endpoints, one of which runs a server-side health check, so a
+// Ancillary reads can settle after the visible queue, so a
 // queue refresh started LATER routinely resolves FIRST. Without a guard, the slow
 // batch's pre-flip task payload lands last and restores the pending-AND-active
 // render — the exact symptom the queue refresh exists to clear.
@@ -751,14 +742,15 @@ describe('ChiefOfStaff stale queue-read guard', () => {
     await renderSettledAt('tasks');
     expect(await screen.findByText('STALE pending copy')).toBeInTheDocument();
 
-    // A spawn kicks off the slow full fetch, whose insights read we hold open so
+    // A config change kicks off the slow full fetch, whose insights read we hold open so
     // the whole batch resolves only after the queue refresh below has landed.
     let releaseInsights;
     api.getCosActionableInsights.mockReturnValue(new Promise((resolve) => { releaseInsights = resolve; }));
-    await act(async () => { getSocketHandler('cos:agent:spawned')({ agentId: 'agent-1', metadata: {} }); });
+    await act(async () => { getSocketHandler('cos:config:changed')({}); });
 
     // The store event's queue refresh resolves first, with the post-flip truth.
     api.getCosTasks.mockResolvedValue(fresh);
+    api.getCosActionableInsights.mockResolvedValue({ insights: [] });
     await act(async () => { getSocketHandler('cos:tasks:changed')({ type: 'user', action: 'updated' }); });
     expect(await screen.findByText('FRESH in-progress copy')).toBeInTheDocument();
 
@@ -784,7 +776,7 @@ describe('ChiefOfStaff stale queue-read guard', () => {
       user: { tasks: [pendingTask], grouped: { pending: [pendingTask], in_progress: [] } },
       cos: { tasks: [], grouped: { pending: [], in_progress: [] } },
     });
-    await renderSettledAt('config');
+    await renderSettledAt('tasks');
 
     const statValue = (label) => screen.getAllByText(label)
       .map((node) => node.parentElement?.parentElement?.textContent)
@@ -1063,5 +1055,72 @@ describe('avatar-style registry coverage', () => {
     for (const id of INLINE_RENDERED_AVATAR_STYLES) {
       expect(AVATAR_STYLE_IDS, `INLINE_RENDERED_AVATAR_STYLES has an entry for unknown style "${id}"`).toContain(id);
     }
+  });
+});
+
+
+describe('ChiefOfStaff route-scoped data', () => {
+  it.each(['config', 'health', 'mind'])('does not fetch task or agent collections on %s, including refresh events', async tab => {
+    withFakeTimers();
+    await renderSettledAt(tab);
+    await act(async () => {
+      for (const event of ['apps:changed', 'cos:tasks:changed', 'cos:agent:spawned', 'cos:agent:completed']) {
+        socketStub.on.mock.calls.find(([name]) => name === event)?.[1]({});
+      }
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(api.getCosTasks).not.toHaveBeenCalled();
+    expect(api.getCosAgents).not.toHaveBeenCalled();
+    if (tab !== 'health') expect(api.getProviders).not.toHaveBeenCalled();
+    expect(api.getApps).not.toHaveBeenCalled();
+    expect(api.getCosActionableInsights).not.toHaveBeenCalled();
+  });
+
+  it('stays idle without polling and invalidates apps/providers independently', async () => {
+    withFakeTimers();
+    await renderSettledAt('agents');
+    await waitFor(() => expect(api.getCosCompletedAgents).toHaveBeenCalledTimes(1));
+    const reads = [api.getCosAgents, api.getProviders, api.getApps, api.getCosCompletedAgents];
+    const before = reads.map(read => read.mock.calls.length);
+    await act(async () => { await vi.advanceTimersByTimeAsync(65_000); });
+    expect(reads.map(read => read.mock.calls.length)).toEqual(before);
+    const latestHandler = name => socketStub.on.mock.calls.filter(([event]) => event === name).at(-1)[1];
+    await act(async () => {
+      latestHandler('apps:changed')(); latestHandler('apps:changed')();
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    expect(api.getApps).toHaveBeenCalledTimes(before[2] + 1);
+    expect(api.getProviders).toHaveBeenCalledTimes(before[1]);
+    expect(api.getCosAgents).toHaveBeenCalledTimes(before[0]);
+    await act(async () => {
+      latestHandler('providers:changed')();
+      await vi.advanceTimersByTimeAsync(450);
+    });
+    expect(api.getProviders).toHaveBeenCalledTimes(before[1] + 1);
+    await act(async () => { latestHandler('connect')(); });
+    expect(api.getCosAgents).toHaveBeenCalledTimes(before[0] + 1);
+    expect(api.getCosTasks).not.toHaveBeenCalled();
+  });
+
+  it('recovers a config invalidation received during an in-flight initial read', async () => {
+    let releaseStatus;
+    api.getCosStatus.mockReturnValueOnce(new Promise(resolve => { releaseStatus = resolve; }));
+    renderPageAt('config');
+    await waitFor(() => expect(api.getCosStatus).toHaveBeenCalledTimes(1));
+    api.getCosStatus.mockResolvedValue({ running: true, paused: true, config, stats: {} });
+    await act(async () => {
+      socketStub.on.mock.calls.find(([event]) => event === 'cos:config:changed')[1]();
+      releaseStatus({ running: false, config, stats: {} });
+    });
+    await waitFor(() => expect(api.getCosStatus).toHaveBeenCalledTimes(2));
+    expect((await screen.findAllByRole('button', { name: /Resume Chief of Staff scheduling/i })).length).toBeGreaterThan(0);
+  });
+
+  it('loads agents when navigating from another CoS tab without waiting for the poll', async () => {
+    await renderSettledAt('mind');
+    expect(api.getCosAgents).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+    await waitFor(() => expect(api.getCosAgents).toHaveBeenCalledWith(expect.objectContaining({ active: true })));
+    expect(api.getCosTasks).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,5 @@
+import { usePagedCollection } from '../../../hooks/usePagedCollection';
+import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter';
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router';
 import { Play, ChevronDown, ChevronRight } from 'lucide-react';
@@ -40,12 +42,26 @@ function SectionGlyph({ status }) {
   return <MicroGlyph variant={spec.variant} state={spec.state} animated={spec.animated} size={13} />;
 }
 
-export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, providers, providersLoaded, apps }) {
+export default function TasksTab({ completedRevision = 0, tasks, agents = [], liveOutputs = {}, onRefresh, onTaskAdded, onTaskUnblocked, providers, providersLoaded, apps }) {
   const [searchParams] = useSearchParams();
   const [userTasksLocal, setUserTasksLocal] = useState([]);
   const [durations, setDurations] = useState(null);
   const [showCompletedUserTasks, setShowCompletedUserTasks] = useState(false);
   const [showCompletedSystemTasks, setShowCompletedSystemTasks] = useState(false);
+  const fetchUserHistory = useCallback(({ cursor, signal }) => api.getCosTasks({ view: 'completed', source: 'user', limit: 25, cursor, signal, silent: true }), []);
+  const fetchSystemHistory = useCallback(({ cursor, signal }) => api.getCosTasks({ view: 'completed', source: 'internal', limit: 25, cursor, signal, silent: true }), []);
+  const userHistory = usePagedCollection(fetchUserHistory, { enabled: showCompletedUserTasks && tasks.user?.completedCount != null });
+  const systemHistory = usePagedCollection(fetchSystemHistory, { enabled: showCompletedSystemTasks && tasks.cos?.completedCount != null });
+  const refreshHistory = () => { userHistory.reload(); systemHistory.reload(); onRefresh(); };
+  const historyVersion = useRef({ user: tasks.user?.completedCount, internal: tasks.cos?.completedCount, revision: completedRevision });
+  useEffect(() => {
+    const previous = historyVersion.current;
+    const revisionChanged = previous.revision !== completedRevision;
+    if (revisionChanged || previous.user !== tasks.user?.completedCount) userHistory.reload();
+    if (revisionChanged || previous.internal !== tasks.cos?.completedCount) systemHistory.reload();
+    historyVersion.current = { user: tasks.user?.completedCount, internal: tasks.cos?.completedCount, revision: completedRevision };
+  }, [completedRevision, tasks.user?.completedCount, tasks.cos?.completedCount, userHistory.reload, systemHistory.reload]);
+
   // Fetched once for the whole list (#4520) — every row renders its instance pin
   // from this, so a long backlog never issues one request per task.
   const { instances: assignableInstances } = useAssignableInstances();
@@ -58,8 +74,8 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
   }, []);
 
   // Memoize task arrays to prevent unnecessary re-renders
-  const userTasks = useMemo(() => tasks.user?.tasks || [], [tasks.user?.tasks]);
-  const cosTasks = useMemo(() => tasks.cos?.tasks || [], [tasks.cos?.tasks]);
+  const userTasks = useMemo(() => [...new Map([...userHistory.items, ...(tasks.user?.tasks || [])].map(task => [task.id, task])).values()], [tasks.user?.tasks, userHistory.items]);
+  const cosTasks = useMemo(() => [...new Map([...systemHistory.items, ...(tasks.cos?.tasks || [])].map(task => [task.id, task])).values()], [tasks.cos?.tasks, systemHistory.items]);
   const selectedTaskId = searchParams.get('task');
   const requestedSource = searchParams.get('source');
   const selectedTaskSource = useMemo(() => {
@@ -240,7 +256,7 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
         <TaskAddForm queueFirst providers={providers} providersLoaded={providersLoaded} apps={apps} onTaskAdded={handleTaskAdded} />
 
         {/* User Tasks Sections */}
-        {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && completedUserTasksLocal.length === 0 ? (
+        {pendingUserTasksLocal.length === 0 && activeUserTasksLocal.length === 0 && blockedUserTasksLocal.length === 0 && (tasks.user?.completedCount ?? completedUserTasksLocal.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="USER" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No user tasks. Add one above or edit TASKS.md directly.
@@ -312,7 +328,7 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
             )}
 
             {/* Completed Section - Collapsible */}
-            {completedUserTasksLocal.length > 0 && (
+            {(tasks.user?.completedCount ?? completedUserTasksLocal.length) > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <button
                   onClick={() => setShowCompletedUserTasks(!showCompletedUserTasks)}
@@ -322,14 +338,15 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
                   <span className="text-sm font-medium text-port-success flex items-center gap-2">
                     {showCompletedUserTasks ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
                     <SectionGlyph status="completed" />
-                    Completed ({completedUserTasksLocal.length})
+                    Completed ({tasks.user?.completedCount ?? completedUserTasksLocal.length})
                   </span>
                 </button>
                 {showCompletedUserTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedUserTasksLocal.map(task => (
-                      <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                      <TaskItem key={task.id} task={task} selected={isTaskSelected(task, 'user')} onRefresh={refreshHistory} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                     ))}
+                    {tasks.user?.completedCount != null && <InfiniteScrollFooter hasMore={userHistory.hasMore} loading={userHistory.loading} error={userHistory.error} onLoadMore={userHistory.loadMore} />}
                   </div>
                 )}
               </div>
@@ -343,7 +360,7 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
         <h3 className="text-lg font-semibold text-white mb-3">System Tasks (COS-TASKS.md)</h3>
 
         {/* System Tasks Sections */}
-        {pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && completedSystemTasks.length === 0 ? (
+        {pendingSystemTasks.length === 0 && activeSystemTasks.length === 0 && blockedSystemTasks.length === 0 && (tasks.cos?.completedCount ?? completedSystemTasks.length) === 0 ? (
           <div className="relative bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
             <SchematicLabel module="COS" status="EMPTY" glyph="bracket-pair" state="idle" variant="tab" />
             No system tasks.
@@ -402,7 +419,7 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
             )}
 
             {/* Completed Section - Collapsible */}
-            {completedSystemTasks.length > 0 && (
+            {(tasks.cos?.completedCount ?? completedSystemTasks.length) > 0 && (
               <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
                 <button
                   onClick={() => setShowCompletedSystemTasks(!showCompletedSystemTasks)}
@@ -412,14 +429,15 @@ export default function TasksTab({ tasks, agents = [], liveOutputs = {}, onRefre
                   <span className="text-sm font-medium text-port-success flex items-center gap-2">
                     {showCompletedSystemTasks ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
                     <SectionGlyph status="completed" />
-                    Completed ({completedSystemTasks.length})
+                    Completed ({tasks.cos?.completedCount ?? completedSystemTasks.length})
                   </span>
                 </button>
                 {showCompletedSystemTasks && (
                   <div className="p-2 space-y-1.5">
                     {completedSystemTasks.map(task => (
-                      <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={onRefresh} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
+                      <TaskItem key={task.id} task={task} isSystem selected={isTaskSelected(task, 'internal')} onRefresh={refreshHistory} onTaskUnblocked={onTaskUnblocked} providers={providers} providersLoaded={providersLoaded} durations={durations} apps={apps} instances={assignableInstances} />
                     ))}
+                    {tasks.cos?.completedCount != null && <InfiniteScrollFooter hasMore={systemHistory.hasMore} loading={systemHistory.loading} error={systemHistory.error} onLoadMore={systemHistory.loadMore} />}
                   </div>
                 )}
               </div>

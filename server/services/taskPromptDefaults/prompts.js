@@ -308,6 +308,32 @@ scale the code actually sees. Say which one you have.
 - **Cache misuse** — a cache that never invalidates, one that never hits because
   its key varies, or an unbounded one that is really a leak.
 
+## Required UI load and idle-network coverage
+
+For apps with a UI, inspect the shared shell and at least one high-volume
+collection route, plus a sibling tab that does not use that collection. Trace
+initial reads, mounted hidden panels, polling timers, websocket invalidations,
+and reconnect recovery. Include Brain inbox/memory, CoS history, and media
+history when those surfaces exist; follow the app's collection-loading standard.
+
+When browser tooling is available, capture a cold route load, navigation to the
+sibling tab, and at least 60 seconds of idle network activity. Report request
+counts and transferred/decoded bytes by endpoint, duplicate or overlapping
+requests, time until useful content renders, and idle bytes per minute. Include
+websocket payloads, not only fetch/XHR. Check apps/providers and other stable
+reference data are invalidated by events rather than repeatedly downloaded.
+Distinguish expected live telemetry from whole-list polling; telemetry should
+be scoped to visible consumers. Use synthetic large collections to verify
+server page limits, compact list projections, lazy details, bounded rendered
+rows, and no full history hydration hidden behind client-side slicing.
+
+Do not claim UI performance passed from source inspection or a small/empty
+fixture alone. If browser access, an authorized session, or usable large-fixture
+evidence is unavailable, explicitly mark UI load/idle transfer UNVERIFIED and
+file a deduplicated coverage-gap issue with the missing check and next step.
+Never copy live personal records, hostnames, tokens, or raw private HAR bodies
+into reports; report redacted endpoint patterns and aggregate measurements.
+
 ## Do not trade correctness or clarity for a gain you cannot measure
 
 Reject micro-optimizations with no measured effect, and any change that makes

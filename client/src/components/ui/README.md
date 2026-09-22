@@ -22,6 +22,7 @@ accessibility). Feature-specific components live under their own feature directo
 | `FormField` | Accessible config-field wrapper — generates an id and wires `<label htmlFor>` to the input; `compact` preserves dense editor-label styling. |
 | `HunkDiff` | Hunked side-by-side diff for long texts, with unchanged runs collapsed. |
 | `ImageThumb` | List-card thumbnail with an icon fallback when the ref is missing or 404s. |
+| `InfiniteScrollFooter` | Shared scroll sentinel with loading, retry, end state and accessible manual Load more; pair with `usePagedCollection`. |
 | `InfoTooltip` | Focusable info/help tooltip — hover, keyboard focus, or tap; Esc to dismiss. |
 | `InlineConfirmRow` | Inline "question + confirm + cancel" row — PortOS's preferred alternative to `window.confirm`. |
 | `InlineDiff` | Stacked word-level diff — old row (red removals) over new row (green additions). |

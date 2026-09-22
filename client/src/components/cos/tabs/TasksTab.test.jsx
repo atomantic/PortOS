@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../../../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
 const api = vi.hoisted(() => ({
   forceCosEvaluate: vi.fn(),
+  getCosTasks: vi.fn(),
   getCosLearningDurations: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
@@ -154,4 +155,25 @@ it('focuses a deep link when its task arrives, then preserves user focus on refr
   rerender(view({ user: { tasks: [{ ...task }] }, cos: { tasks: [] } }));
   await waitFor(() => expect(draft).toHaveFocus());
   expect(scroll).not.toHaveBeenCalled();
+});
+
+
+it('refreshes expanded history on completed changes without fetching it for queue heartbeats', async () => {
+  const completed = id => ({ id, description: `Completed ${id}`, status: 'completed', metadata: {} });
+  api.getCosTasks.mockResolvedValueOnce({ items: [completed('old')], total: 1, nextCursor: null })
+    .mockResolvedValueOnce({ items: [completed('new'), completed('old')], total: 2, nextCursor: null })
+    .mockResolvedValueOnce({ items: [completed('replacement')], total: 1, nextCursor: null });
+  const view = (count, revision = 0) => <MemoryRouter><TasksTab tasks={{ user: { tasks: [], completedCount: count }, cos: { tasks: [], completedCount: 0 } }} completedRevision={revision} onRefresh={vi.fn()} providers={[]} apps={[]} /></MemoryRouter>;
+  const { rerender } = render(view(1));
+  expect(api.getCosTasks).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Completed (1)' }));
+  await screen.findByText('Completed old');
+  rerender(view(1));
+  expect(api.getCosTasks).toHaveBeenCalledTimes(1);
+  rerender(view(2));
+  await screen.findByText('Completed new');
+  rerender(view(1, 1));
+  await screen.findByText('Completed replacement');
+  expect(screen.queryByText('Completed old')).not.toBeInTheDocument();
+  expect(api.getCosTasks).toHaveBeenCalledTimes(3);
 });
