@@ -1067,6 +1067,16 @@ describe('installFromHuggingface', () => {
     const fetchImpl = async (url, opts) => {
       if (url.startsWith('https://huggingface.co/api/models/')) return mockJsonResponse(HF_MODEL);
       if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        // Plan resolution probes Content-Length with a separate timed HEAD
+        // before the download claims its slot. Observe only the slot-owned
+        // GET signal so the synchronous abort assertion cannot race that probe.
+        if (opts?.method === 'HEAD') {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Map([['content-length', String(validSafetensors().length)]]),
+          };
+        }
         sawSignal = opts?.signal;
         // Never closes on its own: this stream only ends when the abort
         // listener below errors it, mirroring how real fetch aborts an
