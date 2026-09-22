@@ -160,11 +160,13 @@ const renderPageAt = (tab) => render(
 // loading-skeleton guards below call `renderPageAt` bare — they hold a core
 // read open precisely so the busy branch is what renders, and settling would
 // hang.
+const waitForPageShell = () => waitFor(() => expect(
+  screen.queryByRole('status', { name: 'Loading Chief of Staff' }),
+).toBeNull());
+
 const renderSettledAt = async (tab) => {
   const result = renderPageAt(tab);
-  await waitFor(() => expect(
-    screen.queryByRole('status', { name: 'Loading Chief of Staff' }),
-  ).toBeNull());
+  await waitForPageShell();
   return result;
 };
 
@@ -191,21 +193,45 @@ describe('ChiefOfStaff loading skeleton', () => {
   });
 
   it('shows the queue before the slow ancillary reads settle', async () => {
-    let releaseInsights;
+    let insightsReleased = false;
+    let resolveInsights;
+    const insightsPromise = new Promise((resolve) => { resolveInsights = resolve; });
     api.getCosTasks.mockResolvedValue({
       user: { tasks: [{ id: 'task-1', description: 'Example queued task', status: 'pending', metadata: {} }] },
       cos: { tasks: [] },
     });
-    api.getCosActionableInsights.mockReturnValue(new Promise((resolve) => { releaseInsights = resolve; }));
+    api.getCosActionableInsights.mockReturnValue(insightsPromise);
 
+    // Start the real lazy module before the page mounts. A contended worker can
+    // spend the whole async assertion budget transforming TasksTab (which pulls
+    // in the task editor and drag/drop stack); warming only this module keeps
+    // this regression focused on core queue scheduling. The navigation tests
+    // below still exercise selecting lazy tab content through the page.
+    const tasksTabReady = import('../components/cos/tabs/TasksTab');
     renderPageAt('tasks');
 
-    expect(await screen.findByText('Example queued task')).toBeInTheDocument();
-    expect(screen.queryByRole('status', { name: 'Loading Chief of Staff' })).toBeNull();
-
-    await act(async () => {
-      releaseInsights({ insights: [] });
-    });
+    try {
+      await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
+      // The shell boundary proves queue rendering did not wait for the held
+      // insights read. Await the lazy module separately before spending the
+      // query budget on the component's own local task-state effect.
+      await waitForPageShell();
+      await act(async () => {
+        await tasksTabReady;
+      });
+      expect(await screen.findByRole('heading', { name: 'Task queue' })).toBeInTheDocument();
+      expect(await screen.findByText('Example queued task')).toBeInTheDocument();
+      expect(insightsReleased).toBe(false);
+    } finally {
+      // Do not strand the intentionally unresolved ancillary read if a boundary
+      // assertion fails; React must be able to settle before test cleanup.
+      if (!insightsReleased) {
+        await act(async () => {
+          insightsReleased = true;
+          resolveInsights({ insights: [] });
+        });
+      }
+    }
   });
 });
 
