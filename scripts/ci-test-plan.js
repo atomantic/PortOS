@@ -236,6 +236,15 @@ export const ALWAYS_RUN_TESTS = [
   // `.env.example` itself is not a scope the selector routes to a runner.
   'server/envExampleDrift.test.js',
   'server/lib/generatedManifests.test.js',
+  // Base-relative server import-growth guard (#7993). A new eager edge in a
+  // widely reached module multiplies across suites this file does not import,
+  // so impact selection would not reach it unless the diff touched this file.
+  // Docs-only plans and rebases onto a moved base still need the comparison. It reads
+  // CI_BASE_SHA — the same variable main() requires for a pull request that
+  // is not forced full — and fails closed when that commit cannot be read.
+  // Pregate copies the sha into the test process so the local run uses this
+  // plan's base, not a second guess.
+  'server/lib/importScoping.test.js',
   // Whole-tree scanner: any server/client file can add a hardcoded "Models →"
   // breadcrumb, with no import edge back to this file.
   'server/lib/localProviderRuntime.test.js',

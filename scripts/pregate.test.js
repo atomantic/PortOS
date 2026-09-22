@@ -72,6 +72,9 @@ describe('resolvePlanStages', () => {
       args: ['--base', 'resolved-base', '--worktree'], env: {},
     });
     expect(stages[1].env).toEqual({ CI_LINT_MODE: 'files', CI_LINT_FILES: '["client/src/App.jsx"]' });
+    for (const stage of stages.filter((item) => item.script === 'run-ci-tests.js')) {
+      expect(stage.env.CI_BASE_SHA).toBe('resolved-base');
+    }
   });
 
   it('drops the lint stage under --skip-lint but keeps the test stages', () => {
