@@ -37,7 +37,7 @@ vi.mock('./store.js', async (importActual) => {
 });
 
 import { recalculateDurationStats } from './metrics.js';
-import { tryReadFile, loadLearningData, saveLearningData } from './store.js';
+import { tryReadFile, loadLearningData, saveLearningData, executionDurationKey } from './store.js';
 import { SKIP_LEARNING_VERDICT } from '../../lib/learningVerdict.js';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
@@ -131,5 +131,100 @@ describe('recalculateDurationStats — skip verdict (#4107)', () => {
     expect(readdir).toHaveBeenCalledWith(join('/tmp/portos-test-agents', '2026-08-14'), { withFileTypes: true });
     expect(tryReadFile).toHaveBeenCalledTimes(25);
     expect(maxActiveReads).toBe(20);
+  });
+});
+
+describe('recalculateDurationStats — execution-scoped rebuild (#8010)', () => {
+  let saved;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    saved = null;
+    loadLearningData.mockImplementation(async () => makeData());
+    saveLearningData.mockImplementation(async (data) => { saved = data; });
+    readdir.mockImplementation(async (path) => (
+      path === '/tmp/portos-test-agents'
+        ? [{ name: '2026-08-14', isDirectory: () => true }]
+        : [
+          { name: 'agent-a', isDirectory: () => true },
+          { name: 'agent-b', isDirectory: () => true },
+          { name: 'agent-c', isDirectory: () => true }
+        ]
+    ));
+  });
+
+  it('rebuilds two execution buckets from two models and skips a run the live path declined to record', async () => {
+    tryReadFile.mockImplementation(async (path) => {
+      if (path.includes('agent-a')) {
+        return JSON.stringify({
+          metadata: { taskType: 'internal', taskDescription: 'Study the app', providerId: 'anthropic', model: 'claude-x' },
+          result: { success: true, duration: 60000, validationPassed: true },
+          completedAt: '2026-08-14T00:00:00.000Z'
+        });
+      }
+      if (path.includes('agent-b')) {
+        return JSON.stringify({
+          metadata: { taskType: 'internal', taskDescription: 'Study the app', providerId: 'openai', model: 'gpt-y' },
+          result: { success: true, duration: 90000, validationPassed: true },
+          completedAt: '2026-08-14T00:00:00.000Z'
+        });
+      }
+      // agent-c never reached recordTaskCompletion's aggregates (#4107 skip
+      // sentinel) — this rebuild must not resurrect an execution bucket for it.
+      return JSON.stringify({
+        metadata: { taskType: 'internal', taskDescription: 'Study the app', providerId: 'anthropic', model: 'claude-x' },
+        result: { success: true, duration: 30000, validationPassed: SKIP_LEARNING_VERDICT },
+        completedAt: '2026-08-14T00:00:00.000Z'
+      });
+    });
+
+    await recalculateDurationStats();
+
+    expect(Object.keys(saved.byTaskTypeExecution)).toHaveLength(2);
+
+    const anthropicKey = executionDurationKey({ taskType: 'internal-task', providerId: 'anthropic', model: 'claude-x', effort: null });
+    const openaiKey = executionDurationKey({ taskType: 'internal-task', providerId: 'openai', model: 'gpt-y', effort: null });
+
+    expect(saved.byTaskTypeExecution[anthropicKey]).toMatchObject({ completed: 1, succeeded: 1, successDurationMs: 60000 });
+    expect(saved.byTaskTypeExecution[openaiKey]).toMatchObject({ completed: 1, succeeded: 1, successDurationMs: 90000 });
+  });
+
+  it('excludes an environmental failure from the rebuilt execution bucket', async () => {
+    tryReadFile.mockImplementation(async (path) => {
+      if (path.includes('agent-a')) {
+        return JSON.stringify({
+          metadata: { taskType: 'internal', taskDescription: 'Study the app', providerId: 'anthropic', model: 'claude-x' },
+          result: {
+            success: false,
+            duration: 5000,
+            validationPassed: null,
+            errorAnalysis: { category: 'rate-limit', origin: 'provider' }
+          },
+          completedAt: '2026-08-14T00:00:00.000Z'
+        });
+      }
+      return null;
+    });
+
+    await recalculateDurationStats();
+
+    expect(saved.byTaskTypeExecution).toEqual({});
+  });
+
+  it('contributes no execution bucket when the archived run is missing its provider/model', async () => {
+    tryReadFile.mockImplementation(async (path) => {
+      if (path.includes('agent-a')) {
+        return JSON.stringify({
+          metadata: { taskType: 'internal', taskDescription: 'Study the app' },
+          result: { success: true, duration: 60000, validationPassed: true },
+          completedAt: '2026-08-14T00:00:00.000Z'
+        });
+      }
+      return null;
+    });
+
+    await recalculateDurationStats();
+
+    expect(saved.byTaskTypeExecution).toEqual({});
   });
 });
