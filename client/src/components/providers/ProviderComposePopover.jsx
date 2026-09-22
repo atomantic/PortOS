@@ -180,7 +180,7 @@ export default function ProviderComposePopover({
   const presetNameId = useId();
 
   return (
-    <Modal open={open} onClose={onClose} size="sm" usePortal ariaLabel={title}>
+    <Modal open={open} onClose={onClose} size="sm" usePortal ariaLabel={title} panelClassName="bg-port-card border border-port-border rounded-xl shadow-2xl">
       <div className="p-4 flex flex-col gap-3">
         <h2 className="text-base font-semibold text-white">{title}</h2>
 
