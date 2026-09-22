@@ -34,23 +34,23 @@ describe('SubmodulesTab', () => {
     expect(screen.getByText('trunk')).toBeInTheDocument();
   });
 
-  it('requests a commit with the update while the toggle is on', async () => {
+  it('updates without a commit by default while the toggle is off', async () => {
     render(<SubmodulesTab repoPath={REPO} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Update' }));
 
     await waitFor(() => expect(mockUpdateSubmodule).toHaveBeenCalled());
-    expect(mockUpdateSubmodule).toHaveBeenCalledWith('lib/dep', { repoPath: REPO, commit: true, silent: true });
-    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(expect.stringContaining('committed on trunk')));
+    expect(mockUpdateSubmodule).toHaveBeenCalledWith('lib/dep', { repoPath: REPO, commit: false, silent: true });
   });
 
-  it('updates without a commit once the toggle is off', async () => {
+  it('requests a commit with the update once the toggle is turned on', async () => {
     render(<SubmodulesTab repoPath={REPO} />);
     await screen.findByText('dep');
     fireEvent.click(screen.getByRole('switch'));
     fireEvent.click(screen.getByRole('button', { name: 'Update' }));
 
     await waitFor(() => expect(mockUpdateSubmodule).toHaveBeenCalled());
-    expect(mockUpdateSubmodule).toHaveBeenCalledWith('lib/dep', { repoPath: REPO, commit: false, silent: true });
+    expect(mockUpdateSubmodule).toHaveBeenCalledWith('lib/dep', { repoPath: REPO, commit: true, silent: true });
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith(expect.stringContaining('committed on trunk')));
   });
 
   it('reports the server outcome, not the toggle, after an update', async () => {
