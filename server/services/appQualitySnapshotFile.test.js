@@ -40,6 +40,7 @@ const gitDouble = (overrides = {}) => ({
   unstageFiles: vi.fn(async () => true),
   commit: vi.fn(async () => ({ hash: 'abc1234', message: 'commit' })),
   createPR: vi.fn(async () => ({ success: true, url: prUrl, cli: 'gh' })),
+  mergePR: vi.fn(async () => ({ success: true })),
   parsePullRequestUrl: vi.fn(() => ({ number: 42, host: 'github.com', owner: 'example', repo: 'app' })),
   ...overrides,
 });
@@ -81,7 +82,7 @@ it('lands a changed snapshot from a detached worktree so the PR branch stays att
   const deps = testDeps();
   expect(await publishAppQualitySnapshot(app, deps)).toEqual({
     published: true, hash: 'abc1234', path: '.quality.json',
-    prUrl, prNumber: 42, queuedMerge: true,
+    prUrl, prNumber: 42, merged: true, queuedMerge: false,
   });
   const [path, body] = deps.writeFile.mock.calls[0];
   expect(path).toBe(join(worktreePath, '.quality.json'));
@@ -110,10 +111,11 @@ it('lands a changed snapshot from a detached worktree so the PR branch stays att
     head: 'portos/quality-snapshot',
   }));
   expect(deps.git.createPR.mock.calls[0][1].body).toContain('no code review required');
-  expect(deps.queuePendingMerge).toHaveBeenCalledWith('example-id', expect.objectContaining({
-    prUrl, prNumber: 42, prBranch: 'portos/quality-snapshot',
-    sourceTask: expect.objectContaining({ metadata: { app: 'example-id' } }),
+  expect(deps.git.createPR.mock.calls[0][1].body).toContain('without waiting for CI');
+  expect(deps.git.mergePR).toHaveBeenCalledWith('/repo/example-app', 42, expect.objectContaining({
+    forgeAccount: null,
   }));
+  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
   expect(log).toHaveBeenCalledWith(`📊 Published quality snapshot for app example-id: 1 measurements → abc1234 (${prUrl})`);
   expect(deps.git.execGit).toHaveBeenCalledWith(
     ['worktree', 'remove', '--force', worktreePath], '/repo/example-app', { ignoreExitCode: true });
@@ -144,7 +146,7 @@ it('skips when origin already has the snapshot and does not write the live check
   expect(deps.git.stageFiles).not.toHaveBeenCalled();
 });
 
-it('re-queues an already-open snapshot PR whose branch already has the same bytes', async () => {
+it('merges an already-open snapshot PR whose branch already has the same bytes without waiting for CI', async () => {
   const body = canonical();
   const deps = testDeps({
     git: gitDouble({
@@ -157,10 +159,32 @@ it('re-queues an already-open snapshot PR whose branch already has the same byte
     })),
   });
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    published: true, prUrl, prNumber: 42, queuedMerge: true,
+    published: true, prUrl, prNumber: 42, merged: true, queuedMerge: false,
   });
   expect(deps.writeFile).not.toHaveBeenCalled();
   expect(deps.addWorktree).not.toHaveBeenCalled();
+  expect(deps.git.mergePR).toHaveBeenCalledWith('/repo/example-app', 42, expect.objectContaining({
+    forgeAccount: null,
+  }));
+  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
+});
+
+it('falls back to the merge-on-green queue when branch protection refuses the immediate merge', async () => {
+  const body = canonical();
+  const deps = testDeps({
+    git: gitDouble({
+      execGit: vi.fn(async (args) => args[0] === 'show' && String(args[1]).includes(QUALITY_SNAPSHOT_BRANCH)
+        ? { exitCode: 0, stdout: body, stderr: '' }
+        : missingShow),
+      mergePR: vi.fn(async () => ({ success: false, error: 'required status checks' })),
+    }),
+    probePrForBranch: vi.fn(async () => ({
+      prState: 'OPEN', prUrl, prNumber: 42, cli: 'gh', readable: true,
+    })),
+  });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
+    published: true, prUrl, prNumber: 42, merged: false, queuedMerge: true,
+  });
   expect(deps.queuePendingMerge).toHaveBeenCalledWith('example-id', expect.objectContaining({ prNumber: 42 }));
 });
 
@@ -238,7 +262,7 @@ it('force-with-lease updates an existing snapshot branch rather than committing 
   expect(deps.writeFile.mock.calls[0][0]).toBe(join(worktreePath, '.quality.json'));
 });
 
-it('adopts an already-open PR when createPR reports a conflict and still queues the merge', async () => {
+it('adopts an already-open PR when createPR reports a conflict and merges it immediately', async () => {
   const deps = testDeps({
     git: gitDouble({
       createPR: vi.fn(async () => ({ success: false, error: 'a pull request already exists' })),
@@ -248,12 +272,13 @@ it('adopts an already-open PR when createPR reports a conflict and still queues 
     })),
   });
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    published: true, prUrl, prNumber: 42, queuedMerge: true,
+    published: true, prUrl, prNumber: 42, merged: true, queuedMerge: false,
   });
-  expect(deps.queuePendingMerge).toHaveBeenCalled();
+  expect(deps.git.mergePR).toHaveBeenCalled();
+  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
 });
 
-it('enables GitLab auto-merge instead of the GitHub pending-merge queue', async () => {
+it('merges a GitLab MR immediately instead of arming pipeline auto-merge', async () => {
   const execGlab = vi.fn(async () => '');
   const deps = testDeps({
     git: gitDouble({
@@ -263,9 +288,33 @@ it('enables GitLab auto-merge instead of the GitHub pending-merge queue', async 
     execGlab,
   });
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    published: true, prNumber: 7, queuedMerge: true,
+    published: true, prNumber: 7, merged: true, queuedMerge: false,
   });
   expect(deps.queuePendingMerge).not.toHaveBeenCalled();
+  expect(execGlab).toHaveBeenCalledWith(
+    ['mr', 'merge', '7', '--yes', '--when-pipeline-succeeds=false'],
+    '/repo/example-app', undefined, { rejectOnError: true },
+  );
+});
+
+it('falls back to GitLab auto-merge when the immediate merge is refused', async () => {
+  const execGlab = vi.fn()
+    .mockRejectedValueOnce(new Error('pipeline must succeed'))
+    .mockResolvedValueOnce('');
+  const deps = testDeps({
+    git: gitDouble({
+      createPR: vi.fn(async () => ({ success: true, url: 'https://gitlab.com/example/app/-/merge_requests/7', cli: 'glab' })),
+      parsePullRequestUrl: vi.fn(() => ({ number: 7, host: 'gitlab.com', owner: 'example', repo: 'app' })),
+    }),
+    execGlab,
+  });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
+    published: true, prNumber: 7, merged: false, queuedMerge: true,
+  });
+  expect(execGlab).toHaveBeenCalledWith(
+    ['mr', 'merge', '7', '--yes', '--when-pipeline-succeeds=false'],
+    '/repo/example-app', undefined, { rejectOnError: true },
+  );
   expect(execGlab).toHaveBeenCalledWith(
     ['mr', 'merge', '7', '--yes', '--auto-merge'],
     '/repo/example-app', undefined, { rejectOnError: true },
