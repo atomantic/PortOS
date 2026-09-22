@@ -2133,6 +2133,69 @@ describe('compatibility matrix', () => {
     await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
     expect(toast.success).toHaveBeenCalledWith('Claude Code · Ollama saved as a preset');
   });
+
+  it('opens compose from Add Preset, saves a derived preset, and opens the editor on the service-owned fields', async () => {
+    const derived = {
+      id: 'claude-cli-ollama',
+      name: 'Claude Code · Ollama',
+      type: 'cli',
+      command: 'claude',
+      enabled: true,
+      presetKind: 'derived',
+      presetDerivable: false,
+      harnessId: 'claude',
+      method: 'cli',
+      serviceId: 'ollama',
+    };
+    const existing = { id: 'existing', name: 'Existing', type: 'cli', command: 'claude', enabled: true };
+    let providerLoads = 0;
+    api.getProviders.mockImplementation(() => {
+      providerLoads += 1;
+      const providers = providerLoads === 1 ? [existing] : [existing, derived];
+      return Promise.resolve({ providers, activeProvider: null });
+    });
+    api.createProviderPreset.mockResolvedValue(derived);
+    await renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Preset' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Compose a new preset' });
+    expect(within(dialog).getByLabelText('Harness')).toHaveValue('');
+    await waitFor(() => expect(within(dialog).getByLabelText('Harness')).not.toBeDisabled());
+    fireEvent.change(within(dialog).getByLabelText('Harness'), { target: { value: 'claude' } });
+    fireEvent.change(await within(dialog).findByLabelText('Method'), { target: { value: 'cli' } });
+    fireEvent.change(within(dialog).getByLabelText('Service'), { target: { value: 'ollama' } });
+    expect(api.refreshProviderModels).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save as preset…' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm save' }));
+    await waitFor(() => expect(api.createProviderPreset).toHaveBeenCalledWith(expect.objectContaining({ compositeId: 'claude.cli@ollama' })));
+    expect(await screen.findByText(/Derived from service/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'ollama' })).toHaveAttribute('href', '/ai/services/ollama');
+    expect(screen.queryByLabelText('Command *')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Name *')).toHaveValue('Claude Code · Ollama');
+    expect(screen.getByLabelText('Arguments (space-separated)')).toBeInTheDocument();
+  });
+
+  it('opens compose from a ready service card with that service selected after a compatible harness and method', async () => {
+    api.getProviderServices.mockResolvedValue({
+      services: [{
+        id: 'uuid-ollama', revision: 1, kind: 'ollama', label: 'Ollama', slug: 'ollama', definitionId: 'ollama',
+        plan: 'local', enabled: true, credentialVia: 'stored', hasCredentials: false, credentialSource: 'none', bindingCount: 0,
+        readiness: 'ready', transports: { openai: { baseUrl: 'http://127.0.0.1:11434/v1' } },
+        catalog: { state: 'known', models: ['qwen3:8b'] },
+        definition: { id: 'ollama', label: 'Ollama', family: 'local', plans: ['local'], catalogStrategy: 'daemon', harnessOnly: null, keyUrl: null, envVars: [] },
+      }],
+    });
+    await renderPage('/ai/services');
+    fireEvent.click(await screen.findByRole('button', { name: 'Create preset from Ollama' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Compose a new preset' });
+    expect(within(dialog).queryByLabelText('Service')).not.toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).getByLabelText('Harness')).not.toBeDisabled());
+    fireEvent.change(within(dialog).getByLabelText('Harness'), { target: { value: 'claude' } });
+    fireEvent.change(await within(dialog).findByLabelText('Method'), { target: { value: 'cli' } });
+    expect(within(dialog).getByLabelText('Service')).toHaveValue('ollama');
+    expect(api.refreshProviderModels).not.toHaveBeenCalled();
+  });
 });
 
 describe('page views', () => {
@@ -2157,6 +2220,19 @@ describe('page views', () => {
     // The header action plus the empty state's own — both create a preset.
     expect(screen.getAllByRole('button', { name: 'Add Preset' }).length).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: 'Add Service' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the blank legacy form behind Add standalone preset', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', enabled: true }],
+      activeProvider: null,
+    });
+    await renderPage();
+    await openHeaderMenu();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Add standalone preset' }));
+    expect(await screen.findByRole('heading', { name: 'Add Provider' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Type *')).toBeInTheDocument();
+    expect(screen.getByLabelText('Command *')).toBeInTheDocument();
   });
 });
 
