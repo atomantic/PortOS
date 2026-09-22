@@ -1,7 +1,7 @@
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import Banner from './ui/Banner';
-import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSystemActivity } from '../hooks/useSystemActivity';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import * as api from '../services/api';
 
@@ -15,15 +15,13 @@ export default function UpdateBanners() {
   } = useUpdateChecker();
 
   const hasAdvisory = Boolean(update || outOfSync);
-  const { data: jobsActive } = useAutoRefetch(async () => {
-    const processing = await api.getActiveProcessing({ silent: true });
-    return processing.agents?.active > 0
-      || processing.jobs?.length > 0
-      || processing.extras?.imageTo3d?.length > 0;
-  }, 15000, { enabled: hasAdvisory });
-  // Keep advisories pending until activity is known and jobs have drained.
-  // Hiding must not dismiss them: they become actionable again when idle.
-  if (!hasAdvisory || jobsActive !== false) return null;
+  // The server's idle verdict, not a client recount. `status !== 'ready'`
+  // (still loading, or the last read failed) stays busy so a restart prompt
+  // cannot appear over work we failed to see. Hiding must not dismiss the
+  // advisory: it becomes actionable again when the verdict is idle.
+  const { snapshot, status } = useSystemActivity();
+  const idle = status === 'ready' && snapshot?.activity?.idle === true;
+  if (!hasAdvisory || !idle) return null;
 
   const goToUpdate = () => navigate(`/apps/${api.PORTOS_APP_ID}/update`);
 

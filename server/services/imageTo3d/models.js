@@ -21,6 +21,14 @@ import { access } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveGalleryImage, ensureDir, rmGuarded, writeFileGuarded } from '../../lib/fileUtils.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
+import { noteSystemActivity } from '../systemActivityNotify.js';
+
+// One heavy render occupies the generating set. Leaving it (ready, failed, or
+// canceled) drains that set; the client re-reads rather than trusting the phase.
+function noteImageTo3d(phase) {
+  noteSystemActivity('imageTo3d', phase);
+  if (phase !== 'start') noteSystemActivity('imageTo3d', 'drained');
+}
 import { prepareLocalMemory, gpuBlockersMessage } from '../localMemory.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import {
@@ -155,7 +163,7 @@ async function failGeneration(id, operationId, error) {
   // includeDeleted so a record the user deleted mid-render resolves (rather than
   // throwing NOT_FOUND → a spurious "failure could not be persisted" log); the
   // `deleted` guard then no-ops the write — the delete already recorded the intent.
-  await store.mutateModel(id, (current) => {
+  const updated = await store.mutateModel(id, (current) => {
     if (current.deleted || current.generationOperationId !== operationId) return null;
     return {
       ...current,
@@ -170,7 +178,12 @@ async function failGeneration(id, operationId, error) {
     };
   }, { includeDeleted: true }).catch((persistError) => {
     console.error(`❌ Image-to-3D model ${id} failure could not be persisted: ${persistError.message}`);
+    return null;
   });
+  // A deleted record no-ops the write (delete already noted cancellation).
+  // A failed persist stays unnoted: the reconnect read must not be told the
+  // build ended when the row may still say generating.
+  if (updated && !updated.deleted && updated.status === 'failed') noteImageTo3d('failure');
 }
 
 async function executeRender({ id, operationId, adapter, sourcePath, caps, options }) {
@@ -266,7 +279,7 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
     // includeDeleted + `deleted` guard: if the user deleted the record while the
     // render ran, complete quietly as a no-op (the GLB on disk is orphaned — full
     // kill-on-delete is tracked as a follow-up) instead of throwing NOT_FOUND.
-    await store.mutateModel(id, (current) => {
+    const finished = await store.mutateModel(id, (current) => {
       if (current.deleted || current.generationOperationId !== operationId) return null;
       return {
         ...current,
@@ -286,6 +299,7 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
         }),
       };
     }, { includeDeleted: true });
+    if (finished?.status === 'ready' && !finished.deleted) noteImageTo3d('completion');
     await rmGuarded(usdzDiskPath(id), { force: true })
       .catch((err) => console.error(`❌ Image-to-3D stale USDZ cleanup failed for ${id}: ${err.message}`));
     console.log(`🧊 Image-to-3D mesh ready: ${id}`);
@@ -321,6 +335,7 @@ export const getModel = store.getModel;
 export async function deleteModel(id) {
   const current = await store.getModel(id, { includeDeleted: true });
   const result = await store.deleteModel(id);
+  if (current?.status === 'generating') noteImageTo3d('cancellation');
   if (current?.status === 'generating' && current.generationOperationId) {
     const kill = activeRenders.get(current.generationOperationId);
     if (kill) {
@@ -430,6 +445,7 @@ async function beginRender(record, adapter, sourcePath, caps, requestOptions) {
     };
   });
 
+  if (next?.status === 'generating') noteImageTo3d('start');
   activeOperations.add(operationId);
   setImmediate(() => {
     void executeRender({ id, operationId, adapter, sourcePath, caps, options });

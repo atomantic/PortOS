@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { readFile, unlink } from 'fs/promises';
 import { EventEmitter } from 'events';
+import { noteSystemActivity } from './systemActivityNotify.js';
 import { readJSONFile, PATHS, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -424,6 +425,10 @@ export async function setUpdateInProgress(inProgress) {
     // Mirror BEFORE returning so the caller's next synchronous statement — and
     // any spawn engine that runs before the next tick — already sees the gate.
     updateInProgressMirror = inProgress;
+    // `false` here is an explicit lock release with no result record — the
+    // caller aborted the attempt. A finished attempt notes completion or
+    // failure from `recordUpdateResult` instead.
+    noteSystemActivity('update', inProgress ? 'start' : 'cancellation');
     return true;
   });
 }
@@ -439,6 +444,7 @@ export async function recordUpdateResult(result) {
     state.lastUpdateResult = result;
     await saveState(state);
     updateInProgressMirror = false;
+    noteSystemActivity('update', result?.success === true ? 'completion' : 'failure');
   });
 }
 
@@ -525,6 +531,7 @@ export async function clearStaleUpdateInProgress() {
       };
       await saveState(state);
       updateInProgressMirror = false;
+      noteSystemActivity('update', 'failure');
       return true;
     }
 

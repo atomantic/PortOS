@@ -11,7 +11,11 @@
  * restart PortOS while App Management is mid-deploy of something else).
  */
 
+import { noteSystemActivity } from './systemActivityNotify.js';
+
 const activeAppOperations = new Map();
+
+const END_PHASES = new Set(['completion', 'failure', 'cancellation']);
 
 /**
  * The live operations as rows — id, name, type, age. One operation occupies
@@ -53,6 +57,7 @@ export const claimAppOperation = (io, app, type) => {
   const operation = { appId: app.id, appName: app.name, type, steps: [], startedAt: Date.now(), repoPath: app.repoPath };
   for (const key of operationKeys(app)) setOperationKey(key, operation);
   io.emit('app:operations:active', activeOperationsPayload());
+  noteSystemActivity('appOperations', 'start');
   return { ok: true, operation };
 };
 
@@ -63,13 +68,18 @@ export const __resetAppOperations = () => activeAppOperations.clear();
 
 // Clear every key this operation holds, and only the keys pointing at THIS
 // operation — a run that already finished must not evict a live sibling.
-export const endAppOperation = (io, appId) => {
+export const endAppOperation = (io, appId, phase = 'completion') => {
   const operation = activeAppOperations.get(appId);
   if (!operation) return;
   for (const [key, op] of activeAppOperations) {
     if (op === operation) activeAppOperations.delete(key);
   }
   io.emit('app:operations:active', activeOperationsPayload());
+  const activityPhase = END_PHASES.has(phase) ? phase : 'completion';
+  noteSystemActivity('appOperations', activityPhase);
+  // Ending the last operation is the queue drain. A second note in the same
+  // turn coalesces with the first; the following read sees an empty registry.
+  if (listActiveAppOperations().length === 0) noteSystemActivity('appOperations', 'drained');
 };
 
 // Record a step into the operation's buffer using the same last-write-wins

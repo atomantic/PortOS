@@ -182,7 +182,11 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   // already persisted by this point, so a failing hook must not un-finalize it.
   if (success) {
     safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), 'onRunCompleted');
-  } else if (!canceled && reportFailure) {
+  } else if (canceled) {
+    // A Stop is not a provider failure. The hook still has to fire so the
+    // shared activity snapshot drops the run; `onRunFailed` stays silent.
+    safeSettle(() => runnerConfig.hooks?.onRunCanceled?.({ runId: metadata.id }), 'onRunCanceled');
+  } else if (reportFailure) {
     safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), 'onRunFailed');
   }
 
@@ -603,7 +607,9 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
       // the terminal result or prevents the caller from settling.
       if (metadata.success) {
         safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
-      } else if (!canceled) {
+      } else if (canceled) {
+        safeSettle(() => runnerConfig.hooks?.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
+      } else {
         safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
       }
       safeSettle(() => onComplete?.(stdoutIsResponse && metadata.success ? { ...metadata, text: assistantOutput } : metadata), `Run ${runId} onComplete`);
@@ -622,7 +628,9 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
         outputSize: Buffer.byteLength(output),
         ...(canceled ? { canceled: true, completionReason: hostInterrupted ? 'host-shutdown' : 'canceled' } : {}),
       };
-      if (!canceled) {
+      if (canceled) {
+        safeSettle(() => runnerConfig.hooks?.onRunCanceled?.({ runId }), `Run ${runId} onRunCanceled hook`);
+      } else {
         safeSettle(() => runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
       }
       safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
