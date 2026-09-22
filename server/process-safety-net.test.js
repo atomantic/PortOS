@@ -18,6 +18,12 @@ const read = (rel) => toCode(readFileSync(join(__dirname, rel), 'utf8'));
 // entry file that boots on import.
 const TOP_LEVEL_CALL = /^[ \t]*setupProcessErrorHandlers\s*\(/m;
 
+// Unlike the other #7953 source-scan guards, this one names its subjects by
+// path rather than by a `git ls-files` extension glob, so there is no `.js`
+// pathspec to widen: it already covers every long-running process the tree
+// boots, whatever its extension. The tracked `.mjs` scripts under
+// `server/scripts/` are one-shot operator CLIs — none calls `server.listen`
+// or otherwise stays resident — so none belongs in this list.
 const WIRING_GUARDS = [
   // The main server wires the net from its boot sequence (services/bootstrap.js,
   // extracted from index.js in #2839) as a NAMED STEP handed to
