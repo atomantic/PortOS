@@ -171,6 +171,9 @@ export default function ReviewerPicker({
   showRunFlags = true,
   showReviewers = true,
   showUsernames = true,
+  // Page-level help (Code Reviewers) explains tiers once. Compact callers such
+  // as a task form still get the short intro beside the controls.
+  showIntro = true,
   renderReviewer = (_token, row) => row,
 }) {
   const id = useId();
@@ -754,14 +757,18 @@ export default function ReviewerPicker({
           <button type="button" disabled={disabled || !addProviderId || selected.includes(`provider:${addProviderId}`)}
             className="min-h-9 text-sm text-port-accent disabled:opacity-50"
             onClick={() => { add(`provider:${addProviderId}`); setAddProviderId(''); }}>Add provider reviewer</button>
-          <p className="text-xs text-gray-500">Add a configured provider, then choose its model and effort on its row. Its account and transport stay attached to that identity.</p>
+          {showIntro && <p className="text-xs text-gray-500">Add a configured provider, then choose its model and effort on its row. Its account and transport stay attached to that identity.</p>}
           {modelOptions?.providersLoaded === false && modelOptions?.loaded && <p role="alert" className="text-xs text-port-warning">Provider list unavailable. Reload this page to retry; saved reviewers and pins are preserved.</p>}
         </div>
       )}
       {effortNotice && <p role="status" className="text-xs text-port-warning">{effortNotice}</p>}
       {showReviewers && <div className="flex flex-col gap-1">
-        <span className="text-xs text-gray-500">Reviewers (in order):</span>
-        <p className="text-xs text-gray-400">Tool-free first, then standalone CLI / Copilot.</p>
+        {showIntro && (
+          <>
+            <span className="text-xs text-gray-500">Reviewers (in order):</span>
+            <p className="text-xs text-gray-400">Tool-free first, then standalone CLI / Copilot.</p>
+          </>
+        )}
         {selected.length > 0 && (
           <>
             <div className={HEADER_CLASS} aria-hidden="true">
@@ -839,7 +846,7 @@ export default function ReviewerPicker({
         )}
       </div>}
 
-      {showUsernames && (selected.length > 0 || selectedUsernames.length > 0) && (
+      {showIntro && showUsernames && (selected.length > 0 || selectedUsernames.length > 0) && (
         <details className="text-[11px] text-gray-400">
           <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-300">Tip: reviewer controls</summary>
           <p className="mt-1">
@@ -851,7 +858,7 @@ export default function ReviewerPicker({
       {showReviewers && addable.length > 0 && (
         <details className="text-xs text-gray-500">
           <summary className="cursor-pointer min-h-9">Standalone / legacy backend</summary>
-          <p className="mb-2">Direct CLI, local runtime and Copilot identities keep their existing behavior. Prefer a configured provider to select an account and transport.</p>
+          {showIntro && <p className="mb-2">Direct CLI, local runtime and Copilot identities keep their existing behavior. Prefer a configured provider to select an account and transport.</p>}
           <div className="flex flex-wrap items-end gap-2">
             <div className="min-w-0 flex-1 max-w-xs">
               <label htmlFor={`${id}-legacy`} className="block mb-1">Legacy backend</label>

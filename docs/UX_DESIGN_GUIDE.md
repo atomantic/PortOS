@@ -27,7 +27,7 @@ Do not start by placing existing JSX blocks into a larger grid. Decide what belo
 - A **section navigator** exposes the area's destinations as icon-prefixed, labeled links. Large areas use a vertical navigator on desktop instead of a horizontally overflowing destination strip. Icons are stable visual anchors, not optional decoration to remove for visual minimalism.
 - One local row of task views is allowed inside a destination, normally 2–5 short labels. If it needs another nested row, promote the destination or use a record detail.
 - Breadcrumbs show ancestry; they do not replace navigation. Search, command palette, and voice are accelerators, never the only discovery path.
-- Page titles name the actual destination: “Jev decision scorer” or “Model performance,” rather than spending a separate header row on “Models” alone.
+- Page titles name the actual destination: “Jev decision scorer” or “Model performance,” rather than spending a separate header row on “Models” alone. The Models shell does this with the active section destination’s label and icon. A destination with two jobs uses a local task row under that title; the title does not change per task, and the destination name is not repeated as the first card heading. Explanations that would be copied onto every group live in one help drawer opened from that row.
 - Keep canonical command IDs, current URLs, aliases, and legacy redirects. Moving a link in navigation does not require moving its route.
 
 ### Models proposal

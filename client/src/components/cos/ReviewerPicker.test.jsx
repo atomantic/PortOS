@@ -233,6 +233,15 @@ describe('ReviewerPicker', () => {
     expect(screen.getByText(/none — no AI reviewers in this list/)).toBeInTheDocument();
   });
 
+  it('keeps the short provider intro unless the page explains tiers itself', () => {
+    const { unmount } = render(<ReviewerPicker reviewers={[]} onChange={() => {}} />);
+    expect(screen.getByText(/Add a configured provider/)).toBeInTheDocument();
+    unmount();
+    render(<ReviewerPicker reviewers={['codex']} onChange={() => {}} showIntro={false} />);
+    expect(screen.queryByText(/Add a configured provider/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tool-free first/)).not.toBeInTheDocument();
+  });
+
   it('de-dupes a malformed list with duplicates (order-preserving)', () => {
     render(<ReviewerPicker reviewers={['codex', 'codex', 'antigravity']} onChange={() => {}} />);
     // Two distinct pills (badges 1 and 2), not three.
