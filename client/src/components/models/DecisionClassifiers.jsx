@@ -19,10 +19,7 @@ export default function DecisionClassifiers({ view }) {
   );
   return (
     <div className="space-y-4 min-w-0">
-      <div>
-        <h2 className="text-lg font-semibold text-white">Decision Classifiers</h2>
-        <p className="text-sm text-gray-400">Manage local systems that choose between fixed answers. Selecting a system here does not change automated integrations.</p>
-      </div>
+      <p className="text-sm text-gray-400">Manage local systems that choose between fixed answers. Selecting a system here does not change automated integrations.</p>
       <TabPills tabs={CLASSIFIERS} activeTab={view} onChange={id => navigate(`/models/decision-classifiers/${id}`)}
         ariaLabel="Decision classifiers" controlsIdPrefix="decision-classifier" mobileCompact />
       <div role="tabpanel" id={`decision-classifier-${view}`} aria-labelledby={`tab-${view}`}>
