@@ -20,7 +20,7 @@ import NetworkSetupGuide from './NetworkSetupGuide.jsx';
 function CertModeBadge({ mode, host }) {
   if (mode === 'tailscale') {
     return (
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2 text-sm @xs:justify-end">
         <ShieldCheck size={14} className="text-port-success" />
         <span className="text-port-success">Trusted via Tailscale</span>
         {host && (
@@ -31,7 +31,7 @@ function CertModeBadge({ mode, host }) {
   }
   if (mode === 'self-signed') {
     return (
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2 text-sm @xs:justify-end">
         <Shield size={14} className="text-port-warning" />
         <span className="text-port-warning">Self-signed cert</span>
       </div>
@@ -39,14 +39,14 @@ function CertModeBadge({ mode, host }) {
   }
   if (mode === 'unknown') {
     return (
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2 text-sm @xs:justify-end">
         <Shield size={14} className="text-gray-400" />
         <span className="text-gray-400">HTTPS · cert metadata missing</span>
       </div>
     );
   }
   return (
-    <div className="flex items-center gap-2 text-sm">
+    <div className="flex flex-wrap items-center gap-2 text-sm @xs:justify-end">
       <ShieldAlert size={14} className="text-port-warning" />
       <span className="text-port-warning">No TLS — plain HTTP</span>
     </div>
@@ -87,15 +87,15 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
     !httpsEnabled && bind?.audience === 'all-interfaces';
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
+    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex min-w-0 items-center gap-3">
           <div className={`p-2 rounded-lg ${httpsEnabled ? 'bg-port-success/10' : 'bg-port-warning/10'}`}>
             <Globe className={`w-5 h-5 ${schemeColor}`} />
           </div>
-          <div>
-            <h3 className="text-lg font-semibold text-white">Network Exposure</h3>
-            <div className="flex items-center gap-2 text-sm">
+          <div className="min-w-0">
+            <h3 className="text-base @sm:text-lg font-semibold leading-tight text-white">Network Exposure</h3>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
               <SchemeIcon size={14} className={schemeColor} />
               <span className={schemeColor}>{scheme.toUpperCase()}</span>
               <span className="text-gray-500">·</span>
@@ -124,22 +124,22 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
       )}
 
       <dl className="space-y-3 text-sm">
-        <div className="flex items-start justify-between gap-3">
-          <dt className="text-gray-500 flex items-center gap-2">
+        <div className="flex flex-col gap-0.5 @xs:flex-row @xs:items-start @xs:justify-between @xs:gap-3">
+          <dt className="shrink-0 text-gray-500 flex items-center gap-2">
             <Shield size={14} />
             Cert mode
           </dt>
-          <dd className="text-right min-w-0">
+          <dd className="min-w-0 text-left @xs:text-right">
             <CertModeBadge mode={cert.mode} host={cert.tailscaleHost} />
           </dd>
         </div>
 
-        <div className="flex items-start justify-between gap-3">
-          <dt className="text-gray-500 flex items-center gap-2">
+        <div className="flex flex-col gap-0.5 @xs:flex-row @xs:items-start @xs:justify-between @xs:gap-3">
+          <dt className="shrink-0 text-gray-500 flex items-center gap-2">
             <Globe size={14} />
             Bind audience
           </dt>
-          <dd className="text-right text-gray-300">
+          <dd className="min-w-0 text-left text-gray-300 @xs:text-right">
             {bind.audience === 'loopback-only' && 'Loopback only'}
             {bind.audience === 'all-interfaces' && 'All interfaces'}
             {bind.audience === 'specific-interface' && (
@@ -149,12 +149,12 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
         </div>
 
         {loopbackMirror.enabled && (
-          <div className="flex items-start justify-between gap-3">
-            <dt className="text-gray-500 flex items-center gap-2">
+          <div className="flex flex-col gap-0.5 @xs:flex-row @xs:items-start @xs:justify-between @xs:gap-3">
+            <dt className="shrink-0 text-gray-500 flex items-center gap-2">
               <Unlock size={14} />
               Loopback HTTP mirror
             </dt>
-            <dd className="text-right text-gray-300">
+            <dd className="min-w-0 text-left text-gray-300 @xs:text-right">
               {/* Mirror is bound to 127.0.0.1 server-side, so it's only
                   reachable when the browser is on the same host. Anywhere
                   else (Tailscale IP, LAN), an `http://localhost:5553` link
@@ -182,14 +182,14 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
           </div>
         )}
 
-        <div className="flex items-start justify-between gap-3">
-          <dt className="text-gray-500 flex items-center gap-2">
+        <div className="flex flex-col gap-0.5 @xs:flex-row @xs:items-start @xs:justify-between @xs:gap-3">
+          <dt className="shrink-0 text-gray-500 flex items-center gap-2">
             {mic.available ? <Mic size={14} /> : <MicOff size={14} />}
             Voice / mic
           </dt>
-          <dd className="text-right">
+          <dd className="min-w-0 text-left @xs:text-right">
             {mic.available ? (
-              <div className="flex items-center gap-1 text-port-success">
+              <div className="flex flex-wrap items-center gap-1 text-port-success @xs:justify-end">
                 <CheckCircle size={14} />
                 <span>Available</span>
                 <span className="text-gray-500 text-xs">
@@ -197,7 +197,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
                 </span>
               </div>
             ) : (
-              <div className="flex items-center gap-1 text-port-warning">
+              <div className="flex items-start gap-1 text-port-warning @xs:justify-end">
                 <AlertTriangle size={14} />
                 <span>Blocked — HTTP on non-loopback origin</span>
               </div>
@@ -210,7 +210,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <Link
             to="/capabilities"
-            className="inline-flex min-h-[44px] items-center text-sm text-port-accent hover:text-port-accent/80 sm:min-h-0"
+            className="inline-flex min-h-[44px] items-center text-sm text-port-accent hover:text-port-accent/80 @sm:min-h-0"
           >
             Open setup
           </Link>
@@ -218,7 +218,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
             href={docsUrl}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 sm:min-h-0"
+            className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 @sm:min-h-0"
           >
             <span>Port + scheme guide</span>
             <ExternalLink size={12} />

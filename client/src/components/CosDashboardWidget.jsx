@@ -163,15 +163,15 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   };
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
+    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="text-2xl" aria-hidden="true">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="shrink-0 text-2xl" aria-hidden="true">
             <Bot className={`w-6 h-6 ${status.running ? 'text-port-success' : 'text-gray-500'}`} />
           </div>
-          <div>
-            <h3 className="text-lg font-semibold text-white">Chief of Staff</h3>
+          <div className="min-w-0">
+            <h3 className="text-base @sm:text-lg font-semibold leading-tight text-white">Chief of Staff</h3>
             <p className="text-sm text-gray-500">
               {status.running
                 ? status.paused ? 'Paused' : 'Active'
@@ -186,22 +186,22 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
         </div>
         <Link
           to="/cos/tasks"
-          className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
+          className="flex shrink-0 items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
-          <span className="hidden sm:inline">View Details</span>
+          <span className="hidden @xs:inline">View Details</span>
           <ChevronRight size={16} />
         </Link>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 @sm:grid-cols-3 gap-3">
         {/* Today's Progress */}
         <div className="bg-port-bg/50 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1">
             <CheckCircle size={14} className="text-port-success" />
             <span className="text-xs text-gray-500">Today</span>
           </div>
-          <div className="text-lg sm:text-xl font-bold text-white">
+          <div className="text-lg @sm:text-xl font-bold text-white">
             {today.succeeded || 0}
             {today.failed > 0 && (
               <span className="text-port-error text-sm font-normal">
@@ -220,7 +220,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
             <Clock size={14} className={queue.total > 0 ? 'text-port-warning' : 'text-gray-400'} />
             <span className="text-xs text-gray-500">Pending</span>
           </div>
-          <div className="text-lg sm:text-xl font-bold text-white">
+          <div className="text-lg @sm:text-xl font-bold text-white">
             {queue.total || 0}
           </div>
           {queue.pendingApprovals > 0 && (
@@ -239,7 +239,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
             <Brain size={14} className={getLearningStatusColor()} />
             <span className="text-xs text-gray-500">Learning</span>
           </div>
-          <div className="text-lg sm:text-xl font-bold text-white">
+          <div className="text-lg @sm:text-xl font-bold text-white">
             {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : '—'}
           </div>
           {learningSummary?.skipped > 0 && (
@@ -385,7 +385,7 @@ function ActivityCalendar({ data }) {
                 <div
                   key={day.date}
                   className={`
-                    w-[9px] h-[9px] sm:w-[10px] sm:h-[10px]
+                    w-[9px] h-[9px] @lg:w-[10px] @lg:h-[10px]
                     rounded-xs transition-colors cursor-default
                     ${getColorClass(day)}
                     ${day.isToday ? 'ring-1 ring-port-accent' : ''}
@@ -408,12 +408,12 @@ function ActivityCalendar({ data }) {
         {/* Mini Legend — derived from the same table the cells use, so it
             cannot drift from the scale it claims to explain. */}
         <div className="flex items-center gap-0.5">
-          <span className="mr-1 hidden sm:inline">Less</span>
+          <span className="mr-1 hidden @sm:inline">Less</span>
           <div className="w-2 h-2 rounded-xs bg-port-border/20" />
           {HEATMAP_SHADES.slice(1).map((shade) => (
             <div key={shade} className={`w-2 h-2 rounded-xs ${shade}`} />
           ))}
-          <span className="ml-1 hidden sm:inline">More</span>
+          <span className="ml-1 hidden @sm:inline">More</span>
         </div>
       </div>
     </div>

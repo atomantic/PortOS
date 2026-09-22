@@ -379,16 +379,16 @@ const BackupWidget = memo(function BackupWidget() {
   const isNever = status?.status === 'never';
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
+    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex min-w-0 items-center gap-3">
           <div className={`p-2 rounded-lg ${health === 'healthy' ? 'bg-port-success/10' : health === 'warning' ? 'bg-port-warning/10' : 'bg-port-error/10'}`}>
             <HardDrive className={`w-5 h-5 ${text}`} />
           </div>
-          <div>
-            <h3 className="text-lg font-semibold text-white">Backup</h3>
-            <div className="flex items-center gap-2 text-sm">
+          <div className="min-w-0">
+            <h3 className="text-base @sm:text-lg font-semibold leading-tight text-white">Backup</h3>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
               <span className={`w-2 h-2 rounded-full inline-block ${dot}`} />
               <span className={text}>
                 {health.charAt(0).toUpperCase() + health.slice(1)}
@@ -404,16 +404,16 @@ const BackupWidget = memo(function BackupWidget() {
         </div>
         <Link
           to="/settings"
-          className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
+          className="flex shrink-0 items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
-          <span className="hidden sm:inline">Settings</span>
+          <span className="hidden @xs:inline">Settings</span>
           <ChevronRight size={16} />
         </Link>
       </div>
 
       {/* Status info */}
       {!isNever ? (
-        <div className="grid grid-cols-2 gap-3 mb-4">
+        <div className="grid grid-cols-1 @xs:grid-cols-2 gap-3 mb-4">
           <div className="bg-port-bg/50 rounded-lg p-3">
             <div className="flex items-center gap-2 mb-1">
               <Clock size={14} className="text-gray-400" />
@@ -459,7 +459,7 @@ const BackupWidget = memo(function BackupWidget() {
       )}
 
       {/* Actions row */}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {/* Backup Now button */}
         <button
           onClick={handleBackupNow}

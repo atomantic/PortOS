@@ -34,7 +34,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
     // which used to be indistinguishable from "nothing is scheduled".
     if (error) {
       return (
-        <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6" role="status">
+        <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6" role="status">
           <div className="flex items-center gap-3">
             <Clock className="w-6 h-6 text-gray-500" aria-hidden="true" />
             <div>
@@ -87,7 +87,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
   };
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
+    <div className="@container bg-port-card border border-port-border rounded-xl p-4 @md:p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
@@ -109,7 +109,7 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
           to="/cos/schedule"
           className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
-          <span className="hidden sm:inline">Schedule</span>
+          <span className="hidden @xs:inline">Schedule</span>
           <ChevronRight size={16} />
         </Link>
       </div>
