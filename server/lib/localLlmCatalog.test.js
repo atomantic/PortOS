@@ -206,6 +206,9 @@ describe('localLlmCatalog', () => {
       expect(ollama.find((m) => m.key === 'gemma4-12b').capabilities).toContain('tools');
       expect(ollama.find((m) => m.key === 'gpt-oss-20b').capabilities).toContain('tools');
       expect(ollama.find((m) => m.key === 'qwen2.5-coder-7b')?.id).toBe('qwen2.5-coder:7b');
+      expect(ollama.find((m) => m.key === 'qwen2.5-coder-14b')?.id).toBe('qwen2.5-coder:14b');
+      expect(ollama.find((m) => m.key === 'deepseek-r1-70b')?.id).toBe('deepseek-r1:70b');
+      expect(ollama.find((m) => m.key === 'llama4-scout-17b')?.id).toBe('llama4:scout');
       expect(ollama.find((m) => m.key === 'phi-4-14b')?.id).toBe('phi4');
       expect(ollama.find((m) => m.key === 'aya-expanse-8b')?.id).toBe('aya-expanse:8b');
     });
