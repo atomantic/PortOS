@@ -192,7 +192,7 @@ describe('CodeReviewersTab', () => {
     expect(api.getCodeReviewDefaults).toHaveBeenCalledWith({ silent: true });
   });
 
-  it('shows a configuration-fault reviewer as a no-op with the settings fix', async () => {
+  it('shows the last failed review attempt with the settings fix', async () => {
     api.getCodeReviewDefaults.mockResolvedValue({
       reviewers: ['ollama'],
       reviewerConfigFaults: { ollama: { code: 'NO_MODEL', lastFailureAt: 123 } },
@@ -200,8 +200,8 @@ describe('CodeReviewersTab', () => {
 
     renderTab(<CodeReviewersTab />);
 
-    expect(await screen.findByText(/ollama cannot review on this install \(NO_MODEL\)/)).toBeInTheDocument();
-    expect(screen.getByText(/review loop is currently a no-op for this reviewer/)).toBeInTheDocument();
+    expect(await screen.findByText(/ollama: the last review attempt failed \(NO_MODEL\)/)).toBeInTheDocument();
+    expect(screen.getByText(/A successful review clears this warning/)).toBeInTheDocument();
     expect(screen.getByText(/Select a model on Review chain/)).toBeInTheDocument();
   });
 
@@ -212,7 +212,7 @@ describe('CodeReviewersTab', () => {
       reviewerConfigFaults: { opencode: { code: 'REVIEWER_ACCESS_DENIED', lastFailureAt: 123 } },
     });
     renderTab(<CodeReviewersTab />);
-    expect(await screen.findByText(/opencode cannot review on this install/)).toHaveTextContent('Select an accessible service or model, or correct provider access.');
+    expect(await screen.findByText(/opencode: the last review attempt failed/)).toHaveTextContent('Select an accessible service or model, or correct provider access.');
     expect(screen.getByText(/A successful review clears this warning/)).toBeInTheDocument();
   });
 

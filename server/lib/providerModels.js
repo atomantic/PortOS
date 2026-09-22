@@ -615,6 +615,27 @@ export const CODEX_EFFORT_KEY = 'model_reasoning_effort';
 // per-run overrides consistent when switching providers.
 const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort', '--thinking']);
 
+/** Remove saved model/effort pins only when a caller explicitly owns those selections.
+ * Preserve transport, account, permission and unrelated config arguments.
+ */
+export function stripProviderPinArgs(args, { model = false, effort = false } = {}) {
+  const flags = [...(model ? ['--model', '-m'] : []), ...(effort ? EFFORT_FLAG_NAMES : [])];
+  const configPin = value => typeof value === 'string' && ((model && value.startsWith('model=')) || (effort && value.startsWith(`${CODEX_EFFORT_KEY}=`)));
+  const result = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (flags.includes(arg)) {
+      if (typeof args[i + 1] === 'string' && !args[i + 1].startsWith('-')) i++;
+      continue;
+    }
+    if (flags.some(flag => arg.startsWith(`${flag}=`))) continue;
+    if ((arg === '-c' || arg === '--config') && configPin(args[i + 1])) { i++; continue; }
+    if ((arg.startsWith('-c=') && configPin(arg.slice(3))) || (arg.startsWith('--config=') && configPin(arg.slice(9)))) continue;
+    result.push(arg);
+  }
+  return result;
+}
+
 /**
  * True when the user has already baked an effort override into the provider's
  * args — claude/agy/grok's `--effort <level>` / `--effort=<level>`, grok's

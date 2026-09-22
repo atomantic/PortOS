@@ -245,7 +245,7 @@ describe('POST /api/code-review/local', () => {
     codeReviewSvc.runLocalCodeReview.mockResolvedValue({
       ok: false,
       code,
-      error: 'This provider has no enforced tool-free review transport. Select its API mode or a supported reviewer harness.',
+      error: 'Reviewer provider has no command configured.',
     })
 
     const res = await request(makeApp())
@@ -253,7 +253,16 @@ describe('POST /api/code-review/local', () => {
       .send({ backend: 'provider:hosted-harness', diff: 'diff --git a b' })
 
     expect(res.status).toBe(400)
-    expect(res.body.error).toMatch(/no enforced tool-free/)
+    expect(res.body.error).toMatch(/no command configured/)
+  })
+
+  it('passes repository context and an explicit tool-free request to the review service', async () => {
+    codeReviewSvc.runLocalCodeReview.mockResolvedValue({ ok: true, findings: 'NO FINDINGS' })
+    const res = await request(makeApp()).post('/api/code-review/local').send({
+      backend: 'provider:example-cli', diff: 'example diff', cwd: '/example/repo', toolFree: true,
+    })
+    expect(res.status).toBe(200)
+    expect(codeReviewSvc.runLocalCodeReview).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/example/repo', toolFree: true }))
   })
 
   it('returns 502 when the service returns { ok: false }', async () => {

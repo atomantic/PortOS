@@ -27,6 +27,8 @@ const localReviewRequestSchema = z.object({
   model: z.string().optional(),
   effort: z.string().optional(),
   inheritDefaults: z.boolean().optional(),
+  cwd: z.string().min(1).optional(),
+  toolFree: z.boolean().optional(),
   diff: z.string().min(1, 'diff must be non-empty'),
   timeoutMs: z.number().int().positive().max(600000).optional(),
 }).strict().superRefine((body, ctx) => {
@@ -50,7 +52,7 @@ const localReviewRequestSchema = z.object({
 // picker can flag a configured reviewer whose binary isn't on this machine
 // (#3606) — warn-only, never filters the `reviewers` list above.
 // `providerReviewUnsupported` is its provider-backed counterpart (#7660): the
-// `provider:<id>` reviewers that would refuse a tool-free review outright, so
+// `provider:<id>` reviewers that have no runnable review transport, so
 // the picker warns at selection time instead of letting the user discover it as
 // a review gate that never clears. Warn-only in exactly the same way.
 router.get('/defaults', asyncHandler(async (_req, res) => {
@@ -87,12 +89,14 @@ router.post('/local', asyncHandler(async (req, res) => {
     model,
     effort,
     diff: body.diff,
+    cwd: body.cwd,
+    toolFree: body.toolFree,
     timeoutMs: body.timeoutMs,
   })
   if (!result.ok) {
     await reportReviewerFailure(body.backend, result)
     // A refusal the caller can fix by changing configuration — no model, a
-    // missing/disabled provider, or one that can never run a tool-free review —
+    // missing/disabled provider, or one with no command configured —
     // is a config gap (400). The 502 bucket is for a reviewer that was actually
     // asked and failed, which is the only kind a caller should retry.
     throw new ServerError(result.error || 'Code review failed', {
