@@ -1789,9 +1789,15 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     expect(child.stdin.listenerCount('error')).toBeGreaterThan(0);
     expect(await runner.isRunActive(runId)).toBe(true);
 
+    // EPIPE on stdin must not finish the run or throw — the child may still
+    // be exiting, and 'close'/'error' own settlement.
+    child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    expect(completions).toHaveLength(0);
+    expect(onRunFailed).not.toHaveBeenCalled();
+    expect(await runner.isRunActive(runId)).toBe(true);
+
     const spawnErr = new Error('spawn missing-cli ENOENT');
     spawnErr.code = 'ENOENT';
-    child.stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
     child.emit('error', spawnErr);
     child.emit('close', null);
 
@@ -1800,12 +1806,14 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     expect(metadata.success).toBe(false);
     expect(metadata.exitCode).toBe(-1);
     expect(metadata.error).toBe('spawn missing-cli ENOENT');
+    expect(metadata.errorCategory).toBe('spawn-error');
     expect(onRunFailed).toHaveBeenCalledTimes(1);
     expect(await runner.isRunActive(runId)).toBe(false);
 
     const persisted = JSON.parse(await readFile(join(dataDir, 'runs', runId, 'metadata.json'), 'utf8'));
     expect(persisted.success).toBe(false);
     expect(persisted.exitCode).toBe(-1);
+    expect(persisted.errorCategory).toBe('spawn-error');
 
     await rm(dataDir, { recursive: true, force: true });
   });
