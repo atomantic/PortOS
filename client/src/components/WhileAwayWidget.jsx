@@ -139,7 +139,7 @@ export default function WhileAwayWidget() {
             aria-label="Mark as seen — reset the window to now"
           >
             <Eye size={13} />
-            <span className="hidden @sm:inline">Mark as seen</span>
+            <span className="@max-sm:sr-only">Mark as seen</span>
           </button>
         )}
       </div>

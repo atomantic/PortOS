@@ -115,7 +115,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             to="/system-resources/overview"
             className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
           >
-            <span className="hidden @xs:inline">Details</span>
+            <span className="@max-xs:sr-only">Details</span>
             <ChevronRight size={16} />
           </Link>
         </div>

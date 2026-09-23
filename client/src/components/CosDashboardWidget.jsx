@@ -188,7 +188,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           to="/cos/tasks"
           className="flex shrink-0 items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
-          <span className="hidden @xs:inline">View Details</span>
+          <span className="@max-xs:sr-only">View Details</span>
           <ChevronRight size={16} />
         </Link>
       </div>

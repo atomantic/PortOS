@@ -96,7 +96,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
           to="/goals"
           className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
-          <span className="hidden @xs:inline">View All</span>
+          <span className="@max-xs:sr-only">View All</span>
           <ChevronRight size={16} />
         </Link>
       </div>

@@ -151,7 +151,7 @@ export default function SubmodulesTab({ repoPath }) {
             className="px-3 sm:px-4 py-2 bg-port-card hover:bg-port-border text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 text-sm border border-port-border min-h-[40px]"
           >
             <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-            <span className="hidden sm:inline">Refresh</span>
+            <span className="max-sm:sr-only">Refresh</span>
           </button>
         </div>
       </div>
