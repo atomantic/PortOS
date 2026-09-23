@@ -143,6 +143,7 @@ export default function CodeAnimation() {
   const [starting, setStarting] = useState(false);
   const [job, setJob] = useState(null);
   const [effort, setEffort] = useState('');
+  const [briefEffort, setBriefEffort] = useState('');
   const [pastedHtml, setPastedHtml] = useState('');
   const [preview, setPreview] = useState(null);
   const jobIdRef = useRef(jobId);
@@ -154,6 +155,15 @@ export default function CodeAnimation() {
     setSelectedProviderId,
     setSelectedModel,
     loading: providersLoading,
+  } = useProviderModels({ filter: providerFilter, silent: true, withEffort: true });
+  const {
+    providers: briefProviders,
+    selectedProviderId: briefProviderId,
+    selectedModel: briefModel,
+    availableModels: briefModels,
+    setSelectedProviderId: setBriefProviderId,
+    setSelectedModel: setBriefModel,
+    loading: briefProvidersLoading,
   } = useProviderModels({ filter: providerFilter, silent: true, withEffort: true });
 
   const update = (patch) => setDraft((prev) => ({ ...prev, ...patch }));
@@ -247,9 +257,9 @@ export default function CodeAnimation() {
     setWritingBrief(true);
     const result = await generateCodeAnimationBrief({
       ...toBriefIdeaInput(draft),
-      providerId: selectedProviderId || undefined,
-      model: selectedModel || undefined,
-      effort: effort || undefined,
+      providerId: briefProviderId || undefined,
+      model: briefModel || undefined,
+      effort: briefEffort || undefined,
     }, { silent: true }).catch((error) => {
       toast.error(error.message || 'Failed to write the brief');
       return null;
@@ -366,6 +376,20 @@ export default function CodeAnimation() {
                 Write brief
               </button>
             </div>
+            <ProviderModelSelector
+              providers={briefProviders}
+              selectedProviderId={briefProviderId}
+              selectedModel={briefModel}
+              availableModels={briefModels}
+              onProviderChange={(id) => { setBriefProviderId(id); setBriefEffort(''); }}
+              onModelChange={setBriefModel}
+              effort={briefEffort}
+              onEffortChange={setBriefEffort}
+              disabled={briefProvidersLoading || writingBrief}
+              alwaysShowModel
+              emptyModelOption="Provider default"
+              label="Brief writing provider"
+            />
             <div>
               <label htmlFor="ca-seed" className={labelClass}>
                 Starting idea <span className="text-gray-600">(optional; what the brief writer starts from)</span>
