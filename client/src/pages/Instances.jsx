@@ -13,6 +13,7 @@ import {
 import { useSearchParams } from 'react-router';
 import Drawer from '../components/Drawer';
 import useDrawerTab from '../hooks/useDrawerTab';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import toast from '../components/ui/Toast';
 import Pill from '../components/ui/Pill';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -1541,7 +1542,6 @@ function InstancesContent() {
         .catch(() => { if (active) setParityReports({}); })
     ]).finally(() => { if (active) setLoading(false); });
 
-    socket.emit('instances:subscribe');
     const handlePeersUpdated = (updatedPeers) => {
       setPeers(updatedPeers);
     };
@@ -1554,10 +1554,16 @@ function InstancesContent() {
 
     return () => {
       active = false;
-      socket.emit('instances:unsubscribe');
       socket.off('instances:peers:updated', handlePeersUpdated);
     };
   }, [fetchData]);
+
+  // Namespace subscription, separate from the effect above so a reconnect's
+  // refetch doesn't re-run (and re-race) the tailnet/exposure/parity-report
+  // reads that only belong on mount. Re-emits `instances:subscribe` on every
+  // socket reconnect and refetches peers/syncStatus, since the server's
+  // per-socket subscriber Set is empty on the reconnected socket.
+  useSocketSubscription('instances', { onResubscribe: fetchData });
 
   if (loading) {
     return (

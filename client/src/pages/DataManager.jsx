@@ -8,6 +8,8 @@ import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
+import useMounted from '../hooks/useMounted';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 
@@ -24,41 +26,53 @@ const TOMBSTONE_KIND_PLURAL = { universe: 'universes', series: 'series', issue: 
 // in both `universe` and `pipeline`): partial progress is still useful.
 function TombstoneGcSection() {
   const [refused, setRefused] = useState(null); // null = still loading
+  const mountedRef = useMounted();
+  const backfillTimerRef = useRef(null);
+
+  const fetchStatus = useCallback(() => {
+    api.getTombstoneSweepStatus({ silent: true })
+      .then((r) => { if (mountedRef.current && Array.isArray(r?.refused)) setRefused(r.refused); })
+      .catch(() => { if (mountedRef.current) setRefused((prev) => prev ?? []); });
+  }, [mountedRef]);
 
   // Subscribe to peer-state changes so toggling a snapshot-mode peer's
   // sync category (or disabling it) re-evaluates the refusal status
   // without a page reload — otherwise the button stays stuck disabled
   // even after the user has resolved the underlying refusal condition.
   //
+  // This is DataManager's only `instances:*` consumer, so it must hold its
+  // own `instances:subscribe` — it previously only listened for
+  // `instances:peers:updated` without ever subscribing, and the server sends
+  // that event only to the `instances` subscriber Set (registerSubscriber in
+  // server/services/socket.js), so the handler below could never fire; only
+  // the Instances page (which unsubscribes when you navigate away) held that
+  // subscription. `useSocketSubscription` also re-subscribes on reconnect and
+  // refetches via `onResubscribe`, so a peer change missed while disconnected
+  // is caught up on the next connect.
+  //
   // `instances:peers:updated` fires from `updatePeer` BEFORE the async
   // `autoSubscribePeerToAllRecords` backfill creates per-record subs, so an
   // immediate fetch sees the pre-backfill state. Schedule a follow-up fetch
   // after a short delay to capture the post-backfill subs; debounce so a
   // rapid burst of peer updates collapses to one delayed fetch.
+  useSocketSubscription('instances', { onResubscribe: fetchStatus });
+
   useEffect(() => {
-    let cancelled = false;
-    let backfillTimer = null;
-    const fetchStatus = () => {
-      api.getTombstoneSweepStatus({ silent: true })
-        .then((r) => { if (!cancelled && Array.isArray(r?.refused)) setRefused(r.refused); })
-        .catch(() => { if (!cancelled) setRefused((prev) => prev ?? []); });
-    };
     const refreshAfterPeerChange = () => {
       fetchStatus();
-      if (backfillTimer) clearTimeout(backfillTimer);
-      backfillTimer = setTimeout(() => {
-        backfillTimer = null;
-        if (!cancelled) fetchStatus();
+      if (backfillTimerRef.current) clearTimeout(backfillTimerRef.current);
+      backfillTimerRef.current = setTimeout(() => {
+        backfillTimerRef.current = null;
+        if (mountedRef.current) fetchStatus();
       }, 1500);
     };
     fetchStatus();
     socket.on('instances:peers:updated', refreshAfterPeerChange);
     return () => {
-      cancelled = true;
-      if (backfillTimer) clearTimeout(backfillTimer);
+      if (backfillTimerRef.current) clearTimeout(backfillTimerRef.current);
       socket.off('instances:peers:updated', refreshAfterPeerChange);
     };
-  }, []);
+  }, [fetchStatus, mountedRef]);
 
   const [runSweep, sweeping] = useAsyncAction(async () => {
     const result = await api.sweepTombstonesNow({ graceMs: 0 }, { silent: true });
