@@ -36,13 +36,12 @@ import {
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import {
   extractCharacterPromptCommon,
-  resolveSheetModelId,
   REFERENCE_SHEET_CONSTANTS,
 } from './universeCharacterSheet.js';
-import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
 import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
+import { selectLocalImageModelFromSettings } from './imageGen/prepareParams.js';
 import { RENDER_TARGET } from '../lib/renderTargets.js';
 import {
   datasetImagePath,
@@ -273,8 +272,7 @@ async function resolveRenderParams({ modelId: modelOverride = null } = {}) {
     return { base: { ...base, ...cloud.providerParams }, activeMode, modelId: cloud.modelId };
   }
   if (activeMode === IMAGE_GEN_MODE.LOCAL) {
-    const allModels = getImageModels();
-    const modelId = resolveSheetModelId({ override: modelOverride, settings, allModels });
+    const modelId = selectLocalImageModelFromSettings(settings, modelOverride)?.id || null;
     if (!modelId) {
       throw new ServerError(
         'No local image-gen models are registered. Install a model via `bash scripts/setup-image-video.sh` before generating dataset images.',

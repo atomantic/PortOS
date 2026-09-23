@@ -18,7 +18,6 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { buildScenePrompt, buildPlaceByKey, matchScenePlace } from '../../lib/scenePrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
 import { buildVisualStyleClause, mergeNegativePromptTokens } from '../../lib/universeVisualStyle.js';
-import { getImageModels } from '../../lib/mediaModels.js';
 import { loraCompatKey } from '../../lib/runners.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { pickCanon } from './seriesCanon.js';
@@ -27,6 +26,7 @@ import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
 import { imageModeCandidates, pickUsableMode } from '../../lib/renderModeLadder.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
+import { selectLocalImageModelFromSettings } from '../imageGen/prepareParams.js';
 
 const joinStyleParts = (...parts) =>
   parts.map((s) => (s || '').trim()).filter(Boolean).join(', ');
@@ -85,32 +85,26 @@ const resolveMode = (options, settings, series = null) => pickUsableMode(setting
  * Resolve trained character LoRAs for a pipeline render. Local mode only —
  * codex has no LoRA support, so resolution is skipped there with one log
  * line. `options.applyCharacterLoras === false` is the per-render opt-out
- * (default on). The compat key comes from the model the local render will
- * actually use (request override → saved local model → first registered),
- * mirroring resolveSheetModelId's order; an unresolvable model just means
- * no compat filtering.
+ * (default on). The compat key comes from the model selected for the local
+ * render, and that same model is carried into the queued job.
  *
- * Returns `{ loras, triggerByKey }` — `triggerByKey` maps canon
+ * Returns `{ loras, triggerByKey, selectedModel }` — `triggerByKey` maps canon
  * entryId/ingredientId → trigger word for prompt weaving.
  */
 async function applyCharacterLorasToRender({ matchedCharacters, mode, options, settings }) {
-  const none = { loras: [], triggerByKey: new Map() };
-  if (options.applyCharacterLoras === false || !matchedCharacters?.length) return none;
+  const none = (selectedModel = null) => ({ loras: [], triggerByKey: new Map(), selectedModel });
+  if (options.applyCharacterLoras === false || !matchedCharacters?.length) return none();
   if (mode !== IMAGE_GEN_MODE.LOCAL) {
     console.log(`⚠️ character LoRA skipped — ${mode} mode has no LoRA support`);
-    return none;
+    return none();
   }
-  const allModels = getImageModels();
-  const model = allModels.find((m) => m.id === options.modelId)
-    || allModels.find((m) => m.id === settings?.imageGen?.local?.modelId)
-    || allModels[0]
-    || null;
-  const compatKey = model ? loraCompatKey(model) : null;
+  const selectedModel = selectLocalImageModelFromSettings(settings, options.modelId);
+  const compatKey = selectedModel ? loraCompatKey(selectedModel) : null;
   const loras = await resolveCharacterLoras(matchedCharacters, { compatKey }).catch((err) => {
     console.error(`❌ character LoRA resolution failed: ${err?.message}`);
     return [];
   });
-  if (!loras.length) return none;
+  if (!loras.length) return none(selectedModel);
   const triggerByKey = new Map();
   for (const lora of loras) {
     if (!lora.triggerWord || !lora.character) continue;
@@ -118,7 +112,7 @@ async function applyCharacterLorasToRender({ matchedCharacters, mode, options, s
     if (lora.character.ingredientId) triggerByKey.set(lora.character.ingredientId, lora.triggerWord);
   }
   console.log(`🧬 character LoRA auto-apply — ${loras.map((l) => `${l.character?.name || '?'}→${l.filename}`).join(', ')}`);
-  return { loras, triggerByKey };
+  return { loras, triggerByKey, selectedModel };
 }
 
 // These renders do NOT opt out of the server-side trigger weave (#4665). Both
@@ -230,7 +224,7 @@ const loadBibleContext = async (issueId) => {
   return { ...chain, settings };
 };
 
-const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLine, series = null }) => {
+const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLine, series = null, selectedModel = null }) => {
   // Merge user + world negatives — mirrors composeStyledPrompt's preset
   // negative handling so the world's global negative-prompt terms stay in
   // effect even when the caller supplies their own additions. Deduplicated
@@ -279,9 +273,23 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
     recordMode: seriesPin.mode,
     recordModel: seriesPin.modelId,
   });
+  const localModel = mode === IMAGE_GEN_MODE.LOCAL
+    ? selectedModel || selectLocalImageModelFromSettings(settings, options.modelId)
+    : null;
+  if (mode === IMAGE_GEN_MODE.LOCAL && !localModel) {
+    throw new ServerError('No local image-gen models are registered.', {
+      status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL',
+    });
+  }
   const params = cloud
     ? { ...cloud.jobParams, cleanC2PA, denoise, ...baseParams }
-    : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: options.modelId, cleanC2PA, denoise, ...baseParams };
+    : {
+      pythonPath: settings.imageGen?.local?.pythonPath || null,
+      modelId: localModel.id,
+      cleanC2PA,
+      denoise,
+      ...baseParams,
+    };
   const { jobId } = enqueueJob({ kind: 'image', params, owner });
   console.log(`${logLine} mode=${mode} jobId=${jobId.slice(0, 8)}`);
   return jobId;

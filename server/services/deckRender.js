@@ -71,7 +71,7 @@ export async function renderDeckCards(deckId, { cardIds, onlyMissing = false, mo
     ? pin.modelId
     : null;
   const localModel = mode === IMAGE_GEN_MODE.LOCAL
-    ? resolveLocalImageModel(settings, { modelId: model || localPinModel || settings.imageGen?.local?.modelId || undefined })
+    ? resolveLocalImageModel(settings, { modelId: model || localPinModel || undefined })
     : null;
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
 

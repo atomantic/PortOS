@@ -118,9 +118,9 @@ vi.mock('../stageRunner.js', () => ({ runStagedLLM: (...a) => runStagedLLMMock(.
 vi.mock('../../lib/mediaModels.js', () => ({
   getDefaultVideoModelId: () => 'ltx-default',
   getVideoModels: () => [{ id: 'ltx-default' }, { id: 'ltx-extra' }],
-  // Character-LoRA auto-apply resolves the render model's compat key from
-  // the image registry; empty registry → no compat filtering in tests.
-  getImageModels: () => [],
+  // Local queueing now requires an explicit selected model ID, and character
+  // LoRA compatibility must resolve against that same model.
+  getImageModels: () => [{ id: 'dev', hardwareCompatibility: { state: 'available' } }],
 }));
 
 // Keep the character-LoRA resolver off the real data/loras directory; tests

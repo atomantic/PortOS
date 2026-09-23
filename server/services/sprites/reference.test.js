@@ -15,6 +15,11 @@ import { mkdir, writeFile, readFile } from 'fs/promises';
 import { writeCandidatePng, placeCandidate as placeCandidateFixture, expectCarriesCorrection } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-reference-test-'));
+const localImageModels = [
+  { id: 'dev', hardwareCompatibility: { state: 'available' } },
+  { id: 'flux-dev-4bit', hardwareCompatibility: { state: 'available' } },
+  { id: 'record-incompatible', hardwareCompatibility: { state: 'unavailable' } },
+];
 
 // MUTATE actual.PATHS (don't replace the object): fileUtils' internal
 // resolvers (resolveImageInputPath / resolveSpriteImageInput) close over the
@@ -38,6 +43,10 @@ vi.mock('../mediaJobQueue/index.js', () => ({
 
 vi.mock('../imageGen/index.js', () => ({
   resolveImageCleaners: () => ({ cleanC2PA: false, denoise: false }),
+}));
+vi.mock('../../lib/mediaModels.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getImageModels: () => localImageModels,
 }));
 
 const settings = {
@@ -795,6 +804,17 @@ describe('lockReference', () => {
     expect(call.params.mode).toBe('local');
     expect(call.params.modelId).toBe('flux-dev-4bit');
     expect(call.params.spriteRef.model).toBe('flux-dev-4bit');
+  });
+
+  it('falls through an incompatible record pin to the compatible install pin', async () => {
+    const id = newId();
+    await createCharacter(id, { imageMode: 'local', imageModelId: 'record-incompatible' });
+
+    await startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'example design' });
+
+    const { params } = enqueueJob.mock.calls[0][0];
+    expect(params.modelId).toBe('flux-dev-4bit');
+    expect(params.spriteRef.model).toBe('flux-dev-4bit');
   });
 
   it('rebases legacy repo-root manifest paths from a phase-1 import', async () => {

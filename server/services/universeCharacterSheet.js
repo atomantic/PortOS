@@ -20,11 +20,11 @@ import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
-import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
 import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
+import { selectLocalImageModelFromSettings } from './imageGen/prepareParams.js';
 import { RENDER_TARGET, recordRenderPin } from '../lib/renderTargets.js';
 import {
   flattenStats, flattenPalette, flattenWardrobes, flattenProps, flattenNamedList,
@@ -57,22 +57,6 @@ const CODEX_HEIGHT = 3072;
 function resolveSheetDimensions(mode, builtWidth, builtHeight) {
   if (mode === IMAGE_GEN_MODE.CODEX) return { width: CODEX_WIDTH, height: CODEX_HEIGHT };
   return { width: builtWidth || DEFAULT_WIDTH, height: builtHeight || DEFAULT_HEIGHT };
-}
-
-// Resolve the local-mode model id. With pure text-template rendering we no
-// longer depend on FLUX.2-specific init-image / multi-ref flags, so any
-// registered model is fair game. Order:
-//   1. Explicit override (when it matches a registered model).
-//   2. settings.imageGen.local.modelId.
-//   3. First available local model.
-// Returns null when nothing is registered; caller surfaces the 400.
-export function resolveSheetModelId({ override, settings, allModels }) {
-  const findById = (id) => (typeof id === 'string' ? allModels.find((m) => m.id === id) : null);
-  const trimmedOverride = typeof override === 'string' ? override.trim() : '';
-  return findById(trimmedOverride)?.id
-    ?? findById(settings?.imageGen?.local?.modelId)?.id
-    ?? allModels[0]?.id
-    ?? null;
 }
 
 const DEFAULT_EXPRESSIONS = Object.freeze([
@@ -186,7 +170,7 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
     // modelId is resolved at render time from current settings — see
-    // resolveSheetModelId. Returned as null here so the prompt builder stays
+    // the shared local model selector. Returned as null here so the prompt builder stays
     // pure (no settings I/O) and the renderer is the single decision point.
     modelId: null,
   };
@@ -456,8 +440,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     modelId = cloud.modelId;
     params = { ...baseParams, ...cloud.providerParams };
   } else if (activeMode === IMAGE_GEN_MODE.LOCAL) {
-    const allModels = getImageModels();
-    modelId = resolveSheetModelId({ override: options.modelId, settings, allModels });
+    modelId = selectLocalImageModelFromSettings(settings, options.modelId)?.id || null;
     if (!modelId) {
       throw new ServerError(
         'No local image-gen models are registered. Install a model via `bash scripts/setup-image-video.sh` before generating a reference sheet.',
