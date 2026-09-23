@@ -15,7 +15,7 @@ import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal';
 import socket from '../services/socket';
-import { startMemoRecording } from '../lib/audioRecorder';
+import useMemoRecorder from '../hooks/useMemoRecorder';
 import { getRelationKind } from '../lib/catalogTypes';
 import {
   createCatalogScrap,
@@ -120,8 +120,7 @@ export default function CatalogIngest() {
   // immediately on select, so it has no persistent mode.
   const [sourceMode, setSourceMode] = useState('paste'); // 'paste' | 'url'
   const [url, setUrl] = useState('');
-  const [recording, setRecording] = useState(false);
-  const recorderRef = useRef(null);
+  const { recording, starting, start: startMemo, stop: stopMemo, cancel: cancelMemo } = useMemoRecorder();
   // "Catalogue into" — the universe every committed ingredient binds to
   // (#7615). Populated on mount; defaulted per-ingest in enterReviewFromResult.
   // Mirrored into a ref because the brain-bridge handoff runs from the
@@ -146,10 +145,6 @@ export default function CatalogIngest() {
   // keep a Brain-selected provider/model from being replaced by a stale
   // catalog stage pin.
   const brainRouteRef = useRef(null);
-
-  // Stop the mic if the page unmounts mid-recording (navigating away), so the
-  // MediaRecorder stream isn't left live with no UI to stop it.
-  useEffect(() => () => { recorderRef.current?.cancel?.(); }, []);
 
   // Load the "Catalogue into" options once. Best-effort — an empty list just
   // leaves Unassigned as the only choice.
@@ -177,17 +172,12 @@ export default function CatalogIngest() {
     return reality?.id || UNASSIGNED_UNIVERSE;
   };
 
-  // Any transition OUT of the paste phase that isn't the voice flow's own
-  // stop-and-transcribe (which nulls recorderRef before switching) must release
-  // the mic — otherwise starting File/URL/Paste ingest mid-recording hides the
+  // Any transition OUT of the paste phase must release the mic — otherwise
+  // starting File/URL/Paste ingest mid-recording hides the
   // stop control while the stream stays live.
   useEffect(() => {
-    if (phase !== 'paste' && recorderRef.current) {
-      recorderRef.current.cancel?.();
-      recorderRef.current = null;
-      setRecording(false);
-    }
-  }, [phase]);
+    if (phase !== 'paste') cancelMemo();
+  }, [phase, cancelMemo]);
 
   // Track active runId so a stale frame from an earlier scrap can't mutate the
   // current stage list (server fans these to all sockets — single-user trust
@@ -226,9 +216,7 @@ export default function CatalogIngest() {
     creativeNoteIdsRef.current = [];
     creativeNoteScrapIdRef.current = null;
     brainRouteRef.current = null;
-    recorderRef.current?.cancel?.();
-    recorderRef.current = null;
-    setRecording(false);
+    cancelMemo();
     setPhase('paste');
     setScrapId(null);
     setStages(INITIAL_STAGES);
@@ -396,21 +384,15 @@ export default function CatalogIngest() {
   };
 
   const startRecording = async () => {
-    const handle = await startMemoRecording().catch((err) => {
+    await startMemo().catch((err) => {
       toast.error(err?.message || 'Microphone unavailable');
-      return null;
     });
-    if (!handle) return;
-    recorderRef.current = handle;
-    setRecording(true);
   };
 
   const stopRecordingAndIngest = async () => {
-    const handle = recorderRef.current;
-    if (!handle) return;
-    recorderRef.current = null;
-    setRecording(false);
-    const clip = await handle.stop().catch((err) => {
+    const pendingClip = stopMemo();
+    if (!pendingClip) return;
+    const clip = await pendingClip.catch((err) => {
       toast.error(err?.message || 'Recording failed');
       return null;
     });
@@ -734,7 +716,7 @@ export default function CatalogIngest() {
                 <FileText size={14} aria-hidden="true" /> File
               </FilePickerButton>
               {!recording ? (
-                <button type="button" onClick={startRecording} disabled={submitting}
+                <button type="button" onClick={startRecording} disabled={submitting || starting}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-port-border text-gray-300 hover:text-white disabled:opacity-50">
                   <Mic size={14} aria-hidden="true" /> Voice Memo
                 </button>
