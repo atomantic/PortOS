@@ -157,7 +157,8 @@ describe('importXPost', () => {
 
     await expect(importXPost('mb-1', { url: POST_URL })).rejects.toMatchObject({ status: 502, code: 'X_POST_DOWNLOAD_FAILED' });
     expect(unlink).toHaveBeenCalledTimes(1);
-    expect(unlink.mock.calls[0][0]).toMatch(/^\/tmp\/imgs\/x-[0-9a-f]{16}\.jpg$/);
+    const deletedPosterPath = unlink.mock.calls[0][0].replaceAll('\\', '/');
+    expect(deletedPosterPath).toMatch(/^\/tmp\/imgs\/x-[0-9a-f]{16}\.jpg$/);
     expect(store.appendImportedItems).not.toHaveBeenCalled();
   });
 });

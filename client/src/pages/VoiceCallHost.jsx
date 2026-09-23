@@ -80,6 +80,12 @@ export default function VoiceCallHost() {
   const [notice, setNotice] = useState(null);
   const audio = useRef({ context: null, stream: null, node: null, source: null, playing: new Set(), outputId: null, pending: [] });
   const lockRelease = useRef(null);
+  const startGenRef = useRef(0);
+
+  const releaseLock = useCallback(() => {
+    lockRelease.current?.();
+    lockRelease.current = null;
+  }, []);
 
   const teardown = useCallback(() => {
     const current = audio.current;
@@ -120,6 +126,7 @@ export default function VoiceCallHost() {
   }, []);
 
   const start = useCallback(async () => {
+    const generation = startGenRef.current;
     setNotice(null);
     const missing = missingCallHostApis(window);
     if (missing.length) {
@@ -146,6 +153,10 @@ export default function VoiceCallHost() {
         return new Promise((release) => { lockRelease.current = release; });
       }).catch(() => resolve(false));
     });
+    if (generation !== startGenRef.current) {
+      if (granted) releaseLock();
+      return;
+    }
     if (!granted) {
       setBlocked('Another tab owns the call host. Close it, or use that tab instead.');
       return;
@@ -153,6 +164,10 @@ export default function VoiceCallHost() {
 
     const currentMode = modeRef.current;
     const devices = await navigator.mediaDevices.enumerateDevices().catch(() => null);
+    if (generation !== startGenRef.current) {
+      releaseLock();
+      return;
+    }
     const problem = describeDeviceProblem(devices, {
       inputLabel: DEFAULT_INPUT_LABEL,
       // Capture only listens — it never plays a reply back, so it has no
@@ -161,6 +176,7 @@ export default function VoiceCallHost() {
     });
     if (problem) {
       setBlocked(problem);
+      releaseLock();
       return;
     }
     const input = devices.find((device) => device.label === DEFAULT_INPUT_LABEL && device.kind === 'audioinput');
@@ -183,19 +199,45 @@ export default function VoiceCallHost() {
         },
       });
     } catch (error) {
-      setBlocked(`Could not open ${DEFAULT_INPUT_LABEL}: ${error.message}`);
+      if (generation === startGenRef.current) setBlocked(`Could not open ${DEFAULT_INPUT_LABEL}: ${error.message}`);
+      releaseLock();
       return;
     }
 
-    const context = new AudioContext();
-    const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
-    try {
-      await context.audioWorklet.addModule(url);
-    } finally {
-      URL.revokeObjectURL(url);
+    if (generation !== startGenRef.current) {
+      stream.getTracks().forEach((track) => track.stop());
+      releaseLock();
+      return;
     }
-    const source = context.createMediaStreamSource(stream);
-    const node = new AudioWorkletNode(context, 'portos-call-tap');
+
+    let context;
+    let node;
+    let source;
+    try {
+      context = new AudioContext();
+      const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'application/javascript' }));
+      try {
+        await context.audioWorklet.addModule(url);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      if (generation !== startGenRef.current) return;
+      source = context.createMediaStreamSource(stream);
+      node = new AudioWorkletNode(context, 'portos-call-tap');
+      source.connect(node);
+    } catch (error) {
+      if (generation === startGenRef.current) setBlocked(`Could not start call audio: ${error.message}`);
+      return;
+    } finally {
+      if (generation !== startGenRef.current || !node) {
+        node?.port?.close?.();
+        node?.disconnect?.();
+        source?.disconnect?.();
+        stream.getTracks().forEach((track) => track.stop());
+        context?.close?.();
+        releaseLock();
+      }
+    }
     let carry = [];
     node.port.onmessage = (event) => {
       const mono = downmixToMono(event.data);
@@ -212,8 +254,6 @@ export default function VoiceCallHost() {
         socket.emit('voice:call:audio', { pcm: pcm.buffer });
       }
     };
-    source.connect(node);
-
     audio.current = { context, stream, node, source, playing: new Set(), outputId: output?.deviceId ?? null, pending: [] };
     // Two literal emits, not a computed event name — a computed
     // `socket.emit(x ? 'a' : 'b')` is invisible to the static
@@ -222,16 +262,16 @@ export default function VoiceCallHost() {
     if (currentMode === 'call') socket.emit('voice:call:attach');
     else socket.emit('voice:capture:start');
     setBlocked(null);
-  }, []);
+  }, [releaseLock]);
 
   const stop = useCallback(() => {
+    startGenRef.current += 1;
     if (modeRef.current === 'call') socket.emit('voice:call:detach');
     else socket.emit('voice:capture:stop');
     teardown();
-    lockRelease.current?.();
-    lockRelease.current = null;
+    releaseLock();
     setAttached(false);
-  }, [teardown]);
+  }, [releaseLock, teardown]);
 
   useEffect(() => {
     const onCallState = (snapshot) => {
@@ -273,6 +313,7 @@ export default function VoiceCallHost() {
     socket.on('voice:call:tts', onTts);
     socket.on('voice:tts:cancel', onTtsCancel);
     return () => {
+      startGenRef.current += 1;
       socket.off('voice:call:state', onCallState);
       socket.off('voice:capture:state', onCaptureState);
       socket.off('voice:call:tts', onTts);
@@ -280,10 +321,9 @@ export default function VoiceCallHost() {
       if (modeRef.current === 'call') socket.emit('voice:call:detach');
       else socket.emit('voice:capture:stop');
       teardown();
-      lockRelease.current?.();
-      lockRelease.current = null;
+      releaseLock();
     };
-  }, [playToCall, teardown]);
+  }, [playToCall, releaseLock, teardown]);
 
   const playTestTone = async () => {
     const context = audio.current.context || new AudioContext();

@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Mic, Square, Play, Trash2, Volume2, VolumeX, Loader2, Target } from 'lucide-react';
 import toast from '../ui/Toast';
-import { startMemoRecording } from '../../lib/audioRecorder';
+import useMemoRecorder from '../../hooks/useMemoRecorder';
 import { createLayeredPlayer } from '../../lib/songPlayback';
 import { uploadFile, getUploadUrl } from '../../services/api';
 import { formatDurationMs } from '../../utils/formatters';
@@ -39,14 +39,12 @@ let tempSeq = 0;
 const tempRecordingId = () => `rec-new-${tempSeq++}`;
 
 export default function SongRecordings({ recordings = [], layers = [], onChange, tempo = null, score = '' }) {
-  const [recording, setRecording] = useState(false);
+  const { recording, starting, start: startMemo, stop: stopMemo, stream: liveStream } = useMemoRecorder();
   const [saving, setSaving] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [targetLayerId, setTargetLayerId] = useState('');
   // Live mic stream while recording — passed to the tuner so it taps the SAME
   // mic (no second getUserMedia). Null whenever a take isn't in flight.
-  const [liveStream, setLiveStream] = useState(null);
-  const handleRef = useRef(null);   // active MediaRecorder handle
   const playerRef = useRef(null);   // active layered player
 
   // Live color-match grading is owned HERE (not inside <ColorMatch>) so the
@@ -87,11 +85,9 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
   // live take is grading (the live run owns the staff then).
   const [reviewId, setReviewId] = useState(null);
 
-  // Tear down any live player/recorder on unmount so a navigation-away can't
-  // leave the mic open or audio playing into the void.
+  // Tear down the layered player on unmount. The recorder hook owns the mic.
   useEffect(() => () => {
     if (playerRef.current) playerRef.current.stop();
-    if (handleRef.current) handleRef.current.cancel();
   }, []);
 
   const layerLabel = useCallback((layerId) => {
@@ -103,20 +99,12 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
     setReviewId(null); // a fresh take takes over the staff from any saved-take review
     armedThisTakeRef.current = false; // until the auto-arm effect fires for THIS take
     if (playerRef.current) { playerRef.current.stop(); setPlaying(false); }
-    const handle = await startMemoRecording().catch((err) => {
+    await startMemo().catch((err) => {
       toast.error(err?.message || 'Microphone access denied');
-      return null;
     });
-    if (!handle) return;
-    handleRef.current = handle;
-    setLiveStream(handle.stream || null); // feed the tuner the recording mic
-    setRecording(true);
-  }, []);
+  }, [startMemo]);
 
   const stopRecording = useCallback(async () => {
-    const handle = handleRef.current;
-    if (!handle) return;
-    handleRef.current = null;
     // Stop grading FIRST (while the analyser graph is still alive) to harvest the
     // finished take's pitch trace + accuracy summary, THEN drop the stream. Only
     // trust the harvest when grading armed for THIS take — otherwise stopMatch()
@@ -126,10 +114,10 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
     const armed = armedThisTakeRef.current;
     armedThisTakeRef.current = false;
     const analysis = armed ? stopMatch() : null;
-    setLiveStream(null); // stream is being torn down with the take
-    setRecording(false);
+    const pendingTake = stopMemo(); // stream is torn down with the take
+    if (!pendingTake) return;
     setSaving(true);
-    const take = await handle.stop().catch((err) => {
+    const take = await pendingTake.catch((err) => {
       toast.error(err?.message || 'Recording failed');
       return null;
     });
@@ -166,7 +154,7 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
 
     onChange([...recordings, entry]);
     toast.success('Take recorded — Save the song to keep it');
-  }, [recordings, targetLayerId, layerLabel, onChange, stopMatch]);
+  }, [recordings, targetLayerId, layerLabel, onChange, stopMatch, stopMemo]);
 
   const removeRecording = useCallback((id) => {
     setReviewId((cur) => (cur === id ? null : cur));
@@ -248,9 +236,9 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
               <Square size={14} /> Stop & save
             </button>
           ) : (
-            <button type="button" onClick={startRecording} disabled={saving} className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Mic size={14} />}
-              {saving ? 'Saving…' : 'Record take'}
+            <button type="button" onClick={startRecording} disabled={saving || starting} className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50">
+              {saving || starting ? <Loader2 size={14} className="animate-spin" /> : <Mic size={14} />}
+              {saving ? 'Saving…' : starting ? 'Opening mic…' : 'Record take'}
             </button>
           )}
         </div>
