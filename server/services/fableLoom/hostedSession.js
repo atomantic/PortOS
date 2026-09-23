@@ -393,6 +393,17 @@ export async function updateHostedSession(sessionId, patch = {}, { io } = {}) {
     throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
   }
 
+  // A `switchHostedEpisode` in flight is about to overwrite currentNodeId /
+  // playbackPhase / activeHoldIndex with the NEW episode's values anyway. The
+  // client's playback-sync effect fires on the very next React commit — well
+  // before the switch's async loom-read/preflight work resolves server-side
+  // — so a `currentNodeId` racing in during that window legitimately belonged
+  // to the OLD episode a moment ago. Treat it as stale and no-op rather than
+  // reject it as a `NODE_NOT_IN_EPISODE` bug (#8112).
+  if (session.switchingEpisode) {
+    return sanitizeHostedSession(session);
+  }
+
   if (patch.audioTarget && FABLELOOM_AUDIO_TARGETS.includes(patch.audioTarget)) {
     session.audioTarget = patch.audioTarget;
   }
@@ -439,6 +450,14 @@ export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session || session.status !== 'active') {
     throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
+  }
+
+  // Serializes switches — without it, two overlapping calls (a host
+  // double-clicking "Next Episode" before the first one's async work
+  // resolves) could race and let the EARLIER request commit last, rebinding
+  // the session to an episode the UI has already left.
+  if (session.switchingEpisode) {
+    throw new ServerError('An episode switch is already in progress', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
   }
 
   // Abort BEFORE the first await: a turn already in flight against the OLD

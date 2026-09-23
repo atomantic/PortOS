@@ -586,6 +586,47 @@ describe('fableLoom hostedSession', () => {
       const listenRes = await startHostedListening(session.id);
       expect(listenRes.ok).toBe(true);
     });
+
+    // Without this, a host double-clicking "Next Episode" before the first
+    // switch's async loom-read/preflight resolves fires two overlapping
+    // calls that race — the earlier request could commit last and rebind the
+    // session to an episode the UI already left.
+    it('rejects a second switch while one is already in flight', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const loomRead = deferred();
+      records.getLoom.mockImplementationOnce(() => loomRead.promise);
+
+      const pending = switchHostedEpisode(session.id, 'ep-2');
+      await expect(switchHostedEpisode(session.id, 'ep-3-not-ready')).rejects.toMatchObject({
+        status: 409,
+        code: 'EPISODE_SWITCH_IN_PROGRESS',
+      });
+
+      loomRead.resolve(mockLoom);
+      await expect(pending).resolves.toMatchObject({ ok: true });
+      expect(getHostedSession(session.id).episodeId).toBe('ep-2');
+    });
+
+    // The client's playback-sync effect fires on the very next React commit
+    // after "Next Episode" — well before switchHostedEpisode's async work
+    // resolves server-side — so a `hosted:playback:update` racing in during
+    // that window carries a currentNodeId that legitimately belonged to the
+    // OLD episode a moment ago. It must no-op, not reject as drift (#8112).
+    it('treats a currentNodeId update that races with an in-flight switch as a stale no-op', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const loomRead = deferred();
+      records.getLoom.mockImplementationOnce(() => loomRead.promise);
+
+      const pending = switchHostedEpisode(session.id, 'ep-2');
+      const updated = await updateHostedSession(session.id, { currentNodeId: 'node-2' });
+      expect(updated.currentNodeId).toBe('node-start');
+
+      loomRead.resolve(mockLoom);
+      await pending;
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-ep2-start');
+    });
   });
 
   describe('expired-session sweep', () => {
