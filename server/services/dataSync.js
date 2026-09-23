@@ -11,6 +11,7 @@ import { join } from 'path';
 import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { canonicalStringify, isEmptyScalar, isPlainObject } from '../lib/objects.js';
 import { snapshotChecksum } from '../lib/snapshotChecksum.js';
+import { parseTsMs } from '../lib/lwwTimestamp.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -141,13 +142,49 @@ const mergeNonEmptyObject = (local, remote) => {
   return merged;
 };
 
-const mergeUniqueRecords = (local, remote) => {
+const logEventId = (record) => (
+  isPlainObject(record) && typeof record.id === 'string' && record.id ? record.id : null
+);
+
+const logEventStampMs = (record) => parseTsMs(record.updatedAt) ?? parseTsMs(record.createdAt) ?? -Infinity;
+
+// Pick one of two copies of the same logged event. The order is total, so the
+// winner is the same whichever copy is local and whichever peer syncs first.
+// Newer `updatedAt` wins. On equal stamps the larger `count` wins: a peer from
+// before #8143 adds a same-product log to an existing row in place without
+// restamping it, and that increment is a real drink/item. Then canonical text.
+const preferLogEventCopy = (a, b) => {
+  const stampDiff = logEventStampMs(a) - logEventStampMs(b);
+  if (stampDiff !== 0 && !Number.isNaN(stampDiff)) return stampDiff > 0 ? a : b;
+  const countDiff = (Number(a.count) || 1) - (Number(b.count) || 1);
+  if (countDiff !== 0) return countDiff > 0 ? a : b;
+  return canonicalStringify(a) >= canonicalStringify(b) ? a : b;
+};
+
+// Merge one day's alcohol drinks or nicotine items (#8143). A row with an `id` is
+// one logged event: copies of it collapse to the preferred copy, and two
+// identical rows with different ids stay two events. A row without an `id` was
+// logged before events had identity, so it keeps the old content-keyed dedupe —
+// its identical twin on a peer is the same row synced earlier, not a new event.
+const mergeDailyLogEvents = (local, remote) => {
   const merged = [];
-  const seen = new Set();
+  const indexById = new Map();
+  const seenLegacy = new Set();
   for (const record of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
+    const id = logEventId(record);
+    if (id) {
+      const index = indexById.get(id);
+      if (index === undefined) {
+        indexById.set(id, merged.length);
+        merged.push(record);
+      } else {
+        merged[index] = preferLogEventCopy(merged[index], record);
+      }
+      continue;
+    }
     const key = canonicalStringify(record);
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (seenLegacy.has(key)) continue;
+    seenLegacy.add(key);
     merged.push(record);
   }
   return merged;
@@ -160,7 +197,7 @@ const mergeDailyLogCategory = (local, remote, listKey, totalKey, totalForItem) =
   const hasList = Array.isArray(localCategory[listKey]) || Array.isArray(remoteCategory[listKey]);
   if (!hasList) return merged;
 
-  const records = mergeUniqueRecords(localCategory[listKey], remoteCategory[listKey]);
+  const records = mergeDailyLogEvents(localCategory[listKey], remoteCategory[listKey]);
   merged[listKey] = records;
   if (records.length > 0) {
     merged[totalKey] = roundToHundredth(records.reduce((total, record) => total + totalForItem(record), 0));
@@ -906,7 +943,7 @@ const SNAPSHOT_CATEGORY_SCHEMA_KEYS = {
   goals: [],
   character: [],
   digitalTwin: [],
-  meatspace: [],
+  meatspace: ['meatspace'],
   videoHistory: [],
   storyBuilder: RECORD_KIND_SCHEMA_CATEGORIES.storyBuilder,
   // Per-instance digests replaced whole under an LWW stamp, with every field

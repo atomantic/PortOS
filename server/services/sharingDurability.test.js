@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdir, readFile, writeFile, rm } from 'fs/promises';
 import { dirname, join } from 'path';
 import { mockPathsDataRoot, mockNoPeers, mockNoPeerSync, mockTestIdentity } from '../lib/mockPathsDataRoot.js';
@@ -41,6 +41,8 @@ const subscriptions = await import('./sharing/subscriptions.js');
 const manifests = await import('./sharing/manifest.js');
 const importer = await import('./sharing/importer.js');
 const annotations = await import('./sharing/annotationsSync.js');
+const alcohol = await import('./meatspaceAlcohol.js');
+const nicotine = await import('./meatspaceNicotine.js');
 const { PATHS } = await import('../lib/fileUtils.js');
 const bucketPath = join(tempRoot, 'bucket');
 let bucket;
@@ -171,6 +173,82 @@ it('merges same-date daily-log tenants without duplicating them on replay', asyn
   const replayed = JSON.parse(await readFile(path, 'utf8'));
   expect(replay).toEqual({ applied: false, count: 0 });
   expect(replayed.entries[0]).toEqual(entry);
+});
+
+// Identified alcohol/nicotine events (#8143): identical rows logged on two peers
+// are two events, a replay adds nothing, and legacy/v0 payloads stay safe.
+describe('daily-log event identity (#8143)', () => {
+  const date = '2026-01-03';
+  const path = () => join(PATHS.meatspace, 'daily-log.json');
+  const stamp = '2026-01-03T20:00:00.000Z';
+  const lager = (id, extra = {}) => ({ id, name: 'Example Lager', oz: 12, abv: 5, count: 1, createdAt: stamp, updatedAt: stamp, ...extra });
+  const day = (drinks) => ({ date, alcohol: { drinks, standardDrinks: 0 } });
+  const snapshot = (...entries) => ({ 'daily-log.json': { entries } });
+  afterEach(() => vi.useRealTimers());
+  const savedDay = async () => JSON.parse(await readFile(path(), 'utf8')).entries.find((e) => e.date === date);
+
+  // Each "peer" logs through the real services onto an empty log at the same
+  // instant, so the rows are identical apart from their event identity.
+  const logOnFreshPeer = async () => {
+    await rm(path(), { force: true });
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(stamp) });
+    await alcohol.logDrink({ name: 'Example Lager', oz: 12, abv: 5, count: 1, date });
+    await nicotine.logNicotine({ product: 'Example Pouch', mgPerUnit: 3, count: 1, date });
+    return JSON.parse(await readFile(path(), 'utf8'));
+  };
+
+  it('keeps identical independent events from both peers in either sync order', async () => {
+    const peers = [await logOnFreshPeer(), await logOnFreshPeer()];
+    vi.useRealTimers();
+    for (const [local, remote] of [peers, [...peers].reverse()]) {
+      await seed(path(), local);
+      const peer = { 'daily-log.json': remote };
+      expect(await dataSync.applyRemote('meatspace', peer)).toEqual({ applied: true, count: 1 });
+      const merged = await savedDay();
+      expect(merged.alcohol.drinks).toHaveLength(2);
+      expect(merged.alcohol.standardDrinks).toBe(2);
+      expect(merged.nicotine.items).toHaveLength(2);
+      expect(merged.nicotine.totalMg).toBe(6);
+
+      expect(await dataSync.applyRemote('meatspace', peer)).toEqual({ applied: false, count: 0 });
+      expect(await savedDay()).toEqual(merged);
+    }
+  });
+
+  it('resolves copies of one event the same way whichever side holds which', async () => {
+    const legacy = { name: 'Example Stout', oz: 12, abv: 5, count: 1 };
+    const newerEdit = lager('drink-x', { count: 1, abv: 10, updatedAt: '2026-01-04T08:00:00.000Z' });
+    // A pre-#8143 peer folds a second log into the row in place, without restamping.
+    const bumpedInPlace = lager('drink-x', { count: 2 });
+    const cases = [
+      // Equal stamps: the in-place increment is a real drink, so the larger count wins.
+      [[lager('drink-x'), legacy], [legacy, lager('drink-x'), bumpedInPlace], 2, 3],
+      [[bumpedInPlace, legacy], [legacy, lager('drink-x')], 2, 3],
+      // A restamped edit wins over a stale copy regardless of its count.
+      [[bumpedInPlace, legacy], [newerEdit, legacy], 1, 3],
+      [[newerEdit, legacy], [bumpedInPlace, legacy], 1, 3],
+    ];
+    for (const [localDrinks, remoteDrinks, count, total] of cases) {
+      await seed(path(), { entries: [day(localDrinks)] });
+      await dataSync.applyRemote('meatspace', snapshot(day(remoteDrinks)));
+      const merged = await savedDay();
+      // The legacy row keeps content dedupe; the identified event is one row.
+      expect(merged.alcohol.drinks).toHaveLength(2);
+      expect(merged.alcohol.drinks.find((d) => d.id === 'drink-x').count).toBe(count);
+      expect(merged.alcohol.standardDrinks).toBe(total);
+    }
+  });
+
+  it('refuses a daily log from a peer on a newer meatspace schema', async () => {
+    await seed(path(), { entries: [day([lager('drink-a')])] });
+    const before = await readFile(path(), 'utf8');
+    const result = await dataSync.applyRemote('meatspace', snapshot(day([lager('drink-b')])), {
+      portosMeta: { portosVersion: '99.0.0', schemaVersions: { meatspace: 2 } },
+    });
+    expect(result.applied).toBe(false);
+    expect(result.blockedBySchema.ahead).toEqual([{ category: 'meatspace', senderV: 2, receiverV: 1 }]);
+    expect(await readFile(path(), 'utf8')).toBe(before);
+  });
 });
 
 // An unreadable shared identity must not leave a new local registry entry.
