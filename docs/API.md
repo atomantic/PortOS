@@ -789,7 +789,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/standardize` | App PM2 standardizer |
 | `/api/stacker-news`, `/api/x` | Social integrations |
 | `/api/model-personality` | LLM personality tests |
-| `/api/providers/comparison` | Provider/model comparison catalog — discover, import, and benchmark source sync (Artificial Analysis, SWE-bench, LiveCodeBench; see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
+| `/api/providers/comparison` | Provider/model comparison catalog — discover, import, and benchmark source sync (Artificial Analysis, OpenRouter routed pricing and endpoint performance, Epoch AI, SWE-bench, LiveCodeBench; see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
 | `/api/browser` | Managed Chromium |
 | `/api/creative-commission` | Creative commissions |
 | `/api/midi-runtime` | MIDI runtime |
@@ -915,6 +915,8 @@ socket.emit('shell:stop', { sessionId });
 ### iTerm2 Sessions
 
 The Shell page's iTerm2 view uses its own `iterm:*` events, never the `shell:*` ones — see [ITERM.md](./ITERM.md). There is no start, stop or resize: iTerm2 owns its sessions' lifecycle and size.
+
+`iterm:input` types exact bytes into a live host terminal and can run commands with the host user's privileges. Treat access to the PortOS socket as host-command access; the iTerm2 view adds no command allowlist. PortOS authentication and HTTPS are optional and off by default, so keep the instance on its private network and use a strong, unique instance password.
 
 ```javascript
 socket.emit('iterm:list'); // subscribe; replies (and re-broadcasts) iterm:sessions

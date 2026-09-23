@@ -378,7 +378,10 @@ export function createItermBridge(deps = {}) {
     // A permanent listener: an 'error' after the open promise settled must
     // never surface as an uncaught EventEmitter error.
     ws.on('error', (err) => {
-      if (conn?.ws === ws) console.error(`❌ ${LOG_PREFIX}: socket error: ${err.message}`);
+      const code = typeof err?.code === 'string' && /^[A-Z0-9_]{1,32}$/u.test(err.code)
+        ? ` (${err.code})`
+        : '';
+      if (!conn || conn.ws === ws) console.error(`❌ ${LOG_PREFIX}: local socket error${code}`);
       reject(err);
     });
     ws.once('open', () => resolve(ws));
@@ -447,9 +450,9 @@ export function createItermBridge(deps = {}) {
     let credentials;
     try {
       credentials = await auth();
-    } catch (err) {
+    } catch {
       if (!stale()) {
-        setStatus('auth-failed', err.message);
+        setStatus('auth-failed', 'Local iTerm2 authentication failed');
         scheduleReconnect();
       }
       return;
@@ -458,9 +461,9 @@ export function createItermBridge(deps = {}) {
     let ws;
     try {
       ws = await openSocket(credentials);
-    } catch (err) {
+    } catch {
       if (!stale()) {
-        setStatus('connect-failed', err.message);
+        setStatus('connect-failed', 'Local iTerm2 socket connection failed');
         scheduleReconnect();
       }
       return;

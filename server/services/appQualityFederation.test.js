@@ -171,7 +171,7 @@ it('reads v2 and legacy snapshot files without writing, and drops future dates',
   expect(JSON.stringify(records)).not.toMatch(/Users|agent-security|app_id|github/);
 
   const legacy = await readReleaseQuality(file(path => {
-    if (path.endsWith('.quality.json')) throw new Error('ENOENT');
+    if (path.endsWith('.quality.json')) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     return JSON.stringify(published);
   }), managed);
   expect(legacy).toMatchObject([{ report: { score: 76 } }]);

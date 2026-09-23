@@ -130,6 +130,20 @@ describe('pending lane saves', () => {
     expect(savedUnload.defaultPrevented).toBe(false);
     view.unmount();
   });
+
+  it('keeps the leave warning after a save fails', async () => {
+    const view = render(<VideoTimelineEditor />);
+    await awaitPageLoaded('Loading timeline project');
+    api.updateTimelineProject.mockRejectedValueOnce(new Error('offline'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledOnce(), { timeout: 1500 });
+    const failedSaveUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(failedSaveUnload);
+    expect(failedSaveUnload.defaultPrevented).toBe(true);
+    expect(toastError).toHaveBeenCalledWith('Save failed: offline');
+    view.unmount();
+  });
 });
 
 describe('lane visibility', () => {

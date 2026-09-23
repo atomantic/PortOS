@@ -312,6 +312,8 @@ export async function createHostedSession(loomId, episodeId, {
     hostSocketId: null,
     audienceSocketId: null,
     activeTurn: null,
+    switchingEpisode: false,
+    episodeSwitchGeneration: 0,
     createdAt: now.toISOString(),
     expiresAt,
   };
@@ -473,6 +475,7 @@ export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
   // switch's `hosted:session:sync`, mixing old-episode content into the new
   // episode. Always cleared in `finally`, including on every early return.
   session.switchingEpisode = true;
+  session.episodeSwitchGeneration += 1;
 
   // Re-checked after every await below — a host "end", DELETE /sessions/:id,
   // or the TTL sweep can tear this session down while we're off reading the
@@ -568,8 +571,17 @@ export async function startHostedListening(sessionId, { io } = {}) {
     throw new ServerError('An episode switch is in progress', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
   }
 
+  const episodeId = session.episodeId;
+  const switchGeneration = session.episodeSwitchGeneration;
   const loom = await getLoom(session.loomId);
-  const episode = loom.episodes?.find((e) => e.id === session.episodeId) || null;
+  if (activeSessions.get(sessionId) !== session || session.status !== 'active') {
+    throw new ServerError('Session is not active', { status: 400, code: 'SESSION_INACTIVE' });
+  }
+  if (session.switchingEpisode || session.episodeSwitchGeneration !== switchGeneration || session.episodeId !== episodeId) {
+    throw new ServerError('Session changed while starting the listening turn', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
+  }
+
+  const episode = loom.episodes?.find((e) => e.id === episodeId) || null;
   const node = episode?.nodes?.find((n) => n.id === session.currentNodeId) || null;
   const asset = resolvePlaybackPhaseAsset({
     node,

@@ -48,7 +48,7 @@ export function parseXPostUrl(input) {
   if (!isXHost(u.hostname)) {
     throw badUrl('That doesn’t look like an x.com/twitter.com post URL');
   }
-  const match = u.pathname.match(/^\/[^/]+\/status\/(\d+)/);
+  const match = u.pathname.match(/^\/[^/]+\/status\/(\d+)(?:\/|$)/);
   if (!match) {
     throw badUrl('Include the full post URL, e.g. x.com/user/status/1234567890');
   }

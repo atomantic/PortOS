@@ -131,4 +131,24 @@ describe('ImageGen cross-page Remix handoff', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     await waitFor(() => expect(screen.queryByText(/load this image’s render settings/)).toBeNull());
   });
+
+  it('clears prompt, negative prompt, and LoRAs missing from a later in-page Remix', async () => {
+    const plainImage = { filename: 'plain-image.png', width: 512, height: 512 };
+    state.listImageGalleryPage.mockResolvedValue({ items: [RECORD, plainImage], total: 2, offset: 0, limit: 20 });
+    state.mediaCardFactory = ({ item, onRemix }) => (
+      <button type="button" onClick={() => onRemix(item)}>Remix {item.filename}</button>
+    );
+    await renderImageGenPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: `Remix ${RECORD.filename}` }));
+    await waitFor(() => expect(state.loraPickerProps.selected).toHaveLength(1));
+    expect(screen.getByLabelText('Prompt')).toHaveValue(RECORD.prompt);
+    expect(screen.getByLabelText('Negative Prompt')).toHaveValue(RECORD.negative_prompt);
+
+    fireEvent.click(screen.getByRole('button', { name: `Remix ${plainImage.filename}` }));
+
+    expect(screen.getByLabelText('Prompt')).toHaveValue('');
+    expect(screen.getByLabelText('Negative Prompt')).toHaveValue('');
+    expect(state.loraPickerProps.selected).toEqual([]);
+  });
 });

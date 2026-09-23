@@ -51,8 +51,11 @@ function mergeConfig(legacy, current) {
       ...(isObject(newConfig.taskMetadata) ? newConfig.taskMetadata : {}),
     };
   }
-  if (Array.isArray(merged.runAfter)) {
-    merged.runAfter = [...new Set(merged.runAfter.map(renameTaskType))];
+  if (Array.isArray(oldConfig.runAfter) || Array.isArray(newConfig.runAfter)) {
+    merged.runAfter = [...new Set([
+      ...(Array.isArray(oldConfig.runAfter) ? oldConfig.runAfter : []),
+      ...(Array.isArray(newConfig.runAfter) ? newConfig.runAfter : []),
+    ].map(renameTaskType))];
   }
   return merged;
 }

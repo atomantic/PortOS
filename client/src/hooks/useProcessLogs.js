@@ -33,7 +33,7 @@ const createEntry = (processName, lines, appId) => ({
   processName,
   appId,
   lines,
-  consumers: new Set(), // Set<{ onLine, onSubscribed }>
+  consumers: new Set(), // Set<{ onLine, onSubscribed, onReset }>
   buffer: [], // shared tail buffer for late joiners, capped at MAX_LINES
   subscribed: false,
 });
@@ -80,7 +80,14 @@ socket.on('logs:error', (data) => {
 // entry, or every mounted consumer freezes with no error frame ever emitted.
 socket.on('connect', () => {
   registry.forEach((entry) => {
-    if (entry.consumers.size > 0) subscribeEntry(entry);
+    if (entry.consumers.size > 0) {
+      // The server replays the requested PM2 tail on every subscription.
+      // Replace each consumer's old tail before that replay arrives so a
+      // reconnect cannot append duplicate history to the shared buffer/UI.
+      entry.buffer = [];
+      entry.consumers.forEach((consumer) => consumer.onReset());
+      subscribeEntry(entry);
+    }
   });
 });
 
@@ -148,15 +155,33 @@ export function useProcessLogs(processName, options = {}) {
     const consumer = {
       onLine: queueLine,
       onSubscribed: () => setSubscribed(true),
+      onReset: () => {
+        pendingRef.current = [];
+        if (flushTimerRef.current != null) clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+        setLogs([]);
+        setSubscribed(false);
+      },
     };
     entry.consumers.add(consumer);
 
     if (isFirstConsumer) {
       subscribeEntry(entry);
     } else {
+      // The PM2 stream is shared, so the first consumer's tail depth must not
+      // cap a later consumer that asked for more history. Reset every view
+      // before replacing the stream: the server replays the expanded tail on
+      // subscribe, and retaining existing lines would duplicate that replay.
+      if (lines > entry.lines) {
+        entry.lines = lines;
+        entry.buffer = [];
+        entry.consumers.forEach((existing) => existing.onReset());
+        subscribeEntry(entry);
+      }
       // Late joiner: seed from the existing entry's tail (capped to this
       // consumer's own `lines`) instead of re-subscribing, which would
-      // replay the tail into every consumer already watching this stream.
+      // replay the tail into every consumer already watching this stream. An
+      // expanded stream was reset above and will seed from its replay instead.
       if (entry.subscribed) setSubscribed(true);
       const seeded = entry.buffer.slice(-lines);
       if (seeded.length > 0) setLogs(seeded);

@@ -135,6 +135,42 @@ describe('universe markdown filenames', () => {
 });
 
 describe('parseUniverseMarkdown', () => {
+  it('round-trips structured canon fields and empty collections without exporting nested metadata', () => {
+    const source = {
+      name: 'Structured World',
+      characters: [{
+        name: 'Mira',
+        psychology: { theoryOfControl: 'Carry the map and no one gets lost.', drives: { status: { desire: 'a title', fear: 'being surplus' } } },
+        sliders: { proactivity: 7, competence: 4 },
+        relationshipLinks: [{ id: 'local-link-id', targetCharacterId: 'example-character', type: 'ally', description: 'Shares the route.' }],
+        stats: { agility: 5 },
+        colorPalette: [{ name: 'Brass', hex: '#b08d57', role: 'coat' }],
+        props: [{ id: 'local-prop-id', name: 'Compass', description: 'Points north.' }],
+        expressions: [{ name: 'Wary', description: 'One brow raised.' }],
+        handGestures: [{ name: 'Wait', description: 'Palm out.' }],
+        wardrobes: [{ name: 'Travel coat', description: 'Weathered canvas.' }],
+        customProfile: { nested: ['kept', 'in order'] },
+        emptyCollection: [],
+      }],
+      places: [{ name: 'The Archive', palette: ['copper', 'ink'] }],
+      objects: [{ name: 'Sun Compass', attachments: [{ characterId: 'example-character', role: 'keepsake' }] }],
+    };
+
+    const markdown = universeToMarkdown(source);
+    const imported = parseUniverseMarkdown(markdown);
+
+    expect(imported).toEqual({
+      ...source,
+      characters: [{
+        ...source.characters[0],
+        relationshipLinks: [{ targetCharacterId: 'example-character', type: 'ally', description: 'Shares the route.' }],
+        props: [{ name: 'Compass', description: 'Points north.' }],
+      }],
+    });
+    expect(markdown).not.toContain('local-link-id');
+    expect(markdown).not.toContain('local-prop-id');
+  });
+
   it('reads the exported editable fields, including multiline values and escaped headings', () => {
     const markdown = universeToMarkdown({
       name: 'The Bright World',

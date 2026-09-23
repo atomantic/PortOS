@@ -248,6 +248,35 @@ describe('useProcessLogs', () => {
     second.unmount();
   });
 
+  it('expands the shared PM2 tail when a later consumer requests more history', () => {
+    const first = renderHook(() => useProcessLogs('game', { lines: 200 }));
+    fire('logs:line', { processName: 'game', line: 'short tail', type: 'stdout', timestamp: 1 });
+
+    const second = renderHook(() => useProcessLogs('game', { lines: 500 }));
+
+    expect(emitsOf('logs:subscribe')).toEqual([
+      { processName: 'game', lines: 200 },
+      { processName: 'game', lines: 500 },
+    ]);
+    expect(first.result.current.logs).toEqual([]);
+    expect(second.result.current.logs).toEqual([]);
+
+    act(() => {
+      for (let index = 0; index < 500; index += 1) {
+        handlers.get('logs:line')?.forEach(fn => fn({
+          processName: 'game', line: `expanded replay ${index}`, type: 'stdout', timestamp: index + 2,
+        }));
+      }
+    });
+    flushLines();
+
+    expect(first.result.current.logs).toHaveLength(500);
+    expect(second.result.current.logs).toEqual(first.result.current.logs);
+
+    first.unmount();
+    second.unmount();
+  });
+
   it('clear() on one consumer does not empty another consumer\'s lines', () => {
     const first = renderHook(() => useProcessLogs('game'));
     const second = renderHook(() => useProcessLogs('game'));
@@ -261,17 +290,26 @@ describe('useProcessLogs', () => {
     second.unmount();
   });
 
-  it('re-subscribes and resumes streaming after a reconnect', () => {
+  it('replaces the replayed tail and resumes streaming after a reconnect', () => {
     const { result } = renderHook(() => useProcessLogs('game'));
     expect(emitsOf('logs:subscribe')).toHaveLength(1);
 
+    fire('logs:line', { processName: 'game', line: 'recent', type: 'stdout', timestamp: 1 });
+    expect(result.current.logs).toHaveLength(1);
+
     // Server drops every stream owned by a disconnected socket
     // (cleanupSocketStreams) — a mounted consumer must re-subscribe on
-    // 'connect' or it freezes with no error frame ever emitted.
+    // 'connect' or it freezes with no error frame ever emitted. The new stream
+    // replays its tail, so clear the old tail before those lines arrive.
     fireRaw('connect', undefined);
     expect(emitsOf('logs:subscribe')).toHaveLength(2);
+    expect(result.current.logs).toEqual([]);
 
+    fire('logs:line', { processName: 'game', line: 'recent', type: 'stdout', timestamp: 2 });
     fire('logs:line', { processName: 'game', line: 'resumed', type: 'stdout', timestamp: 3 });
-    expect(result.current.logs).toEqual([{ line: 'resumed', type: 'stdout', timestamp: 3 }]);
+    expect(result.current.logs).toEqual([
+      { line: 'recent', type: 'stdout', timestamp: 2 },
+      { line: 'resumed', type: 'stdout', timestamp: 3 },
+    ]);
   });
 });

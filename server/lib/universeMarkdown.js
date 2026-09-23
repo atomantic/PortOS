@@ -35,6 +35,14 @@ const ENTRY_METADATA_FIELDS = new Set([
   'deleted', 'deletedAt', 'schemaVersion', 'locked', 'missingFromProse',
 ]);
 
+const stripEntryMetadata = (value) => {
+  if (Array.isArray(value)) return value.map(stripEntryMetadata);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !ENTRY_METADATA_FIELDS.has(key))
+    .map(([key, nested]) => [key, stripEntryMetadata(nested)]));
+};
+
 const CANON_SECTIONS = Object.freeze([
   ['characters', 'Characters'],
   ['places', 'Places'],
@@ -49,15 +57,6 @@ const compareNames = (left, right) => {
   const rawA = String(left);
   const rawB = String(right);
   return rawA < rawB ? -1 : rawA > rawB ? 1 : 0;
-};
-
-const hasContent = (value) => {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return Boolean(value.trim());
-  if (typeof value === 'number' || typeof value === 'boolean') return true;
-  if (Array.isArray(value)) return value.some(hasContent);
-  if (typeof value === 'object') return Object.values(value).some(hasContent);
-  return false;
 };
 
 const formatFieldLabel = (key) => String(key)
@@ -133,8 +132,10 @@ const renderEntry = (kind, entry, fallback) => {
   const lines = [`### ${entryName(entry, fallback)}`];
   for (const key of orderedEntryKeys(kind, entry)) {
     const value = entry[key];
-    if (!hasContent(value)) continue;
-    const rendered = formatBlockValue(value);
+    if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) continue;
+    const rendered = typeof value === 'string'
+      ? formatBlockValue(value)
+      : `\`\`\`portos-json\n${JSON.stringify(stripEntryMetadata(value), null, 2).replace(/`/g, '\\u0060')}\n\`\`\``;
     if (!rendered) continue;
     lines.push(`**${formatFieldLabel(key)}:** ${rendered}`);
   }
@@ -401,14 +402,25 @@ const splitSubsections = (lines) => {
 const parseCanonEntries = (kind, lines) => splitSubsections(lines).map(({ title, lines: entryLines }) => {
   const { fields, freeText } = readFieldBlocks(
     entryLines,
-    (key) => STRING_FIELDS[kind].has(key) || ARRAY_FIELDS[kind].has(key),
+    (key) => key !== 'name' && !ENTRY_METADATA_FIELDS.has(key),
   );
   const entry = { ...(kind === 'places' && /^(?:int\.?\s*\/\s*ext\.?|ext\.?|int\.?)(?:\s|\.)/iu.test(title)
     ? { slugline: title }
     : { name: title }) };
   for (const [key, value] of Object.entries(fields)) {
+    const structured = value.match(/^```portos-json\n([\s\S]*?)\n```$/u);
+    if (structured) {
+      try {
+        entry[key] = JSON.parse(structured[1]);
+        continue;
+      } catch {
+        // Keep malformed hand-authored metadata legible instead of silently
+        // discarding the field; normal universe validation still applies.
+      }
+    }
     if (STRING_FIELDS[kind].has(key)) entry[key] = value;
     else if (ARRAY_FIELDS[kind].has(key)) entry[key] = splitArrayValue(value);
+    else entry[key] = value;
   }
   if (freeText && !entry.notes) entry.notes = freeText;
   return entry;

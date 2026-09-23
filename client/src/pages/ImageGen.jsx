@@ -1299,8 +1299,8 @@ export default function ImageGen() {
     // clear the picker so the user sees what actually produced the image.
     setStylePreset(null);
     setSelectedUniverse(null);
-    if (img.prompt) setPrompt(img.prompt);
-    if (img.negativePrompt || img.negative_prompt) setNegativePrompt(img.negativePrompt || img.negative_prompt);
+    setPrompt(img.prompt ?? img.metadata?.prompt ?? '');
+    setNegativePrompt(img.negativePrompt ?? img.negative_prompt ?? img.metadata?.negativePrompt ?? '');
     if (img.seed != null) setSeed(String(img.seed));
     if (img.steps) setSteps(String(img.steps));
     if (img.guidance != null) setGuidance(String(img.guidance));
@@ -1315,13 +1315,11 @@ export default function ImageGen() {
     const sidecarFilenames = img.loraFilenames?.length
       ? img.loraFilenames
       : (img.loraPaths || []).map((p) => p.split(/[\\/]/).pop());
-    if (sidecarFilenames.length) {
-      const restored = sidecarFilenames.map((fn, i) => {
-        const match = availableLoras.find((l) => l.filename === fn);
-        return match ? { filename: match.filename, name: match.name, scale: img.loraScales?.[i] ?? 1.0 } : null;
-      }).filter(Boolean);
-      setSelectedLoras(restored);
-    }
+    const restored = sidecarFilenames.map((fn, i) => {
+      const match = availableLoras.find((l) => l.filename === fn);
+      return match ? { filename: match.filename, name: match.name, scale: img.loraScales?.[i] ?? 1.0 } : null;
+    }).filter(Boolean);
+    setSelectedLoras(restored);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [availableLoras, models]);
 

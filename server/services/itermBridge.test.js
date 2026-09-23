@@ -266,6 +266,28 @@ describe('itermBridge', () => {
     expect(await bridge.getItermStatus()).toEqual({ state: 'api-disabled', detail: null });
   });
 
+  it('does not expose the local socket path when a connection fails', async () => {
+    bridge.shutdown();
+    const socketPath = process.platform === 'win32'
+      ? '\\\\.\\pipe\\example-user-private-socket'
+      : join(dir, 'example-user', 'missing.sock');
+    bridge = createItermBridge({ ...deps, socketPath });
+    const socket = fakeSocket('lister');
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await bridge.subscribeList(socket);
+    await vi.waitFor(async () => expect((await bridge.getItermStatus()).state).toBe('connect-failed'));
+
+    expect(await bridge.getItermStatus()).toEqual({
+      state: 'connect-failed',
+      detail: 'Local iTerm2 socket connection failed',
+    });
+    expect(JSON.stringify(socket.all('iterm:sessions'))).not.toContain(socketPath);
+    expect(errorLog.mock.calls.some(([message]) => /local socket error \([A-Z0-9_]+\)$/u.test(message))).toBe(true);
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain(socketPath);
+    errorLog.mockRestore();
+  });
+
   it('disconnects immediately when the feature turns off', async () => {
     const socket = await listAndConnect();
     deps.enabled = false;

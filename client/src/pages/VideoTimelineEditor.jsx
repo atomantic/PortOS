@@ -307,8 +307,9 @@ export default function VideoTimelineEditor() {
     updatedAtRef.current = updated.updatedAt;
     setProject((p) => ({ ...p, updatedAt: updated.updatedAt }));
     return true;
-  }).finally(() => {
-    if (pendingLanesRef.current === next) pendingLanesRef.current = null;
+  }).then((saved) => {
+    if (saved && pendingLanesRef.current === next) pendingLanesRef.current = null;
+    return saved;
   }), [projectId, refresh, queueWrite]);
 
   // Debounced save: trim/fade edits fire many PATCHes per drag if we don't

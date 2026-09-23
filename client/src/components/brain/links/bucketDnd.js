@@ -45,8 +45,9 @@ const DIRECTIONS = {
  */
 export function linksCollisionDetection(args) {
   const activeKind = args.active?.data?.current?.kind;
+  const targetKind = activeKind === LINK_KIND ? LINK_SLOT_KIND : activeKind;
   const droppableContainers = args.droppableContainers.filter(
-    (container) => container.data?.current?.kind === activeKind,
+    (container) => container.data?.current?.kind === targetKind,
   );
   return closestCenter({ ...args, droppableContainers });
 }
