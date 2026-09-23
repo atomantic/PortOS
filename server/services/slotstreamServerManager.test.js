@@ -306,6 +306,35 @@ describe('slotstreamServerManager', () => {
       expect(result.ready).toBe(false);
       expect(result.reason).toMatch(/not found/);
     });
+
+    // Regression for #8105: the death-detecting readiness loop used to be a
+    // hand-rolled copy that reported only a bare `PM2 status: errored` — MTPLX's
+    // copy of the same loop already tailed the PM2 log, and the two have drifted
+    // back together onto `onDemand.waitForReady`'s shared `exitTail`.
+    it('reports the PM2 log tail when it dies after startup but before it answers', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
+      // Skip `startSlotstreamServer`'s own startup-window poll (deadline
+      // immediately in the past) so the ONLY readiness loop exercised is the
+      // shared one `ensureSlotstreamRunning` waits on afterward.
+      resetForTest({ startupWait: 0 });
+      vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockResolvedValue({ reachable: false });
+      // Errored throughout — including the initial guards — so this cannot start
+      // a REAL managed process the assertions below have to unwind.
+      vi.spyOn(pm2Module, 'getAppStatusStrict').mockImplementation(async (name) => (
+        name === SLOTSTREAM_APP ? { name, status: 'errored', pid: null } : { name, status: 'not_found', pm2_env: null }
+      ));
+      vi.spyOn(pm2Module, 'execPm2').mockImplementation(async (args) => {
+        execPm2Calls.push(args);
+        if (args[0] === 'logs') return { stdout: '', stderr: 'metal buffer allocation failed' };
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await ensureSlotstreamRunning();
+
+      expect(result.ready).toBe(false);
+      expect(result.reason).toMatch(/errored/);
+      expect(result.reason).toMatch(/metal buffer allocation failed/);
+    });
   });
 
   describe('isSlotstreamProvider', () => {

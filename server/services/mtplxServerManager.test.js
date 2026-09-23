@@ -947,6 +947,47 @@ describe('mtplxServerManager', () => {
     });
   });
 
+  describe('surviving an idle-reaper stop (#8105)', () => {
+    // Bug #2 from the issue: `stopMtplxServer` clears `currentConfig`, and the
+    // saved launch line used to hold only `model`/`port` — an assessment's
+    // tuning relaunch was silently lost the moment the reaper stopped MTPLX.
+    // Slotstream already persisted its own knob (`memoryGb`); MTPLX now does
+    // the same for `tuning`, through the same shared `persistDaemonLaunchConfig`.
+    it('relaunches with the same tuning it was started with after the idle reaper stops it', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
+      resetForTest({ idleMinutes: 1, keepLoaded: false });
+
+      // Real `settings.js` writes are refused outside a test's own isolated
+      // data root (see `testDataIsolation.js`) — spy the two calls the manager
+      // makes onto an in-memory store, the same seam the "probes the saved
+      // port" test above uses for reads.
+      const settings = await import('./settings.js');
+      let store = {};
+      vi.spyOn(settings, 'getSettings').mockImplementation(async () => store);
+      vi.spyOn(settings, 'updateSettingsWith').mockImplementation(async (mutate) => {
+        store = await mutate(store);
+        return store;
+      });
+
+      await startMtplxServer({ port: 8010, tuning: { depth: 5, kvQuant: 'q4' } });
+      execPm2Calls = [];
+
+      const { reapIdleDaemons } = await import('../lib/managedDaemon.js');
+      const stopped = await reapIdleDaemons(Date.now() + 10 * 60_000);
+      expect(stopped).toContain(MTPLX_APP);
+      expect(pm2State).toBeNull();
+
+      await ensureMtplxRunning();
+
+      const start = execPm2Calls.find((args) => args[0] === 'start');
+      const relaunchArgs = start.slice(start.indexOf('--') + 1);
+      expect(relaunchArgs[relaunchArgs.indexOf('--port') + 1]).toBe('8010');
+      expect(relaunchArgs[relaunchArgs.indexOf('--model') + 1]).toBe('Example/Qwen-MTP');
+      expect(relaunchArgs[relaunchArgs.indexOf('--depth') + 1]).toBe('5');
+      expect(relaunchArgs[relaunchArgs.indexOf('--kv-quant') + 1]).toBe('q4');
+    });
+  });
+
   describe('isMtplxProvider', () => {
     it('matches a local MTPLX endpoint', () => {
       expect(isMtplxProvider({ type: 'api', endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx', mtplxBacked: true })).toBe(true);
@@ -964,6 +1005,18 @@ describe('mtplxServerManager', () => {
 
     it('matches an MTPLX-backed TUI provider', () => {
       expect(isMtplxProvider({ type: 'tui', endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx-tui', mtplxBacked: true })).toBe(true);
+    });
+
+    // Regression for #8105: `localEndpointPort` returns a STRING, and the port
+    // arm used to compare it with `===` against the numeric `currentConfig.port`
+    // — always false, so an unnamed/unmarked provider pointed at wherever the
+    // managed daemon is actually listening was never recognized.
+    it('matches a bare endpoint pointed at the port the managed daemon is actually serving', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
+      await startMtplxServer({ port: 8010 });
+
+      expect(isMtplxProvider({ type: 'api', endpoint: 'http://127.0.0.1:8010/v1' })).toBe(true);
+      expect(isMtplxProvider({ type: 'api', endpoint: 'http://127.0.0.1:8011/v1' })).toBe(false);
     });
   });
 
