@@ -160,7 +160,7 @@ describe('planPresetBackfill over the shipped samples', () => {
   const { patches, skipped } = planPresetBackfill({ graph, providers, bootstraps: {}, env: {} });
 
   it('stamps every routed record whose re-derivation is a fixpoint, with the structural keys only', () => {
-    expect(Object.keys(patches).length).toBeGreaterThanOrEqual(30);
+    expect(Object.keys(patches).length).toBeGreaterThanOrEqual(35);
     for (const patch of Object.values(patches)) {
       expect(Object.keys(patch).every((key) => PRESET_STRUCTURAL_KEYS.includes(key))).toBe(true);
       expect(patch).toMatchObject({ harnessId: expect.any(String), method: expect.any(String), serviceId: expect.any(String) });
@@ -169,6 +169,26 @@ describe('planPresetBackfill over the shipped samples', () => {
     expect(patches['claude-ollama']).toEqual({ harnessId: 'claude', method: 'cli', serviceId: 'ollama' });
     expect(patches['claude-ollama-tui']).toEqual({ harnessId: 'claude', method: 'tui', serviceId: 'ollama' });
     expect(patches.slotstream).toMatchObject({ harnessId: 'direct', method: 'api' });
+  });
+
+  // #8159: the remaining shipped samples the boot backfill left legacy.
+  it('stamps Claude-on-SGLang now that the graph import names its OpenAI endpoint too', () => {
+    // Claude Code reads `ANTHROPIC_BASE_URL` (the server root); the graph
+    // import used to keep only that transport, so the derived `endpoint` (read
+    // from the connection's `openai` transport) came back null against the
+    // record's own OpenAI-compatible `endpoint` field.
+    expect(patches['claude-sglang']).toMatchObject({ harnessId: 'claude', method: 'cli' });
+    expect(patches['claude-sglang-tui']).toMatchObject({ harnessId: 'claude', method: 'tui' });
+    expect(patches['claude-sglang-tui'].serviceId).toBe(patches['claude-sglang'].serviceId);
+  });
+
+  it('stamps the direct-API local-runtime samples, whose shipped records carry no *Backed marker', () => {
+    // `materializeRoute` used to write `ollamaBacked`/`lmstudioBacked`/
+    // `mtplxBacked` even onto a direct `type: 'api'` record that never reads
+    // it, so every re-derivation drifted on a marker the shipped file never had.
+    expect(patches.ollama).toMatchObject({ harnessId: 'direct', method: 'api' });
+    expect(patches.lmstudio).toMatchObject({ harnessId: 'direct', method: 'api' });
+    expect(patches.mtplx).toMatchObject({ harnessId: 'direct', method: 'api' });
   });
 
   it('derives the keyless Zen CLI/TUI pair on the free plan, big-pickle included', () => {
@@ -187,10 +207,18 @@ describe('planPresetBackfill over the shipped samples', () => {
 
   it('leaves each unmappable or drifting record legacy with a reason, never a guess', () => {
     const reasons = Object.fromEntries(skipped.map(({ id, reason }) => [id, reason]));
+    // Pi signs in itself; the vendor connection maps to no service definition.
     expect(reasons['pi-cli']).toBe('service-undefined');
+    expect(reasons['pi-tui']).toBe('service-undefined');
+    // Kilo/OpenChamber compose onto nothing — no harness bindings at all.
     expect(reasons['kilo-cli']).toBe('service-undefined');
-    // The legacy per-gateway marker is not what a service writes.
+    expect(reasons['kilo-tui']).toBe('service-undefined');
+    expect(reasons['openchamber-cli']).toBe('service-undefined');
+    // The legacy per-gateway marker is not what a service writes, and the
+    // `orcarouter/`-namespaced models are not the catalog's own names — kept
+    // on the legacy marker on purpose (scripts/generate-provider-samples.js).
     expect(reasons['opencode-orcarouter']).toMatch(/^drift:.*orcarouterBacked/);
+    expect(reasons['opencode-orcarouter-tui']).toMatch(/^drift:.*orcarouterBacked/);
     for (const id of Object.keys(reasons)) expect(patches).not.toHaveProperty(id);
   });
 

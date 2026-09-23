@@ -334,6 +334,17 @@ export function mintRouteIds({ harnessId, kind, modes, taken }) {
  * so the spawner and `providerConnectionProfile` classify it onto that service:
  * the runtime's `*Backed` boolean, or `gatewayBacked: '<id>'`. Slotstream and
  * a plain API endpoint carry none, exactly as {@link connectionKindMarkers}.
+ *
+ * Written unconditionally, including onto a direct `type: 'api'` record — the
+ * round-trip contract `materializeRoute` owes (`routeDescribesService`) needs
+ * it there too: `localRuntimeKind`'s id/port fallback only covers `ollama` /
+ * `lmstudio` (by id, name or default port) and `mtplx` (by id alone, and only
+ * when the record's id is literally `mtplx`), never `llama` / `vllm` /
+ * `sglang`, and a freshly minted direct record's id is `direct.api@<slug>`,
+ * not the shipped sample's own id. A direct API preset's DRIFT check is what
+ * ignores this marker instead (`derivedPresetDrift`, #8159) — the shipped
+ * `ollama` / `lmstudio` / `mtplx` samples predate the graph and never carried
+ * one, but nothing on the direct API path reads it either way.
  */
 const serviceMarkers = (definition, { wrapper }) => {
   if (definition.localRuntime) return connectionKindMarkers(definition.localRuntime) || {};

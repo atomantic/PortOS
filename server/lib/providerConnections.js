@@ -181,6 +181,18 @@ export function providerConnectionProfile(provider) {
 
   if (baseUrl) transports[protocol] = { baseUrl };
 
+  // A wrapper pointed straight at a local daemon's Anthropic-compatible port
+  // (the base URL an ANTHROPIC_BASE_URL/OPENAI_BASE_URL env var names) can ALSO
+  // carry its own `endpoint` field naming the daemon's OpenAI-compatible
+  // listing — deliberately a different URL (Claude SGLang, #8159), read by the
+  // readiness probe and by any OTHER harness materialized onto the same
+  // service. Declared as a second transport rather than folded into `baseUrl`
+  // above, so a connection built from this record states BOTH wires it knows
+  // about instead of losing the one the env var did not already capture.
+  if (protocol !== 'openai' && isNonBlankStr(record.endpoint) && record.endpoint !== baseUrl) {
+    transports.openai = { baseUrl: record.endpoint };
+  }
+
   // A record fronting a local daemon or a bare API endpoint MUST name where it
   // is. Falling back to a conventional default here would silently equate two
   // installs' different daemons, so an undeclared endpoint isolates instead.
