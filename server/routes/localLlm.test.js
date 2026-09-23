@@ -57,6 +57,12 @@ vi.mock('../services/ollamaManager.js', () => ({
   getLastLoadedModelsError: vi.fn(() => null),
   getLoadedModels: vi.fn(async () => []),
   unloadModel: vi.fn(),
+  // Reached via providerExecutionReadiness.js's managed-runtime table
+  // (issue #8104) whenever an unmocked module transitively imports
+  // aiProvider.js — this suite never drives that path, so a no-op stub keeps
+  // the module graph loadable.
+  ensureProviderReady: vi.fn(async () => ({ success: true })),
+  isOllamaProvider: vi.fn(() => false),
 }));
 
 vi.mock('../services/lmStudioManager.js', () => ({

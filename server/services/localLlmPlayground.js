@@ -3,7 +3,7 @@ import { createRun, finalizeRunRecord } from './runner.js';
 import { ensureBackendProvider } from './localLlm.js';
 import { getProviderById } from './providers.js';
 import { markProviderAvailable } from './providerStatus.js';
-import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
+import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
 import { anyAbortSignal } from '../lib/requestAbort.js';
 // The SSE read loop lives in `lib/openAiChatStream.js` so the assessments
 // service can measure a bare loopback daemon that has no provider record.
@@ -124,9 +124,9 @@ async function resolveLocalProvider(backend) {
 
 async function streamChatCompletion({ provider, backend, modelId, prompt, systemPrompt, images, temperature, maxTokens, extraBody = {}, signal, onChunk, onStats, nativeOllamaUsage = false }) {
   if (backend === 'ollama') {
-    const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
+    const ready = await ensureManagedRuntimeReady(provider);
     if (!ready.success) {
-      throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
+      throw new Error(ready.error);
     }
   }
 
