@@ -451,7 +451,7 @@ export const startCapture = async () => {
       releaseCaptureSession = null;
       recorderSessionGeneration = null;
     }
-    recorderStartPendingGeneration = null;
+    if (recorderStartPendingGeneration === generation) recorderStartPendingGeneration = null;
     throw err;
   });
   if (!isOwnerCurrent(ownerGeneration) || recorderGeneration !== generation) {
@@ -484,6 +484,7 @@ export const startCapture = async () => {
 };
 
 export const stopCapture = async ({ submit = true } = {}) => {
+  const ownerGeneration = captureOwnerGeneration;
   const generation = recorderGeneration;
   const rec = recorder;
   const capturedStream = stream;
@@ -519,6 +520,8 @@ export const stopCapture = async ({ submit = true } = {}) => {
     rec.stop();
   });
   if (recorderGeneration === generation) recorderGeneration += 1;
+  const stoppedGeneration = recorderGeneration;
+  if (!isOwnerCurrent(ownerGeneration) || stoppedGeneration !== generation + 1) return null;
 
   const blob = new Blob(recordedChunks, { type: rec.mimeType });
   // Mode-switch cancellation (e.g. user toggled hands-free mid-utterance):
@@ -527,6 +530,7 @@ export const stopCapture = async ({ submit = true } = {}) => {
   if (blob.size < 800) return null; // discard sub-25ms empty recordings
 
   const { wav, peak } = await blobToWav16k(blob);
+  if (!isOwnerCurrent(ownerGeneration) || recorderGeneration !== stoppedGeneration) return null;
   socket.emit('voice:turn', { audio: wav, mimeType: 'audio/wav' });
   return { mimeType: 'audio/wav', size: wav.byteLength, sourceSize: blob.size, peak };
 };
@@ -978,7 +982,7 @@ export const startContinuous = async (callbacks = {}) => {
       releaseContinuousSession = null;
       continuousSessionGeneration = null;
     }
-    continuousStartPendingGeneration = null;
+    if (continuousStartPendingGeneration === generation) continuousStartPendingGeneration = null;
     throw err;
   });
   if (!isOwnerCurrent(ownerGeneration) || continuousGeneration !== generation) {

@@ -66,6 +66,18 @@ const { socket, listeners, audio, FakeAudioContext } = vi.hoisted(() => {
   return { socket, listeners, audio, FakeAudioContext };
 });
 
+const audioRecorderStub = vi.hoisted(() => ({ blobToWav16k: null }));
+
+vi.mock('../lib/audioRecorder.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    blobToWav16k: (...args) => audioRecorderStub.blobToWav16k
+      ? audioRecorderStub.blobToWav16k(...args)
+      : actual.blobToWav16k(...args),
+  };
+});
+
 vi.mock('./socket', () => ({ default: socket }));
 
 let voiceClient;
@@ -151,6 +163,7 @@ describe('voice playback cancellation', () => {
     audio.decodeImpl = () => Promise.resolve({});
     audio.sources.length = 0;
     socket.emit.mockClear();
+    audioRecorderStub.blobToWav16k = null;
     voiceClient.disposeCaptureOwner();
   });
 
@@ -388,6 +401,92 @@ describe('voice playback cancellation', () => {
       configurable: true,
       value: previousMediaDevices,
     });
+  });
+
+  it('does not emit captured audio when the owner is disposed during WAV conversion', async () => {
+    const previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }), enumerateDevices: vi.fn().mockResolvedValue([]) },
+    });
+    let resolveConversion;
+    audioRecorderStub.blobToWav16k = vi.fn(() => new Promise((resolve) => { resolveConversion = resolve; }));
+    const previousRecorder = window.MediaRecorder;
+    const previousGlobalRecorder = globalThis.MediaRecorder;
+    window.MediaRecorder = FakeMediaRecorder;
+    globalThis.MediaRecorder = FakeMediaRecorder;
+
+    try {
+      await voiceClient.startCapture();
+      FakeMediaRecorder.last.dispatch('dataavailable', { data: new Blob(['x'.repeat(1_000)]) });
+      const pending = voiceClient.stopCapture();
+      await vi.waitFor(() => expect(audioRecorderStub.blobToWav16k).toHaveBeenCalledOnce());
+      voiceClient.disposeCaptureOwner();
+      resolveConversion({ wav: new ArrayBuffer(16), peak: 0.5 });
+
+      await expect(pending).resolves.toBeNull();
+      expect(socket.emit).not.toHaveBeenCalledWith('voice:turn', expect.anything());
+      expect(track.stop).toHaveBeenCalledOnce();
+    } finally {
+      window.MediaRecorder = previousRecorder;
+      if (previousGlobalRecorder === undefined) delete globalThis.MediaRecorder;
+      else globalThis.MediaRecorder = previousGlobalRecorder;
+      if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
+      else delete navigator.mediaDevices;
+    }
+  });
+
+  it.each(['push-to-talk', 'continuous'])('keeps a newer %s permission request guarded when an older request rejects', async (mode) => {
+    const previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    const oldRequest = (() => {
+      let resolve;
+      let reject;
+      const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+      return { promise, resolve, reject };
+    })();
+    const currentRequest = (() => {
+      let resolve;
+      const promise = new Promise((yes) => { resolve = yes; });
+      return { promise, resolve };
+    })();
+    const getUserMedia = vi.fn().mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue([]) },
+    });
+    const previousRecorder = window.MediaRecorder;
+    const previousGlobalRecorder = globalThis.MediaRecorder;
+    window.MediaRecorder = FakeMediaRecorder;
+    globalThis.MediaRecorder = FakeMediaRecorder;
+
+    const start = mode === 'continuous' ? voiceClient.startContinuous : voiceClient.startCapture;
+    try {
+      const staleStart = start();
+      const staleRejected = expect(staleStart).rejects.toMatchObject({ message: 'old permission denied' });
+      voiceClient.disposeCaptureOwner();
+      const currentStart = start();
+      oldRequest.reject(new Error('old permission denied'));
+      await staleRejected;
+
+      await start();
+      expect(getUserMedia).toHaveBeenCalledTimes(2);
+
+      const track = { stop: vi.fn() };
+      currentRequest.resolve({ getTracks: () => [track] });
+      await currentStart;
+      expect(getUserMedia).toHaveBeenCalledTimes(2);
+      if (mode === 'continuous') expect(voiceClient.isContinuous()).toBe(true);
+      else expect(voiceClient.isCapturing()).toBe(true);
+    } finally {
+      voiceClient.disposeCaptureOwner();
+      await voiceClient.stopContinuous();
+      window.MediaRecorder = previousRecorder;
+      if (previousGlobalRecorder === undefined) delete globalThis.MediaRecorder;
+      else globalThis.MediaRecorder = previousGlobalRecorder;
+      if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
+      else delete navigator.mediaDevices;
+    }
   });
 
   it('ignores VAD worklet frames and async submissions after owner disposal', async () => {
