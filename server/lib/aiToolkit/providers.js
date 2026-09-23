@@ -981,7 +981,7 @@ export function createProviderService(config = {}) {
       data.providers[id] = provider;
       for (const sibling of group || []) {
         if (sibling.id === id) continue;
-        Object.assign(sibling, sharedModeUpdates(updates, sibling));
+        Object.assign(sibling, sharedModeUpdates(updates));
         normalizeClearedFields(sibling);
       }
       await saveProviders(data);

@@ -26,7 +26,12 @@ it('unifies either-enabled siblings, preserves execution pins and separate conne
   expect(result.activeProvider).toBe('first-tui');
   for (const stem of ['first', 'second', 'off']) {
     for (const id of [stem, `${stem}-tui`]) {
-      expect(result.providers[id]).toEqual({ ...before[id], enabled: stem !== 'off', models: ['model-a', 'model-b'] });
+      expect(result.providers[id]).toEqual({
+        ...before[id],
+        enabled: stem !== 'off',
+        models: ['model-a', 'model-b'],
+        defaultModel: 'model-a',
+      });
     }
   }
   for (const id of ['remote', 'remote-tui', 'custom', 'custom-tui']) expect(result.providers[id]).toEqual(before[id]);
