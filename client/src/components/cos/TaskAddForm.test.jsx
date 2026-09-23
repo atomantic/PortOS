@@ -150,6 +150,29 @@ describe('TaskAddForm responsive layout', () => {
     expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'chosen-app' }), { silent: true });
   });
 
+  it('keeps the target app selector on the main queue-first form', async () => {
+    localStorage.clear();
+    api.addCosTask.mockResolvedValue({ id: 'example-task' });
+    const user = userEvent.setup();
+    render(<TaskAddForm queueFirst providers={[]} defaultApp="first-app"
+      apps={[{ id: 'first-app', name: 'First App' }, { id: 'chosen-app', name: 'Chosen App' }]}
+      onTaskAdded={vi.fn()} />);
+
+    const appSelect = screen.getByLabelText('Target application');
+    expect(appSelect).toHaveValue('first-app');
+    expect(appSelect.closest('#task-configuration')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Task configuration' })).not.toBeInTheDocument();
+
+    await user.selectOptions(appSelect, 'chosen-app');
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Inspect the chosen app');
+    await user.click(screen.getByRole('button', { name: 'Add task' }));
+
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({
+      app: 'chosen-app',
+      description: 'Inspect the chosen app',
+    }), { silent: true });
+  });
+
   // #7796: hiding configuration must not reset the draft or silently change
   // app completion defaults, and a failed submission must remain retryable.
   it('keeps queue settings inline and retains drafts across collapse and failed submission', async () => {
