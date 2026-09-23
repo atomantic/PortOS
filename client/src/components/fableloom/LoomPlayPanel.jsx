@@ -119,6 +119,11 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   // resulting `hosted:session:ended{reason:'episode_not_ready'}` can name it
   // in the toast even though the server payload carries only the reason.
   const pendingHostedEpisodeSwitchRef = useRef(null);
+  // Always the CURRENT episode id, read from the `hosted:session:sync`
+  // handler below (which closes over the socket-connect effect's render and
+  // would otherwise see a stale `episode`).
+  const latestEpisodeIdRef = useRef(episode.id);
+  useEffect(() => { latestEpisodeIdRef.current = episode.id; }, [episode.id]);
 
   // Socket connection when hosted session is active
   useEffect(() => {
@@ -149,6 +154,22 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
         } catch (err) {
           console.warn('TTS playback error:', err);
         }
+      }
+    });
+
+    // The server rejects a second `hosted:episode:switch` sent while an
+    // earlier one is still in flight (409 EPISODE_SWITCH_IN_PROGRESS) — a
+    // host who advances episodes faster than that round trip would otherwise
+    // strand the hosted session on whichever earlier target won the race.
+    // Every `hosted:session:sync` (including the one the in-flight switch
+    // itself broadcasts on commit) names the server's current episode; if it
+    // no longer matches what the host is actually showing, request the
+    // CURRENT one again rather than leaving the mismatch unresolved (#8112).
+    socket.on('hosted:session:sync', (data) => {
+      if (data?.episodeId && data.episodeId !== latestEpisodeIdRef.current) {
+        hostedEpisodeIdRef.current = latestEpisodeIdRef.current;
+        pendingHostedEpisodeSwitchRef.current = { id: latestEpisodeIdRef.current, label: pendingHostedEpisodeSwitchRef.current?.label };
+        hostedSocketRef.current?.emit('hosted:episode:switch', { episodeId: latestEpisodeIdRef.current });
       }
     });
 
