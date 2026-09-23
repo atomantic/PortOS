@@ -182,8 +182,7 @@ const envFlagEnabled = (value) => {
   return normalized !== '' && normalized !== '0' && normalized !== 'false';
 };
 
-export function usesThirdPartyBackend(provider) {
-  const envVars = provider?.envVars;
-  if (!envVars || typeof envVars !== 'object') return false;
+export function usesThirdPartyBackend(provider, inheritedEnv = process.env) {
+  const envVars = { ...inheritedEnv, ...(provider?.envVars || {}) };
   return THIRD_PARTY_BACKEND_VARS.some((name) => envFlagEnabled(envVars[name]));
 }

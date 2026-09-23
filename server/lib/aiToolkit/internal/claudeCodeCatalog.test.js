@@ -166,7 +166,7 @@ describe('usesThirdPartyBackend', () => {
     ['Foundry', { CLAUDE_CODE_USE_FOUNDRY: 'yes' }],
     ['Claude Platform on AWS', { CLAUDE_CODE_USE_ANTHROPIC_AWS: '1' }],
   ])('recognizes a record pointed at %s', (_label, envVars) => {
-    expect(usesThirdPartyBackend({ command: 'claude', envVars })).toBe(true);
+    expect(usesThirdPartyBackend({ command: 'claude', envVars }, {})).toBe(true);
   });
 
   // `"0"` / `"false"` is how an install disables a marker it inherited from a
@@ -179,6 +179,14 @@ describe('usesThirdPartyBackend', () => {
     ['no markers at all', { ANTHROPIC_MODEL: 'claude-opus-5' }],
     ['no envVars', undefined],
   ])('treats %s as first-party', (_label, envVars) => {
-    expect(usesThirdPartyBackend({ command: 'claude', envVars })).toBe(false);
+    expect(usesThirdPartyBackend({ command: 'claude', envVars }, {})).toBe(false);
+  });
+
+  it('checks inherited process settings and honors a provider-level off switch', () => {
+    expect(usesThirdPartyBackend({ command: 'claude' }, { CLAUDE_CODE_USE_BEDROCK: '1' })).toBe(true);
+    expect(usesThirdPartyBackend(
+      { command: 'claude', envVars: { CLAUDE_CODE_USE_BEDROCK: '0' } },
+      { CLAUDE_CODE_USE_BEDROCK: '1' },
+    )).toBe(false);
   });
 });
