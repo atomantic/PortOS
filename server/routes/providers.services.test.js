@@ -248,14 +248,14 @@ describe('DELETE /api/providers/services/:slug', () => {
 });
 
 describe('POST /api/providers/services/:slug/refresh-catalog', () => {
-  const listing = ['big-pickle', 'mimo-v2.5-free', 'deepseek-v4-flash-free'];
+  const listing = ['big-pickle', 'example-paid-model', 'mimo-v2.5-free', 'deepseek-v4-flash-free'];
 
   it('gives two plans of one definition different catalogs from one probe answer', async () => {
     probe.mockResolvedValue({ reachable: true, models: listing, contextWindows: { 'big-pickle': 128000 }, error: null });
     const free = await request(app()).post('/api/providers/services/opencode-zen/refresh-catalog');
     const paid = await request(app()).post(`/api/providers/services/${ZEN_PAID}/refresh-catalog`);
     expect(free.status).toBe(200);
-    expect(free.body.service.catalog).toMatchObject({ state: 'known', models: ['mimo-v2.5-free', 'deepseek-v4-flash-free'], error: null });
+    expect(free.body.service.catalog).toMatchObject({ state: 'known', models: ['big-pickle', 'mimo-v2.5-free', 'deepseek-v4-flash-free'], error: null });
     expect(paid.body.service.catalog).toMatchObject({ state: 'known', models: listing, capabilities: { 'big-pickle': { contextWindow: 128000 } } });
     // Its OWN endpoint with its OWN key — never a route's.
     expect(probe).toHaveBeenCalledWith('https://opencode.ai/zen/v1', expect.objectContaining({ apiKey: ZEN_KEY }));

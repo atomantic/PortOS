@@ -31,6 +31,8 @@ const presetService = vi.hoisted(() => ({
   createPresetFromComposite: vi.fn(), derivePreset: vi.fn(), materializeStoredPreset: vi.fn(), savesAsDerivedPreset: vi.fn(), storableProviderRecord: vi.fn(),
 }));
 vi.mock('../services/providerPresets.js', () => presetService);
+const graphService = vi.hoisted(() => ({ presetSkipReason: vi.fn(() => null) }));
+vi.mock('../services/providerGraph.js', async (importOriginal) => ({ ...(await importOriginal()), ...graphService }));
 import { createPortOSProviderRoutes } from './providers.js';
 
 const COMPOSITE = 'pi.tui@nvidia-nim';
@@ -171,6 +173,13 @@ describe('GET /api/providers — preset structure (#7565)', () => {
     expect(byId['pi-tui-nvidia-nim-free']).toMatchObject({ presetKind: 'derived', presetDerivable: false, serviceId: 'nvidia-nim-free', envVars: { NVIDIA_API_KEY: '***' } });
     expect(byId['claude-ollama']).toMatchObject({ presetKind: 'legacy', presetDerivable: true });
     expect(JSON.stringify(res.body)).not.toContain('nim-key');
+  });
+  it('withholds the Convert button from a legacy record the last reconcile pass refused', async () => {
+    // The conversion re-runs that pass, so offering it would only answer 409.
+    graphService.presetSkipReason.mockImplementation((id) => (id === 'claude-ollama' ? 'drift:endpoint' : null));
+    providerService.getAllProviders.mockResolvedValue({ activeProvider: 'claude-ollama', providers: [LEGACY] });
+    const res = await request(app()).get('/api/providers');
+    expect(res.body.providers[0]).toMatchObject({ presetKind: 'legacy', presetDerivable: false });
   });
 });
 

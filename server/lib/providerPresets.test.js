@@ -171,6 +171,13 @@ describe('planPresetBackfill over the shipped samples', () => {
     expect(patches.slotstream).toMatchObject({ harnessId: 'direct', method: 'api' });
   });
 
+  it('derives the keyless Zen CLI/TUI pair on the free plan, big-pickle included', () => {
+    // OpenCode serves Zen's free tier signed out, so an unset OPENCODE_API_KEY
+    // is not a refusal, and the free-plan filter keeps the bare stealth model.
+    expect(patches['opencode-zen-cli']).toMatchObject({ harnessId: 'opencode', method: 'cli' });
+    expect(patches['opencode-zen-tui'].serviceId).toBe(patches['opencode-zen-cli'].serviceId);
+  });
+
   it('keeps the NIM OpenCode pair on one gateway instance', () => {
     expect(patches['opencode-nvidia-nim'].serviceId).toBe(patches['opencode-nvidia-nim-tui'].serviceId);
     expect(patches['opencode-nvidia-nim']).toMatchObject({ harnessId: 'opencode', method: 'cli' });
@@ -182,7 +189,6 @@ describe('planPresetBackfill over the shipped samples', () => {
     const reasons = Object.fromEntries(skipped.map(({ id, reason }) => [id, reason]));
     expect(reasons['pi-cli']).toBe('service-undefined');
     expect(reasons['kilo-cli']).toBe('service-undefined');
-    expect(reasons['opencode-zen-cli']).toBe('SERVICE_CREDENTIAL_REQUIRED');
     // The legacy per-gateway marker is not what a service writes.
     expect(reasons['opencode-orcarouter']).toMatch(/^drift:.*orcarouterBacked/);
     for (const id of Object.keys(reasons)) expect(patches).not.toHaveProperty(id);

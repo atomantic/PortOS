@@ -70,8 +70,10 @@ const SUBSCRIPTION = Object.freeze(['subscription']);
 const LOCAL = Object.freeze(['local']);
 
 /** A model-id suffix filter for the one plan a vendor marks in the id itself. */
-const suffixPlanFilter = (suffix) => (plan, models) => (
-  plan === 'free' ? models.filter((model) => String(model).endsWith(suffix)) : models
+const suffixPlanFilter = (suffix, { alsoFree = [] } = {}) => (plan, models) => (
+  plan === 'free'
+    ? models.map(String).filter((id) => id.endsWith(suffix) || alsoFree.includes(id.split('/').pop()))
+    : models
 );
 
 const definition = ({ transports = {}, credential = {}, catalog, ...row }) => Object.freeze({
@@ -244,7 +246,10 @@ export const SERVICE_DEFINITIONS = Object.freeze([
     transports: { openai: { defaultBaseUrl: 'https://opencode.ai/zen/v1' } },
     credential: { envVars: ['OPENCODE_API_KEY'], keyUrl: 'https://opencode.ai/auth' },
     plans: METERED,
-    catalog: { strategy: 'probe', planFilter: suffixPlanFilter('-free') },
+    // Zen's free tier is `-free`-suffixed except its stealth model, which
+    // `opencode models` prints bare (`opencode/big-pickle`) — the default
+    // model of every shipped Zen preset, so the free plan must keep it.
+    catalog: { strategy: 'probe', planFilter: suffixPlanFilter('-free', { alsoFree: ['big-pickle'] }) },
     piProvider: 'opencode',
   }),
   definition({

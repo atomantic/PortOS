@@ -235,11 +235,13 @@ export const PROVIDER_HARNESSES = Object.freeze([
     }),
     bindings: Object.freeze([
       // OpenCode's own hosted service is a provider it ships; only permissions
-      // go in the inline config, and the key rides its documented env var.
+      // go in the inline config, and the key rides its documented env var. The
+      // FREE plan needs none: OpenCode serves Zen's free models to a signed-out
+      // client, which is how every shipped Zen preset runs (no key on the record).
       Object.freeze({
         service: 'opencode-zen',
         baseUrl: Object.freeze({ via: 'opencodeConfig', builtin: true }),
-        credential: Object.freeze({ via: 'env', name: 'OPENCODE_API_KEY', required: true }),
+        credential: Object.freeze({ via: 'env', name: 'OPENCODE_API_KEY', required: true, optionalOnPlans: Object.freeze(['free']) }),
       }),
       // A gateway's key is materialized under the gateway's own variable (what
       // the spawner exports for OpenCode); anything else keys off the record.
