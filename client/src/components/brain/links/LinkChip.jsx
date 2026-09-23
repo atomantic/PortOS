@@ -43,6 +43,7 @@ export default function LinkChip({ link, onRemove, dragHandleProps }) {
             alt=""
             width={16}
             height={16}
+            draggable={false}
             className="shrink-0 rounded-sm"
             onError={() => setIconFailed(true)}
           />
