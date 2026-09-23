@@ -1,28 +1,33 @@
 import { useState } from 'react';
 import { Link2, X, GripVertical } from 'lucide-react';
-import { faviconUrl, LINK_DND_TYPE } from './bucketColors';
+import { faviconUrl } from './bucketColors';
 
 /**
  * A compact favicon + title button for a link inside a bucket.
  * Clicking opens the link in a new tab; the hover-revealed X removes it
- * from the bucket (does not delete the underlying link). Draggable chips
- * carry their link id so they can be dropped into another bucket.
+ * from the bucket (does not delete the underlying link). `dragHandleProps`
+ * (a dnd-kit `useDraggable` handle's `attributes`/`listeners`/ref, wired by
+ * the caller so the drag id carries the chip's bucket + index) turns the
+ * grip icon into the pointer/keyboard drag activator.
  */
-export default function LinkChip({ link, onRemove, draggable }) {
+export default function LinkChip({ link, onRemove, dragHandleProps }) {
   const [iconFailed, setIconFailed] = useState(false);
   const favicon = faviconUrl(link.url);
 
   return (
-    <div
-      className={`group flex items-center gap-2 pl-1.5 pr-1 py-1 bg-port-bg border border-port-border rounded-md hover:border-port-accent/50 transition-colors max-w-full ${draggable ? 'cursor-grab' : ''}`}
-      draggable={draggable}
-      onDragStart={draggable ? (e) => {
-        e.dataTransfer.setData(LINK_DND_TYPE, link.id);
-        e.dataTransfer.effectAllowed = 'move';
-      } : undefined}
-    >
-      {draggable && (
-        <GripVertical size={12} className="shrink-0 text-gray-600 group-hover:text-gray-400" />
+    <div className="group flex items-center gap-2 pl-1.5 pr-1 py-1 bg-port-bg border border-port-border rounded-md hover:border-port-accent/50 transition-colors max-w-full">
+      {dragHandleProps && (
+        <button
+          type="button"
+          ref={dragHandleProps.setActivatorNodeRef}
+          {...dragHandleProps.attributes}
+          {...dragHandleProps.listeners}
+          className="shrink-0 flex items-center justify-center text-gray-600 hover:text-gray-300 cursor-grab active:cursor-grabbing"
+          aria-label={`Drag ${link.title}`}
+          title="Drag to reorder or move to another bucket"
+        >
+          <GripVertical size={12} />
+        </button>
       )}
       <a
         href={link.url}

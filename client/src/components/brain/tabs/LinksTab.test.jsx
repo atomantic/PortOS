@@ -10,6 +10,7 @@ vi.mock('../../../services/api', () => ({
   updateBrainLink: vi.fn(),
   deleteBrainLink: vi.fn(),
   reorderBrainLinks: vi.fn(),
+  reorderBrainBuckets: vi.fn(),
   cloneBrainLink: vi.fn(),
   pullBrainLink: vi.fn(),
   scanBrainLink: vi.fn(),
@@ -34,8 +35,35 @@ vi.mock('../links/BucketBoard', () => ({
   },
 }));
 
-import { createBrainLink, getBrainLink, getBrainLinks, getBrainBuckets, studyBrainLink } from '../../../services/api';
+// LinksTab mounts its own `DndContext` (buckets + the flat link list share
+// one). Capturing its props — the same shape KanbanBoard.test.jsx uses — lets
+// the drag-end routing and the live announcement text be exercised directly,
+// since jsdom cannot supply real pointer geometry to drive an actual drag.
+const dndState = vi.hoisted(() => ({ context: null }));
+vi.mock('@dnd-kit/core', () => ({
+  DndContext: ({ children, ...props }) => {
+    dndState.context = props;
+    return <>{children}</>;
+  },
+  DragOverlay: ({ children }) => <>{children}</>,
+  closestCenter: vi.fn(() => []),
+  KeyboardSensor: function KeyboardSensorStub() {},
+  PointerSensor: function PointerSensorStub() {},
+  useDraggable: () => ({
+    attributes: {},
+    listeners: {},
+    setNodeRef: () => {},
+    setActivatorNodeRef: () => {},
+    isDragging: false,
+  }),
+  useSensor: (sensor, options) => ({ sensor, options }),
+  useSensors: (...sensors) => sensors,
+}));
+
+import { createBrainLink, getBrainLink, getBrainLinks, getBrainBuckets, studyBrainLink, reorderBrainBuckets, reorderBrainLinks } from '../../../services/api';
 import toast from '../../ui/Toast';
+import { KeyboardSensor } from '@dnd-kit/core';
+import { BUCKET_KIND, LINK_KIND, LINK_SLOT_KIND, linksKeyboardCoordinates } from '../links/bucketDnd';
 import LinksTab from './LinksTab';
 
 const link = (id, cloneStatus, overrides = {}) => ({
@@ -64,6 +92,7 @@ const tick = (ms = 3000) => act(async () => { await vi.advanceTimersByTimeAsync(
 beforeEach(() => {
   vi.clearAllMocks();
   bucketBoardRenders = 0;
+  dndState.context = null;
   vi.useFakeTimers();
   getBrainBuckets.mockResolvedValue({ buckets: [] });
 });
@@ -369,5 +398,121 @@ describe('LinksTab on-demand repo re-study', () => {
 
     expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/pull failed/i));
     expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+// #8120: buckets and chips could only be reordered with a mouse (native HTML5
+// drag, no keyboard path). This suite exercises the ONE DndContext LinksTab
+// mounts around the flat list + the bucket board — sensors, drag-end routing,
+// and the live announcement text — the same "capture DndContext's props"
+// shape KanbanBoard.test.jsx uses, since jsdom cannot drive a real drag.
+describe('LinksTab drag-and-drop wiring', () => {
+  const buckets = [
+    { id: 'b1', name: 'Reading', color: 'accent', order: 0 },
+    { id: 'b2', name: 'Tools', color: 'purple', order: 1 },
+  ];
+
+  beforeEach(() => {
+    getBrainBuckets.mockResolvedValue({ buckets });
+  });
+
+  it('registers a KeyboardSensor with the shared coordinate getter', async () => {
+    getBrainLinks.mockResolvedValue({ links: [] });
+    await renderTab();
+
+    const keyboardSensor = dndState.context.sensors.find(({ sensor }) => sensor === KeyboardSensor);
+    expect(keyboardSensor).toBeDefined();
+    expect(keyboardSensor.options.coordinateGetter).toBe(linksKeyboardCoordinates);
+  });
+
+  it('reorders buckets when a bucket is dropped on another bucket', async () => {
+    getBrainLinks.mockResolvedValue({ links: [] });
+    reorderBrainBuckets.mockResolvedValue(true);
+    await renderTab();
+
+    const active = { data: { current: { kind: BUCKET_KIND, bucket: { id: 'b1' }, bucketIndex: 0 } } };
+    const over = { data: { current: { kind: BUCKET_KIND, bucketId: 'b2', bucketIndex: 1 } } };
+    await act(async () => { dndState.context.onDragEnd({ active, over }); });
+
+    expect(reorderBrainBuckets).toHaveBeenCalledWith(['b2', 'b1'], { silent: true });
+  });
+
+  it('does nothing when a bucket is dropped back on itself', async () => {
+    getBrainLinks.mockResolvedValue({ links: [] });
+    await renderTab();
+
+    const active = { data: { current: { kind: BUCKET_KIND, bucket: { id: 'b1' }, bucketIndex: 0 } } };
+    const over = { data: { current: { kind: BUCKET_KIND, bucketId: 'b1', bucketIndex: 0 } } };
+    await act(async () => { dndState.context.onDragEnd({ active, over }); });
+
+    expect(reorderBrainBuckets).not.toHaveBeenCalled();
+  });
+
+  it('reorders a link to a specific chip slot when dropped on a link-slot droppable', async () => {
+    const twoInBucket = [
+      link('a', 'none', { bucketId: 'b1', bucketOrder: 0, title: 'Alpha' }),
+      link('c', 'none', { bucketId: 'b1', bucketOrder: 1, title: 'Charlie' }),
+    ];
+    getBrainLinks.mockResolvedValue({ links: twoInBucket });
+    reorderBrainLinks.mockResolvedValue(true);
+    await renderTab();
+
+    // Drag Alpha (currently index 0) to index 2 — after Charlie.
+    const active = { data: { current: { kind: LINK_KIND, link: twoInBucket[0], bucketId: 'b1', index: 0 } } };
+    const over = { data: { current: { kind: LINK_SLOT_KIND, bucketId: 'b1', bucketName: 'Reading', index: 2 } } };
+    await act(async () => { dndState.context.onDragEnd({ active, over }); });
+
+    expect(reorderBrainLinks).toHaveBeenCalledWith(
+      [{ id: 'c', bucketId: 'b1', bucketOrder: 0 }, { id: 'a', bucketId: 'b1', bucketOrder: 1 }],
+      { silent: true },
+    );
+  });
+
+  it('ignores a drop with no destination, and a drop whose kinds do not match', async () => {
+    getBrainLinks.mockResolvedValue({ links: [] });
+    await renderTab();
+
+    await act(async () => { dndState.context.onDragEnd({ active: { data: { current: { kind: BUCKET_KIND } } }, over: null }); });
+    const mismatched = {
+      active: { data: { current: { kind: LINK_KIND, link: { id: 'a' } } } },
+      over: { data: { current: { kind: BUCKET_KIND, bucketId: 'b1' } } },
+    };
+    await act(async () => { dndState.context.onDragEnd(mismatched); });
+
+    expect(reorderBrainBuckets).not.toHaveBeenCalled();
+    expect(reorderBrainLinks).not.toHaveBeenCalled();
+  });
+
+  it('announces the destination bucket and position when a link drag ends', async () => {
+    const twoInBucket = [
+      link('a', 'none', { bucketId: 'b1', bucketOrder: 0, title: 'Alpha' }),
+      link('c', 'none', { bucketId: 'b1', bucketOrder: 1, title: 'Charlie' }),
+    ];
+    getBrainLinks.mockResolvedValue({ links: twoInBucket });
+    await renderTab();
+
+    const active = { data: { current: { kind: LINK_KIND, link: twoInBucket[0], bucketId: 'b1', index: 0 } } };
+    const over = { data: { current: { kind: LINK_SLOT_KIND, bucketId: 'b1', index: 1 } } };
+    const message = dndState.context.accessibility.announcements.onDragEnd({ active, over });
+    expect(message).toBe('Moved Alpha to position 2 of 2 in Reading.');
+  });
+
+  it('announces the destination position when a bucket drag ends', async () => {
+    getBrainLinks.mockResolvedValue({ links: [] });
+    await renderTab();
+
+    const active = { data: { current: { kind: BUCKET_KIND, bucket: { id: 'b1', name: 'Reading' } } } };
+    const over = { data: { current: { kind: BUCKET_KIND, bucketId: 'b2' } } };
+    const message = dndState.context.accessibility.announcements.onDragEnd({ active, over });
+    expect(message).toBe('Moved bucket Reading to position 2 of 2.');
+  });
+
+  it('announces a drop outside a valid destination did not move anything', async () => {
+    getBrainLinks.mockResolvedValue({ links: [] });
+    await renderTab();
+
+    const active = { data: { current: { kind: LINK_KIND, link: { id: 'a', title: 'Alpha' } } } };
+    const message = dndState.context.accessibility.announcements.onDragEnd({ active, over: null });
+    expect(message).toBe('Alpha was dropped outside a valid destination and did not move.');
   });
 });
