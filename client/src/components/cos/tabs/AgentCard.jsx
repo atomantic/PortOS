@@ -70,6 +70,7 @@ const PROVIDER_BADGE_CLASSES = {
   execution: 'bg-emerald-500/15 text-emerald-400',
   dispatch: 'bg-teal-500/15 text-teal-400',
   tier: 'bg-orange-500/15 text-orange-400',
+  tierDowngraded: 'bg-red-500/15 text-red-400',
   prompt: 'bg-amber-500/15 text-amber-400',
   auth: 'bg-rose-500/15 text-rose-400',
 };
@@ -139,10 +140,12 @@ function buildProviderConfigBadges(metadata = {}) {
       title: `${dispatch}-owned child process`,
     },
     metadata.modelTier && {
-      key: 'tier',
-      label: 'Tier',
+      key: metadata.modelDowngradedFromDefault ? 'tierDowngraded' : 'tier',
+      label: metadata.modelDowngradedFromDefault ? 'Tier (downgraded)' : 'Tier',
       value: metadata.modelTier,
-      title: metadata.modelReason ? `Model selection: ${metadata.modelReason}` : `Model tier ${metadata.modelTier}`,
+      title: metadata.modelDowngradedFromDefault
+        ? `Ran on "${metadata.model}" — the learning system substituted this for the configured default "${metadata.modelConfiguredDefault}" (${metadata.modelReason})`
+        : metadata.modelReason ? `Model selection: ${metadata.modelReason}` : `Model tier ${metadata.modelTier}`,
     },
     metadata.leanMode && {
       key: 'prompt',

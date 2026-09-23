@@ -371,15 +371,29 @@ async function resolveOrdinaryProviderAndModel(task) {
     }
   }
 
+  // The learning-based tiers can pick a weaker model than the provider's
+  // configured default without the task ever asking for that — surface it
+  // loudly rather than let "ran on the configured default" and "the learning
+  // system downgraded it" collapse into the same quiet info log (#8148).
+  const isLearningOverride = modelSelection.reason === 'learning-suggested' || modelSelection.reason === 'learning-avoid-bad-tier';
+  const downgradedFromDefault = isLearningOverride && !!provider.defaultModel && selectedModel !== provider.defaultModel;
+  if (downgradedFromDefault) {
+    modelSelection.downgradedFromDefault = true;
+    modelSelection.configuredDefault = provider.defaultModel;
+  }
+
   const logMessage = modelSelection.learningReason
     ? `Model selection: ${selectedModel} (${modelSelection.reason} - ${modelSelection.learningReason})`
     : `Model selection: ${selectedModel} (${modelSelection.reason})`;
-  emitLog('info', logMessage, {
+  emitLog(downgradedFromDefault ? 'warn' : 'info', downgradedFromDefault
+    ? `${logMessage} — differs from provider's configured default "${provider.defaultModel}" (learning system substituted this model)`
+    : logMessage, {
     taskId: task.id,
     model: selectedModel,
     tier: modelSelection.tier,
     reason: modelSelection.reason,
-    ...(modelSelection.learningReason && { learningReason: modelSelection.learningReason })
+    ...(modelSelection.learningReason && { learningReason: modelSelection.learningReason }),
+    ...(downgradedFromDefault && { downgradedFromDefault: true, configuredDefault: provider.defaultModel })
   });
 
   return { ok: true, provider, selectedModel, modelSelection };
