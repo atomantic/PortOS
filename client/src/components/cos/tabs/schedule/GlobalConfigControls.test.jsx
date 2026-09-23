@@ -122,6 +122,18 @@ describe('GlobalConfigControls — After opening PR', () => {
     expect(screen.getByTestId('reviewer-picker')).toBeInTheDocument();
   });
 
+  it('explains that a scheduled task reviewer override can fall back to system tiers', () => {
+    renderControls({
+      taskMetadata: {
+        useWorktree: true,
+        openPR: true,
+        prCompletion: 'review-then-merge',
+        reviewers: ['claude'],
+      },
+    });
+    expect(screen.getByText(/This task’s reviewer list is its preferred tier.*system Code Review Defaults tier/)).toBeInTheDocument();
+  });
+
   it('resets the task review override while preserving unrelated task metadata', () => {
     const onUpdate = renderControls({
       taskMetadata: {

@@ -234,6 +234,8 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     : config.taskMetadata?.openPR
       ? prCompletion === '' || prCompletion === 'review-then-merge'
       : !!config.taskMetadata?.reviewLoop;
+  const hasTaskReviewerListOverride = (Array.isArray(config.taskMetadata?.reviewers) && config.taskMetadata.reviewers.length > 0)
+    || (typeof config.taskMetadata?.reviewer === 'string' && !!config.taskMetadata.reviewer);
 
   // `selectedProvider` / `availableModels` come from useTaskModelPins above — it
   // resolves the pin against the active provider, lists Antigravity's BASE models
@@ -763,6 +765,11 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
                 onUpdate(taskType, { taskMetadata });
               }}
             />
+            {hasTaskReviewerListOverride && (
+              <p className="mt-2 text-xs text-gray-500">
+                This task’s reviewer list is its preferred tier. If any reviewer is paused, scheduled runs use the first healthy system Code Review Defaults tier, or the first configured system tier if all are paused.
+              </p>
+            )}
           </div>
         )}
       </div>

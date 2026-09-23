@@ -373,6 +373,24 @@ describe('codeReview helpers', () => {
       expect(out.reviewerApplies).toBe(false)
     })
 
+    it('falls back from a paused scheduled task reviewer to the first healthy system tier', async () => {
+      const pausedUntil = Date.now() + 60_000
+      mockedSettings.current = {
+        codeReview: {
+          reviewers: ['codex'],
+          reviewerFallbackGroups: [['codex'], ['ollama'], ['claude']],
+          reviewerHealth: {
+            grok: { pausedUntil },
+            codex: { pausedUntil },
+          },
+        },
+      }
+
+      const out = await resolveReviewLoopOptions({ reviewers: ['grok'] }, testDeps)
+
+      expect(out.reviewers).toEqual(['ollama'])
+    })
+
     it('assembles a reviewer-keyed model map from the per-CLI-reviewer scalars', async () => {
       mockedSettings.current = {
         codeReview: {
