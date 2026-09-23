@@ -28,6 +28,8 @@ import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { readDailyLogIfEnabled } from './mortalLoomStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { parseTsMs, compareNewerWins } from '../lib/lwwTimestamp.js';
+import { recordTombstone, supersedingTimestamp } from '../lib/tombstones.js';
 
 export const DAILY_LOG_FILE = join(PATHS.meatspace, 'daily-log.json');
 
@@ -130,6 +132,34 @@ export function stampDailyLogEventEdit(event, now = new Date().toISOString()) {
     event.replaces = { ...event };
     event.id = randomUUID();
   }
-  event.updatedAt = now;
+  // Step past the copy being edited even if a peer that last touched it ran a
+  // clock ahead of ours; otherwise that stale copy would win the id merge.
+  event.updatedAt = supersedingTimestamp(dailyLogEventLiveStamp(event), now);
   return event;
+}
+
+/**
+ * The newer of an event's `createdAt` and `updatedAt` — the instant a deletion
+ * has to beat. Null for a legacy row with neither stamp.
+ */
+export function dailyLogEventLiveStamp(event) {
+  const { createdAt, updatedAt } = event || {};
+  if (compareNewerWins(createdAt, updatedAt)) return createdAt;
+  return parseTsMs(updatedAt) === null ? null : updatedAt;
+}
+
+/** Top-level `daily-log.json` field holding `{ id, deletedAt }` event tombstones (#8154). */
+export const DAILY_LOG_TOMBSTONES_KEY = 'eventTombstones';
+
+/**
+ * Record that a logged drink/nicotine event was deleted, so peers that still
+ * hold it drop it on their next sync instead of sending it back (#8154). The
+ * stamp is kept past the event's own live stamp so the deletion wins over the
+ * copy the user was looking at even under clock skew. A legacy row without an
+ * `id` has no identity a peer could match on, so its delete stays local.
+ */
+export function tombstoneDailyLogEvent(log, event, now = new Date().toISOString()) {
+  if (typeof event?.id !== 'string' || !event.id) return;
+  const deletedAt = supersedingTimestamp(dailyLogEventLiveStamp(event), now);
+  log[DAILY_LOG_TOMBSTONES_KEY] = recordTombstone(log[DAILY_LOG_TOMBSTONES_KEY], event.id, { keyField: 'id', deletedAt });
 }

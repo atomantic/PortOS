@@ -12,7 +12,8 @@ import {
   loadMeatspaceDailyLog,
   mutateDailyLog,
   newDailyLogEvent,
-  stampDailyLogEventEdit
+  stampDailyLogEventEdit,
+  tombstoneDailyLogEvent
 } from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
@@ -324,6 +325,7 @@ export async function removeDrink(date, index) {
     if (!entry?.alcohol?.drinks?.[index]) return null;
 
     const removed = entry.alcohol.drinks.splice(index, 1)[0];
+    tombstoneDailyLogEvent(log, removed);
     if (entry.alcohol.drinks.length === 0) delete entry.alcohol;
     else recalcAlcoholTotal(entry);
     return removed;

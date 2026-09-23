@@ -763,6 +763,24 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   //    Its content union still keeps an edited row beside the unedited copy (it
   //    cannot read `replaces`) — the same double row an edit between two v0
   //    peers has always produced, cleared once that peer upgrades.
+  //
+  // Still v1 after #8154, which added deletes and date moves for id'd events:
+  // a top-level `eventTombstones: [{ id, deletedAt }]` list (unioned both ways)
+  // and a whole-log pass that keeps one copy per id, on whichever date the
+  // newest copy lives. That is additive, and a bump would make every older
+  // receiver refuse ALL daily-log data, new drinks included. With a pre-#8154
+  // peer in the federation:
+  //  - It keeps a deleted or moved-away copy (it cannot read tombstones and
+  //    merges ids per date) and sends it back each cycle. A current receiver
+  //    drops that copy again — it is not newer than the tombstone, and the
+  //    moved copy's newer stamp wins the id — so only the old peer
+  //    double-counts, until it upgrades.
+  //  - It cannot strip tombstones from a current peer: the list is unioned, and
+  //    the old peer's own writes keep unknown top-level fields. Its own copy of
+  //    the list only refreshes when its local file lacks the key, so it may
+  //    send a stale subset back, which a union ignores.
+  // Rows without an `id` (logged before #8143) are still add-only: deleting
+  // or moving one does not reach peers.
   // The key exists so the NEXT incompatible daily-log change can bump to 2 and
   // have v1 receivers reject it.
   meatspace: 1,
