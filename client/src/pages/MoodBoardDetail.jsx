@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
@@ -29,6 +29,7 @@ import {
   linkMoodBoardPinterest,
   unlinkMoodBoardPinterest,
   syncMoodBoardPinterest,
+  importMoodBoardXPost,
 } from '../services/api';
 import { moodBoardItemSrc, moodBoardItemVideoSrc, moodBoardItemAnalysisSource } from '../lib/moodBoardItemSrc';
 import { timeAgo } from '../utils/formatters';
@@ -73,6 +74,10 @@ function MoodBoardEditor({ id }) {
   const [linking, setLinking] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [confirmingUnlink, setConfirmingUnlink] = useState(false);
+
+  // X.com (Twitter) post import — one-shot, no persisted link.
+  const [xPostUrl, setXPostUrl] = useState('');
+  const [importingXPost, setImportingXPost] = useState(false);
 
   // The keyed editor isolates board state. Also guard async continuations and
   // delayed child callbacks so the old editor cannot toast or start a mutation
@@ -275,6 +280,19 @@ function MoodBoardEditor({ id }) {
       : 'Up to date — no new pins');
   };
 
+  const handleImportXPost = async () => {
+    if (!mountedRef.current) return;
+    if (!xPostUrl.trim()) { toast.error('Enter an x.com/twitter.com post URL'); return; }
+    setImportingXPost(true);
+    const result = await importMoodBoardXPost(id, xPostUrl.trim(), { silent: true }).catch(() => null);
+    if (!mountedRef.current) return;
+    setImportingXPost(false);
+    if (!result?.board) { toast.error('Could not import that post — check the URL or try again'); return; }
+    setBoard(result.board);
+    setXPostUrl('');
+    toast.success(`Added ${result.added} item${result.added === 1 ? '' : 's'} from the post`);
+  };
+
   if (loading) {
     return (
       <div className="max-w-5xl mx-auto">
@@ -445,6 +463,39 @@ function MoodBoardEditor({ id }) {
             </p>
           </div>
         )}
+      </div>
+
+      {/* X.com (Twitter) post import */}
+      <div className="bg-port-card border border-port-border rounded-md p-4 mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <AtSign className="w-4 h-4 text-port-accent" aria-hidden="true" />
+          <h2 className="text-sm font-medium text-white">Import from an X post</h2>
+        </div>
+        <div>
+          <label htmlFor="x-post-url" className="block text-xs text-gray-400 mb-1">Post URL</label>
+          <div className="flex gap-2">
+            <input
+              id="x-post-url"
+              type="text"
+              value={xPostUrl}
+              maxLength={2048}
+              placeholder="https://x.com/user/status/1234567890"
+              onChange={(e) => setXPostUrl(e.target.value)}
+              className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:border-port-accent outline-none"
+            />
+            <button
+              type="button"
+              onClick={handleImportXPost}
+              disabled={importingXPost || !xPostUrl.trim()}
+              className="px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50 transition-colors"
+            >
+              {importingXPost ? 'Importing…' : 'Import'}
+            </button>
+          </div>
+        </div>
+        <p className="text-[11px] text-gray-500 mt-2">
+          Paste a public x.com/twitter.com post URL. Pulls every attached photo (or its video) into this board.
+        </p>
       </div>
 
       {/* Add item */}

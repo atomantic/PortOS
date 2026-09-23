@@ -18,6 +18,7 @@ vi.mock('../services/moodBoard/index.js', () => ({
   linkPinterestBoard: vi.fn(),
   unlinkPinterestBoard: vi.fn(),
   syncPinterestBoard: vi.fn(),
+  importXPost: vi.fn(),
 }));
 
 // The synthesis service pulls the aiProvider/promptRunner stack — stub it so
@@ -123,6 +124,22 @@ describe('mood-board routes', () => {
       });
       expect(res.status).toBe(400);
       expect(synthesizeBoardStyle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/x-post', () => {
+    it('validates the body and passes it to the service', async () => {
+      svc.importXPost.mockResolvedValueOnce({ board: { id: 'mb-1' }, added: 2 });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/x-post').send({ url: 'https://x.com/user/status/1' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ board: { id: 'mb-1' }, added: 2 });
+      expect(svc.importXPost).toHaveBeenCalledWith('mb-1', { url: 'https://x.com/user/status/1' });
+    });
+
+    it('400s on a non-http(s) url (schema gate)', async () => {
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/x-post').send({ url: 'not a url' });
+      expect(res.status).toBe(400);
+      expect(svc.importXPost).not.toHaveBeenCalled();
     });
   });
 });

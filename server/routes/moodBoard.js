@@ -17,6 +17,7 @@ import {
   moodBoardItemCreateSchema,
   moodBoardItemUpdateSchema,
   moodBoardPinterestLinkSchema,
+  moodBoardXPostImportSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -36,6 +37,7 @@ import {
   linkPinterestBoard,
   unlinkPinterestBoard,
   syncPinterestBoard,
+  importXPost,
 } from '../services/moodBoard/index.js';
 
 const router = Router();
@@ -131,6 +133,14 @@ router.delete('/:id/pinterest', asyncHandler(async (req, res) => {
 // Manual "Sync now" — pull new pins from the linked feed into the board.
 router.post('/:id/pinterest/sync', asyncHandler(async (req, res) => {
   const result = await syncPinterestBoard(req.params.id);
+  res.json(result);
+}));
+
+// One-shot import: paste a public x.com/twitter.com post URL, pull its
+// attached photos/video into the board.
+router.post('/:id/x-post', asyncHandler(async (req, res) => {
+  const data = validateRequest(moodBoardXPostImportSchema, req.body);
+  const result = await importXPost(req.params.id, data);
   res.json(result);
 }));
 

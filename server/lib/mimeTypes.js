@@ -166,6 +166,24 @@ export function detectImageFormat(buf) {
 }
 
 /**
+ * Magic-byte sniff of a video buffer. Mirrors `detectImageFormat`'s reasoning —
+ * a remote CDN's Content-Type isn't trustworthy, so downloaded video bytes
+ * (e.g. the mood-board X post importer) are verified from the leading bytes.
+ * Recognises an ISO-BMFF/MP4 container, which carries an `ftyp` box within its
+ * first few dozen bytes (X serves a looping GIF as an mp4 too).
+ *
+ * @param {Buffer} buf - Raw decoded video bytes
+ * @returns {{ format: 'mp4', ext: string, mime: string } | null}
+ */
+export function detectVideoFormat(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length <= 16) return null;
+  if (buf.subarray(0, 64).includes('ftyp')) {
+    return { format: 'mp4', ext: '.mp4', mime: 'video/mp4' };
+  }
+  return null;
+}
+
+/**
  * Get a file's extension, normalised to lowercase with a leading dot.
  * Returns null when the filename has no extension.
  *
