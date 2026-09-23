@@ -378,7 +378,10 @@ export function createItermBridge(deps = {}) {
     // A permanent listener: an 'error' after the open promise settled must
     // never surface as an uncaught EventEmitter error.
     ws.on('error', (err) => {
-      if (conn?.ws === ws) console.error(`❌ ${LOG_PREFIX}: local socket error`);
+      const code = typeof err?.code === 'string' && /^[A-Z0-9_]{1,32}$/u.test(err.code)
+        ? ` (${err.code})`
+        : '';
+      if (!conn || conn.ws === ws) console.error(`❌ ${LOG_PREFIX}: local socket error${code}`);
       reject(err);
     });
     ws.once('open', () => resolve(ws));
