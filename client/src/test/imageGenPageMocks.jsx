@@ -197,6 +197,10 @@ vi.mock('../services/api', () => ({
   getFlux2Status: vi.fn(async () => state.flux2Status),
 }));
 
+vi.mock('../services/apiImageVideo', () => ({
+  listMediaGalleryPage: vi.fn(async () => ({ items: [] })),
+}));
+
 vi.mock('../hooks/useImageGenProgress', () => ({
   useImageGenProgress: () => ({ progress: null, begin: vi.fn(), end: vi.fn(), resume: vi.fn() }),
 }));
