@@ -1,5 +1,5 @@
 import { useRef, useMemo, useEffect, useState, useCallback, Suspense } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { useGLTF, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import {
@@ -15,6 +15,8 @@ import CoSCanvasGuard from './CoSCanvasGuard';
 import { withInPlaceClips } from '../../utils/animationClips';
 import { fitModelToHeight } from '../../utils/modelFit';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
+import { graphMotionSettings } from '../graph3d/GraphScene';
+import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
 
 const MODEL_URL = '/api/avatar/model.glb';
 const TARGET_HEIGHT = 1.9; // world units — fills the fixed portrait frame
@@ -235,6 +237,16 @@ function StateEffects({ color, state }) {
   return <Sparkles count={15} scale={3} size={1.5} speed={0.3} color={color} />;
 }
 
+// Under frameloop='demand', state/speaking changes that only affect
+// useFrame-driven properties need to invalidate the frame so one renders.
+function InvalidateOnStateChange({ state, speaking }) {
+  const { invalidate } = useThree();
+  useEffect(() => {
+    invalidate();
+  }, [state, speaking, invalidate]);
+  return null;
+}
+
 function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
@@ -242,6 +254,8 @@ function Scene({ state, speaking, background }) {
   return (
     <>
       <CoSBackgroundCamera enabled={background} z={3.3} />
+
+      <InvalidateOnStateChange state={state} speaking={speaking} />
 
       {/* Neutral, even lighting so the model renders in its own full texture
           and color. The per-state hue lives in the accent point light + halo /
@@ -285,6 +299,7 @@ function LoadingPlaceholder({ background = false }) {
 export default function MuseCoSAvatar({ state, speaking, background = false }) {
   // null = checking, true = GLB present, false = missing
   const [modelPresent, setModelPresent] = useState(null);
+  const reduceMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     let cancelled = false;
@@ -310,6 +325,7 @@ export default function MuseCoSAvatar({ state, speaking, background = false }) {
         camera={{ position: [0, 0, 3.3], fov: 45 }}
         style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
+        {...graphMotionSettings(reduceMotion)}
       >
         <Suspense fallback={null}>
           <Scene state={state} speaking={speaking} background={background} />

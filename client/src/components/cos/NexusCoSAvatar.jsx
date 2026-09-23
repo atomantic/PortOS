@@ -1,11 +1,13 @@
-import { useRef, useMemo } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useRef, useMemo, useEffect } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Float, MeshDistortMaterial, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSCanvasGuard from './CoSCanvasGuard';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
+import { graphMotionSettings } from '../graph3d/GraphScene';
+import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
 
 // Central brain-like neural core
 function NeuralCore({ color, state, speaking }) {
@@ -333,6 +335,16 @@ function StatusRing({ color, state }) {
   );
 }
 
+// Under frameloop='demand', state/speaking changes that only affect
+// useFrame-driven properties need to invalidate the frame so one renders.
+function InvalidateOnStateChange({ state, speaking }) {
+  const { invalidate } = useThree();
+  useEffect(() => {
+    invalidate();
+  }, [state, speaking, invalidate]);
+  return null;
+}
+
 function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
@@ -343,6 +355,8 @@ function Scene({ state, speaking, background }) {
   return (
     <>
       <CoSBackgroundCamera enabled={background} y={0.2} z={3.5} />
+
+      <InvalidateOnStateChange state={state} speaking={speaking} />
 
       <ambientLight intensity={0.1} />
       <pointLight position={[3, 2, 3]} intensity={0.6} color={color} />
@@ -370,12 +384,14 @@ function Scene({ state, speaking, background }) {
 }
 
 export default function NexusCoSAvatar({ state, speaking, background = false }) {
+  const reduceMotion = usePrefersReducedMotion();
   return (
     <CoSCanvasGuard label="Nexus 3D avatar. Drag to rotate." background={background}>
       <Canvas
         camera={{ position: [0, 0.2, 3.5], fov: 45 }}
         style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
+        {...graphMotionSettings(reduceMotion)}
       >
         <Scene state={state} speaking={speaking} background={background} />
       </Canvas>
