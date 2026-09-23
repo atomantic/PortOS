@@ -579,6 +579,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
         <div className="absolute inset-0 sm:relative sm:inset-auto z-20 sm:z-auto">
           {selectedGoal ? (
             <GoalDetailPanel
+              key={selectedGoal.id}
               goal={selectedGoal}
               allGoals={data?.flat}
               onClose={closeDetail}
