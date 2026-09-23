@@ -448,6 +448,12 @@ export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
     session.activeTurn.abortController.abort('episode_switch');
     session.activeTurn = null;
   }
+  // Blocks `startHostedListening` from starting a NEW turn for the rest of
+  // this function — without it, a turn that starts during the awaits below
+  // would run against the OLD episode and could commit/emit AFTER this
+  // switch's `hosted:session:sync`, mixing old-episode content into the new
+  // episode. Always cleared in `finally`, including on every early return.
+  session.switchingEpisode = true;
 
   // Re-checked after every await below — a host "end", DELETE /sessions/:id,
   // or the TTL sweep can tear this session down while we're off reading the
@@ -456,23 +462,31 @@ export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
   // AFTER the room already saw the terminal `hosted:session:ended`.
   const isLive = () => activeSessions.get(sessionId) === session && session.status === 'active';
 
-  const loom = await getLoom(session.loomId);
-  if (!isLive()) return { ok: false, ended: true, reason: 'session_ended' };
-  if (!loom) {
-    throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  const episode = findEpisode(loom, episodeId);
+  try {
+    const loom = await getLoom(session.loomId);
+    if (!isLive()) return { ok: false, ended: true, reason: 'session_ended' };
+    if (!loom) {
+      throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
+    }
+    const episode = findEpisode(loom, episodeId);
 
-  const preflight = await checkHostedSessionReadiness({ loomId: session.loomId, episodeId, loom, episode });
-  if (!isLive()) return { ok: false, ended: true, reason: 'session_ended' };
-  const startNode = preflight.ready
-    ? episode.nodes?.find((n) => n.id === episode.startNodeId) || null
-    : null;
-  if (!preflight.ready || !startNode) {
-    endHostedSession(sessionId, { reason: 'episode_not_ready', io });
-    return { ok: false, ended: true, reason: 'episode_not_ready', preflight };
-  }
+    const preflight = await checkHostedSessionReadiness({ loomId: session.loomId, episodeId, loom, episode });
+    if (!isLive()) return { ok: false, ended: true, reason: 'session_ended' };
+    const startNode = preflight.ready
+      ? episode.nodes?.find((n) => n.id === episode.startNodeId) || null
+      : null;
+    if (!preflight.ready || !startNode) {
+      endHostedSession(sessionId, { reason: 'episode_not_ready', io });
+      return { ok: false, ended: true, reason: 'episode_not_ready', preflight };
+    }
 
+    return commitHostedEpisodeSwitch(session, sessionId, episodeId, startNode, { io });
+  } finally {
+    session.switchingEpisode = false;
+  }
+}
+
+function commitHostedEpisodeSwitch(session, sessionId, episodeId, startNode, { io }) {
   const now = new Date();
   session.episodeId = episodeId;
   session.currentNodeId = startNode.id;
@@ -525,6 +539,14 @@ export async function startHostedListening(sessionId, { io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session || session.status !== 'active') {
     throw new ServerError('Session is not active', { status: 400, code: 'SESSION_INACTIVE' });
+  }
+
+  // `switchHostedEpisode` holds this while it's off awaiting the loom read
+  // and readiness preflight. Without this gate a turn could start against the
+  // OLD episode mid-switch, then commit and emit AFTER the new episode's
+  // `hosted:session:sync` — mixing old-episode content into the new episode.
+  if (session.switchingEpisode) {
+    throw new ServerError('An episode switch is in progress', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
   }
 
   const loom = await getLoom(session.loomId);

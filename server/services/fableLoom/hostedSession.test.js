@@ -563,6 +563,29 @@ describe('fableLoom hostedSession', () => {
       expect(getHostedSession(session.id)).toBeNull();
       expect(io.emits.at(-1).event).toBe('hosted:session:ended');
     });
+
+    // Without this gate a turn that starts while the switch is off awaiting
+    // the loom read/preflight would run against the OLD episode and could
+    // commit and emit AFTER the new episode's hosted:session:sync, mixing
+    // old-episode content into the new episode.
+    it('refuses to start a new turn while a switch is in flight, and allows one once it settles', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const loomRead = deferred();
+      records.getLoom.mockImplementationOnce(() => loomRead.promise);
+
+      const pending = switchHostedEpisode(session.id, 'ep-2');
+      await expect(startHostedListening(session.id)).rejects.toMatchObject({
+        status: 409,
+        code: 'EPISODE_SWITCH_IN_PROGRESS',
+      });
+
+      loomRead.resolve(mockLoom);
+      await pending;
+
+      const listenRes = await startHostedListening(session.id);
+      expect(listenRes.ok).toBe(true);
+    });
   });
 
   describe('expired-session sweep', () => {
