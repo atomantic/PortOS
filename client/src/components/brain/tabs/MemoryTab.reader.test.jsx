@@ -7,8 +7,13 @@ const api = vi.hoisted(() => ({
   getBrainMemories: vi.fn(), getBrainMemory: vi.fn().mockResolvedValue(null), getMemoryBackendStatus: vi.fn().mockResolvedValue({ backend: 'postgres' }),
   getChatgptArchive: vi.fn(), deleteBrainMemory: vi.fn()
 }));
+// Socket connect fires a reconnect-reconciliation refresh in MemoryTab; mock it
+// so an unrelated real socket connection can never add a surprise getBrainMemories
+// call in this suite (see the socket-mock convention in AgendaTab.test.jsx).
+const { socketMock } = vi.hoisted(() => ({ socketMock: { on: vi.fn(), off: vi.fn() } }));
 vi.mock('../../../services/api', () => api);
 vi.mock('../../../services/apiBrain', () => api);
+vi.mock('../../../services/socket', () => ({ default: socketMock }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
 function Location() { return <output data-testid="location">{useLocation().pathname}</output>; }
 function mount(path = '/brain/memory') {
@@ -118,6 +123,11 @@ describe('Brain deletion preserves the list', () => {
     const region = screen.getByRole('region', { name: 'Memory entries' });
     const search = screen.getByRole('textbox', { name: /Search/ });
     fireEvent.change(search, { target: { value: 'Example' } });
+    // The 250ms search debounce triggers a legitimate reload; under full-suite
+    // load that reload can land after the naive baseline snapshot below and
+    // show up as an "extra" getBrainMemories call the deletion never made
+    // (#8186). Settle it explicitly before recording the baseline.
+    await waitFor(() => expect(api.getBrainMemories).toHaveBeenCalledWith(expect.objectContaining({ search: 'Example' })));
     const callsBeforeDelete = api.getBrainMemories.mock.calls.length;
     fireEvent.click(screen.getAllByRole('button', { name: 'Delete', exact: true })[0]);
     const confirm = screen.getByTitle('Confirm delete');
