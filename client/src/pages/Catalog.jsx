@@ -136,7 +136,7 @@ export default function Catalog() {
   // Cancelable at the same shared boundary MediaCollections uses (#8187):
   // a page that later navigates away can drop a still-pending mirror write
   // instead of letting it fire after the fact and clobber the new route.
-  const [scheduleQMirror] = useCancelableDebounce();
+  const [scheduleQMirror, cancelQMirror] = useCancelableDebounce();
   useEffect(() => {
     scheduleQMirror(() => {
       const trimmed = searchInput.trim();
@@ -460,6 +460,10 @@ export default function Catalog() {
     const ingredientIds = [...selectedIds];
     if (ingredientIds.length === 0) return;
     setRemixMenuOpen(false);
+    // Drop any pending query→URL mirror write first — left free to fire
+    // after this navigation, it could clobber the remix destination back to
+    // this page's own list route (#8187).
+    cancelQMirror();
     navigate(target.to, { state: { remix: { ingredientIds } } });
   };
 
@@ -749,7 +753,7 @@ export default function Catalog() {
 
       {showForm && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-port-card border border-port-border rounded-lg space-y-3">
-          <button type="button" onClick={() => navigate('/catalog/ingest?mode=babble')}
+          <button type="button" onClick={() => { cancelQMirror(); navigate('/catalog/ingest?mode=babble'); }}
             className="text-sm text-port-accent hover:underline">
             Babble and Prune — turn a brainstorm into multiple entries
           </button>
