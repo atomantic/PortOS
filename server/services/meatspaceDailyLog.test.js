@@ -34,7 +34,7 @@ vi.mock('./mortalLoomStore.js', () => ({
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { readDailyLogIfEnabled } from './mortalLoomStore.js';
 import { DAILY_LOG_FILE, readLocalDailyLog, loadMeatspaceDailyLog } from './meatspaceDailyLog.js';
-import { getAlcoholSummary, getDailyAlcohol, logDrink, updateDrink } from './meatspaceAlcohol.js';
+import { getAlcoholSummary, getDailyAlcohol, logDrink, removeDrink, updateDrink } from './meatspaceAlcohol.js';
 import { getDailyNicotine, getNicotineSummary, logNicotine } from './meatspaceNicotine.js';
 import { addBodyEntry, getBodyHistory } from './meatspaceHealth.js';
 
@@ -289,6 +289,46 @@ describe('serialized daily-log writes (#8032)', () => {
     await logDrink({ name: 'Example Wine', oz: 5, abv: 12, count: 1, date: '2024-06-01' });
     expect((await getAlcoholSummary()).today).toBe(2);
     expect(current().entries.find((entry) => entry.date === '2024-06-01').alcohol.drinks).toHaveLength(2);
+  });
+
+  // Peers merge rows by id, so each log must be its own event (#8143).
+  it('logs a repeated drink as a separate event and edits/removes the one targeted', async () => {
+    const current = useLogStore({
+      entries: [{
+        date: '2024-06-01',
+        alcohol: { drinks: [{ name: 'Example Lager', oz: 12, abv: 5, count: 1 }], standardDrinks: 1 }
+      }],
+      lastEntryDate: '2024-06-01'
+    });
+    const first = await logDrink({ name: 'Example Lager', oz: 12, abv: 5, count: 1, date: '2024-06-01' });
+    const second = await logDrink({ name: 'Example Lager', oz: 12, abv: 5, count: 1, date: '2024-06-01' });
+    const drinks = () => current().entries[0].alcohol.drinks;
+
+    expect(first.drink.id).toEqual(expect.any(String));
+    expect(second.drink.id).not.toBe(first.drink.id);
+    expect(drinks().map((d) => d.count)).toEqual([1, 1, 1]);
+    expect(second.dayTotal).toBe(3);
+
+    await updateDrink('2024-06-01', 2, { count: 2 });
+    expect(drinks()[2]).toMatchObject({ id: second.drink.id, count: 2 });
+    expect(drinks()[1]).toEqual(first.drink);
+
+    // Editing a legacy row gives it an identity so later edits merge by id.
+    await updateDrink('2024-06-01', 0, { abv: 6 });
+    expect(drinks()[0]).toMatchObject({ id: expect.any(String), abv: 6, updatedAt: expect.any(String) });
+
+    await removeDrink('2024-06-01', 1);
+    expect(drinks().map((d) => d.id)).not.toContain(first.drink.id);
+    expect(current().entries[0].alcohol.standardDrinks).toBe(3.2);
+  });
+
+  it('logs a repeated nicotine product as a separate event and counts units for today', async () => {
+    const current = useLogStore({ entries: [], lastEntryDate: null });
+    await logNicotine({ product: 'Example Pouch', mgPerUnit: 3, count: 2, date: '2024-06-01' });
+    await logNicotine({ product: 'Example Pouch', mgPerUnit: 3, count: 1, date: '2024-06-01' });
+    const items = current().entries[0].nicotine.items;
+    expect(new Set(items.map((i) => i.id)).size).toBe(2);
+    expect(await getNicotineSummary()).toMatchObject({ today: 9, todayCount: 3 });
   });
 
   it('drops the nicotine summary cache after a local write', async () => {
