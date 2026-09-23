@@ -56,8 +56,7 @@ export default function AppQualityRunner({ app, children }) {
     if (response) setRuns(previous => previous.map(entry => entry.id === response.run.id ? response.run : entry));
     setBusy(false);
   };
-  const controls = <section id="quality-runner" aria-label="Run quality checks" className="border-t border-port-border pt-3 space-y-3">
-    <h4 className="font-medium">Run quality checks</h4>
+  const controls = <section id="quality-runner" aria-label="Run quality checks" className="space-y-3">
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
       <label htmlFor="quality-checks">Checks
         <select id="quality-checks" className="block w-full bg-port-bg border border-port-border rounded p-2" value={selection} disabled={busy} onChange={event => setSelection(event.target.value)}>
@@ -75,7 +74,7 @@ export default function AppQualityRunner({ app, children }) {
       availableModels={picker.availableModels} onProviderChange={value => { picker.setSelectedProviderId(value); setEffort(''); }}
       onModelChange={picker.setSelectedModel} effort={effort} onEffortChange={setEffort} loading={picker.loading} disabled={busy}
       emptyProviderOption="Select a subscription provider" emptyModelOption="Select a model" includeDefaultModel highlightToolUse />
-    <p className="text-xs text-gray-400">{taskTypes.length} scheduled agents, run sequentially within this batch. Launch another batch to run checks in parallel. {mode === 'fix' ? 'Each selected audit can change code and open a PR.' : 'Findings become issues; no fixes or backlog claim jobs.'} Schedules can stay disabled. The Improve setting still applies.</p>
+    <p className="text-xs text-gray-400">Runs sequentially; launch another batch to run in parallel. {mode === 'fix' ? 'Each audit can change code and open a PR.' : 'Findings become issues; no fixes.'}</p>
     <details className="text-xs"><summary className="cursor-pointer text-port-accent">Selected checks ({taskTypes.length})</summary><p className="mt-1">{categories.filter(category => taskTypes.includes(category.id)).map(category => category.label).join(', ') || 'No checks need evidence. Unavailable assessments and N/A categories are excluded.'}</p></details>
     <button type="button" onClick={start} disabled={busy || picker.loading || !picker.selectedProviderId || !picker.selectedModel || !taskTypes.length || app.quality?.unavailable}
       className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">{taskTypes.length === 1 ? 'Run now' : `Run ${taskTypes.length} checks now`}</button>
@@ -87,5 +86,6 @@ export default function AppQualityRunner({ app, children }) {
       {run.status === 'running' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={() => stop(run.id)}>Stop remaining checks</button>}
     </div>)}
   </section>;
-  return children ? children(controls) : controls;
+  const activeRuns = runs.filter(run => run.status === 'running').length;
+  return children ? children(controls, activeRuns) : controls;
 }

@@ -14,7 +14,7 @@ vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn
 import { publishAppQualitySnapshot } from '../../services/apiApps';
 import toast from '../ui/Toast';
 
-it('shows zero as a real score and explains excluded categories in the breakdown', async () => {
+it('shows zero as a real score up front and keeps the scoring explanation in a tooltip', async () => {
   const app = { id: 'portos-default', quality: { score: 0, ratedCategories: 1, totalCategories: 25, categories: [
     { id: 'security', label: 'Security', score: 0, coverage: 'broad', confidence: 'high', summary: 'Critical failure', scannedFiles: 5, totalFiles: 5, worstSeverity: 10 },
     { id: 'ux', label: 'UX', score: 80, coverage: 'partial', stale: true, summary: 'Only one journey inspected' },
@@ -22,10 +22,16 @@ it('shows zero as a real score and explains excluded categories in the breakdown
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
   expect(screen.getByRole('heading', { name: 'Quality: 0/100' })).toBeInTheDocument();
-  expect(screen.getByText('Stale · partial')).toBeInTheDocument();
+  expect(screen.getAllByText('Stale · partial')).not.toHaveLength(0);
   expect(screen.getByText(/1\/25 categories contribute/)).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: /Scheduled audit runners/ })).toHaveAttribute('href', '/cos/schedule');
-  expect(screen.getByRole('table').parentElement).not.toHaveClass('overflow-auto', 'xl:max-h-[calc(100vh-19rem)]');
+  expect(screen.queryByText(/Equal-weight mean/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'How the quality score works' }));
+  expect(screen.getByRole('tooltip')).toHaveTextContent(/Equal-weight mean/);
+  // Metrics-only visitors never see the run or schedule forms until they ask.
+  expect(screen.queryByText('Runner')).not.toBeInTheDocument();
+  expect(screen.queryByText('Schedule form')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
+  expect(screen.getByRole('menuitem', { name: 'Scheduled audit runners' })).toHaveAttribute('href', '/cos/schedule');
 });
 
 it('links an unassessed tile to its app quality tab without inventing a score', () => {
@@ -36,8 +42,9 @@ it('links an unassessed tile to its app quality tab without inventing a score', 
 it('explains why completed maintenance can still have no saved assessment', async () => {
   render(<MemoryRouter><AppQuality app={{ id: 'example', quality: { score: null, categories: [] } }} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
-  expect(screen.getByText(/Earlier runs are not scored retroactively/)).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: /Scheduled audit runners/ })).toHaveAttribute('href', '/cos/schedule');
+  expect(screen.getByText(/No audit assessment saved yet/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'How the quality score works' }));
+  expect(screen.getByRole('tooltip')).toHaveTextContent(/Earlier runs are not scored retroactively/);
 });
 
 it('distinguishes saved but excluded evidence from an app that was never assessed', async () => {
@@ -48,7 +55,7 @@ it('distinguishes saved but excluded evidence from an app that was never assesse
   expect(screen.getByRole('link', { name: 'Quality: no qualifying score' })).toBeInTheDocument();
   rerender(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
-  expect(screen.getByText(/Saved assessments do not currently qualify/)).toBeInTheDocument();
+  expect(screen.getByText(/Saved assessments do not qualify/)).toBeInTheDocument();
   expect(screen.getByText('60/100')).toBeInTheDocument();
 });
 
@@ -59,22 +66,23 @@ it('identifies federated evidence and incomplete scores without linking to a loc
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
   expect(screen.getByText(/1 peers unavailable or incompatible/)).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: 'View instances' })).toHaveAttribute('href', '/instances');
-  expect(screen.queryByRole('link', { name: 'Audit run' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Security actions' }));
+  expect(screen.getByRole('menuitem', { name: 'View instances' })).toHaveAttribute('href', '/instances');
+  expect(screen.queryByRole('menuitem', { name: 'View audit run' })).not.toBeInTheDocument();
 });
 
-it('makes the category actions and header navigation look like distinct clickable controls', async () => {
-  const app = { id: 'example', publishQualitySnapshot: true, quality: { categories: [
-    { id: 'security', label: 'Security', score: 80, coverage: 'broad', confidence: 'high', agentId: 'run-1' },
+it('keeps secondary category actions in a row menu beside the run shortcut', async () => {
+  const app = { id: 'example', quality: { categories: [
+    { id: 'security', label: 'Security', score: 80, coverage: 'broad', confidence: 'high', agentId: 'run-1', summary: 'No material defects' },
   ] } };
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
-  expect(screen.getByRole('link', { name: 'Scheduled audit runners' })).toHaveClass('inline-flex', 'border', 'rounded');
-  expect(screen.getByRole('link', { name: 'View agents' })).toHaveClass('inline-flex', 'border', 'rounded');
-  expect(screen.getByRole('button', { name: 'Publish snapshot now' })).toHaveClass('inline-flex', 'border', 'rounded');
-  expect(screen.getByRole('link', { name: 'Configure and run Security' })).toHaveClass('inline-flex', 'bg-port-accent/15', 'border', 'rounded');
-  expect(screen.getByRole('link', { name: 'View audit run for Security' })).toHaveClass('inline-flex', 'border', 'bg-port-bg/40', 'rounded');
-  expect(screen.getByRole('rowheader', { name: /Security/ })).toHaveClass('px-3', 'py-2.5');
+  expect(screen.queryByText('No material defects')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Security assessment details' }));
+  expect(screen.getByRole('tooltip')).toHaveTextContent('No material defects');
+  fireEvent.click(screen.getByRole('button', { name: 'Security actions' }));
+  expect(screen.getByRole('menuitem', { name: 'Runner settings' })).toHaveAttribute('href', '/cos/schedule?task=security');
+  expect(screen.getByRole('menuitem', { name: 'View audit run' })).toHaveAttribute('href', '/cos/agents/run-1');
 });
 
 it('sorts the category breakdown by worst score or oldest last run', async () => {
@@ -89,27 +97,30 @@ it('sorts the category breakdown by worst score or oldest last run', async () =>
   const sortBy = screen.getByRole('combobox', { name: 'Sort by' });
   expect(sortBy).toHaveValue('score');
   let rowLabels = screen.getAllByRole('row').slice(1).map(row => within(row).queryByRole('rowheader')?.textContent);
-  expect(rowLabels.filter(Boolean)).toEqual(['SecurityRunner settings', 'TestsRunner settings', 'UXRunner settings', 'PerfRunner settings']);
+  expect(rowLabels.filter(Boolean)).toEqual(['Security', 'Tests', 'UX', 'Perf']);
 
   fireEvent.change(sortBy, { target: { value: 'oldest-run' } });
   rowLabels = screen.getAllByRole('row').slice(1).map(row => within(row).queryByRole('rowheader')?.textContent);
-  expect(rowLabels.filter(Boolean)).toEqual(['PerfRunner settings', 'TestsRunner settings', 'UXRunner settings', 'SecurityRunner settings']);
+  expect(rowLabels.filter(Boolean)).toEqual(['Perf', 'Tests', 'UX', 'Security']);
 });
 
-it('opens the shared runner beside unavailable category evidence while preserving URL filters', async () => {
+it('opens the run and schedule forms in a deep-linked drawer while preserving URL filters', async () => {
   const app = { id: 'example', quality: { categories: [
     { id: 'security', label: 'Security', score: null, coverage: 'unavailable' },
     { id: 'ux', label: 'UX', score: null, coverage: 'unavailable' },
   ] } };
   render(<MemoryRouter initialEntries={['/apps/example/quality?period=30']}><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
-  const link = screen.getByRole('link', { name: 'Configure and run Security' });
-  expect(link).toHaveAttribute('href', '/apps/example/quality?period=30&qualityCheck=security#quality-runner');
+  const link = screen.getByRole('link', { name: 'Run Security check' });
+  expect(link).toHaveAttribute('href', '/apps/example/quality?period=30&qualityPanel=run&qualityCheck=security');
   fireEvent.click(link);
-  const table = screen.getByRole('table');
-  expect(within(table).getByText('Runner')).toBeInTheDocument();
-  expect(screen.getAllByText('Runner')).toHaveLength(1);
-  expect(screen.getAllByText('unavailable')).toHaveLength(2);
+  expect(within(screen.getByRole('dialog', { name: 'Run quality checks' })).getByText('Runner')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  expect(screen.queryByText('Runner')).not.toBeInTheDocument();
+  // The header's Run drops the row preselection so it opens on the default set.
+  expect(screen.getByRole('link', { name: 'Run checks' })).toHaveAttribute('href', '/apps/example/quality?period=30&qualityPanel=run');
+  fireEvent.click(screen.getByRole('link', { name: 'Schedule' }));
+  expect(within(screen.getByRole('dialog', { name: 'Weekly quality schedule' })).getByText('Schedule form')).toBeInTheDocument();
 });
 
 describe('AppQuality snapshot publishing', () => {
@@ -118,10 +129,13 @@ describe('AppQuality snapshot publishing', () => {
   it('offers the publish action only for an app that opted in', async () => {
     const { rerender } = render(<MemoryRouter><AppQuality app={{ ...publishingApp, publishQualitySnapshot: false }} detail /></MemoryRouter>);
     await screen.findByText(/No scored assessments/);
-    expect(screen.queryByRole('button', { name: 'Publish snapshot now' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'Publish snapshot now' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
 
     rerender(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
-    expect(screen.getByRole('button', { name: 'Publish snapshot now' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
+    expect(screen.getByRole('menuitem', { name: 'Publish snapshot now' })).toBeInTheDocument();
   });
 
   it('reports the pull request that carries the snapshot into the repo', async () => {
@@ -132,7 +146,8 @@ describe('AppQuality snapshot publishing', () => {
     render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
     await screen.findByText(/No scored assessments/);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Publish snapshot now' }));
 
     await waitFor(() => expect(publishAppQualitySnapshot).toHaveBeenCalledWith('example'));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
@@ -144,7 +159,8 @@ describe('AppQuality snapshot publishing', () => {
     render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
     await screen.findByText(/No scored assessments/);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Publish snapshot now' }));
 
     await waitFor(() => expect(toast).toHaveBeenCalledWith('Snapshot already up to date in .quality.json'));
     expect(toast.success).not.toHaveBeenCalled();
@@ -155,7 +171,8 @@ describe('AppQuality snapshot publishing', () => {
     render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
     await screen.findByText(/No scored assessments/);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Publish snapshot now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Publish snapshot now' }));
 
     await waitFor(() => expect(toast).toHaveBeenCalledWith(
       'The committed quality file is in an unsupported format. Publish left it in place.'));

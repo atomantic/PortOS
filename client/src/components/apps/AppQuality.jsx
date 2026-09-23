@@ -1,11 +1,20 @@
 import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
 import AppQualityScheduleForm from './AppQualityScheduleForm';
-import { Fragment, useId, useState } from 'react';
+import { useId, useState } from 'react';
+import { CalendarClock, Play } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router';
 import { formatDateShort } from '../../utils/formatters';
 import { publishAppQualitySnapshot } from '../../services/apiApps';
 import toast from '../ui/Toast';
+import InfoTooltip from '../ui/InfoTooltip';
+import OverflowMenu from '../ui/OverflowMenu';
+import Drawer from '../Drawer';
+import useDrawerTab from '../../hooks/useDrawerTab';
+
+// Run/schedule forms live in a slide-out keyed by ?qualityPanel so the page
+// itself stays a metrics view; the value is the drawer title.
+const PANELS = { run: 'Run quality checks', schedule: 'Weekly quality schedule' };
 
 // The server refuses rather than fails when there is nothing to publish, so each
 // `published: false` reason gets its own plain-language explanation.
@@ -26,6 +35,7 @@ export default function AppQuality({ app, detail = false }) {
   const [publishing, setPublishing] = useState(false);
   const [categorySort, setCategorySort] = useState('score');
   const categorySortId = useId();
+  const [panel, setPanel] = useDrawerTab('qualityPanel', null, Object.keys(PANELS));
   // User-initiated, so every outcome toasts (the wrapper is silent).
   const publishSnapshot = async () => {
     setPublishing(true);
@@ -40,12 +50,6 @@ export default function AppQuality({ app, detail = false }) {
     toast(PUBLISH_SKIPPED[result?.reason] || 'Nothing to publish to .quality.json');
   };
   const quality = app.quality;
-  const selectedCategory = quality?.categories?.find(category => category.id === params.get('qualityCheck'));
-  const runnerLink = categoryId => {
-    const next = new URLSearchParams(params);
-    next.set('qualityCheck', categoryId);
-    return { search: next.toString(), hash: '#quality-runner' };
-  };
   const score = quality?.score;
   const sortedCategories = quality?.categories
     ? [...quality.categories].sort((a, b) => {
@@ -73,123 +77,145 @@ export default function AppQuality({ app, detail = false }) {
       {label}{score != null && ` · ${quality.ratedCategories}/${quality.totalCategories} categories`}
     </Link>
   );
+  const panelLink = (name, categoryId) => {
+    const next = new URLSearchParams(params);
+    next.set('qualityPanel', name);
+    // Header actions open on the default selection; a row's Run preselects it.
+    if (categoryId) next.set('qualityCheck', categoryId);
+    else next.delete('qualityCheck');
+    return { search: next.toString() };
+  };
+  const menuItems = [
+    { id: 'runners', label: 'Scheduled audit runners', to: '/cos/schedule' },
+    { id: 'agents', label: 'View agents', to: '/cos/agents' },
+    ...(app.publishQualitySnapshot === true
+      ? [{ id: 'publish', label: publishing ? 'Publishing snapshot…' : 'Publish snapshot now', onSelect: publishSnapshot, disabled: publishing }]
+      : []),
+  ];
+  const federation = quality?.federation;
   return (
-    <AppQualityRunner key={app.id} app={app}>{runner => <section aria-label="App quality" className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
-      <h3 className="font-semibold text-white">{label}</h3>
-      <p className="text-xs text-gray-400">
-        Assessments describe the code before fixes. The overall score is the equal-weight mean of broad, medium/high-confidence assessments from the last 30 days.
-        {' '}{quality?.ratedCategories ?? 0}/{quality?.totalCategories ?? 0} categories contribute. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect.
-      </p>
-      <details className="text-xs text-gray-400">
-        <summary className="cursor-pointer text-port-accent">How audit scores work</summary>
-        <p className="mt-1">
-          Scores are the auditing agent’s evidence-based assessment, not a calculation from the number of issues filed.
-          {' '}90–100 means no material defect found after broad review; 70–89 means localized moderate debt;
-          {' '}40–69 means significant recurring or widespread problems; 10–39 means severe defects in core workflows;
-          {' '}0–9 means pervasive critical failure. A run with no findings can therefore score below 100.
-          {' '}Worst severity 0/10 means no material finding was verified, not a perfect category score.
-          {' '}Assessment details contain the agent’s stated rationale; coverage and confidence describe the strength of its evidence.
-        </p>
-      </details>
-      {quality?.federation && (
-        <p className="text-xs text-gray-400">
-          Unified app score: newest assessment per category across this install and {quality.federation.available ?? 0} available sync peers with the same repository. Versions may differ.
-          {' '}Peer evidence is fetched when viewed; offline peers do not contribute.
-          {quality.federation.failed && ' Peer quality could not be loaded; the score may be incomplete.'}
-          {quality.federation.unavailable > 0 && ` ${quality.federation.unavailable} peers unavailable or incompatible; the score may be incomplete.`}
-        </p>
-      )}
-      {score == null && !quality?.unavailable && (
-        <p className="text-sm text-gray-400">
-          {hasAssessments
-            ? 'Saved assessments do not currently qualify for an overall score. Check the category breakdown for coverage, confidence and age.'
-            : 'No audit assessment has been saved. Completed maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively; run a scheduled audit to collect an assessment.'}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Link
-          to="/cos/schedule"
-          className="inline-flex items-center rounded border border-port-border bg-port-bg/60 px-2.5 py-1.5 text-xs font-medium text-gray-200 transition-colors hover:border-port-accent hover:text-white"
-        >
-          Scheduled audit runners
-        </Link>
-        <Link
-          to="/cos/agents"
-          className="inline-flex items-center rounded border border-port-border bg-port-bg/60 px-2.5 py-1.5 text-xs font-medium text-gray-200 transition-colors hover:border-port-accent hover:text-white"
-        >
-          View agents
-        </Link>
-        {app.publishQualitySnapshot === true && (
-          <button
-            type="button"
-            onClick={publishSnapshot}
-            disabled={publishing}
-            className="inline-flex items-center rounded border border-port-accent bg-port-accent/15 px-2.5 py-1.5 text-xs font-medium text-port-accent transition-colors hover:bg-port-accent/25 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {publishing ? 'Publishing snapshot…' : 'Publish snapshot now'}
-          </button>
+    <AppQualityRunner key={app.id} app={app}>{(runner, activeRuns) => <section aria-label="App quality" className="space-y-4">
+      <div className="bg-port-card border border-port-border rounded-lg p-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="text-4xl font-semibold tabular-nums text-white" aria-hidden="true">
+            {score ?? '—'}<span className="text-base font-normal text-gray-500">/100</span>
+          </div>
+          <div className="min-w-0">
+            <h3 className="flex items-center gap-1.5 font-semibold text-white">
+              {label}
+              <InfoTooltip label="How the quality score works" placement="below" align="start" panelClassName="w-80">
+                <p>Equal-weight mean of broad, medium/high-confidence assessments from the last 30 days. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
+                <p className="mt-1.5">Scores are the auditing agent’s evidence-based judgment, not an issue count: 90–100 no material defect · 70–89 localized debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure. A run with no findings can score below 100.</p>
+                {federation && <p className="mt-1.5">Unified score: the newest assessment per category across this install and sync peers with the same repository. Offline peers do not contribute.</p>}
+                {score == null && !hasAssessments && <p className="mt-1.5">Maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively.</p>}
+              </InfoTooltip>
+            </h3>
+            <p className="text-xs text-gray-400">
+              {quality?.ratedCategories ?? 0}/{quality?.totalCategories ?? 0} categories contribute
+              {federation && ` · ${federation.available ?? 0} sync peers`}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link to={panelLink('run')} className="inline-flex items-center gap-1.5 rounded bg-port-accent px-3 py-1.5 text-xs font-medium text-port-bg hover:opacity-90">
+            <Play size={14} aria-hidden="true" />Run checks
+            {activeRuns > 0 && <span className="rounded-full bg-port-bg/30 px-1.5">{activeRuns} running</span>}
+          </Link>
+          <Link to={panelLink('schedule')} className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-bg/60 px-3 py-1.5 text-xs font-medium text-gray-200 hover:border-port-accent hover:text-white">
+            <CalendarClock size={14} aria-hidden="true" />Schedule
+          </Link>
+          <OverflowMenu label="More quality actions" items={menuItems} />
+        </div>
+        {(federation?.failed || federation?.unavailable > 0) && <p className="basis-full text-xs text-port-warning">
+          {federation.failed ? 'Peer quality could not be loaded; the score may be incomplete.' : `${federation.unavailable} peers unavailable or incompatible; the score may be incomplete.`}
+        </p>}
+        {score == null && !quality?.unavailable && <p className="basis-full text-sm text-gray-400">
+          {hasAssessments ? 'Saved assessments do not qualify for an overall score yet. See the breakdown for coverage, confidence and age.' : 'No audit assessment saved yet. Run checks to collect one.'}
+        </p>}
+      </div>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-start">
+        <AppQualityHistory appId={app.id} categories={quality?.categories} />
+        {!!quality?.categories?.length && (
+          <section aria-label="Category breakdown" className="min-w-0 bg-port-card border border-port-border rounded-lg p-4">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-medium">Category breakdown</h4>
+              <label htmlFor={categorySortId} className="flex items-center gap-2 text-xs text-gray-400">
+                Sort by
+                <select
+                  id={categorySortId}
+                  value={categorySort}
+                  onChange={event => setCategorySort(event.target.value)}
+                  className="rounded border border-port-border bg-port-bg px-2 py-1 text-port-text"
+                >
+                  <option value="score">Worst score</option>
+                  <option value="oldest-run">Oldest last run</option>
+                </select>
+              </label>
+            </div>
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-gray-400">
+                <tr>
+                  <th className="py-1.5 px-2">Category</th>
+                  <th className="py-1.5 px-2">Score</th>
+                  <th className="py-1.5 px-2 hidden sm:table-cell">Evidence</th>
+                  <th className="py-1.5 px-2"><span className="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>{sortedCategories.map(category => <CategoryRow key={category.id} category={category}
+                below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score}
+                runLink={panelLink('run', category.id)} />)}</tbody>
+            </table>
+          </section>
         )}
       </div>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
-      <div className="min-w-0 space-y-4">
-        {!selectedCategory && runner}
-        <AppQualityScheduleForm app={app} />
-        <AppQualityHistory appId={app.id} categories={quality?.categories} />
-      </div>
-      {!!quality?.categories?.length && (
-        <section aria-label="Category breakdown" className="min-w-0">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-sm font-medium">Category breakdown</h4>
-            <label htmlFor={categorySortId} className="flex items-center gap-2 text-xs text-gray-400">
-              Sort by
-              <select
-                id={categorySortId}
-                value={categorySort}
-                onChange={event => setCategorySort(event.target.value)}
-                className="rounded border border-port-border bg-port-bg px-2 py-1 text-port-text"
-              >
-                <option value="score">Worst score</option>
-                <option value="oldest-run">Oldest last run</option>
-              </select>
-            </label>
-          </div>
-          <table className="w-full text-sm text-left">
-            <thead className="text-gray-400 sticky top-0 bg-port-card">
-              <tr>
-                <th className="py-2 px-3">Category</th>
-                <th className="py-2 px-3">Score</th>
-                <th className="py-2 px-3">Evidence</th>
-              </tr>
-            </thead>
-            <tbody>{sortedCategories.map(category => (
-              <Fragment key={category.id}><tr className={`border-t border-port-border align-top${score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score ? ' bg-port-warning/10' : ''}`}>
-                <th scope="row" className="py-2.5 px-3 font-medium">{category.label}<Link className="block text-xs font-normal text-port-accent hover:underline" to={`/cos/schedule?task=${encodeURIComponent(category.id)}`} aria-label={`${category.label} runner`}>Runner settings</Link></th>
-                <td className="py-2.5 px-3 whitespace-nowrap">{category.score == null ? '—' : `${category.score}/100`}</td>
-                <td className="py-2.5 px-3 text-xs text-gray-400">
-                  <div>{category.stale ? 'Stale · ' : ''}{category.coverage}{category.confidence && ` · ${category.confidence} confidence`}
-                    {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}</div>
-                  <Link to={runnerLink(category.id)} aria-label={`Configure and run ${category.label}`} className="mt-2 inline-flex items-center rounded border border-port-accent bg-port-accent/15 px-2.5 py-1.5 text-xs font-medium text-port-accent transition-colors hover:bg-port-accent/25">Configure and run</Link>
-                  {category.summary && <details className="mt-1"><summary className="cursor-pointer text-port-accent">Assessment details</summary><p className="break-words">{category.summary}</p></details>}
-                  {category.id === 'better-dependency-freedom' && <p className="mt-1 text-xs">
-                    Dependency freedom assesses whether packages earn their place, not whether the project has zero dependencies.
-                    {' '}There is no automatic penalty for dependency count. Zero removal candidates or issues filed does not guarantee 100/100:
-                    {' '}the clean-audit range is 90–100. The assessment rationale should explain the chosen score.
-                  </p>}
-                  {category.totalFiles > 0 && <div>{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</div>}
-                  {category.sourcePeerName && !category.sourcePeerId && <div>Source: {category.sourcePeerName}</div>}
-                  {category.sourcePeerId && <div>Source: {category.sourcePeerName || 'federated peer'} · <Link className="text-port-accent hover:underline" to="/instances">View instances</Link></div>}
-                  {!category.sourcePeerId && category.agentId && <Link className="mt-2 inline-flex items-center rounded border border-port-border bg-port-bg/40 px-2.5 py-1.5 text-xs font-medium text-port-text-muted transition-colors hover:border-port-accent/60 hover:text-port-accent" to={`/cos/agents/${category.agentId}`} aria-label={`View audit run for ${category.label}`}>View audit run</Link>}
-                </td>
-              </tr>
-              {selectedCategory?.id === category.id && <tr><td colSpan={3} className="px-3 pb-3">
-                {runner}
-              </td></tr>}
-              </Fragment>
-            ))}</tbody>
-          </table>
-        </section>
-      )}
-      </div>
+      <Drawer open={!!panel} onClose={() => setPanel(null)} title={PANELS[panel]} size="md" closeLabel="Close"
+        // The schedule form holds an unapplied plan; a stray Esc/backdrop click would discard it.
+        closeOnEsc={panel !== 'schedule'} closeOnBackdrop={panel !== 'schedule'}>
+        {panel === 'run' && runner}
+        {panel === 'schedule' && <AppQualityScheduleForm app={app} />}
+      </Drawer>
     </section>}</AppQualityRunner>
+  );
+}
+
+function CategoryRow({ category, below, runLink }) {
+  const details = category.summary || category.totalFiles > 0 || category.id === 'better-dependency-freedom';
+  const menuItems = [
+    { id: 'settings', label: 'Runner settings', to: `/cos/schedule?task=${encodeURIComponent(category.id)}` },
+    ...(!category.sourcePeerId && category.agentId ? [{ id: 'run', label: 'View audit run', to: `/cos/agents/${category.agentId}` }] : []),
+    ...(category.sourcePeerId ? [{ id: 'instances', label: 'View instances', to: '/instances' }] : []),
+  ];
+  const evidence = <>
+    {category.stale ? 'Stale · ' : ''}{category.coverage}{category.confidence && ` · ${category.confidence}`}
+    {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}
+    {category.sourcePeerId || category.sourcePeerName ? ` · ${category.sourcePeerName || 'federated peer'}` : ''}
+  </>;
+  return (
+    <tr className={`border-t border-port-border align-middle${below ? ' bg-port-warning/10' : ''}`}>
+      <th scope="row" className="py-1.5 px-2 font-medium">
+        <span className="inline-flex items-center gap-1.5">
+          {category.label}
+          {details && <InfoTooltip label={`${category.label} assessment details`} placement="below" align="start" panelClassName="w-72 max-h-64 overflow-auto font-normal">
+            {category.summary && <p className="break-words">{category.summary}</p>}
+            {category.totalFiles > 0 && <p className="mt-1">{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</p>}
+            {category.id === 'better-dependency-freedom' && <p className="mt-1">Assesses whether packages earn their place; dependency count carries no automatic penalty.</p>}
+          </InfoTooltip>}
+        </span>
+      </th>
+      <td className="py-1.5 px-2 tabular-nums">
+        <span className="whitespace-nowrap">{category.score == null ? '—' : `${category.score}/100`}</span>
+        <span className="block text-xs text-gray-400 sm:hidden">{evidence}</span>
+      </td>
+      <td className="py-1.5 px-2 text-xs text-gray-400 hidden sm:table-cell">{evidence}</td>
+      <td className="py-1.5 px-2">
+        <div className="flex items-center justify-end gap-1">
+          <Link to={runLink} aria-label={`Run ${category.label} check`} title="Run this check"
+            className="inline-flex min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 items-center justify-center rounded border border-port-accent/60 bg-port-accent/10 p-1.5 text-port-accent hover:bg-port-accent/25">
+            <Play size={12} aria-hidden="true" />
+          </Link>
+          <OverflowMenu label={`${category.label} actions`} items={menuItems} />
+        </div>
+      </td>
+    </tr>
   );
 }
