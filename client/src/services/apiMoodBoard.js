@@ -7,6 +7,9 @@ import { request } from './apiCore.js';
 
 export const listMoodBoards = (options) => request('/mood-boards', options);
 
+// `{ id, name }` only — for pickers; skips every board's inline items.
+export const listMoodBoardNames = (options) => request('/mood-boards/names', options);
+
 export const getMoodBoard = (id, options) =>
   request(`/mood-boards/${encodeURIComponent(id)}`, options);
 

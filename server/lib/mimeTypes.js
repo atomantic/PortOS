@@ -95,6 +95,12 @@ export const EXTENSION_MIME_MAP = {
  * miscellaneous text/config types that are not meaningful attachment types.
  * The attachments route validates against this set; uploads uses the full map.
  */
+// Audio extensions (no dot) POST /api/uploads accepts as playable tracks —
+// every audio/* entry above except MIDI, which is a score, not a recording.
+export const UPLOAD_AUDIO_EXTENSIONS = Object.freeze(Object.entries(EXTENSION_MIME_MAP)
+  .filter(([, mime]) => mime.startsWith('audio/') && mime !== 'audio/midi')
+  .map(([ext]) => ext.slice(1)));
+
 export const ATTACHMENT_ALLOWED_EXTENSIONS = new Set([
   '.txt', '.md', '.json', '.csv', '.xml', '.yaml', '.yml',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf',

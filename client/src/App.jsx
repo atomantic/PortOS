@@ -81,6 +81,7 @@ const Game = lazyWithReload(() => import('./pages/Game'));
 const MusicVideo = lazyWithReload(() => import('./pages/MusicVideo'));
 const Sprites = lazyWithReload(() => import('./pages/Sprites'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
+const CodeAnimation = lazyWithReload(() => import('./pages/CodeAnimation'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
 const Decks = lazyWithReload(() => import('./pages/Decks'));
 const DeckDetail = lazyWithReload(() => import('./pages/DeckDetail'));
@@ -592,6 +593,7 @@ export default function App() {
           <Route path="catalog" element={<Catalog />} />
           <Route path="catalog/ingest" element={<CatalogIngest />} />
           <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
+          <Route path="code-animation" element={<CodeAnimation />} />
           <Route path="mood-boards" element={<MoodBoards />} />
           <Route path="mood-boards/:id" element={<MoodBoardDetail />} />
           <Route path="decks" element={<Decks />} />

@@ -25,6 +25,7 @@ import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
 import { STYLE_NOTES_MAX } from '../services/universeBuilder.js';
 import {
   listBoards,
+  listBoardNames,
   getBoard,
   createBoard,
   updateBoard,
@@ -48,6 +49,11 @@ router.get('/', asyncHandler(async (req, res) => {
     return res.json(boards);
   }
   res.json(paginateArray(boards, req.query, { defaultLimit: 50, maxLimit: 500 }));
+}));
+
+// Registered ahead of `/:id` so the literal path is not read as a board id.
+router.get('/names', asyncHandler(async (_req, res) => {
+  res.json(await listBoardNames());
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
