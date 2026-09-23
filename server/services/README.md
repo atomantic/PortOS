@@ -16,3 +16,5 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `sprites/reference.js` | Sprite reference candidate rendering and provenance. |
 | `deckRender.js` | Deck card image render jobs. |
 | `fableLoom/production.js` | FableLoom production render planning and enqueueing. |
+| `appProcessTypes.js` | Dependency-free managed-app process-type vocabulary and PM2/desktop predicates. |
+| `appProcessStatus.js` | PM2-backed managed-app status projections, expected-exit policy, and custom PM2 home resolution. |

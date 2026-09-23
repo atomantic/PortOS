@@ -23,7 +23,8 @@ import * as pm2Service from '../../services/pm2.js';
 import * as appBuilder from '../../services/appBuilder.js';
 import { logAction } from '../../services/history.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { parseEcosystemFromPath, usesPm2, isDesktopType } from '../../services/streamingDetect.js';
+import { parseEcosystemFromPath } from '../../services/streamingDetect.js';
+import { usesPm2, isDesktopType } from '../../services/appProcessTypes.js';
 import { detectAppIcon, isUsableSvg } from '../../services/appIconDetect.js';
 import { loadApp, pathExists, deriveUiPort } from './shared.js';
 

@@ -22,6 +22,7 @@ vi.mock('child_process', async (importOriginal) => {
 
 const { spawn } = await import('child_process');
 const { createRunnerService } = await import('./runner.js');
+const { createRunLifecycle } = await import('./internal/runLifecycle.js');
 const { streamTransportDispatcher } = await import('./internal/streamTransport.js');
 
 describe('AI Toolkit runner service', () => {
@@ -1583,6 +1584,67 @@ describe('AI Toolkit runner service', () => {
       .toBe('head tail');
   });
 
+});
+
+describe('AI Toolkit runner — private lifecycle', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('rearms the stall bound, settles once, and clears the absolute bound', () => {
+    vi.useFakeTimers();
+    const controller = { abort: vi.fn() };
+    const onTimeout = vi.fn();
+    let lifecycle;
+    lifecycle = createRunLifecycle({
+      runId: 'lifecycle-stall',
+      controller,
+      stallTimeout: 100,
+      absoluteTimeout: 200,
+      onTimeout: (bound) => {
+        lifecycle.markSettled();
+        onTimeout(bound);
+      },
+    });
+
+    lifecycle.start();
+    vi.advanceTimersByTime(80);
+    lifecycle.noteStreamProgress();
+    vi.advanceTimersByTime(80);
+    expect(onTimeout).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(20);
+
+    expect(onTimeout).toHaveBeenCalledOnce();
+    expect(onTimeout).toHaveBeenCalledWith('stall');
+    expect(controller.abort).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(1000);
+    expect(onTimeout).toHaveBeenCalledOnce();
+  });
+
+  it('fires the absolute bound independently of stream progress', () => {
+    vi.useFakeTimers();
+    const controller = { abort: vi.fn() };
+    const onTimeout = vi.fn();
+    let lifecycle;
+    lifecycle = createRunLifecycle({
+      runId: 'lifecycle-absolute',
+      controller,
+      stallTimeout: 1000,
+      absoluteTimeout: 200,
+      onTimeout: (bound) => {
+        lifecycle.markSettled();
+        onTimeout(bound);
+      },
+    });
+
+    lifecycle.start();
+    vi.advanceTimersByTime(150);
+    lifecycle.noteStreamProgress();
+    vi.advanceTimersByTime(50);
+
+    expect(onTimeout).toHaveBeenCalledWith('absolute');
+    expect(controller.abort).toHaveBeenCalledOnce();
+  });
 });
 
 describe('AI Toolkit runner — declared extension points', () => {

@@ -19,7 +19,7 @@ import { getGenomeSummary } from '../services/genome.js';
 import { getSettings } from '../services/settings.js';
 import * as telegram from '../services/telegram.js';
 import * as telegramBridge from '../services/telegramBridge.js';
-import * as apps from '../services/apps.js';
+import { getAppStatusSummary } from '../services/appProcessStatus.js';
 
 const router = Router();
 
@@ -94,7 +94,7 @@ router.get('/', asyncHandler(async (req, res) => {
     getVoiceConfig().catch(() => ({})),
     getGenomeSummary().catch(() => ({ uploaded: false })),
     resolveTelegram().catch(() => ({})),
-    apps.getAppStatusSummary().catch(() => ({ total: 0 })),
+    getAppStatusSummary().catch(() => ({ total: 0 })),
     getNetworkExposureSetupStatus().catch(() => ({})),
     getSettings(),
   ]);

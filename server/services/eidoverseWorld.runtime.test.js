@@ -65,6 +65,8 @@ vi.mock('./instanceIdentity.js', () => ({
 
 vi.mock('./apps.js', () => ({
   getAllApps: vi.fn(async () => []),
+}));
+vi.mock('./appProcessStatus.js', () => ({
   getAppStatuses: vi.fn(async () => {
     mocks.appStatusReads += 1;
     return mocks.appStatuses;

@@ -21,7 +21,7 @@ vi.mock('./taskLearning.js', () => ({
 vi.mock('./pm2.js', () => ({ listProcesses: vi.fn(async () => mock.processes) }));
 // Mirrors the real annotateExpectedExit, including its fail-open behavior: a
 // registry read failure marks nothing expected, so nothing is exempted.
-vi.mock('./apps.js', () => ({
+vi.mock('./appProcessStatus.js', () => ({
   annotateExpectedExit: vi.fn(async (processes) => {
     const names = mock.desktopLookupError ? new Set() : mock.desktopProcessNames;
     return processes.map(p => ({ ...p, expectedExit: names.has(p?.name) }));
