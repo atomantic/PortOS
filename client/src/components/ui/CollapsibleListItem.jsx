@@ -6,6 +6,7 @@ import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
  */
 export default function CollapsibleListItem({ removing, onExited, children, spacing = '0.5rem' }) {
   const elementRef = useRef(null);
+  const hadFocusRef = useRef(false);
   const exitRef = useRef(onExited);
   exitRef.current = onExited;
   const reducedMotion = usePrefersReducedMotion();
@@ -13,7 +14,9 @@ export default function CollapsibleListItem({ removing, onExited, children, spac
   useEffect(() => {
     if (!removing) return undefined;
     const element = elementRef.current;
-    if (element.contains(document.activeElement)) {
+    const shouldRestoreFocus = element.contains(document.activeElement) || hadFocusRef.current;
+    hadFocusRef.current = false;
+    if (shouldRestoreFocus) {
       const siblings = [...element.parentElement.children];
       const destination = siblings.slice(siblings.indexOf(element) + 1).find(sibling => !sibling.inert)
         || siblings.reverse().find(sibling => sibling !== element && !sibling.inert)
@@ -26,7 +29,17 @@ export default function CollapsibleListItem({ removing, onExited, children, spac
   }, [removing, reducedMotion]);
 
   return (
-    <div ref={elementRef} tabIndex={-1} inert={removing || undefined}
+    <div
+      ref={elementRef}
+      tabIndex={-1}
+      inert={removing || undefined}
+      onFocusCapture={() => { hadFocusRef.current = true; }}
+      onBlurCapture={event => {
+        if (event.relatedTarget && event.relatedTarget !== document.body
+          && !event.currentTarget.contains(event.relatedTarget)) {
+          hadFocusRef.current = false;
+        }
+      }}
       className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
       style={{ gridTemplateRows: removing ? '0fr' : '1fr', opacity: removing ? 0 : 1 }}>
       <div className="min-h-0 overflow-hidden">

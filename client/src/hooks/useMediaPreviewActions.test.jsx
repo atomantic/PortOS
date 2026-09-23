@@ -22,6 +22,57 @@ const parseNav = () => {
 describe('useMediaPreviewActions.handleRemix', () => {
   beforeEach(() => navigate.mockReset());
 
+  it('sends a saved image back to /media/image by filename only', () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    result.current.handleRemix({
+      kind: 'image',
+      filename: 'example image.png',
+      prompt: 'a paper kite above a garden',
+      negativePrompt: 'blurry',
+      modelId: 'flux2',
+      width: 1024,
+      height: 768,
+      seed: 42,
+      steps: 12,
+      guidance: 3,
+      quantize: '8',
+      loraFilenames: ['example-lora.safetensors'],
+      loraScales: [0.7],
+    });
+    const { path, params } = parseNav();
+    expect(path).toBe('/media/image');
+    expect(params.get('remix')).toBe('example image.png');
+    expect([...params.keys()]).toEqual(['remix']);
+  });
+
+  it('keeps the legacy settings bundle for a filename-less image', () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    result.current.handleRemix({
+      kind: 'image',
+      prompt: 'a paper kite above a garden',
+      negativePrompt: 'blurry',
+      modelId: 'flux2',
+      width: 1024,
+      height: 768,
+      seed: 42,
+      steps: 12,
+      guidance: 3,
+      quantize: '8',
+    });
+    const { path, params } = parseNav();
+    expect(path).toBe('/media/image');
+    expect(params.get('remix')).toBeNull();
+    expect(params.get('prompt')).toBe('a paper kite above a garden');
+    expect(params.get('negativePrompt')).toBe('blurry');
+    expect(params.get('modelId')).toBe('flux2');
+    expect(params.get('width')).toBe('1024');
+    expect(params.get('height')).toBe('768');
+    expect(params.get('seed')).toBe('42');
+    expect(params.get('steps')).toBe('12');
+    expect(params.get('guidance')).toBe('3');
+    expect(params.get('quantize')).toBe('8');
+  });
+
   // #6290: a saved video hands over its RECORD ID, not a render-settings
   // bundle. The bundle was a second restore implementation that had to be
   // extended for every new render field and wasn't — it silently dropped the
