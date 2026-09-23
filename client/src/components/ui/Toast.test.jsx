@@ -397,6 +397,26 @@ describe('finite toasts pause their dismiss timer while held', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it('restarts the countdown on a same-id re-add whose content, type, and duration are all unchanged', () => {
+    // Regression: `add()` used to arm a brand-new timer on EVERY call for an
+    // id, even one whose content/type/duration are byte-identical to what's
+    // already showing (a caller "refreshing" the same toast). Comparing
+    // content/type/duration by value can't see that call happened at all —
+    // nothing looks different — so the fix has to key off something that
+    // changes on every add(), not just on a visible difference.
+    act(() => { toast('Still syncing...', { id: 'sync-status', duration: 8000 }); });
+    advance(6000); // 2s left
+
+    act(() => { toast('Still syncing...', { id: 'sync-status', duration: 8000 }); });
+
+    // If the countdown hadn't restarted, this would already be dismissed at
+    // the old deadline (6000 + 2000 = 8000, i.e. right about now).
+    advance(6001);
+    expect(screen.getByRole('status')).toBeVisible();
+    advance(1999);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('restarts the countdown when a same-id swap changes only the duration, not the content', () => {
     // Regression: an Infinity→finite swap that keeps identical content/type
     // must still reset the countdown. `remainingRef` was previously left at

@@ -279,22 +279,24 @@ function ToastItem({ t, toastOptions }) {
   //
   // `remainingRef` is the ms left on the countdown; it survives across
   // pause/resume because a ref, unlike state, doesn't trigger its own
-  // re-render/effect cycle. `prevIdentityRef` detects a same-id swap that
-  // needs a fresh countdown — content/type by reference (the same signal the
-  // collapse-reset effect above uses, since they only change identity when
-  // `add()` actually ran) PLUS `duration` itself: a swap that keeps identical
-  // content/type but changes just the duration (e.g. an Infinity toast
-  // re-added with a finite one) must still reset — otherwise `remainingRef`
-  // keeps holding the stale duration, and if that was `Infinity`,
-  // `setTimeout(fn, Infinity)` clamps to 0 and the toast would dismiss
-  // almost immediately instead of honouring the new duration.
+  // re-render/effect cycle. `prevSeqRef` detects a same-id re-add that needs
+  // a fresh countdown — `t.seq` (assigned in `add()`) bumps on EVERY call for
+  // this id, including one whose content/type/duration are byte-identical to
+  // what's already showing, matching the old behaviour where `add()` armed a
+  // brand-new timer on every call regardless of whether anything visibly
+  // changed. Comparing `content`/`type`/`duration` by value instead would
+  // miss that case (nothing would look different to React) and also miss a
+  // swap that keeps identical content/type but changes just the duration —
+  // e.g. an Infinity toast re-added as finite — where `remainingRef` would
+  // otherwise keep holding `Infinity`; `setTimeout(fn, Infinity)` clamps to 0
+  // in JS, so that toast would dismiss almost immediately instead of
+  // honouring its new duration.
   const remainingRef = useRef(t.duration);
-  const prevIdentityRef = useRef([t.content, t.type, t.duration]);
+  const prevSeqRef = useRef(t.seq);
 
   useEffect(() => {
-    const [prevContent, prevType, prevDuration] = prevIdentityRef.current;
-    const isNewArm = prevContent !== t.content || prevType !== t.type || prevDuration !== t.duration;
-    prevIdentityRef.current = [t.content, t.type, t.duration];
+    const isNewArm = prevSeqRef.current !== t.seq;
+    prevSeqRef.current = t.seq;
 
     if (t.duration === Infinity) return undefined;
     if (isNewArm) remainingRef.current = t.duration;
@@ -306,7 +308,7 @@ function ToastItem({ t, toastOptions }) {
       clearTimeout(timer);
       remainingRef.current = Math.max(0, remainingRef.current - (Date.now() - start));
     };
-  }, [t.id, t.duration, t.content, t.type, held]);
+  }, [t.id, t.duration, t.seq, held]);
 
   // Re-entering `add()` with the same id replaces the entry in place (a
   // loading→success swap, a coalesced AI-status error picking up another
