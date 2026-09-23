@@ -143,7 +143,8 @@ import {
   countRunningAgentsByProject,
   isWithinProjectLimit,
   checkStagePrecondition,
-  applyAppWorktreeDefault
+  applyAppWorktreeDefault,
+  unblockExpiredCooldowns
 } from './cosTaskGenerator.js';
 export { evaluateTasks, checkStagePrecondition, applyAppWorktreeDefault };
 
@@ -435,6 +436,16 @@ async function runStart() {
         emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
       }
       await resetOrphanedTasks();
+      // Evaluation is event-driven, so without this cadence a timed pause
+      // (`worktree-busy`, `orphan-cooldown`) whose `cooldownUntil` lapsed would
+      // sit blocked until the next restart or manual evaluate.
+      const revived = await getAllTasks()
+        .then(({ user, cos: internal }) => unblockExpiredCooldowns(user, internal))
+        .catch((err) => {
+          console.warn(`⚠️ unblockExpiredCooldowns failed: ${err?.message || err}`);
+          return 0;
+        });
+      if (revived > 0) scheduleDequeue();
       const { archived } = await _archiveStaleAgents().catch(err => {
         console.warn(`⚠️ _archiveStaleAgents failed: ${err?.message || err}`, err?.stack || '');
         return { archived: 0 };

@@ -35,7 +35,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, releaseIdleSiblingNextHolder } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
@@ -86,12 +86,6 @@ const WORKTREE_BUSY_MAX_ATTEMPTS = 5;
 // service before the shared task-target-branch contract existed.
 export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/taskTargetBranch.js';
 
-/** `protectedAgentIds` over a freshly-read agent list — see agentState.js. */
-async function getProtectedAgentIds() {
-  const { getAgents } = await import('./cos.js');
-  return protectedAgentIds(await getAgents());
-}
-
 /**
  * Take over the worktree that already holds `branchName`, for a task whose whole
  * purpose is to run ON that branch (a merge/review-loop follow-up, a resume).
@@ -117,14 +111,31 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
-  const activeAgentIds = await getProtectedAgentIds().catch(err => {
+  const { getAgents } = await import('./cos.js');
+  const agents = await getAgents().catch(err => {
     emitLog('warn', `🌳 Skipping worktree adoption for task ${taskId} — could not read the agent list: ${err.message}`, { taskId });
     return null;
   });
-  if (!activeAgentIds) return null;
+  if (!agents) return null;
+  const activeAgentIds = protectedAgentIds(agents);
 
   const holder = await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds, preferredPath, allowLiveClaim });
-  if (!holder) return null;
+  if (!holder) {
+    // Not adoptable, but a coordinator follow-up may still free the branch from an
+    // idle `/do:next` sibling tree by detaching it in place — `createWorktree`
+    // then attaches normally instead of waiting out a holder that never leaves.
+    if (allowLiveClaim) {
+      const activeWorkspacePaths = agents
+        .filter(a => activeAgentIds.has(a.id))
+        .map(a => a.workspacePath || a.metadata?.workspacePath);
+      const released = await releaseIdleSiblingNextHolder(workspacePath, branchName, { activeWorkspacePaths }).catch(err => {
+        emitLog('warn', `🌳 Could not release ${branchName} for task ${taskId}: ${err.message}`, { taskId });
+        return null;
+      });
+      if (released) emitLog('info', `🌳 Released ${branchName} from idle worktree ${released.path} for task ${taskId}`, { taskId, branch: branchName });
+    }
+    return null;
+  }
 
   const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName).catch(err => {
     emitLog('warn', `🌳 Could not adopt ${holder.path} holding ${branchName} for task ${taskId}: ${err.message}`, { taskId });

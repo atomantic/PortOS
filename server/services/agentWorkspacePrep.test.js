@@ -45,6 +45,7 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   createWorktree: vi.fn(),
   adoptWorktree: vi.fn(),
   findAdoptableWorktreeForBranch: vi.fn().mockResolvedValue(null),
+  releaseIdleSiblingNextHolder: vi.fn().mockResolvedValue(null),
   mergeBaseIntoFeatureWorktree: vi.fn(),
 }));
 vi.mock('./agentAppWorkspace.js', () => ({
@@ -69,7 +70,7 @@ import { ensureLatest } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
-import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch } from './worktreeManager.js';
+import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, releaseIdleSiblingNextHolder } from './worktreeManager.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 
@@ -566,6 +567,21 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     expect(r.outcome).toBe('ready');
   });
 
+  // A `/do:next` run keeps its tree in a sibling directory outside the managed
+  // root, which adoption refuses. Releasing that idle holder lets the follow-up
+  // attach instead of pausing until its busy budget runs out.
+  it('releases an idle /do:next sibling holder for a review-loop follow-up, then attaches', async () => {
+    getAgents.mockResolvedValue([{ id: 'agent-live', status: 'running', metadata: { workspacePath: '/elsewhere/live' } }]);
+    releaseIdleSiblingNextHolder.mockResolvedValueOnce({ path: '/repos/next-issue-1' });
+    createWorktree.mockResolvedValueOnce({ worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/task-x/agent-y', baseBranch: null });
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+    expect(releaseIdleSiblingNextHolder).toHaveBeenCalledWith(expect.any(String), 'cos/task-x/agent-y', { activeWorkspacePaths: ['/elsewhere/live'] });
+    expect(r.outcome).toBe('ready');
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
   // A plain resume never targets a claim tree — its pointer names a CoS
   // `agent-*` worktree — so it must not carry the same carve-out.
   it('does not opt into live-claim adoption for a plain resume', async () => {
@@ -576,6 +592,7 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
 
     const [, , opts] = findAdoptableWorktreeForBranch.mock.calls.at(-1);
     expect(opts.allowLiveClaim).toBe(false);
+    expect(releaseIdleSiblingNextHolder).not.toHaveBeenCalled();
   });
 
   // Adoption MOVES the directory, so the protected set has to cover every agent
