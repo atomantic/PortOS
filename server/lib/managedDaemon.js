@@ -1,4 +1,5 @@
 import { getMemoryStats } from './memoryStats.js';
+import { localEndpointPort } from './localEndpoint.js';
 
 /**
  * Shared plumbing for a local daemon PortOS runs as an optional PM2 process
@@ -209,6 +210,208 @@ export function createDaemonWatcher({
     resetLogs: logs.reset,
     snapshotLogs: logs.snapshot,
     waitForPortRelease,
+  };
+}
+
+/**
+ * The last few lines PM2 has for a dead daemon, folded into the manager's own
+ * log buffer and summarized alongside the PM2 status word.
+ *
+ * Shared because `startMtplxServer`'s relaunch-wait loop and
+ * `ensureSlotstreamRunning`'s used to diagnose the identical failure two
+ * different ways: MTPLX's wait loop tailed the PM2 log (6a9348344, 7480e0476),
+ * Slotstream's reported only `PM2 status: errored`. A launch line that dies
+ * mid-load deserves the same diagnosis regardless of which daemon it was.
+ *
+ * @param {{appName: string, execPm2: (args: string[]) => Promise<{stdout?: string, stderr?: string}>, appendLog: (line: string) => void, lines?: number, tailLines?: number}} options
+ * @returns {(status: string) => Promise<string>}
+ */
+export function createPm2ExitTail({ appName, execPm2, appendLog, lines = 15, tailLines = 4 }) {
+  return async (status) => {
+    const pm2Logs = await execPm2(['logs', appName, '--nostream', '--lines', String(lines)]).catch(() => null);
+    const outputLines = `${pm2Logs?.stderr || pm2Logs?.stdout || ''}`.split('\n').map((l) => l.trimEnd()).filter(Boolean);
+    for (const line of outputLines) appendLog(line);
+    const tail = outputLines.slice(-tailLines).join(' | ');
+    return tail ? `PM2 status: ${status} — ${tail}` : `PM2 status: ${status}`;
+  };
+}
+
+/**
+ * Shared on-demand wake mechanism for a local daemon that stops on idle
+ * (`registerIdleDaemon` above) and must come back up lazily for the next
+ * request. Extracted from `mtplxServerManager.js` and `slotstreamServerManager.js`,
+ * which had drifted into two copies with different bugs (#8105): MTPLX's port
+ * arm never matched (a string compared with `===` to a number), and only
+ * MTPLX's death-detecting readiness loop carried a PM2 log tail.
+ *
+ * Mechanism only, same contract as `createDaemonWatcher` above: what a launch
+ * line MEANS (which knobs it carries, how a saved one merges with a live one)
+ * stays in `resolveLaunch`, which each manager supplies.
+ *
+ * @param {{
+ *   appName: string,
+ *   label: string,
+ *   emoji: string,
+ *   readSection: () => Promise<object|null>,
+ *   endpointFor: (config: object|null) => string,
+ *   probe: (endpoint: string) => Promise<boolean>,
+ *   start: (config: object) => Promise<object>,
+ *   stop: () => Promise<unknown>,
+ *   getStatusStrict: () => Promise<object|null>,
+ *   clearStatusCache?: () => void,
+ *   exitTail?: (status: string) => Promise<string>,
+ *   resolveLaunch: (current: object|null, saved: {model: string|null, port: number|null, raw: object}) => object,
+ *   getConfig?: () => object|null,
+ *   sleep: (ms: number) => Promise<void>,
+ *   getRelaunchReadyTimeoutMs: () => number,
+ *   getRelaunchPollMs: () => number,
+ * }} options
+ */
+export function createOnDemandDaemon({
+  appName,
+  label,
+  emoji,
+  readSection,
+  endpointFor,
+  probe,
+  start,
+  stop,
+  getStatusStrict,
+  clearStatusCache = () => {},
+  exitTail,
+  resolveLaunch,
+  getConfig = () => null,
+  sleep,
+  getRelaunchReadyTimeoutMs,
+  getRelaunchPollMs,
+}) {
+  // Test seam, same shape as each manager's own `_set*OverrideForTests`: a
+  // suite must not depend on whether this developer has an idle window
+  // configured. `null` means "read settings"; both live here now rather than
+  // in the manager, since `registerIdle` below is what reads them.
+  let idleMinutesOverride = null;
+  let keepLoadedOverride = null;
+
+  const configuredIdleMinutes = async () => {
+    if (idleMinutesOverride !== null) return idleMinutesOverride;
+    const section = await readSection();
+    const raw = Number(section?.idleMinutes);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+  };
+
+  const configuredKeepLoaded = async () => {
+    if (keepLoadedOverride !== null) return keepLoadedOverride;
+    const section = await readSection();
+    // Legacy fallback: `pinned` was the setting's name before `keepLoaded`.
+    return Boolean(section?.keepLoaded ?? section?.pinned);
+  };
+
+  const registerIdle = () => {
+    registerIdleDaemon({
+      name: appName,
+      getIdleMs: async () => idleWindowMs(await configuredIdleMinutes()),
+      isPinned: async () => configuredKeepLoaded(),
+      isRunning: async () => Boolean((await getStatusStrict())?.status === 'online'),
+      stop: () => stop(),
+    });
+  };
+
+  /** The launch line last saved on the settings card, sanitized. */
+  const savedLaunchConfig = async () => {
+    const section = await readSection();
+    const launch = section?.launch || {};
+    return {
+      model: typeof launch.model === 'string' && launch.model.trim() ? launch.model.trim() : null,
+      port: Number.isFinite(Number(launch.port)) ? Number(launch.port) : null,
+      // Whatever else the daemon's own knobs need (MTPLX's `tuning`,
+      // Slotstream's `memoryGb`) — shaped and normalized by `resolveLaunch`,
+      // never generically here, since only the manager knows that shape.
+      raw: launch,
+    };
+  };
+
+  /**
+   * Block until the relaunched daemon answers, or until it is proven dead.
+   * MTPLX's `waitForRelaunchedEndpoint`, generalized: poll PM2 alongside the
+   * endpoint, because "still loading" and "already died" look identical from
+   * the endpoint alone and cost wildly different amounts of time to wait out.
+   */
+  const waitForReady = async (endpoint) => {
+    const deadline = Date.now() + getRelaunchReadyTimeoutMs();
+    while (Date.now() < deadline) {
+      if (await probe(endpoint)) return { ready: true, reason: null };
+      clearStatusCache();
+      const proc = await getStatusStrict();
+      if (proc && ['errored', 'stopped', 'not_found'].includes(proc.status)) {
+        const tail = exitTail ? await exitTail(proc.status) : `PM2 status: ${proc.status}`;
+        return { ready: false, reason: `${label} exited while loading (${tail})` };
+      }
+      await sleep(getRelaunchPollMs());
+    }
+    return { ready: false, reason: `${label} relaunched but never answered on its port` };
+  };
+
+  const markUsed = () => markDaemonUsed(appName);
+
+  /**
+   * Bring the daemon up if the idle reaper (or the user) stopped it, and mark
+   * it used either way. A no-op when already online — the overwhelmingly
+   * common case, and it has to stay cheap enough to sit in front of every
+   * request: the one PM2 status read it costs is the same read a status poll
+   * already does.
+   *
+   * Resolves `{ ready, reason }` rather than throwing: a caller in front of an
+   * inference request wants to report "could not be started" alongside its own
+   * error, not have a lazy start unwind its stack.
+   */
+  const ensureRunning = async () => {
+    markUsed();
+
+    const pm2Status = await getStatusStrict();
+    if (pm2Status?.status === 'online') return { ready: true, reason: null };
+
+    // Resolve the launch line BEFORE probing, so the probe below asks about
+    // the port this start would actually bind. `resolveLaunch` sets the
+    // precedence: the config recovered from the last live process, then the
+    // launch the user saved, then the daemon's own default.
+    const saved = await savedLaunchConfig();
+    const config = resolveLaunch(getConfig(), saved);
+
+    // Something else is already serving that port — a daemon the user started
+    // outside PortOS, or another process entirely. Either way this is not
+    // ours to start, and probing beats racing `start` into a port conflict.
+    const endpoint = endpointFor(config);
+    if (await probe(endpoint)) return { ready: true, reason: null };
+
+    console.log(`${emoji} ${label} is stopped — starting it for an incoming request`);
+    const started = await start(config).catch((err) => ({ error: err }));
+
+    if (started.error) return { ready: false, reason: started.error.message };
+    // `start` returns as soon as it knows the process did not die on the
+    // spot; a multi-gigabyte checkpoint routinely outlasts that window, so the
+    // caller's request has to wait for the real readiness signal.
+    if (started.online) return { ready: true, reason: null };
+    return waitForReady(started.endpoint ?? endpoint);
+  };
+
+  /** Is `provider` served by the port THIS daemon's live launch is bound to? */
+  const servesPort = (provider, managedPort) =>
+    Boolean(managedPort) && Number(localEndpointPort(provider?.endpoint)) === managedPort;
+
+  return {
+    ensureRunning,
+    markUsed,
+    registerIdle,
+    waitForReady,
+    servesPort,
+    // Card-status reads. Kept on the returned object rather than re-declared
+    // in the manager — that is exactly the "no longer define
+    // configuredIdleMinutes/configuredKeepLoaded" half of #8105.
+    idleMinutes: configuredIdleMinutes,
+    keepLoaded: configuredKeepLoaded,
+    savedLaunch: savedLaunchConfig,
+    setIdleMinutesOverrideForTests: (value) => { idleMinutesOverride = value; },
+    setKeepLoadedOverrideForTests: (value) => { keepLoadedOverride = value; },
   };
 }
 

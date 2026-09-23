@@ -24,12 +24,12 @@ import { sleep } from '../lib/fileUtils.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import {
   createDaemonWatcher,
+  createOnDemandDaemon,
+  createPm2ExitTail,
   pm2ArgValue,
-  idleWindowMs,
-  markDaemonUsed,
-  registerIdleDaemon,
   SLOTSTREAM_APP,
 } from '../lib/managedDaemon.js';
+import { persistDaemonLaunchConfig } from './localDaemonLaunchConfig.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { isAppleSilicon, isPortInUse } from '../lib/platform.js';
 import { PORTS } from '../lib/ports.js';
@@ -111,6 +111,39 @@ const daemon = createDaemonWatcher({
 });
 const appendLog = daemon.appendLog;
 
+// `settings.js` reached only through a dynamic import — see the note beside
+// `mtplxServerManager.js`'s copy of this same pattern.
+const readSettings = () => import('./settings.js').then((m) => m.getSettings()).catch(() => null);
+
+/**
+ * The shared on-demand wake mechanism (#8105) — see the identical block in
+ * `mtplxServerManager.js` for the full contract. `resolveLaunch` here carries
+ * `memoryGb` instead of `tuning`.
+ */
+const onDemand = createOnDemandDaemon({
+  appName: SLOTSTREAM_APP,
+  label: 'Slotstream',
+  emoji: '🌊',
+  readSection: () => readSettings().then((settings) => settings?.localLlm?.slotstream ?? null),
+  endpointFor,
+  probe: probeEndpoint,
+  start: (config) => startSlotstreamServer(config),
+  stop: () => stopSlotstreamServer(),
+  getStatusStrict: () => getAppStatusStrict(SLOTSTREAM_APP),
+  clearStatusCache: () => clearJlistCache(),
+  exitTail: createPm2ExitTail({ appName: SLOTSTREAM_APP, execPm2: (...args) => execPm2(...args), appendLog }),
+  resolveLaunch: (current, saved) => ({
+    port: current?.port ?? saved.port ?? DEFAULT_PORT,
+    model: current?.model ?? saved.model ?? null,
+    memoryGb: current?.memoryGb ?? (Number.isFinite(Number(saved.raw?.memoryGb)) ? Number(saved.raw.memoryGb) : null),
+  }),
+  getConfig: () => currentConfig,
+  sleep,
+  getRelaunchReadyTimeoutMs: () => relaunchReadyTimeoutMs,
+  getRelaunchPollMs: () => relaunchPollMs,
+});
+onDemand.registerIdle();
+
 /**
  * Reconstructs the launch config from PM2 process args when PortOS restarted
  * while the PM2 process stayed online.
@@ -166,8 +199,8 @@ export async function getSlotstreamServerStatus() {
     ...base,
     supported,
     unsupportedReason: supported ? null : SLOTSTREAM_UNSUPPORTED_REASON,
-    idleMinutes: await configuredIdleMinutes(),
-    keepLoaded: await configuredKeepLoaded(),
+    idleMinutes: await onDemand.idleMinutes(),
+    keepLoaded: await onDemand.keepLoaded(),
     launch: saved,
     memoryPlan,
     cachedModels: (cache.models || []).map((m) => m?.id).filter(Boolean),
@@ -360,7 +393,11 @@ export async function startSlotstreamServer(options = {}) {
     );
   }
 
-  await persistLaunchConfig({ port, model, memoryGb: plan.auto ? null : plan.targetGb });
+  // `memoryGb` stays the user's *override* (null when PortOS sized it), never
+  // the resolved target — `--memory-gb` is always on the launch line, so the
+  // saved override is the only thing that can tell an auto-sized 85.8 GB from
+  // one the user typed apart later.
+  await persistDaemonLaunchConfig({ key: 'slotstream', label: 'Slotstream', launch: { port, model, memoryGb: plan.auto ? null : plan.targetGb } });
 
   const finalProc = await getAppStatusStrict(SLOTSTREAM_APP);
   return {
@@ -409,8 +446,8 @@ export function _resetSlotstreamServerStateForTests({
   keepLoaded = null,
   logFiles,
 } = {}) {
-  idleMinutesOverride = idleMinutes;
-  keepLoadedOverride = keepLoaded;
+  onDemand.setIdleMinutesOverrideForTests(idleMinutes);
+  onDemand.setKeepLoadedOverrideForTests(keepLoaded);
   slotstreamLogFiles = logFiles ? {
     stdout: logFiles.stdout || DEFAULT_SLOTSTREAM_LOG_FILES.stdout,
     stderr: logFiles.stderr || DEFAULT_SLOTSTREAM_LOG_FILES.stderr,
@@ -426,118 +463,43 @@ export function _resetSlotstreamServerStateForTests({
 
 // Test hook for pinning
 export function _setSlotstreamKeepLoadedOverrideForTests(val) {
-  keepLoadedOverride = val;
+  onDemand.setKeepLoadedOverrideForTests(val);
 }
 
-const readSettings = () => import('./settings.js').then((m) => m.getSettings()).catch(() => null);
-let idleMinutesOverride = null;
-let keepLoadedOverride = null;
-
-async function configuredIdleMinutes() {
-  if (idleMinutesOverride !== null) return idleMinutesOverride;
-  const settings = await readSettings();
-  const raw = Number(settings?.localLlm?.slotstream?.idleMinutes);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
-}
-
-async function configuredKeepLoaded() {
-  if (keepLoadedOverride !== null) return keepLoadedOverride;
-  const settings = await readSettings();
-  return Boolean(settings?.localLlm?.slotstream?.keepLoaded ?? settings?.localLlm?.slotstream?.pinned);
-}
-
-registerIdleDaemon({
-  name: SLOTSTREAM_APP,
-  getIdleMs: async () => idleWindowMs(await configuredIdleMinutes()),
-  isPinned: async () => configuredKeepLoaded(),
-  isRunning: async () => Boolean((await getAppStatusStrict(SLOTSTREAM_APP))?.status === 'online'),
-  stop: () => stopSlotstreamServer(),
-});
-
+/**
+ * The launch line last saved on the Slotstream card, for a lazy start to
+ * replay — including the `memoryGb` override, the one field the shared
+ * `onDemand.savedLaunch()` (model/port only) does not sanitize on its own.
+ */
 async function savedLaunchConfig() {
-  const settings = await readSettings();
-  const launch = settings?.localLlm?.slotstream?.launch;
+  const { model, port, raw } = await onDemand.savedLaunch();
   return {
-    model: typeof launch?.model === 'string' && launch.model.trim() ? launch.model.trim() : null,
-    port: Number.isFinite(Number(launch?.port)) ? Number(launch.port) : null,
-    memoryGb: Number.isFinite(Number(launch?.memoryGb)) ? Number(launch.memoryGb) : null,
+    model,
+    port,
+    memoryGb: Number.isFinite(Number(raw?.memoryGb)) ? Number(raw.memoryGb) : null,
   };
 }
 
-/**
- * Record the launch a start actually used, so the on-demand restart after an
- * idle release replays it.
- *
- * Without this an explicit memory cap lives only in `currentConfig`, which
- * `stopSlotstreamServer` clears — so the reaper would silently trade the cap
- * the user chose for an auto-sized target on the next request. `memoryGb` stays
- * the user's *override* (null when PortOS sized it), never the resolved target,
- * so a later status still knows which of the two it is looking at.
- */
-async function persistLaunchConfig({ port, model, memoryGb }) {
-  const settings = await import('./settings.js').catch(() => null);
-  if (!settings?.updateSettingsWith) return;
-  await settings.updateSettingsWith((current) => ({
-    ...current,
-    localLlm: {
-      ...current?.localLlm,
-      slotstream: {
-        ...current?.localLlm?.slotstream,
-        launch: { port, model, memoryGb },
-      },
-    },
-  })).catch((error) => {
-    console.error(`❌ Slotstream: could not persist the launch line (${error?.message || 'unknown'}); an idle restart will re-size from host RAM`);
-  });
-}
-
-export const markSlotstreamUsed = () => markDaemonUsed(SLOTSTREAM_APP);
+// `registerIdleDaemon`, the idle-minutes/keep-loaded reads, `markSlotstreamUsed`,
+// and `ensureSlotstreamRunning` all now live in `onDemand` (#8105) — see the
+// identical block in `mtplxServerManager.js`.
+export const markSlotstreamUsed = () => onDemand.markUsed();
 
 /**
- * Bring Slotstream up if the idle reaper (or the user) stopped it.
+ * Bring Slotstream up if the idle reaper (or the user) stopped it. See
+ * `onDemand.ensureRunning` for the shared mechanism; Slotstream's own
+ * contribution is the `resolveLaunch` hook wired above, which carries
+ * `memoryGb` alongside `port`/`model`.
  *
  * @returns {Promise<{ready: boolean, reason: string|null}>}
  */
-export async function ensureSlotstreamRunning() {
-  markSlotstreamUsed();
-
-  const pm2Status = await getAppStatusStrict(SLOTSTREAM_APP);
-  if (pm2Status?.status === 'online') return { ready: true, reason: null };
-
-  const saved = await savedLaunchConfig();
-  const config = {
-    port: currentConfig?.port ?? saved.port ?? DEFAULT_PORT,
-    model: currentConfig?.model ?? saved.model ?? null,
-    memoryGb: currentConfig?.memoryGb ?? saved.memoryGb ?? null,
-  };
-
-  const endpoint = endpointFor(config);
-  if (await probeEndpoint(endpoint)) return { ready: true, reason: null };
-
-  console.log(`🌊 Slotstream is stopped — starting it for an incoming request`);
-  const started = await startSlotstreamServer(config).catch((err) => ({ error: err }));
-  if (started.error) return { ready: false, reason: started.error.message };
-  if (started.online) return { ready: true, reason: null };
-
-  const deadline = Date.now() + relaunchReadyTimeoutMs;
-  while (Date.now() < deadline) {
-    if (await probeEndpoint(started.endpoint ?? endpoint)) return { ready: true, reason: null };
-    clearJlistCache();
-    const proc = await getAppStatusStrict(SLOTSTREAM_APP);
-    if (proc && ['errored', 'stopped', 'not_found'].includes(proc.status)) {
-      return { ready: false, reason: `Slotstream exited while loading (PM2 status: ${proc.status})` };
-    }
-    await sleep(relaunchPollMs);
-  }
-  return { ready: false, reason: 'Slotstream relaunched but never answered on its port' };
-}
+export const ensureSlotstreamRunning = () => onDemand.ensureRunning();
 
 export function isSlotstreamProvider(provider) {
   if (!provider || !['api', 'tui'].includes(provider.type)) return false;
   if (!isLocalInstanceEndpoint(provider.endpoint)) return false;
   if (localRuntimeKind(provider) === 'slotstream') return true;
-  const managedPort = currentConfig?.port;
-  return Boolean(managedPort) && Number(localEndpointPort(provider.endpoint)) === managedPort;
+  return onDemand.servesPort(provider, currentConfig?.port);
 }
 
 /**

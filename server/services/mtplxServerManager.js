@@ -33,7 +33,8 @@ import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEnd
 import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.js';
 import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
-import { createDaemonWatcher, pm2ArgValue, idleWindowMs, markDaemonUsed, registerIdleDaemon, MTPLX_APP } from '../lib/managedDaemon.js';
+import { createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, pm2ArgValue, MTPLX_APP } from '../lib/managedDaemon.js';
+import { persistDaemonLaunchConfig } from './localDaemonLaunchConfig.js';
 // `settings.js` is lazy-imported at its call sites below, never statically: it
 // eagerly resolves `fileUtils.PATHS` at module load, which drags PATHS into the
 // module graph of every consumer of this manager and breaks the many suites that
@@ -175,6 +176,10 @@ const probeEndpoint = async (endpoint) =>
 const endpointFor = (config) =>
   `http://${DEFAULT_HOST}:${config?.port ?? DEFAULT_PORT}/v1`;
 
+// `settings.js` stays a dynamic import here too — see the note at the top of
+// this file on why it is never imported statically.
+const readSettings = () => import('./settings.js').then((m) => m.getSettings()).catch(() => null);
+
 const daemon = createDaemonWatcher({
   appName: MTPLX_APP,
   defaultHost: DEFAULT_HOST,
@@ -193,6 +198,39 @@ const daemon = createDaemonWatcher({
   getPortReleaseTimeoutMs: () => portReleaseTimeoutMs,
 });
 const appendLog = daemon.appendLog;
+
+/**
+ * The shared on-demand wake mechanism (#8105) — idle-window/keep-loaded reads,
+ * the relaunch readiness poll (with the PM2 exit-log tail), and the numeric
+ * port-match arm `isMtplxProvider` layers its `localRuntimeKind` check on top
+ * of. What a launch line MEANS stays here, in `resolveLaunch`: the precedence
+ * is the live process's recovered config, then the launch line last saved on
+ * the MTPLX card (now including `tuning`, so an idle stop no longer forgets
+ * an assessment relaunch's tuning), then the daemon's own default.
+ */
+const onDemand = createOnDemandDaemon({
+  appName: MTPLX_APP,
+  label: 'MTPLX',
+  emoji: '🚄',
+  readSection: () => readSettings().then((settings) => settings?.localLlm?.mtplx ?? null),
+  endpointFor,
+  probe: probeEndpoint,
+  start: (config) => startMtplxServer(config),
+  stop: () => stopMtplxServer(),
+  getStatusStrict: () => getAppStatusStrict(MTPLX_APP),
+  clearStatusCache: () => clearJlistCache(),
+  exitTail: createPm2ExitTail({ appName: MTPLX_APP, execPm2: (...args) => execPm2(...args), appendLog }),
+  resolveLaunch: (current, saved) => ({
+    port: current?.port ?? saved.port ?? DEFAULT_PORT,
+    model: current?.model ?? saved.model ?? null,
+    tuning: current?.tuning ?? normalizeTuning('mtplx', saved.raw?.tuning),
+  }),
+  getConfig: () => currentConfig,
+  sleep,
+  getRelaunchReadyTimeoutMs: () => relaunchReadyTimeoutMs,
+  getRelaunchPollMs: () => relaunchPollMs,
+});
+onDemand.registerIdle();
 
 /**
  * Reconstructs the launch config from PM2 process args when PortOS restarted
@@ -260,50 +298,10 @@ const withinDeclaredRange = (spec, raw) => {
 
 const waitForPortRelease = daemon.waitForPortRelease;
 
-/**
- * Block until the relaunched server answers, or until it is proven dead.
- *
- * Polls PM2 alongside the endpoint, because the two failures look identical from
- * the endpoint alone and cost wildly different amounts of time. `mtplx serve`
- * accepts a `--context-window` far past what the machine can hold, then dies
- * partway through loading the checkpoint — well after `startMtplxServer`'s short
- * startup window has already returned. Waiting the full readiness budget out on
- * a process PM2 has already marked `errored` would leave the install's `mtplx`
- * provider down for minutes per bad launch line, and a tuning sweep is EXPECTED
- * to produce bad launch lines.
- *
- * Resolves `{ ready, reason }` — and the two not-ready cases carry DIFFERENT
- * reasons, because they send the user to different places. A process PM2 marks
- * `errored` printed something on the way out, and that tail is the whole
- * diagnosis ("metal buffer allocation failed"); reporting it as "never answered
- * on its port" would throw away the one fact that explains the failure.
- */
-async function waitForRelaunchedEndpoint(endpoint) {
-  const deadline = Date.now() + relaunchReadyTimeoutMs;
-  while (Date.now() < deadline) {
-    if (await probeEndpoint(endpoint)) return { ready: true, reason: null };
-    clearJlistCache();
-    const proc = await getAppStatusStrict(MTPLX_APP);
-    if (proc && ['errored', 'stopped', 'not_found'].includes(proc.status)) {
-      return { ready: false, reason: `MTPLX exited while loading (${await exitTail(proc.status)})` };
-    }
-    await sleep(relaunchPollMs);
-  }
-  return { ready: false, reason: 'MTPLX relaunched but never answered on its port' };
-}
-
-/**
- * The last few lines the dead process printed, appended to its PM2 status —
- * the same tail `startMtplxServer` surfaces for a server that dies inside its
- * startup window, so a launch line that fails later is diagnosed the same way.
- */
-async function exitTail(status) {
-  const pm2Logs = await execPm2(['logs', MTPLX_APP, '--nostream', '--lines', '15']).catch(() => null);
-  const lines = `${pm2Logs?.stderr || pm2Logs?.stdout || ''}`.split('\n').map((l) => l.trimEnd()).filter(Boolean);
-  for (const line of lines) appendLog(line);
-  const tail = lines.slice(-4).join(' | ');
-  return tail ? `PM2 status: ${status} — ${tail}` : `PM2 status: ${status}`;
-}
+// `waitForRelaunchedEndpoint` (the death-detecting readiness poll) and its
+// `exitTail` PM2 log-tail helper now live in `lib/managedDaemon.js` as
+// `onDemand.waitForReady` — shared with `slotstreamServerManager.js`, whose
+// copy of the same loop reported only a bare PM2 status word (#8105).
 
 /** Resolve the `mtplx` executable on the child-process PATH. */
 const resolveMtplxBinary = () => findCommandOnPath('mtplx');
@@ -365,11 +363,11 @@ export async function getMtplxServerStatus() {
     // an untuned server, and for one PortOS does not manage — it cannot read
     // another process's launch line.
     tuningFlags: base.managed === true ? launchArgs('mtplx', currentConfig?.tuning) : [],
-    idleMinutes: await configuredIdleMinutes(),
-    keepLoaded: await configuredKeepLoaded(),
+    idleMinutes: await onDemand.idleMinutes(),
+    keepLoaded: await onDemand.keepLoaded(),
     // What a lazy start will launch on, so the card's fields show the saved
     // choice rather than resetting to "Auto" on every page load.
-    launch: await savedLaunchConfig(),
+    launch: await onDemand.savedLaunch().then(({ model, port }) => ({ model, port })),
     cachedModels: (cache.models || []).map((m) => m?.repo_id).filter(Boolean),
     // The same cache, with what the manage-checkpoints UI needs to let a user
     // free the disk: how big each pack is, and whether it is actually servable
@@ -602,6 +600,16 @@ export async function startMtplxServer(options = {}) {
     );
   }
 
+  // Persist the launch line every successful start used — including `tuning` —
+  // so the next on-demand restart (after an idle stop) replays exactly this
+  // configuration instead of falling back to a resolved default. Additive
+  // field: an older install's saved launch simply has no `tuning` key, which
+  // `onDemand`'s `resolveLaunch` reads as untuned. Fixes the bug Slotstream's
+  // own `persistLaunchConfig` did not have: MTPLX used to forget a tuning
+  // applied through an assessment relaunch the moment the idle reaper stopped
+  // it (#8105).
+  await persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: { port, model, tuning: normalizedTuning } });
+
   const finalProc = await getAppStatusStrict(MTPLX_APP);
   return {
     success: true,
@@ -755,7 +763,7 @@ export async function relaunchMtplxServerWithTuning(tuning = {}) {
   // waits only long enough to catch a server that dies immediately, and a cold
   // MLX checkpoint takes far longer than that to load. So `online: false` here
   // is "not ready YET", not "wedged"; give it the real readiness budget first.
-  const ready = started.online ? { ready: true, reason: null } : await waitForRelaunchedEndpoint(started.endpoint);
+  const ready = started.online ? { ready: true, reason: null } : await onDemand.waitForReady(started.endpoint);
   if (ready.ready) return { applied: true, reason: null, config: started.config };
 
   // Treat it exactly like a rejected launch line: put the previous configuration
@@ -810,7 +818,7 @@ async function restorePrevious(previous, failure) {
   }
   if (!restored) return null;
   if (restored.online) return restored.config;
-  const back = await waitForRelaunchedEndpoint(restored.endpoint);
+  const back = await onDemand.waitForReady(restored.endpoint);
   if (back.ready) return restored.config;
   console.error(`❌ MTPLX: the restored configuration ${back.reason}`);
   return null;
@@ -827,8 +835,8 @@ export function _resetMtplxServerStateForTests({
   keepLoaded = null,
   logFiles,
 } = {}) {
-  idleMinutesOverride = idleMinutes;
-  keepLoadedOverride = keepLoaded;
+  onDemand.setIdleMinutesOverrideForTests(idleMinutes);
+  onDemand.setKeepLoadedOverrideForTests(keepLoaded);
   mtplxLogFiles = logFiles ? {
     stdout: logFiles.stdout || DEFAULT_MTPLX_LOG_FILES.stdout,
     stderr: logFiles.stderr || DEFAULT_MTPLX_LOG_FILES.stderr,
@@ -846,7 +854,7 @@ export function _resetMtplxServerStateForTests({
 
 // Test hook for pinning
 export function _setMtplxKeepLoadedOverrideForTests(val) {
-  keepLoadedOverride = val;
+  onDemand.setKeepLoadedOverrideForTests(val);
 }
 
 // =============================================================================
@@ -865,120 +873,24 @@ export function _setMtplxKeepLoadedOverrideForTests(val) {
  *
  * `llamaServerManager` deliberately takes the other path (`--sleep-idle-seconds`),
  * because llama.cpp CAN unload in place — see `supportsSleepIdle` there.
+ *
+ * The idle-minutes/keep-loaded reads, the `registerIdleDaemon` registration,
+ * `savedLaunchConfig`, `markMtplxUsed`, and `ensureMtplxRunning` all now live in
+ * `onDemand` (`lib/managedDaemon.js`'s `createOnDemandDaemon`) — see #8105.
  */
-
-/**
- * The configured idle window for MTPLX, in minutes. `0`/absent = never stop,
- * which is what every install did before this setting existed, so an upgrade
- * changes nothing until the user opts in.
- */
-const readSettings = () => import('./settings.js').then((m) => m.getSettings()).catch(() => null);
-// See `configuredIdleMinutes`. Only `_resetMtplxServerStateForTests` writes it.
-let idleMinutesOverride = null;
-let keepLoadedOverride = null;
-
-async function configuredIdleMinutes() {
-  // Test seam, same reason as `llamaServerManager`'s: a suite must not depend on
-  // whether this developer has an idle window configured. `null` reads settings.
-  if (idleMinutesOverride !== null) return idleMinutesOverride;
-  const settings = await readSettings();
-  const raw = Number(settings?.localLlm?.mtplx?.idleMinutes);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
-}
-
-async function configuredKeepLoaded() {
-  if (keepLoadedOverride !== null) return keepLoadedOverride;
-  const settings = await readSettings();
-  return Boolean(settings?.localLlm?.mtplx?.keepLoaded ?? settings?.localLlm?.mtplx?.pinned);
-}
-
-// Registered at module load so the reaper knows about MTPLX regardless of which
-// call path touches this module first. Registration itself starts nothing and
-// reads no settings — the window is resolved per sweep, inside `getIdleMs`.
-registerIdleDaemon({
-  name: MTPLX_APP,
-  getIdleMs: async () => idleWindowMs(await configuredIdleMinutes()),
-  isPinned: async () => configuredKeepLoaded(),
-  isRunning: async () => Boolean((await getAppStatusStrict(MTPLX_APP))?.status === 'online'),
-  stop: () => stopMtplxServer(),
-});
-
-/**
- * The checkpoint/port the user last saved on the MTPLX card, for a lazy start to
- * replay. Empty when nothing was saved — `startMtplxServer` then resolves a
- * cached checkpoint itself, which is what the old Start button did.
- */
-async function savedLaunchConfig() {
-  const settings = await readSettings();
-  const launch = settings?.localLlm?.mtplx?.launch;
-  return {
-    model: typeof launch?.model === 'string' && launch.model.trim() ? launch.model.trim() : null,
-    port: Number.isFinite(Number(launch?.port)) ? Number(launch.port) : null,
-  };
-}
 
 /** Record real MTPLX traffic. Never call this from a status poll — see `markDaemonUsed`. */
-export const markMtplxUsed = () => markDaemonUsed(MTPLX_APP);
+export const markMtplxUsed = () => onDemand.markUsed();
 
 /**
  * Bring MTPLX up if the idle reaper (or the user) stopped it, and mark it used
- * either way.
- *
- * A no-op when it is already online — the overwhelmingly common case, and it
- * must stay cheap enough to sit in front of every request. The one PM2 status
- * read it costs is the same read `getMtplxServerStatus` already does on a poll.
- *
- * The relaunch reuses the config recovered from PM2's argv when PortOS still
- * holds one, so the daemon comes back on exactly the checkpoint, port, and
- * tuning the user last launched it with. `startMtplxServer` resolves a cached
- * checkpoint on its own when there is no such record (a fresh PortOS whose
- * reaper stopped a server it never started), which is the same fallback the
- * Start button used to take.
- *
- * Resolves `{ ready, reason }` rather than throwing: a caller in front of an
- * inference request wants to report "MTPLX could not be started" alongside its
- * own error, not have a lazy start unwind its stack.
+ * either way. See `onDemand.ensureRunning` for the shared mechanism; MTPLX's
+ * own contribution is the `resolveLaunch` hook wired above, which carries
+ * `tuning` alongside `port`/`model`.
  *
  * @returns {Promise<{ready: boolean, reason: string|null}>}
  */
-export async function ensureMtplxRunning() {
-  markMtplxUsed();
-
-  const pm2Status = await getAppStatusStrict(MTPLX_APP);
-  if (pm2Status?.status === 'online') return { ready: true, reason: null };
-
-  // Resolve the launch line BEFORE probing, so the probe below asks about the
-  // port this start would actually bind. Precedence: the config recovered from
-  // the last live process (it carries the tuning an assessment relaunch applied,
-  // which settings never see), then the launch options the user saved on the
-  // MTPLX card, then MTPLX's own cache pick. Reversing the first two would let a
-  // stale saved port fight a daemon PortOS is already tracking on another one.
-  const saved = await savedLaunchConfig();
-  const config = {
-    port: currentConfig?.port ?? saved.port ?? DEFAULT_PORT,
-    model: currentConfig?.model ?? saved.model ?? null,
-    tuning: currentConfig?.tuning ?? null,
-  };
-
-  // Something else is already serving that port — an MTPLX the user started
-  // outside PortOS, or another daemon entirely. Either way this is not ours to
-  // start, and probing beats racing `startMtplxServer` into a port conflict.
-  // Probing `endpointFor(currentConfig)` instead would ask about the DEFAULT
-  // port whenever PortOS restarted while MTPLX was stopped, which is exactly
-  // when the saved port is the only record of where it belongs.
-  const endpoint = endpointFor(config);
-  if (await probeEndpoint(endpoint)) return { ready: true, reason: null };
-
-  console.log(`🚄 MTPLX is stopped — starting it for an incoming request`);
-  const started = await startMtplxServer(config).catch((err) => ({ error: err }));
-
-  if (started.error) return { ready: false, reason: started.error.message };
-  // `startMtplxServer` returns as soon as it knows the process did not die on
-  // the spot; a multi-gigabyte MLX checkpoint routinely outlasts that window, so
-  // the caller's request has to wait for the real readiness signal.
-  if (started.online) return { ready: true, reason: null };
-  return waitForRelaunchedEndpoint(started.endpoint ?? endpoint);
-}
+export const ensureMtplxRunning = () => onDemand.ensureRunning();
 
 /**
  * Is this provider served by the MTPLX daemon PortOS manages?
@@ -1009,8 +921,11 @@ export function isMtplxProvider(provider) {
   // MANAGED daemon's live port, which only this module tracks, and reading it
   // from `localProviderRuntime.js` (a side-effect-free module every readiness
   // check imports) would be a circular import back to this one.
-  const managedPort = currentConfig?.port;
-  return Boolean(managedPort) && localEndpointPort(provider.endpoint) === managedPort;
+  //
+  // `onDemand.servesPort` compares numerically (#8105) — `localEndpointPort`
+  // returns a STRING, and comparing that with `===` against the numeric
+  // `managedPort` was permanently false, so this arm never matched.
+  return onDemand.servesPort(provider, currentConfig?.port);
 }
 
 /**
