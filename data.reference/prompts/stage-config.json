@@ -66,14 +66,14 @@
     "writers-room-continue": {
       "name": "Writers Room — Live Continuation",
       "description": "Live Creative Director feedback: from the prose around the cursor, propose 2–4 short optional continuation beats, prose snippets, or dialogue lines the writer can accept. Drives the opt-in live-mode side panel in the editor.",
-      "model": "quick",
+      "model": "light",
       "returnsJson": true,
       "variables": []
     },
     "writers-room-cd-bridge": {
       "name": "Writers Room — Creative Director Bridge",
       "description": "From the prose around the cursor, propose a short Creative Director treatment — a logline, synopsis, overall visual treatment (styleSpec), and 2–6 filmable scenes (intent + visual prompt + duration). The writer reviews it and sends it into a new Creative Director project. Drives the opt-in live-mode side panel in the editor.",
-      "model": "quick",
+      "model": "light",
       "returnsJson": true,
       "variables": []
     },

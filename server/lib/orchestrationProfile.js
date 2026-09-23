@@ -182,3 +182,33 @@ export function parseReasoningDirective(text) {
   return { rung };
 }
 
+/**
+ * Resolve the reasoning effort for ONE DELEGATED STEP of an orchestrated run
+ * (#5992), rather than one effort for the whole run.
+ *
+ * Precedence: the `REASONING: <rung>` directive the architect wrote into this
+ * step's spec → the role's configured default from the orchestration profile →
+ * the run-level effort already resolved for the task.
+ *
+ * NEVER rounds. An unsupported rung returns `{ error }` so the caller can refuse
+ * the spec: silently substituting the nearest supported level would run the step
+ * at an effort nobody chose while still reporting success — and the architect
+ * naming a rung deliberately is the entire point of the per-step contract.
+ *
+ * @param {object} options
+ * @param {string} [options.spec] - the delegated step's spec text
+ * @param {object} [options.task] - the task carrying the orchestration profile
+ * @param {string} [options.role] - the role executing this step
+ * @param {string|null} [options.runEffort] - the run-level effort already resolved
+ * @returns {{ effort: string|null, source: string }|{ error: string }}
+ */
+export function resolveStepEffort({ spec = '', task = null, role = PRIMARY_ORCHESTRATION_ROLE, runEffort = null } = {}) {
+  const directive = parseReasoningDirective(spec);
+  if (directive?.error) return { error: directive.error };
+  if (directive?.rung) return { effort: directive.rung, source: 'spec' };
+
+  const roleDefault = roleAssignment(task, role)?.effort;
+  if (roleDefault) return { effort: roleDefault, source: 'role' };
+
+  return { effort: runEffort || null, source: runEffort ? 'run' : 'default' };
+}

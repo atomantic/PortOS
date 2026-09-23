@@ -851,7 +851,7 @@ export default function LearningTab() {
                         Misroutes Detected
                       </h4>
                       <p className="text-xs text-gray-400 mb-3">
-                        These task type + model tier combinations have &lt;40% success with 3+ attempts. The system will auto-adjust routing.
+                        These task type + model tier combinations have &lt;40% success with 3+ attempts. Routing never changes on its own — pin a model or tier on the task or schedule to act on this.
                       </p>
                       <div className="space-y-1">
                         {routing.misroutes.map((m, idx) => (
@@ -922,8 +922,15 @@ export default function LearningTab() {
                           entry.tiers.map((tier, tIdx) => (
                             <tr key={`${entry.taskType}-${tier.tier}`} className="border-t border-port-border">
                               {tIdx === 0 ? (
-                                <td className="p-3 text-gray-300 truncate max-w-[200px]" rowSpan={entry.tiers.length}>
-                                  {entry.taskType}
+                                <td className="p-3 text-gray-300 max-w-[200px] align-top" rowSpan={entry.tiers.length}>
+                                  <div className="truncate">{entry.taskType}</div>
+                                  {entry.suggestion && (
+                                    <div className="text-xs text-gray-500 mt-1" title={entry.suggestion.reason || undefined}>
+                                      {entry.suggestion.tier && <>Suggests <span className="text-port-accent">{entry.suggestion.tier}</span></>}
+                                      {entry.suggestion.tier && entry.suggestion.avoidTiers.length > 0 && ' · '}
+                                      {entry.suggestion.avoidTiers.length > 0 && <>avoid <span className="text-orange-400">{entry.suggestion.avoidTiers.join(', ')}</span></>}
+                                    </div>
+                                  )}
                                 </td>
                               ) : null}
                               <td className="p-3 text-orange-400">{tier.tier}</td>

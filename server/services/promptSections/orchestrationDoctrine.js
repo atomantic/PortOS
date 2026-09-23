@@ -10,7 +10,7 @@
  * The section is the whole delivery mechanism for the per-step reasoning rung:
  * PortOS cannot intercept an agent's own sub-agent dispatch, so the contract is
  * stated here and the architect writes `REASONING: <rung>` into each spec, which
- * `thinkingLevels.resolveStepEffort` then reads back without rounding.
+ * `orchestrationProfile.resolveStepEffort` then reads back without rounding.
  *
  * Renders '' for every `direct`-mode task, which is every task by default.
  */

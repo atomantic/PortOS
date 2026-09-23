@@ -13,6 +13,7 @@ import {
 } from '../../utils/formatters';
 import { getPrompt, savePrompt } from '../../services/apiPrompts';
 import { getProviders } from '../../services/apiProviders';
+import { STAGE_MODEL_TIER_OPTIONS, canonicalStageModelTier } from '../../lib/stageModelTiers';
 
 /**
  * Inline picker for a prompt stage's provider+model. Mirrors the Tier/Specific
@@ -138,15 +139,13 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
       {!isSpecific ? (
         <select
           aria-label="Model"
-          value={stage.model || 'default'}
+          value={canonicalStageModelTier(stage.model) || 'default'}
           onChange={(e) => persist({ provider: null, model: e.target.value })}
           className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
         >
-          <option value="default">Default — use the active provider's default model</option>
-          <option value="quick">Quick — provider's light/fast model</option>
-          <option value="coding">Coding — provider's medium model</option>
-          <option value="heavy">Heavy — provider's heavy model</option>
-          <option value="ultra">Ultra — provider's frontier model</option>
+          {STAGE_MODEL_TIER_OPTIONS.map(({ value, label, hint }) => (
+            <option key={value} value={value}>{label} — {hint}</option>
+          ))}
         </select>
       ) : (
         <ProviderModelSelector

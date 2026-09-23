@@ -94,6 +94,9 @@ describe('stageRunner — resolveModel', () => {
 
   it('maps tier names to per-tier provider keys, falls back to defaultModel when missing', () => {
     const p = { defaultModel: 'd', lightModel: 'l', mediumModel: 'm', heavyModel: 'h' };
+    expect(resolveModel(p, 'light')).toBe('l');
+    expect(resolveModel(p, 'medium')).toBe('m');
+    // Legacy stage spellings stay readable (older peers, backups) — #8149.
     expect(resolveModel(p, 'quick')).toBe('l');
     expect(resolveModel(p, 'coding')).toBe('m');
     expect(resolveModel(p, 'heavy')).toBe('h');
@@ -615,7 +618,7 @@ describe('stageRunner — runStagedLLM model resolution (#1558)', () => {
   });
 
   it('lets modelDefault OVERRIDE a stage TIER value (the run model applies to unpinned/tier stages)', async () => {
-    // A tier (default/quick/coding/heavy) is NOT a deliberate pin — the run model
+    // A tier (default/light/medium/heavy/ultra) is NOT a deliberate pin — the run model
     // must win, else launching autopilot with a model is a no-op on ~every stage.
     prompts.getStage.mockReturnValue({ model: 'heavy' });
     providers.getActiveProvider.mockResolvedValue(apiProvider({ heavyModel: 'h' }));
