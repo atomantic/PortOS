@@ -7,8 +7,7 @@ import {
   expandPortosRootInApp,
 } from '../lib/portosRootPlaceholder.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { NON_PM2_TYPES, usesPm2, isDesktopType } from './streamingDetect.js';
-import { listProcessesStrict } from './pm2.js';
+import { NON_PM2_TYPES } from './appProcessTypes.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskScheduleRegistry.js';
 import { sanitizeTaskMetadata } from '../lib/cosValidation.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -96,9 +95,8 @@ async function loadApps() {
 
   // STRICT (#4115): this reader WRITES — an empty `data.apps` makes the baseline
   // branch below rewrite apps.json with a lone PortOS entry, so a swallowed
-  // EACCES/EIO would delete every registered app. It also feeds displayed counts
-  // (`getAppStatusSummary`'s total/online/unmanaged), where a fake 0 reads as
-  // fact. Absent is still a legitimate first-run empty; unreadable is not.
+  // EACCES/EIO would delete every registered app. Absent is still a legitimate
+  // first-run empty; unreadable is not.
   const data = await readJSONFile(APPS_FILE, { apps: {} }, { strict: true });
 
   // Normalize: ensure data.apps is always an object
@@ -212,193 +210,6 @@ export async function getAllApps({ includeArchived = true } = {}) {
  */
 export async function getActiveApps() {
   return getAllApps({ includeArchived: false });
-}
-
-/**
- * PM2 process names whose exit is expected: desktop apps and optional native
- * launch targets attached to otherwise web-based apps.
- *
- * A desktop process is launched with `autorestart: false` because the user
- * closing the window is a normal exit — but that alone does NOT stop every
- * relaunch path. Anything that reacts to an `errored` PM2 status by restarting
- * it (the CoS health monitor) would reopen the game window, and anything that
- * alerts on `errored` (proactive alerts) would report a quit as a failure.
- * A force-quit or a non-zero exit lands in exactly that state, so those
- * supervisors consult this set and skip desktop processes. See issue #2991.
- *
- * Archived apps are included: their PM2 entries can outlive the archive, and a
- * stale entry must not become auto-restartable just because the app was hidden.
- *
- * @returns {Promise<Set<string>>} Process names to exempt from auto-restart/alerts.
- */
-export async function getDesktopProcessNames() {
-  const apps = await getAllApps();
-  const names = new Set();
-  for (const app of apps) {
-    if (isDesktopType(app.type)) {
-      for (const name of app.pm2ProcessNames || []) names.add(name);
-    }
-    if (app.nativeLaunch?.processName) names.add(app.nativeLaunch.processName);
-  }
-  return names;
-}
-
-/**
- * Resolve the custom PM2 home for a registered process name.
- *
- * Process-name-only log consumers use this as a backward-compatible fallback
- * when they do not already have an app id. An app id remains the preferred
- * disambiguator because process names may be reused across PM2 homes.
- *
- * @param {string} processName PM2 process name to look up
- * @returns {Promise<string|null>} The owning app's custom PM2_HOME, if any
- */
-export async function resolvePm2HomeForProcess(processName) {
-  const apps = await getAllApps();
-  const app = apps.find(candidate =>
-    candidate.pm2ProcessNames?.includes(processName)
-    || candidate.nativeLaunch?.processName === processName
-  );
-  return app?.pm2Home || null;
-}
-
-/**
- * Stamp `expectedExit` onto each PM2 process so supervisors can branch on the
- * concept rather than each re-deriving it from a name set.
- *
- * `expectedExit: true` means "this process stopping is a normal outcome, not a
- * failure" — today that covers desktop (GUI) app processes and the optional
- * native launch targets attached to web apps. The user closing either window
- * ends its process (cleanly as `stopped`, or as `errored` on a force-quit /
- * non-zero exit). Consumers that auto-restart or alert on `errored` must skip
- * these. Current consumers:
- *   - services/cosHealthMonitor.js   — auto-restarts errored processes
- *   - services/proactiveAlerts.js    — alerts on errored / crash-looping processes
- *   - routes/systemHealth.js         — drives overallHealth + the dashboard/city HUD
- *   - services/voice/tools/system.js — `pm2_status` reads "issues" back aloud
- * A further consumer that reacts to `errored` needs this too; naming the concept
- * here is what makes that discoverable (see issue #2991).
- *
- * What NONE of them exempt is *liveness*. `expectedExit` says a process
- * STOPPING is a normal outcome, so only the failure-bearing counts filter on
- * it — an `online` count must still include an exempt process, or a *running*
- * desktop app lands in `total` and in no status bucket at all.
- *
- * Fails open: if the registry can't be read, nothing is marked expected, so the
- * pre-existing behavior stands rather than silently exempting every process.
- * Accepts either shape of process object — raw `pm2 jlist` entries or `mapProcess`
- * output — since both carry a top-level `name`.
- *
- * @param {Array<{name: string}>} processes
- * @returns {Promise<Array<object>>} the same processes, each with `expectedExit`.
- */
-export async function annotateExpectedExit(processes) {
-  const desktopNames = await getDesktopProcessNames().catch(err => {
-    console.error(`❌ Could not read the app registry for process supervision: ${err.message}`);
-    return new Set();
-  });
-  return processes.map(p => ({ ...p, expectedExit: desktopNames.has(p?.name) }));
-}
-
-/**
- * Summarize PM2-managed app status for dashboards.
- *
- * Only counts apps whose `type` is PM2-runnable (Express services, etc.).
- * Native projects (Xcode, iOS, macOS) have no detectable runtime state and
- * are reported separately under `unmanaged` so callers can show context
- * without inflating the running denominator.
- */
-/**
- * Resolve each active app's overall PM2 status in one pass.
- *
- * Returns one entry per active app — PM2-runnable apps carry a derived
- * `overallStatus` of `online` / `stopped` / `not_started` / `unknown`; native
- * projects (Xcode, iOS, macOS) report `n/a` since they have no detectable
- * runtime. Each unique PM2_HOME is queried at most once. This is the shared
- * primitive behind both `getAppStatusSummary()` (counts) and the OpenWorld
- * snapshot pipeline (per-building status), so the two never drift.
- *
- * Absent-vs-empty rule (AGENTS.md): `listProcessesStrict(home)` returns `null`
- * when the PM2 read FAILED (vs `[]` for a successful read with no processes).
- * The generic `listProcesses` flattens a failed read into `[]`, which would
- * record every app in that home as `not_started` (status known: never launched)
- * when the truth is `unknown` (status unavailable: PM2 unreachable). We track
- * failed homes explicitly and mark their apps `overallStatus: 'unknown'` +
- * `degraded: true`, so a transient PM2 blip can't masquerade as "all apps
- * offline." Homes that read fine still report accurate status alongside.
- *
- * @returns {Promise<Array<{ id, name, type, repoPath, overallStatus, managed: boolean, degraded?: boolean }>>}
- */
-export async function getAppStatuses() {
-  const apps = await getAllApps({ includeArchived: false });
-
-  // Group PM2 apps by pm2Home so each unique home is queried at most once.
-  const homeGroups = new Map();
-  for (const app of apps) {
-    if (!usesPm2(app.type)) continue;
-    const home = app.pm2Home || null;
-    if (!homeGroups.has(home)) homeGroups.set(home, true);
-  }
-
-  const procMaps = new Map();
-  const failedHomes = new Set();
-  for (const home of homeGroups.keys()) {
-    // `null` = PM2 read failed (vs `[]` = read OK, no processes).
-    const procs = await listProcessesStrict(home);
-    if (procs === null) {
-      failedHomes.add(home);
-      procMaps.set(home, new Map());
-    } else {
-      procMaps.set(home, new Map(procs.map(p => [p.name, p])));
-    }
-  }
-
-  return apps.map(app => {
-    const managed = usesPm2(app.type);
-    // repoPath is carried so callers can map an agent's workspacePath back to its
-    // app (the OpenWorld snapshot's agent-assignment mapping, mirroring the
-    // client's agentMap) without a second apps read.
-    const base = { id: app.id, name: app.name, type: app.type, repoPath: app.repoPath };
-    if (!managed) {
-      return { ...base, overallStatus: 'n/a', managed: false };
-    }
-    const home = app.pm2Home || null;
-    if (failedHomes.has(home)) {
-      // PM2 read for this home failed — runtime status is genuinely unknown,
-      // NOT a confident `not_started`. `degraded` lets callers surface the gap.
-      return { ...base, overallStatus: 'unknown', managed: true, degraded: true };
-    }
-    const procMap = procMaps.get(home) || new Map();
-    const names = app.pm2ProcessNames || [];
-    let overallStatus = 'not_started';
-    if (names.length > 0) {
-      const statuses = names.map(n => procMap.get(n)?.status || 'not_found');
-      if (statuses.some(s => s === 'online')) overallStatus = 'online';
-      else if (statuses.some(s => s === 'stopped')) overallStatus = 'stopped';
-      else overallStatus = 'not_started';
-    }
-    return { ...base, overallStatus, managed: true };
-  });
-}
-
-export async function getAppStatusSummary() {
-  const statuses = await getAppStatuses();
-  const managed = statuses.filter(s => s.managed);
-  // `unknown` = PM2 home read failed (status unavailable), distinct from
-  // `notStarted` (read succeeded, app simply isn't running). `degraded` flags
-  // that at least one managed app's runtime status couldn't be determined, so
-  // consumers don't report a PM2 blip as a confident "everything offline."
-  const unknown = managed.filter(s => s.overallStatus === 'unknown').length;
-
-  return {
-    total: managed.length,
-    online: managed.filter(s => s.overallStatus === 'online').length,
-    stopped: managed.filter(s => s.overallStatus === 'stopped').length,
-    notStarted: managed.filter(s => s.overallStatus === 'not_started').length,
-    unknown,
-    degraded: unknown > 0,
-    unmanaged: statuses.length - managed.length
-  };
 }
 
 /**

@@ -32,6 +32,8 @@ vi.mock('../../services/pm2.js', () => ({
 vi.mock('../../services/streamingDetect.js', () => ({
   parseEcosystemFromPath: vi.fn(),
   writeEcosystemPortEdits: vi.fn().mockResolvedValue({ file: 'ecosystem.config.cjs', changed: true, remapApplied: true, applied: [], unapplied: [] }),
+}));
+vi.mock('../../services/appProcessTypes.js', () => ({
   usesPm2: vi.fn((type) => !new Set(['ios-native', 'macos-native', 'xcode', 'swift']).has(type)),
   NON_PM2_TYPES: new Set(['ios-native', 'macos-native', 'xcode', 'swift'])
 }));

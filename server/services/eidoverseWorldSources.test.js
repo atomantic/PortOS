@@ -10,8 +10,10 @@ vi.mock('node:fs/promises', () => ({
   })),
 }));
 vi.mock('./apps.js', () => ({
-  getAppStatuses: vi.fn(async () => sources.apps),
   getAllApps: vi.fn(async () => sources.appConfig),
+}));
+vi.mock('./appProcessStatus.js', () => ({
+  getAppStatuses: vi.fn(async () => sources.apps),
 }));
 vi.mock('./cos.js', () => ({
   getAgents: vi.fn(async () => sources.agents),

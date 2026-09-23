@@ -14,6 +14,8 @@ vi.mock('../services/pm2.js', () => ({
 }));
 vi.mock('../services/apps.js', () => ({
   getAppById: vi.fn(async () => null),
+}));
+vi.mock('../services/appProcessStatus.js', () => ({
   resolvePm2HomeForProcess: vi.fn(async () => null),
 }));
 

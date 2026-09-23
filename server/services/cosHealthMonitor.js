@@ -10,7 +10,7 @@ import { execPm2, listProcessesStrict } from './pm2.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { loadState, saveState, withStateLock, isDaemonRunning } from './cosState.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { annotateExpectedExit } from './apps.js';
+import { annotateExpectedExit } from './appProcessStatus.js';
 
 /**
  * Run a daemon health check: inspect PM2 processes and memory, auto-restart

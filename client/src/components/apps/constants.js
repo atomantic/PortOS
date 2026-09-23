@@ -1,5 +1,5 @@
 // From lib/, NOT services/apiCore.js: this file is imported by a node-env server
-// test (streamingDetect's DESKTOP_TYPES parity check), where apiCore's React
+// test (appProcessTypes' DESKTOP_TYPES parity check), where apiCore's React
 // dependency doesn't resolve.
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURES } from '../../../../server/lib/instanceFeatureRegistry.js';
@@ -11,7 +11,7 @@ export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'sw
 // class string — Tailwind only sees classes it can read in source.
 export const INPUT_CLASS = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden';
 
-// Mirrors DESKTOP_TYPES in server/services/streamingDetect.js — app types that run
+// Mirrors DESKTOP_TYPES in server/services/appProcessTypes.js — app types that run
 // a GUI/desktop process with no HTTP port (a game binary). Kept in sync by hand
 // (a parity test asserts the two Sets match); the server stays the source of truth
 // for what the type MEANS (autorestart off, command-launched, exempt from
@@ -46,7 +46,7 @@ export function resolveLaunchPanelProcess(app, result) {
 }
 
 // Mirrors NON_NODE_TYPES / NON_STANDARDIZABLE_TYPES in
-// server/services/streamingDetect.js (parity tests assert the Sets match). The
+// server/services/appProcessTypes.js (parity tests assert the Sets match). The
 // PM2 standardizer writes a NODE ecosystem config from a prompt that opens "You
 // are analyzing a Node.js application", so a Python/Go/Docker/static repo must
 // not be offered the flow. It's a DENY list, not an allowlist of Node types:

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import os from 'os';
 import { statfs } from 'fs/promises';
 import { listProcesses } from '../services/pm2.js';
-import * as apps from '../services/apps.js';
+import { getAppStatusSummary, annotateExpectedExit } from '../services/appProcessStatus.js';
 import * as cos from '../services/cos.js';
 import { getSelf } from '../services/instanceIdentity.js';
 import { checkHealth } from '../lib/db.js';
@@ -132,7 +132,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // Gather data in parallel
   const [pm2Processes, appStatusSummary, cosStatus, cosPendingTaskIds, cosAgents, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity, reviewerConfigHealth] = await Promise.all([
     listProcesses().catch(() => []),
-    apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
+    getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
     cos.getStatus().catch(() => null),
     // Queue depth is read here rather than taken off `getStatus()`, which has no
     // such field — `cosStatus.queueLength` never existed, so the widget's
@@ -182,7 +182,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // desktop app would sit in `total` and in no status bucket at all and the
   // dashboard would read "5/6 · all running" with all six up. Resource totals
   // likewise cover every process. See issue #2991.
-  const annotated = await apps.annotateExpectedExit(pm2Processes);
+  const annotated = await annotateExpectedExit(pm2Processes);
   const supervised = annotated.filter(p => !p.expectedExit);
   const processStats = {
     total: pm2Processes.length,
