@@ -85,6 +85,7 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
   }, [html, audioGlobal, audio]);
 
   useEffect(() => {
+    clearTimeout(recordTimerRef.current);
     setMeta(null);
     setRecording(false);
     setVideo(null);

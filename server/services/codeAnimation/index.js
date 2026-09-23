@@ -180,7 +180,7 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
       : Math.max(0, CODE_ANIMATION_LIMITS.referenceImagesMax - uploads.length - universeImages.length),
   });
   const referenceImages = [...uploads, ...universeImages, ...boardImages];
-  const prompt = buildCodeAnimationPrompt({
+  const promptInput = {
     title: input.title,
     concept: input.concept,
     onScreenText: input.onScreenText,
@@ -193,10 +193,13 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     universe,
     moodBoard: board,
     referenceImages,
-    delivery,
-  });
+  };
+  const prompt = buildCodeAnimationPrompt({ ...promptInput, delivery });
   return {
     prompt,
+    // The copy form describes references as attachments; the CLI form embeds
+    // their on-disk paths, which must not reach the client.
+    copyPrompt: delivery === 'copy' ? prompt : buildCodeAnimationPrompt({ ...promptInput, delivery: 'copy' }),
     moodBoardId: moodBoardId || null,
     frame: { ...resolveFrameSize(input.format.aspectRatio, input.format.resolution), fps: input.format.fps, durationSeconds: input.format.durationSeconds },
     // Absolute paths never leave the server — the client gets served URLs only.
@@ -229,7 +232,7 @@ function settleJob(id, patch) {
   jobs.set(id, { ...job, ...patch, completedAt: new Date().toISOString(), updatedAtMs: Date.now() });
 }
 
-async function runGeneration(jobId, { provider, model, effort, prompt, referencePaths }) {
+async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
   const { runPromptThroughProvider } = await import('../promptRunner.js');
   const result = await runPromptThroughProvider({
     provider,
@@ -279,7 +282,7 @@ export async function startCodeAnimationGeneration(input) {
     updatedAtMs: Date.now(),
   });
   console.log(`🎞️ Code animation generation ${id.slice(0, 8)} started on ${provider.id}`);
-  runGeneration(id, { provider, model: input.model, effort: input.effort, prompt: built.prompt, referencePaths: built.referencePaths })
+  runGeneration({ provider, model: input.model, effort: input.effort, prompt: built.prompt, referencePaths: built.referencePaths })
     .then(({ html, provider: ranOn, model, runId }) => {
       settleJob(id, { status: 'completed', html, providerId: ranOn, model, runId });
       console.log(`✅ Code animation generation ${id.slice(0, 8)} completed (${html.length} chars)`);
@@ -289,7 +292,7 @@ export async function startCodeAnimationGeneration(input) {
       settleJob(id, { status: 'failed', error: message });
       console.error(`❌ Code animation generation ${id.slice(0, 8)} failed: ${message}`);
     });
-  return { ...publicJob(jobs.get(id)), prompt: built.prompt, attachments: built.attachments };
+  return { ...publicJob(jobs.get(id)), prompt: built.copyPrompt, attachments: built.attachments, moodBoardId: built.moodBoardId };
 }
 
 export function getCodeAnimationJob(id) {

@@ -151,7 +151,11 @@ describe('POST /api/code-animation/generate', () => {
     runPromptThroughProvider.mockResolvedValue({ text: 'I wrote the file to disk.', provider: { id: 'cli-1' } });
     const app = makeApp();
     const res = await request(app).post('/api/code-animation/generate').send({ ...brief, providerId: 'cli-1' });
-    expect(runPromptThroughProvider.mock.calls[0][0].screenshots).toEqual([]);
+    const call = runPromptThroughProvider.mock.calls[0][0];
+    expect(call.screenshots).toEqual([]);
+    // The agent reads references from disk; the client gets the copy form.
+    expect(call.prompt).toContain(join(PATHS.images, 'pin.png'));
+    expect(res.body.prompt).not.toContain(PATHS.data);
     const job = await pollUntilSettled(app, res.body.id);
     expect(job.status).toBe('failed');
     expect(job.error).toMatch(/did not contain an HTML document/);

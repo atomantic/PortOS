@@ -160,8 +160,12 @@ export default function CodeAnimation() {
   const jobSettled = job?.id === jobId && job.status !== 'running';
   const pollJob = useCallback(async () => {
     const requested = jobId;
-    const next = await getCodeAnimationJob(requested, { silent: true })
-      .catch((error) => ({ id: requested, status: 'missing', error: error.message }));
+    // Only a 404 means the job is gone; any other failure rethrows so the
+    // poller keeps trying on its next tick.
+    const next = await getCodeAnimationJob(requested, { silent: true }).catch((error) => {
+      if (error.status === 404) return { id: requested, status: 'missing', error: error.message };
+      throw error;
+    });
     if (jobIdRef.current !== requested) return;
     setJob(next);
     if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame });
@@ -229,7 +233,7 @@ export default function CodeAnimation() {
     });
     setStarting(false);
     if (!started) return;
-    setBuilt({ prompt: started.prompt, attachments: started.attachments, frame: started.frame, audioUrl: started.audioUrl, briefKey });
+    setBuilt({ prompt: started.prompt, attachments: started.attachments, frame: started.frame, audioUrl: started.audioUrl, moodBoardId: started.moodBoardId, briefKey });
     setJob(started);
     setPreview(null);
     const next = new URLSearchParams(searchParams);
