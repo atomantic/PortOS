@@ -155,9 +155,9 @@ export default function TagPicker({
         />
       </div>
       {expanded && (
-        <ul id={listId} role="listbox" aria-label="Tag suggestions" className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg">
+        <div id={listId} role="listbox" aria-label="Tag suggestions" className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg">
           {visibleSuggestions.map((s, index) => (
-            <li key={s.id} role="presentation">
+            <div key={s.id}>
               <button
                 type="button"
                 role="option"
@@ -178,9 +178,9 @@ export default function TagPicker({
                 )}
                 {s.label}
               </button>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );

@@ -11,7 +11,7 @@ import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import MediaImage from '../MediaImage';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
-import { isEditableTarget } from '../../lib/a11yKeyboard';
+import { isEditableTarget, onActivateKeyDown } from '../../lib/a11yKeyboard';
 import { i2vReferenceModeLabel } from '../../lib/videoReferenceModes';
 import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { copyToClipboard } from '../../lib/clipboard';
@@ -319,6 +319,13 @@ export default function MediaLightbox({
       aria-label={`Media viewer — ${item.filename || item.key || 'item'}`}
       className={`fixed inset-0 z-50 bg-black/90 flex items-center justify-center ${overlayPad}`}
       onClick={onClose}
+      // The backdrop itself carries no tabIndex (it isn't a tab stop) and its
+      // real keyboard equivalent — Escape — is already handled by the
+      // window-level listener above, which also respects the refine/prompt-
+      // from/fullscreen precedence. `onActivateKeyDown`'s currentTarget guard
+      // makes this a no-op for a bubbled keydown from a focused descendant
+      // (button, input) and only fires if this div itself were ever focused.
+      onKeyDown={onActivateKeyDown(onClose)}
     >
       {hasPrevious && (
         <button
@@ -596,7 +603,15 @@ function SettingsPane({
     return () => clearTimeout(handle);
   }, [saveStatus]);
   return (
-    <aside className={asideClasses} onClick={(e) => e.stopPropagation()}>
+    <aside
+      className={asideClasses}
+      onClick={(e) => e.stopPropagation()}
+      // Same containment, minus Escape: a keystroke from a focused control in
+      // this sidebar (an annotation field, a toggle) must not bubble to the
+      // overlay's onClick={onClose}, but Escape still needs to reach the
+      // window-level listener that owns close-precedence.
+      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
+    >
       <header className="flex items-center justify-between p-3 border-b border-port-border">
         <span className="text-xs uppercase tracking-wide text-gray-400">{isVideo ? 'Video' : 'Image'} settings</span>
         <div className="flex items-center gap-2">

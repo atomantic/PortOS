@@ -25,7 +25,7 @@ import {
   getHealthLabel
 } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
-import { clickableProps } from '../../../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
 import SoulWizard from '../SoulWizard';
 import PersonalityMap from '../PersonalityMap';
 import ConfidenceGauge from '../ConfidenceGauge';
@@ -503,6 +503,7 @@ export default function OverviewTab({ status, settings, onRefresh }) {
                 className={`p-4 rounded-lg border ${config.color} cursor-pointer hover:opacity-80 transition-opacity`}
                 onClick={() => navigate('/digital-twin/documents')}
                 {...clickableProps(() => navigate('/digital-twin/documents'))}
+                onKeyDown={onActivateKeyDown(() => navigate('/digital-twin/documents'))}
               >
                 <div className="flex items-center gap-2 mb-2">
                   <Icon size={16} />

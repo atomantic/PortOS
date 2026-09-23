@@ -12,7 +12,7 @@ import { formatBytes } from '../../utils/formatters';
 import { effortAwareModelOptions, effortSurvivingModel, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, isCodexSubscriptionProvider, isOpencodeLocalProvider, generationControlsFor, providerModeSelectionPolicy, seedModelEffort, resolveProviderModelOptions, MODEL_SOURCE } from '../../utils/providers';
 import { isCompositeProviderId } from '../../utils/providerRef';
 import { DEFAULT_PR_COMPLETION, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, PR_COMPLETION_OPTIONS, prCompletionOption } from './constants';
-import { clickableProps } from '../../lib/a11yKeyboard';
+import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
 import ReviewerPicker from './ReviewerPicker';
 import InstancePicker from './InstancePicker';
@@ -1015,6 +1015,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                   key={template.id}
                   onClick={() => applyTemplate(template)}
                   {...clickableProps(() => applyTemplate(template))}
+                  onKeyDown={onActivateKeyDown(() => applyTemplate(template))}
                   className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
                   title={template.slashdoCommand ? `${slashdoLabel(template.slashdoCommand)} \u2014 ${template.context || template.description}` : template.description}
                 >

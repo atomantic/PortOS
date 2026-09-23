@@ -213,6 +213,12 @@ export default function CollectionPickerShell({
         visibility: style ? 'visible' : 'hidden',
       }}
       onClick={(e) => e.stopPropagation()}
+      // Same containment as the click handler above — a keystroke that
+      // reaches here already came through a focused control inside the
+      // popover (search input, form, toggle buttons), so it must not bubble
+      // to an ancestor either. Escape is excepted so `useEscapeKey`'s
+      // `window` listener still sees it and closes the popover.
+      onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
     >
       {title && (
         <div className="text-[10px] text-gray-500 uppercase tracking-wide px-1 pt-1 pb-1.5 shrink-0">{title}</div>

@@ -1,6 +1,6 @@
 import { Plus, X, Terminal as TerminalIcon, Bot } from 'lucide-react';
 import { formatDurationMs } from '../../utils/formatters';
-import { clickableProps } from '../../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard.js';
 
 const shortId = (id) => id?.slice(0, 6) ?? '';
 
@@ -47,6 +47,7 @@ export default function ShellSessionTabs({ sessions, activeSessionId, onSwitch, 
             }`}
             onClick={() => !isActive && onSwitch(s.sessionId)}
             {...clickableProps(() => !isActive && onSwitch(s.sessionId))}
+            onKeyDown={onActivateKeyDown(() => !isActive && onSwitch(s.sessionId))}
             title={title}
           >
             <TabIcon size={12} className="shrink-0" />
