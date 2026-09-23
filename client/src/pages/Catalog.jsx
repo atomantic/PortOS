@@ -39,6 +39,7 @@ import { catalogRefRoleForType } from '../lib/catalogTypes';
 import { useCatalogTypes } from '../hooks/useCatalogTypes.jsx';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useUrlParams from '../hooks/useUrlParams';
+import useCancelableDebounce from '../hooks/useCancelableDebounce';
 
 // All type-derived UI (chips, badge color, inline-form primary content
 // key/label, snippet fallback) flows from the merged registry (system +
@@ -132,14 +133,17 @@ export default function Catalog() {
 
   // Debounce typing → q, and mirror q to the URL (replace, to avoid history
   // spam). The fetch keys on the local `q`; the URL copy is for shareability.
+  // Cancelable at the same shared boundary MediaCollections uses (#8187):
+  // a page that later navigates away can drop a still-pending mirror write
+  // instead of letting it fire after the fact and clobber the new route.
+  const [scheduleQMirror] = useCancelableDebounce();
   useEffect(() => {
-    const t = setTimeout(() => {
+    scheduleQMirror(() => {
       const trimmed = searchInput.trim();
       setQ(trimmed);
       updateParams({ q: trimmed }, { replace: true });
     }, 300);
-    return () => clearTimeout(t);
-  }, [searchInput, updateParams]);
+  }, [searchInput, updateParams, scheduleQMirror]);
 
   // Adopt an externally-changed `?q=` (Back/Forward, or an in-app link to a
   // different query while this page stays mounted) so the box + fetch never lag
