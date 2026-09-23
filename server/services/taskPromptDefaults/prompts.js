@@ -355,6 +355,15 @@ Repository: {repoPath}
 
 If the project has no user interface, say so and exit cleanly.
 
+## Skip what static analysis already covers
+
+Check for a JSX/TSX a11y linter already wired into the project (e.g. Biome's
+\`a11y\` rule group, \`eslint-plugin-jsx-a11y\`) before you start, and run it if
+one exists. Do NOT re-derive or file findings that linter already catches
+deterministically on every commit — missing \`alt\`/labels, invalid or
+unsupported ARIA props/roles, an unlabeled form control. Spend your budget on
+what only a live agent driving the running interface can establish.
+
 ## Hunt for
 
 - **Keyboard traps and unreachable controls** — an interactive element that
@@ -362,10 +371,9 @@ If the project has no user interface, say so and exit cleanly.
   handling, a dialog that does not trap and restore focus.
 - **Missing focus indication** — a focus style removed and never replaced, so
   keyboard users cannot tell where they are.
-- **Unlabeled controls** — an icon-only button, an input with no associated
-  label, a form control whose only label is placeholder text.
 - **Images and media without text alternatives** — a meaningful image with no
-  description, or a decorative one announced as content.
+  description, or a decorative one announced as content — when the linter
+  above doesn't already cover this project's markup.
 - **Semantics faked with generic elements** — a clickable element that is not a
   button or link, a heading order that skips levels, a list that is not marked
   up as one, a table without headers.
