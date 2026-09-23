@@ -77,17 +77,23 @@ it('makes the category actions and header navigation look like distinct clickabl
   expect(screen.getByRole('rowheader', { name: /Security/ })).toHaveClass('px-3', 'py-2.5');
 });
 
-it('orders the category breakdown from lowest score to highest, with unscored categories last', async () => {
+it('sorts the category breakdown by worst score or oldest last run', async () => {
   const app = { id: 'example', quality: { categories: [
-    { id: 'ux', label: 'UX', score: 80, coverage: 'broad' },
-    { id: 'security', label: 'Security', score: 20, coverage: 'broad' },
+    { id: 'ux', label: 'UX', score: 80, coverage: 'broad', assessedAt: '2026-09-12T00:00:00Z' },
+    { id: 'security', label: 'Security', score: 20, coverage: 'broad', assessedAt: '2026-09-13T00:00:00Z' },
     { id: 'perf', label: 'Perf', score: null, coverage: 'unavailable' },
-    { id: 'tests', label: 'Tests', score: 60, coverage: 'broad' },
+    { id: 'tests', label: 'Tests', score: 60, coverage: 'broad', assessedAt: '2026-09-10T00:00:00Z' },
   ] } };
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
-  const rowLabels = screen.getAllByRole('row').slice(1).map(row => within(row).queryByRole('rowheader')?.textContent);
+  const sortBy = screen.getByRole('combobox', { name: 'Sort by' });
+  expect(sortBy).toHaveValue('score');
+  let rowLabels = screen.getAllByRole('row').slice(1).map(row => within(row).queryByRole('rowheader')?.textContent);
   expect(rowLabels.filter(Boolean)).toEqual(['SecurityRunner settings', 'TestsRunner settings', 'UXRunner settings', 'PerfRunner settings']);
+
+  fireEvent.change(sortBy, { target: { value: 'oldest-run' } });
+  rowLabels = screen.getAllByRole('row').slice(1).map(row => within(row).queryByRole('rowheader')?.textContent);
+  expect(rowLabels.filter(Boolean)).toEqual(['PerfRunner settings', 'TestsRunner settings', 'UXRunner settings', 'SecurityRunner settings']);
 });
 
 it('opens the shared runner beside unavailable category evidence while preserving URL filters', async () => {
