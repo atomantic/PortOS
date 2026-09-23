@@ -214,9 +214,10 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
           />
         ) : audioChoice == null ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 p-5 text-center">
+            <h3 className="text-base font-semibold text-white">Preview paused</h3>
             <p className="max-w-xl text-sm text-gray-200">
-              This generated animation can navigate itself. If you provide its selected audio track, its code could send that track outside PortOS.
-              Continue only if you trust this animation.
+              Choose whether to run this generated animation with its selected audio track. The preview is paused until you choose.
+              The animation can navigate itself, so its code could send that track outside PortOS. Continue only if you trust it.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               <button

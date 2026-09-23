@@ -82,6 +82,8 @@ describe('CodeAnimationPreview', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderPreview({ audioUrl: '/api/uploads/audio/example.wav' });
 
+    expect(screen.getByRole('heading', { name: 'Preview paused' })).toBeInTheDocument();
+    expect(screen.getByText(/preview is paused until you choose/i)).toBeInTheDocument();
     expect(screen.getByText(/could send that track outside PortOS/i)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.queryByTitle('Code animation preview')).not.toBeInTheDocument();
