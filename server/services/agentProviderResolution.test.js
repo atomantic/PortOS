@@ -25,6 +25,7 @@ vi.mock('./providerStatus.js', () => ({
 vi.mock('./agentModelSelection.js', () => ({ selectModelForTask: vi.fn(), selectModelForRole: vi.fn() }));
 
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
+import { emitLog } from './cosEvents.js';
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
 import { isProviderAvailable, getFallbackProvider, getProviderStatus } from './providerStatus.js';
 import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
@@ -70,6 +71,32 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.provider).toBe(provider);
     expect(r.selectedModel).toBe('m-default');
     expect(r.modelSelection.tier).toBe('medium');
+  });
+
+  it('flags a learning-suggested model that differs from the provider default and warns loudly (#8148)', async () => {
+    const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5', 'claude-sonnet-5'] };
+    getActiveProvider.mockResolvedValue(provider);
+    selectModelForTask.mockResolvedValue({ model: 'claude-sonnet-5', tier: 'medium', reason: 'learning-suggested', learningReason: '80% success on medium' });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(true);
+    expect(r.selectedModel).toBe('claude-sonnet-5');
+    expect(r.modelSelection.downgradedFromDefault).toBe(true);
+    expect(r.modelSelection.configuredDefault).toBe('claude-opus-5-5');
+    expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('differs from provider\'s configured default'), expect.objectContaining({
+      downgradedFromDefault: true,
+      configuredDefault: 'claude-opus-5-5',
+    }));
+  });
+
+  it('does not flag a learning suggestion that already matches the provider default', async () => {
+    const provider = { id: 'p1', type: 'cli', defaultModel: 'claude-opus-5-5', models: ['claude-opus-5-5'] };
+    getActiveProvider.mockResolvedValue(provider);
+    selectModelForTask.mockResolvedValue({ model: 'claude-opus-5-5', tier: 'default', reason: 'learning-suggested' });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.modelSelection.downgradedFromDefault).toBeUndefined();
+    expect(emitLog).toHaveBeenCalledWith('info', expect.any(String), expect.not.objectContaining({ downgradedFromDefault: true }));
   });
 
   it('fails with providerId + status when unavailable and no fallback exists', async () => {

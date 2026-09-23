@@ -568,6 +568,30 @@ describe('AgentCard responsive header', () => {
     }
   });
 
+  it('flags a learning-downgraded model tier distinctly from an ordinary tier badge (#8148)', () => {
+    render(
+      <MemoryRouter>
+        <AgentCard
+          agent={{
+            ...agent,
+            metadata: {
+              ...agent.metadata,
+              modelTier: 'medium',
+              model: 'claude-sonnet-5',
+              modelReason: 'learning-suggested',
+              modelDowngradedFromDefault: true,
+              modelConfiguredDefault: 'claude-opus-5-5',
+            },
+          }}
+          completed
+        />
+      </MemoryRouter>
+    );
+    const badge = screen.getByText('Tier (downgraded): medium');
+    expect(badge).toBeInTheDocument();
+    expect(badge.getAttribute('title')).toContain('claude-opus-5-5');
+  });
+
   it('derives a known harness for legacy provider metadata', () => {
     render(
       <MemoryRouter>

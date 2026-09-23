@@ -171,6 +171,14 @@ export function buildAgentRegistration({
     effort,
     modelTier: modelSelection.tier,
     modelReason: modelSelection.reason,
+    // Set only when the learning system substituted a weaker model than the
+    // provider's configured default for a task that never pinned one — the
+    // run card needs to distinguish "ran on the configured default" from a
+    // silent downgrade (#8148).
+    ...(modelSelection.downgradedFromDefault && {
+      modelDowngradedFromDefault: true,
+      modelConfiguredDefault: modelSelection.configuredDefault
+    }),
     runId,
     phase: 'initializing',
     useRunner: dispatchUseRunner,
