@@ -5,7 +5,7 @@
  * pipeline series / issues / writers-room). Full-width page; owns its scroll.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router';
 import { Sparkles, Save, Trash2, ArrowLeft, Loader2, ExternalLink, Plus, X, History, RotateCcw, Image as ImageIcon, Star, ChevronDown, Upload, Mic, Square } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -31,7 +31,8 @@ import {
   uploadCatalogIngredientMediaFile,
   recordCatalogIngredientVoiceMemo,
 } from '../services/apiCatalog';
-import { startMemoRecording, arrayBufferToBase64 } from '../lib/audioRecorder';
+import { arrayBufferToBase64 } from '../lib/audioRecorder';
+import useMemoRecorder from '../hooks/useMemoRecorder';
 import { useGalleryPage } from '../hooks/useGalleryPage';
 import { generateImage } from '../services/apiSystem';
 import { composeCanonStyledPrompt } from '../lib/composeStyledPrompt';
@@ -1202,15 +1203,11 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false); // upload or transcription in flight
-  const [recording, setRecording] = useState(false);
+  const { recording, starting, start: startMemo, stop: stopMemo } = useMemoRecorder();
   const [armedDetach, setArmedDetach] = useState(null);
-  const recorderRef = useRef(null);
   const list = Array.isArray(media) ? media : [];
   const portrait = list.find((m) => m.kind === 'portrait');
   const others = list.filter((m) => m.kind !== 'portrait');
-
-  // Release the mic if the panel unmounts mid-recording (navigating away).
-  useEffect(() => () => { recorderRef.current?.cancel?.(); }, []);
 
   const doUpload = async (file) => {
     if (!file || busy) return;
@@ -1236,21 +1233,15 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
   };
 
   const startRecording = async () => {
-    const handle = await startMemoRecording().catch((err) => {
+    await startMemo().catch((err) => {
       toast.error(err?.message || 'Microphone unavailable');
-      return null;
     });
-    if (!handle) return;
-    recorderRef.current = handle;
-    setRecording(true);
   };
 
   const stopRecording = async () => {
-    const handle = recorderRef.current;
-    if (!handle) return;
-    recorderRef.current = null;
-    setRecording(false);
-    const clip = await handle.stop().catch((err) => { toast.error(err?.message || 'Recording failed'); return null; });
+    const pendingClip = stopMemo();
+    if (!pendingClip) return;
+    const clip = await pendingClip.catch((err) => { toast.error(err?.message || 'Recording failed'); return null; });
     if (!clip?.audioBase64) return;
     if (clip.peak !== undefined && clip.peak < 0.01) {
       toast.error('That memo was silent — check your microphone and try again.');
@@ -1278,7 +1269,7 @@ function MediaPanel({ media, missingMedia, onAttach, onSetPortrait, onDetach, on
             <Upload size={12} aria-hidden="true" /> Upload file
           </FilePickerButton>
           {!recording ? (
-            <button type="button" onClick={startRecording} disabled={busy}
+            <button type="button" onClick={startRecording} disabled={busy || starting}
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent disabled:opacity-40">
               <Mic size={12} aria-hidden="true" /> Record memo
             </button>
