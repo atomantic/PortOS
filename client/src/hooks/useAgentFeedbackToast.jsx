@@ -4,7 +4,7 @@ import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';
 import socket from '../services/socket';
 import * as api from '../services/api';
 import OutputBlocks from '../components/cos/OutputBlocks';
-import { isAgentHandoff } from '../lib/agentOutcome';
+import { isAgentFeedbackEligible } from '../lib/cosAgentFeedback';
 import { agentIssueLinkifier } from '../lib/issueRefs';
 
 const AUTO_DISMISS_MS = 15000;
@@ -168,15 +168,15 @@ export function useAgentFeedbackToast() {
 
     // Handle agent completion events
     const handleAgentCompleted = (data) => {
-      // Skip system agents and already-shown agents
       const agentId = data?.id || data?.agentId;
-      const isSystem = data?.taskId?.startsWith('sys-') || agentId?.startsWith('sys-');
 
-      // A record Resume/Relaunch retired is a handoff, not a completion: pressing
-      // Relaunch popped "✗ Agent completed — rate the result" in the corner for a
-      // run the user had just moved to another provider, and the run it handed the
-      // task to raises this toast itself when it actually finishes.
-      if (!agentId || isSystem || isAgentHandoff(data) || shownFeedbackFor.current.has(agentId)) {
+      // Only offer a rating the server will accept: the same shared predicate
+      // gates submitAgentFeedback, so an autonomous run (a scheduled claim-issue
+      // task, an improvement task) no longer pops a card whose thumbs answer
+      // "Can only submit feedback for completed agents". It also skips system
+      // agents and Resume/Relaunch handoffs — the run the task was handed to
+      // raises this toast itself when it actually finishes.
+      if (!agentId || !isAgentFeedbackEligible(data) || shownFeedbackFor.current.has(agentId)) {
         return;
       }
 
