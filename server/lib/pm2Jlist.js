@@ -26,10 +26,39 @@
  */
 function extractJsonArrayText(stdout) {
   const objectStart = stdout.indexOf('[{');
-  if (objectStart >= 0) return stdout.slice(objectStart);
   const emptyMatch = stdout.match(/\[\](?![0-9])/);
-  if (emptyMatch) return stdout.slice(stdout.indexOf(emptyMatch[0]));
-  return '[]';
+  const start = objectStart >= 0
+    ? objectStart
+    : emptyMatch
+      ? emptyMatch.index
+      : -1;
+  if (start < 0) return '[]';
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < stdout.length; index += 1) {
+    const char = stdout[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '[') {
+      depth += 1;
+    } else if (char === ']') {
+      depth -= 1;
+      if (depth === 0) return stdout.slice(start, index + 1);
+    }
+  }
+  return stdout.slice(start);
 }
 
 /**
