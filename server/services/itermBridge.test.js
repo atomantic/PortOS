@@ -98,7 +98,10 @@ describe('itermBridge', () => {
 
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'it2-'));
-    const socketPath = join(dir, 's');
+    // Windows CI has no Unix sockets; a named pipe exercises the same path.
+    const socketPath = process.platform === 'win32'
+      ? `\\\\.\\pipe\\portos-it2-${process.pid}-${Date.now()}`
+      : join(dir, 's');
     fake = await startFakeIterm(socketPath);
     deps = {
       socketPath,
