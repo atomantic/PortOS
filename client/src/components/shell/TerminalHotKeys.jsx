@@ -82,9 +82,11 @@ export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, sendEsc, handleP
           onBlur={() => setShowPasteInput(false)}
         />
       )}
-      <ShellImageDrop onSend={sendImage} placement={popoverPlacement} />
-      <div className="w-px h-6 bg-port-border shrink-0" />
-      {SCROLL_KEYS.map((key) => (
+      {/* Photo and view-scroll are PortOS-PTY only: the iTerm2 view (#8114) has
+          no image endpoint and no scrollback, so it omits both callbacks. */}
+      {sendImage && <ShellImageDrop onSend={sendImage} placement={popoverPlacement} />}
+      {scrollPage && <div className="w-px h-6 bg-port-border shrink-0" />}
+      {scrollPage && SCROLL_KEYS.map((key) => (
         <button
           key={key.label}
           onClick={() => scrollPage(key.direction)}

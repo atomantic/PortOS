@@ -768,6 +768,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/rigging` | Auto-skin rigging and animation retargeting for image-to-3D models |
 | `/api/privacy` | PII vault / trusted-org / broker opt-out |
 | `/api/shell` | Browser PTY shells |
+| `/api/iterm` | iTerm2 view capability status (`GET /status` → `{ state, detail }`); sessions themselves travel over the `iterm:*` socket events ([ITERM.md](./ITERM.md)) |
 | `/api/ports` | Port scan / allocation |
 | `/api/logs` | PM2 process logs |
 | `/api/detect` | App-repo detection |
@@ -909,6 +910,21 @@ socket.emit('shell:resize', { sessionId, cols: 120, rows: 40 });
 
 // Stop shell session
 socket.emit('shell:stop', { sessionId });
+```
+
+### iTerm2 Sessions
+
+The Shell page's iTerm2 view uses its own `iterm:*` events, never the `shell:*` ones — see [ITERM.md](./ITERM.md). There is no start, stop or resize: iTerm2 owns its sessions' lifecycle and size.
+
+```javascript
+socket.emit('iterm:list'); // subscribe; replies (and re-broadcasts) iterm:sessions
+socket.on('iterm:sessions', ({ status, sessions }) => {}); // status.state, [{ id: 'iterm-<uuid>', windowIndex, tabIndex, paneIndex, label, cwd, cols, rows, … }]
+socket.emit('iterm:attach', { id }); // → iterm:attached { id, cols, rows, bufferedOutput } | iterm:error
+socket.on('iterm:output', ({ id, data }) => {}); // one full-screen ANSI repaint per frame
+socket.emit('iterm:input', { id, data: 'ls\r' }); // exact bytes, delivered in order
+socket.on('iterm:exit', ({ id }) => {}); // session closed or iTerm2 went away
+socket.emit('iterm:detach', { id });
+socket.emit('iterm:unlist');
 ```
 
 ### Provider Status

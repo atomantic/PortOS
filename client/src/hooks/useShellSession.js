@@ -1,13 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import useMounted from './useMounted';
 import { useSearchParams, useParams, useNavigate } from 'react-router';
-import { Terminal } from '@xterm/xterm';
-import { WebLinksAddon } from '@xterm/addon-web-links';
-import '@xterm/xterm/css/xterm.css';
 import { useSocket } from './useSocket';
 import { useThemeContext } from '../components/ThemeContext';
-import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
-import { isFocusEscapeKey } from '../lib/a11yKeyboard';
+import { createShellTerminal, readTerminalTheme } from '../components/shell/createShellTerminal';
 import { attachDictationBridge } from '../lib/terminalDictation';
 import { fitTerminal } from '../lib/terminalFit';
 import {
@@ -26,26 +22,6 @@ export const MAX_SESSIONS = 20;
 // recoverToSurvivor's no-op fallback, for the one caller already sitting at bare
 // /shell and content to stay there when nothing is free to adopt.
 const STAY_PUT = () => {};
-
-// Read the active theme's colors off the document and assemble the xterm palette.
-// The day/night mode comes from the `data-port-theme-mode` attribute applyTheme()
-// stamps on <html>, so this stays correct without threading React state in.
-// Background/foreground prefer the dedicated --port-terminal-* tokens (hand-tuned
-// per theme) and fall back to the page bg/text.
-const readTerminalTheme = () => {
-  const root = document.documentElement;
-  const mode = root.dataset.portThemeMode === 'day' ? 'day' : 'night';
-  const css = (varName) => getComputedStyle(root).getPropertyValue(varName).trim();
-  return buildTerminalTheme({
-    bg: parseCssColorToHex(css('--port-terminal-bg') || css('--port-bg'), '#070707'),
-    fg: parseCssColorToHex(css('--port-terminal-text') || css('--port-text'), '#e5e5e5'),
-    accent: parseCssColorToHex(css('--port-accent')),
-    card: parseCssColorToHex(css('--port-card')),
-    error: parseCssColorToHex(css('--port-error')),
-    success: parseCssColorToHex(css('--port-success')),
-    warning: parseCssColorToHex(css('--port-warning')),
-  }, mode);
-};
 
 /**
  * useShellSession — all socket/session/terminal state and lifecycle for the Shell
@@ -258,39 +234,9 @@ export function useShellSession({ isFullscreen } = {}) {
   useEffect(() => {
     if (!terminalRef.current || termInstanceRef.current) return;
 
-    const term = new Terminal({
-      cursorBlink: true,
-      cursorStyle: 'block',
-      fontSize: 14,
-      fontFamily: '"Roboto Mono for Powerline", "MesloLGS NF", "MesloLGS Nerd Font", "Hack Nerd Font", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", Menlo, Monaco, "Courier New", monospace',
-      theme: readTerminalTheme(),
-      scrollback: 5000,
-      allowProposedApi: true,
-      // Screen-reader mode is what makes xterm build its .xterm-accessibility
-      // live region — without it every rendered row stays aria-hidden and a
-      // screen-reader user focusing the terminal hears an empty textarea. It
-      // also relaxes _keyDown's blanket preventDefault on resolved keys, which
-      // the dictation bridge (lib/terminalDictation.js) is already written to
-      // defer to.
-      screenReaderMode: true
-    });
-
-    const webLinksAddon = new WebLinksAddon();
-
-    term.loadAddon(webLinksAddon);
-
-    term.open(terminalRef.current);
-
-    // WCAG 2.1.2 (no keyboard trap): xterm's helper textarea is in the tab
-    // order but its _keyDown preventDefaults Tab, Shift+Tab and Escape alike,
-    // so a keyboard user who tabs in cannot leave without a mouse. The
-    // documented escape is Shift+Tab — the conventional "leave this widget"
-    // backtab: returning false makes _keyDown bail before it cancels the
-    // event, so the browser performs the focus move to the previous tabbable
-    // element and nothing reaches the PTY. Plain Tab must stay claimed — it is
-    // shell completion. The gesture itself is the shared isFocusEscapeKey
-    // predicate so the stand-down rule lives in one place.
-    term.attachCustomKeyEventHandler((event) => !isFocusEscapeKey(event));
+    // Construction, theme, links and the Shift+Tab focus escape are shared with
+    // the iTerm2 view (components/shell/createShellTerminal.js).
+    const term = createShellTerminal(terminalRef.current);
 
     // xterm binds no touch handlers of its own, so without this a swipe over the
     // terminal does nothing. Alternate-screen TUIs need the matching wheel capture so

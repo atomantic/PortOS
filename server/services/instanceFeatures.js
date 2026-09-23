@@ -61,6 +61,14 @@ const DETECTORS = {
     const report = await checkSetup();
     return report.helper?.ok === 'ok' && report.identity?.ok === 'ok';
   },
+  // Cheap and fail-closed: platform, app bundle and the EnableAPIServer pref —
+  // no AppleScript, no socket connect, never launches iTerm2.
+  iterm: async () => {
+    if (process.platform !== 'darwin') return false;
+    const { detectItermInstall } = await import('./itermAuth.js');
+    const install = await detectItermInstall().catch(() => null);
+    return install?.state === 'ready';
+  },
 };
 
 const FEATURE_BY_ID = new Map(INSTANCE_FEATURES.map((feature) => [feature.id, feature]));

@@ -21,3 +21,10 @@ export const sendShellImage = (sessionId, { data, filename, message }, options =
     body: JSON.stringify({ data, filename, message }),
     ...options,
   });
+
+/**
+ * Capability state of the Shell page's iTerm2 view (#8114): `{ state, detail }`,
+ * never session contents. States and their fixes are in docs/ITERM.md.
+ * @param {{ silent?: boolean }} [options]
+ */
+export const getItermStatus = (options = {}) => request('/iterm/status', options);

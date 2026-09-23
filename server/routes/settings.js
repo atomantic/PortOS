@@ -294,6 +294,15 @@ async function reconcileBeeperArming(reason, options = {}) {
     .catch((err) => console.error(`❌ Beeper ingestion reconcile (${reason}) failed: ${err.message}`));
 }
 
+// The iTerm2 bridge connects only while its feature is on (#8114): turning it
+// off must drop the connection now, and turning it on must serve an already-
+// open iTerm2 view without a restart. Same persisted-flag rule as above.
+async function reconcileItermOnToggle() {
+  const { reconcileItermBridge } = await import('../services/itermBridge.js');
+  await reconcileItermBridge({ reason: 'feature-toggle' })
+    .catch((err) => console.error(`❌ iTerm2 bridge reconcile (feature-toggle) failed: ${err.message}`));
+}
+
 // An interval-only Beeper save (no `enabled` flip) used to take effect only
 // at the next process restart: the registered event's `intervalMs` is read
 // once, at `schedule()` time (`createSettingsGatedSyncScheduler.js`), and
@@ -317,6 +326,7 @@ router.put('/features/:featureId', asyncHandler(async (req, res) => {
   const { enabled } = validateRequest(instanceFeatureUpdateSchema, req.body || {});
   const result = await updateInstanceFeature(featureId, enabled);
   if (featureId === 'beeper') await reconcileBeeperArming('feature-toggle');
+  if (featureId === 'iterm') await reconcileItermOnToggle();
   res.json(result);
 }));
 

@@ -19,6 +19,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [STORAGE.md](./STORAGE.md) | Storage classification contract — PostgreSQL vs filesystem, new-data-store checklist |
 | [BACKUP.md](./BACKUP.md) | Filesystem snapshots + PostgreSQL dumps, restore semantics |
 | [PORTS.md](./PORTS.md) | Port allocation (5553–5561) and how 5555/5553/5554 relate |
+| [ITERM.md](./ITERM.md) | The Shell page's iTerm2 view — requirements, status states and their fixes, why iTerm2 sessions stay separate from PortOS shells, the clean-room protocol rule |
 | [INSTANCE_FEATURES.md](./INSTANCE_FEATURES.md) | Optional per-install features — registry, client-side nav gating, feature groups, reconcile-at-toggle |
 | [PM2.md](./PM2.md) | Recommended PM2 ecosystem patterns for sub-projects |
 | [QUOTA-BURN.md](./QUOTA-BURN.md) | Quota-burn automation — spending subscription-backed CLI quota before expiry |
