@@ -23,6 +23,7 @@
  * caller that COUNTS these entries can't report a fake 0 (#2726).
  */
 
+import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { readDailyLogIfEnabled } from './mortalLoomStore.js';
@@ -104,4 +105,31 @@ export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
     await atomicWrite(DAILY_LOG_FILE, log);
     return result !== undefined ? result : log;
   });
+}
+
+/**
+ * Mint a logged alcohol drink or nicotine item as its own event (#8143).
+ *
+ * Peers merge these rows by `id`, so two machines that each log the same drink on
+ * the same day keep two events instead of collapsing byte-identical rows into one.
+ * `updatedAt` is the last-writer-wins stamp for edits. Rows logged before this
+ * existed carry no `id` and keep merging by their full content.
+ */
+export function newDailyLogEvent(fields, now = new Date().toISOString()) {
+  return { id: randomUUID(), ...fields, createdAt: now, updatedAt: now };
+}
+
+/**
+ * Restamp an event about to be edited so the edit wins over a peer's older copy.
+ * Call it BEFORE changing any field: a legacy row (no `id`) gets an id here and
+ * records its pre-edit content in `replaces`, so a peer that still holds the
+ * unedited legacy row does not merge it back in as a second event.
+ */
+export function stampDailyLogEventEdit(event, now = new Date().toISOString()) {
+  if (typeof event.id !== 'string' || !event.id) {
+    event.replaces = { ...event };
+    event.id = randomUUID();
+  }
+  event.updatedAt = now;
+  return event;
 }

@@ -8,7 +8,12 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, getDateString } from '../lib/fileUtils.js';
-import { loadMeatspaceDailyLog, mutateDailyLog } from './meatspaceDailyLog.js';
+import {
+  loadMeatspaceDailyLog,
+  mutateDailyLog,
+  newDailyLogEvent,
+  stampDailyLogEventEdit
+} from './meatspaceDailyLog.js';
 import {
   isMortalLoomEnabled,
   mlPush,
@@ -210,12 +215,14 @@ export async function logDrink({ name, oz, abv, count = 1, date }) {
     if (!entry) { entry = { date: targetDate }; log.entries.push(entry); }
     if (!entry.alcohol) entry.alcohol = { drinks: [], standardDrinks: 0 };
 
-    const existing = entry.alcohol.drinks.find(d => d.name === drink.name && d.oz === drink.oz && d.abv === drink.abv);
-    if (existing) existing.count = (existing.count || 1) + count;
-    else entry.alcohol.drinks.push(drink);
+    // Every log is its own event — never fold it into a same-product row. Bumping
+    // an existing row's count in place loses one of two concurrent increments when
+    // peers merge that row by id (#8143).
+    const event = newDailyLogEvent(drink);
+    entry.alcohol.drinks.push(event);
 
     recalcAlcoholTotal(entry);
-    return { drink, standardDrinks, date: targetDate, dayTotal: entry.alcohol.standardDrinks };
+    return { drink: event, standardDrinks, date: targetDate, dayTotal: entry.alcohol.standardDrinks };
   }, { label: 'Alcohol' });
 
   averageCache = null;
@@ -253,7 +260,7 @@ export async function updateDrink(date, index, updates) {
     const entry = log.entries.find(e => e.date === date);
     if (!entry?.alcohol?.drinks?.[index]) return null;
 
-    const drink = entry.alcohol.drinks[index];
+    const drink = stampDailyLogEventEdit(entry.alcohol.drinks[index]);
     if (updates.name !== undefined) drink.name = updates.name;
     if (updates.oz !== undefined) drink.oz = updates.oz;
     if (updates.abv !== undefined) drink.abv = updates.abv;
