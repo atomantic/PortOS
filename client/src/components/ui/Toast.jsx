@@ -270,18 +270,22 @@ function ToastItem({ t, toastOptions }) {
   //
   // `remainingRef` is the ms left on the countdown; it survives across
   // pause/resume because a ref, unlike state, doesn't trigger its own
-  // re-render/effect cycle. `prevIdentityRef` detects a same-id content swap
-  // (a loading→success toast) the same way the collapse-reset effect above
-  // does — comparing `t.content`/`t.type` by reference, which only change
-  // when `add()` actually ran — and restarts the countdown from the NEW
-  // duration rather than treating the swap as a re-render of the old one.
+  // re-render/effect cycle. `prevIdentityRef` detects a same-id swap that
+  // needs a fresh countdown — content/type by reference (the same signal the
+  // collapse-reset effect above uses, since they only change identity when
+  // `add()` actually ran) PLUS `duration` itself: a swap that keeps identical
+  // content/type but changes just the duration (e.g. an Infinity toast
+  // re-added with a finite one) must still reset — otherwise `remainingRef`
+  // keeps holding the stale duration, and if that was `Infinity`,
+  // `setTimeout(fn, Infinity)` clamps to 0 and the toast would dismiss
+  // almost immediately instead of honouring the new duration.
   const remainingRef = useRef(t.duration);
-  const prevIdentityRef = useRef([t.content, t.type]);
+  const prevIdentityRef = useRef([t.content, t.type, t.duration]);
 
   useEffect(() => {
-    const [prevContent, prevType] = prevIdentityRef.current;
-    const isNewArm = prevContent !== t.content || prevType !== t.type;
-    prevIdentityRef.current = [t.content, t.type];
+    const [prevContent, prevType, prevDuration] = prevIdentityRef.current;
+    const isNewArm = prevContent !== t.content || prevType !== t.type || prevDuration !== t.duration;
+    prevIdentityRef.current = [t.content, t.type, t.duration];
 
     if (t.duration === Infinity) return undefined;
     if (isNewArm) remainingRef.current = t.duration;

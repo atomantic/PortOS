@@ -397,6 +397,23 @@ describe('finite toasts pause their dismiss timer while held', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it('restarts the countdown when a same-id swap changes only the duration, not the content', () => {
+    // Regression: an Infinity→finite swap that keeps identical content/type
+    // must still reset the countdown. `remainingRef` was previously left at
+    // its stale Infinity value, and `setTimeout(fn, Infinity)` clamps to 0 in
+    // JS — the toast would have dismissed on the very next tick instead of
+    // honouring the new duration.
+    act(() => { toast('Reconnecting to the agent...', { id: 'agent-status', duration: Infinity }); });
+    advance(50000); // never dismisses on its own while Infinity
+
+    act(() => { toast('Reconnecting to the agent...', { id: 'agent-status', duration: 5000 }); });
+
+    advance(4999);
+    expect(screen.getByRole('status')).toBeVisible();
+    advance(1);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('restarts the countdown from the new duration on a same-id content swap (loading → success)', () => {
     act(() => { toast.loading('Applying fix...', { id: 'apply-fix' }); });
     advance(50000); // loading is Infinity — never dismisses on its own
