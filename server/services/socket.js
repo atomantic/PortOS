@@ -38,6 +38,7 @@ import { registerAppHandlers } from '../sockets/apps.js';
 import { registerFableLoomHostedNamespace } from '../sockets/fableLoomHosted.js';
 import { cleanupSocketStreams, registerLogHandlers } from '../sockets/logs.js';
 import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
+import { detachItermSocket, registerItermHandlers } from '../sockets/iterm.js';
 import { getBuildId } from '../lib/buildId.js';
 import { authEvents, extractToken, isAuthEnabled, verifySession } from './auth.js';
 import { runEventLogEvents } from './agentRunEventLog.js';
@@ -169,6 +170,7 @@ function registerLifecycleHandlers(socket, _io) {
     if (detached > 0) {
       console.log(`🐚 Detached ${detached} shell session(s) (still running)`);
     }
+    detachItermSocket(socket);
     socket.removeAllListeners();
   });
 }
@@ -183,6 +185,7 @@ const SOCKET_HANDLER_REGISTRARS = [
   registerSubscriptionHandlers,
   registerErrorHandlers,
   registerShellHandlers,
+  registerItermHandlers,
   registerLifecycleHandlers
 ];
 
