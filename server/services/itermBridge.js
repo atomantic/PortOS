@@ -40,7 +40,7 @@ import {
   encodeItermClientMessage,
   flattenItermLayout,
 } from '../lib/itermMessages.js';
-import { renderItermFrame } from '../lib/itermScreenRender.js';
+import { renderItermFrame, renderItermSnapshot } from '../lib/itermScreenRender.js';
 import {
   ITERM_APP_NAME,
   detectItermInstall,
@@ -54,7 +54,27 @@ export const ITERM_SESSION_PREFIX = 'iterm-';
 export const ITERM_SUBPROTOCOL = 'api.iterm2.com';
 
 const LOG_PREFIX = 'iTerm2 bridge';
+// Match xterm's scrollback capacity in the browser, plus its visible rows.
+const ITERM_SCROLLBACK_LINES = 5_000;
 const FAILURE_STATES = new Set(['auth-failed', 'connect-failed']);
+
+const firstVisibleBufferLine = (buffer, rows, fallback = 0) => {
+  const range = buffer.windowedCoordRange?.coordRange;
+  const rangeStart = range?.start?.y ?? buffer.range?.location;
+  const rangeEnd = range?.end?.y
+    ?? (buffer.range?.location !== undefined && buffer.range?.length !== undefined
+      ? buffer.range.location + buffer.range.length
+      : undefined);
+  return buffer.numLinesAboveScreen
+    ?? (rangeEnd !== undefined ? Math.max(0, rangeEnd - rows) : rangeStart)
+    ?? fallback;
+};
+
+const firstReturnedBufferLine = (buffer, firstVisibleLine, rows) => (
+  buffer.windowedCoordRange?.coordRange?.start?.y
+  ?? buffer.range?.location
+  ?? Math.max(0, firstVisibleLine - Math.max(0, (buffer.contents?.length ?? 0) - rows))
+);
 
 const defaultIsFeatureEnabled = async () => {
   const { isInstanceFeatureEnabled } = await import('./instanceFeatures.js');
@@ -202,12 +222,50 @@ export function createItermBridge(deps = {}) {
       try {
         do {
           entry.fetchQueued = false;
+          const initialViewers = new Set(entry.initialViewers);
+          const needsSnapshot = initialViewers.size > 0 || entry.lastScreenStartLine === null;
           const response = await request({
-            getBufferRequest: { session: entry.uuid, lineRange: { screenContentsOnly: true }, includeStyles: true },
+            getBufferRequest: {
+              session: entry.uuid,
+              lineRange: needsSnapshot
+                ? { trailingLines: ITERM_SCROLLBACK_LINES + Math.max(1, entry.rows || 0) }
+                : { screenContentsOnly: true },
+              includeStyles: true,
+            },
           });
-          const buffer = response.getBufferResponse;
+          let buffer = response.getBufferResponse;
           if (!buffer || sessions.get(entry.id) !== entry) break;
-          const lineCount = buffer.contents.length;
+          const firstVisibleLine = firstVisibleBufferLine(buffer, entry.rows || 1, entry.lastScreenStartLine ?? 0);
+          const previousScreenStartLine = entry.lastScreenStartLine;
+          const scrollbackRows = previousScreenStartLine === null
+            ? 0
+            : Math.max(0, firstVisibleLine - previousScreenStartLine);
+          const replaceViewers = previousScreenStartLine !== null
+            && (firstVisibleLine < previousScreenStartLine || scrollbackRows > entry.rows);
+          let hasSnapshot = needsSnapshot;
+
+          // A screen-only update can skip more rows than the previous visible
+          // screen contained (for example while a viewer is suspended). Fetch
+          // a fresh bounded snapshot in that case; old rows can no longer be
+          // recovered from the viewer's last frame alone.
+          if (replaceViewers && !hasSnapshot) {
+            const snapshotResponse = await request({
+              getBufferRequest: {
+                session: entry.uuid,
+                lineRange: { trailingLines: ITERM_SCROLLBACK_LINES + Math.max(1, entry.rows || 0) },
+                includeStyles: true,
+              },
+            });
+            buffer = snapshotResponse.getBufferResponse;
+            if (!buffer || sessions.get(entry.id) !== entry) break;
+            hasSnapshot = true;
+          }
+
+          const visibleLine = firstVisibleBufferLine(buffer, entry.rows || 1, firstVisibleLine);
+          const returnedLine = firstReturnedBufferLine(buffer, visibleLine, entry.rows || 1);
+          const visibleOffset = Math.max(0, visibleLine - returnedLine);
+          const screenLines = hasSnapshot ? buffer.contents.slice(visibleOffset) : buffer.contents;
+          const lineCount = screenLines.length;
           if (lineCount > 0 && lineCount !== entry.rows && lineCount !== entry.lastLineCount) {
             // The grid may have changed under us; the list call refreshes
             // cols/rows. Once per distinct line count, never once per frame.
@@ -215,16 +273,36 @@ export function createItermBridge(deps = {}) {
           }
           entry.lastLineCount = lineCount;
           entry.lastFrame = renderItermFrame({
-            lines: buffer.contents,
+            lines: screenLines,
             cursor: buffer.cursor,
-            firstVisibleLine: buffer.windowedCoordRange?.coordRange?.start?.y
-              ?? buffer.range?.location
-              ?? buffer.numLinesAboveScreen
-              ?? 0,
+            firstVisibleLine: visibleLine,
             cols: entry.cols,
             rows: Math.max(entry.rows || 0, lineCount),
           });
-          for (const viewer of entry.viewers) safeEmit(viewer, 'iterm:output', { id: entry.id, data: entry.lastFrame });
+
+          const fullSnapshot = hasSnapshot
+            ? renderItermSnapshot({
+              lines: buffer.contents,
+              cursor: buffer.cursor,
+              firstVisibleLine: visibleLine,
+              rangeStartLine: returnedLine,
+              cols: entry.cols,
+              rows: entry.rows,
+            })
+            : null;
+          for (const viewer of entry.viewers) {
+            if (fullSnapshot && (replaceViewers || initialViewers.has(viewer))) {
+              safeEmit(viewer, 'iterm:output', { id: entry.id, data: fullSnapshot, reset: true });
+              entry.initialViewers.delete(viewer);
+            } else {
+              safeEmit(viewer, 'iterm:output', {
+                id: entry.id,
+                data: entry.lastFrame,
+                scrollbackRows,
+              });
+            }
+          }
+          entry.lastScreenStartLine = visibleLine;
         } while (entry.fetchQueued && entry.viewers.size > 0);
       } catch (err) {
         console.error(`❌ ${LOG_PREFIX}: screen fetch failed: ${err.message}`);
@@ -279,6 +357,7 @@ export function createItermBridge(deps = {}) {
       if (!entry) {
         entry = {
           id, uuid: pane.uuid, name: null, jobName: null, cwd: null, lastFrame: null, lastLineCount: null,
+          lastScreenStartLine: null, initialViewers: new Set(),
           viewers: new Set(), fetchInFlight: null, fetchQueued: false, inputTail: Promise.resolve(),
         };
         added.push(entry);
@@ -576,17 +655,19 @@ export function createItermBridge(deps = {}) {
     if (!entry) return null;
     const first = entry.viewers.size === 0;
     entry.viewers.add(socket);
+    entry.initialViewers.add(socket);
     if (first) {
       subscribeScreen(entry, true).then(() => {
         if (conn && sessions.get(id) === entry) fetchFrame(entry);
       });
     }
-    else if (!entry.lastFrame) fetchFrame(entry);
+    else fetchFrame(entry);
     return { id, cols: entry.cols, rows: entry.rows, bufferedOutput: entry.lastFrame ?? '' };
   };
 
   const releaseViewer = (entry, socket) => {
     if (!entry.viewers.delete(socket)) return false;
+    entry.initialViewers.delete(socket);
     if (entry.viewers.size === 0 && sessions.get(entry.id) === entry) subscribeScreen(entry, false);
     return true;
   };
