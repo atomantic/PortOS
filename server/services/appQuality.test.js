@@ -36,7 +36,9 @@ describe('scheduled audit measurement workflow', () => {
     const legacyReport = report({ category: 'react-lifecycle', score: 73 });
     const query = vi.fn().mockResolvedValue({ rows: [] });
     await expect(recordAuditQuality({ task, taskType: 'react-lifecycle', agentId: 'agent-legacy', workspacePath: '/repo', success: true, assessedAt }, {
-      readFile: vi.fn().mockResolvedValue(JSON.stringify({ summary: sentinel(legacyReport), payload: null })), query,
+      readFile: vi.fn().mockResolvedValue(JSON.stringify({ summary: sentinel(legacyReport), payload: null })),
+      query,
+      ensureSchema: vi.fn(),
     })).resolves.toBe(true);
     expect(query.mock.calls[0][1]).toEqual([
       'portos-default', 'ui-lifecycle', 'agent-legacy', assessedAt,
