@@ -106,6 +106,7 @@ export {
   startHostedSessionSweep,
   stopHostedSessionSweep,
   sweepExpiredHostedSessions,
+  switchHostedEpisode,
   updateHostedSession,
   verifyHostedToken,
 } from './hostedSession.js';

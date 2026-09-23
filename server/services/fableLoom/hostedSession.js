@@ -376,8 +376,18 @@ export function _getInternalSession(sessionId) {
 
 /**
  * Update hosted session state (e.g. audio target, playback phase, current node).
+ *
+ * `currentNodeId` is validated against the session's CURRENT `episodeId` (only
+ * when it actually changes — a phase/hold-index-only update skips the lookup).
+ * Without this, a client that drifted from the server's episode (the host
+ * advanced an episode without the server learning about it, #8112) would push
+ * a node id that belongs to a different episode's graph; the audience's next
+ * turn then resolves `findNode` against the WRONG episode, throws "Scene not
+ * found", and silently falls back to canned narration with no visible error.
+ * Rejecting here fails loudly instead, so a future client bug can't degrade
+ * the same way in silence.
  */
-export function updateHostedSession(sessionId, patch = {}, { io } = {}) {
+export async function updateHostedSession(sessionId, patch = {}, { io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session || session.status !== 'active') {
     throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
@@ -386,7 +396,16 @@ export function updateHostedSession(sessionId, patch = {}, { io } = {}) {
   if (patch.audioTarget && FABLELOOM_AUDIO_TARGETS.includes(patch.audioTarget)) {
     session.audioTarget = patch.audioTarget;
   }
-  if (patch.currentNodeId) {
+  if (patch.currentNodeId && patch.currentNodeId !== session.currentNodeId) {
+    const loom = await getLoom(session.loomId);
+    const episode = loom?.episodes?.find((e) => e.id === session.episodeId) || null;
+    const nodeBelongsToEpisode = !!episode?.nodes?.some((n) => n.id === patch.currentNodeId);
+    if (!nodeBelongsToEpisode) {
+      throw new ServerError('currentNodeId does not belong to the hosted session\'s current episode', {
+        status: 400,
+        code: 'NODE_NOT_IN_EPISODE',
+      });
+    }
     session.currentNodeId = patch.currentNodeId;
   }
   if (patch.playbackPhase) {
@@ -401,6 +420,66 @@ export function updateHostedSession(sessionId, patch = {}, { io } = {}) {
     io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:session:sync', sanitized);
   }
   return sanitized;
+}
+
+/**
+ * Re-bind a hosted session to a different episode of the same loom, so the
+ * audience's phone stays connected across an episode transition instead of
+ * being silently stranded on the old episode's graph (#8112).
+ *
+ * Aborts any in-flight turn against the OLD episode first (a turn that
+ * resolves mid-switch must not land narration/a transition against the new
+ * one), re-runs the same readiness preflight `createHostedSession` requires,
+ * and — on failure — ends the session outright via `endHostedSession` rather
+ * than leaving it half-bound to an episode that can't play. Resets
+ * `currentNodeId` to the new episode's opening node and clears the
+ * transcript/turnPhase so the audience view starts clean.
+ */
+export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
+  const session = activeSessions.get(sessionId);
+  if (!session || session.status !== 'active') {
+    throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
+  }
+
+  const loom = await getLoom(session.loomId);
+  if (!loom) {
+    throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  const episode = findEpisode(loom, episodeId);
+
+  if (session.activeTurn?.abortController) {
+    session.activeTurn.abortController.abort('episode_switch');
+    session.activeTurn = null;
+  }
+
+  const preflight = await checkHostedSessionReadiness({ loomId: session.loomId, episodeId, loom, episode });
+  const startNode = preflight.ready
+    ? episode.nodes?.find((n) => n.id === episode.startNodeId) || null
+    : null;
+  if (!preflight.ready || !startNode) {
+    endHostedSession(sessionId, { reason: 'episode_not_ready', io });
+    return { ok: false, ended: true, reason: 'episode_not_ready', preflight };
+  }
+
+  const now = new Date();
+  session.episodeId = episodeId;
+  session.currentNodeId = startNode.id;
+  session.playbackPhase = initialPhaseForNode(startNode);
+  session.activeHoldIndex = 0;
+  session.turnPhase = 'idle';
+  session.transcript = [{
+    id: randomUUID(),
+    role: 'narrator',
+    text: startNode.prose || startNode.title || '',
+    timestamp: now.toISOString(),
+  }];
+  session.recentTts = [];
+
+  const sanitized = sanitizeHostedSession(session);
+  if (io) {
+    io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:session:sync', sanitized);
+  }
+  return { ok: true, session: sanitized };
 }
 
 /**

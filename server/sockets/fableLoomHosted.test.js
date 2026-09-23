@@ -48,6 +48,20 @@ describe('fableLoomHosted Socket.IO namespace', () => {
         playbackAssets: { holdLoopVideoHistoryIds: ['vid-2'] },
         transitions: [],
       }],
+    }, {
+      id: 'ep-2',
+      title: 'Episode 2',
+      startNodeId: 'node-ep2-1',
+      nodes: [{
+        id: 'node-ep2-1',
+        title: 'Episode 2 opener',
+        prose: 'Episode two opening prose',
+        playbackMode: 'decision',
+        audienceConnection: 'connected',
+        protagonistPresence: 'offscreen',
+        isEnding: false,
+        transitions: [],
+      }],
     }],
   };
 
@@ -377,10 +391,10 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(getHostedSession(session.id).turnPhase).toBe('idle');
     });
 
-    it('lets a host drive hosted:playback:update', () => {
+    it('lets a host drive hosted:playback:update', async () => {
       const host = connectHost();
 
-      host.listeners['hosted:playback:update']({ phase: 'entry', activeHoldIndex: 1, nodeId: 'node-2' });
+      await host.listeners['hosted:playback:update']({ phase: 'entry', activeHoldIndex: 1, nodeId: 'node-2' });
 
       expect(roomEvent('hosted:playback:sync')?.data).toEqual({
         phase: 'entry',
@@ -403,6 +417,51 @@ describe('fableLoomHosted Socket.IO namespace', () => {
         activeHoldIndex: 0,
         currentNodeId: 'node-1',
       });
+    });
+
+    // #8112: only the host may re-bind this hosted session's episode. An
+    // audience socket triggering this would let a guest device rewrite the
+    // story the host is presenting.
+    it('lets a host switch episodes and re-syncs the room', async () => {
+      const host = connectHost();
+
+      await host.listeners['hosted:episode:switch']({ episodeId: 'ep-2' });
+
+      expect(getHostedSession(session.id)).toMatchObject({
+        episodeId: 'ep-2',
+        currentNodeId: 'node-ep2-1',
+        turnPhase: 'idle',
+      });
+      const sync = roomEvent('hosted:session:sync');
+      expect(sync?.data).toMatchObject({ episodeId: 'ep-2', currentNodeId: 'node-ep2-1' });
+      expect(sync?.data.transcript).toHaveLength(1);
+    });
+
+    it('refuses hosted:episode:switch from an audience socket', async () => {
+      await audience.listeners['hosted:episode:switch']({ episodeId: 'ep-2' });
+
+      expect(getHostedSession(session.id)).toMatchObject({ episodeId: 'ep-1', currentNodeId: 'node-1' });
+      expect(roomEvent('hosted:session:sync')).toBeUndefined();
+    });
+
+    it('emits hosted:error when hosted:episode:switch is sent with no episodeId', async () => {
+      const host = connectHost();
+
+      await host.listeners['hosted:episode:switch']({});
+
+      expect(host.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'EPISODE_ID_REQUIRED' });
+      expect(getHostedSession(session.id).episodeId).toBe('ep-1');
+    });
+
+    it('emits hosted:error to the host when the target episode does not exist', async () => {
+      const host = connectHost();
+
+      await host.listeners['hosted:episode:switch']({ episodeId: 'no-such-episode' });
+
+      expect(host.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'NOT_FOUND' });
+      expect(getHostedSession(session.id).episodeId).toBe('ep-1');
     });
 
     it('returns the turn to listening on hosted:speech:done', () => {
