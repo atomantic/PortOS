@@ -127,6 +127,14 @@ describe('materializeRoute writes what each binding shape says', () => {
     expect(record.secretEnvVars).toEqual(SAMPLES['opencode-zen-cli'].secretEnvVars);
   });
 
+  it('starts Zen keyless on the free plan only — a paid plan still needs its key', () => {
+    const keyless = (plan) => { try { materializeRoute({ harness: 'opencode', method: 'cli', serviceInstance: { definitionId: 'opencode-zen', plan } }); return null; } catch (err) { return err.code; } };
+    expect(keyless('free')).toBeNull();
+    expect(keyless('paid')).toBe('SERVICE_CREDENTIAL_REQUIRED');
+    const free = materializeRoute({ harness: 'opencode', method: 'cli', serviceInstance: { definitionId: 'opencode-zen', plan: 'free' } });
+    expect(free.envVars).not.toHaveProperty('OPENCODE_API_KEY');
+  });
+
   // Two instances of one definition under different plans are how "NVIDIA
   // free vs paid" is represented; each is its own route.
   it('keys a second plan of the same service by its slug', () => {

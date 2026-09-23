@@ -216,11 +216,7 @@ export function materializeDerivedPreset({ record, harness, instance, catalog = 
   const { owned } = providerConnectionProfile(record);
 
   const envVars = mergeDerivedEnv(record, owned, materialized);
-  const stored = new Set(Array.isArray(record.secretEnvVars) ? record.secretEnvVars : []);
-  const secretEnvVars = [...new Set([
-    ...materialized.secretEnvVars,
-    ...[...stored].filter((name) => Object.hasOwn(envVars, name)),
-  ])];
+  const secretEnvVars = [...new Set([...materialized.secretEnvVars, ...liveSecretNames(record, envVars)])];
 
   const derived = {
     ...record,
@@ -262,6 +258,14 @@ export function materializeDerivedPreset({ record, harness, instance, catalog = 
   return { record: derived, error: null, ownedEnvNames };
 }
 
+/**
+ * The record's declared secret names that carry a value in `envVars`. A name
+ * with no value masks and exports nothing (every shipped Zen preset declares an
+ * unset `OPENCODE_API_KEY`), so derivation drops it and drift ignores it.
+ */
+const liveSecretNames = (record, envVars) =>
+  (Array.isArray(record.secretEnvVars) ? record.secretEnvVars : []).filter((name) => Object.hasOwn(envVars, name));
+
 const sameSet = (a, b) => a.length === b.length && a.every((item) => b.includes(item));
 const orNull = (value) => value ?? null;
 
@@ -281,7 +285,7 @@ export function derivedPresetDrift(record, derived, harness) {
   if (typeof record.endpoint === 'string' && record.endpoint !== '' && record.endpoint !== orNull(derived.endpoint)) drift.push('endpoint');
   if ((record.apiKey ?? '') !== (derived.apiKey ?? '')) drift.push('apiKey');
   if (!isDeepStrictEqual(record.envVars ?? {}, derived.envVars)) drift.push('envVars');
-  if (!sameSet(Array.isArray(record.secretEnvVars) ? record.secretEnvVars : [], derived.secretEnvVars)) drift.push('secretEnvVars');
+  if (!sameSet(liveSecretNames(record, record.envVars ?? {}), derived.secretEnvVars)) drift.push('secretEnvVars');
   if (!isDeepStrictEqual(bootstrapShape(record.credentialBootstrap, harness), bootstrapShape(derived.credentialBootstrap, harness))) {
     drift.push('credentialBootstrap');
   }

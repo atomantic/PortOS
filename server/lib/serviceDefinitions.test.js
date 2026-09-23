@@ -98,6 +98,7 @@ describe('SERVICE_DEFINITIONS', () => {
     expect(serviceDefinitionById('openrouter').catalog.planFilter('free', models)).toEqual(['vendor/small:free']);
     expect(serviceDefinitionById('openrouter').catalog.planFilter('paid', models)).toEqual(models);
     expect(serviceDefinitionById('opencode-zen').catalog.planFilter('free', models)).toEqual(['big-pickle-free']);
+    expect(serviceDefinitionById('opencode-zen').catalog.planFilter('free', ['opencode/big-pickle', 'opencode/claude-opus-5'])).toEqual(['opencode/big-pickle']);
     expect(serviceDefinitionById('nvidia-nim').catalog.planFilter).toBeUndefined();
   });
 });

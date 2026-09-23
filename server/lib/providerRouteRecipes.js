@@ -374,6 +374,7 @@ const serviceConnectionKind = ({ definition, slug }) =>
  *   - `SERVICE_ENDPOINT_REQUIRED` — the binding needs a base URL the instance
  *     does not declare (a local daemon's port is an install-specific fact)
  *   - `SERVICE_CREDENTIAL_REQUIRED` — the program refuses to start without one
+ *     (a binding's `optionalOnPlans` names the plans it starts keyless on)
  *   - `SERVICE_CREDENTIAL_BOOTSTRAP_REQUIRED` — the instance's credential is
  *     minted by a bootstrap CLI at spawn, and none was supplied
  *
@@ -463,7 +464,8 @@ export function materializeRouteOutcome({
   const credentialEnvName = credentialVia === 'gatewayEnv'
     ? definition.gateway.apiKeyEnv
     : credentialVia === 'env' ? credential.name ?? definition.credential.envVars[0] ?? null : null;
-  const credentialRequired = credential?.required === true && instance.credentialVia !== 'bootstrap';
+  const credentialRequired = credential?.required === true && instance.credentialVia !== 'bootstrap'
+    && !credential.optionalOnPlans?.includes(instance.plan);
   if (credentialRequired && apiKey === '') {
     return refuse('SERVICE_CREDENTIAL_REQUIRED',
       `${harness.label} will not start without a ${credentialEnvName || 'key'} for ${definition.label}. Set one first — any non-empty value works for a local daemon that ignores it.`);

@@ -103,6 +103,14 @@ let graphEnabled = false;
 /** Re-entrancy latch: a projection's own file write must not re-trigger a pass. */
 let reconciling = false;
 let queue = Promise.resolve();
+/**
+ * Why each routed legacy record stayed legacy on the LAST pass (#7565), by
+ * provider id. The editor offers "Convert to derived preset" only where this
+ * holds no reason: the conversion runs the very same pass, so a record the pass
+ * just refused would refuse again (the pre-fix editor offered the button to
+ * every shipped preset it could never convert).
+ */
+let presetSkipReasons = new Map();
 
 /**
  * One-at-a-time execution. A rejected pass must not poison the next one.
@@ -117,11 +125,15 @@ export { serialize as serializeProviderGraph };
 
 export const providerGraphEnabled = () => graphEnabled;
 
+/** The reason the last pass left `providerId` a legacy preset, or null when it did not refuse it. */
+export const presetSkipReason = (providerId) => presetSkipReasons.get(providerId) ?? null;
+
 /** Test seam: reset module state between suites. */
 export function resetProviderGraphState() {
   graphEnabled = false;
   reconciling = false;
   queue = Promise.resolve();
+  presetSkipReasons = new Map();
 }
 
 const providerService = () => requireToolkit().services.providers;
@@ -214,6 +226,7 @@ async function reconcilePass(reason) {
     bindings: [...graph.bindings, ...plan.imports.bindings],
     routes: [...graph.routes.filter((route) => !removed.has(route.providerId)), ...plan.imports.routes],
   }, providers);
+  presetSkipReasons = new Map(presets.skipped.map(({ id, reason }) => [id, reason]));
 
   const detached = plan.regroups.filter((regroup) => regroup.connectionAction === 'clone').length;
   const split = plan.regroups.filter((regroup) => !regroup.bindingId).length;
@@ -448,7 +461,7 @@ export async function previewBindingLink(input) {
   const { graph, binding, source, target } = await resolveLink(input);
   const routes = graph.routes.filter((route) => route.bindingId === binding.id);
   const { differences } = compareBackendEndpoints(asProfile(source), asProfile(target));
-  const catalogDiffers = source.catalog.models.join(' ') !== target.catalog.models.join(' ');
+  const catalogDiffers = source.catalog.models.join('\u0000') !== target.catalog.models.join('\u0000');
 
   return {
     bindingId: binding.id,

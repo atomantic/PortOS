@@ -6,6 +6,7 @@ import {
   createConnection,
   getManagementGraph,
   linkBinding,
+  presetSkipReason,
   previewBindingLink,
   refreshConnectionCatalog,
   removeConnection,
@@ -213,10 +214,11 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     publicReviewActionsSupported: publicReviewPostures.includes(PUBLIC_REVIEW_ACTIONS_POSTURE),
     // Preset structure (#7565): `derived` when the record names the service it
     // is materialized from, else `legacy`; and whether a legacy record is a
-    // candidate for "Convert to derived preset" (pure over the record — the
-    // conversion itself still proves the fixpoint against the service).
+    // candidate for "Convert to derived preset": pure over the record, AND not
+    // refused by the last reconcile pass — the conversion re-runs that pass, so
+    // a record it just left legacy would only fail again (#7565).
     presetKind: presetKind(provider),
-    presetDerivable: presetDerivable(provider),
+    presetDerivable: presetDerivable(provider) && !presetSkipReason(provider?.id),
   });
 };
 
