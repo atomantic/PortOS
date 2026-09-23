@@ -19,6 +19,7 @@ export { default as useAutoSizeTextarea } from './useAutoSizeTextarea.js';
 export { default as useChartColors } from './useChartColors.js';
 export * from './useChartColors.js';
 export { default as useClickOutside } from './useClickOutside.js';
+export { default as useCancelableDebounce } from './useCancelableDebounce.js';
 export { default as useConfirmDelete } from './useConfirmDelete.js';
 export { default as useColorMatch } from './useColorMatch.js';
 export { default as useContainerWidth } from './useContainerWidth.js';

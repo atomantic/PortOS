@@ -19,6 +19,7 @@ import MediaImage from '../components/MediaImage';
 import SyncBadge from '../components/sync/SyncBadge';
 import { useSyncIntegrity, syncBadgeStatus } from '../hooks/useSyncIntegrity';
 import useUrlParams from '../hooks/useUrlParams';
+import useCancelableDebounce from '../hooks/useCancelableDebounce';
 
 // Cap for the card title AFTER the auto-creator prefix moves to its badge.
 // Middle-truncating at this length keeps the trailing date/qualifier — the only
@@ -100,6 +101,10 @@ export default function MediaCollections() {
       // make the create read as broken. Navigating is the one feedback that
       // holds regardless of the filter row, and an empty bucket exists to be
       // filled anyway.
+      // Drop any pending query→URL mirror write first — it would otherwise be
+      // free to fire after this navigation and clobber the detail route back
+      // to the list route (#8187).
+      cancelQueryMirror();
       navigate(`/media/collections/${encodeURIComponent(created.id)}`);
     }
   };
@@ -159,14 +164,20 @@ export default function MediaCollections() {
   // history write + full route re-render per keystroke.
   const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [mirroredQuery, setMirroredQuery] = useState(() => searchParams.get('q') || '');
+  // Cancelable so a route change (opening the just-created collection) can
+  // drop a still-pending mirror write before it fires — otherwise the stale
+  // write can land after the navigation and clobber it back to the list
+  // route (#8187). React's own unmount cleanup isn't enough: it runs
+  // asynchronously relative to the `navigate()` call in `handleCreate`, and
+  // under load the gap can outlast the 300ms debounce.
+  const [scheduleQueryMirror, cancelQueryMirror] = useCancelableDebounce();
   useEffect(() => {
-    const t = setTimeout(() => {
+    scheduleQueryMirror(() => {
       const trimmed = query.trim();
       setMirroredQuery(trimmed);
       updateParams({ q: trimmed }, { replace: true });
     }, 300);
-    return () => clearTimeout(t);
-  }, [query, updateParams]);
+  }, [query, updateParams, scheduleQueryMirror]);
 
   // Adopt an externally-changed `?q=` (Back/Forward, or a ⌘K/voice link while
   // this page stays mounted). Our own debounced write lands `urlQuery ===
