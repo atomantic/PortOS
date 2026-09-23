@@ -23,6 +23,7 @@ const store = {
   relinkBinding: vi.fn().mockResolvedValue(undefined),
   deleteConnection: vi.fn(),
   detachBindingToConnection: vi.fn().mockResolvedValue(undefined),
+  saveConnectionSettings: vi.fn().mockResolvedValue(2),
 };
 vi.mock('./providerGraphStore.js', () => store);
 
@@ -33,6 +34,11 @@ const providers = {
 vi.mock('../lib/aiToolkitState.js', () => ({
   requireToolkit: () => ({ services: { providers } }),
 }));
+
+// `updateConnectionSettings` re-derives every DERIVED preset on the row it
+// just saved, which reads the bootstrap-apps table — kept doubled and empty
+// so this file never reaches `settings.js`'s real file store.
+vi.mock('./credentialBootstrapApps.js', () => ({ listCredentialBootstraps: vi.fn().mockResolvedValue({}) }));
 
 const graph = await import('./providerGraph.js');
 
@@ -203,6 +209,49 @@ describe('reconciliation', () => {
     store.readGraph.mockClear();
     await graph.onProvidersSaved();
     expect(store.readGraph).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('connection settings keep the preset-conversion cache live (#8159)', () => {
+  it('updates presetSkipReason for this connection\'s legacy routes on the SAME write, not the next reconcile pass', async () => {
+    // The connection's base URL does not yet match the routed legacy
+    // record's own ANTHROPIC_BASE_URL, so the boot pass leaves it legacy —
+    // re-deriving it would rewrite the env var it already carries.
+    const fixture = graphFixture();
+    fixture.connections[0] = connection(CONN_A, 'http://127.0.0.1:19999', 'ollama');
+    store.readGraph.mockResolvedValue(fixture);
+    const { harnessId, method, serviceId, ...legacy } = structuredClone(CLAUDE);
+    providers.getAllProviders.mockResolvedValue({ activeProvider: 'claude-ollama', providers: [legacy] });
+
+    await graph.initProviderGraph();
+    expect(graph.presetSkipReason('claude-ollama')).toMatch(/^drift:/);
+
+    // Fixing the connection's own base URL makes re-deriving the record a
+    // fixpoint. A connection-settings edit never writes `providers.json`, so
+    // `onProvidersSaved` never fires and no reconcile pass runs — the cache
+    // must still answer correctly right after THIS write.
+    await graph.updateConnectionSettings({
+      connectionId: CONN_A, expectedRevision: 1, transports: { anthropic: { baseUrl: 'http://127.0.0.1:11434' } },
+    });
+    expect(graph.presetSkipReason('claude-ollama')).toBeNull();
+
+    // And the reverse: moving the connection back off the record's own
+    // ANTHROPIC_BASE_URL makes it drift again, live, the same way.
+    await graph.updateConnectionSettings({
+      connectionId: CONN_A, expectedRevision: 1, transports: { anthropic: { baseUrl: 'http://127.0.0.1:19999' } },
+    });
+    expect(graph.presetSkipReason('claude-ollama')).toMatch(/^drift:/);
+  });
+
+  it('leaves an unrelated connection\'s cached verdict untouched', async () => {
+    await graph.initProviderGraph();
+    expect(graph.presetSkipReason('claude-ollama')).toBeNull();
+    // CONN_B carries no routes in the fixture, so this is a no-op scan, not a
+    // crash on an empty route list.
+    await expect(graph.updateConnectionSettings({
+      connectionId: CONN_B, expectedRevision: 1, label: 'Renamed',
+    })).resolves.toMatchObject({ connectionId: CONN_B });
+    expect(graph.presetSkipReason('claude-ollama')).toBeNull();
   });
 });
 

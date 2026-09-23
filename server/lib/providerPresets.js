@@ -276,7 +276,17 @@ const orNull = (value) => value ?? null;
  */
 export function derivedPresetDrift(record, derived, harness) {
   const drift = [];
-  for (const key of ['type', 'command', ...BACKEND_MARKER_KEYS]) {
+  // A `*Backed`/`gatewayBacked` marker is read back by `localRuntimeNamespace`
+  // to give a WRAPPER command its local namespace; `materializeRoute` writes
+  // one onto every local-runtime composition regardless, including a direct
+  // `type: 'api'` record that spawns nothing and never reads it. The shipped
+  // `ollama` / `lmstudio` / `mtplx` samples predate the graph and carry none,
+  // so comparing markers on a recipe-less (direct) harness would refuse a
+  // fixpoint conversion over a field the record's own execution path ignores
+  // (#8159). A WRAPPER's marker still participates — it is what makes
+  // `opencode-orcarouter`'s legacy `orcarouterBacked` a real drift.
+  const markerKeys = harness.recipe ? BACKEND_MARKER_KEYS : [];
+  for (const key of ['type', 'command', ...markerKeys]) {
     if (!isDeepStrictEqual(orNull(record[key]), orNull(derived[key]))) drift.push(key);
   }
   // A wrapper that names its endpoint only inside its env or inline config
@@ -336,6 +346,66 @@ export function derivedPresetPatch(record, derived) {
 }
 
 /**
+ * The backfill verdict for ONE legacy record already resolved onto the graph
+ * — the additive structural patch when re-deriving it from `connection` is a
+ * FIXPOINT, or the reason it stays legacy. Pulled out of `planPresetBackfill`'s
+ * loop body (#8159) so a caller that already knows which route/connection a
+ * record sits on can ask the exact same question about just THAT record,
+ * without rebuilding the whole-graph maps `planPresetBackfill` needs to
+ * resolve every record at once. `providerGraph.js`'s
+ * `refreshPresetSkipReasonsForConnection` is the worked example: a connection
+ * SETTINGS edit changes what this verdict answers for every legacy route on
+ * that one connection, without writing `providers.json` (so it never triggers
+ * the reconcile pass that would otherwise keep `presetSkipReason` current).
+ *
+ * `route`, `connection` and `instance` arrive pre-resolved (a caller looping
+ * over many records resolves an instance once per connection; a single-record
+ * caller resolves it inline) rather than re-read here, so this function stays
+ * pure over its inputs.
+ *
+ * @param {object} record - a LEGACY provider record (caller has already
+ *   excluded a derived preset)
+ * @param {{route: object|null, connection: object|null, instance: object|null,
+ *          bootstraps?: object, env?: object}} resolved
+ * @returns {{patch: object, reason: null} | {patch: null, reason: string}}
+ */
+export function presetBackfillVerdict(record, { route, connection, instance, bootstraps = {}, env = process.env }) {
+  const refuse = (reason) => ({ patch: null, reason });
+  if (!route) return refuse('unmapped');
+  if (!connection?.slug) return refuse('service-unnamed');
+  if (!instance) return refuse('service-undefined');
+  const harness = harnessForProvider(record);
+  if (!harness) return refuse('harness-unknown');
+  if (!spawnsRecipeBinary(record, harness)) return refuse('command-differs');
+
+  const match = matchBootstrapApp(record.credentialBootstrap, harness, bootstraps);
+  if (record.credentialBootstrap?.command && !match) return refuse('bootstrap-unmatched');
+  const structural = {
+    harnessId: harness.id,
+    method: record.type,
+    serviceId: connection.slug,
+    ...(match ? { credentialBootstrapId: match.slug } : {}),
+  };
+  const listed = listedModels(instance, connection.catalog);
+  const models = Array.isArray(record.models) ? record.models : [];
+  if (listed.length > 0 && !isDeepStrictEqual(listed, models) && models.every((model) => listed.includes(model))) {
+    structural.catalogNarrowing = [...models];
+  }
+
+  const { record: derived, error } = materializeDerivedPreset({
+    record: { ...record, ...structural },
+    harness,
+    instance,
+    catalog: connection.catalog,
+    bootstrap: match ? bootstrapInputFor(match.slug, match.app) : null,
+  });
+  if (error) return refuse(error.code);
+  const drift = derivedPresetDrift(record, derived, harness);
+  if (drift.length > 0) return refuse(`drift:${drift.join(',')}`);
+  return { patch: structural, reason: null };
+}
+
+/**
  * The boot-time backfill (#7565): every LEGACY record the graph already routes
  * onto a named service instance, stamped with the structural keys that make it
  * a derived preset — but ONLY when re-deriving it from that service reproduces
@@ -348,7 +418,10 @@ export function derivedPresetPatch(record, derived) {
  * Row-derived, idempotent (a stamped record is skipped) and never a seed:
  * it needs the graph, so it rides the reconcile pass exactly as the
  * service-column backfill does. Everything it refuses is reported with a
- * reason so a human can see why a record stayed legacy.
+ * reason so a human can see why a record stayed legacy — the per-record rule
+ * is {@link presetBackfillVerdict}; this loop only resolves each record onto
+ * the graph (caching one service instance per connection across mode
+ * siblings) and collects the verdicts.
  *
  * @param {{graph: {connections: object[], bindings: object[], routes: object[]},
  *          providers: object[], bootstraps?: object, env?: object}} input
@@ -369,42 +442,12 @@ export function planPresetBackfill({ graph, providers, bootstraps = {}, env = pr
 
   for (const record of providers) {
     if (!record || typeof record !== 'object' || !record.id || isDerivedPreset(record)) continue;
-    const skip = (reason) => skipped.push({ id: record.id, reason });
-    const route = routes.get(record.id);
-    if (!route) { skip('unmapped'); continue; }
-    const connection = connections.get(bindings.get(route.bindingId)?.connectionId);
-    if (!connection?.slug) { skip('service-unnamed'); continue; }
-    const instance = instanceFor(connection);
-    if (!instance) { skip('service-undefined'); continue; }
-    const harness = harnessForProvider(record);
-    if (!harness) { skip('harness-unknown'); continue; }
-    if (!spawnsRecipeBinary(record, harness)) { skip('command-differs'); continue; }
-
-    const match = matchBootstrapApp(record.credentialBootstrap, harness, bootstraps);
-    if (record.credentialBootstrap?.command && !match) { skip('bootstrap-unmatched'); continue; }
-    const structural = {
-      harnessId: harness.id,
-      method: record.type,
-      serviceId: connection.slug,
-      ...(match ? { credentialBootstrapId: match.slug } : {}),
-    };
-    const listed = listedModels(instance, connection.catalog);
-    const models = Array.isArray(record.models) ? record.models : [];
-    if (listed.length > 0 && !isDeepStrictEqual(listed, models) && models.every((model) => listed.includes(model))) {
-      structural.catalogNarrowing = [...models];
-    }
-
-    const { record: derived, error } = materializeDerivedPreset({
-      record: { ...record, ...structural },
-      harness,
-      instance,
-      catalog: connection.catalog,
-      bootstrap: match ? bootstrapInputFor(match.slug, match.app) : null,
-    });
-    if (error) { skip(error.code); continue; }
-    const drift = derivedPresetDrift(record, derived, harness);
-    if (drift.length > 0) { skip(`drift:${drift.join(',')}`); continue; }
-    patches[record.id] = structural;
+    const route = routes.get(record.id) ?? null;
+    const connection = route ? connections.get(bindings.get(route.bindingId)?.connectionId) ?? null : null;
+    const instance = connection?.slug ? instanceFor(connection) : null;
+    const { patch, reason } = presetBackfillVerdict(record, { route, connection, instance, bootstraps, env });
+    if (reason) { skipped.push({ id: record.id, reason }); continue; }
+    patches[record.id] = patch;
   }
   return { patches, skipped };
 }
