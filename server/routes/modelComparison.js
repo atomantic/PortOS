@@ -3,6 +3,8 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, modelComparisonImportSchema, modelComparisonDiscoverySchema, modelComparisonSyncSchema } from '../lib/validation.js';
 import { getModelComparison, importModelComparison } from '../services/modelComparison.js';
 import { hasArtificialAnalysisKey, syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
+import { syncOpenRouterCatalog, syncOpenRouterEndpointCatalog } from '../services/openrouterBenchmarks.js';
+import { syncEpochAiCatalog } from '../services/epochAiBenchmarks.js';
 import { syncSwebenchCatalog } from '../services/swebenchBenchmarks.js';
 import { syncLiveCodeBenchCatalog } from '../services/livecodebenchBenchmarks.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
@@ -14,6 +16,9 @@ import { applyModelAccess } from '../lib/aiToolkit/internal/modelAccess.js';
 // presence travels separately on GET — never the key itself.
 const BENCHMARK_SYNC_SOURCES = Object.freeze({
   'artificial-analysis': { label: 'Artificial Analysis', requiresKey: true, sync: syncArtificialAnalysisCatalog },
+  openrouter: { label: 'OpenRouter routed pricing', requiresKey: false, sync: () => syncOpenRouterCatalog() },
+  'openrouter-endpoints': { label: 'OpenRouter serving endpoints', requiresKey: false, sync: () => syncOpenRouterEndpointCatalog() },
+  'epoch-ai': { label: 'Epoch AI benchmarks', requiresKey: false, sync: () => syncEpochAiCatalog() },
   swebench: { label: 'SWE-bench leaderboards', requiresKey: false, sync: () => syncSwebenchCatalog() },
   livecodebench: { label: 'LiveCodeBench', requiresKey: false, sync: () => syncLiveCodeBenchCatalog() },
 });

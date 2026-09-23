@@ -192,6 +192,9 @@ it('exposes the sync sources and syncs each keyless source without a key', async
   const listed = (await request(app).get('/comparison')).body.syncSources;
   expect(listed).toEqual([
     { id: 'artificial-analysis', label: 'Artificial Analysis', requiresKey: true },
+    { id: 'openrouter', label: 'OpenRouter routed pricing', requiresKey: false },
+    { id: 'openrouter-endpoints', label: 'OpenRouter serving endpoints', requiresKey: false },
+    { id: 'epoch-ai', label: 'Epoch AI benchmarks', requiresKey: false },
     { id: 'swebench', label: 'SWE-bench leaderboards', requiresKey: false },
     { id: 'livecodebench', label: 'LiveCodeBench', requiresKey: false },
   ]);

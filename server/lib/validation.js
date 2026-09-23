@@ -2245,7 +2245,9 @@ export const modelComparisonObservationSchema = z.object({
 }).strict();
 export const modelComparisonImportSchema = z.object({
   schemaVersion: z.literal(1),
-  observations: z.array(modelComparisonObservationSchema).min(1).max(2000),
+  // The on-demand Epoch AI sync imports several thousand independently
+  // attributed model/benchmark/configuration rows in one atomic catalog merge.
+  observations: z.array(modelComparisonObservationSchema).min(1).max(12000),
 }).strict().superRefine((value, ctx) => {
   const ids = new Set();
   value.observations.forEach((row, index) => {
