@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import TaskAddForm from './TaskAddForm';
@@ -1083,6 +1083,28 @@ describe('TaskAddForm layout ordering', () => {
 
     expect(screen.getByLabelText('Attach screenshots')).toBeInTheDocument();
     expect(screen.getByLabelText('Attach files')).toBeInTheDocument();
+  });
+
+  it('renders an Add button at the bottom next to queue position selector in queueFirst mode when expanded', async () => {
+    const user = userEvent.setup();
+    api.addCosTask.mockResolvedValue({ id: 'bottom-task' });
+    render(<TaskAddForm queueFirst providers={[]} apps={[{ id: 'portos', name: 'PortOS' }]} onTaskAdded={vi.fn()} />);
+    await act(async () => {});
+
+    await user.type(screen.getByRole('textbox', { name: /Task description/ }), 'Test task from bottom button');
+    await user.click(screen.getByRole('button', { name: 'Task configuration' }));
+
+    const queueLabel = screen.getByText('Queue:');
+    expect(queueLabel).toBeInTheDocument();
+
+    const bottomContainer = queueLabel.closest('div.flex-wrap');
+    expect(bottomContainer).toBeInTheDocument();
+
+    const bottomAddButton = within(bottomContainer).getByRole('button', { name: 'Add' });
+    expect(bottomAddButton).toBeInTheDocument();
+
+    await user.click(bottomAddButton);
+    expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ description: 'Test task from bottom button' }), { silent: true });
   });
 });
 
