@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, FileCode2, Globe, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
-import { Link, useSearchParams } from 'react-router';
+import { AlertTriangle, CheckCircle2, Clock3, Copy, FileCode2, Globe, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import CodeAnimationPreview from '../components/codeAnimation/CodeAnimationPreview';
@@ -12,6 +12,7 @@ import {
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   getCodeAnimationOptions,
+  listCodeAnimationJobs,
   listMoodBoardNames,
   listUniverseNames,
   listUniverseStyles,
@@ -21,9 +22,11 @@ import {
 import { copyToClipboard } from '../lib/clipboard';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../lib/safeStorage';
 import { readFileAsBase64, UPLOAD_IMAGE_ACCEPT, validateImageFile } from '../utils/fileUpload';
+import { formatCount, timeAgo } from '../utils/formatters';
 
 const DRAFT_KEY = 'portos.codeAnimation.draft';
 const JOB_POLL_MS = 3_000;
+const GALLERY_POLL_MS = 10_000;
 // Mood-board choice sentinels: follow the universe's linked board, or none.
 const BOARD_FOLLOW_UNIVERSE = 'universe';
 const BOARD_NONE = 'none';
@@ -98,6 +101,52 @@ function toBriefIdeaInput(draft) {
   };
 }
 
+function draftFromJob(job) {
+  const input = job?.input || {};
+  const moodBoardChoice = input.moodBoardId === undefined
+    ? BOARD_FOLLOW_UNIVERSE
+    : input.moodBoardId
+      ? input.moodBoardId
+      : BOARD_NONE;
+  return {
+    ...DEFAULT_DRAFT,
+    title: input.title || '',
+    seedIdea: input.seedIdea || '',
+    concept: input.concept || '',
+    onScreenText: input.onScreenText || '',
+    styleNotes: input.styleNotes || '',
+    universeId: input.universeId || '',
+    moodBoardChoice,
+    includeMoodBoardImages: input.includeMoodBoardImages !== false,
+    referenceImages: (Array.isArray(input.referenceImages) ? input.referenceImages : []).map((image) => ({
+      ...image,
+      url: `/api/uploads/${encodeURIComponent(image.filename)}`,
+    })),
+    audio: input.audio
+      ? { ...input.audio, url: `/api/uploads/${encodeURIComponent(input.audio.filename)}` }
+      : null,
+    soundtrack: input.soundtrack || 'none',
+    format: { ...DEFAULT_DRAFT.format, ...(input.format || {}) },
+    renderer: input.renderer || 'auto',
+    interactive: input.interactive === true,
+  };
+}
+
+function galleryJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    title: job.title,
+    concept: job.concept || job.input?.concept || '',
+    providerId: job.providerId,
+    model: job.model,
+    error: job.error,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+  };
+}
+
 const readAudioDuration = (file) => new Promise((resolve) => {
   const url = URL.createObjectURL(file);
   const audio = new Audio();
@@ -128,8 +177,10 @@ async function uploadOrToast(file) {
 }
 
 export default function CodeAnimation() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const jobId = searchParams.get('job') || '';
+  const [searchParams] = useSearchParams();
+  const routeParams = useParams();
+  const navigate = useNavigate();
+  const jobId = routeParams.jobId || searchParams.get('job') || '';
   const [options, setOptions] = useState(null);
   const [universes, setUniverses] = useState([]);
   const [universeStyles, setUniverseStyles] = useState({});
@@ -142,11 +193,16 @@ export default function CodeAnimation() {
   const [built, setBuilt] = useState(null);
   const [starting, setStarting] = useState(false);
   const [job, setJob] = useState(null);
+  const [savedJobs, setSavedJobs] = useState([]);
+  const [galleryLoaded, setGalleryLoaded] = useState(false);
+  const [galleryError, setGalleryError] = useState('');
   const [effort, setEffort] = useState('');
   const [briefEffort, setBriefEffort] = useState('');
   const [pastedHtml, setPastedHtml] = useState('');
   const [preview, setPreview] = useState(null);
   const jobIdRef = useRef(jobId);
+  const hydratedJobIdRef = useRef('');
+  const galleryRequestRef = useRef(0);
   const {
     providers,
     selectedProviderId,
@@ -168,6 +224,22 @@ export default function CodeAnimation() {
 
   const update = (patch) => setDraft((prev) => ({ ...prev, ...patch }));
   const updateFormat = (patch) => setDraft((prev) => ({ ...prev, format: { ...prev.format, ...patch } }));
+
+  const refreshGallery = useCallback(async () => {
+    const requestId = ++galleryRequestRef.current;
+    const rows = await listCodeAnimationJobs({ silent: true }).catch((error) => {
+      if (requestId !== galleryRequestRef.current) return null;
+      setGalleryError(error.message || 'Failed to load animation gallery');
+      setGalleryLoaded(true);
+      return null;
+    });
+    if (requestId !== galleryRequestRef.current) return;
+    if (!Array.isArray(rows)) return;
+    setSavedJobs(rows);
+    setGalleryError('');
+    setGalleryLoaded(true);
+  }, []);
+  useAutoRefetch(refreshGallery, GALLERY_POLL_MS, { enabled: true, pollOnly: true });
 
   useEffect(() => { safeWriteJsonStorage(DRAFT_KEY, draft); }, [draft]);
 
@@ -193,10 +265,18 @@ export default function CodeAnimation() {
   // blank-slate idea generator.
   const briefSeeds = !!(draft.universeId || draft.seedIdea.trim() || draft.concept.trim() || draft.title.trim());
   const canWriteBrief = briefSeeds && !writingBrief;
+  const inProgressCount = savedJobs.filter((item) => item.status === 'running').length;
+  const completedCount = savedJobs.filter((item) => item.status === 'completed').length;
 
   // Poll the generation job named in the URL until it settles. The ref drops a
   // response for a job the user has since replaced.
-  useEffect(() => { jobIdRef.current = jobId; }, [jobId]);
+  useEffect(() => {
+    jobIdRef.current = jobId;
+    hydratedJobIdRef.current = '';
+    setJob(null);
+    setPreview(null);
+    setBuilt(null);
+  }, [jobId]);
   const jobSettled = job?.id === jobId && job.status !== 'running';
   const pollJob = useCallback(async () => {
     const requested = jobId;
@@ -209,6 +289,28 @@ export default function CodeAnimation() {
     if (jobIdRef.current !== requested) return;
     setJob(next);
     if (next.status === 'completed' && next.html) setPreview({ html: next.html, audioUrl: next.audioUrl, frame: next.frame });
+    else setPreview(null);
+    if (next.status !== 'missing') {
+      galleryRequestRef.current += 1;
+      setSavedJobs((previous) => [galleryJob(next), ...previous.filter((item) => item.id !== requested)]
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
+    }
+    if (hydratedJobIdRef.current !== requested && next.input) {
+      hydratedJobIdRef.current = requested;
+      const restoredDraft = draftFromJob(next);
+      setDraft(restoredDraft);
+      setSelectedProviderId(next.input.providerId || '');
+      setSelectedModel(next.input.model || '');
+      setEffort(next.input.effort || '');
+      setBuilt(next.prompt ? {
+        prompt: next.prompt,
+        attachments: next.attachments || [],
+        frame: next.frame,
+        audioUrl: next.audioUrl,
+        moodBoardId: next.moodBoardId,
+        briefKey: JSON.stringify(toBrief(restoredDraft)),
+      } : null);
+    }
   }, [jobId]);
   useAutoRefetch(pollJob, JOB_POLL_MS, { enabled: !!jobId && !jobSettled, pollOnly: true });
 
@@ -289,6 +391,7 @@ export default function CodeAnimation() {
     setStarting(true);
     const started = await startCodeAnimationGeneration({
       ...brief,
+      seedIdea: draft.seedIdea,
       providerId: selectedProviderId,
       model: selectedModel || undefined,
       effort: effort || undefined,
@@ -301,9 +404,9 @@ export default function CodeAnimation() {
     setBuilt({ prompt: started.prompt, attachments: started.attachments, frame: started.frame, audioUrl: started.audioUrl, moodBoardId: started.moodBoardId, briefKey });
     setJob(started);
     setPreview(null);
-    const next = new URLSearchParams(searchParams);
-    next.set('job', started.id);
-    setSearchParams(next);
+    galleryRequestRef.current += 1;
+    setSavedJobs((previous) => [galleryJob(started), ...previous.filter((item) => item.id !== started.id)]);
+    navigate(`/code-animation/${encodeURIComponent(started.id)}`);
   };
 
   const handlePreviewPasted = () => {
@@ -321,6 +424,58 @@ export default function CodeAnimation() {
         subtitle="Prompt an LLM to code an animated film, with no assets, in a universe's style, then preview it and record it to video."
         className="rounded-xl border border-port-border bg-port-card"
       />
+
+      <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-gallery-heading">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 id="ca-gallery-heading" className="text-sm font-semibold text-white">Animation gallery</h2>
+            <p className="mt-1 text-xs text-gray-500">
+              {formatCount(inProgressCount)} in progress · {formatCount(completedCount)} completed
+            </p>
+          </div>
+          <Link to="/code-animation" className={buttonSecondary}>
+            <Sparkles className="h-4 w-4" /> New animation
+          </Link>
+        </div>
+        {galleryError && <p role="status" className="text-xs text-port-error">{galleryError}</p>}
+        {!galleryLoaded && <p className="text-xs text-gray-500">Loading animations…</p>}
+        {galleryLoaded && savedJobs.length === 0 && !galleryError && (
+          <p className="text-xs text-gray-500">Generated animations will appear here so you can reopen them later.</p>
+        )}
+        {savedJobs.length > 0 && (
+          <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3">
+            {savedJobs.map((item) => {
+              const StatusIcon = item.status === 'running'
+                ? Clock3
+                : item.status === 'completed'
+                  ? CheckCircle2
+                  : AlertTriangle;
+              const statusLabel = item.status === 'running'
+                ? 'In progress'
+                : item.status === 'completed'
+                  ? 'Completed'
+                  : 'Failed';
+              return (
+                <Link
+                  key={item.id}
+                  to={`/code-animation/${encodeURIComponent(item.id)}`}
+                  aria-current={jobId === item.id ? 'page' : undefined}
+                  className={`min-w-0 rounded-lg border p-3 transition-colors hover:border-port-accent ${jobId === item.id ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-bg/60'}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <StatusIcon className={`h-4 w-4 shrink-0 ${item.status === 'failed' ? 'text-port-error' : item.status === 'completed' ? 'text-port-success' : 'text-port-accent'}`} />
+                    <p className="min-w-0 flex-1 truncate text-sm font-medium text-white">{item.title || item.concept || 'Untitled animation'}</p>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-2 text-xs text-gray-500">
+                    <span>{statusLabel}{item.model ? ` · ${item.model}` : ''}</span>
+                    <span className="shrink-0">{timeAgo(item.createdAt)}</span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
@@ -557,7 +712,7 @@ export default function CodeAnimation() {
                 {generating ? 'Generating…' : 'Generate animation'}
               </button>
               {job?.status === 'failed' && <span className="text-xs text-port-error">Generation failed: {job.error}</span>}
-              {job?.status === 'missing' && <span className="text-xs text-gray-500">That generation is no longer available (it expired or the server restarted).</span>}
+              {job?.status === 'missing' && <span className="text-xs text-gray-500">That generation is no longer available.</span>}
             </div>
             <details className="text-xs text-gray-400">
               <summary className="cursor-pointer select-none">Preview HTML from another LLM</summary>

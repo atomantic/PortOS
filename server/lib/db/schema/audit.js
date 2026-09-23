@@ -2,8 +2,8 @@
 // trigger function, the list of audited tables, and the trigger builder.
 // Extracted verbatim from ensureSchemaImpl() in server/lib/db.js (#2832) with
 // zero behavior change. Parity-locked against server/scripts/init-db.sql by
-// db.ddlParity.test.js — keep auditedTables in sync with the
-// AUDITED_RECORD_TABLES list there.
+// db.ddlParity.test.js — keep auditedTables in sync with the audit triggers
+// in init-db.sql.
 export const auditDdl = [
     // ─── Deletion audit log (incident #1248-follow-up) ──────────────────────
     // Append-only forensic trail of EVERY tombstone (soft-delete), un-tombstone
@@ -84,12 +84,12 @@ export const auditDdl = [
 
 // Attach the audit trigger to every user-authored-content table. Adding a
 // table here is all it takes to audit its deletions. (Keep in sync with the
-// AUDITED_RECORD_TABLES list in init-db.sql.)
+// audit triggers in init-db.sql.)
 export const auditedTables = [
     'universes', 'universe_runs', 'pipeline_series', 'pipeline_issues',
     'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
     'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
-    'catalog_user_types', 'creative_director_projects', 'threejs_models', 'image_to_3d_models', 'sprite_records', 'games', 'mood_boards', 'fableloom_stories',
+    'catalog_user_types', 'creative_director_projects', 'threejs_models', 'image_to_3d_models', 'sprite_records', 'games', 'code_animation_jobs', 'mood_boards', 'fableloom_stories',
     'lora_training_runs', 'authors', 'artists', 'albums', 'tracks', 'tribe_people', 'tribe_touchpoints',
     'tribe_identities',
 ];

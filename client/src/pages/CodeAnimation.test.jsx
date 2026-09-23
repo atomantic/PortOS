@@ -8,6 +8,7 @@ vi.mock('../services/api', () => ({
   generateCodeAnimationBrief: vi.fn(),
   getCodeAnimationJob: vi.fn(),
   getCodeAnimationOptions: vi.fn(),
+  listCodeAnimationJobs: vi.fn().mockResolvedValue([]),
   listMoodBoardNames: vi.fn(),
   listUniverseNames: vi.fn(),
   listUniverseStyles: vi.fn(),

@@ -946,6 +946,23 @@ CREATE TABLE IF NOT EXISTS media_assets (
 -- images-vs-videos. A composite (kind, created_at DESC) serves both.
 CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC);
 
+-- Code Animation jobs. Gallery status/title and the full brief/provider record
+-- live in PostgreSQL; generated HTML stays in data/code-animations/<id>.html.
+-- Machine-local generated work with no peer-sync cursor or tombstone.
+CREATE TABLE IF NOT EXISTS code_animation_jobs (
+  id TEXT PRIMARY KEY,
+  status VARCHAR(16) NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  concept TEXT NOT NULL DEFAULT '',
+  provider_id TEXT,
+  model TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_code_animation_jobs_created ON code_animation_jobs (created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_code_animation_jobs_status_created ON code_animation_jobs (status, created_at DESC);
+
 -- Catalog user-defined types (Phase 4 lead-in, issue #1001). One row per
 -- user-defined ingredient type — the registry that defines catalog row
 -- semantics, moved out of data/settings.json (`catalogUserTypes`) so type
@@ -1921,7 +1938,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Audit trigger on every user-authored-content table. AUDITED_RECORD_TABLES —
--- keep in sync with the auditedTables list in server/lib/db.js.
+-- keep in sync with auditedTables in server/lib/db/schema/audit.js.
 DROP TRIGGER IF EXISTS trg_universes_audit ON universes;
 CREATE TRIGGER trg_universes_audit AFTER UPDATE OR DELETE ON universes FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_universe_runs_audit ON universe_runs;
@@ -1954,6 +1971,8 @@ DROP TRIGGER IF EXISTS trg_sprite_records_audit ON sprite_records;
 CREATE TRIGGER trg_sprite_records_audit AFTER UPDATE OR DELETE ON sprite_records FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_games_audit ON games;
 CREATE TRIGGER trg_games_audit AFTER UPDATE OR DELETE ON games FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_code_animation_jobs_audit ON code_animation_jobs;
+CREATE TRIGGER trg_code_animation_jobs_audit AFTER UPDATE OR DELETE ON code_animation_jobs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_fableloom_stories_audit ON fableloom_stories;
 CREATE TRIGGER trg_fableloom_stories_audit AFTER UPDATE OR DELETE ON fableloom_stories FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_mood_boards_audit ON mood_boards;

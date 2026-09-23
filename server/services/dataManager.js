@@ -76,6 +76,7 @@ export const CATEGORIES = {
   'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false },
   'private': { label: 'Private Keys', description: 'Machine-local integration credentials — managed in Settings > Credentials', archivable: false, deletable: false },
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
+  'code-animations': { label: 'Code Animations', description: 'Generated animation HTML retained with its job history — the only copy of provider-generated work', archivable: true, deletable: false },
   'commission-feedback': { label: 'Commission Feedback', description: 'Reactions on creative commissions (file mirror of the Postgres store)', archivable: true, deletable: false },
   'conflict-journal': { label: 'Conflict Journal', description: 'Peer-sync conflict history — diagnostics only, safe to purge', archivable: true, deletable: true, purgeScope: 'category' },
   'cos': { label: 'Chief of Staff', description: 'Agent data, reports, memories', archivable: true, deletable: false },

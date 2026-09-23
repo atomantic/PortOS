@@ -3,11 +3,10 @@
  * mood board, reference uploads, audio) into prompt inputs, builds the prompt,
  * and optionally runs it through an AI provider to get the animation's HTML.
  *
- * Nothing is persisted: the prompt is returned for the user to copy, and a
- * generation is a short-lived in-memory job the page polls until the HTML is
- * ready. The page then previews, records, and saves the result through the
- * existing gallery-video upload path, which is where the durable artifact
- * lives. A server restart simply forgets in-flight jobs.
+ * Generated jobs are persisted locally: PostgreSQL stores gallery metadata
+ * and the generation brief, while the completed HTML is a managed file asset.
+ * The page can reopen completed work after navigation or restart; a job that
+ * was still running when the server restarted is marked interrupted on read.
  *
  * The heavy dependencies (provider runner, universe + mood-board stores) are
  * imported lazily so the options/prompt path and its tests stay light.
@@ -20,6 +19,14 @@ import { makePathResolver, resolveGalleryImage, resolveImageRef } from '../../li
 import { universeVisualStyleTokens } from '../../lib/universeVisualStyle.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
+import {
+  getCodeAnimationJobRecord,
+  isCodeAnimationJobId,
+  listCodeAnimationJobRecords,
+  readCodeAnimationHtml,
+  saveCodeAnimationHtml,
+  saveCodeAnimationJobRecord,
+} from './jobStore.js';
 import {
   buildCodeAnimationPrompt,
   extractAnimationHtml,
@@ -36,9 +43,10 @@ const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 const resolveUploadImage = makePathResolver(() => PATHS.uploads, { extensions: IMAGE_EXTENSIONS });
 const resolveUploadAudio = makePathResolver(() => PATHS.uploads, { extensions: UPLOAD_AUDIO_EXTENSIONS });
 
-const JOB_TTL_MS = 60 * 60 * 1000;
-const JOBS_MAX = 20;
-const jobs = new Map();
+// This process-local set distinguishes live work from persisted jobs left
+// running by a previous server process. Those are marked interrupted when the
+// gallery or job detail is next read.
+const activeJobs = new Set();
 
 export function getCodeAnimationOptions() {
   return {
@@ -277,27 +285,44 @@ export async function generateCodeAnimationBrief(input) {
   return { brief };
 }
 
-// Drop settled jobs past their TTL, then the oldest settled ones past the cap.
-// A running job is never evicted — its result would have nowhere to land.
-function pruneJobs() {
-  const now = Date.now();
-  const settled = [...jobs.values()].filter((job) => job.status !== 'running')
-    .sort((a, b) => a.updatedAtMs - b.updatedAtMs);
-  let overflow = jobs.size - JOBS_MAX;
-  for (const job of settled) {
-    if (overflow > 0 || now - job.updatedAtMs > JOB_TTL_MS) {
-      jobs.delete(job.id);
-      overflow -= 1;
-    }
-  }
+const jobTitle = (input) => input.title?.trim() || input.concept.slice(0, 120);
+
+function summaryJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    title: job.title,
+    concept: job.concept || job.input?.concept || '',
+    providerId: job.providerId,
+    model: job.model,
+    error: job.error,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    completedAt: job.completedAt,
+  };
 }
 
-const publicJob = ({ updatedAtMs: _updatedAtMs, ...job }) => job;
+async function reconcileJob(job) {
+  if (job.status !== 'running' || activeJobs.has(job.id)) return job;
+  const now = new Date().toISOString();
+  const interrupted = {
+    ...job,
+    status: 'failed',
+    error: 'Generation was interrupted by a server restart',
+    completedAt: now,
+    updatedAt: now,
+  };
+  await saveCodeAnimationJobRecord(interrupted);
+  return interrupted;
+}
 
-function settleJob(id, patch) {
-  const job = jobs.get(id);
-  if (!job) return;
-  jobs.set(id, { ...job, ...patch, completedAt: new Date().toISOString(), updatedAtMs: Date.now() });
+export async function listCodeAnimationJobs() {
+  const records = await listCodeAnimationJobRecords();
+  return Promise.all(records.map(async (job) => {
+    if (job.status !== 'running' || activeJobs.has(job.id)) return summaryJob(job);
+    const record = await getCodeAnimationJobRecord(job.id);
+    return record ? summaryJob(await reconcileJob(record)) : summaryJob(job);
+  }));
 }
 
 async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
@@ -332,39 +357,81 @@ export async function startCodeAnimationGeneration(input) {
     throw new ServerError('Choose an enabled AI provider', { status: 400, code: 'PROVIDER_UNAVAILABLE' });
   }
   const built = await buildCodeAnimationRequest(input, { delivery: provider.type === 'api' ? 'api' : 'cli' });
-  pruneJobs();
   const id = randomUUID();
   const now = new Date().toISOString();
-  jobs.set(id, {
+  const job = {
     id,
     status: 'running',
+    title: jobTitle(input),
+    input,
     providerId: provider.id,
     model: input.model || null,
     frame: built.frame,
     audioUrl: built.audioUrl,
-    html: null,
+    prompt: built.copyPrompt,
+    attachments: built.attachments,
+    moodBoardId: built.moodBoardId,
     error: null,
     runId: null,
+    createdAt: now,
     startedAt: now,
     completedAt: null,
-    updatedAtMs: Date.now(),
+    updatedAt: now,
+  };
+  activeJobs.add(id);
+  await saveCodeAnimationJobRecord(job).catch((error) => {
+    activeJobs.delete(id);
+    throw error;
   });
   console.log(`🎞️ Code animation generation ${id.slice(0, 8)} started on ${provider.id}`);
   runGeneration({ provider, model: input.model, effort: input.effort, prompt: built.prompt, referencePaths: built.referencePaths })
-    .then(({ html, provider: ranOn, model, runId }) => {
-      settleJob(id, { status: 'completed', html, providerId: ranOn, model, runId });
+    .then(async ({ html, provider: ranOn, model, runId }) => {
+      await saveCodeAnimationHtml(id, html);
+      const completedAt = new Date().toISOString();
+      await saveCodeAnimationJobRecord({
+        ...job,
+        status: 'completed',
+        providerId: ranOn,
+        model,
+        runId,
+        completedAt,
+        updatedAt: completedAt,
+      });
+      activeJobs.delete(id);
       console.log(`✅ Code animation generation ${id.slice(0, 8)} completed (${html.length} chars)`);
     })
-    .catch((error) => {
+    .catch(async (error) => {
       const message = String(error?.message || error || 'Generation failed').slice(0, 2_000);
-      settleJob(id, { status: 'failed', error: message });
+      const completedAt = new Date().toISOString();
+      const failed = { ...job, status: 'failed', error: message, completedAt, updatedAt: completedAt };
+      await saveCodeAnimationJobRecord(failed).catch((persistError) => {
+        console.error(`❌ Code animation generation ${id.slice(0, 8)} status could not be saved: ${persistError.message}`);
+      });
+      activeJobs.delete(id);
       console.error(`❌ Code animation generation ${id.slice(0, 8)} failed: ${message}`);
     });
-  return { ...publicJob(jobs.get(id)), prompt: built.copyPrompt, attachments: built.attachments, moodBoardId: built.moodBoardId };
+  return job;
 }
 
-export function getCodeAnimationJob(id) {
-  const job = jobs.get(id);
-  return job ? publicJob(job) : null;
+export async function getCodeAnimationJob(id) {
+  if (!isCodeAnimationJobId(id)) return null;
+  const record = await getCodeAnimationJobRecord(id);
+  if (!record) return null;
+  let job = await reconcileJob(record);
+  if (job.status !== 'completed') return { ...job, html: null };
+  try {
+    return { ...job, html: await readCodeAnimationHtml(job.id) };
+  } catch (error) {
+    if (error?.code !== 'CODE_ANIMATION_OUTPUT_MISSING') throw error;
+    const completedAt = new Date().toISOString();
+    job = {
+      ...job,
+      status: 'failed',
+      error: 'Generated animation file is missing from this installation',
+      completedAt,
+      updatedAt: completedAt,
+    };
+    await saveCodeAnimationJobRecord(job);
+    return { ...job, html: null };
+  }
 }
-

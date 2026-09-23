@@ -6,8 +6,21 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
+const { codeAnimationRecords, codeAnimationHtml } = vi.hoisted(() => ({
+  codeAnimationRecords: new Map(),
+  codeAnimationHtml: new Map(),
+}));
+
 vi.mock('../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-code-animation-') }));
+vi.mock('../services/codeAnimation/jobStore.js', () => ({
+  getCodeAnimationJobRecord: vi.fn(async (id) => codeAnimationRecords.get(id) ?? null),
+  isCodeAnimationJobId: (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id),
+  listCodeAnimationJobRecords: vi.fn(async () => [...codeAnimationRecords.values()]),
+  readCodeAnimationHtml: vi.fn(async (id) => codeAnimationHtml.get(id)),
+  saveCodeAnimationHtml: vi.fn(async (id, html) => codeAnimationHtml.set(id, html)),
+  saveCodeAnimationJobRecord: vi.fn(async (job) => codeAnimationRecords.set(job.id, job)),
+}));
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../services/moodBoard/db.js', () => ({ getBoard: vi.fn() }));
 vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
@@ -71,6 +84,8 @@ afterAll(cleanupTempDataRoots);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  codeAnimationRecords.clear();
+  codeAnimationHtml.clear();
   getUniverse.mockResolvedValue(UNIVERSE);
   getBoard.mockResolvedValue(BOARD);
   resolveProviderAndModel.mockResolvedValue({ provider: { id: 'api-1', type: 'api' }, selectedModel: 'example-model' });
