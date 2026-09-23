@@ -1514,10 +1514,8 @@ describe('cos.js source — priority + capacity invariants', () => {
   it('agentLifecycle stamps the resolved endpoint onto the agent record (#4834)', () => {
     // Counting a running agent by provider id alone breaks when the provider is
     // edited or deleted while the agent still holds the GPU.
-    const LIFECYCLE_SRC = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8');
-    // Stamped through the SAME resolver the counter reads with, so writer and
-    // reader cannot drift on where a CLI provider records its daemon.
-    expect(LIFECYCLE_SRC).toMatch(/providerEndpoint:\s*providerBaseUrl\(provider\)/);
+    const DISPATCH_SRC = readFileSync(join(__dirname, 'agentSpawnDispatch.js'), 'utf-8');
+    expect(DISPATCH_SRC).toMatch(/providerEndpoint:\s*providerBaseUrl\(provider\)/);
   });
 
   it('forceSpawnTask refuses synchronously when the local endpoint is full (#4834)', () => {

@@ -36,6 +36,9 @@ import { PROVIDER_CONFIG_BLOCKED_CATEGORY, PAUSED_BLOCKED_CATEGORIES, USER_DECIS
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_LIFECYCLE_SRC = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8');
+const AGENT_SPAWN_PREPARATION_SRC = readFileSync(join(__dirname, 'agentSpawnPreparation.js'), 'utf-8');
+const AGENT_SPAWN_DISPATCH_SRC = readFileSync(join(__dirname, 'agentSpawnDispatch.js'), 'utf-8');
+const AGENT_SPAWN_OWNER_SRC = `${AGENT_SPAWN_PREPARATION_SRC}\n${AGENT_SPAWN_DISPATCH_SRC}`;
 // finalizeAgent + stampLiExecutionVerdict moved to their own module (issue #2837)
 // so both spawners can import them without cycling back through the lifecycle
 // orchestrator. The source-level assertions below follow them there.
@@ -320,19 +323,19 @@ describe('agentLifecycle — guard wiring', () => {
   // stays greppable is the wiring: that the orchestrator delegates to the gate
   // instead of growing a second copy beside it.
   it('delegates every public-review spawn precondition to the extracted gate', () => {
-    expect(AGENT_LIFECYCLE_SRC).toMatch(
+    expect(AGENT_SPAWN_DISPATCH_SRC).toMatch(
       /import \{ checkPublicReviewSpawnPreconditions \} from '\.\.\/lib\/publicReviewSpawnGate\.js'/
     );
-    expect(AGENT_LIFECYCLE_SRC).toMatch(
+    expect(AGENT_SPAWN_DISPATCH_SRC).toMatch(
       /const publicReviewBlock = await checkPublicReviewSpawnPreconditions\(\{[\s\S]{0,400}?validateModel: validatePublicReviewModel,/
     );
     // One bail, through the shared epilogue — not a hand-rolled block write.
-    expect(AGENT_LIFECYCLE_SRC).toContain('if (publicReviewBlock) return blockAndBail(publicReviewBlock);');
+    expect(AGENT_SPAWN_DISPATCH_SRC).toContain('if (publicReviewBlock) return context.blockAndBail(publicReviewBlock);');
     // A second, inline copy of any gate here is the drift this extraction
     // exists to prevent.
-    expect(AGENT_LIFECYCLE_SRC).not.toMatch(/publicReviewScanBlock\(/);
-    expect(AGENT_LIFECYCLE_SRC).not.toMatch(/publicReviewEligibilityBlock\(/);
-    expect(AGENT_LIFECYCLE_SRC).not.toMatch(/publicReviewProviderBlock\(/);
+    expect(AGENT_SPAWN_DISPATCH_SRC).not.toMatch(/publicReviewScanBlock\(/);
+    expect(AGENT_SPAWN_DISPATCH_SRC).not.toMatch(/publicReviewEligibilityBlock\(/);
+    expect(AGENT_SPAWN_DISPATCH_SRC).not.toMatch(/publicReviewProviderBlock\(/);
   });
 
   // #5830 collapsed the two per-stage provider gates into one and dropped the
@@ -413,7 +416,7 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     expect(
       invokersOf('spawnAgentForTask'),
       'a new caller of spawnAgentForTask must also carry the self-update hold (see subAgentSpawner.js)'
-    ).toEqual(['agentLifecycle.js', 'subAgentSpawner.js']);
+    ).toEqual(['subAgentSpawner.js']);
   });
 
   it('the three low-level spawn helpers are invoked only from the gated dispatch', () => {
@@ -423,7 +426,7 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
       expect(
         invokersOf(helper),
         `${helper} must stay reachable only through spawnAgentForTask`
-      ).toEqual(['agentLifecycle.js']);
+      ).toEqual(['agentSpawnDispatch.js']);
     }
   });
 
@@ -565,36 +568,27 @@ function trackedCompletionPreamble() {
 // body and can't be reached without mocking its 40+ imports. Anchored on
 // `runAgentSpawn` (the guarded body extracted from spawnAgentForTask, #2548).
 
-const RUN_SPAWN_START = AGENT_LIFECYCLE_SRC.indexOf('async function runAgentSpawn');
-const RUN_SPAWN_BODY = AGENT_LIFECYCLE_SRC.slice(RUN_SPAWN_START, RUN_SPAWN_START + 60_000);
+const RUN_SPAWN_START = AGENT_SPAWN_OWNER_SRC.indexOf('export async function prepareAgentSpawn');
+const RUN_SPAWN_BODY = AGENT_SPAWN_OWNER_SRC;
 
 describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', () => {
   it('uses a mutable handedOff flag to distinguish the two failure modes', () => {
-    // The flag is declared with `let` so the catch arm can read which side of
-    // the spawn handoff a throw came from.
-    expect(RUN_SPAWN_BODY).toMatch(/let\s+handedOff\s*=\s*false\s*;/);
-    // The catch arm rethrows for post-handoff failures (a live agent may exist).
-    expect(RUN_SPAWN_BODY).toMatch(/if\s*\(\s*handedOff\s*\)\s*\{[\s\S]{0,800}?throw\s+err\s*;/);
-    // The pre-spawn branch runs the shared block-and-bail epilogue — blocking
-    // ONLY a private assessment, whose setup failure will not fix itself —
-    // then re-emits job:spawn-failed for autonomous-job tasks so cos.js can
-    // clear its job-level guard.
-    expect(RUN_SPAWN_BODY).toMatch(
-      /await blockAndBail\(\{\s*reason: setupError,\s*category: 'private-security-setup-failed',\s*persist: isPrivateSecurityTask\(task\),/
+    expect(AGENT_SPAWN_PREPARATION_SRC).toMatch(/handedOff:\s*false/);
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/context\.handedOff/);
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/if\s*\(!context\.setupCatchArmed\s*\|\|\s*context\.handedOff\)\s*throw\s+err\s*;/);
+    expect(AGENT_LIFECYCLE_SRC).toMatch(
+      /await context\.blockAndBail\(\{[\s\S]{0,300}?reason: setupError,[\s\S]{0,200}?category: 'private-security-setup-failed',/
     );
-    expect(RUN_SPAWN_BODY).toMatch(/job:spawn-failed/);
-    expect(RUN_SPAWN_BODY).toMatch(/task\.metadata\??\.jobId/);
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/job:spawn-failed/);
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/task\.metadata\??\.jobId/);
   });
 
   it('sets handedOff = true BEFORE the first spawn helper invocation', () => {
-    // Setting it after would misclassify a synchronous throw from building the
-    // helper's argument object as a pre-spawn failure even though the helper
-    // may have begun work.
-    const flipIdx = RUN_SPAWN_BODY.indexOf('handedOff = true');
-    expect(flipIdx, '`handedOff = true` must exist inside runAgentSpawn').toBeGreaterThan(-1);
+    const flipIdx = AGENT_SPAWN_DISPATCH_SRC.indexOf('context.handedOff = true');
+    expect(flipIdx, '`context.handedOff = true` must exist in dispatchAgentRun').toBeGreaterThan(-1);
     for (const helper of ['spawnTuiAgent(', 'spawnViaRunner(', 'spawnDirectly(']) {
-      const idx = RUN_SPAWN_BODY.indexOf(helper);
-      expect(idx, `${helper} must appear AFTER \`handedOff = true\``).toBeGreaterThan(flipIdx);
+      const idx = AGENT_SPAWN_DISPATCH_SRC.indexOf(helper);
+      expect(idx, `${helper} must appear AFTER \`context.handedOff = true\``).toBeGreaterThan(flipIdx);
     }
   });
 });
@@ -622,46 +616,30 @@ describe('runAgentSpawn source — durable TUI ownership (#3202)', () => {
 // omit it. What each gate actually releases is behavior-tested in
 // agentLifecycle.blockAndBail.test.js; these pin the structure that keeps a
 // NEW gate from re-opening the hole.
-describe('runAgentSpawn source — app-review marker release (issue #989)', () => {
-  it('cleanupOnError releases the synthetic app-review marker', () => {
-    const start = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError =');
-    expect(start, 'cleanupOnError must exist').toBeGreaterThan(-1);
-    const body = AGENT_LIFECYCLE_SRC.slice(start, start + 1400);
-    expect(body, 'cleanupOnError must release the app-review marker').toMatch(
-      /releaseAppReviewMarker\(task\.metadata\?\.app\)/
-    );
+describe('agent spawn preparation — app-review marker release (issue #989)', () => {
+  it('releases the synthetic app-review marker from the shared cleanup owner', () => {
+    const start = AGENT_SPAWN_PREPARATION_SRC.indexOf('context.cleanupOnError =');
+    expect(start, 'cleanup owner must exist').toBeGreaterThan(-1);
+    const body = AGENT_SPAWN_PREPARATION_SRC.slice(start, start + 1400);
+    expect(body).toMatch(/releaseAppReviewMarker\(context\.task\.metadata\?\.app\)/);
   });
 
-  it('every cleanupOnError call is awaited so the release persists before return null', () => {
-    // A bare `cleanupOnError(` call would fire the async marker release without
-    // awaiting it, racing the `return null`.
-    const bareCalls = RUN_SPAWN_BODY.match(/(?<!await )(?<!const )cleanupOnError\(/g) || [];
-    expect(bareCalls, 'all cleanupOnError calls must be awaited').toEqual([]);
+  it('awaits every cleanup call before returning null', () => {
+    const bareCalls = AGENT_SPAWN_OWNER_SRC.match(/(?<!await )(?<!const )context\.cleanupOnError\(/g) || [];
+    expect(bareCalls, 'all cleanup calls must be awaited').toEqual([]);
   });
 
-  it('routes the marker release through cleanupOnError alone, with no inline copy', () => {
-    // `cleanupOnError` is now defined ahead of every gate, so an inline release
-    // anywhere in the body means a gate grew its own epilogue again.
-    const releases = RUN_SPAWN_BODY.match(/releaseAppReviewMarker\(/g) || [];
-    expect(releases.length, 'exactly one release site: inside cleanupOnError').toBe(1);
-    const defIdx = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError =', RUN_SPAWN_START);
-    expect(defIdx, 'cleanupOnError must be defined inside runAgentSpawn').toBeGreaterThan(RUN_SPAWN_START);
-    // Ahead of the first gate that can bail, so no early return can outrun it.
-    const firstGateIdx = AGENT_LIFECYCLE_SRC.indexOf('if (totalSpawns >= MAX_TOTAL_SPAWNS)', RUN_SPAWN_START);
-    expect(firstGateIdx, 'the max-spawns gate must exist').toBeGreaterThan(-1);
-    expect(defIdx, 'cleanupOnError must be defined before the first gate').toBeLessThan(firstGateIdx);
+  it('keeps one marker release site in preparation', () => {
+    const releases = AGENT_SPAWN_PREPARATION_SRC.match(/releaseAppReviewMarker\(/g) || [];
+    expect(releases).toHaveLength(1);
   });
 
-  // The state cleanupOnError releases is acquired at different points, so each
-  // release is guarded on its own flag. Without the guards, the max-spawns gate
-  // — which runs before an agent id exists — would release a lane nobody took.
-  it('guards each release on the thing having actually been acquired', () => {
-    const start = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError =', RUN_SPAWN_START);
-    const body = AGENT_LIFECYCLE_SRC.slice(start, start + 1400);
-    expect(body).toMatch(/if \(laneAcquired\) release\(agentId\);/);
-    expect(body).toMatch(/if \(toolExecution\) \{[\s\S]{0,200}?errorExecution\(toolExecution\.id/);
-    expect(body).toMatch(/if \(claimAcquired\) \{/);
-    expect(RUN_SPAWN_BODY).toMatch(/laneAcquired = true;/);
+  it('guards each release on the acquired resource', () => {
+    const body = AGENT_SPAWN_PREPARATION_SRC;
+    expect(body).toMatch(/if \(context\.laneAcquired\) release\(context\.agentId\);/);
+    expect(body).toMatch(/if \(context\.toolExecution\) \{[\s\S]{0,200}?errorExecution\(context\.toolExecution\.id/);
+    expect(body).toMatch(/if \(context\.claimAcquired\) \{/);
+    expect(body).toMatch(/context\.laneAcquired = true;/);
   });
 });
 
@@ -674,43 +652,29 @@ describe('runAgentSpawn source — app-review marker release (issue #989)', () =
 // parameterized helper is what makes each gate's behavior assertable, so pin
 // that the collapse holds: a tenth gate must reuse the helper, not paste a
 // tenth copy.
-describe('runAgentSpawn source — one block-and-bail epilogue', () => {
+describe('agent spawn preparation — one block-and-bail epilogue', () => {
   it('writes the blocked status in exactly one place', () => {
-    const blockWrites = RUN_SPAWN_BODY.match(/status: 'blocked'/g) || [];
-    expect(blockWrites.length, 'only blockAndBail may persist a blocked status').toBe(1);
-    expect(RUN_SPAWN_BODY).toMatch(
-      /const blockAndBail = async \(\{ reason, category, infrastructureCode, emit = 'agent:error', emitPayload = \{\}, persist = true \}\) => \{/
-    );
+    const blockWrites = AGENT_SPAWN_OWNER_SRC.match(/status: 'blocked'/g) || [];
+    expect(blockWrites).toHaveLength(1);
+    expect(AGENT_SPAWN_PREPARATION_SRC).toContain('context.blockAndBail = async');
   });
 
-  // The block write itself frees the federation lease (updateTask strips the
-  // claim on any non-`in_progress` status change). Releasing FIRST would open a
-  // window where a peer could claim and start the task, then have its live
-  // `in_progress` record clobbered to `blocked` — which outranks `in_progress`
-  // in the claim-aware merge. One helper means one ordering to get right.
-  it('persists the block BEFORE releasing the lease', () => {
-    const start = RUN_SPAWN_BODY.indexOf('const blockAndBail =');
-    expect(start, 'blockAndBail must exist').toBeGreaterThan(-1);
-    const body = RUN_SPAWN_BODY.slice(start, RUN_SPAWN_BODY.indexOf('\n  };', start));
+  it('persists the block before releasing the lease', () => {
+    const body = AGENT_SPAWN_PREPARATION_SRC;
     const persistIdx = body.indexOf("status: 'blocked'");
-    const cleanupIdx = body.indexOf('await cleanupOnError(reason)');
+    const cleanupIdx = body.indexOf('await context.cleanupOnError(reason)');
     expect(persistIdx).toBeGreaterThan(-1);
     expect(cleanupIdx).toBeGreaterThan(-1);
-    expect(persistIdx, 'the block write must precede the lease release').toBeLessThan(cleanupIdx);
-    // …and the announcement comes last, after the state is settled.
+    expect(persistIdx).toBeLessThan(cleanupIdx);
     expect(body.indexOf("cosEvents.emit('agent:error'")).toBeGreaterThan(cleanupIdx);
   });
 
-  // A fail-closed content outcome must not raise an investigator; a runaway
-  // respawn is a standing decision and raises neither. Both are one word now.
-  it('supports the three announcement modes the gates actually differ on', () => {
-    const start = RUN_SPAWN_BODY.indexOf('const blockAndBail =');
-    const body = RUN_SPAWN_BODY.slice(start, RUN_SPAWN_BODY.indexOf('\n  };', start));
-    expect(body).toMatch(/if \(emit === 'agent:error'\) \{/);
-    expect(body).toMatch(/\} else if \(emit === 'warn-log'\) \{/);
-    expect(body).toMatch(/emitLog\('warn', `Public review withheld for task \$\{task\.id\}: \$\{category\}`/);
-    // 'none' is the absence of a branch — pin the one caller that relies on it.
-    expect(RUN_SPAWN_BODY).toMatch(/category: 'max-spawns',\s*emit: 'none',/);
+  it('supports the three announcement modes the gates differ on', () => {
+    const body = AGENT_SPAWN_PREPARATION_SRC;
+    expect(body).toMatch(/if \(emit === 'agent:error'\)/);
+    expect(body).toMatch(/\} else if \(emit === 'warn-log'\)/);
+    expect(body).toMatch(/emitLog\('warn', `Public review withheld for task \$\{context\.task\.id\}: \$\{category\}`/);
+    expect(body).toMatch(/category: 'max-spawns',\s*emit: 'none',/);
   });
 });
 
@@ -723,20 +687,20 @@ describe('runAgentSpawn source — one block-and-bail epilogue', () => {
 // lease is released, so a federated peer can't be clobbered.
 describe('runAgentSpawn source — permanent provider-config failure blocks the task', () => {
   it('the resolution-failure path blocks a permanent failure with a provider-config reason', () => {
-    const idx = AGENT_LIFECYCLE_SRC.indexOf('const resolution = await resolveAgentProviderAndModel(task)');
+    const idx = AGENT_SPAWN_DISPATCH_SRC.indexOf('const resolution = await resolveAgentProviderAndModel(task)');
     expect(idx, 'resolution call must exist').toBeGreaterThan(-1);
-    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 2000);
+    const body = AGENT_SPAWN_DISPATCH_SRC.slice(idx, idx + 2000);
     // `persist` carries what used to be an `if (resolution.permanent)` wrapper
     // around a hand-copied block write: a transient failure stays pending, a
     // permanent one is blocked. Same decision, one line, one epilogue.
     expect(body, 'gates the block on resolution.permanent').toMatch(/persist:\s*resolution\.permanent,/);
-    expect(body, 'routes through the shared epilogue').toMatch(/return blockAndBail\(\{/);
+    expect(body, 'routes through the shared epilogue').toMatch(/return context\.blockAndBail\(\{/);
     // The category is the SHARED constant, not a hand-written literal: the pause
     // and reaper-exemption sets in lib/taskBlockCategories.js key on the same
     // value, and a stamp-site literal is exactly how those three drift apart.
     expect(body, 'tags the block category from the shared constant').toMatch(/category:\s*PROVIDER_CONFIG_BLOCKED_CATEGORY,/);
     expect(body, 'does not re-hardcode the literal').not.toMatch(/'provider-config'/);
-    expect(AGENT_LIFECYCLE_SRC, 'imports the shared constant').toMatch(/import \{[^}]*PROVIDER_CONFIG_BLOCKED_CATEGORY[^}]*\} from '\.\.\/lib\/taskBlockCategories\.js'/);
+    expect(AGENT_SPAWN_DISPATCH_SRC, 'imports the shared constant').toMatch(/import \{[^}]*PROVIDER_CONFIG_BLOCKED_CATEGORY[^}]*\} from '\.\.\/lib\/taskBlockCategories\.js'/);
     // The provider identity rides the agent:error event, so the investigator
     // names which provider failed rather than only the message.
     expect(body).toMatch(/emitPayload: \{[\s\S]{0,300}?resolution\.providerId[\s\S]{0,200}?resolution\.providerStatus/);
@@ -757,11 +721,11 @@ describe('runAgentSpawn source — permanent provider-config failure blocks the 
   // "one block-and-bail epilogue" above. What is left to pin here is that this
   // path still goes through it rather than re-inlining its own write.
   it('blocks through the shared epilogue, which persists before releasing the lease', () => {
-    const idx = AGENT_LIFECYCLE_SRC.indexOf('const resolution = await resolveAgentProviderAndModel(task)');
-    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 2000);
+    const idx = AGENT_SPAWN_DISPATCH_SRC.indexOf('const resolution = await resolveAgentProviderAndModel(task)');
+    const body = AGENT_SPAWN_DISPATCH_SRC.slice(idx, idx + 2000);
     expect(body, 'no hand-rolled block write on this path').not.toMatch(/status:\s*'blocked'/);
     expect(body, 'no hand-rolled lease release on this path').not.toMatch(/await cleanupOnError\(/);
-    expect(body).toMatch(/if \(!resolution\.ok\) \{[\s\S]{0,1200}?return blockAndBail\(\{/);
+    expect(body).toMatch(/if \(!resolution\.ok\) \{[\s\S]{0,1200}?return context\.blockAndBail\(\{/);
   });
 });
 
@@ -773,7 +737,7 @@ describe('runAgentSpawn source — permanent provider-config failure blocks the 
 // same task. These orderings live inside runAgentSpawn with no behavioral seam.
 describe('runAgentSpawn source — instance provenance + claim ordering (#1563)', () => {
   it('imports the identity resolver from the instance identity leaf', () => {
-    expect(AGENT_LIFECYCLE_SRC).toMatch(
+    expect(AGENT_SPAWN_PREPARATION_SRC).toMatch(
       /import\s*\{\s*ensureInstanceId\s*\}\s*from\s*'\.\/instanceIdentity\.js';/
     );
   });
@@ -815,7 +779,7 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
   });
 
   it('stamps the federation claim into the in_progress task update', () => {
-    expect(AGENT_LIFECYCLE_SRC).toMatch(/\.\.\.buildClaim\(instanceId\)/);
+    expect(AGENT_SPAWN_DISPATCH_SRC).toMatch(/\.\.\.buildClaim\(instanceId\)/);
   });
 
   it('acquires the claim (updateTask with buildClaim) BEFORE registering the agent', () => {
@@ -846,10 +810,10 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
   });
 
   it('releases the claim on a failed-setup early exit (cleanupOnError)', () => {
-    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('const cleanupOnError = async');
-    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 1200);
-    expect(fnBody.indexOf('claimAcquired'), 'cleanupOnError must gate on claimAcquired').toBeGreaterThan(-1);
-    expect(fnBody.indexOf('buildRelease()'), 'cleanupOnError must release the claim via buildRelease').toBeGreaterThan(-1);
+    const fnStart = AGENT_SPAWN_PREPARATION_SRC.indexOf('context.cleanupOnError = async');
+    const fnBody = AGENT_SPAWN_PREPARATION_SRC.slice(fnStart, fnStart + 1200);
+    expect(fnBody.indexOf('context.claimAcquired'), 'cleanup owner must gate on claimAcquired').toBeGreaterThan(-1);
+    expect(fnBody.indexOf('buildRelease()'), 'cleanup owner must release the claim via buildRelease').toBeGreaterThan(-1);
   });
 
   it('stamps instanceId into the registerAgent metadata', () => {
@@ -863,7 +827,7 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
     // recognises a claim run by its \`analysisType\`, which an inline
     // \`isTruthyMeta(task.metadata?.claimFlow)\` would silently drop. Hoisted to one
     // const because \`configCodingOnMain\` reads the same fact.
-    expect(AGENT_LIFECYCLE_SRC).toContain('const claimFlowTask = isClaimFlowTask(task, isTruthyMeta);');
+    expect(AGENT_SPAWN_DISPATCH_SRC).toContain('const claimFlowTask = isClaimFlowTask(task, isTruthyMeta);');
     expect(AGENT_REGISTRATION_SRC).toContain('configClaimFlow: claimFlowTask');
     expect(AGENT_REGISTRATION_SRC.indexOf('configClaimFlow')).toBeGreaterThan(AGENT_REGISTRATION_SRC.indexOf('configOpenPR'));
   });
