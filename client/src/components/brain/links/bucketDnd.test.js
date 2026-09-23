@@ -99,7 +99,7 @@ describe('linksKeyboardCoordinates', () => {
 });
 
 describe('linksCollisionDetection', () => {
-  it('only matches droppables of the dragged item\'s own kind', () => {
+  it('keeps bucket drags on bucket targets', () => {
     const bucketContainer = { id: 'bucket-drop:b1', data: { current: { kind: BUCKET_KIND, bucketId: 'b1' } }, rect: rect(0, 0) };
     const slotContainer = { id: 'chip-slot:b1:0', data: { current: { kind: LINK_SLOT_KIND, bucketId: 'b1', index: 0 } }, rect: rect(0, 0) };
     const args = {
@@ -112,5 +112,19 @@ describe('linksCollisionDetection', () => {
     const collisions = linksCollisionDetection(args);
     expect(collisions.every((c) => c.id === bucketContainer.id)).toBe(true);
     expect(collisions.some((c) => c.id === slotContainer.id)).toBe(false);
+  });
+
+  it('maps link drags to link-slot targets so links can be filed and reordered', () => {
+    const bucketContainer = { id: 'bucket-drop:b1', data: { current: { kind: BUCKET_KIND, bucketId: 'b1' } }, rect: rect(0, 0) };
+    const slotContainer = { id: 'chip-slot:b1:0', data: { current: { kind: LINK_SLOT_KIND, bucketId: 'b1', index: 0 } }, rect: rect(0, 0) };
+    const args = {
+      active: { id: 'link:l1', data: { current: { kind: LINK_KIND } }, rect: { current: { initial: rect(0, 0) } } },
+      collisionRect: rect(0, 0),
+      droppableRects: new Map([[bucketContainer.id, bucketContainer.rect], [slotContainer.id, slotContainer.rect]]),
+      droppableContainers: [bucketContainer, slotContainer],
+      pointerCoordinates: null,
+    };
+    const collisions = linksCollisionDetection(args);
+    expect(collisions.map((collision) => collision.id)).toEqual([slotContainer.id]);
   });
 });
