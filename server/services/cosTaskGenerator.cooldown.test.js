@@ -57,10 +57,11 @@ beforeEach(() => {
 
 describe('unblockExpiredCooldowns', () => {
   it('routes each revived task back to the store it was read from', async () => {
-    await unblockExpiredCooldowns(
+    // The count drives the health timer's follow-up dequeue.
+    await expect(unblockExpiredCooldowns(
       store([cooldownTask('u1', EXPIRED)]),
       store([cooldownTask('c1', EXPIRED)])
-    );
+    )).resolves.toBe(2);
 
     expect(updateTaskMock).toHaveBeenCalledTimes(2);
     expect(updateTaskMock.mock.calls.map(([id, , taskType]) => [id, taskType])).toEqual([

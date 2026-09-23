@@ -691,6 +691,7 @@ export function isWithinProjectLimit(task, agentsByProject, perProjectLimit) {
  * otherwise sit blocked forever.
  */
 async function unblockExpiredCooldownsInQueue(blocked, defaultTaskType) {
+  let revived = 0;
   for (const task of blocked || []) {
     if (!TIMED_COOLDOWN_BLOCKED_CATEGORIES.has(task.metadata?.blockedCategory) || !task.metadata?.cooldownUntil) continue;
     // An unparseable `cooldownUntil` yields NaN, and NaN loses BOTH comparisons —
@@ -710,7 +711,9 @@ async function unblockExpiredCooldownsInQueue(blocked, defaultTaskType) {
         cooldownUntil: undefined
       }
     }, task.taskType || defaultTaskType);
+    revived++;
   }
+  return revived;
 }
 
 /**
@@ -723,10 +726,13 @@ async function unblockExpiredCooldownsInQueue(blocked, defaultTaskType) {
  * version re-derived the queue of origin with `userBlocked.includes(task)` per
  * task, an O(N) scan inside an O(N) loop (#3500). Passing the origin down makes
  * classification O(1) and the whole pass linear.
+ *
+ * @returns {Promise<number>} how many tasks were revived
  */
 export async function unblockExpiredCooldowns(userTaskData, cosTaskData) {
-  await unblockExpiredCooldownsInQueue(userTaskData.grouped?.blocked, 'user');
-  await unblockExpiredCooldownsInQueue(cosTaskData.grouped?.blocked, 'internal');
+  const user = await unblockExpiredCooldownsInQueue(userTaskData.grouped?.blocked, 'user');
+  const internal = await unblockExpiredCooldownsInQueue(cosTaskData.grouped?.blocked, 'internal');
+  return user + internal;
 }
 
 /**
