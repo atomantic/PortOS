@@ -3,7 +3,7 @@ import express from 'express';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/paths.js', async (importOriginal) =>
@@ -11,13 +11,17 @@ vi.mock('../lib/paths.js', async (importOriginal) =>
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../services/moodBoard/db.js', () => ({ getBoard: vi.fn() }));
 vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
-vi.mock('../services/promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
+vi.mock('../services/promptRunner.js', () => ({
+  runPromptThroughProvider: vi.fn(),
+  resolveProviderAndModel: vi.fn(),
+  assertProvider: vi.fn(),
+}));
 
 import { PATHS } from '../lib/paths.js';
 import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
 import { getProviderById } from '../services/providers.js';
-import { runPromptThroughProvider } from '../services/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
 import routes from './codeAnimation.js';
 
 const makeApp = () => {
@@ -35,6 +39,11 @@ const UNIVERSE = {
   styleNotes: 'quiet and melancholic',
   styleReferences: [{ id: 'ref-1', title: 'Night markets', prompt: 'paper lanterns', imageRefs: ['style-ref.png'] }],
   moodBoardId: 'board-1',
+  logline: 'A drowned city keeps its lamps lit',
+  premise: 'Lamplighters trade memory for oil',
+  characters: [{ id: 'chr-1', name: 'Mira', role: 'lamplighter', physicalDescription: 'tall, oil-stained coat' }],
+  places: [{ id: 'set-1', name: 'The Lower Market', description: 'flooded arcade of stalls' }],
+  objects: [{ id: 'obj-1', name: 'The Brass Wick', significance: 'never gutters' }],
 };
 const BOARD = {
   id: 'board-1',
@@ -64,6 +73,65 @@ beforeEach(() => {
   vi.clearAllMocks();
   getUniverse.mockResolvedValue(UNIVERSE);
   getBoard.mockResolvedValue(BOARD);
+  resolveProviderAndModel.mockResolvedValue({ provider: { id: 'api-1', type: 'api' }, selectedModel: 'example-model' });
+});
+
+describe('POST /api/code-animation/brief', () => {
+  const briefResponse = (body) => ({ runId: 'run-b', text: `\`\`\`json\n${JSON.stringify(body)}\n\`\`\`` });
+
+  it('writes the brief from the universe bible and canon cast', async () => {
+    runPromptThroughProvider.mockResolvedValue(briefResponse({
+      title: 'The Brass Wick',
+      concept: 'Mira climbs the flooded arcade as the lamps go out one by one.',
+      onScreenText: '0:02 "One light remains"',
+      styleNotes: 'colder blues at the climax',
+    }));
+    const res = await request(makeApp()).post('/api/code-animation/brief').send({
+      universeId: 'universe-1',
+      seedIdea: 'a chase that ends in silence',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.brief).toEqual({
+      title: 'The Brass Wick',
+      concept: 'Mira climbs the flooded arcade as the lamps go out one by one.',
+      onScreenText: '0:02 "One light remains"',
+      styleNotes: 'colder blues at the climax',
+    });
+    expect(res.body.moodBoardId).toBe('board-1');
+    expect(res.body.llm).toEqual({ provider: 'api-1', model: 'example-model', runId: 'run-b' });
+    const call = runPromptThroughProvider.mock.calls[0][0];
+    expect(call.source).toBe('code-animation-brief');
+    expect(call.cwd).toBe(PATHS.data);
+    expect(call.prompt).toContain('a chase that ends in silence');
+    expect(call.prompt).toContain('- Mira — role: lamplighter');
+    expect(call.prompt).toContain('Mood board: "Dusk"');
+    // The brief is text — no reference images are attached or named.
+    expect(call.screenshots).toBeUndefined();
+    expect(call.prompt).not.toContain('Reference images');
+  });
+
+  it('502s a response that holds no brief', async () => {
+    runPromptThroughProvider.mockResolvedValue({ text: 'I would rather not.' });
+    const res = await request(makeApp()).post('/api/code-animation/brief').send({ universeId: 'universe-1' });
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('LLM_INVALID_JSON');
+  });
+
+  it('refuses a request with no universe and nothing written', async () => {
+    const res = await request(makeApp()).post('/api/code-animation/brief').send({ seedIdea: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('BRIEF_INPUT_REQUIRED');
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a missing provider as a 400 instead of running', async () => {
+    resolveProviderAndModel.mockResolvedValue({ provider: null, selectedModel: null });
+    assertProvider.mockImplementation(() => { throw new ServerError('No AI provider available to write the brief', { status: 400, code: 'PROVIDER_UNAVAILABLE' }); });
+    const res = await request(makeApp()).post('/api/code-animation/brief').send({ seedIdea: 'a lantern' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROVIDER_UNAVAILABLE');
+    expect(runPromptThroughProvider).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/code-animation/prompt', () => {
@@ -90,6 +158,10 @@ describe('POST /api/code-animation/prompt', () => {
       { label: 'canon sheet', origin: 'mood-board', url: '/data/image-refs/sheet.png' },
     ]);
     expect(res.body.audioUrl).toBe('/api/uploads/abc12345-theme.mp3');
+    // The coding prompt is art direction — the universe's bible and cast are
+    // the brief writer's material and stay out of it.
+    expect(res.body.prompt).not.toContain('Mira');
+    expect(res.body.prompt).not.toContain('A drowned city keeps its lamps lit');
     expect(JSON.stringify(res.body)).not.toContain(PATHS.data);
   });
 

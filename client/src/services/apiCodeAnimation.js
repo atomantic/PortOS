@@ -7,6 +7,13 @@ import { request } from './apiCore.js';
 
 export const getCodeAnimationOptions = (options) => request('/code-animation/options', options);
 
+// Ask a model to WRITE the brief from the chosen universe's bible and canon cast.
+export const generateCodeAnimationBrief = (input, options) => request('/code-animation/brief', {
+  method: 'POST',
+  body: JSON.stringify(input),
+  ...options,
+});
+
 export const buildCodeAnimationPrompt = (brief, options) => request('/code-animation/prompt', {
   method: 'POST',
   body: JSON.stringify(brief),

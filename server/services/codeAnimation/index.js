@@ -31,6 +31,12 @@ import {
   CODE_ANIMATION_RENDERERS,
   CODE_ANIMATION_RESOLUTIONS,
 } from './prompt.js';
+import {
+  buildCodeAnimationBriefPrompt,
+  extractBriefIdea,
+  projectCanonForBrief,
+  CODE_ANIMATION_BRIEF_LIMITS,
+} from './brief.js';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 const resolveUploadImage = makePathResolver(() => PATHS.uploads, { extensions: IMAGE_EXTENSIONS });
@@ -46,6 +52,7 @@ export function getCodeAnimationOptions() {
     resolutions: Object.keys(CODE_ANIMATION_RESOLUTIONS),
     renderers: CODE_ANIMATION_RENDERERS,
     limits: CODE_ANIMATION_LIMITS,
+    briefLimits: CODE_ANIMATION_BRIEF_LIMITS,
     messages: CODE_ANIMATION_MESSAGES,
     audioGlobal: CODE_ANIMATION_AUDIO_GLOBAL,
     audioExtensions: UPLOAD_AUDIO_EXTENSIONS,
@@ -77,7 +84,20 @@ function fillReferences(candidates, slots) {
   return images;
 }
 
-async function resolveUniverse(universeId, { imageSlots }) {
+// The narrative half of a universe — its bible text and canon cast. Only the
+// brief writer reads it: the coding prompt is art direction, and a logline or a
+// character's motivations would just crowd out the runtime contract.
+function universeNarrative(universe) {
+  return {
+    logline: trimTo(universe.logline, 2_000),
+    premise: trimTo(universe.premise, 4_000),
+    characters: projectCanonForBrief(universe.characters, 'characters', CODE_ANIMATION_BRIEF_LIMITS.charactersMax),
+    places: projectCanonForBrief(universe.places, 'places', CODE_ANIMATION_BRIEF_LIMITS.placesMax),
+    objects: projectCanonForBrief(universe.objects, 'objects', CODE_ANIMATION_BRIEF_LIMITS.objectsMax),
+  };
+}
+
+async function resolveUniverse(universeId, { imageSlots, narrative = false }) {
   if (!universeId) return null;
   const { getUniverse } = await import('../universeBuilder/crud.js');
   const universe = await getUniverse(universeId).catch((error) => {
@@ -107,6 +127,7 @@ async function resolveUniverse(universeId, { imageSlots }) {
     styleReferences,
     moodBoardId: isNonBlankStr(universe.moodBoardId) ? universe.moodBoardId : null,
     images,
+    ...(narrative ? universeNarrative(universe) : {}),
   };
 }
 
@@ -207,6 +228,47 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     audioUrl: audio?.url || null,
     referencePaths: referenceImages.map((image) => image.path),
   };
+}
+
+/**
+ * Write the brief itself: ask a model for a title / concept / on-screen text /
+ * style refinement grounded in the universe's bible and canon cast, the same
+ * way a series or story is generated from a universe. Synchronous — a few
+ * hundred words comes back inside one request, unlike the HTML generation.
+ *
+ * Returns `{ brief, moodBoardId, llm }`; the client drops `brief` straight into
+ * the form so the user can edit it before building the animation prompt.
+ */
+export async function generateCodeAnimationBrief(input) {
+  const { assertProvider, resolveProviderAndModel, runPromptThroughProvider } = await import('../promptRunner.js');
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId: input.providerId, model: input.model });
+  assertProvider(provider, { message: 'No AI provider available to write the brief', code: 'PROVIDER_UNAVAILABLE', status: 400 });
+  // No image slots: the brief is text, and the style images are already the
+  // coding prompt's job.
+  const universe = await resolveUniverse(input.universeId, { imageSlots: 0, narrative: true });
+  const moodBoardId = input.moodBoardId === undefined ? universe?.moodBoardId : input.moodBoardId;
+  const { board } = await resolveMoodBoard(moodBoardId, { imageSlots: 0 });
+  const prompt = buildCodeAnimationBriefPrompt({
+    universe,
+    moodBoard: board,
+    seedIdea: input.seedIdea,
+    format: input.format,
+    current: input.current,
+  });
+  console.log(`📝 Code animation brief writing on ${provider.id}/${selectedModel || 'default'}${universe ? ` for universe "${universe.name}"` : ''}`);
+  const { text, runId } = await runPromptThroughProvider({
+    provider,
+    model: selectedModel || undefined,
+    effort: input.effort || undefined,
+    prompt,
+    source: 'code-animation-brief',
+    // Same containment as the HTML generation: a CLI/TUI agent only needs to
+    // print a JSON document, never to touch the PortOS checkout.
+    cwd: PATHS.data,
+  });
+  const brief = extractBriefIdea(text);
+  console.log(`✅ Code animation brief written — runId=${runId || 'n/a'} concept=${brief.concept.length} chars`);
+  return { brief, moodBoardId: moodBoardId || null, llm: { provider: provider.id, model: selectedModel || null, runId: runId || null } };
 }
 
 // Drop settled jobs past their TTL, then the oldest settled ones past the cap.

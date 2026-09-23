@@ -115,7 +115,8 @@ function artDirectionSection({ universe, styleNotes, hasMoodBoard }) {
   return lines.join('\n');
 }
 
-function moodBoardSection(board) {
+/** The board's style context as prompt text (`''` when there is no board). */
+export function moodBoardSection(board) {
   if (!board) return '';
   const lines = [`Mood board: "${board.name || 'Untitled board'}" — distill its through-line (palette, texture, lighting, rhythm, mood), not any single item.`];
   if (isNonBlankStr(board.description)) lines.push(`Board description: ${board.description}`);
