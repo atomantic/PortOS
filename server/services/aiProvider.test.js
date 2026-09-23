@@ -263,6 +263,24 @@ describe('callProviderAISimple through the ChatGPT subscription', () => {
     expect(statusOp.complete).toHaveBeenCalledTimes(1);
   });
 
+  it('returns the effective model and effort after Codex clamps the requested effort', async () => {
+    runTurn.mockResolvedValue({
+      text: 'a benchmark answer',
+      usage: { inputTokens: 18, outputTokens: 3, source: 'chatgpt-subscription' },
+      model: 'gpt-6-sol',
+      effort: 'max',
+      effortClamped: true,
+      clampReason: 'gpt-6-sol does not support "ultra" — using "max"',
+    });
+
+    const result = await callProviderAISimple(
+      { ...CODEX_ENABLED, effort: 'ultra' }, 'gpt-6-sol', 'Answer one benchmark item.', {},
+    );
+
+    expect(result).toMatchObject({ model: 'gpt-6-sol', effort: 'max', effortClamped: true });
+    expect(result.clampReason).toMatch(/using "max"/);
+  });
+
   it('refuses a codex record whose transport the user has not enabled', async () => {
     const result = await callProviderAISimple(CODEX_ADVERTISED_ONLY, 'model-alpha', 'hi', {});
 

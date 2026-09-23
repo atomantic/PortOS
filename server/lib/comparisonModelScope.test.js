@@ -102,15 +102,20 @@ describe('providerCatalogSlugs', () => {
     expect([...slugs].sort()).toEqual(['claude-opus-5', 'claude-sonnet-5']);
   });
 
-  it('resolves the shipped provider config onto real catalog models', async () => {
+  it('matches shipped providers to the current observation model identities', async () => {
     const providers = JSON.parse(await readFile(join(root, 'data.reference/providers.json'), 'utf8'));
     const catalog = JSON.parse(await readFile(join(root, 'data.reference/model-comparison.json'), 'utf8'));
     const inventory = Object.values(providers.providers).map(provider => ({ models: provider.models || [] }));
-    const known = new Set(catalog.observations.map(row => row.model));
+    // Both provider ids and observations can carry gateway/vendor namespaces,
+    // version spellings, or free-tier suffixes. Compare the canonical identity
+    // on both sides; the PortOS seed is intentionally a small sourced set, not
+    // the retired external benchmark catalog's 30+ model inventory.
+    const known = new Set(catalog.observations.map(row => catalogSlugForProviderModel(row.model)).filter(Boolean));
     const matched = [...providerCatalogSlugs(inventory)].filter(slug => known.has(slug));
-    // A mapping regression shows up as this collapsing toward zero.
-    expect(matched.length).toBeGreaterThan(30);
-    expect(matched).toContain('claude-opus-5');
-    expect(matched).toContain('gpt-5.6-sol');
+    expect(known.size).toBeGreaterThan(0);
+    expect(matched.sort()).toEqual([...known].sort());
+    // Keep coverage anchored across a subscription model and a free provider.
+    expect(matched).toContain('grok-4.7');
+    expect(matched).toContain('muse-spark-1.3');
   });
 });

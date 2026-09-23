@@ -1,8 +1,8 @@
 /**
- * Per-model API billing rates for the "what would this have cost" estimates on
- * /devtools/usage. PortOS runs on provider subscriptions, so these numbers are
- * informational only — they answer "what would the recorded usage have cost
- * under API billing," never an actual bill.
+ * Per-model API billing rates for informational cost estimates. Subscription
+ * plans and local providers do not expose a bill per benchmark run, so these
+ * rates answer "what would the recorded tokens cost under API billing," never
+ * the actual subscription allowance consumed or a local inference bill.
  *
  * Rates are USD per 1M tokens. Standard input/output come from the table below;
  * the prompt-cache tiers are derived from the input rate by the multipliers in
@@ -30,6 +30,18 @@
  */
 
 export const PRICING_AS_OF = '2026-09-01';
+
+// Newer model launch rates are tracked separately so the baseline date above
+// does not imply that every vendor's pricing was re-verified on that date.
+const MODEL_RATE_AS_OF = Object.freeze({
+  'gpt-6-sol': '2026-09-22',
+  'gpt-6-luna': '2026-09-22',
+  'gpt-5.6-sol': '2026-09-22',
+  'gpt-5.6-luna': '2026-09-22',
+});
+
+export const pricingAsOfForModel = (model) =>
+  MODEL_RATE_AS_OF[String(model || '').trim().toLowerCase()] || PRICING_AS_OF;
 
 /**
  * Every shipped Claude Opus generation bills at the same published rate, so the
@@ -74,11 +86,15 @@ const EXACT_RATES = {
   'claude-sonnet-4-6': [3.0, 15.0],
   'claude-sonnet-4-5': [3.0, 15.0],
   'claude-haiku-4-5': [1.0, 5.0],
-  // OpenAI (Codex CLI)
+  // OpenAI (Codex CLI). GPT-6 Sol/Luna and updated GPT-5.6 Sol/Luna rates were
+  // verified against the 2026-09-22 model launch:
+  // https://openai.com/index/introducing-gpt-6-sol-and-luna/
   'gpt-6-astra': [10.0, 50.0],
-  'gpt-5.6-sol': [5.0, 30.0],
+  'gpt-6-sol': [2.0, 10.0],
+  'gpt-6-luna': [0.1, 0.5],
+  'gpt-5.6-sol': [4.0, 20.0],
   'gpt-5.6-terra': [2.5, 15.0],
-  'gpt-5.6-luna': [1.0, 6.0],
+  'gpt-5.6-luna': [0.2, 1.2],
   'gpt-5.5': [5.0, 30.0],
   'gpt-5.5-pro': [30.0, 180.0],
   'gpt-5.4': [2.5, 15.0],

@@ -1,21 +1,16 @@
 #!/usr/bin/env node
 /**
- * Rewrite `data.reference/model-comparison.json` down to the models PortOS can
- * actually dispatch.
+ * Keep `data.reference/model-comparison.json` scoped to dispatched models and
+ * reference prices, without publishing third-party model-quality scores.
  *
- * A full Artificial Analysis sync returns the whole public index — 600+ rows
- * covering retired generations (claude-2.0, palm-2, llama-2), research
- * checkpoints, and models behind harnesses PortOS does not ship. None of that
- * belongs in the repo: the seed exists so a fresh install opens the comparison
- * chart on the models it can select in Settings > AI Providers > Models, and
- * anyone who wants the rest of the index syncs it into their own
- * `data/model-comparison.json` with an API key.
+ * The seed is a small set of price references for models exposed by shipped
+ * providers, not an industry score index. Performance comes from explicit
+ * PortOS benchmark runs stored only on the install that ran them.
  *
  * Scope is derived from `data.reference/providers.json` rather than a hand-kept
  * list, so adding a model to a shipped provider and re-running this script is
- * all it takes to bring its benchmark rows along. `FRONTIER_ANCHORS` adds the
- * few families the chart is read against even when no shipped provider config
- * names them yet.
+ * all it takes to bring its reference rows along. `FRONTIER_ANCHORS` adds a
+ * few current models even when no shipped provider config names them yet.
  *
  * Usage: node scripts/prune-model-comparison-seed.js [--check]
  *   --check  exit non-zero if the seed is not already pruned (CI/test use)
@@ -41,6 +36,8 @@ export const FRONTIER_ANCHORS = [
   'claude-fable-5.1', 'claude-fable-5', 'claude-opus-5.5', 'gpt-6-luna', 'gpt-6-sol',
 ];
 
+const RETIRED_PUBLIC_BENCHMARK = /^(?:Artificial Analysis Intelligence Index|SWE-bench\b)/i;
+
 export async function inScopeModels() {
   const providers = JSON.parse(await readFile(providersPath, 'utf8'));
   const inventory = Object.values(providers.providers || {}).map(provider => ({
@@ -53,8 +50,8 @@ export async function inScopeModels() {
   // installer for. Only DECLARED equivalences widen the keep-set, so retaining a
   // row stays a reviewed decision rather than a side effect of a similar name.
   for (const model of localCatalogBenchmarkModels()) scope.add(model);
-  // Endpoint pricing belongs to the exact serving tier, including stealth IDs
-  // that deliberately cannot resolve to a public benchmark model.
+  // Endpoint pricing belongs to the exact serving tier, including aliases
+  // that deliberately cannot resolve to another public model identity.
   for (const { models } of inventory) {
     for (const model of models) {
       scope.add(model);
@@ -70,7 +67,10 @@ export async function prunedSeed() {
   const scope = await inScopeModels();
   const catalog = JSON.parse(await readFile(seedPath, 'utf8'));
   return {
-    pruned: { ...catalog, observations: catalog.observations.filter(row => scope.has(row.model)) },
+    pruned: {
+      ...catalog,
+      observations: catalog.observations.filter(row => scope.has(row.model) && !RETIRED_PUBLIC_BENCHMARK.test(row.benchmark || '')),
+    },
     originalCount: catalog.observations.length,
   };
 }
