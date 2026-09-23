@@ -12,12 +12,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router';
 import {
   ArrowLeft, BookOpen, FolderTree, ImagePlus, Layers, Loader2,
-  MapPin, Network, Package, Plus, Save, Trash2, Users,
+  MapPin, Network, Package, Plus, Save, Trash2, Upload, Users,
 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import toast from '../ui/Toast';
 import {
   exportUniverseMarkdown,
+  importUniverseMarkdown,
   waitForUniverseWrites,
   WORLD_CATEGORY_KEY_MAX,
 } from '../../services/api';
@@ -29,6 +30,7 @@ import { useUniverseNav } from '../../hooks/useUniverseNav';
 import useUniverseRender from '../../hooks/useUniverseRender';
 import useUniverseTabs from '../../hooks/useUniverseTabs';
 import EntityCombobox from '../EntityCombobox';
+import FilePickerButton from '../ui/FilePickerButton';
 import MediaPreview from '../media/MediaPreview';
 import OriginBadge from '../sharing/OriginBadge';
 import ShareToButton from '../sharing/ShareToButton';
@@ -43,6 +45,8 @@ import { appendImageRefById } from '../../lib/bibleLimits';
 import { downloadBlob } from '../../lib/downloadBlob';
 import { totalVariationCount } from '../../lib/universeBuilderCounts';
 import { universeMarkdownFilename } from '../../lib/universeMarkdownFilename';
+import { ensureDraftCategories } from '../../lib/universeBuilderShared';
+import { parseUniverseMarkdown } from '../../../../server/lib/universeMarkdown.js';
 import {
   TAB_BIBLE,
   TAB_CAST,
@@ -113,6 +117,7 @@ export default function UniverseBuilder() {
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [waitingForWrites, setWaitingForWrites] = useState(false);
   // `goToWorld` preserves `location.search` (e.g. `?tab=&bucket=&series=`) so
   // the auto-save → create path doesn't snap the user back to the Bible tab
@@ -277,6 +282,81 @@ export default function UniverseBuilder() {
     toast.success(`Downloaded ${filename}`);
   }, [draft.name, draftRef, exporting, flushDraftIfDirty, saving, selectedId]);
 
+  const handleImportMarkdown = useCallback(async (event) => {
+    const file = event.currentTarget.files?.[0];
+    const importIsReady = () => mountedRef.current
+      && selectedIdRef.current === selectedId
+      && draftRef.current?.id === selectedId;
+    if (!file || !selectedId || importing || saving || !importIsReady()) return;
+    setImporting(true);
+    try {
+      if (file.size > 10_000_000) throw new Error('Markdown files must be 10 MB or smaller');
+      const markdown = await file.text();
+      // Validate before flushing a dirty draft so a wrong file never saves
+      // unrelated edits as a side effect of a failed import.
+      parseUniverseMarkdown(markdown);
+      if (!importIsReady()) return;
+
+      setWaitingForWrites(true);
+      const writesReady = await waitForUniverseWrites(selectedId);
+      setWaitingForWrites(false);
+      if (!writesReady) {
+        toast.error('Changes are still saving — try the import again in a moment');
+        return;
+      }
+      if (!importIsReady()) return;
+
+      const flushed = await flushDraftIfDirty();
+      if (!flushed || !importIsReady()) return;
+      setWaitingForWrites(true);
+      const flushedWritesReady = await waitForUniverseWrites(selectedId);
+      setWaitingForWrites(false);
+      if (!flushedWritesReady) {
+        toast.error('Changes are still saving — try the import again in a moment');
+        return;
+      }
+      if (!importIsReady()) return;
+
+      const result = await importUniverseMarkdown(selectedId, markdown, { silent: true });
+      if (!importIsReady()) return;
+      const importedDraft = {
+        ...result,
+        categories: ensureDraftCategories(result.categories),
+        compositeSheets: result.compositeSheets || [],
+        styleReferences: result.styleReferences || [],
+        characters: result.characters || [],
+        places: result.places || [],
+        objects: result.objects || [],
+        influences: result.influences || { embrace: [], avoid: [] },
+      };
+      setDraft(importedDraft);
+      markDraftSaved(importedDraft);
+      clearPendingCanonAdditions();
+      setCanonDirty(false);
+      setWorlds((previous) => [result, ...previous.filter((universe) => universe.id !== result.id)]);
+      toast.success(`Imported Markdown into ${result.name}`);
+    } catch (error) {
+      if (mountedRef.current) toast.error(error?.message || 'Failed to import Markdown');
+    } finally {
+      if (mountedRef.current) {
+        setWaitingForWrites(false);
+        setImporting(false);
+      }
+    }
+  }, [
+    clearPendingCanonAdditions,
+    draftRef,
+    flushDraftIfDirty,
+    importing,
+    markDraftSaved,
+    mountedRef,
+    saving,
+    selectedId,
+    setCanonDirty,
+    setDraft,
+    setWorlds,
+  ]);
+
   // Page-level lightbox + gallery-metadata concern. A single MediaPreview at
   // this level covers EVERY thumb on the page: variations, composite sheets,
   // canon imageRefs, style probes, and character reference sheets — so clicking
@@ -412,6 +492,16 @@ export default function UniverseBuilder() {
           </button>
           {selectedId && (
             <>
+              <FilePickerButton
+                accept=".md,.markdown,text/markdown,text/plain"
+                disabled={importing || exporting || saving || loading || draft.id !== selectedId}
+                onChange={handleImportMarkdown}
+                title="Import Markdown and replace sections included in the file"
+                className="px-3 py-2 rounded flex items-center gap-2 min-h-[40px] border border-port-border hover:bg-port-card-hover disabled:opacity-50"
+              >
+                {importing ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                {waitingForWrites ? 'Saving changes…' : importing ? 'Importing…' : 'Import .md'}
+              </FilePickerButton>
               <button
                 onClick={handleExportMarkdown}
                 disabled={exporting || saving || draft.id !== selectedId}

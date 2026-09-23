@@ -68,6 +68,10 @@ export const exportUniverseMarkdown = (id, options = {}) => request(
   `/universe-builder/${encodeURIComponent(id)}/export/markdown`,
   { responseType: 'text', ...options },
 );
+export const importUniverseMarkdown = (id, markdown, options = {}) => trackUniverseWrite(id, request(
+  `/universe-builder/${encodeURIComponent(id)}/import/markdown`,
+  { method: 'POST', body: JSON.stringify({ markdown }), ...options },
+));
 
 // `[{ id, name, influences: { embrace[], avoid[] } }]` for every live universe
 // that has style tokens. Use this instead of `listUniverses()` whenever a
