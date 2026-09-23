@@ -61,6 +61,25 @@ export function planCrashRetry(scope, output) {
   return { retry: true, relPath, selector: toRunnerPath(scope, relPath) };
 }
 
+/**
+ * Vitest's own "Test Files" summary line, e.g. `Test Files  1 failed | 797
+ * passed | 2 skipped (800)`. The crashed file itself is never counted here
+ * (it errored, not failed — see the fixture in run-ci-tests.test.js), so a
+ * nonzero "failed" count means a REAL, unrelated assertion failure shared the
+ * run with the crash.
+ */
+const TEST_FILES_SUMMARY_PATTERN = /Test Files\s+([^\n]+)/;
+
+/**
+ * True when the run had a genuine test failure alongside (or instead of) a
+ * worker crash. A missing summary line fails closed (treated as "yes, there
+ * were other failures") so a parsing miss can never mask a real regression.
+ */
+export function hasOtherTestFailures(output) {
+  const summary = TEST_FILES_SUMMARY_PATTERN.exec(String(output || ''));
+  return !summary || /\d+\s+failed/.test(summary[1]);
+}
+
 export function requiresSourceFiles(mode, repoSources) {
   return mode === 'related' && repoSources.length === 0;
 }
@@ -151,6 +170,12 @@ async function spawnNpm(scope, script, extraArgs, label) {
   const retry = await runNpm(scope, script, [selector]);
   recordVitestDuration(scope, `crash retry: ${relPath}`, retryStartedAt);
   if (!retry.error && retry.status === 0) {
+    if (hasOtherTestFailures(result.output)) {
+      // The crash retry only clears the crash itself — a real assertion
+      // failure elsewhere in the same run must still fail the job.
+      console.error(`❌ ${relPath}'s worker crash recovered on retry, but the run also has a real test failure — not masking it`);
+      return result.status;
+    }
     console.log(`✅ ${relPath} passed on retry — treating the original worker crash as a runner fault, not a regression`);
     return 0;
   }

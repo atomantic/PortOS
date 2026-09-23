@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   extractCrashedTestFile,
+  hasOtherTestFailures,
   planCrashRetry,
   recordVitestDuration,
   relatedInputs,
@@ -182,6 +183,22 @@ describe('planCrashRetry', () => {
     expect(planCrashRetry('server', 'FAIL server/lib/foo.test.js\nExpected true to be false')).toEqual({
       retry: false,
     });
+  });
+});
+
+describe('hasOtherTestFailures', () => {
+  it('reads false only from a clean "Test Files" summary with no failed count', () => {
+    expect(hasOtherTestFailures('Test Files  798 passed | 2 skipped (801)')).toBe(false);
+  });
+
+  it('reads true when the summary reports a real failure, whichever order it lists the counts', () => {
+    expect(hasOtherTestFailures('Test Files  1 failed | 797 passed | 2 skipped (800)')).toBe(true);
+    expect(hasOtherTestFailures('Test Files  797 passed | 1 failed (798)')).toBe(true);
+  });
+
+  it('fails closed (assumes a real failure) when the summary line is missing', () => {
+    expect(hasOtherTestFailures('')).toBe(true);
+    expect(hasOtherTestFailures('some unrelated crash output with no summary at all')).toBe(true);
   });
 });
 
