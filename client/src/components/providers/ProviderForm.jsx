@@ -21,7 +21,7 @@ import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import { GatewayKeyHint } from './ProviderNotices';
 import ProviderModelAccess from './ProviderModelAccess';
-import { CONFIGURED_MODEL_KEYS, configuredModelsOf, normalizeModelAccess, providerModelCatalog } from '../../utils/providerModelAccess';
+import { CONFIGURED_MODEL_KEYS, configuredModelsOf, normalizeModelAccess, providerModelCatalog, scopeModelsByAccess } from '../../utils/providerModelAccess';
 
 // The provider editor's Drawer tabs. `connection` is the default, so a bare
 // /ai/edit/:providerId deep link opens on the identity/transport fields; the
@@ -198,9 +198,18 @@ export default function ProviderForm({ provider, daemonReadiness = null, onClose
       ...liveHardwareFor(formData),
     },
   }, daemonReadiness?.contextWindows), daemonReadiness?.runtimeContextWindow);
-  const availableModels = filterHardwareCompatibleProviderModels(
-    filterGenerationModels(mergedModels),
-    capabilityProvider,
+  // Scoped by the same Model Access policy `ProviderModelAccess` previews above,
+  // so the Default Model + tier selects can't offer a model the policy hides —
+  // they used to read straight off `mergedModels` and ignore the policy entirely.
+  // `keep` preserves an already-configured tier's model even if the (possibly
+  // just-edited) policy would now exclude it, matching the editor's own preview.
+  const availableModels = scopeModelsByAccess(
+    filterHardwareCompatibleProviderModels(
+      filterGenerationModels(mergedModels),
+      capabilityProvider,
+    ),
+    normalizeModelAccess(formData.modelAccess),
+    { keep: modelAccessKeeps },
   );
   const configuredModels = [
     formData.defaultModel,
