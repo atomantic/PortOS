@@ -4,8 +4,11 @@ import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  extractCrashedTestFile,
+  planCrashRetry,
   recordVitestDuration,
   relatedInputs,
+  repoRelativeFromCrashPath,
   requiresSourceFiles,
   shardArgs,
   toRunnerPath,
@@ -114,6 +117,71 @@ describe('requiresSourceFiles', () => {
     expect(requiresSourceFiles('related', ['server/services/auth.js'])).toBe(false);
     expect(requiresSourceFiles('files', [])).toBe(false);
     expect(requiresSourceFiles('full', [])).toBe(false);
+  });
+});
+
+describe('extractCrashedTestFile', () => {
+  // Verbatim shape of Vitest's own message for a forked worker that aborted
+  // natively (issue 8152 — a Windows 0xC0000409 fail-fast), trimmed to the
+  // two lines the regex actually needs.
+  const CRASH_OUTPUT = [
+    '⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯',
+    'Error: [vitest-pool]: Worker forks emitted error.',
+    'Caused by: Error: Worker exited unexpectedly with exit code 3221226505 during started state while running test file D:/a/PortOS/PortOS/server/services/sprites/importer.test.js',
+    '  Test Files  798 passed | 2 skipped (801)',
+  ].join('\n');
+
+  it('pulls the crashed file out of a native worker-crash error', () => {
+    expect(extractCrashedTestFile(CRASH_OUTPUT)).toBe(
+      'D:/a/PortOS/PortOS/server/services/sprites/importer.test.js',
+    );
+  });
+
+  it('finds nothing in an ordinary assertion failure or empty output', () => {
+    expect(extractCrashedTestFile('FAIL server/lib/foo.test.js > bar\nExpected 1 to be 2')).toBeNull();
+    expect(extractCrashedTestFile('')).toBeNull();
+    expect(extractCrashedTestFile(undefined)).toBeNull();
+  });
+});
+
+describe('repoRelativeFromCrashPath', () => {
+  it('maps an absolute Windows or POSIX runner path onto its workspace', () => {
+    expect(repoRelativeFromCrashPath('D:/a/PortOS/PortOS/server/services/sprites/importer.test.js'))
+      .toBe('server/services/sprites/importer.test.js');
+    expect(repoRelativeFromCrashPath('/home/runner/work/PortOS/PortOS/client/src/lib/foo.test.js'))
+      .toBe('client/src/lib/foo.test.js');
+  });
+
+  it('returns null when the path names neither workspace', () => {
+    expect(repoRelativeFromCrashPath('D:/a/PortOS/PortOS/scripts/foo.test.js')).toBeNull();
+    expect(repoRelativeFromCrashPath('')).toBeNull();
+  });
+});
+
+describe('planCrashRetry', () => {
+  const CRASH_OUTPUT = 'Caused by: Error: Worker exited unexpectedly with exit code 3221226505 '
+    + 'during started state while running test file D:/a/PortOS/PortOS/server/services/sprites/importer.test.js';
+
+  it('plans a same-workspace single-file retry for a matching crash', () => {
+    expect(planCrashRetry('server', CRASH_OUTPUT)).toEqual({
+      retry: true,
+      relPath: 'server/services/sprites/importer.test.js',
+      selector: './services/sprites/importer.test.js',
+    });
+  });
+
+  it('declines to retry a crash reported in the other workspace', () => {
+    // A server-shard crash never gets replayed as a client-scoped selector.
+    expect(planCrashRetry('client', CRASH_OUTPUT)).toEqual({
+      retry: false,
+      crashedPath: 'D:/a/PortOS/PortOS/server/services/sprites/importer.test.js',
+    });
+  });
+
+  it('declines to retry an ordinary test failure', () => {
+    expect(planCrashRetry('server', 'FAIL server/lib/foo.test.js\nExpected true to be false')).toEqual({
+      retry: false,
+    });
   });
 });
 
