@@ -406,7 +406,7 @@ const BackupWidget = memo(function BackupWidget() {
           to="/settings"
           className="flex shrink-0 items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
-          <span className="hidden @xs:inline">Settings</span>
+          <span className="@max-xs:sr-only">Settings</span>
           <ChevronRight size={16} />
         </Link>
       </div>

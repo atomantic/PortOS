@@ -1586,7 +1586,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               title="Save current form as a reusable template"
             >
               <Bookmark size={14} aria-hidden="true" />
-              <span className="hidden @sm:inline">Save Template</span>
+              <span className="@max-sm:sr-only">Save Template</span>
             </button>}
             <button
               onClick={handleAddTask}

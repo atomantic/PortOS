@@ -580,7 +580,7 @@ export default function SongBookViewer() {
           <>
             <Link to="/songbook" className={btnClass}>
               <ArrowLeft size={15} />
-              <span className="hidden sm:inline">All songs</span>
+              <span className="max-sm:sr-only">All songs</span>
             </Link>
             {editing ? (
               <>

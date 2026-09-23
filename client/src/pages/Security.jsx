@@ -312,7 +312,7 @@ export default function Security() {
             }`}
           >
             <Settings size={16} />
-            <span className="hidden sm:inline">Settings</span>
+            <span className="max-sm:sr-only">Settings</span>
           </button>
         </div>
       </div>
