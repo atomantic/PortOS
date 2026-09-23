@@ -266,6 +266,24 @@ describe('itermBridge', () => {
     expect(await bridge.getItermStatus()).toEqual({ state: 'api-disabled', detail: null });
   });
 
+  it('does not expose the local socket path when a connection fails', async () => {
+    bridge.shutdown();
+    const socketPath = process.platform === 'win32'
+      ? '\\\\.\\pipe\\example-user-private-socket'
+      : join(dir, 'example-user', 'missing.sock');
+    bridge = createItermBridge({ ...deps, socketPath });
+    const socket = fakeSocket('lister');
+
+    await bridge.subscribeList(socket);
+    await vi.waitFor(async () => expect((await bridge.getItermStatus()).state).toBe('connect-failed'));
+
+    expect(await bridge.getItermStatus()).toEqual({
+      state: 'connect-failed',
+      detail: 'Local iTerm2 socket connection failed',
+    });
+    expect(JSON.stringify(socket.all('iterm:sessions'))).not.toContain(socketPath);
+  });
+
   it('disconnects immediately when the feature turns off', async () => {
     const socket = await listAndConnect();
     deps.enabled = false;
