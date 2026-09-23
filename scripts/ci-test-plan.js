@@ -453,6 +453,7 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/preWrapClasses.test.js');
     add('client/src/providerSelectConventions.test.js');
     add('client/src/responsiveGridConventions.test.js');
+    add('client/src/socketSubscriptionConventions.test.js');
     add('client/src/storageConventions.test.js');
     add('client/src/subNavConventions.test.js');
     // Same trigger, different subject: this one scans the TEST files for an
