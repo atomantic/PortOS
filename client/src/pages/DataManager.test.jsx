@@ -56,7 +56,7 @@ describe('DataManager tombstone GC peer-refusal subscription (#8110)', () => {
   it('subscribes to the instances room on mount', async () => {
     render(<DataManager />);
     await waitFor(() => expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument());
-    expect(socket.emit).toHaveBeenCalledWith('instances:subscribe');
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('instances:subscribe'));
   });
 
   it('re-subscribes and refetches refusal status after a socket reconnect', async () => {
@@ -69,7 +69,7 @@ describe('DataManager tombstone GC peer-refusal subscription (#8110)', () => {
     socket.emit.mockClear();
     await act(async () => connectHandler());
 
-    expect(socket.emit).toHaveBeenCalledWith('instances:subscribe');
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('instances:subscribe'));
     await waitFor(() => expect(getTombstoneSweepStatus.mock.calls.length).toBeGreaterThan(initialCalls));
   });
 });
