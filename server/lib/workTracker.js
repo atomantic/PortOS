@@ -546,8 +546,8 @@ async function hostKnownToForgeCli(host) {
   let defaultGhConfigDir = path.join(homedir(), '.config', 'gh');
   if (process.env.XDG_CONFIG_HOME) {
     defaultGhConfigDir = path.join(process.env.XDG_CONFIG_HOME, 'gh');
-  } else if (process.platform === 'win32' && (process.env.AppData || process.env.APPDATA)) {
-    defaultGhConfigDir = path.join(process.env.AppData || process.env.APPDATA, 'GitHub CLI');
+  } else if (process.platform === 'win32' && process.env.APPDATA) {
+    defaultGhConfigDir = path.join(process.env.APPDATA, 'GitHub CLI');
   }
   const ghConfigDir = process.env.GH_CONFIG_DIR
     || defaultGhConfigDir;
@@ -673,8 +673,8 @@ function gitlabProjectPath(originUrl) {
  * a self-hosted GitHub Enterprise Server or GitLab instance can run on ANY
  * domain the operator picked (`git.mycompany.com`,
  * `scm.mycompany.com`, …) — there is no hostname heuristic that can tell such a
- * host apart from a non-forge remote, so the user's own pin is the only signal
- * left. A genuinely wrong pin (e.g. a bitbucket.org origin pinned to 'github')
+ * host apart from a non-forge remote, so the app setting or CLI host config is
+ * the only signal left. A genuinely wrong preference (e.g. a bitbucket.org origin pinned to 'github')
  * still degrades gracefully: the resulting `gh`/`glab` call fails and the
  * caller reports a transient "couldn't reach" error rather than PortOS lying
  * upfront that the origin "isn't GitHub or GitLab".
