@@ -286,7 +286,8 @@ describe('npm spawn shape', () => {
       writeFileSync(join(dir, '.npmrc'), 'ignore-scripts=true\naudit=false\n');
       // Synthetic installed packages: no registry, native compiler, or download.
       // The non-allowlisted package must remain untouched by the explicit rebuild.
-      for (const name of ['node-pty', 'example-untrusted']) {
+      const trustedPackages = TRUSTED_REBUILDS.server.flatMap(({ pkgs }) => pkgs);
+      for (const name of [...trustedPackages, 'example-untrusted']) {
         const pkgDir = join(dir, 'node_modules', name);
         mkdirSync(pkgDir, { recursive: true });
         writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({
@@ -296,7 +297,9 @@ describe('npm spawn shape', () => {
       }
 
       expect(rebuildTrusted(dir, 'server')).toBe(true);
-      expect(existsSync(join(dir, 'node_modules', 'node-pty', 'built.txt'))).toBe(true);
+      for (const name of trustedPackages) {
+        expect(existsSync(join(dir, 'node_modules', name, 'built.txt')), `${name} install hook should run`).toBe(true);
+      }
       expect(existsSync(join(dir, 'node_modules', 'example-untrusted', 'built.txt'))).toBe(false);
       expect(readFileSync(join(dir, '.npmrc'), 'utf8')).toContain('ignore-scripts=true');
     } finally {
