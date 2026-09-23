@@ -51,11 +51,19 @@ describe('vite chunk groups', () => {
   it('captures the whole three stack on both path separators', () => {
     const { test } = groupNamed('vendor-three');
     expect(test.test('/app/node_modules/three/build/three.module.js')).toBe(true);
-    expect(test.test('/app/node_modules/three-stdlib/index.js')).toBe(true);
     expect(test.test('/app/node_modules/three-mesh-bvh/src/index.js')).toBe(true);
     expect(test.test('C:\\app\\node_modules\\@react-three\\fiber\\index.js')).toBe(true);
     // A `three`-prefixed package we do not depend on must not be swept in.
     expect(test.test('/app/node_modules/three-globe/index.js')).toBe(false);
+    // three-stdlib (loaders/exporters) is split into its own chunk (#8146).
+    expect(test.test('/app/node_modules/three-stdlib/index.js')).toBe(false);
+  });
+
+  it('isolates the three-stdlib loaders/exporters into their own chunk (#8146)', () => {
+    const { test } = groupNamed('vendor-three-loaders');
+    expect(test.test('/app/node_modules/three-stdlib/loaders/GLTFLoader.js')).toBe(true);
+    expect(test.test('C:\\app\\node_modules\\three-stdlib\\exporters\\USDZExporter.js')).toBe(true);
+    expect(test.test('/app/node_modules/three/build/three.module.js')).toBe(false);
   });
 
   it('keeps package names from bleeding across the separator', () => {
