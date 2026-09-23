@@ -2345,9 +2345,17 @@ describe('shared development work admission', () => {
     await updateTask(manual.id, { status: 'completed' }, 'user');
     expect((await addTask({ description: 'New evidence', metadata }, 'internal')).duplicate).not.toBe(true);
   });
-  it('reserves untargeted claims against targeted work while preserving independent apps', async () => {
+  it('lets a manual pinned claim proceed alongside a running untargeted drain, but still blocks true duplicates', async () => {
     const claim = await addTask({ description: 'Claim next', app: 'example', claimFlow: true }, 'internal');
-    expect(await addTask({ description: 'Claim 42', app: 'example', claimFlow: true, claimTarget: '42' }, 'user'))
+    // A manual claim of a specific issue is not a duplicate of the app's running
+    // unpinned batch drain — the operator can hand-pick an issue while it runs.
+    const targeted = await addTask({ description: 'Claim 42', app: 'example', claimFlow: true, claimTarget: '42' }, 'user');
+    expect(targeted.duplicate).not.toBe(true);
+    // But a second manual claim of the SAME issue is still a duplicate...
+    expect(await addTask({ description: 'Claim 42 again', app: 'example', claimFlow: true, claimTarget: '42' }, 'user'))
+      .toMatchObject({ id: targeted.id, duplicate: true });
+    // ...and a second untargeted drain for the same app is still a duplicate too.
+    expect(await addTask({ description: 'Claim next again', app: 'example', claimFlow: true }, 'internal'))
       .toMatchObject({ id: claim.id, duplicate: true });
     expect((await addTask({ description: 'Claim 42', app: 'different', claimFlow: true, claimTarget: '42' }, 'user')).duplicate).not.toBe(true);
   });

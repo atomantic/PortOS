@@ -356,11 +356,18 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
 
   // One state lock covers BOTH task files: manual and autonomous producers
   // must acquire the same durable work identity even with different titles.
-  if (developmentWorkIdentity(taskData)) {
+  const newWorkIdentity = developmentWorkIdentity(taskData);
+  if (newWorkIdentity) {
     const otherPath = join(ROOT_DIR, taskType === 'user' ? state.config.cosTasksFile : state.config.userTasksFile);
     const other = existsSync(otherPath) ? await readTaskFile(otherPath) : [];
     const owner = [...tasks, ...other].find(task => task.id !== ignoreTaskId
-      && DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, taskData));
+      && DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, taskData)
+      // A pinned claim of one specific issue is not a duplicate of an already-running
+      // unpinned (wildcard) claim-issue drain for the same app: the drain works the
+      // backlog in bulk, but the operator must still be able to hand-pick a specific
+      // issue while it runs. Two pinned claims for the same issue, or two unpinned
+      // drains for the same app, remain duplicates.
+      && !(newWorkIdentity.kind === 'issue' && newWorkIdentity.key !== '*' && developmentWorkIdentity(task)?.key === '*'));
     if (owner) return { ...owner, duplicate: true };
   }
 
