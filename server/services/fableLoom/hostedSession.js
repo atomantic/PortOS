@@ -449,13 +449,22 @@ export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
     session.activeTurn = null;
   }
 
+  // Re-checked after every await below — a host "end", DELETE /sessions/:id,
+  // or the TTL sweep can tear this session down while we're off reading the
+  // loom or running preflight. Without this a switch that loses that race
+  // would resurrect a deleted session's state and emit `hosted:session:sync`
+  // AFTER the room already saw the terminal `hosted:session:ended`.
+  const isLive = () => activeSessions.get(sessionId) === session && session.status === 'active';
+
   const loom = await getLoom(session.loomId);
+  if (!isLive()) return { ok: false, ended: true, reason: 'session_ended' };
   if (!loom) {
     throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
   }
   const episode = findEpisode(loom, episodeId);
 
   const preflight = await checkHostedSessionReadiness({ loomId: session.loomId, episodeId, loom, episode });
+  if (!isLive()) return { ok: false, ended: true, reason: 'session_ended' };
   const startNode = preflight.ready
     ? episode.nodes?.find((n) => n.id === episode.startNodeId) || null
     : null;

@@ -543,6 +543,26 @@ describe('fableLoom hostedSession', () => {
       const { session } = await createHostedSession('loom-1', 'ep-1');
       await expect(switchHostedEpisode(session.id, 'not-an-episode')).rejects.toMatchObject({ status: 404 });
     });
+
+    // A host "end", DELETE /sessions/:id, or the TTL sweep can land while
+    // switchHostedEpisode is off awaiting the loom read or preflight. Losing
+    // that race must not resurrect the deleted session's state or emit
+    // hosted:session:sync AFTER the room already saw hosted:session:ended.
+    it('does not resurrect a session torn down while awaiting the loom read', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const loomRead = deferred();
+      records.getLoom.mockImplementationOnce(() => loomRead.promise);
+
+      const pending = switchHostedEpisode(session.id, 'ep-2', { io });
+      endHostedSession(session.id, { reason: 'host_ended', io });
+      loomRead.resolve(mockLoom);
+
+      await expect(pending).resolves.toMatchObject({ ok: false, reason: 'session_ended' });
+      expect(getHostedSession(session.id)).toBeNull();
+      expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+    });
   });
 
   describe('expired-session sweep', () => {
