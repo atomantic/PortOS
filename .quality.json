@@ -1,762 +1,595 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "repository": "2d5f6a24e05573259a136bc8e83f04c18bb1438c4f1d96cbe0ac73f6ffc4e0a0",
+  "reportVersion": 1,
+  "categories": [
+    "accessibility",
+    "api-contract",
+    "better-cognitive-load",
+    "better-complexity",
+    "better-dependency-freedom",
+    "better-runtime-safety",
+    "better-structural-drift",
+    "better-test-quality",
+    "code-quality",
+    "console-errors",
+    "copy",
+    "data-safety",
+    "documentation",
+    "error-handling",
+    "mobile-responsive",
+    "module-hygiene",
+    "observability",
+    "performance",
+    "react-lifecycle",
+    "security",
+    "simplify",
+    "test-coverage",
+    "typing",
+    "ui-bugs",
+    "ux"
+  ],
+  "coverage": [
+    "broad",
+    "partial",
+    "unavailable",
+    "not-applicable"
+  ],
+  "confidence": [
+    "low",
+    "medium",
+    "high"
+  ],
   "measurements": [
-    {
-      "measurementId": "25118a56c4a70f291ee6874211cf97dda1284c57643d6702daae80bbface0013",
-      "assessedAt": "2026-09-11T02:09:13.557Z",
-      "report": {
-        "version": 1,
-        "category": "accessibility",
-        "score": 68,
-        "worstSeverity": 8,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 1713,
-        "totalFiles": 1713
-      }
-    },
-    {
-      "measurementId": "cc226f11c98b707bc8cb4228ce2cb527dd9b890465abec31b5e69d67620b7f37",
-      "assessedAt": "2026-09-12T22:47:33.908Z",
-      "report": {
-        "version": 1,
-        "category": "accessibility",
-        "score": 73,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 1607,
-        "totalFiles": 1607
-      }
-    },
-    {
-      "measurementId": "ac055ce60c67f01bcbf85b85fc78cfb53385f5a8ea9179f3862e6e5a63f3b7f9",
-      "assessedAt": "2026-09-17T01:00:58.478Z",
-      "report": {
-        "version": 1,
-        "category": "accessibility",
-        "score": 68,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 4385,
-        "totalFiles": 4385
-      }
-    },
-    {
-      "measurementId": "d980eee1b0165473e654a6ebe0b21bd03d11ba3315c93ae187a6af0271732982",
-      "assessedAt": "2026-09-11T05:26:14.358Z",
-      "report": {
-        "version": 1,
-        "category": "api-contract",
-        "score": 72,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 371,
-        "totalFiles": 371
-      }
-    },
-    {
-      "measurementId": "adc39ece34c95d3e4a7ae246516c8c6185bf0329bdfd38f48916e0618429be4d",
-      "assessedAt": "2026-09-12T14:55:53.463Z",
-      "report": {
-        "version": 1,
-        "category": "api-contract",
-        "score": 82,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7393,
-        "totalFiles": 7393
-      }
-    },
-    {
-      "measurementId": "b36acd4091a03da1b874f2be54fc585b79a5dc66ee7d797c4de5db592ce3e7f5",
-      "assessedAt": "2026-09-10T17:06:43.676Z",
-      "report": {
-        "version": 1,
-        "category": "better-cognitive-load",
-        "score": 64,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 4185,
-        "totalFiles": 4185
-      }
-    },
-    {
-      "measurementId": "ee9bb00004f7f6f6198932d52f8536ec243c128cf5f072cfdce1be0797518aa8",
-      "assessedAt": "2026-09-12T06:34:32.069Z",
-      "report": {
-        "version": 1,
-        "category": "better-cognitive-load",
-        "score": 79,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7396,
-        "totalFiles": 7396
-      }
-    },
-    {
-      "measurementId": "a0e85e88066c35272b55b2273e3b2e86fe123b2a164980e569b1971431bb152b",
-      "assessedAt": "2026-09-17T01:01:17.886Z",
-      "report": {
-        "version": 1,
-        "category": "better-cognitive-load",
-        "score": 78,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 4354,
-        "totalFiles": 4354
-      }
-    },
-    {
-      "measurementId": "1eebdf14e81a8c4f46f3804d9711e68676a0f0cec96c2e87a1fa399c57ba4372",
-      "assessedAt": "2026-09-10T12:38:20.981Z",
-      "report": {
-        "version": 1,
-        "category": "better-complexity",
-        "score": 58,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 4185,
-        "totalFiles": 4185
-      }
-    },
-    {
-      "measurementId": "e9ef09d048e0ec67ae26cb2d4027b45ecd1709e596b00ea329debe86e5672189",
-      "assessedAt": "2026-09-11T23:24:29.322Z",
-      "report": {
-        "version": 1,
-        "category": "better-complexity",
-        "score": 61,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 6526,
-        "totalFiles": 6526
-      }
-    },
-    {
-      "measurementId": "80784a9a5dcb8e030c8cf3d741d62ff92c315bf6a751c150e809ba7f68dd93a4",
-      "assessedAt": "2026-09-12T16:22:39.982Z",
-      "report": {
-        "version": 1,
-        "category": "better-complexity",
-        "score": 78,
-        "worstSeverity": 4,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 3823,
-        "totalFiles": 3823
-      }
-    },
-    {
-      "measurementId": "951101aa2659cf132281633d25b0102cfb8ed8a66cb13675b4052c25f54966f6",
-      "assessedAt": "2026-09-11T20:13:57.414Z",
-      "report": {
-        "version": 1,
-        "category": "better-dependency-freedom",
-        "score": 78,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 8140,
-        "totalFiles": 8140
-      }
-    },
-    {
-      "measurementId": "38f7e45d1083494df287cb377aed54c3b67ef1f2c5a277c4683e27249d801032",
-      "assessedAt": "2026-09-12T14:24:37.137Z",
-      "report": {
-        "version": 1,
-        "category": "better-dependency-freedom",
-        "score": 95,
-        "worstSeverity": 0,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7952,
-        "totalFiles": 7952
-      }
-    },
-    {
-      "measurementId": "4667a1b37ebd3e9cfcb8d5b8f41586f83f022455c7110017ad0cd57d4592c49b",
-      "assessedAt": "2026-09-11T20:05:26.381Z",
-      "report": {
-        "version": 1,
-        "category": "better-runtime-safety",
-        "score": 78,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 7182,
-        "totalFiles": 7182
-      }
-    },
-    {
-      "measurementId": "d0ecd81fa7f53734b7d2e50879859d284382f08e291f03355782e0503bc86dcc",
-      "assessedAt": "2026-09-12T14:24:52.808Z",
-      "report": {
-        "version": 1,
-        "category": "better-runtime-safety",
-        "score": 78,
-        "worstSeverity": 8,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 4237,
-        "totalFiles": 4237
-      }
-    },
-    {
-      "measurementId": "d36486ed4648dea977bd49f02948b071bd36c28e9c14a37f8072c2a634a35cd2",
-      "assessedAt": "2026-09-10T06:14:17.032Z",
-      "report": {
-        "version": 1,
-        "category": "better-structural-drift",
-        "score": 68,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 4175,
-        "totalFiles": 4175
-      }
-    },
-    {
-      "measurementId": "c9d865ae8bd54ab59af168201a5e874363a209711c4d4ff8df73eb7cf83f45b4",
-      "assessedAt": "2026-09-12T05:33:12.949Z",
-      "report": {
-        "version": 1,
-        "category": "better-structural-drift",
-        "score": 84,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7447,
-        "totalFiles": 7447
-      }
-    },
-    {
-      "measurementId": "cb07b1faced51c531abbf96162efd8639d12bfec71a8705250111f3c4a3ae7c2",
-      "assessedAt": "2026-09-11T20:19:43.474Z",
-      "report": {
-        "version": 1,
-        "category": "better-test-quality",
-        "score": 82,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 3139,
-        "totalFiles": 3139
-      }
-    },
-    {
-      "measurementId": "6298c049fb4772b9ff13c3a5a13905015dfe15b99c51609db929c13bc7bea959",
-      "assessedAt": "2026-09-11T00:11:45.376Z",
-      "report": {
-        "version": 1,
-        "category": "code-quality",
-        "score": 82,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 7367,
-        "totalFiles": 7367
-      }
-    },
-    {
-      "measurementId": "547d1674e677d34cef896a9f2d47827cf56da6013eea19e292e02a019f024924",
-      "assessedAt": "2026-09-22T16:37:36.903Z",
-      "report": {
-        "version": 1,
-        "category": "code-quality",
-        "score": 76,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 7995,
-        "totalFiles": 7995
-      }
-    },
-    {
-      "measurementId": "b6e2b7cb6cfea9131f407268e28e2f932309bdb34a740609c0087300de311e45",
-      "assessedAt": "2026-09-12T14:56:09.495Z",
-      "report": {
-        "version": 1,
-        "category": "console-errors",
-        "score": 82,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7389,
-        "totalFiles": 7389
-      }
-    },
-    {
-      "measurementId": "8b6601545bc700e8d052dcce50c8ce786622e05e162ef613e2d3ba74b3d168b4",
-      "assessedAt": "2026-09-11T20:00:38.410Z",
-      "report": {
-        "version": 1,
-        "category": "copy",
-        "score": 76,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 1595,
-        "totalFiles": 1595
-      }
-    },
-    {
-      "measurementId": "2ce67bce3c70db90fa8379b41b9314c05e9f5916323ca7f93d01c1d628adfad4",
-      "assessedAt": "2026-09-11T06:13:55.436Z",
-      "report": {
-        "version": 1,
-        "category": "data-safety",
-        "score": 68,
-        "worstSeverity": 8,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7364,
-        "totalFiles": 7364
-      }
-    },
-    {
-      "measurementId": "1848a824283ed813217a6ee39f61dfc7d86fcb67d83b4d47361841949c0fa525",
-      "assessedAt": "2026-09-12T22:47:50.466Z",
-      "report": {
-        "version": 1,
-        "category": "data-safety",
-        "score": 62,
-        "worstSeverity": 8,
-        "coverage": "partial",
-        "confidence": "medium",
-        "scannedFiles": 7798,
-        "totalFiles": 7798
-      }
-    },
-    {
-      "measurementId": "0dee2a6ffd7c6bc71165a6f405abf5b324f86c20982d27f437307a9f8d6bdceb",
-      "assessedAt": "2026-09-13T03:16:17.962Z",
-      "report": {
-        "version": 1,
-        "category": "data-safety",
-        "score": 80,
-        "worstSeverity": 7,
-        "coverage": "partial",
-        "confidence": "high",
-        "scannedFiles": 2600,
-        "totalFiles": 4238
-      }
-    },
-    {
-      "measurementId": "0102e6409ec8d5ad1b2fde2c78e6f945f2dc5455036f406c1ee86ae26445488b",
-      "assessedAt": "2026-09-10T19:06:38.953Z",
-      "report": {
-        "version": 1,
-        "category": "documentation",
-        "score": 76,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 239,
-        "totalFiles": 239
-      }
-    },
-    {
-      "measurementId": "9a3892fdfe164a95c2c2b7002c7841fa5199083ae283de935fe8ea55be74a554",
-      "assessedAt": "2026-09-12T06:44:46.386Z",
-      "report": {
-        "version": 1,
-        "category": "documentation",
-        "score": 78,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7598,
-        "totalFiles": 7598
-      }
-    },
-    {
-      "measurementId": "107b9748fdbfac4d640ab9627ab16e0a4b84965dbc81d77ce41448452d417efd",
-      "assessedAt": "2026-09-11T05:25:58.268Z",
-      "report": {
-        "version": 1,
-        "category": "error-handling",
-        "score": 71,
-        "worstSeverity": 8,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 4188,
-        "totalFiles": 4188
-      }
-    },
-    {
-      "measurementId": "715f3222b8b5e73b549b88e7200b9382b7d90d368a34cb2616e3e9cb9bd2144e",
-      "assessedAt": "2026-09-12T22:47:42.163Z",
-      "report": {
-        "version": 1,
-        "category": "error-handling",
-        "score": 80,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 4213,
-        "totalFiles": 4213
-      }
-    },
-    {
-      "measurementId": "64fce5882bb11a4f2671b66dd08046de1bd908788f9c88850355ada9cd20795e",
-      "assessedAt": "2026-09-11T04:48:25.502Z",
-      "report": {
-        "version": 1,
-        "category": "mobile-responsive",
-        "score": 86,
-        "worstSeverity": 4,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7334,
-        "totalFiles": 7334
-      }
-    },
-    {
-      "measurementId": "7a6e4d04609546cea27e075014bdb4cf5d8b027586e194526539b55cb663bf93",
-      "assessedAt": "2026-09-10T10:25:44.286Z",
-      "report": {
-        "version": 1,
-        "category": "module-hygiene",
-        "score": 72,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 3763,
-        "totalFiles": 3763
-      }
-    },
-    {
-      "measurementId": "236059feffe76d162bbf7743cc20d1b5d9b35adf25b3f0580335aba4cc77c775",
-      "assessedAt": "2026-09-12T05:52:50.597Z",
-      "report": {
-        "version": 1,
-        "category": "module-hygiene",
-        "score": 82,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 3809,
-        "totalFiles": 3809
-      }
-    },
-    {
-      "measurementId": "3337e7ffed6afdbf3ed541c5adda2c8a6d96945260fe7df93a5b8c0b04c2a111",
-      "assessedAt": "2026-09-22T16:24:54.078Z",
-      "report": {
-        "version": 1,
-        "category": "module-hygiene",
-        "score": 62,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 8110,
-        "totalFiles": 8110
-      }
-    },
-    {
-      "measurementId": "79e6da253105d7801fe4848611a988089553c2c0ffc9dbef51163d09f896cd42",
-      "assessedAt": "2026-09-11T05:26:52.844Z",
-      "report": {
-        "version": 1,
-        "category": "observability",
-        "score": 62,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 4191,
-        "totalFiles": 4191
-      }
-    },
-    {
-      "measurementId": "6b8f438a583abbdb0b5164571b3e1a6f11cef3aaca71eb3ef5d75a4c5269e259",
-      "assessedAt": "2026-09-12T07:02:07.868Z",
-      "report": {
-        "version": 1,
-        "category": "observability",
-        "score": 75,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7389,
-        "totalFiles": 7389
-      }
-    },
-    {
-      "measurementId": "037681c40e1981c533014fbabb4956c8add10299b25ca426d33b18a0e76a7110",
-      "assessedAt": "2026-09-17T04:14:14.575Z",
-      "report": {
-        "version": 1,
-        "category": "observability",
-        "score": 68,
-        "worstSeverity": 7,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 4356,
-        "totalFiles": 4356
-      }
-    },
-    {
-      "measurementId": "f5316a6d7557a33e361dbaee741bb2e1752f3c296f76b21f0379c842bd92fcc6",
-      "assessedAt": "2026-09-21T22:10:15.312Z",
-      "report": {
-        "version": 1,
-        "category": "observability",
-        "score": 55,
-        "worstSeverity": 7,
-        "coverage": "partial",
-        "confidence": "medium",
-        "scannedFiles": 2900,
-        "totalFiles": 4518
-      }
-    },
-    {
-      "measurementId": "a44f79088ea2801f93b9be174397ef78c84c0263b3191dc32a9d3a897141a53b",
-      "assessedAt": "2026-09-22T19:28:42.988Z",
-      "report": {
-        "version": 1,
-        "category": "observability",
-        "score": 80,
-        "worstSeverity": 4,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 8149,
-        "totalFiles": 8149
-      }
-    },
-    {
-      "measurementId": "602a4a5ff34bc32378a90e9a236befa87b739e6601ce623820a2b59bb77f77a8",
-      "assessedAt": "2026-09-10T14:41:26.439Z",
-      "report": {
-        "version": 1,
-        "category": "performance",
-        "score": 68,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 4186,
-        "totalFiles": 4186
-      }
-    },
-    {
-      "measurementId": "6172a2aa31538bcb35e56379aa4c2183bbe83afe2c830cc711ffb3bc5d9af17b",
-      "assessedAt": "2026-09-11T22:12:39.345Z",
-      "report": {
-        "version": 1,
-        "category": "performance",
-        "score": 72,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7341,
-        "totalFiles": 7341
-      }
-    },
-    {
-      "measurementId": "a7f651993a5b6d8138d64390fe74fb9cf0b9b209d19246a6b37a0d794186d49c",
-      "assessedAt": "2026-09-12T06:18:10.363Z",
-      "report": {
-        "version": 1,
-        "category": "performance",
-        "score": 82,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7404,
-        "totalFiles": 7404
-      }
-    },
-    {
-      "measurementId": "68a7930dabd9b67936d871563df04a96bed9f7f15505436d4d5d872e80e4086d",
-      "assessedAt": "2026-09-11T19:55:10.104Z",
-      "report": {
-        "version": 1,
-        "category": "react-lifecycle",
-        "score": 74,
-        "worstSeverity": 8,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 2520,
-        "totalFiles": 2520
-      }
-    },
-    {
-      "measurementId": "89df7d4b97dbacf4db2d7dd5e755e32e4f9faffe0b569bfc6d43cdb150fdbf65",
-      "assessedAt": "2026-09-12T22:48:00.742Z",
-      "report": {
-        "version": 1,
-        "category": "react-lifecycle",
-        "score": 74,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 1603,
-        "totalFiles": 1603
-      }
-    },
-    {
-      "measurementId": "b7895140384428156ad5ff761bee43e33507584ccf2650d1fe1c1098a148f794",
-      "assessedAt": "2026-09-22T16:24:31.577Z",
-      "report": {
-        "version": 1,
-        "category": "react-lifecycle",
-        "score": 62,
-        "worstSeverity": 8,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 1701,
-        "totalFiles": 1701
-      }
-    },
-    {
-      "measurementId": "6f77d6fc832e35e026784e818f6d2f0c964f531e01fb9a167e2a7cb2d97b266d",
-      "assessedAt": "2026-09-10T23:59:42.485Z",
-      "report": {
-        "version": 1,
-        "category": "security",
-        "score": 94,
-        "worstSeverity": 0,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 7462,
-        "totalFiles": 7462
-      }
-    },
-    {
-      "measurementId": "bc16212799340eb771074e1a0132ce007f1716ed816b8e9cbf926dbcb85b89dc",
-      "assessedAt": "2026-09-10T08:32:49.922Z",
-      "report": {
-        "version": 1,
-        "category": "simplify",
-        "score": 70,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7278,
-        "totalFiles": 7278
-      }
-    },
-    {
-      "measurementId": "0f9ff59aadcbf2484ec2f8dbb40c4ad7a80f399eb7d9e8d537798e575751f133",
-      "assessedAt": "2026-09-12T05:44:02.767Z",
-      "report": {
-        "version": 1,
-        "category": "simplify",
-        "score": 82,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "medium",
-        "scannedFiles": 7392,
-        "totalFiles": 7392
-      }
-    },
-    {
-      "measurementId": "d0f5deab25cce80bf524f1c27a0d4943c8e780433b2b535a4e3500591471c902",
-      "assessedAt": "2026-09-21T11:00:03.506Z",
-      "report": {
-        "version": 1,
-        "category": "simplify",
-        "score": 78,
-        "worstSeverity": 4,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 8785,
-        "totalFiles": 8785
-      }
-    },
-    {
-      "measurementId": "8c4861377fe30e010fbc9c5e6bd14c48b85208536631420e0a6d79f7603e722e",
-      "assessedAt": "2026-09-11T00:19:27.463Z",
-      "report": {
-        "version": 1,
-        "category": "test-coverage",
-        "score": 82,
-        "worstSeverity": 8,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 7291,
-        "totalFiles": 7291
-      }
-    },
-    {
-      "measurementId": "4196f433e31368a49b853d97c0c599425ee139438697c99b432873a0ca0ddbde",
-      "assessedAt": "2026-09-11T19:44:53.227Z",
-      "report": {
-        "version": 1,
-        "category": "typing",
-        "score": null,
-        "worstSeverity": 0,
-        "coverage": "not-applicable",
-        "confidence": "high",
-        "scannedFiles": 8140,
-        "totalFiles": 8140
-      }
-    },
-    {
-      "measurementId": "b158c04331799a56444f7b9ffb47caa2886c8edd19fb9ff10572461661c26564",
-      "assessedAt": "2026-09-11T02:45:28.794Z",
-      "report": {
-        "version": 1,
-        "category": "ui-bugs",
-        "score": 82,
-        "worstSeverity": 6,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 2541,
-        "totalFiles": 2541
-      }
-    },
-    {
-      "measurementId": "2ad2c4ced2c2584972be16efd674a6b60ab5b8576eb645b5cb39d39528461c81",
-      "assessedAt": "2026-09-11T05:26:04.263Z",
-      "report": {
-        "version": 1,
-        "category": "ux",
-        "score": 58,
-        "worstSeverity": 8,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 1598,
-        "totalFiles": 1598
-      }
-    },
-    {
-      "measurementId": "f5f8bd301122115aac50887b9c773486fda1b9264e6b6410f5cebc94d71f574d",
-      "assessedAt": "2026-09-12T22:07:58.415Z",
-      "report": {
-        "version": 1,
-        "category": "ux",
-        "score": 68,
-        "worstSeverity": 6,
-        "coverage": "partial",
-        "confidence": "medium",
-        "scannedFiles": 7424,
-        "totalFiles": 7424
-      }
-    },
-    {
-      "measurementId": "362ba5ea9f62d34780b5fe1e50abc3c22a7abdf94701e429f3f251d062ef40e2",
-      "assessedAt": "2026-09-13T05:21:50.077Z",
-      "report": {
-        "version": 1,
-        "category": "ux",
-        "score": 78,
-        "worstSeverity": 5,
-        "coverage": "broad",
-        "confidence": "high",
-        "scannedFiles": 247,
-        "totalFiles": 247
-      }
-    }
+    [
+      "2026-09-10T06:14:17.032Z",
+      6,
+      68,
+      5,
+      0,
+      1,
+      4175,
+      4175
+    ],
+    [
+      "2026-09-10T08:32:49.922Z",
+      20,
+      70,
+      5,
+      0,
+      1,
+      7278,
+      7278
+    ],
+    [
+      "2026-09-10T10:25:44.286Z",
+      15,
+      72,
+      5,
+      0,
+      2,
+      3763,
+      3763
+    ],
+    [
+      "2026-09-10T12:38:20.981Z",
+      3,
+      58,
+      6,
+      0,
+      1,
+      4185,
+      4185
+    ],
+    [
+      "2026-09-10T14:41:26.439Z",
+      17,
+      68,
+      5,
+      0,
+      1,
+      4186,
+      4186
+    ],
+    [
+      "2026-09-10T17:06:43.676Z",
+      2,
+      64,
+      7,
+      0,
+      1,
+      4185,
+      4185
+    ],
+    [
+      "2026-09-10T19:06:38.953Z",
+      12,
+      76,
+      5,
+      0,
+      1,
+      239,
+      239
+    ],
+    [
+      "2026-09-10T23:59:42.485Z",
+      19,
+      94,
+      0,
+      0,
+      2,
+      7462,
+      7462
+    ],
+    [
+      "2026-09-11T00:11:45.376Z",
+      8,
+      82,
+      6,
+      0,
+      2,
+      7367,
+      7367
+    ],
+    [
+      "2026-09-11T00:19:27.463Z",
+      21,
+      82,
+      8,
+      0,
+      2,
+      7291,
+      7291
+    ],
+    [
+      "2026-09-11T02:09:13.557Z",
+      0,
+      68,
+      8,
+      0,
+      2,
+      1713,
+      1713
+    ],
+    [
+      "2026-09-11T02:45:28.794Z",
+      23,
+      82,
+      6,
+      0,
+      2,
+      2541,
+      2541
+    ],
+    [
+      "2026-09-11T04:48:25.502Z",
+      14,
+      86,
+      4,
+      0,
+      1,
+      7334,
+      7334
+    ],
+    [
+      "2026-09-11T05:25:58.268Z",
+      13,
+      71,
+      8,
+      0,
+      2,
+      4188,
+      4188
+    ],
+    [
+      "2026-09-11T05:26:04.263Z",
+      24,
+      58,
+      8,
+      0,
+      2,
+      1598,
+      1598
+    ],
+    [
+      "2026-09-11T05:26:14.358Z",
+      1,
+      72,
+      7,
+      0,
+      1,
+      371,
+      371
+    ],
+    [
+      "2026-09-11T05:26:52.844Z",
+      16,
+      62,
+      6,
+      0,
+      2,
+      4191,
+      4191
+    ],
+    [
+      "2026-09-11T06:13:55.436Z",
+      11,
+      68,
+      8,
+      0,
+      1,
+      7364,
+      7364
+    ],
+    [
+      "2026-09-11T19:44:53.227Z",
+      22,
+      null,
+      0,
+      3,
+      2,
+      8140,
+      8140
+    ],
+    [
+      "2026-09-11T19:55:10.104Z",
+      18,
+      74,
+      8,
+      0,
+      2,
+      2520,
+      2520
+    ],
+    [
+      "2026-09-11T20:00:38.410Z",
+      10,
+      76,
+      5,
+      0,
+      2,
+      1595,
+      1595
+    ],
+    [
+      "2026-09-11T20:05:26.381Z",
+      5,
+      78,
+      7,
+      0,
+      2,
+      7182,
+      7182
+    ],
+    [
+      "2026-09-11T20:13:57.414Z",
+      4,
+      78,
+      7,
+      0,
+      2,
+      8140,
+      8140
+    ],
+    [
+      "2026-09-11T20:19:43.474Z",
+      7,
+      82,
+      5,
+      0,
+      2,
+      3139,
+      3139
+    ],
+    [
+      "2026-09-11T22:12:39.345Z",
+      17,
+      72,
+      6,
+      0,
+      1,
+      7341,
+      7341
+    ],
+    [
+      "2026-09-11T23:24:29.322Z",
+      3,
+      61,
+      7,
+      0,
+      2,
+      6526,
+      6526
+    ],
+    [
+      "2026-09-12T05:33:12.949Z",
+      6,
+      84,
+      5,
+      0,
+      1,
+      7447,
+      7447
+    ],
+    [
+      "2026-09-12T05:44:02.767Z",
+      20,
+      82,
+      5,
+      0,
+      1,
+      7392,
+      7392
+    ],
+    [
+      "2026-09-12T05:52:50.597Z",
+      15,
+      82,
+      5,
+      0,
+      1,
+      3809,
+      3809
+    ],
+    [
+      "2026-09-12T06:18:10.363Z",
+      17,
+      82,
+      6,
+      0,
+      1,
+      7404,
+      7404
+    ],
+    [
+      "2026-09-12T06:34:32.069Z",
+      2,
+      79,
+      6,
+      0,
+      1,
+      7396,
+      7396
+    ],
+    [
+      "2026-09-12T06:44:46.386Z",
+      12,
+      78,
+      7,
+      0,
+      1,
+      7598,
+      7598
+    ],
+    [
+      "2026-09-12T07:02:07.868Z",
+      16,
+      75,
+      6,
+      0,
+      1,
+      7389,
+      7389
+    ],
+    [
+      "2026-09-12T14:24:37.137Z",
+      4,
+      95,
+      0,
+      0,
+      1,
+      7952,
+      7952
+    ],
+    [
+      "2026-09-12T14:24:52.808Z",
+      5,
+      78,
+      8,
+      0,
+      1,
+      4237,
+      4237
+    ],
+    [
+      "2026-09-12T14:55:53.463Z",
+      1,
+      82,
+      6,
+      0,
+      1,
+      7393,
+      7393
+    ],
+    [
+      "2026-09-12T14:56:09.495Z",
+      9,
+      82,
+      6,
+      0,
+      1,
+      7389,
+      7389
+    ],
+    [
+      "2026-09-12T16:22:39.982Z",
+      3,
+      78,
+      4,
+      0,
+      1,
+      3823,
+      3823
+    ],
+    [
+      "2026-09-12T22:07:58.415Z",
+      24,
+      68,
+      6,
+      1,
+      1,
+      7424,
+      7424
+    ],
+    [
+      "2026-09-12T22:47:33.908Z",
+      0,
+      73,
+      7,
+      0,
+      2,
+      1607,
+      1607
+    ],
+    [
+      "2026-09-12T22:47:42.163Z",
+      13,
+      80,
+      7,
+      0,
+      1,
+      4213,
+      4213
+    ],
+    [
+      "2026-09-12T22:47:50.466Z",
+      11,
+      62,
+      8,
+      1,
+      1,
+      7798,
+      7798
+    ],
+    [
+      "2026-09-12T22:48:00.742Z",
+      18,
+      74,
+      6,
+      0,
+      2,
+      1603,
+      1603
+    ],
+    [
+      "2026-09-13T03:16:17.962Z",
+      11,
+      80,
+      7,
+      1,
+      2,
+      2600,
+      4238
+    ],
+    [
+      "2026-09-13T05:21:50.077Z",
+      24,
+      78,
+      5,
+      0,
+      2,
+      247,
+      247
+    ],
+    [
+      "2026-09-17T01:00:58.478Z",
+      0,
+      68,
+      6,
+      0,
+      1,
+      4385,
+      4385
+    ],
+    [
+      "2026-09-17T01:01:17.886Z",
+      2,
+      78,
+      5,
+      0,
+      1,
+      4354,
+      4354
+    ],
+    [
+      "2026-09-17T04:14:14.575Z",
+      16,
+      68,
+      7,
+      0,
+      2,
+      4356,
+      4356
+    ],
+    [
+      "2026-09-21T11:00:03.506Z",
+      20,
+      78,
+      4,
+      0,
+      2,
+      8785,
+      8785
+    ],
+    [
+      "2026-09-21T22:10:15.312Z",
+      16,
+      55,
+      7,
+      1,
+      1,
+      2900,
+      4518
+    ],
+    [
+      "2026-09-22T16:24:31.577Z",
+      18,
+      62,
+      8,
+      0,
+      2,
+      1701,
+      1701
+    ],
+    [
+      "2026-09-22T16:24:54.078Z",
+      15,
+      62,
+      5,
+      0,
+      1,
+      8110,
+      8110
+    ],
+    [
+      "2026-09-22T16:37:36.903Z",
+      8,
+      76,
+      7,
+      0,
+      2,
+      7995,
+      7995
+    ],
+    [
+      "2026-09-22T19:28:42.988Z",
+      16,
+      80,
+      4,
+      0,
+      1,
+      8149,
+      8149
+    ],
+    [
+      "2026-09-23T02:07:11.302Z",
+      15,
+      64,
+      6,
+      0,
+      1,
+      4081,
+      4081
+    ]
   ]
 }
