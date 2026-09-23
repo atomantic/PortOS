@@ -165,6 +165,7 @@ export * from './useCatalogTypes.jsx';
 // === Sockets & lifecycle ===
 export * from './useCosTaskUpdates.js';
 export * from './usePrevious.js';
+export * from './useItermSession.js';
 export * from './useShellSession.js';
 export * from './useSocket.js';
 export * from './useSocketSubscription.js';

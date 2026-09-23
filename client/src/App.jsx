@@ -417,6 +417,9 @@ export default function App() {
           <Route path="local-llm/playground" element={<LocalLlmPlayground />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
+          {/* The iTerm2 view (#8114): the static `iterm` segment outranks :sessionId. */}
+          <Route path="shell/iterm" element={<Shell />} />
+          <Route path="shell/iterm/:itermSessionId" element={<Shell />} />
           <Route path="shell/:sessionId" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
           <Route path="insights" element={<Navigate to="/insights/overview" replace />} />

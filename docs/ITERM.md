@@ -10,6 +10,10 @@ On a Mac running iTerm2, PortOS can list the terminals you already have open in 
 
 The first time PortOS connects, macOS may ask whether PortOS (the process running `osascript`) may control iTerm2. Allow it under **System Settings → Privacy & Security → Automation**.
 
+## Using it
+
+With the feature on, the Shell page header shows a `PortOS | iTerm2` switch. `/shell` and `/shell/:sessionId` stay PortOS shells. `/shell/iterm` lists the iTerm2 sessions, grouped window › tab › pane, and `/shell/iterm/iterm-<uuid>` opens one directly (⌘K "iterm" goes there too). The view has an amber iTerm2 frame and badge plus a `cols×rows · sized by iTerm` geometry badge. The input helpers (Ctrl-C, Esc, arrows, paste, quick commands, fullscreen) all work. New, Stop, Restart, the cd picker and the provider launcher are absent on purpose.
+
 ## How it works
 
 - **In-process and demand-driven.** `server/services/itermBridge.js` holds one WebSocket to iTerm2's private Unix socket (`~/Library/Application Support/iTerm2/private/socket`, subprotocol `api.iterm2.com`). It connects only while the feature is on **and** a browser is listing or viewing iTerm2 sessions (`iterm:list`). It disconnects 60s after the last viewer leaves, and at once when the feature is turned off. Server boot never connects.

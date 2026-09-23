@@ -208,6 +208,9 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.devtools.jira-reports', path: '/devtools/jira/reports', label: 'JIRA Reports', section: 'Dev Tools', feature: 'jira', aliases: ['jira-reports'] },
   { id: 'nav.devtools.quota-burn', path: '/devtools/quota-burn', label: 'Quota Burn', section: 'Models', tabId: 'quota-burn', navGroup: 'Operate', aliases: ['quota-burn', 'burn-quota', 'quota'], keywords: ['subscription', 'usage', 'reset window', 'spend quota', 'claude', 'codex', 'grok', 'agy', 'burn'] },
   { id: 'nav.shell', path: '/shell', label: 'Shell', section: 'Dev Tools', aliases: ['shell', 'terminal'] },
+  // ⌘K / voice only — no sidebar row: the view is reached from the Shell page's
+  // PortOS | iTerm2 switch (#8114).
+  { id: 'nav.shell-iterm', path: '/shell/iterm', label: 'iTerm2 Sessions', section: 'Dev Tools', feature: 'iterm', aliases: ['iterm', 'iterm2'], keywords: ['terminal', 'mac', 'sessions'] },
   { id: 'nav.devtools.usage', path: '/devtools/usage', label: 'Usage', section: 'Models', tabId: 'usage', navGroup: 'Operate', aliases: ['devtools-usage'] },
   { id: 'nav.devtools.video-download', path: '/devtools/video-download', label: 'Video Downloader', section: 'Dev Tools', aliases: ['video-download', 'video-downloader', 'download-video'], keywords: ['youtube', 'x.com', 'twitter', 'yt-dlp', 'download', 'clip'] },
   { id: 'nav.workspace-contexts', path: '/workspace-contexts', label: 'Workspaces', section: 'Dev Tools', aliases: ['workspaces', 'workspace-contexts', 'project-contexts', 'project-switcher'], keywords: ['project', 'context', 'switch project', 'branch', 'shell', 'tasks', 'restore', 'working context'] },

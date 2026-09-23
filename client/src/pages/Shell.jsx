@@ -11,25 +11,23 @@ import ShellProviderLauncher from '../components/shell/ShellProviderLauncher';
 import InfoTooltip from '../components/ui/InfoTooltip';
 import Kbd from '../components/ui/Kbd';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
+import { useLocation } from 'react-router';
+import ShellSourceSwitch from '../components/shell/ShellSourceSwitch';
+import ItermShellView from '../components/shell/ItermShellView';
+import { visibleQuickCommands } from '../components/shell/quickCommands';
 
-// Typed-into-the-current-session shortcuts only. The AI CLIs that used to sit
-// here as hardcoded buttons (claude / codex / agy / grok) now come from the
-// enabled TUI providers via ShellProviderLauncher — a dynamic list that scales
-// past a row of buttons and, unlike a typed command line, carries each
-// provider's own backend env.
-//
-// `openclaw` is the one holdout, because PortOS ships no provider record for it.
-// A new AI CLI belongs in `providers.sample.json` as a TUI provider, where the
-// launcher picks it up for free — do not grow this list back.
-const QUICK_COMMANDS = [
-  { label: 'openclaw', command: 'openclaw tui' },
-  // Claude Code slash-command shortcuts — typed + submitted into an interactive
-  // `claude` session. The flags are double-dash (`--`); keep them verbatim.
-  { label: '/do:next', command: '/do:next --issues --self --review-with=claude,codex --merge' },
-  { label: '/remote-control', command: '/remote-control' },
-];
+// `/shell` + `/shell/:sessionId` are PortOS PTY shells; `/shell/iterm` +
+// `/shell/iterm/:itermSessionId` are the iTerm2 view (#8114). Two separate
+// views, each with its own hook, so the PortOS one never lists, auto-starts or
+// navigates while the iTerm2 view is open, and vice versa.
+const isItermShellPath = (pathname) => pathname === '/shell/iterm' || pathname.startsWith('/shell/iterm/');
 
 export default function Shell() {
+  const { pathname } = useLocation();
+  return isItermShellPath(pathname) ? <ItermShellView /> : <PortosShellView />;
+}
+
+function PortosShellView() {
   const { isFeatureEnabled } = useInstanceFeatures();
   // Fullscreen promotes the terminal to a fixed overlay above the sidebar, hiding
   // the stacked toolbars so the TUI gets the whole viewport — the key mobile win
@@ -152,6 +150,7 @@ export default function Shell() {
             an overflow — without it a narrow phone would push the row wider than
             the page and give the whole document a horizontal scrollbar. */}
         <h1 className="text-xl font-semibold text-white min-w-0 truncate">Shell</h1>
+        <ShellSourceSwitch source="portos" />
         <div
           className={`flex items-center gap-2 shrink-0 text-sm px-2 py-1 rounded ${
             connected ? 'text-port-success sm:bg-port-success/20' : 'text-gray-400 sm:bg-gray-500/20'
@@ -252,7 +251,7 @@ export default function Shell() {
               onOpen={loadProviders}
               onLaunch={launchProvider}
             />
-            {QUICK_COMMANDS.filter(({ label }) => label !== 'openclaw' || isFeatureEnabled('openclaw')).map(({ label, command }) => (
+            {visibleQuickCommands(isFeatureEnabled).map(({ label, command }) => (
               <button
                 key={label}
                 onClick={() => sendCommand(command)}
