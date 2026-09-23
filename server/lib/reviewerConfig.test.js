@@ -739,6 +739,23 @@ describe('claim reviewer round-trip (prompt CSV ↔ persisted metadata)', () => 
     expect(resolveClaimReviewerConfig({ reviewer: 'grok' }, null, ['claude']).reviewers).toEqual(['grok']);
   });
 
+  it('uses a task reviewer override first, then the first healthy system tier', () => {
+    const pausedUntil = Date.now() + 60_000;
+    const defaults = {
+      reviewers: ['ollama'],
+      reviewerFallbackGroups: [['codex'], ['ollama'], ['claude']],
+      reviewerHealth: {
+        grok: { pausedUntil },
+        codex: { pausedUntil },
+      },
+    };
+
+    expect(resolveClaimReviewerConfig({ reviewers: ['grok'] }, defaults, defaults.reviewers).reviewers)
+      .toEqual(['ollama']);
+    expect(resolveClaimReviewerConfig({ reviewers: ['claude'] }, defaults, defaults.reviewers).reviewers)
+      .toEqual(['claude']);
+  });
+
   it('resolveClaimReviewerConfig returns empty reviewers and empty CSV when prCompletion is merge-on-green', () => {
     const config = resolveClaimReviewerConfig({ prCompletion: 'merge-on-green', reviewers: ['codex'] }, defaults, defaults.reviewers);
     expect(config.reviewers).toEqual([]);

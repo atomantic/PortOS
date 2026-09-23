@@ -39,9 +39,9 @@ import {
   normalizeReviewerMaxRounds,
   resolveReviewerMaxRounds,
   reviewerEffortsFromDefaults,
+  resolveReviewerGroup,
   resolveReviewerPins,
   normalizeReviewerEffort,
-  prioritizeToolFreeReviewers,
   EFFORT_SELECTABLE_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
 } from '../lib/reviewerConfig.js'
@@ -362,7 +362,7 @@ export async function getCodeReviewDefaults() {
  */
 export async function resolveReviewLoopOptions(metadata, { normalize }) {
   const defaults = await getCodeReviewDefaults().catch(() => null)
-  const reviewers = prioritizeToolFreeReviewers(normalize(metadata, defaults?.reviewers))
+  const reviewers = resolveReviewerGroup(metadata, defaults, defaults?.reviewers, normalize)
   // GitHub reviewer usernames: a task-level list (even empty) overrides the
   // global default; only fall back to the Code Review Defaults when the task
   // didn't pin its own. Mirrors the reviewers precedence.
