@@ -78,16 +78,11 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
   // fps, tiling, etc.). Video remix lands the user in 'text' mode with all
   // params filled; they can switch to image/extend mode and pick a source.
   //
-  // Videos hand over the RECORD ID (`?remix=<id>`), not a render-settings
-  // bundle (#6290). A field-by-field URL is a second restore implementation
-  // that has to be extended every time a render field is added, and it fell
-  // behind the in-page one: `textEncoderId`, `speedProfileId`, `draftDecode`
-  // and the LoRA arrays were all missing here, so remixing the same clip from
-  // Media History silently returned those controls to stock while remixing it
-  // from the Video Gen gallery restored them. The id lets /media/video resolve
-  // the record from its own history load and reuse `applyRemix` — the single
-  // restore implementation. The field bundle below stays for records with no
-  // id (and keeps previously-issued links working), but is not extended.
+  // Saved videos hand over the record id, and saved images hand over the
+  // filename, rather than maintaining a second field-by-field restore path.
+  // The destination resolves the record and reuses its in-page restore logic.
+  // Filename-less images and id-less videos keep their legacy bundles for
+  // compatibility; those bundles are not extended.
   const handleRemix = useCallback((item) => {
     if (!item) return;
     if (item.kind === 'video') {
@@ -119,8 +114,11 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
       navigate(`/media/video?${params}`);
       return;
     }
+    if (item.filename) {
+      navigate('/media/image?remix=' + encodeURIComponent(item.filename));
+      return;
+    }
     const params = buildImageGenParams(item);
-    if (item.filename) params.set('remix', item.filename);
     navigate(`/media/image?${params}`);
   }, [navigate]);
 

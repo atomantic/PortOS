@@ -28,7 +28,7 @@
 
 import { StrictMode } from 'react';
 import { act, render } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation } from 'react-router';
 import { vi } from 'vitest';
 
 /** Local model as the catalog reports it; `.defaultLocalModel` pins its regressions against this shape. */
@@ -94,6 +94,12 @@ const defaultStatus = async () => ({
 export const state = {
   /** Catalog `listImageModels` resolves to; reassign for a different model list. */
   models: [imageGenModel('dev', { name: 'FLUX.1 Dev' })],
+  listImageModels: vi.fn(async () => state.models),
+  getGalleryImages: vi.fn(async () => []),
+  locationSearch: '',
+  initImagePickerProps: null,
+  loraPickerProps: null,
+  resolutionFieldProps: null,
   /** `GET /api/instances` peers — a media-provider peer makes the target picker appear. */
   peers: [],
   /** `getImageGenStatus`; a spy so a suite can hold the probe open or vary the payload. */
@@ -140,6 +146,12 @@ export const state = {
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetImageGenMockState() {
   state.models = [imageGenModel('dev', { name: 'FLUX.1 Dev' })];
+  state.listImageModels.mockReset().mockImplementation(async () => state.models);
+  state.getGalleryImages.mockReset().mockResolvedValue([]);
+  state.locationSearch = '';
+  state.initImagePickerProps = null;
+  state.loraPickerProps = null;
+  state.resolutionFieldProps = null;
   state.peers = [];
   state.getImageGenStatus.mockReset().mockImplementation(defaultStatus);
   state.generateImage.mockReset().mockResolvedValue({ jobId: 'job-1' });
@@ -167,7 +179,8 @@ vi.mock('../services/api', () => ({
   getImageGenStatus: (...args) => state.getImageGenStatus(...args),
   generateImage: (...args) => state.generateImage(...args),
   generateImageMultipart: vi.fn(async () => ({})),
-  listImageModels: vi.fn(async () => state.models),
+  listImageModels: (...args) => state.listImageModels(...args),
+  getGalleryImages: (...args) => state.getGalleryImages(...args),
   listLorasFull: (...args) => state.listLorasFull(...args),
   listImageGalleryPage: (...args) => state.listImageGalleryPage(...args),
   cancelImageGen: vi.fn(async () => ({})),
@@ -235,6 +248,7 @@ vi.mock('../components/media/UniverseStylePicker', () => ({
 // the gallery card and preview) while every other suite keeps them null.
 vi.mock('../components/imageGen/InitImagePicker', () => ({
   default: (props) => {
+    state.initImagePickerProps = props;
     const Factory = state.initImagePickerFactory;
     return Factory ? <Factory {...props} /> : null;
   },
@@ -270,10 +284,20 @@ vi.mock('../components/media/MediaPreview', () => ({
 vi.mock('../components/Drawer', () => ({ default: () => null }));
 vi.mock('../components/settings/ImageGenTab', () => ({ ImageGenTab: () => null }));
 vi.mock('../components/imageGen/Flux2InstallModal', () => ({ default: () => null }));
-vi.mock('../components/imageGen/LoraPicker', () => ({ default: () => null }));
+vi.mock('../components/imageGen/LoraPicker', () => ({
+  default: (props) => {
+    state.loraPickerProps = props;
+    return null;
+  },
+}));
 vi.mock('../components/media/StylePresetPicker', () => ({ default: () => null }));
 vi.mock('../components/media/MediaJobsQueue', () => ({ default: () => null }));
-vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));
+vi.mock('../components/media/ResolutionField', () => ({
+  default: (props) => {
+    state.resolutionFieldProps = props;
+    return null;
+  },
+}));
 
 let ImageGen = null;
 
@@ -295,9 +319,17 @@ export async function loadImageGenPage() {
  */
 export async function renderImageGenPage(path = '/media/image', { strict = false } = {}) {
   if (!ImageGen) throw new Error('await loadImageGenPage() at module scope before rendering');
+  function LocationProbe() {
+    const location = useLocation();
+    state.locationSearch = location.search;
+    return null;
+  }
   const tree = (
     <MemoryRouter initialEntries={[path]}>
-      <ImageGen />
+      <>
+        <LocationProbe />
+        <ImageGen />
+      </>
     </MemoryRouter>
   );
   let view;

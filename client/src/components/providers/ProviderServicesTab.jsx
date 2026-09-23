@@ -62,9 +62,16 @@ function ServiceCard({
     if (open) ref.current?.scrollIntoView?.({ block: 'nearest' });
   }, [open]);
   // Re-seeded only when the row's revision moves, so a poll that changed
-  // nothing cannot wipe a half-typed edit.
+  // nothing cannot wipe a half-typed edit. The initial state already matches
+  // the loaded service; skip the redundant mount reset so a fast first edit
+  // cannot be overwritten by the passive effect.
   const [draft, setDraft] = useState(() => draftFrom(service));
-  useEffect(() => { setDraft(draftFrom(service)); }, [service.id, service.revision]); // eslint-disable-line react-hooks/exhaustive-deps
+  const draftVersionRef = useRef({ id: service.id, revision: service.revision });
+  useEffect(() => {
+    if (draftVersionRef.current.id === service.id && draftVersionRef.current.revision === service.revision) return;
+    draftVersionRef.current = { id: service.id, revision: service.revision };
+    setDraft(draftFrom(service));
+  }, [service.id, service.revision]); // eslint-disable-line react-hooks/exhaustive-deps
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const set = (key) => (e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }));
   const setTransport = (protocol) => (e) => setDraft((prev) => ({ ...prev, transports: { ...prev.transports, [protocol]: e.target.value } }));
