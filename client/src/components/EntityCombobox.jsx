@@ -190,6 +190,11 @@ export default function EntityCombobox({
                 id={optionId(u.id)}
                 role="option"
                 aria-selected={u.id === selectedId}
+                // Virtually focused via the input's `aria-activedescendant`
+                // (WAI-ARIA combobox pattern) — tabIndex={-1} keeps a native
+                // <button>'s default tab stop from pulling focus off the
+                // input, matching every other option row in this codebase.
+                tabIndex={-1}
                 onClick={() => { onPick(u); setOpen(false); }}
                 onMouseEnter={() => setActiveIdx(i)}
                 className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${
@@ -212,6 +217,7 @@ export default function EntityCombobox({
                 id={createOptionId}
                 role="option"
                 aria-selected={false}
+                tabIndex={-1}
                 disabled={busy}
                 onClick={() => { onCreate(); setOpen(false); }}
                 onMouseEnter={() => setActiveIdx(filtered.length)}

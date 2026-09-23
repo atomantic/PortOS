@@ -94,6 +94,11 @@ export default function SpriteSearch({ records, onSelect }) {
                   id={`sprite-opt-${r.id}`}
                   role="option"
                   aria-selected={i === activeIndex}
+                  // Virtually focused via the input's `aria-activedescendant`
+                  // (WAI-ARIA combobox pattern), like the other option rows in
+                  // this list — tabIndex={-1} keeps a native <button>'s
+                  // default tab stop from pulling focus off the input.
+                  tabIndex={-1}
                   onClick={() => commit(r)}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={`w-full flex items-center gap-2 text-left px-3 py-2 text-sm ${i === activeIndex ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'}`}
