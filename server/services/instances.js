@@ -212,28 +212,12 @@ function validName(name, fallback) {
 }
 
 // "NaN" and "undefined" are what a missing number or a missing value stringify
-// to. They are not peer names. The string "null" is left alone: a hostname can
-// actually be "null", and addPeer accepts it.
-const UNUSABLE_PEER_LABEL = /^(nan|undefined)$/i;
-
 /**
- * The name to print for a peer in a server log.
- *
- * A missing name must not stringify as "NaN". Fall through host, address, then
- * a short instance id so two peers in one sync line stay distinguishable.
+ * Peer display names, hosts, addresses and instance IDs can identify a machine.
+ * Keep server logs generic so runtime sync events do not persist that data.
  */
-export function peerLogLabel(peer) {
-  const text = (value) => (typeof value === 'string' ? value.trim() : '');
-  const usable = (value) => Boolean(value) && !UNUSABLE_PEER_LABEL.test(value);
-  const name = text(peer?.name);
-  if (usable(name)) return name;
-  const host = text(peer?.host);
-  if (usable(host)) return host;
-  const address = text(peer?.address);
-  if (usable(address)) return address;
-  const id = text(peer?.instanceId);
-  if (usable(id)) return id.length > 12 ? `${id.slice(0, 8)}…` : id;
-  return 'unnamed peer';
+export function peerLogLabel() {
+  return 'peer';
 }
 
 function isIPAddress(str) {

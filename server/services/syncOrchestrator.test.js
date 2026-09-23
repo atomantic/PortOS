@@ -767,7 +767,7 @@ describe('syncOrchestrator', () => {
 
       await syncWithPeer({ ...mockPeer, syncCategories: { usage: true } });
 
-      const logged = errorSpy.mock.calls.find(([msg]) => String(msg).includes('usage sync with test-peer failed'));
+      const logged = errorSpy.mock.calls.find(([msg]) => String(msg).includes('usage sync with peer failed'));
       expect(logged).toBeTruthy();
       // The stack rides as a second argument (logFailureWithStack), so the
       // failure names a frame instead of collapsing to one message-only line.
@@ -1261,7 +1261,7 @@ describe('syncOrchestrator', () => {
         await syncAllPeers();
 
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle: 1 peer online'));
-        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync starting with test-peer'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync starting with peer'));
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 0 changes applied across 1 peer'));
       } finally {
         logSpy.mockRestore();
@@ -1286,7 +1286,7 @@ describe('syncOrchestrator', () => {
       try {
         await syncAllPeers();
 
-        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Synced with test-peer: 1 brain changes'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Synced with peer: 1 brain changes'));
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 1 change applied across 1 peer'));
       } finally {
         logSpy.mockRestore();
@@ -1310,7 +1310,7 @@ describe('syncOrchestrator', () => {
       try {
         await syncAllPeers();
 
-        expect(errorSpy.mock.calls.some(([message]) => String(message).includes('usage sync with test-peer failed'))).toBe(true);
+        expect(errorSpy.mock.calls.some(([message]) => String(message).includes('usage sync with peer failed'))).toBe(true);
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 0 changes applied across 1 peer'));
       } finally {
         logSpy.mockRestore();
