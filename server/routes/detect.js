@@ -4,7 +4,7 @@ import { readFile, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { exec } from '../lib/childProcess.js';
 import { promisify } from 'util';
-import { execPm2 } from '../services/pm2.js';
+import { listProcessesStrict } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
@@ -239,8 +239,16 @@ router.post('/pm2', asyncHandler(async (req, res) => {
     throw new ServerError('Process name is required', { status: 400, code: 'MISSING_NAME' });
   }
 
-  const { stdout } = await execPm2(['jlist']).catch(() => ({ stdout: '[]' }));
-  const processes = safeJSONParse(stdout, []);
+  // `listProcessesStrict()` returns `null` when the PM2 read itself FAILED (vs
+  // `[]` for a successful read with no processes) — the absent-vs-empty
+  // contract from issue #968, now the one non-test owner of raw `pm2 jlist`
+  // execution/parsing alongside `autofixer/shared.js` (#8164). `exists: false`
+  // is reserved for a successful empty/no-match read; a failed read is a 503,
+  // never a confident "process not found."
+  const processes = await listProcessesStrict();
+  if (processes === null) {
+    throw new ServerError('PM2 process read failed', { status: 503, code: 'PM2_UNAVAILABLE' });
+  }
   const found = processes.find(p => p.name === name);
 
   res.json({
@@ -248,7 +256,7 @@ router.post('/pm2', asyncHandler(async (req, res) => {
     exists: !!found,
     process: found ? {
       name: found.name,
-      status: found.pm2_env?.status,
+      status: found.status,
       pid: found.pid,
       pm_id: found.pm_id
     } : null

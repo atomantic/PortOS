@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { existsSync } from 'fs';
+import { EventEmitter } from 'events';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -11,6 +12,15 @@ vi.mock('fs/promises', async (importOriginal) => ({
   ...(await importOriginal()),
   readFile: (...args) => readFileMock(...args),
 }));
+
+// listProcessesStrict() tests fake the PM2 CLI's spawned child process so they
+// don't depend on a real `pm2` daemon; every other test in this file leaves
+// spawn unmocked (real execPm2 calls, or short-circuits before spawning).
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawn: (...args) => spawnMock(...args) };
+});
 
 // execPm2's missing-binary guard is tested by faking existsSync rather than
 // actually deleting PM2_BIN, which would break every other test in this file.
@@ -104,5 +114,51 @@ describeShared('autofixer/shared — loadApps', () => {
     await expect(shared.loadApps()).resolves.toEqual([
       { id: 'example-app', pm2ProcessNames: ['example-api'], repoPath: '/srv/example' },
     ]);
+  });
+});
+
+// `listProcessesStrict()` (issue #8164) is the one strict reader `server.js`
+// (the repair daemon) and `ui.js` (the dashboard API) both call — a failed
+// PM2 read must resolve `null`, never `[]`, or a crashed monitored process
+// silently stops getting auto-repaired and the dashboard reports a clean
+// empty process list instead of "unavailable".
+function fakeChild({ stdout = '', code = 0 } = {}) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  queueMicrotask(() => {
+    if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+    child.emit('close', code);
+  });
+  return child;
+}
+
+describeShared('autofixer/shared — listProcessesStrict', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  it('resolves a populated process array on a successful read', async () => {
+    spawnMock.mockReturnValue(fakeChild({
+      stdout: JSON.stringify([{ name: 'svc-a', pm2_env: { status: 'online' } }])
+    }));
+    await expect(shared.listProcessesStrict()).resolves.toEqual([
+      { name: 'svc-a', pm2_env: { status: 'online' } }
+    ]);
+  });
+
+  it('resolves [] for a genuine empty read (not "unavailable")', async () => {
+    spawnMock.mockReturnValue(fakeChild({ stdout: '[]' }));
+    await expect(shared.listProcessesStrict()).resolves.toEqual([]);
+  });
+
+  it('resolves null (not []) when the PM2 CLI exits non-zero', async () => {
+    spawnMock.mockReturnValue(fakeChild({ stdout: '', code: 1 }));
+    await expect(shared.listProcessesStrict()).resolves.toBeNull();
+  });
+
+  it('resolves null (not []) for exit-0 stdout with no real array literal', async () => {
+    spawnMock.mockReturnValue(fakeChild({ stdout: 'pm2 daemon not running', code: 0 }));
+    await expect(shared.listProcessesStrict()).resolves.toBeNull();
   });
 });

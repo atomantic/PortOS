@@ -3,13 +3,15 @@
 // dependency-light (node builtins only): PortOS's own `server/services/pm2.js`
 // has an equivalent `execPm2`, but importing it here would drag the whole
 // server dependency graph into a package whose package.json declares only
-// express.
+// express. `server/lib/pm2Jlist.js` is the one exception: a pure, zero-import
+// leaf, so importing it costs nothing this package needs to stay light about.
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import { parsePm2JlistStdout } from '../server/lib/pm2Jlist.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -40,6 +42,23 @@ export function execPm2(pm2Args) {
     });
     child.on('error', reject);
   });
+}
+
+/**
+ * Strict PM2 process list: the one non-test reader both `server.js` and
+ * `ui.js` share, so a failed read never masquerades as zero processes.
+ *
+ * `null` = the read FAILED (spawn/exit failure, or stdout with no real array
+ * literal — see `parsePm2JlistStdout`); an array (incl. `[]`) = a successful
+ * read. Callers must not collapse `null` into `[]`: the repair daemon skips
+ * its cycle instead of reporting "no PM2 processes found", and the dashboard
+ * API answers 503 instead of an empty list (issue #8164).
+ *
+ * @returns {Promise<Array|null>}
+ */
+export async function listProcessesStrict() {
+  const { stdout } = await execPm2(['jlist']).catch(() => ({ stdout: '' }));
+  return parsePm2JlistStdout(stdout);
 }
 
 // Paths. Resolved from THIS module's location (both consumers are siblings in

@@ -10,7 +10,14 @@ vi.mock('../services/aiDetect.js', () => ({
   detectAppWithAi: vi.fn()
 }));
 
+// `listProcessesStrict` returns `null` on a FAILED PM2 read (distinct from a
+// successful `[]` empty read) — the absent-vs-empty contract from issue #968.
+vi.mock('../services/pm2.js', () => ({
+  listProcessesStrict: vi.fn()
+}));
+
 import { detectAppWithAi } from '../services/aiDetect.js';
+import { listProcessesStrict } from '../services/pm2.js';
 
 describe('Detect Routes', () => {
   let app;
@@ -44,6 +51,59 @@ describe('Detect Routes', () => {
     expect(response.status).toBe(500);
     expect(response.body).toMatchObject({ error: 'provider crashed', code: 'INTERNAL_ERROR' });
     expect(response.body).not.toHaveProperty('success');
+  });
+});
+
+describe('POST /api/detect/pm2', () => {
+  let app;
+
+  beforeEach(() => {
+    app = express();
+    app.use(express.json());
+    app.use('/api/detect', detectRoutes);
+    app.use(errorMiddleware);
+    vi.clearAllMocks();
+  });
+
+  it('reports exists:false only for a successful read with no matching process', async () => {
+    listProcessesStrict.mockResolvedValue([{ name: 'other-app', status: 'online', pid: 123, pm_id: 0 }]);
+
+    const response = await request(app)
+      .post('/api/detect/pm2')
+      .send({ name: 'example-app' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ name: 'example-app', exists: false, process: null });
+  });
+
+  it('reports the matched process status/pid from the mapped shape', async () => {
+    listProcessesStrict.mockResolvedValue([{ name: 'example-app', status: 'online', pid: 123, pm_id: 0 }]);
+
+    const response = await request(app)
+      .post('/api/detect/pm2')
+      .send({ name: 'example-app' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      name: 'example-app',
+      exists: true,
+      process: { name: 'example-app', status: 'online', pid: 123, pm_id: 0 }
+    });
+  });
+
+  // Issue #8164: a FAILED PM2 read must not be reported as exists:false —
+  // that would tell a caller the process is confidently absent when its
+  // status is actually unavailable.
+  it('returns a 503 instead of exists:false when the PM2 read fails', async () => {
+    listProcessesStrict.mockResolvedValue(null);
+
+    const response = await request(app)
+      .post('/api/detect/pm2')
+      .send({ name: 'example-app' });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toMatchObject({ code: 'PM2_UNAVAILABLE' });
+    expect(response.body).not.toHaveProperty('exists');
   });
 });
 
