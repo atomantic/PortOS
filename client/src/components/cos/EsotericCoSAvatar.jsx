@@ -1,11 +1,13 @@
-import { useRef, useMemo } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useRef, useMemo, useEffect } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Float, MeshDistortMaterial, Sparkles, Stars } from '@react-three/drei';
 import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 import CoSCanvasGuard from './CoSCanvasGuard';
+import { graphMotionSettings } from '../graph3d/GraphScene';
+import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
 
 // Central mystical core - an artifact of unknown origin
 function EsotericCore({ color, state, speaking }) {
@@ -178,6 +180,16 @@ function FloatingRunes({ color }) {
 }
 
 
+// Under frameloop='demand', state/speaking changes that only affect
+// useFrame-driven properties need to invalidate the frame so one renders.
+function InvalidateOnStateChange({ state, speaking }) {
+  const { invalidate } = useThree();
+  useEffect(() => {
+    invalidate();
+  }, [state, speaking, invalidate]);
+  return null;
+}
+
 function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
@@ -185,6 +197,8 @@ function Scene({ state, speaking, background }) {
   return (
     <>
       <CoSBackgroundCamera enabled={background} z={5} />
+
+      <InvalidateOnStateChange state={state} speaking={speaking} />
 
       <ambientLight intensity={0.2} />
       <pointLight position={[10, 10, 10]} intensity={1} color={color} />
@@ -204,12 +218,14 @@ function Scene({ state, speaking, background }) {
 }
 
 export default function EsotericCoSAvatar({ state, speaking, background = false }) {
+  const reduceMotion = usePrefersReducedMotion();
   return (
     <CoSCanvasGuard label="Esoteric 3D avatar. Drag to rotate." background={background}>
       <Canvas
         camera={{ position: [0, 0, 5], fov: 45 }}
         style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
+        {...graphMotionSettings(reduceMotion)}
       >
         <Scene state={state} speaking={speaking} background={background} />
       </Canvas>

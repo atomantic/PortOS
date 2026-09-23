@@ -14,11 +14,21 @@ vi.mock('./CoSCanvasGuard', () => ({
 }));
 // jsdom has no WebGL context and none of the scene is under test here, so the
 // Canvas is stubbed CHILDLESS — rendering the subtree would run three.js object
-// code against r3f's HTMLElement stand-ins. Only which props reach the guard
-// matters, and the guard sits OUTSIDE the canvas.
+// code against r3f's HTMLElement stand-ins. Capture frameloop prop to verify
+// reduced-motion behavior. The guard sits OUTSIDE the canvas.
+const canvasProps = vi.hoisted(() => []);
 vi.mock('@react-three/fiber', () => ({
-  Canvas: () => <div data-testid="mini-canvas" />,
+  Canvas: (props) => {
+    canvasProps.push(props);
+    return <div data-testid="mini-canvas" data-frameloop={props.frameloop} />;
+  },
   useFrame: vi.fn(),
+  useThree: vi.fn(() => ({ invalidate: vi.fn() })),
+}));
+
+let reduceMotionPreference = false;
+vi.mock('../../hooks/usePrefersReducedMotion', () => ({
+  default: () => reduceMotionPreference,
 }));
 
 import MiniCharacterCoSAvatar from './MiniCharacterCoSAvatar';
@@ -26,6 +36,8 @@ import MiniCharacterCoSAvatar from './MiniCharacterCoSAvatar';
 describe('MiniCharacterCoSAvatar', () => {
   beforeEach(() => {
     guardProps.length = 0;
+    canvasProps.length = 0;
+    reduceMotionPreference = false;
     // The component HEAD-probes the model before mounting the canvas.
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true })));
   });
@@ -58,5 +70,17 @@ describe('MiniCharacterCoSAvatar', () => {
       'data-reset-key',
       '/api/avatar/model.glb?variant=rigged-image3d-1',
     ));
+  });
+
+  it('passes frameloop="demand" to Canvas when reduced motion is preferred', async () => {
+    reduceMotionPreference = true;
+    render(<MiniCharacterCoSAvatar variant="mini-male-c" />);
+    await waitFor(() => expect(screen.getByTestId('mini-canvas')).toHaveAttribute('data-frameloop', 'demand'));
+  });
+
+  it('passes frameloop="always" to Canvas when reduced motion is not preferred', async () => {
+    reduceMotionPreference = false;
+    render(<MiniCharacterCoSAvatar variant="mini-male-c" />);
+    await waitFor(() => expect(screen.getByTestId('mini-canvas')).toHaveAttribute('data-frameloop', 'always'));
   });
 });
