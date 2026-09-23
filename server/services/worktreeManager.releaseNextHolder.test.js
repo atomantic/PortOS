@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { execGit } from '../lib/execGit.js';
 import { releaseIdleSiblingNextHolder } from './worktreeManager.js';
 
@@ -39,7 +39,9 @@ afterEach(async () => {
 
 describe('releaseIdleSiblingNextHolder', () => {
   it('detaches an idle, clean, pushed sibling tree in place so the branch can be checked out', async () => {
-    await expect(releaseIdleSiblingNextHolder(repo, BRANCH, { nowMs: LATER() })).resolves.toEqual({ path: holder });
+    // git reports forward-slash paths on Windows, so compare resolved paths.
+    const released = await releaseIdleSiblingNextHolder(repo, BRANCH, { nowMs: LATER() });
+    expect(resolve(released.path)).toBe(resolve(holder));
     expect(existsSync(holder)).toBe(true);
     expect(await holderBranch()).toBe('');
     await git(['worktree', 'add', '-q', join(root, 'follow-up'), BRANCH]);
