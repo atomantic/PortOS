@@ -373,6 +373,104 @@ describe('universe-builder routes', () => {
     expect(missing.body.code).toBe('NOT_FOUND');
   });
 
+  it('POST /:id/import/markdown replaces represented sections and preserves local entry metadata', async () => {
+    const app = buildApp();
+    const created = await request(app)
+      .post('/api/universe-builder')
+      .send({
+        name: 'Original Markdown World',
+        characters: [
+          { name: 'Mira', role: 'Scout', notes: 'Local note to preserve.' },
+          { name: 'Removed Character', role: 'Old role' },
+        ],
+        places: [{ name: 'The Archive', slugline: 'INT. THE ARCHIVE - DAY', description: 'Old location detail.' }],
+        categories: {
+          landscapes: {
+            kind: 'places',
+            variations: [{ label: 'Copper Flats', prompt: 'shimmering ground', imageRefs: ['local-ref.png'], locked: false }],
+          },
+          vehicles: { kind: 'objects', variations: [{ label: 'Old Skiff', prompt: 'a small boat' }] },
+        },
+        influences: { embrace: ['warm light'], avoid: ['plastic'] },
+      });
+    expect(created.status).toBe(201);
+    const miraId = created.body.characters.find((entry) => entry.name === 'Mira').id;
+    const archiveId = created.body.places[0].id;
+    const variationId = created.body.categories.landscapes.variations[0].id;
+
+    const imported = await request(app)
+      .post(`/api/universe-builder/${created.body.id}/import/markdown`)
+      .send({ markdown: [
+        '# Imported Markdown World',
+        '',
+        '**Premise:** A new map changes the coast.',
+        '',
+        '## Characters',
+        '',
+        '### Mira',
+        '',
+        '**Role:** Guide',
+        '',
+        '### Rin',
+        '',
+        '**Role:** Navigator',
+        '',
+        '## Places',
+        '',
+        '### The Archive',
+        '',
+        '**Description:** A living tower of maps.',
+        '',
+        '## Categories',
+        '',
+        '### landscapes',
+        '**Kind:** places',
+        '- **Copper Flats** — salt plains beneath a red sunrise',
+        '',
+        '## Influences',
+        '',
+        '- Embrace: copper',
+      ].join('\n') });
+
+    expect(imported.status).toBe(200);
+    expect(imported.body.name).toBe('Imported Markdown World');
+    expect(imported.body.premise).toBe('A new map changes the coast.');
+    expect(imported.body.characters.map((entry) => entry.name)).toEqual(['Mira', 'Rin']);
+    expect(imported.body.characters[0]).toMatchObject({
+      id: miraId,
+      role: 'Guide',
+      notes: 'Local note to preserve.',
+    });
+    expect(imported.body.places[0]).toMatchObject({
+      id: archiveId,
+      name: 'The Archive',
+      slugline: 'INT. THE ARCHIVE - DAY',
+      description: 'A living tower of maps.',
+    });
+    expect(imported.body.categories.landscapes.variations[0]).toMatchObject({
+      id: variationId,
+      label: 'Copper Flats',
+      prompt: 'salt plains beneath a red sunrise',
+      imageRefs: ['local-ref.png'],
+      locked: false,
+    });
+    expect(imported.body.categories.vehicles.variations).toEqual([]);
+    expect(imported.body.influences).toEqual({ embrace: ['copper'], avoid: [] });
+  });
+
+  it('POST /:id/import/markdown rejects a document without a universe title', async () => {
+    const app = buildApp();
+    const created = await request(app)
+      .post('/api/universe-builder')
+      .send({ name: 'Markdown Validation Target' });
+    const response = await request(app)
+      .post(`/api/universe-builder/${created.body.id}/import/markdown`)
+      .send({ markdown: '## Characters\n\n### Mira' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+  });
+
   it('POST / creates a universe', async () => {
     const res = await request(buildApp())
       .post('/api/universe-builder')

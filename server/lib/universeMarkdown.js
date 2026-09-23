@@ -70,7 +70,11 @@ const formatInlineValue = (value) => {
   if (typeof value === 'string') return value.trim().replace(/\s*[\r\n]+\s*/g, ' ');
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (Array.isArray(value)) {
-    return value.map(formatInlineValue).filter(Boolean).join(', ');
+    return value
+      .map(formatInlineValue)
+      .filter(Boolean)
+      .map((rendered) => rendered.replace(/\\/g, '\\\\').replace(/,/g, '\\,'))
+      .join(', ');
   }
   if (typeof value === 'object') {
     return Object.entries(value)
@@ -95,7 +99,7 @@ const formatBlockValue = (value) => {
     .map((line) => {
       const leading = line.match(/^\s*/u)?.[0] || '';
       const content = line.slice(leading.length);
-      return /^(?:#{1,6}\s|>\s?|[-*_]{3,}\s*$|=+\s*$|-+\s*$|`{3,})/u.test(content)
+      return /^(?:#{1,6}\s|>\s?|[-*_]{3,}\s*$|=+\s*$|-+\s*$|`{3,}|\*\*[^*]+:\*\*)/u.test(content)
         ? `${leading}\\${content}`
         : line;
     })
@@ -236,7 +240,10 @@ export function universeToMarkdown(record) {
   const source = record && typeof record === 'object' ? record : {};
   const sections = [`# ${headingText(source.name, 'Untitled Universe')}`];
   const prose = ['logline', 'premise', 'styleNotes']
-    .map((key) => formatBlockValue(source[key]))
+    .map((key) => {
+      const value = formatBlockValue(source[key]);
+      return value ? `**${formatFieldLabel(key)}:** ${value}` : '';
+    })
     .filter(Boolean);
   if (prose.length) sections.push(prose.join('\n\n'));
 
@@ -255,4 +262,227 @@ export function universeToMarkdown(record) {
   }
 
   return `${sections.join('\n\n').trimEnd()}\n`;
+}
+
+const STRING_FIELDS = Object.freeze({
+  characters: new Set([
+    'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern',
+    'visualNotes', 'physicalDescription', 'personality', 'background',
+    'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
+    'motivations', 'ghost', 'wound', 'lie', 'want', 'need', 'arcType',
+    'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'voiceId',
+    'prompt', 'notes', 'firstAppearance',
+  ]),
+  places: new Set([
+    'slugline', 'description', 'palette', 'era', 'weather', 'intExt',
+    'timeOfDay', 'recurringDetails', 'prompt', 'notes', 'firstAppearance',
+  ]),
+  objects: new Set([
+    'description', 'significance', 'prompt', 'notes', 'firstAppearance',
+  ]),
+});
+
+const ARRAY_FIELDS = Object.freeze({
+  characters: new Set(['aliases', 'tags', 'secrets', 'evidence', 'missingFromProse']),
+  places: new Set(['tags', 'evidence', 'missingFromProse']),
+  objects: new Set(['aliases', 'tags', 'evidence', 'missingFromProse']),
+});
+const UNIVERSE_FIELDS = new Map([
+  ['logline', 'logline'],
+  ['premise', 'premise'],
+  ['styleNotes', 'styleNotes'],
+]);
+const SECTION_NAMES = new Map([
+  ['characters', 'characters'],
+  ['places', 'places'],
+  ['objects', 'objects'],
+  ['categories', 'categories'],
+  ['influences', 'influences'],
+]);
+
+const unescapeMarkdownLine = (line) => line.replace(
+  /^(\s*)\\(?=(?:#{1,6}\s|>\s?|[-*_]{3,}\s*$|`{3,}|\*\*[^*]+:\*\*))/u,
+  '$1',
+);
+
+const fieldKey = (label) => label
+  .trim()
+  .toLowerCase()
+  .split(/[^a-z0-9]+/u)
+  .filter(Boolean)
+  .map((part, index) => (index === 0 ? part : `${part[0].toUpperCase()}${part.slice(1)}`))
+  .join('');
+
+const FIELD_LINE = /^\*\*([^*]+):\*\*(?:\s+(.*))?$/u;
+
+const readFieldBlocks = (lines, isKnownField) => {
+  const fields = {};
+  const free = [];
+  let activeKey = null;
+  let activeLines = [];
+  let ignoringField = false;
+  const flush = () => {
+    if (activeKey) fields[activeKey] = activeLines.join('\n').trim();
+    activeKey = null;
+    activeLines = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = unescapeMarkdownLine(rawLine);
+    const escapedFieldLine = /^\s*\\\*\*[^*]+:\*\*/u.test(rawLine);
+    const match = escapedFieldLine ? null : line.match(FIELD_LINE);
+    if (match) {
+      flush();
+      activeKey = fieldKey(match[1]);
+      ignoringField = !isKnownField(activeKey);
+      if (ignoringField) activeKey = null;
+      else activeLines = [match[2] || ''];
+    } else if (activeKey) {
+      activeLines.push(line);
+    } else if (!ignoringField) {
+      free.push(line);
+    }
+  }
+  flush();
+  return { fields, freeText: free.join('\n').trim() };
+};
+
+const splitArrayValue = (value) => {
+  const items = [];
+  let item = '';
+  for (let i = 0; i < value.length; i += 1) {
+    if (value[i] === '\\' && (value[i + 1] === ',' || value[i + 1] === '\\')) {
+      item += value[i + 1];
+      i += 1;
+    } else if (value[i] === ',') {
+      if (item.trim()) items.push(item.trim());
+      item = '';
+      while (value[i + 1] === ' ') i += 1;
+    } else {
+      item += value[i];
+    }
+  }
+  if (item.trim()) items.push(item.trim());
+  return items;
+};
+
+const readSections = (lines) => {
+  const sections = [];
+  let current = null;
+  const preamble = [];
+  for (const line of lines) {
+    const heading = line.match(/^##\s+(.+?)\s*#*\s*$/u);
+    if (!heading) {
+      if (current) current.lines.push(line);
+      else preamble.push(line);
+      continue;
+    }
+    current = { title: heading[1].trim().toLowerCase(), lines: [] };
+    sections.push(current);
+  }
+  return { preamble, sections };
+};
+
+const splitSubsections = (lines) => {
+  const subsections = [];
+  let current = null;
+  for (const line of lines) {
+    const heading = line.match(/^###\s+(.+?)\s*#*\s*$/u);
+    if (!heading) {
+      if (current) current.lines.push(line);
+      continue;
+    }
+    current = { title: unescapeMarkdownLine(heading[1]).trim(), lines: [] };
+    subsections.push(current);
+  }
+  return subsections;
+};
+
+const parseCanonEntries = (kind, lines) => splitSubsections(lines).map(({ title, lines: entryLines }) => {
+  const { fields, freeText } = readFieldBlocks(
+    entryLines,
+    (key) => STRING_FIELDS[kind].has(key) || ARRAY_FIELDS[kind].has(key),
+  );
+  const entry = { ...(kind === 'places' && /^(?:int\.?\s*\/\s*ext\.?|ext\.?|int\.?)(?:\s|\.)/iu.test(title)
+    ? { slugline: title }
+    : { name: title }) };
+  for (const [key, value] of Object.entries(fields)) {
+    if (STRING_FIELDS[kind].has(key)) entry[key] = value;
+    else if (ARRAY_FIELDS[kind].has(key)) entry[key] = splitArrayValue(value);
+  }
+  if (freeText && !entry.notes) entry.notes = freeText;
+  return entry;
+});
+
+const parseCategories = (lines) => Object.fromEntries(splitSubsections(lines).map(({ title, lines: categoryLines }) => {
+  let kind;
+  const variations = [];
+  for (const rawLine of categoryLines) {
+    const line = unescapeMarkdownLine(rawLine).trim();
+    const kindMatch = line.match(/^\*\*kind:\*\*\s*(.+)$/iu);
+    if (kindMatch) {
+      kind = kindMatch[1].trim();
+      continue;
+    }
+    const labeled = line.match(/^-\s+\*\*(.+?)\*\*\s+—\s+(.*)$/u);
+    if (labeled) {
+      variations.push({ label: labeled[1].trim(), prompt: labeled[2].trim() });
+      continue;
+    }
+    const bullet = line.match(/^-\s+(.+)$/u);
+    if (bullet) {
+      const value = bullet[1].trim();
+      if (value) variations.push({ label: value, prompt: value });
+    }
+  }
+  return [title, { ...(kind ? { kind } : {}), variations }];
+}));
+
+const parseInfluences = (lines) => {
+  const influences = { embrace: [], avoid: [] };
+  for (const rawLine of lines) {
+    const match = unescapeMarkdownLine(rawLine).trim().match(/^-\s+(embrace|avoid):\s*(.+)$/iu);
+    if (!match) continue;
+    const value = match[2].trim();
+    if (value) influences[match[1].toLowerCase()].push(value);
+  }
+  return influences;
+};
+
+/**
+ * Parse the editable world-bible fields represented by Universe Markdown.
+ * Exported sections are treated as replacements; omitted sections are absent
+ * from the patch. The parser intentionally skips local image pointers and
+ * inventory-only Composite Sheets / Style References rows.
+ *
+ * @param {string} markdown - A Markdown document with a top-level universe title.
+ * @returns {Record<string, unknown>} A partial universe patch.
+ */
+export function parseUniverseMarkdown(markdown) {
+  if (typeof markdown !== 'string') throw new Error('Choose a Markdown file to import.');
+  const lines = markdown.replace(/^\uFEFF/u, '').replace(/\r\n?/gu, '\n').split('\n');
+  const titleIndex = lines.findIndex((line) => line.trim());
+  const title = titleIndex >= 0 ? lines[titleIndex].match(/^#\s+(.+?)\s*#*\s*$/u) : null;
+  if (!title?.[1]?.trim()) throw new Error('Markdown must start with a top-level # universe title.');
+
+  const { preamble, sections } = readSections(lines.slice(titleIndex + 1));
+  const { fields: topFields, freeText } = readFieldBlocks(
+    preamble,
+    (key) => UNIVERSE_FIELDS.has(key),
+  );
+  const patch = { name: title[1].trim() };
+  for (const [key, value] of Object.entries(topFields)) patch[UNIVERSE_FIELDS.get(key)] = value;
+  if (freeText && !('premise' in patch)) patch.premise = freeText;
+
+  for (const section of sections) {
+    const key = SECTION_NAMES.get(section.title);
+    if (key === 'characters' || key === 'places' || key === 'objects') {
+      patch[key] = parseCanonEntries(key, section.lines);
+    } else if (key === 'categories') {
+      patch.categories = parseCategories(section.lines);
+    } else if (key === 'influences') {
+      patch.influences = parseInfluences(section.lines);
+    }
+  }
+  return patch;
 }

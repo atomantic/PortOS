@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { slugifyUniverseName, universeMarkdownFilename, universeToMarkdown } from './universeMarkdown.js';
+import {
+  parseUniverseMarkdown,
+  slugifyUniverseName,
+  universeMarkdownFilename,
+  universeToMarkdown,
+} from './universeMarkdown.js';
 import { UNIVERSE_MARKDOWN_FILENAME_CASES } from '../../client/src/lib/universeMarkdownFilename.cases.js';
 
 describe('universeToMarkdown', () => {
@@ -22,7 +27,8 @@ describe('universeToMarkdown', () => {
     });
 
     expect(markdown).toContain('# The Bright World');
-    expect(markdown).toContain('A world beneath two suns.\n\nEvery map changes when the second sun rises.');
+    expect(markdown).toContain('**Logline:** A world beneath two suns.');
+    expect(markdown).toContain('**Premise:** Every map changes when the second sun rises.');
     expect(markdown).toContain('## Characters\n\n### Mira');
     expect(markdown).toContain('### Mira\n\n**Role:** Cartographer');
     expect(markdown).toContain('**Physical Description:** Patient and precise.');
@@ -125,5 +131,52 @@ describe('universe markdown filenames', () => {
   it.each(UNIVERSE_MARKDOWN_FILENAME_CASES)('matches the client-safe contract for %j', (name, slug, filename) => {
     expect(slugifyUniverseName(name)).toBe(slug);
     expect(universeMarkdownFilename(name)).toBe(filename);
+  });
+});
+
+describe('parseUniverseMarkdown', () => {
+  it('reads the exported editable fields, including multiline values and escaped headings', () => {
+    const markdown = universeToMarkdown({
+      name: 'The Bright World',
+      logline: 'A world beneath two suns.',
+      premise: 'Every map changes.\n## A heading inside the text.\n**Logline:** literal text, not a field.',
+      styleNotes: 'Warm copper light.',
+      characters: [{ name: 'Mira', aliases: ['The Mapper, Jr.', 'M.'], role: 'Cartographer', notes: 'Patient and precise.' }],
+      places: [{ slugline: 'INT. THE ARCHIVE - DAY', description: 'A tower of living maps.' }],
+      objects: [{ name: 'Sun Compass', description: 'Points toward the next dawn.' }],
+      categories: {
+        landscapes: { kind: 'places', variations: [{ label: 'Copper Flats', prompt: 'shimmering salt' }] },
+      },
+      influences: { embrace: ['copper', 'dust'], avoid: ['plastic'] },
+    });
+
+    expect(parseUniverseMarkdown(markdown)).toEqual({
+      name: 'The Bright World',
+      logline: 'A world beneath two suns.',
+      premise: 'Every map changes.\n## A heading inside the text.\n**Logline:** literal text, not a field.',
+      styleNotes: 'Warm copper light.',
+      characters: [{
+        name: 'Mira', aliases: ['The Mapper, Jr.', 'M.'], role: 'Cartographer', notes: 'Patient and precise.',
+      }],
+      places: [{ slugline: 'INT. THE ARCHIVE - DAY', description: 'A tower of living maps.' }],
+      objects: [{ name: 'Sun Compass', description: 'Points toward the next dawn.' }],
+      categories: {
+        landscapes: { kind: 'places', variations: [{ label: 'Copper Flats', prompt: 'shimmering salt' }] },
+      },
+      influences: { embrace: ['copper', 'dust'], avoid: ['plastic'] },
+    });
+  });
+
+  it('imports older and hand-authored Markdown prose as the premise', () => {
+    expect(parseUniverseMarkdown('# Example Universe\n\nA concise premise.\n\nMore context.')).toEqual({
+      name: 'Example Universe',
+      premise: 'A concise premise.\n\nMore context.',
+    });
+  });
+
+  it('rejects Markdown without a top-level universe title', () => {
+    expect(() => parseUniverseMarkdown('## Characters\n\n### Mira')).toThrow(
+      'Markdown must start with a top-level # universe title.',
+    );
   });
 });

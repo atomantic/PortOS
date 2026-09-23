@@ -652,6 +652,40 @@ describe('useUniverseDraft', () => {
     await waitFor(() => expect(result.current.draft.premise).toBe('Saved premise'));
   });
 
+  it('tracks a directly marked import response before a hydration GET can overwrite it', async () => {
+    let serverUpdatedAt = universe.updatedAt;
+    let u1Fetches = 0;
+    let resolveStaleHydration;
+    apiMocks.getUniverse.mockImplementation(async (id) => {
+      if (id === 'u2') return universeTwo;
+      u1Fetches += 1;
+      if (u1Fetches === 2) return new Promise((resolve) => { resolveStaleHydration = resolve; });
+      return { ...universe, premise: 'Imported premise', updatedAt: serverUpdatedAt };
+    });
+
+    const { result, rerender } = renderSelectable();
+    await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+    const importedAt = tickServerClock();
+    const imported = { ...universe, premise: 'Imported premise', updatedAt: importedAt };
+    await act(async () => {
+      serverUpdatedAt = importedAt;
+      result.current.setDraft(imported);
+      result.current.markDraftSaved(imported);
+    });
+
+    await act(async () => { rerender({ selectedId: 'u2' }); });
+    await waitFor(() => expect(result.current.draft.id).toBe('u2'));
+    await act(async () => { rerender({ selectedId: 'u1' }); });
+    await waitFor(() => expect(resolveStaleHydration).toBeTypeOf('function'));
+    await act(async () => {
+      resolveStaleHydration({ ...universe, premise: 'Original premise', updatedAt: universe.updatedAt });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(result.current.draft.premise).toBe('Imported premise'));
+    expect(u1Fetches).toBe(3);
+  });
+
   it('lets an un-raced hydration carry a peer edit the client never wrote', async () => {
     // The mirror of the test above: with no mutation in flight, the GET is
     // authoritative — including for writers the client can't see (peer sync,
