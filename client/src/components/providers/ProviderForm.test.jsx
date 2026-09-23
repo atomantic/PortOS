@@ -337,6 +337,25 @@ describe('ProviderForm model access', () => {
     expect(screen.getByText(/No patterns yet/)).toBeInTheDocument();
   });
 
+  // The Default Model select used to be built from the raw catalog, ignoring
+  // the policy the "Catalog" checklist right above it already enforces — so a
+  // provider scoped to one model still offered the hidden one as the default.
+  it('scopes the Default Model select to the model access policy', () => {
+    renderForm({ provider: scopedProvider });
+    switchTab('Models');
+    const defaultModelSelect = screen.getByLabelText('Default Model');
+    const optionValues = Array.from(defaultModelSelect.options).map(o => o.value);
+    expect(optionValues).toContain('meta/llama-3.3-70b-instruct');
+    expect(optionValues).not.toContain('nvidia/nemotron-4-340b-instruct');
+  });
+
+  it('keeps an already-configured default model selectable even if the policy now hides it', () => {
+    renderForm({ provider: { ...scopedProvider, defaultModel: 'nvidia/nemotron-4-340b-instruct' } });
+    switchTab('Models');
+    const defaultModelSelect = screen.getByLabelText('Default Model');
+    expect(defaultModelSelect).toHaveValue('nvidia/nemotron-4-340b-instruct');
+  });
+
   // #7565: a DERIVED preset says where its connection comes from; a legacy one
   // the server reports convertible offers the one-click conversion and closes
   // through onSave like any other save. Neither appears on a new record.

@@ -32,6 +32,9 @@ export {
   // What the form submits, and what the catalog list marks as glob-covered.
   normalizeModelAccess,
   modelMatchesAccessPatterns,
+  // The scoping primitive itself, so other model pickers (Default Model, tier
+  // selects) can apply the same policy the editor already previews.
+  scopeModelsByAccess,
 } from '../../../server/lib/aiToolkit/internal/modelAccess.js';
 
 /** How each mode reads in the editor. Ordered as the mode selector renders them. */
