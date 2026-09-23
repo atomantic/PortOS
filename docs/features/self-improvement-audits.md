@@ -9,11 +9,11 @@ Configure them in **CoS → Schedule**. Every lane is on-demand and enabled by
 default, so a fresh install spends nothing until you press Run or pick a cadence
 (the AI Provider Usage Policy in `AGENTS.md`).
 
-Filed forge issues keep a `[<metric>-…]` slug in the title **and** apply that
-same metric as a label (`cognitive-load`, `structural-drift`, `runtime-safety`,
-…) alongside the category (`code-quality`, `bug`, `tests`, …) so the backlog
-can be filtered without parsing titles. When the slug stem is already the
-category (`ux`, `security`) the extra label is omitted.
+Filed forge issues use short, human-readable titles; the issue number or key is
+the ID. Category labels (`code-quality`, `bug`, `tests`, …) and distinct metric
+labels (`cognitive-load`, `structural-drift`, `runtime-safety`, …) make the
+backlog filterable without encoding metadata in titles. PLAN.md keeps its
+existing slugged checklist IDs.
 
 Registry: `server/lib/auditCatalog.js` (what each lane is and how it files),
 `server/services/taskScheduleRegistry.js` (cadence and posture),
@@ -76,20 +76,21 @@ problem:
 - **Tests are split two ways.** `test-coverage` owns the gaps;
   `better-test-quality` owns the tests that already exist.
 
-## The `better-` prefix and slashdo parity
+## The `better-` prefix and slashdo scope alignment
 
-The `better-` lanes mirror an audit lens from the bundled slashdo `/do:better`
-command (`lib/slashdo/lib/better-audit.md`). That command fans every lens out to
-sub-agents inside a single run; these task types expose the same lenses
-individually, so each can be scheduled, pinned to its own provider and model, and
-toggled between filing and fixing on its own.
+The bundled slashdo `/do:better` command now declares a generic scope and
+ownership table in `lib/slashdo/lib/better-audit.md`; it no longer has a
+`For <lens>:` checklist for PortOS to mirror. PortOS keeps its focused
+`better-*` scheduled missions as narrower, PortOS-owned additions that can be
+scheduled and pinned independently. Their prompt bodies own the specialist
+checks. Shared audit discovery, issue filing, and delivery contracts stay in
+their common runtime seams instead of being copied into each mission.
 
-The prefix marks a **parity obligation**: when one of these missions improves,
-the improvement is a candidate to push upstream to slashdo rather than to let the
-two definitions drift. `DO_BETTER_LENS_COVERAGE` in `server/lib/auditCatalog.js`
-records which lane owns each lens, and `auditCatalog.test.js` reads the bundled
-submodule and fails when a lens declared upstream has no lane here — so a
-category added to slashdo cannot silently become unschedulable in PortOS.
+`DO_BETTER_SCOPE_COVERAGE` in `server/lib/auditCatalog.js` maps current slashdo
+scope names to scheduled task types and drives schedule labels. The test reads
+the bundled scope table in both directions: a new upstream scope needs an owner,
+and an obsolete scope label cannot remain after upstream changes. The former
+`DO_BETTER_LENS_COVERAGE` export remains an alias for compatibility.
 
 The prefix is spelled with a hyphen rather than `better:` because a task type is
 interpolated into the CoS task id, which becomes a git branch name
@@ -106,5 +107,7 @@ produces no diff is not scored as a failure.
 
 Findings go to whichever tracker the app resolves to — a `PLAN.md` checklist
 item, a GitHub or GitLab issue, or a JIRA ticket — via `{trackerInstructions}`.
-Each lane carries a slug prefix so repeat runs deduplicate against their own
-history instead of re-filing.
+PLAN.md keeps its existing checklist IDs. New forge and JIRA issues use plain
+human-readable titles, with the issue number/key as the ID and category/metric
+labels for filtering. Earlier bracketed title prefixes are read only when
+checking for duplicates; new issue titles do not add them.

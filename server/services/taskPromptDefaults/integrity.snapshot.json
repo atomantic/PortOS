@@ -32,7 +32,7 @@
     "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
     "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
     "performance": "b69bf4cbd2b3c272b5650608c62cede3",
-    "plan-feature": "87f71a894757f89354da4e2119e07118",
+    "plan-feature": "7f859397ff16889ffc0cf5a8ba6bddab",
     "plan-task": "8a53a518714cc4029d751fdad92f9b05",
     "plan-task-claim": "ff9ef899c1b0d13ae2f6d7e31c13a10f",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
@@ -40,7 +40,7 @@
     "pr-reviewer-review": "a4b35a1dc44e03b3d0ecf1a4e1bae6df",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
-    "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
+    "reference-watch": "57221102b6245d40852ac258fbf9ebbf",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
     "release-check": "cd936b9a4fb76273b36ec54c3ed6d5ba",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
@@ -52,7 +52,7 @@
     "ui-bugs": "073bea13a94b0266c53b5f55bb2344b9",
     "ui-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "b8c0bde4075685625443a405b2c70b50"
+    "ux": "f90b5f38a7c6264e0d40919a2933ba4c"
   },
   "PROMPT_VERSIONS": {
     "accessibility": 5,
@@ -86,11 +86,11 @@
     "module-hygiene": 1,
     "observability": 1,
     "performance": 4,
-    "plan-feature": 5,
+    "plan-feature": 6,
     "plan-task": 19,
     "pr-reviewer": 5,
     "pr-watcher": 2,
-    "reference-watch": 3,
+    "reference-watch": 4,
     "refresh-local-llm-catalog": 4,
     "release-check": 14,
     "repo-sync": 1,
@@ -102,9 +102,9 @@
     "ui-bugs": 3,
     "ui-lifecycle": 2,
     "user-action-review": 2,
-    "ux": 3
+    "ux": 4
   },
-  "REFERENCE_WATCH_AUDITED_VERSION": 3,
+  "REFERENCE_WATCH_AUDITED_VERSION": 4,
   "PREVIOUS_DEFAULT_PROMPTS": {
     "accessibility": [
       "ce7377d0ac57cbf0526074cfb95e3803",
@@ -288,7 +288,8 @@
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",
       "a707866783fd0d8c1037489f23ff66de",
       "b20980c8eda2256060d09d4bca397244",
-      "3df6f0a46f2a524af1dc4f83dfdf0647"
+      "3df6f0a46f2a524af1dc4f83dfdf0647",
+      "87f71a894757f89354da4e2119e07118"
     ],
     "plan-task": [
       "4df36bed4974ff41f369c86828e7f94f",
@@ -319,7 +320,8 @@
     ],
     "reference-watch": [
       "f9322140bff7d3f603799c09ce468da9",
-      "722ca590fb4b6323c98850a176b9b309"
+      "722ca590fb4b6323c98850a176b9b309",
+      "e0e20754700fb08d5159b8437d9c260b"
     ],
     "refresh-local-llm-catalog": [
       "525bd0077672bf2f8beec9c0124740c8",
@@ -370,7 +372,8 @@
     ],
     "ux": [
       "e03d03fc7c16faa5b5db93be2896b9ad",
-      "ac11f692eae40ffe8ddeaeaccbcf75e9"
+      "ac11f692eae40ffe8ddeaeaccbcf75e9",
+      "b8c0bde4075685625443a405b2c70b50"
     ]
   }
 }

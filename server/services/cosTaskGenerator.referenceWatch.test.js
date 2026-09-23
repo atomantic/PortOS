@@ -204,8 +204,12 @@ describe('scheduled ux prompt assembly (#3273)', () => {
     const task = await generateUx(app);
     expect(task).not.toBeNull();
     expect(task.description).not.toContain('{trackerInstructions}');
-    // ux wording, not reference-watch's.
-    expect(task.description).toContain('[ux-…]');
+    // The old UX marker is compatibility-only; new forge titles use the shared
+    // human-readable issue-ID contract.
+    expect(task.description).toContain('legacy marker only');
+    expect(task.description).toContain('short, human-readable title');
+    expect(task.description).not.toContain('[<slug>]');
+    expect(task.description).not.toContain('--search');
     expect(task.description).toContain('gh label create ux');
     expect(task.description).not.toContain('ref-watch');
     // Ordering guard: {trackerInstructions} expands BEFORE {appName}/{repoPath}.
@@ -262,8 +266,12 @@ describe('scheduled plan-feature prompt assembly', () => {
     const task = await generatePlanFeature(app);
     expect(task).not.toBeNull();
     expect(task.description).not.toContain('{trackerInstructions}');
-    // plan-feature wording, not reference-watch's.
-    expect(task.description).toContain('[plan-feature-…]');
+    // The old plan-feature marker is compatibility-only; new forge titles use
+    // the shared human-readable issue-ID contract.
+    expect(task.description).toContain('legacy marker only');
+    expect(task.description).toContain('short, human-readable title');
+    expect(task.description).not.toContain('[<slug>]');
+    expect(task.description).not.toContain('--search');
     expect(task.description).toContain('gh label create plan-feature');
     expect(task.description).not.toContain('ref-watch');
     // Ordering guard: {trackerInstructions} expands BEFORE {appName}/{repoPath}.

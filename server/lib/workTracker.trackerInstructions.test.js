@@ -84,11 +84,18 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
   it('teaches GitHub to create labels lazily and apply independent model/effort hints', () => {
     const github = formatTrackerInstructions('github', REF_WATCH);
     expectForgeDispatchContract(github, { cli: 'gh', issueLabel: 'reference-watch' });
-    expect(github).toContain('--search "ref-watch in:title"');
+    expect(github).toContain('gh issue list --state open --limit 500 --json number,title,body,labels');
+    expect(github).toContain('legacy marker only');
+    expect(github).toContain('The issue number is its ID');
+    expect(github).toContain('gh issue create --title "$TITLE"');
+    expect(github).toContain('--body-file "$BODY_FILE"');
+    expect(github).toContain('URL="$(gh issue create');
+    expect(github).not.toContain('--search');
+    expect(github).not.toContain('[<slug>]');
     expect(github).toContain('Reference-watch complete-label contract (mandatory)');
     expect(github).not.toContain('[--label model:<tier>]');
     expect(github).not.toContain('[--label effort:<level>]');
-    expect(github).toContain('create each required dispatch-hint label');
+    expect(github).toContain('Create each label immediately before applying it');
     expect(formatTrackerInstructions('github')).toBe(github);
     expect(formatTrackerInstructions('github', TRACKER_FILING_PRESETS['reference-watch'])).toBe(github);
   });
@@ -96,7 +103,13 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
   it('teaches GitLab the same contract with glab flags', () => {
     const gitlab = formatTrackerInstructions('gitlab', REF_WATCH);
     expectForgeDispatchContract(gitlab, { cli: 'glab', issueLabel: 'reference-watch' });
-    expect(gitlab).toContain('glab issue list --label reference-watch');
+    expect(gitlab).toContain('glab issue list --state opened --per-page 100 -F json');
+    expect(gitlab).toContain('glab issue create --title "$TITLE"');
+    expect(gitlab).toContain('--description "$(cat "$BODY_FILE")"');
+    expect(gitlab).toContain('URL="$(glab issue create');
+    expect(gitlab).toContain('NUM="${URL##*/}"');
+    expect(gitlab).not.toContain('--force');
+    expect(gitlab).not.toContain('[<slug>]');
     expect(gitlab).toContain('Reference-watch complete-label contract (mandatory)');
     expect(formatTrackerInstructions('gitlab')).toBe(gitlab);
   });
@@ -111,11 +124,13 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
     expect(jira).toContain('Do not relabel a ticket you skipped as a duplicate');
     expect(jira).toContain('Issue-quality gate');
     expect(jira).toContain('fall back to recording proposals in PLAN.md');
+    expect(jira).toContain('short, human-readable summary');
+    expect(jira).toContain('legacy marker only');
     expect(formatTrackerInstructions('jira')).toBe(jira);
   });
 });
 
-describe('formatTrackerInstructions — metric labels beside the slug', () => {
+describe('formatTrackerInstructions — metric labels beside the category', () => {
   it('formats category + metric + plan as repeated --label flags', () => {
     expect(formatForgeCategoryLabelFlags('code-quality', ['cognitive-load']))
       .toBe('--label code-quality --label cognitive-load --label plan');
@@ -123,11 +138,13 @@ describe('formatTrackerInstructions — metric labels beside the slug', () => {
     expect(formatForgeCategoryLabelFlags('ux', ['ux'])).toBe('--label ux --label plan');
   });
 
-  it('applies the slug-stem metric as a second forge label when it differs from the category', () => {
+  it('applies the metric label as a second forge label when it differs from the category', () => {
     const preset = getAuditFilingPreset('better-cognitive-load');
     const github = formatTrackerInstructions('github', preset);
     expect(github).toContain('--label code-quality --label cognitive-load --label plan');
-    expect(github).toContain('gh label create cognitive-load --description "Proposed from a cognitive-load/readability audit" --force');
+    expect(github).toContain('gh label create cognitive-load --color 0366D6 --description "Proposed from a cognitive-load/readability audit" 2>/dev/null || true');
+    expect(github).not.toMatch(/gh label create [^`\n]*--force/);
+    expect(github).not.toContain('[<slug>]');
     expect(formatTrackerInstructions('gitlab', preset)).toContain('--label code-quality --label cognitive-load --label plan');
     expect(formatTrackerInstructions('jira', preset)).toContain('and the metric label `cognitive-load`');
   });
@@ -143,21 +160,25 @@ describe('formatTrackerInstructions — metric labels beside the slug', () => {
 describe('formatTrackerInstructions — ux preset (#3273)', () => {
   const ux = TRACKER_FILING_PRESETS.ux;
 
-  it('carries the ux slug prefix + label into every tracker block', () => {
-    for (const tracker of ['plan', 'github', 'gitlab', 'jira']) {
+  it('keeps the plan id and reads old forge title tags without minting new ones', () => {
+    expect(formatTrackerInstructions('plan', ux)).toContain('[ux-…]');
+    for (const tracker of ['github', 'gitlab']) {
       const block = formatTrackerInstructions(tracker, ux);
-      expect(block).toContain('[ux-…]');
-      expect(block).not.toContain('ref-watch');
-      expect(block).not.toContain('reference-watch');
+      expect(block).toContain('legacy marker only');
+      expect(block).not.toMatch(/--title "\[[^\"]+\]/);
     }
+    const jira = formatTrackerInstructions('jira', ux);
+    expect(jira).toContain('short, human-readable summary');
+    expect(jira).toContain('The JIRA key is its ID');
   });
 
-  it('labels filed forge issues `ux` (and `plan`) and searches titles by the slug stem', () => {
+  it('labels filed forge issues `ux` (and `plan`) while issue numbers remain their ids', () => {
     const github = formatTrackerInstructions('github', ux);
-    expect(github).toContain('gh label create ux --description "Proposed from a UX/design audit" --force');
+    expect(github).toContain('gh label create ux --color 0366D6 --description "Proposed from a UX/design audit" 2>/dev/null || true');
     expect(github).toContain(`--label ux --label plan ${formatOptionalIssueLabelFlags('--label model:<tier> --label effort:<level>')}`);
-    expect(github).toContain('--search "ux in:title"');
-    expect(formatTrackerInstructions('gitlab', ux)).toContain('glab issue list --label ux');
+    expect(github).toContain('The issue number is its ID');
+    expect(github).not.toContain('--search');
+    expect(formatTrackerInstructions('gitlab', ux)).toContain('glab issue list --state opened');
     expect(formatTrackerInstructions('gitlab', ux)).toContain('--label ux --label plan');
   });
 
@@ -214,6 +235,13 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
             expect(rendered, taskType).toContain('exactly one `model:` and exactly one `effort:`');
             expect(rendered, taskType).toContain('--label model:<tier> --label effort:<level>');
             expect(rendered, taskType).not.toContain('[--label model:<tier>]');
+            if (taskType.startsWith('better-')) {
+              expect(rendered, taskType).toContain('read the open-issue inventory');
+              expect(rendered, taskType).toContain('gh issue create --title "$TITLE"');
+              expect(rendered, taskType).toContain('--body-file "$BODY_FILE"');
+              expect(rendered, taskType).not.toContain('[<slug>]');
+              expect(rendered, taskType).not.toContain('--search');
+            }
           }
           expect(
             rendered.match(/\{[a-zA-Z][a-zA-Z0-9_]*\}/g),
@@ -260,22 +288,26 @@ describe('resolveTrackerFilingBlock — fileIssues audit types', () => {
 describe('formatTrackerInstructions — plan-feature preset', () => {
   const planFeature = TRACKER_FILING_PRESETS['plan-feature'];
 
-  it('carries the plan-feature slug prefix + label into every tracker block', () => {
-    for (const tracker of ['plan', 'github', 'gitlab', 'jira']) {
+  it('keeps plan ids and limits prior issue tags to de-duplication', () => {
+    expect(formatTrackerInstructions('plan', planFeature)).toContain('[plan-feature-…]');
+    for (const tracker of ['github', 'gitlab']) {
       const block = formatTrackerInstructions(tracker, planFeature);
-      expect(block).toContain('[plan-feature-…]');
-      expect(block).not.toContain('ref-watch');
-      expect(block).not.toContain('[ux-…]');
+      expect(block).toContain('legacy marker only');
+      expect(block).not.toMatch(/--title "\[[^\"]+\]/);
     }
+    const jira = formatTrackerInstructions('jira', planFeature);
+    expect(jira).toContain('short, human-readable summary');
+    expect(jira).toContain('The JIRA key is its ID');
   });
 
-  it('labels filed forge issues `plan-feature` (+ `plan`) and dedupes by the slug stem', () => {
+  it('labels filed forge issues `plan-feature` (+ `plan`) and preserves existing labels', () => {
     const github = formatTrackerInstructions('github', planFeature);
-    expect(github).toContain('gh label create plan-feature --description "Feature plan filed by the plan-feature brainstorm" --force');
+    expect(github).toContain('gh label create plan-feature --color 0366D6 --description "Feature plan filed by the plan-feature brainstorm" 2>/dev/null || true');
     expect(github).toContain('--label plan-feature --label plan');
-    expect(github).toContain('--search "plan-feature in:title"');
+    expect(github).not.toMatch(/gh label create [^`\n]*--force/);
+    expect(github).not.toContain('--search');
     const gitlab = formatTrackerInstructions('gitlab', planFeature);
-    expect(gitlab).toContain('glab issue list --label plan-feature');
+    expect(gitlab).toContain('glab issue list --state opened');
     expect(gitlab).toContain('--label plan-feature --label plan');
   });
 
