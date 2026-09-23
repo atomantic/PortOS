@@ -149,7 +149,7 @@ export default function ModelComparison() {
       })
       .catch(err => {
         if (cancelled.current) {
-          setError('Run cancelled. Reloading any partial usage record…');
+          setError('Run cancelled. Use Refresh to check for a saved partial usage record.');
           getModelComparison({ silent: true }).then(setCatalog).catch(() => {});
           return;
         }

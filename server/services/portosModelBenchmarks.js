@@ -104,8 +104,6 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
   const runId = randomUUID();
   const billing = modelComparisonBilling(provider);
   const family = familyForProvider(provider);
-  const rate = !isLocalProvider(provider) ? resolveModelRates(family || provider.id, model) : null;
-  const canPriceEquivalent = rate && ['exact', 'family'].includes(rate.matched);
   let selectedEffort = effort || (isCodexTextTransportEnabled(provider) ? provider.effort : null) || 'default';
   const runProvider = {
     ...provider,
@@ -114,6 +112,7 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
   };
   const startedAt = Date.now();
   const results = [];
+  const servedModels = new Set();
   let failureReason = null;
 
   for (const task of TASKS) {
@@ -133,8 +132,13 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
     if (isCodexTextTransportEnabled(provider) && typeof result.effort === 'string' && result.effort) {
       selectedEffort = result.effort;
     }
+    if (typeof result.model === 'string' && result.model.trim()) {
+      servedModels.add(result.model.trim());
+      if (servedModels.size > 1) failureReason = 'Provider changed the served model during the benchmark run';
+    }
     const usage = usageFor(result, prompt);
     results.push({ task, correct: grade(task, result.text), ...usage });
+    if (failureReason) break;
   }
 
   if (results.length === 0) {
@@ -151,7 +155,12 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
   const totalTokens = inputTokens + outputTokens;
   const completedTasks = results.length;
   const passedTasks = results.filter(result => result.correct).length;
-  const complete = completedTasks === TASKS.length && !signal?.aborted;
+  const complete = completedTasks === TASKS.length && !signal?.aborted && !failureReason;
+  const benchmarkModel = servedModels.size > 1 ? 'Multiple models' : [...servedModels][0] || model;
+  const rate = !isLocalProvider(provider) && servedModels.size <= 1
+    ? resolveModelRates(family || provider.id, benchmarkModel)
+    : null;
+  const canPriceEquivalent = rate && ['exact', 'family'].includes(rate.matched);
   const tokenBases = new Set(results.map(result => result.basis));
   const tokenBasis = tokenBases.size === 1 ? [...tokenBases][0] : 'mixed';
   const retrievedAt = new Date(finishedAt).toISOString();
@@ -163,6 +172,8 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
     `temperature=0`,
     `max_tokens=32`,
     `transport=${isCodexTextTransportEnabled(provider) ? 'codex-text' : 'api-text'}`,
+    ...(benchmarkModel !== model ? [`requestedModel=${model}`] : []),
+    ...(servedModels.size > 1 ? [`servedModelCount=${servedModels.size}`] : []),
   ].join('; ');
   const cost = canPriceEquivalent
     ? estimateCostUsd(Math.max(0, inputTokens - results.reduce((sum, result) => sum + result.cachedInput, 0)), outputTokens, rate, {
@@ -172,7 +183,7 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
   const observation = {
     id: `portos:${runId}`,
     provider: provider.name || provider.id,
-    model,
+    model: benchmarkModel,
     effort: selectedEffort,
     configuration,
     billing,
@@ -181,7 +192,7 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
     costPerTask: null,
     apiEquivalentCost: cost === null ? null : metric(cost, {
       ...source,
-      methodology: `Reference only: estimated at published API token rates as of ${pricingAsOfForModel(model)}; this is not subscription allowance burn or a local inference bill. ${methodology}`,
+      methodology: `Reference only: estimated at published API token rates as of ${pricingAsOfForModel(benchmarkModel)}; this is not subscription allowance burn or a local inference bill. ${methodology}`,
     }),
     inputPerMillion: null,
     outputPerMillion: null,

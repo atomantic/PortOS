@@ -50,6 +50,39 @@ it('stores the effective Codex effort and scores all five explicit tasks', async
   expect(JSON.stringify(result.observation)).not.toContain('PORTOS-USAGE');
 });
 
+it('attributes and estimates cost using the model actually served', async () => {
+  const answers = ['175', 'PORTOS-USAGE', '2,3', '105.75', '1,4'];
+  callProviderAISimple.mockImplementation(async () => answer(answers.shift(), { model: 'gpt-6-sol' }));
+
+  const result = await runPortosModelBenchmark({ provider: codexProvider, model: 'subscription-alias' });
+
+  expect(result.observation).toMatchObject({
+    model: 'gpt-6-sol',
+    configuration: expect.stringContaining('requestedModel=subscription-alias'),
+    apiEquivalentCost: { value: expect.any(Number) },
+  });
+  expect(result.observation.apiEquivalentCost.value).toBeGreaterThan(0);
+});
+
+it('does not score or price a run when the provider changes served models mid-run', async () => {
+  callProviderAISimple
+    .mockResolvedValueOnce(answer('175', { model: 'gpt-6-sol' }))
+    .mockResolvedValueOnce(answer('PORTOS-USAGE', { model: 'gpt-6-luna' }));
+
+  const result = await runPortosModelBenchmark({ provider: codexProvider, model: 'gpt-6-sol' });
+
+  expect(result.complete).toBe(false);
+  expect(result.failureReason).toBe('Provider changed the served model during the benchmark run');
+  expect(result.observation).toMatchObject({
+    model: 'Multiple models',
+    quality: null,
+    apiEquivalentCost: null,
+    completedTasks: 2,
+    notes: expect.stringContaining('Provider changed the served model during the benchmark run'),
+  });
+  expect(result.observation.tokensPerRun.value).toBe(44);
+});
+
 it('keeps a safe partial record and identifies the provider status when a later task fails', async () => {
   callProviderAISimple
     .mockResolvedValueOnce(answer('175'))
