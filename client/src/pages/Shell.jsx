@@ -199,7 +199,7 @@ function PortosShellView() {
               title="Restart session (kill + new)"
             >
               <RefreshCw size={16} />
-              <span className="hidden sm:inline">Restart</span>
+              <span className="max-sm:sr-only">Restart</span>
             </button>
           )}
           {connected && (
@@ -209,7 +209,7 @@ function PortosShellView() {
               title={isLiveRun ? 'Stop this TUI run' : 'Kill current session'}
             >
               <PowerOff size={16} />
-              <span className="hidden sm:inline">Stop</span>
+              <span className="max-sm:sr-only">Stop</span>
             </button>
           )}
           <button
@@ -218,7 +218,7 @@ function PortosShellView() {
             title="Start new session"
           >
             <Power size={16} />
-            <span className="hidden sm:inline">New</span>
+            <span className="max-sm:sr-only">New</span>
           </button>
         </div>
       </div>

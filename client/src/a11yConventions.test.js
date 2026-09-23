@@ -2360,46 +2360,6 @@ describe('a11y conventions', () => {
     expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  // Pre-existing sites that use the same `hidden <bp>:inline` idiom for a
-  // control whose accessible name comes only from `title` (never
-  // aria-label). #8118 fixed the 14 sites its live-accessibility-tree audit
-  // found genuinely nameless; these carry the identical static shape but
-  // were out of that issue's audited scope. Tracked as a follow-up rather
-  // than silently reopening the scope of #8118 — see #8141. Fix by
-  // converting to `max-<bp>:sr-only` / `@max-<size>:sr-only` (or adding a
-  // real aria-label) and removing the entry.
-  const RESPONSIVE_HIDDEN_LABEL_ALLOWLIST = new Set([
-    'src/pages/MediaAnnotate.jsx',
-    'src/pages/Shell.jsx',
-    'src/components/shell/ItermShellView.jsx',
-    'src/components/shell/TerminalHotKeys.jsx',
-    'src/components/shell/ShellProviderLauncher.jsx',
-    'src/components/shell/ShellImageDrop.jsx',
-    'src/components/songs/RoundSheetMusic.jsx',
-    'src/components/songs/ScoreSheet.jsx',
-    'src/components/goals/GoalsTreeView.jsx',
-    'src/components/goals/GoalsListView.jsx',
-    'src/components/writers-room/WorkEditor.jsx',
-    'src/components/brain/tabs/DailyLogTab.jsx',
-    'src/components/brain/tabs/FeedsTab.jsx',
-    'src/components/brain/tabs/InboxTab.jsx',
-    'src/components/brain/tabs/YoutubeTab.jsx',
-    'src/components/fableloom/LoomPlayPanel.jsx',
-    'src/components/apps/AppDetailView.jsx',
-    'src/components/apps/tabs/GitTab.jsx',
-    'src/components/dashboard/LayoutPicker.jsx',
-    'src/pages/ProcessesPage.jsx',
-    'src/pages/WritersRoom.jsx',
-    'src/pages/FableLoomStory.jsx',
-    'src/pages/AgentsPage.jsx',
-    'src/pages/UsagePage.jsx',
-    'src/pages/Eidoverse.jsx',
-    'src/pages/CharacterSheet.jsx',
-    'src/pages/VideoTimelineEditor.jsx',
-    'src/pages/Brain.jsx',
-    'src/components/dashboard/builtins/HourlyActivityWidget.jsx',
-  ]);
-
   it('keeps a responsive-hidden control label in the accessible name', () => {
     // A <button>/<a>/<Link> whose only text sits inside a `hidden
     // sm:inline`/`hidden @xs:inline` span loses its name exactly where that
@@ -2409,7 +2369,6 @@ describe('a11y conventions', () => {
     // so the label stays in the tree and is hidden only visually.
     const offenders = [];
     for (const file of trackedJsxFiles()) {
-      if (RESPONSIVE_HIDDEN_LABEL_ALLOWLIST.has(file)) continue;
       const src = rawSourceOf(file);
       for (const tagName of ['button', 'a', 'Link']) {
         for (const node of forEachOpeningTag(src, tagName)) {

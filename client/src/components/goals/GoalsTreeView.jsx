@@ -512,7 +512,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
                 title={cfg.label}
               >
                 <Icon className="w-3 h-3" />
-                <span className="hidden sm:inline">{cfg.label}</span>
+                <span className="max-sm:sr-only">{cfg.label}</span>
               </button>
             );
           })}
