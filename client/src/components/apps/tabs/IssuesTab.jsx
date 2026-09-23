@@ -860,7 +860,7 @@ export default function IssuesTab({ appId, appName }) {
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2 sm:min-w-0 sm:self-start">
+                  <div className="grid grid-cols-2 gap-2 w-full sm:flex sm:flex-wrap sm:items-center sm:w-auto sm:min-w-0 sm:self-start">
                     {ACTION_ORDER.map(action => {
                       const spec = ISSUE_ACTIONS[action];
                       const run = runs[runKey(action, issue.number)];
@@ -875,7 +875,7 @@ export default function IssuesTab({ appId, appName }) {
                             key={action}
                             to="/cos/agents"
                             aria-label={`${spec.label} #${issue.number}: ${RUN_STATUS_LABEL[state] || 'Queued — view'}`}
-                            className="min-h-[44px] sm:min-h-0 px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                            className="min-h-[44px] sm:min-h-0 w-full sm:w-auto px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 border border-port-border rounded-lg text-xs flex items-center justify-center sm:justify-start gap-1.5 transition-colors"
                           >
                             <Icon size={14} /> {spec.label} · {RUN_STATUS_LABEL[state] || 'Queued — view'}
                           </Link>
@@ -889,7 +889,7 @@ export default function IssuesTab({ appId, appName }) {
                           disabled={action === 'claim' && invalidReviewOverride}
                           title={spec.title(issue.number, appName)}
                           icon={Icon}
-                          className={`min-h-[44px] sm:min-h-0 px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs`}
+                          className={`min-h-[44px] sm:min-h-0 w-full sm:w-auto sm:min-w-[7.5rem] px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs`}
                         >
                           {spec.label}
                         </RunActionButton>
@@ -903,7 +903,7 @@ export default function IssuesTab({ appId, appName }) {
                           label: `#${issue.number} ${issue.title || ''}`.trim()
                         }}
                         buttonText="Thread"
-                        className="min-h-[44px] sm:min-h-0 px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
+                        className="min-h-[44px] sm:min-h-0 w-full sm:w-auto justify-center px-3 py-1.5 bg-port-bg text-gray-300 hover:text-white border border-port-border rounded-lg text-xs flex items-center gap-1.5 transition-colors"
                       />
                     )}
                     {issue.url && (
@@ -920,10 +920,10 @@ export default function IssuesTab({ appId, appName }) {
                             window.open(issue.url, '_blank', 'noreferrer');
                           }
                         }}
-                        className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 hover:bg-port-border/40 text-xs transition-colors shrink-0"
+                        className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 hover:bg-port-border/40 text-xs transition-colors shrink-0"
                       >
                         <ExternalLink size={14} />
-                        <span className="hidden sm:inline">{forgeLabel}</span>
+                        <span className="sm:inline">{forgeLabel}</span>
                       </a>
                     )}
                   </div>
