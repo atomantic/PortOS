@@ -2,7 +2,7 @@
  * Mirror parity test for the tool-use capability regex, which exists in two
  * copies by architecture:
  *   1. server/lib/localModelHeuristics.js — authoritative;
- *   2. server/lib/aiToolkit/providers.js — the vendored toolkit may not import
+ *   2. server/lib/aiToolkit/internal/providerCatalogService.js — the vendored toolkit may not import
  *      out of its own directory (see aiToolkit/AGENTS.md), so TOOL_USE_RE is
  *      inlined there too.
  *
@@ -20,7 +20,7 @@ import { compareDeclaration } from './mirrorParity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = resolve(__dirname, 'localModelHeuristics.js');
-const TOOLKIT_PATH = resolve(__dirname, 'aiToolkit/providers.js');
+const TOOLKIT_PATH = resolve(__dirname, 'aiToolkit/internal/providerCatalogService.js');
 
 describe('localModelHeuristics↔aiToolkit TOOL_USE_RE mirror parity', () => {
   const serverSrc = readFileSync(SERVER_PATH, 'utf8');
@@ -31,7 +31,7 @@ describe('localModelHeuristics↔aiToolkit TOOL_USE_RE mirror parity', () => {
       compareDeclaration(serverSrc, toolkitSrc, 'TOOL_USE_RE');
 
     expect(serverDecl, 'server/lib/localModelHeuristics.js is missing: TOOL_USE_RE').not.toBeNull();
-    expect(clientDecl, 'server/lib/aiToolkit/providers.js is missing: TOOL_USE_RE').not.toBeNull();
+    expect(clientDecl, 'server/lib/aiToolkit/internal/providerCatalogService.js is missing: TOOL_USE_RE').not.toBeNull();
     expect(
       clientNorm,
       'TOOL_USE_RE diverged — the localModelHeuristics copy is authoritative; port the change verbatim',

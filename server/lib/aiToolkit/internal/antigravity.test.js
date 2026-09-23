@@ -32,7 +32,7 @@ const TAB_LABELLED_OUTPUT = [
 ].join('\n');
 
 describe('parseAntigravityModelList', () => {
-  // Success-path coverage for the parser extracted out of providers.js. Without
+  // Success-path coverage for the parser extracted out of providerCatalogService.js. Without
   // it, `agy models` had no test that ever fed the filter real output — only a
   // spawn-failure case — so narrowing the character class or dropping the
   // sentinel filter would have kept the whole suite green.
