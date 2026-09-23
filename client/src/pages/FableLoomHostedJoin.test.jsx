@@ -124,6 +124,40 @@ describe('FableLoomHostedJoin', () => {
     vi.unstubAllGlobals();
   });
 
+  it('closes the mic on release while preserving the recorder final chunk', async () => {
+    window.location.hash = '#session=sess-123&token=tok-abc';
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+    });
+    let recorder;
+    vi.stubGlobal('MediaRecorder', class {
+      constructor() { this.state = 'inactive'; this.mimeType = 'audio/webm'; recorder = this; }
+      start() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        queueMicrotask(() => {
+          this.ondataavailable?.({ data: new Blob(['last']) });
+          this.onstop?.();
+        });
+      }
+    });
+
+    render(<FableLoomHostedJoin />);
+    const button = screen.getByRole('button', { name: /hold talk/i });
+    fireEvent.pointerDown(button);
+    await waitFor(() => expect(recorder?.state).toBe('recording'));
+    fireEvent.pointerUp(button);
+
+    expect(track.stop).toHaveBeenCalledOnce();
+    await waitFor(() => expect(mockSocket.emit).toHaveBeenCalledWith('hosted:mic:stop', expect.any(Uint8Array)));
+    const bytes = mockSocket.emit.mock.calls.find(([event]) => event === 'hosted:mic:stop')[1];
+    expect(new TextDecoder().decode(bytes)).toBe('last');
+    expect(track.stop).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
   it('keeps audio chunks separate across two press and release cycles', async () => {
     window.location.hash = '#session=sess-123&token=tok-abc';
     const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];

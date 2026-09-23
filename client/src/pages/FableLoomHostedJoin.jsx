@@ -140,7 +140,13 @@ export default function FableLoomHostedJoin() {
 
       const recorder = new MediaRecorder(stream);
       const chunks = [];
-      mediaRecorderRef.current = { recorder, stream };
+      let tracksStopped = false;
+      const stopTracks = () => {
+        if (tracksStopped) return;
+        tracksStopped = true;
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      mediaRecorderRef.current = { recorder, stream, stopTracks };
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -155,7 +161,7 @@ export default function FableLoomHostedJoin() {
             socket.emit('hosted:mic:stop', new Uint8Array(buf));
           }
         });
-        stream.getTracks().forEach((track) => track.stop());
+        stopTracks();
       };
 
       recorder.start(100);
@@ -175,9 +181,10 @@ export default function FableLoomHostedJoin() {
     pressedRef.current = false;
     ++startGenRef.current;
     if (mediaRecorderRef.current) {
-      const { recorder } = mediaRecorderRef.current;
+      const { recorder, stopTracks } = mediaRecorderRef.current;
       mediaRecorderRef.current = null;
       if (recorder.state !== 'inactive') recorder.stop();
+      stopTracks();
       setIsRecording(false);
     }
   };
@@ -190,7 +197,7 @@ export default function FableLoomHostedJoin() {
     if (active) {
       active.recorder.onstop = null;
       if (active.recorder.state !== 'inactive') active.recorder.stop();
-      active.stream.getTracks().forEach((track) => track.stop());
+      active.stopTracks();
     }
   }, []);
 
