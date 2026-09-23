@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
+import useMounted from '../hooks/useMounted.js';
 import {
   AlertCircle,
   Loader2,
@@ -29,7 +30,9 @@ export default function FableLoomHostedJoin() {
   const [isRecording, setIsRecording] = useState(false);
 
   const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
+  const pressedRef = useRef(false);
+  const startGenRef = useRef(0);
+  const mountedRef = useMounted();
   const transcriptScrollRef = useRef(null);
   const audioPlayerRef = useRef(null);
 
@@ -124,24 +127,31 @@ export default function FableLoomHostedJoin() {
 
   // Microphone recording controls
   const startRecording = async () => {
-    if (turnPhase === 'thinking' || turnPhase === 'speaking') return;
+    if (pressedRef.current || mediaRecorderRef.current || turnPhase === 'thinking' || turnPhase === 'speaking' || turnPhase === 'ended') return;
+    pressedRef.current = true;
+    const generation = ++startGenRef.current;
+    let stream;
     try {
-      audioChunksRef.current = [];
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!mountedRef.current || !pressedRef.current || generation !== startGenRef.current || mediaRecorderRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
       const recorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
+      const chunks = [];
+      mediaRecorderRef.current = { recorder, stream };
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+          chunks.push(event.data);
         }
       };
 
       recorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        const audioBlob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
         audioBlob.arrayBuffer().then((buf) => {
-          if (socket) {
+          if (mountedRef.current && socket) {
             socket.emit('hosted:mic:stop', new Uint8Array(buf));
           }
         });
@@ -155,16 +165,34 @@ export default function FableLoomHostedJoin() {
         socket.emit('hosted:mic:start');
       }
     } catch (err) {
+      if (mediaRecorderRef.current?.stream === stream) mediaRecorderRef.current = null;
+      stream?.getTracks().forEach((track) => track.stop());
       console.error('Microphone access denied:', err);
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
+    pressedRef.current = false;
+    ++startGenRef.current;
+    if (mediaRecorderRef.current) {
+      const { recorder } = mediaRecorderRef.current;
+      mediaRecorderRef.current = null;
+      if (recorder.state !== 'inactive') recorder.stop();
       setIsRecording(false);
     }
   };
+
+  useEffect(() => () => {
+    pressedRef.current = false;
+    ++startGenRef.current;
+    const active = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    if (active) {
+      active.recorder.onstop = null;
+      if (active.recorder.state !== 'inactive') active.recorder.stop();
+      active.stream.getTracks().forEach((track) => track.stop());
+    }
+  }, []);
 
   const handleSendText = (e) => {
     e?.preventDefault();
