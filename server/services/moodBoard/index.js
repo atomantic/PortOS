@@ -37,6 +37,12 @@ export { imageUrlToAppAsset } from './logic.js';
 // moodBoard entry. It fires its own federation emits after each store mutation.
 export { linkPinterestBoard, unlinkPinterestBoard, syncPinterestBoard } from './pinterest.js';
 
+// X.com (Twitter) post importer — one-shot "paste a post URL, pull its
+// photos/video in". Lives in its own module (network I/O + downloads) but
+// surfaced here so routes import a single moodBoard entry; fires its own
+// federation emit after the store mutation.
+export { importXPost } from './xPost.js';
+
 // Announce a newly-created board to the per-record peer-sync pipeline: emit the
 // 'updated' event so any existing subscription pushes it, AND auto-subscribe
 // every moodBoards-enabled peer so brand-new boards (and their later tombstones)

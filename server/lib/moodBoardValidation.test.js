@@ -10,6 +10,7 @@ import {
   moodBoardUpdateSchema,
   moodBoardItemCreateSchema,
   moodBoardItemUpdateSchema,
+  moodBoardXPostImportSchema,
   isVideoItemMediaKey,
 } from './moodBoardValidation.js';
 
@@ -29,6 +30,21 @@ describe('moodBoardCreateSchema', () => {
 describe('moodBoardUpdateSchema', () => {
   it('accepts a partial patch', () => {
     expect(moodBoardUpdateSchema.parse({ description: '' }).description).toBe('');
+  });
+});
+
+describe('moodBoardXPostImportSchema', () => {
+  it('accepts an http(s) URL', () => {
+    expect(moodBoardXPostImportSchema.parse({ url: 'https://x.com/user/status/1' }).url).toBe('https://x.com/user/status/1');
+  });
+  it('rejects a non-http(s) value', () => {
+    expect(moodBoardXPostImportSchema.safeParse({ url: 'not a url' }).success).toBe(false);
+  });
+  it('rejects an empty url', () => {
+    expect(moodBoardXPostImportSchema.safeParse({ url: '' }).success).toBe(false);
+  });
+  it('rejects unknown keys (strict)', () => {
+    expect(moodBoardXPostImportSchema.safeParse({ url: 'https://x.com/user/status/1', extra: true }).success).toBe(false);
   });
 });
 

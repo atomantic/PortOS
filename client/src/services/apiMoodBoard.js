@@ -82,3 +82,12 @@ export const syncMoodBoardPinterest = (id, options) =>
     method: 'POST',
     ...options,
   });
+
+// One-shot import: paste a public x.com/twitter.com post URL, server pulls its
+// attached photos/video into the board. Resolves `{ board, added }`.
+export const importMoodBoardXPost = (id, url, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/x-post`, {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+    ...options,
+  });

@@ -113,6 +113,17 @@ export const moodBoardPinterestLinkSchema = z.object({
   ),
 }).strict();
 
+// X.com (Twitter) post import body. The URL shape is validated lightly here
+// (present, http(s), bounded); the x.com/twitter.com host check + post-URL
+// normalization happens in `parseXPostUrl` (server/lib/xPostMedia.js), which
+// throws a specific 400 so a non-X URL gets a clear reason.
+export const moodBoardXPostImportSchema = z.object({
+  url: z.string().trim().min(1).max(2048).refine(
+    (v) => /^https?:\/\//.test(v),
+    'url must be an http(s) x.com/twitter.com post URL',
+  ),
+}).strict();
+
 // Per-item prompt-from-media analysis (#4188 Phase 3) — written by the item
 // PATCH after a user-triggered vision run on the item's media. Additive on the
 // wire: the board federates whole-record LWW (sanitizeBoardForSync's `...raw`

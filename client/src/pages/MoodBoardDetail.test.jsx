@@ -10,6 +10,7 @@ const mockUpdateMoodBoard = vi.fn();
 const mockAddMoodBoardItem = vi.fn();
 const mockUpdateMoodBoardItem = vi.fn();
 const mockSyncMoodBoardPinterest = vi.fn();
+const mockImportMoodBoardXPost = vi.fn();
 
 vi.mock('../services/api', () => ({
   getMoodBoard: (...args) => mockGetMoodBoard(...args),
@@ -20,6 +21,7 @@ vi.mock('../services/api', () => ({
   linkMoodBoardPinterest: vi.fn(),
   unlinkMoodBoardPinterest: vi.fn(),
   syncMoodBoardPinterest: (...args) => mockSyncMoodBoardPinterest(...args),
+  importMoodBoardXPost: (...args) => mockImportMoodBoardXPost(...args),
 }));
 
 const mockToastError = vi.fn();
@@ -226,6 +228,38 @@ describe('MoodBoardDetail stale-response guards', () => {
     await act(async () => { oldSync.reject(new Error('Sync failed')); });
     expect(mockToastError).toHaveBeenCalledExactlyOnceWith('Mood board not found');
     expect(mockToastSuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('MoodBoardDetail X post import', () => {
+  it('imports a post URL and merges the returned board', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    mockImportMoodBoardXPost.mockResolvedValueOnce({
+      board: { id: 'a', name: 'Board A', items: [{ id: 'mbi-1', type: 'image', imageUrl: '/data/images/x.jpg' }] },
+      added: 1,
+    });
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    fireEvent.change(screen.getByLabelText('Post URL'), { target: { value: 'https://x.com/user/status/1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('Added 1 item from the post'));
+    expect(mockImportMoodBoardXPost).toHaveBeenCalledWith('a', 'https://x.com/user/status/1', { silent: true });
+    expect(screen.getByLabelText('Post URL')).toHaveValue('');
+  });
+
+  it('toasts an error and keeps the typed URL on failure', async () => {
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [] });
+    mockImportMoodBoardXPost.mockRejectedValueOnce(new Error('boom'));
+    renderPage();
+    await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+
+    fireEvent.change(screen.getByLabelText('Post URL'), { target: { value: 'https://x.com/user/status/1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Could not import that post — check the URL or try again'));
+    expect(screen.getByLabelText('Post URL')).toHaveValue('https://x.com/user/status/1');
   });
 });
 

@@ -339,14 +339,32 @@ export function clearPinterestLinkRecord(board) {
 }
 
 /**
+ * Shared dedupe-by-`source` + MAX_ITEMS_PER_BOARD-capacity core for every
+ * "append already-downloaded media as board items" flow (the persisted
+ * Pinterest sync below and the one-shot X post importer) — one place owning
+ * the truncate-rather-than-throw contract so it can't drift between the two
+ * callers. `buildItem(imp)` turns one `imported` entry into a normalized item;
+ * the caller decides the rest (what to stamp on the board afterward).
+ */
+function buildFreshItems(existingItems, imported, buildItem) {
+  const seen = new Set(existingItems.map((it) => it && it.source).filter(Boolean));
+  const capacity = Math.max(0, MAX_ITEMS_PER_BOARD - existingItems.length);
+  const fresh = [];
+  for (const imp of Array.isArray(imported) ? imported : []) {
+    if (fresh.length >= capacity) break;
+    if (imp.source && seen.has(imp.source)) continue;
+    if (imp.source) seen.add(imp.source);
+    fresh.push(buildItem(imp));
+  }
+  return fresh;
+}
+
+/**
  * Append already-downloaded Pinterest pins as image items, then stamp the sync
  * timestamp. Each `imported` entry is `{ imageUrl, caption, source }` where
- * `source` is the pin permalink — the dedupe key. Skips pins whose `source`
- * already exists on the board (in-lock safety net; the service pre-dedupes
- * before downloading) and respects MAX_ITEMS_PER_BOARD by truncating to the
- * remaining capacity rather than throwing — a partial import beats a hard
- * mid-sync failure. Always re-stamps `pinterest.lastSyncedAt` (even on zero new)
- * so the UI reflects the check. Returns `{ board, added, aborted }`.
+ * `source` is the pin permalink — the dedupe key (see buildFreshItems). Always
+ * re-stamps `pinterest.lastSyncedAt` (even on zero new) so the UI reflects the
+ * check. Returns `{ board, added, aborted }`.
  *
  * `expectedFeedUrl` guards a single-user re-entrancy race: the feed fetch +
  * image downloads run OUTSIDE the row lock, so the user can unlink or re-link
@@ -359,18 +377,10 @@ export function appendPinterestPins(board, imported, { syncedAt = nowIso(), expe
     return { board, added: 0, aborted: true };
   }
   const items = Array.isArray(board.items) ? board.items : [];
-  const seen = new Set(items.map((it) => it && it.source).filter(Boolean));
-  const capacity = Math.max(0, MAX_ITEMS_PER_BOARD - items.length);
-  const fresh = [];
-  for (const imp of Array.isArray(imported) ? imported : []) {
-    if (fresh.length >= capacity) break;
-    if (imp.source && seen.has(imp.source)) continue;
-    if (imp.source) seen.add(imp.source);
-    fresh.push(normalizeItem(
-      { type: 'image', imageUrl: imp.imageUrl, caption: imp.caption ?? null, source: imp.source ?? null },
-      { id: `mbi-${randomUUID()}`, now: syncedAt },
-    ));
-  }
+  const fresh = buildFreshItems(items, imported, (imp) => normalizeItem(
+    { type: 'image', imageUrl: imp.imageUrl, caption: imp.caption ?? null, source: imp.source ?? null },
+    { id: `mbi-${randomUUID()}`, now: syncedAt },
+  ));
   const next = {
     ...board,
     items: [...items, ...fresh],
@@ -378,4 +388,26 @@ export function appendPinterestPins(board, imported, { syncedAt = nowIso(), expe
     updatedAt: nowIso(),
   };
   return { board: next, added: fresh.length, aborted: false };
+}
+
+// ─── One-shot media imports (X post importer) ────────────────────────────────
+
+/**
+ * Append already-downloaded media items in ONE locked write — same
+ * dedupe/capacity core as appendPinterestPins (buildFreshItems), generalized
+ * for a one-shot import (X post) that has no persisted link/lastSyncedAt to
+ * stamp. Each `imported` entry is `{ type, imageUrl, mediaKey, caption,
+ * source }`; `source` is the dedupe key, re-checked here as an in-lock safety
+ * net (the service pre-dedupes before downloading, but two concurrent imports
+ * of the same post could race between that check and this write). Returns
+ * `{ board, added }`.
+ */
+export function appendImportedItems(board, imported) {
+  const items = Array.isArray(board.items) ? board.items : [];
+  const fresh = buildFreshItems(items, imported, (imp) => normalizeItem(
+    { type: imp.type, imageUrl: imp.imageUrl ?? null, mediaKey: imp.mediaKey ?? null, caption: imp.caption ?? null, source: imp.source ?? null },
+    { id: `mbi-${randomUUID()}` },
+  ));
+  const next = { ...board, items: [...items, ...fresh], updatedAt: nowIso() };
+  return { board: next, added: fresh.length };
 }
