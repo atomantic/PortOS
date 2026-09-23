@@ -67,6 +67,20 @@ const NON_ROUTABLE_LEARNED_TIERS = new Set(['minimal', 'low', 'ultra']);
  */
 export const isNonRoutableLearnedTier = (tier) => NON_ROUTABLE_LEARNED_TIERS.has(tier);
 
+/**
+ * A recorded tier name → the tier a user can actually pin today, or null.
+ * Learning data from before #8149 carries the retired thinking-level names;
+ * pinning one (`high`) would be read as a literal model id, so advice maps them
+ * onto the tier they resolved to (`off` → the provider default, `high`/`xhigh`
+ * → heavy). `user-specified` and the local-only levels name no pinnable tier,
+ * so they never appear as advice — their history stays in the matrix.
+ */
+const ADVISORY_TIERS = Object.freeze({
+  light: 'light', medium: 'medium', heavy: 'heavy', ultra: 'ultra', default: 'default',
+  off: 'default', high: 'heavy', xhigh: 'heavy',
+});
+const advisoryTier = (tier) => (Object.hasOwn(ADVISORY_TIERS, tier) ? ADVISORY_TIERS[tier] : null);
+
 /** Minimum success rate (%) for a tier to count as "proven" for a task type. */
 const HIGH_SUCCESS_THRESHOLD = 80;
 
@@ -264,10 +278,15 @@ export async function getTaskTypePriorityMultiplier(taskType) {
 export async function suggestModelTier(taskType) {
   // Sandboxed fallback (issue #2333): the `external/untyped` bucket aggregates
   // heterogeneous work, so its tier success rates are meaningless — never let it
-  // drive a model-tier suggestion. Let the selector fall through to its default.
+  // drive a model-tier suggestion.
   if (isSandboxedTaskType(taskType)) return null;
+  return suggestModelTierFrom(await loadLearningData(), taskType);
+}
 
-  const data = await loadLearningData();
+// `suggestModelTier` over an already-loaded snapshot, so a caller walking every
+// task type (getRoutingAccuracy) loads — and clones — the store once, not per row.
+function suggestModelTierFrom(data, taskType) {
+  if (isSandboxedTaskType(taskType)) return null;
 
   // Auto-adjustment aggressiveness gate (issue #2344): the enriched failure
   // signal steers routing more aggressively only once the correlation-quality
@@ -484,13 +503,14 @@ export async function getRoutingAccuracy() {
 
   // Advice, not routing: the tier each task type's history recommends, for the
   // user to pin on the task or schedule if they agree.
-  await Promise.all(matrix.map(async (entry) => {
-    const suggestion = await suggestModelTier(entry.taskType).catch(() => null);
-    const avoidTiers = suggestion?.avoidTiers || [];
-    if (suggestion?.suggested || avoidTiers.length > 0) {
-      entry.suggestion = { tier: suggestion.suggested || null, avoidTiers, reason: suggestion.reason || null };
+  for (const entry of matrix) {
+    const suggestion = suggestModelTierFrom(data, entry.taskType);
+    const tier = advisoryTier(suggestion?.suggested);
+    const avoidTiers = [...new Set((suggestion?.avoidTiers || []).map(advisoryTier).filter(Boolean))];
+    if (tier || avoidTiers.length > 0) {
+      entry.suggestion = { tier, avoidTiers, reason: suggestion.reason || null };
     }
-  }));
+  }
 
   return { matrix, tierOverview, misroutes, totalMisroutes: misroutes.length };
 }
