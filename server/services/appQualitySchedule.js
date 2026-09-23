@@ -25,6 +25,7 @@ import {
   AUDIT_DEFINITIONS,
   AUDIT_REPO_CAPABILITIES,
   AUDIT_TASK_TYPE_LIST,
+  normalizeAuditTaskType,
   auditCapabilityRequirement,
 } from '../lib/auditCatalog.js';
 import {
@@ -150,7 +151,8 @@ async function loadNotApplicableCategories(appId) {
     [appId]
   ).catch(() => null);
   if (!result) return new Set();
-  return new Set(result.rows.filter(row => row.report?.coverage === 'not-applicable').map(row => row.category));
+  return new Set(result.rows.filter(row => row.report?.coverage === 'not-applicable')
+    .map(row => normalizeAuditTaskType(row.category)));
 }
 
 /**

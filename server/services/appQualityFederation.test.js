@@ -50,6 +50,15 @@ it('combines newest categories in app view and UTC history without changing othe
   expect((await exportPortosQuality(peer.instanceId, 30, local)).measurements.map(m => m.report.score)).toEqual([20]);
 });
 
+it('reads stored lifecycle measurements under the renamed category', async () => {
+  const [app] = await enrichAppsWithQuality(
+    [{ id: 'portos-default' }],
+    deps([row('react-lifecycle', 73)]),
+  );
+  expect(app.quality.categories.find(category => category.id === 'ui-lifecycle'))
+    .toMatchObject({ score: 73, coverage: 'broad', stale: false });
+});
+
 it('keeps local scores on old, offline, malformed, oversize or mismatched peers and rejects future evidence', async () => {
   const payload = await exportPortosQuality(peer.instanceId, 30, deps([row('security', 90)]));
   const local = deps([row('security', 20)]);

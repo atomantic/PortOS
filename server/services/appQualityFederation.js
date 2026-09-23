@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../lib/db.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { auditQualityReportSchema, AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
@@ -49,7 +50,7 @@ async function eligiblePeers(deps) {
 }
 
 export function qualityRecord(row) {
-  return { category: row.category, agentId: row.agent_id,
+  return { category: normalizeAuditTaskType(row.category), agentId: row.agent_id,
     measurementId: hash(row.agent_id), assessedAt: new Date(row.assessed_at).toISOString(), report: row.report };
 }
 

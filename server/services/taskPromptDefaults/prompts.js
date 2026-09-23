@@ -1064,7 +1064,7 @@ Trace client callers through to server routes and schemas, hunting for:
 For each finding, name the caller AND the route with \`file.js:LINE\`, the shape
 that gets through, and the concrete failure it produces.`,
 
-  'react-lifecycle': `[Improvement: {appName}] UI lifecycle and state audit
+  'ui-lifecycle': `[Improvement: {appName}] UI lifecycle and state audit
 
 Audit {appName}'s UI resource lifetimes and state correctness.
 

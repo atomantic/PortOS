@@ -99,6 +99,12 @@ If you find additional problems, mention them in the summary — do not expand s
  */
 export const AUDIT_REPO_CAPABILITIES = Object.freeze(['ui', 'typescript', 'tests', 'dependencies', 'api']);
 
+/** Read aliases kept only for in-flight tasks and historical quality records. */
+export const LEGACY_AUDIT_TASK_TYPE_ALIASES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle' });
+export const normalizeAuditTaskType = (taskType) => Object.hasOwn(LEGACY_AUDIT_TASK_TYPE_ALIASES, taskType)
+  ? LEGACY_AUDIT_TASK_TYPE_ALIASES[taskType]
+  : taskType;
+
 /** Why an app lacking the capability is not worth scheduling that audit for. */
 export const AUDIT_CAPABILITY_MISSING_REASON = Object.freeze({
   ui: 'no user interface found in this repository',
@@ -330,17 +336,16 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'API contract finding(s)',
     }),
   },
-  // Legacy IDs and filing labels preserve saved schedules and audit history.
-  'react-lifecycle': {
-    quotaBurnId: 'react-lifecycle-audit',
+  'ui-lifecycle': {
+    quotaBurnId: 'ui-lifecycle-audit',
     label: 'UI lifecycle & state',
     description: 'UI lifecycle audit — configurable: file issues (default) or implement fixes',
     defaultFileIssues: true,
     requiresCapability: 'ui',
     filing: filing({
-      slugPrefix: 'react-lifecycle-',
-      label: 'react-lifecycle-audit',
-      issueLabel: 'react-lifecycle',
+      slugPrefix: 'ui-lifecycle-',
+      label: 'ui-lifecycle-audit',
+      issueLabel: 'ui-lifecycle',
       labelDescription: 'Proposed from a UI lifecycle/state audit',
       noun: 'UI lifecycle finding(s)',
     }),
@@ -492,7 +497,7 @@ export const AUDIT_TASK_TYPE_LIST = Object.freeze([...AUDIT_TASK_TYPES]);
  * @returns {boolean} True if registered in AUDIT_DEFINITIONS
  */
 export function isAuditTaskType(taskType) {
-  return AUDIT_TASK_TYPES.has(taskType);
+  return AUDIT_TASK_TYPES.has(normalizeAuditTaskType(taskType));
 }
 
 /**
@@ -502,7 +507,7 @@ export function isAuditTaskType(taskType) {
  * @returns {boolean} True if the audit defaults to filing issues rather than fixing
  */
 export function defaultFileIssuesFor(taskType) {
-  return AUDIT_DEFINITIONS[taskType]?.defaultFileIssues === true;
+  return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.defaultFileIssues === true;
 }
 
 /**
@@ -513,7 +518,7 @@ export function defaultFileIssuesFor(taskType) {
  * @returns {boolean} True when live-checkout remediation is forbidden
  */
 export function auditDoWorkRequiresWorktree(taskType) {
-  return AUDIT_DEFINITIONS[taskType]?.doWorkRequiresWorktree === true;
+  return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.doWorkRequiresWorktree === true;
 }
 
 /**
@@ -606,7 +611,7 @@ export const FILE_ISSUES_DELIVERY_SETTINGS = Object.freeze({
  * @returns {string|null} A member of AUDIT_REPO_CAPABILITIES, or null
  */
 export function auditCapabilityRequirement(taskType) {
-  return AUDIT_DEFINITIONS[taskType]?.requiresCapability || null;
+  return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.requiresCapability || null;
 }
 
 /**
@@ -616,7 +621,7 @@ export function auditCapabilityRequirement(taskType) {
  * @returns {object|null} Filing preset metadata (slugPrefix, label, issueLabel, planItemBody, etc.) or null
  */
 export function getAuditFilingPreset(taskType) {
-  return AUDIT_DEFINITIONS[taskType]?.filing || null;
+  return AUDIT_DEFINITIONS[normalizeAuditTaskType(taskType)]?.filing || null;
 }
 
 /**
@@ -670,7 +675,7 @@ export const DO_BETTER_LENS_COVERAGE = Object.freeze({
   dry: ['simplify'],
   architecture: ['module-hygiene', 'api-contract'],
   'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability'],
-  'stack-specific': ['react-lifecycle', 'accessibility', 'data-safety', 'security'],
+  'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'security'],
   deps: ['better-dependency-freedom', 'security'],
   tests: ['test-coverage', 'better-test-quality'],
   ux: ['ux', 'mobile-responsive', 'copy'],
@@ -680,11 +685,12 @@ export const DO_BETTER_LENS_COVERAGE = Object.freeze({
 
 /** Display metadata is derived, so upgrades never rewrite durable task IDs. */
 export function getAuditScheduleMetadata(taskType) {
-  if (!isAuditTaskType(taskType)) return { displayName: taskType, defaultLabels: [] };
+  const canonicalType = normalizeAuditTaskType(taskType);
+  if (!isAuditTaskType(canonicalType)) return { displayName: taskType, defaultLabels: [] };
   const lenses = Object.entries(DO_BETTER_LENS_COVERAGE)
-    .filter(([, types]) => types.includes(taskType)).map(([lens]) => lens);
+    .filter(([, types]) => types.includes(canonicalType)).map(([lens]) => lens);
   return {
-    displayName: taskType.startsWith('better-') ? taskType : `better-${taskType}`,
+    displayName: canonicalType.startsWith('better-') ? canonicalType : `better-${canonicalType}`,
     defaultLabels: ['codebase-improvement', 'slashdo', ...lenses],
   };
 }

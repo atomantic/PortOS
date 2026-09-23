@@ -21,7 +21,7 @@
     "module-hygiene",
     "observability",
     "performance",
-    "react-lifecycle",
+    "ui-lifecycle",
     "security",
     "simplify",
     "test-coverage",

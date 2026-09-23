@@ -19,6 +19,7 @@ describe('scheduled audit measurement workflow', () => {
       expect(auditQualityInstructions(category)).toContain(`"category":"${category}"`);
     }
     expect(auditQualityInstructions('claim-issue')).toBe('');
+    expect(auditQualityInstructions('react-lifecycle')).toContain('"category":"ui-lifecycle"');
   });
 
   it('accepts the structured sentinel envelope and uses server-owned app, category and run provenance', async () => {
@@ -29,6 +30,18 @@ describe('scheduled audit measurement workflow', () => {
     })).resolves.toBe(true);
     expect(query.mock.calls[0][1]).toEqual(['portos-default', 'better-complexity', 'agent-1', assessedAt, JSON.stringify(report())]);
 
+  });
+
+  it('records an in-flight task under the current UI lifecycle category', async () => {
+    const legacyReport = report({ category: 'react-lifecycle', score: 73 });
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    await expect(recordAuditQuality({ task, taskType: 'react-lifecycle', agentId: 'agent-legacy', workspacePath: '/repo', success: true, assessedAt }, {
+      readFile: vi.fn().mockResolvedValue(JSON.stringify({ summary: sentinel(legacyReport), payload: null })), query,
+    })).resolves.toBe(true);
+    expect(query.mock.calls[0][1]).toEqual([
+      'portos-default', 'ui-lifecycle', 'agent-legacy', assessedAt,
+      JSON.stringify({ ...legacyReport, category: 'ui-lifecycle' }),
+    ]);
   });
 
   it('rejects malformed, cross-category, duplicate and dishonest coverage reports and failed runs without writing', async () => {
@@ -61,6 +74,20 @@ describe('scheduled audit measurement workflow', () => {
     expect(quality).toMatchObject({ score: 40, ratedCategories: 2, totalCategories: 25 });
     expect(quality.categories.find(c => c.id === 'ux')).toMatchObject({ score: 100, stale: true });
     expect(summarizeAppQuality().score).toBeNull();
+  });
+
+  it('surfaces previously stored lifecycle scores under the renamed category', () => {
+    const now = Date.now();
+    const legacy = {
+      category: 'react-lifecycle',
+      assessedAt: new Date(now).toISOString(),
+      report: report({ category: 'react-lifecycle', score: 73 }),
+    };
+
+    expect(summarizeAppQuality([legacy], now).categories.find(category => category.id === 'ui-lifecycle'))
+      .toMatchObject({ score: 73, coverage: 'broad', stale: false });
+    expect(buildAppQualityHistory([legacy], 1, now).points.at(-1).categories['ui-lifecycle'])
+      .toMatchObject({ score: 73, coverage: 'broad', confidence: 'high' });
   });
 
   it('makes database unavailability explicit without failing app management', async () => {

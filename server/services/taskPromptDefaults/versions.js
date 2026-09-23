@@ -51,7 +51,7 @@ export const PROMPT_VERSIONS = {
   'simplify': 1, // v1: dead-code/duplication audit. Mode injected at dispatch.
   'module-hygiene': 1, // v1: evidence-led complexity, responsibility, reuse, and reusable-surface discoverability audit. Mode injected at dispatch.
   'api-contract': 1, // v1: API/route-contract audit (validation gaps, client/server drift, status envelopes, asyncHandler). Net-new type (no retired-hash history needed). Mode injected at dispatch.
-  'react-lifecycle': 2, // v2: framework-neutral UI lifecycle and state correctness. v1: React lifecycle/state audit (effect teardowns, stale closures, unmounted setState, derived state). Net-new type. Mode injected at dispatch.
+  'ui-lifecycle': 2, // v2: framework-neutral UI lifecycle and state correctness. v1: lifecycle/state audit limited to React effects, stale closures, unmounted setState, and derived state. Mode injected at dispatch.
   'observability': 1, // v1: logging/observability audit (silent catches, log noise, missing error context, uninstrumented pipelines). Net-new type. Mode injected at dispatch.
   'copy': 1, // v1: copy/text-clarity audit (jargon, ambiguous action verbs, dead-end errors, pluralization). Net-new type. Mode injected at dispatch.
 

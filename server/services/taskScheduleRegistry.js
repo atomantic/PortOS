@@ -338,7 +338,7 @@ export const DEFAULT_TASK_INTERVALS = {
   'simplify':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'module-hygiene':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'api-contract':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
-  'react-lifecycle':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'ui-lifecycle':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'observability':     { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'copy':                { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   // The do:better-lens lanes. All file-issues by default (an unattended run
@@ -544,7 +544,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'simplify': 'Dead-code/duplication audit — file issues (default) or implement removals',
   'module-hygiene': 'Module hygiene — complexity, reuse, ownership, and discoverability; file issues (default) or implement one refactor',
   'api-contract': 'API/route-contract audit — file issues (default) or implement fixes',
-  'react-lifecycle': 'UI lifecycle/state audit — file issues (default) or implement fixes',
+  'ui-lifecycle': 'UI lifecycle/state audit — file issues (default) or implement fixes',
   'observability': 'Logging/observability audit — file issues (default) or implement fixes',
   'copy': 'Copy/text-clarity audit — file issues (default) or implement rewrites',
   'better-complexity': 'Cyclomatic complexity — measure branching per function, reduce the hottest offenders; file issues (default) or implement one refactor',

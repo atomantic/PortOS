@@ -553,7 +553,7 @@ invalid shape, and the concrete failure that occurs.`,
   }),
 
   auditPreset({
-    id: 'react-lifecycle-audit',
+    id: 'ui-lifecycle-audit',
     label: 'UI lifecycle & state',
     summary: 'Resource cleanup, stale data, async ordering, and state continuity in interactive UI code.',
     labels: '`bug`, `area:ui`, `plan`',
