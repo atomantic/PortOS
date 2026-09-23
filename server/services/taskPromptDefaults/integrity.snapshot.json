@@ -28,7 +28,7 @@
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
     "mobile-responsive": "eb7f6b307bccd15199c74d7aff5c21c3",
-    "model-comparison-refresh": "dc1702b07c7fb8be6165feb776d5acb6",
+    "model-comparison-refresh": "7de58f49e5cea22a4282fb37bc9f37ab",
     "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
     "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
     "performance": "b69bf4cbd2b3c272b5650608c62cede3",
@@ -82,7 +82,7 @@
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
     "mobile-responsive": 3,
-    "model-comparison-refresh": 1,
+    "model-comparison-refresh": 2,
     "module-hygiene": 1,
     "observability": 1,
     "performance": 4,
@@ -274,6 +274,9 @@
     "mobile-responsive": [
       "636bdc17fa39ed2f2e27623284c8e04c",
       "16d8e7f63a673a2de48994c0ac08ef3d"
+    ],
+    "model-comparison-refresh": [
+      "dc1702b07c7fb8be6165feb776d5acb6"
     ],
     "performance": [
       "c8224243c15f6897ee04be25d172f021",

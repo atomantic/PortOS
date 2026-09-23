@@ -254,10 +254,17 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
   // OpenAI-compatible bodies report token counts under `usage`; surface the completion
   // token count so the AI Core landmark can size its activity beam by output volume
   // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".
-  const completionTokens = Number(data.usage?.completion_tokens);
+  const completionTokens = Number.isFinite(data.usage?.completion_tokens) ? data.usage.completion_tokens : NaN;
+  const promptTokens = Number.isFinite(data.usage?.prompt_tokens) ? data.usage.prompt_tokens : NaN;
   return {
     text: content,
     tokens: Number.isFinite(completionTokens) ? completionTokens : undefined,
+    ...(Number.isFinite(promptTokens) || Number.isFinite(completionTokens)
+      ? { usage: {
+        ...(Number.isFinite(promptTokens) ? { inputTokens: promptTokens } : {}),
+        ...(Number.isFinite(completionTokens) ? { outputTokens: completionTokens } : {}),
+      } }
+      : {}),
   };
 }
 
@@ -391,7 +398,9 @@ const reportedResetsAt = (readiness) => {
 
 /**
  * Call an API-based AI provider with a simple prompt.
- * Returns { text } on success, { error } on failure.
+ * Returns { text, usage? } on success, { error } on failure. HTTP providers
+ * surface reported prompt/completion counts when present; callers may estimate
+ * only the missing side rather than treating it as a measured zero.
  *
  * On an LM Studio "No models loaded" 400, this auto-loads a model from the
  * provider's configured models list and retries once. The retry uses the
@@ -512,7 +521,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   const first = await postChatCompletion(provider, model, body, opts);
   if (!first.error) {
     statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(first.tokens));
-    return { text: first.text };
+    return { text: first.text, ...(first.usage ? { usage: first.usage } : {}) };
   }
 
   // Recover by retrying the call against `retryModel` (already loaded/healed),
@@ -522,7 +531,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     const retry = await postChatCompletion(provider, retryModel, body, opts);
     if (!retry.error) {
       statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, { model: retryModel, ...throughput(retry.tokens) });
-      return { text: retry.text };
+      return { text: retry.text, ...(retry.usage ? { usage: retry.usage } : {}) };
     }
     statusOp.error(retry.error, { model: retryModel });
     return { error: retry.error };

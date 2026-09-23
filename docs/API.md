@@ -789,7 +789,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/standardize` | App PM2 standardizer |
 | `/api/stacker-news`, `/api/x` | Social integrations |
 | `/api/model-personality` | LLM personality tests |
-| `/api/providers/comparison` | Provider/model comparison catalog — discover, import, and benchmark source sync (Artificial Analysis, OpenRouter routed pricing and endpoint performance, Epoch AI, SWE-bench, LiveCodeBench; see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
+| `/api/providers/comparison` | Machine-local reference prices and PortOS-run model benchmark results; discover provider models, start a user-triggered task run, and import supported reference observations (see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
 | `/api/browser` | Managed Chromium |
 | `/api/creative-commission` | Creative commissions |
 | `/api/midi-runtime` | MIDI runtime |

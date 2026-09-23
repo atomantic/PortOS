@@ -1,445 +1,95 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ModelComparison from './ModelComparison';
-import ComparisonResearch from './ComparisonResearch';
 import * as api from '../../services/apiModelComparison';
-import * as agents from '../../services/apiAgents';
+import toast from '../ui/Toast';
 
 vi.mock('../../services/apiModelComparison', () => ({
   getModelComparison: vi.fn(),
-  importModelComparison: vi.fn(),
   discoverComparisonModels: vi.fn(),
-  syncBenchmarkSource: vi.fn(),
+  runPortosModelBenchmark: vi.fn(),
 }));
-vi.mock('../../services/apiProviders', () => ({ getProviders: vi.fn().mockResolvedValue({ providers: [{ id: 'example', name: 'Example research', models: ['example-model', 'other-model'] }] }) }));
-vi.mock('../../services/apiAgents', () => ({ getCosSchedule: vi.fn(), updateCosTaskInterval: vi.fn(), triggerCosOnDemandTask: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), warning: vi.fn() } }));
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   ScatterChart: ({ children }) => <div>{children}</div>,
-  Scatter: ({ name, data, line }) => (
-    <div data-testid={`scatter-${name}`} data-has-line={!!line} data-points={data?.length} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} />
-  ),
+  Scatter: ({ name, data }) => <div data-testid={`scatter-${name}`} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} />,
   CartesianGrid: () => null,
-  LabelList: () => null,
   Tooltip: () => null,
-  XAxis: ({ scale, domain, allowDataOverflow }) => (
-    <div
-      data-testid="xaxis"
-      data-scale={scale}
-      data-domain={JSON.stringify(domain)}
-      data-allow-overflow={allowDataOverflow ? 'true' : 'false'}
-    />
-  ),
-  YAxis: ({ domain, allowDataOverflow }) => (
-    <div
-      data-testid="yaxis"
-      data-domain={JSON.stringify(domain)}
-      data-allow-overflow={allowDataOverflow ? 'true' : 'false'}
-    />
-  ),
+  XAxis: ({ label }) => <div data-testid="xaxis" data-label={label?.value} />,
+  YAxis: ({ label }) => <div data-testid="yaxis" data-label={label?.value} />,
 }));
-const source = { url: 'https://example.com/benchmark', retrievedAt: '2026-01-01T00:00:00Z', methodology: 'Example v1' };
-const metric = value => ({ value, source });
-const observation = { id: 'example', model: 'example-model', provider: 'Example API', effort: 'high', configuration: 'Example endpoint', billing: 'api', benchmark: 'Example v1', quality: metric(50), costPerTask: metric(0.5), inputPerMillion: metric(2), outputPerMillion: metric(10), reasoningPerMillion: null, responseSeconds: null, tokensPerSecond: null, quota: null, notes: '' };
+
+const runSource = {
+  url: 'portos://model-comparison/00000000-0000-4000-8000-000000000001',
+  retrievedAt: '2026-09-23T00:00:00.000Z',
+  methodology: 'PortOS Task Bench v1',
+};
+const metric = value => ({ value, source: runSource });
+const observation = ({ id, provider, model, score, tokens, cost = null, billing = 'subscription', tokenBasis = 'measured' }) => ({
+  id,
+  provider,
+  model,
+  effort: 'high',
+  configuration: 'PortOS Task Bench v1; temperature=0',
+  billing,
+  benchmark: 'PortOS Task Bench v1 (deterministic)',
+  quality: metric(score),
+  costPerTask: null,
+  inputPerMillion: null,
+  outputPerMillion: null,
+  reasoningPerMillion: null,
+  responseSeconds: metric(4),
+  tokensPerSecond: metric(tokens / 4),
+  tokensPerRun: metric(tokens),
+  inputTokens: metric(tokens - 20),
+  outputTokens: metric(20),
+  apiEquivalentCost: cost === null ? null : metric(cost),
+  tokenBasis,
+  completedTasks: 5,
+  totalTasks: 5,
+  quota: null,
+  notes: 'No prompt or model response is stored.',
+});
+const codexRun = observation({ id: 'portos:codex-run', provider: 'Codex', model: 'gpt-6-luna', score: 80, tokens: 120, cost: 0.0002 });
+const localRun = observation({ id: 'portos:local-run', provider: 'Ollama', model: 'qwen3.6:35b', score: 60, tokens: 150, billing: 'local', tokenBasis: 'estimated' });
+const inventory = [
+  { id: 'codex', name: 'Codex', billing: 'subscription', canBenchmark: true, canDiscover: false, models: [{ model: 'gpt-6-luna', efforts: ['low', 'high'] }] },
+  { id: 'ollama', name: 'Ollama', billing: 'local', canBenchmark: true, canDiscover: true, models: [{ model: 'qwen3.6:35b', efforts: [] }] },
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
-  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation, { ...observation, id: 'missing', model: 'local-example', billing: 'local', costPerTask: null, quality: null }], inventory: [] });
-  agents.getCosSchedule.mockResolvedValue({ tasks: { 'model-comparison-refresh': { enabled: true, providerId: 'example', model: 'example-model', type: 'on-demand' } } });
-});
-it('shows missing evidence, filters models and estimates token costs without inventing reasoning prices or local cost', async () => {
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-  await screen.findByText('1 plotted · 1 missing selected metrics or outside log scale');
-  fireEvent.click(screen.getByText(/Evidence & sources/));
-  fireEvent.click(screen.getByText('Show or hide providers, models & effort'));
-  expect(screen.getAllByText(/E2E unknown/)).toHaveLength(2);
-  expect(screen.getAllByText(/Stale/).length).toBeGreaterThan(0);
-  fireEvent.click(screen.getByRole('button', { name: 'Toggle example-model' }));
-  expect(screen.getByRole('button', { name: 'Toggle example-model' })).toHaveAttribute('aria-pressed', 'false');
-  expect(screen.getByLabelText('example-model')).not.toBeChecked();
-  expect(screen.getByText('No comparable points for these filters. Adjust filters or refresh the research catalog.')).toBeTruthy();
-  fireEvent.click(screen.getByLabelText('example-model'));
-  fireEvent.change(screen.getByLabelText('Cost basis'), { target: { value: 'scenario' } });
-  expect(screen.getByText('$0.0250')).toBeTruthy();
-  expect(screen.getByText('$2.50')).toBeTruthy();
-  fireEvent.change(screen.getByLabelText('Reasoning tokens'), { target: { value: '1000' } });
-  expect(screen.queryByText('$0.0250')).toBeNull();
-  expect(screen.getByText('No comparable points for these filters. Adjust filters or refresh the research catalog.')).toBeTruthy();
-  expect(agents.triggerCosOnDemandTask).not.toHaveBeenCalled();
-});
-it('gates research on saved settings and confirms the queued task', async () => {
-  let completeSave;
-  agents.updateCosTaskInterval.mockImplementation(() => new Promise(resolve => { completeSave = resolve; }));
-  agents.triggerCosOnDemandTask.mockResolvedValue({ success: true });
-  render(<MemoryRouter><ComparisonResearch /></MemoryRouter>);
-  const run = screen.getByRole('button', { name: 'Run research now' });
-  await waitFor(() => expect(run.disabled).toBe(false));
-  fireEvent.change(screen.getByLabelText('Research model'), { target: { value: 'other-model' } });
-  expect(run.disabled).toBe(true);
-  fireEvent.click(screen.getByRole('button', { name: 'Save research settings' }));
-  expect(run.disabled).toBe(true);
-  completeSave({ interval: { enabled: true, providerId: 'example', model: 'other-model', type: 'on-demand' } });
-  await waitFor(() => expect(run.disabled).toBe(false));
-  fireEvent.click(run);
-  await screen.findByText(/Research queued in CoS/);
-  expect(agents.triggerCosOnDemandTask).toHaveBeenCalledWith('model-comparison-refresh', null, { silent: true });
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [codexRun, localRun], inventory });
 });
 
-it('connects reasoning effort points with line and allows toggling line style and scale', async () => {
-  const multiObs = [
-    { ...observation, id: 'm-low', model: 'gpt-5.6-sol', effort: 'low', quality: metric(41), costPerTask: metric(0.23) },
-    { ...observation, id: 'm-med', model: 'gpt-5.6-sol', effort: 'medium', quality: metric(46), costPerTask: metric(0.37) },
-    { ...observation, id: 'm-high', model: 'gpt-5.6-sol', effort: 'high', quality: metric(48), costPerTask: metric(0.61) },
-    { ...observation, id: 'single', model: 'single-model', effort: 'high', quality: metric(30), costPerTask: metric(0.1) },
-  ];
-  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: multiObs, inventory: [] });
+it('runs the explicitly selected provider, model and effort, then displays the saved result', async () => {
+  api.runPortosModelBenchmark.mockResolvedValue({ observation: codexRun, complete: true });
+  render(<ModelComparison />);
 
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
+  await screen.findByTestId('xaxis');
+  fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'high' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Run five tasks' }));
 
-  await screen.findByText(/1 reasoning curves/);
-  const solScatter = screen.getByTestId('scatter-gpt-5.6-sol');
-  expect(solScatter).toHaveAttribute('data-has-line', 'true');
-  expect(solScatter).toHaveAttribute('data-points', '3');
-
-  const singleScatter = screen.getByTestId('scatter-single-model');
-  expect(singleScatter).toHaveAttribute('data-has-line', 'false');
-
-  // Test toggling lines off
-  fireEvent.click(screen.getByLabelText('Connect effort lines'));
-  expect(screen.getByTestId('scatter-gpt-5.6-sol')).toHaveAttribute('data-has-line', 'false');
-
-  // Test scale toggle
-  fireEvent.change(screen.getByLabelText('X-axis scale'), { target: { value: 'log' } });
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-scale', 'log');
-
-  // Test quick filter reasoning curves
-  fireEvent.click(screen.getByText(/Reasoning curves \(1\)/));
-  expect(screen.getByRole('button', { name: 'Toggle single-model' })).toHaveAttribute('aria-pressed', 'false');
-  expect(screen.getByRole('button', { name: 'Toggle gpt-5.6-sol' })).toHaveAttribute('aria-pressed', 'true');
+  await waitFor(() => expect(api.runPortosModelBenchmark).toHaveBeenCalledWith(
+    { providerId: 'codex', model: 'gpt-6-luna', effort: 'high' },
+    expect.objectContaining({ silent: true, signal: expect.any(AbortSignal) }),
+  ));
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Benchmark saved: 80% correct'));
+  expect(screen.getByTestId('scatter-Codex')).toHaveAttribute('data-values', '[[120,80]]');
 });
 
-it('prompts for a key when none is stored and closes the modal once the sync lands', async () => {
-  api.syncBenchmarkSource.mockResolvedValue({ success: true, observations: 636, total: 636 });
+it('compares all runs by tokens and limits the cost view to models with known API rates', async () => {
+  render(<ModelComparison />);
 
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
+  await screen.findByTestId('scatter-Ollama');
+  expect(screen.getByTestId('scatter-Codex')).toHaveAttribute('data-values', '[[120,80]]');
+  expect(screen.getByTestId('scatter-Ollama')).toHaveAttribute('data-values', '[[150,60]]');
 
-  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
-  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Start Sync' })).toBeDisabled();
-
-  fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'test-key-123' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Start Sync' }));
-
-  await waitFor(() => expect(api.syncBenchmarkSource).toHaveBeenCalledWith('artificial-analysis', { apiKey: 'test-key-123' }, { silent: true }));
-  await waitFor(() => expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull());
-});
-
-it('syncs straight away without a key prompt when one is already configured', async () => {
-  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
-  api.syncBenchmarkSource.mockResolvedValue({ success: true, observations: 636, total: 636 });
-
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
-
-  await waitFor(() => expect(api.syncBenchmarkSource).toHaveBeenCalledWith('artificial-analysis', {}, { silent: true }));
-  expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull();
-});
-
-it('discards a typed key when the prompt is cancelled', async () => {
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
-  fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'abandoned-key' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-
-  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
-  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toHaveValue('');
-  expect(api.syncBenchmarkSource).not.toHaveBeenCalled();
-});
-
-it('falls back to the key prompt when a sync with the stored key is rejected', async () => {
-  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
-  api.syncBenchmarkSource.mockRejectedValue(new Error('Artificial Analysis API failed (401): Unauthorized'));
-
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
-
-  await screen.findByText(/Artificial Analysis API failed \(401\)/);
-  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
-});
-
-it('offers the server sync sources and syncs a keyless source without a key prompt', async () => {
-  api.getModelComparison.mockResolvedValue({
-    schemaVersion: 1, observations: [observation], inventory: [],
-    syncSources: [
-      { id: 'artificial-analysis', label: 'Artificial Analysis', requiresKey: true },
-      { id: 'swebench', label: 'SWE-bench leaderboards', requiresKey: false },
-      { id: 'livecodebench', label: 'LiveCodeBench', requiresKey: false },
-    ],
-  });
-  api.syncBenchmarkSource.mockResolvedValue({ success: true, observations: 2, total: 2 });
-
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
-  fireEvent.change(screen.getByLabelText('Sync source'), { target: { value: 'swebench' } });
-
-  // A keyless source needs no key input, and Start Sync is enabled without one.
-  expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull();
-  expect(screen.getByRole('button', { name: 'Start Sync' })).not.toBeDisabled();
-
-  fireEvent.click(screen.getByRole('button', { name: 'Start Sync' }));
-  await waitFor(() => expect(api.syncBenchmarkSource).toHaveBeenCalledWith('swebench', {}, { silent: true }));
-  await waitFor(() => expect(screen.queryByLabelText('Sync source')).toBeNull());
-});
-
-it('falls back to Artificial Analysis only when the server offers no source list', async () => {
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  fireEvent.click(screen.getByRole('button', { name: /Sync benchmark data/i }));
-  const sourceSelect = screen.getByLabelText('Sync source');
-  expect(sourceSelect).toHaveValue('artificial-analysis');
-  expect(sourceSelect.querySelectorAll('option')).toHaveLength(1);
-});
-
-it('opens on a log cost axis and scopes the chart to the providers models', async () => {
-  const scoped = [
-    { ...observation, id: 'mine', model: 'claude-opus-5', effort: 'max', quality: metric(54), costPerTask: metric(4.2) },
-    { ...observation, id: 'theirs', model: 'palm-2', effort: 'unspecified', quality: metric(20), costPerTask: metric(0.01) },
-  ];
-  api.getModelComparison.mockResolvedValue({
-    schemaVersion: 1,
-    observations: scoped,
-    inventory: [],
-    availableModels: ['claude-opus-5'],
-  });
-
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-scale', 'log');
-  expect(screen.getByRole('button', { name: 'Toggle claude-opus-5' })).toBeTruthy();
-  expect(screen.queryByRole('button', { name: 'Toggle palm-2' })).toBeNull();
-
-  fireEvent.click(screen.getByLabelText('All models (not just yours)'));
-  expect(screen.getByRole('button', { name: 'Toggle palm-2' })).toBeTruthy();
-});
-
-it('plots an unpublished effort cost as a flagged estimate that can be turned off', async () => {
-  const curve = [
-    { ...observation, id: 'c-low', model: 'gpt-5.6-sol', effort: 'low', quality: metric(41), costPerTask: metric(0.2) },
-    { ...observation, id: 'c-max', model: 'gpt-5.6-sol', effort: 'max', quality: metric(51), costPerTask: metric(1.2) },
-    { ...observation, id: 'f-low', model: 'claude-fable-5.1', effort: 'low', quality: metric(48), costPerTask: null },
-    { ...observation, id: 'f-max', model: 'claude-fable-5.1', effort: 'max', quality: metric(57), costPerTask: metric(6.1) },
-  ];
-  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: curve, inventory: [] });
-
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  await screen.findByText(/1 estimated cost/);
-  expect(screen.getByTestId('scatter-claude-fable-5.1')).toHaveAttribute('data-points', '2');
-
-  fireEvent.click(screen.getByLabelText('Estimate unpublished costs'));
-  expect(screen.getByTestId('scatter-claude-fable-5.1')).toHaveAttribute('data-points', '1');
-  expect(screen.queryByText(/· 1 estimated cost/)).toBeNull();
-});
-
-it('leaves only the models that actually plot a curve selected', async () => {
-  const mixed = [
-    // Two efforts, both plottable → a real curve.
-    { ...observation, id: 'p-low', model: 'gpt-5.6-sol', effort: 'low', quality: metric(41), costPerTask: metric(0.2) },
-    { ...observation, id: 'p-max', model: 'gpt-5.6-sol', effort: 'max', quality: metric(51), costPerTask: metric(1.2) },
-    // Two efforts, neither plottable (no cost anywhere in the family, so no
-    // anchor to estimate from) → must not survive the quick filter.
-    { ...observation, id: 'u-low', model: 'unpriced-model', effort: 'low', quality: metric(30), costPerTask: null },
-    { ...observation, id: 'u-max', model: 'unpriced-model', effort: 'max', quality: metric(35), costPerTask: null },
-  ];
-  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: mixed, inventory: [] });
-
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  await screen.findByText(/1 reasoning curves/);
-  fireEvent.click(screen.getByText(/Reasoning curves \(1\)/));
-  expect(screen.getByRole('button', { name: 'Toggle gpt-5.6-sol' })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.getByRole('button', { name: 'Toggle unpriced-model' })).toHaveAttribute('aria-pressed', 'false');
-});
-
-it('stretches chart width and adjusts height', async () => {
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  await screen.findByText('1 plotted · 1 missing selected metrics or outside log scale');
-
-  // Initially at 1x
-  expect(screen.getByRole('button', { name: '1×' })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.queryByText(/Chart stretched/)).toBeNull();
-
-  // Switch to 2x stretch
-  fireEvent.click(screen.getByRole('button', { name: '2×' }));
-  expect(screen.getByRole('button', { name: '2×' })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.getByText(/Chart stretched 2×/)).toBeTruthy();
-
-  // Switch height to 600px
-  expect(screen.getByRole('button', { name: '480px' })).toHaveAttribute('aria-pressed', 'true');
-  fireEvent.click(screen.getByRole('button', { name: '600px' }));
-  expect(screen.getByRole('button', { name: '600px' })).toHaveAttribute('aria-pressed', 'true');
-});
-
-it('scales axes via zoom buttons and manual bounds inputs', async () => {
-  const multi = [
-    { ...observation, id: 'm1', model: 'model-a', quality: metric(30), costPerTask: metric(0.02) },
-    { ...observation, id: 'm2', model: 'model-b', quality: metric(45), costPerTask: metric(0.50) },
-    { ...observation, id: 'm3', model: 'model-c', quality: metric(55), costPerTask: metric(2.00) },
-  ];
-  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: multi, inventory: [] });
-
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  await act(async () => {});
-
-  await screen.findByText('3 plotted · 0 missing selected metrics or outside log scale');
-  const xaxis = screen.getByTestId('xaxis');
-  const yaxis = screen.getByTestId('yaxis');
-
-  expect(xaxis).toHaveAttribute('data-allow-overflow', 'false');
-  expect(yaxis).toHaveAttribute('data-allow-overflow', 'false');
-
-  // Click Zoom in
-  fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'true');
-  expect(screen.getByTestId('yaxis')).toHaveAttribute('data-allow-overflow', 'true');
-  expect(screen.getByRole('button', { name: 'Reset zoom' })).toBeTruthy();
-  expect(screen.getByText(/\(\d in zoom\)/)).toBeTruthy();
-
-  // Click Reset zoom
-  fireEvent.click(screen.getByRole('button', { name: 'Reset zoom' }));
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'false');
-  expect(screen.queryByRole('button', { name: 'Reset zoom' })).toBeNull();
-
-  // Click Fit visible
-  fireEvent.click(screen.getByRole('button', { name: 'Fit visible' }));
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'true');
-  expect(screen.getByRole('button', { name: 'Reset zoom' })).toBeTruthy();
-
-  // Toggle Scale axes manual inputs
-  fireEvent.click(screen.getByRole('button', { name: /Scale axes/i }));
-  const minCostInput = screen.getByLabelText('Minimum cost per task');
-  const maxCostInput = screen.getByLabelText('Maximum cost per task');
-  const minScoreInput = screen.getByLabelText('Minimum index score');
-  const maxScoreInput = screen.getByLabelText('Maximum index score');
-
-  fireEvent.change(minCostInput, { target: { value: '0.10' } });
-  fireEvent.change(maxCostInput, { target: { value: '1.00' } });
-  fireEvent.change(minScoreInput, { target: { value: '40' } });
-  fireEvent.change(maxScoreInput, { target: { value: '50' } });
-
-  fireEvent.click(screen.getByRole('button', { name: 'Apply range' }));
-
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-domain', JSON.stringify([0.1, 1]));
-  expect(screen.getByTestId('yaxis')).toHaveAttribute('data-domain', JSON.stringify([40, 50]));
-
-  // Clear range resets zoom
-  fireEvent.click(screen.getByRole('button', { name: 'Clear range' }));
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'false');
-});
-
-it('respects initial zoom and stretch URL search parameters', async () => {
-  render(
-    <MemoryRouter initialEntries={['/?stretch=1.5&height=600&xMin=0.2&xMax=1.5&yMin=40&yMax=60']}>
-      <ModelComparison />
-    </MemoryRouter>
-  );
-  await act(async () => {});
-
-  await screen.findByText(/1 plotted/);
-  expect(screen.getByRole('button', { name: '1.5×' })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.getByRole('button', { name: '600px' })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.getByText(/Chart stretched 1.5×/)).toBeTruthy();
-
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'true');
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-domain', JSON.stringify([0.2, 1.5]));
-  expect(screen.getByTestId('yaxis')).toHaveAttribute('data-domain', JSON.stringify([40, 60]));
-});
-
-it('persists settings to localStorage and restores them on a fresh visit', async () => {
-  localStorage.clear();
-  const { unmount } = render(
-    <MemoryRouter initialEntries={['/']}>
-      <ModelComparison />
-    </MemoryRouter>
-  );
-  await act(async () => {});
-  await screen.findByText(/1 plotted/);
-
-  fireEvent.click(screen.getByRole('button', { name: '1.5×' }));
-  await waitFor(() => expect(localStorage.getItem('portos-model-comparison-settings')).toContain('stretch=1.5'));
-  unmount();
-
-  render(
-    <MemoryRouter initialEntries={['/']}>
-      <ModelComparison />
-    </MemoryRouter>
-  );
-  await act(async () => {});
-  await screen.findByText(/1 plotted/);
-  expect(screen.getByRole('button', { name: '1.5×' })).toHaveAttribute('aria-pressed', 'true');
-});
-
-
-it('switches metric coordinates, clears stale zoom, and preserves evidence table units', async () => {
-  api.getModelComparison.mockResolvedValue({ observations: [
-    { ...observation, tokensPerSecond: metric(80), responseSeconds: metric(12) },
-    { ...observation, id: 'missing-speed', model: 'other', tokensPerSecond: null },
-  ], inventory: [] });
-  render(<MemoryRouter initialEntries={['/?xMin=0.1&yMin=40']}><ModelComparison /></MemoryRouter>);
-  await screen.findByLabelText('X axis');
-  fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'tokensPerSecond' } });
-  fireEvent.change(screen.getByLabelText('Y axis'), { target: { value: 'responseSeconds' } });
-  expect(screen.getByTestId('scatter-example-model')).toHaveAttribute('data-values', '[[80,12]]');
-  expect(screen.queryByTestId('scatter-other')).toBeNull();
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-scale', 'linear');
-  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'false');
-  expect(screen.getAllByText('$0.5000')).toHaveLength(2);
-  expect(screen.getAllByText('50')).toHaveLength(2);
-});
-
-it('keeps exact Zen IDs in available coverage and plots free prices without inventing quality', async () => {
-  const free = { ...observation, id: 'free', model: 'example-free', benchmark: 'Unbenchmarked (pricing only)', quality: null, costPerTask: null, inputPerMillion: metric(0), outputPerMillion: metric(0) };
-  api.getModelComparison.mockResolvedValue({ observations: [observation, free], availableModels: ['example'], inventory: [{ id: 'zen', models: [{ model: `opencode/${free.model}`, efforts: [] }] }] });
-  render(<MemoryRouter initialEntries={['/?xAxis=inputPerMillion&yAxis=outputPerMillion&scale=linear']}><ModelComparison /></MemoryRouter>);
-  expect(await screen.findByTestId('scatter-example-free')).toHaveAttribute('data-values', '[[0,0]]');
-  fireEvent.click(screen.getByRole('button', { name: 'Fit visible' }));
-  const domain = JSON.parse(screen.getByTestId('xaxis').getAttribute('data-domain'));
-  expect(domain[1]).toBeGreaterThan(domain[0]);
-  fireEvent.change(screen.getByLabelText('Y axis'), { target: { value: 'quality' } });
-  expect(screen.queryByTestId('scatter-example-free')).toBeNull();
-  expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
-});
-
-it('reads coverage through the normalized catalog name so a local backend id is not reported as unresearched', async () => {
-  api.getModelComparison.mockResolvedValue({
-    observations: [{ ...observation, model: 'qwen3-coder-30b-a3b' }],
-    availableModels: ['qwen3-coder-30b-a3b'],
-    inventory: [{ id: 'ollama', name: 'Ollama', models: [
-      { model: 'qwen3-coder:30b', efforts: [], catalogModel: 'qwen3-coder-30b-a3b' },
-      { model: 'mystery:7b', efforts: [], catalogModel: 'mystery-7b' },
-    ] }],
-  });
-  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
-  fireEvent.click(await screen.findByText(/Configured provider coverage/));
-  // The endpoint id never equals the index name, so matching on it alone
-  // reported every Ollama pull as unresearched.
-  expect(screen.getByText(/qwen3-coder:30b/)).toHaveTextContent('Public model reference available as qwen3-coder-30b-a3b');
-  expect(screen.getByText(/mystery:7b/)).toHaveTextContent('Needs research');
+  fireEvent.click(screen.getByRole('button', { name: 'API equivalent' }));
+  await screen.findByTestId('scatter-Codex');
+  expect(screen.queryByTestId('scatter-Ollama')).toBeNull();
+  expect(screen.getByTestId('scatter-Codex')).toHaveAttribute('data-values', '[[0.2,80]]');
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-label', 'Estimated API equivalent per 1,000 runs');
+  expect(screen.getByText('~$0.20')).toBeTruthy();
 });

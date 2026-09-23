@@ -11,3 +11,7 @@ export const discoverComparisonModels = (providerId, options) => request('/provi
 export const syncBenchmarkSource = (source, data, options) => request(`/providers/comparison/sync/${source}`, {
   method: 'POST', body: JSON.stringify(data || {}), ...options,
 });
+
+export const runPortosModelBenchmark = (selection, options) => request('/providers/comparison/run', {
+  method: 'POST', body: JSON.stringify(selection), ...options,
+});

@@ -1,163 +1,41 @@
-# Models Comparison
+# PortOS Model Benchmarks
 
-Open **Models → Comparison** (`/models/comparison`) to compare sourced provider/model/effort configurations. The chart separates benchmark versions and offers published benchmark cost per task or an explicit uncached token workload estimate. Provider, model and effort filters are bookmarkable query parameters. The table is the accessible equivalent of the chart and retains missing-data rows.
+**Models → Comparison** runs a small, fixed PortOS task set against models this install can use. The chart can show total tokens per five-task run or estimated API-equivalent cost per 1,000 runs on the X axis, against exact-answer score on the Y axis. Token mode includes local models. Cost mode includes only models with a known API-rate reference. A run is initiated by a person from the page; reads, startup, imports, and scheduled research never call a model.
 
-The catalog contains comprehensive public configurations across major providers (OpenAI, Google, Anthropic, Meta, DeepSeek, Mistral, Alibaba, etc.) from Artificial Analysis, with the September 5, 2026 v4.2 and September 10, 2026 v4.3 snapshots retained, plus a September 22, 2026 v4.3.2 refresh for GPT-6 Astra, Sol and Luna, GPT-5.6 Terra, and Claude Opus 5.5. The refresh keeps only metrics published for each model effort; unavailable measurements stay null. Models with multiple evaluated reasoning efforts are connected along effort curves, with standardized end-to-end response times and configurable linear or logarithmic cost scaling.
+## PortOS Task Bench v1
 
-## Sources and interpretation
+Version 1 contains five short, deterministic tasks: arithmetic, text formatting, a small logic puzzle, a price calculation, and JavaScript output reading. Each task has a fixed expected answer and a deterministic matcher. The score is the percentage of tasks matched exactly. An incomplete run has no score.
 
-- [Artificial Analysis](https://artificialanalysis.ai/) supplies independent quality, benchmark cost and performance measurements. Its [API documentation](https://artificialanalysis.ai/api-reference) describes key-based access and attribution. Research can use public model/provider pages without a key. Do not copy documentation example values into the catalog as current observations.
-- [OpenRouter's public model API](https://openrouter.ai/api/v1/models) supplies OpenRouter-routed per-token prices. These prices describe OpenRouter's routed charge, not the creator's first-party price. The `:free` routes are promotional and remain subject to upstream limits and data-use terms; this source publishes no quality score.
-- [OpenRouter's model endpoint API](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model) supplies per-serving-provider p50 latency and throughput for its rolling 30-minute window. Each row keeps the routed model, serving provider, endpoint tag, quantization and context limits in its configuration. Missing measurements remain null, and endpoint performance is never transferred to another provider.
-- [Epoch AI's Capabilities & Benchmarking data](https://epoch.ai/benchmarks/use-this-data) supplies named benchmark scores from its on-demand CSV bundle. The adapter records the benchmark release or version and each row's model/run configuration. Epoch AI's data is attributed under CC BY 4.0; benchmark questions and answers remain their creators' property, and external-run rows retain their original source licensing.
-- Official provider pricing documents govern the exact endpoint, region, token classes, batch/cache/context tier and billing date. Public benchmark pricing is an attributed reference, not an account-specific invoice.
-- Official local model cards identify revisions and quantizations. Hosted quality is only transferable when the evaluated configuration is verified equivalent. Hosted speed and cost never describe local hardware.
-- Subscription quota stays unknown unless a primary source defines per-task units for the exact workload and plan. No dollar-to-quota conversion, generic effort multiplier, or assumption that local inference is free.
-- Every metric carries its own source URL, retrieval date and methodology. End-to-end response measurements must name input/output lengths, reasoning inclusion and percentile/window. They are independent of the intelligence evaluation. Unknown metrics are `null`.
-- Entries older than 30 days are visibly stale. This is a freshness cue, not a guarantee that more recent data is correct. A schema validates structure, not the source's truth.
+This is a PortOS workload for comparing the configurations available on one install. It is not a replacement implementation of SWE-bench or a claim to reproduce a public leaderboard. Task definitions and grading rules ship in source; model responses and prompts are not saved.
 
-## Grok 4.7 — September 21, 2026
+## Provider scope and safety
 
-[xAI announced Grok 4.7](https://x.ai/news/grok-4-7) for its API and Grok Build. The native `grok models` catalog lists `grok-4.7` as its default, alongside `grok-4.7-build-fast`, `grok-4.6` and `grok-4.5`. Fresh PortOS Grok CLI/TUI and xAI API presets default to 4.7; upgrades add the model without changing existing selections or custom arguments. Gateway model IDs remain specific to their own catalogs.
+The page lists enabled models after applying the same model-access policy as provider pickers. A run is allowed only for a configured subscription family or a free/local provider, and only through a direct text API or Codex's isolated subscription text transport. CLI-only providers that can invoke agent tools stay visible as unavailable until PortOS can call them through a tool-free transport.
 
-The [official model documentation](https://docs.x.ai/developers/models/grok-4.7) specifies a 500,000-token context window, text/image input, text output, function calling and structured outputs. API reasoning effort supports `low`, `medium`, `high` and `xhigh`, defaulting to `high`. These are API capabilities; PortOS's existing CLI context budget remains unchanged.
+Each run makes five serial calls to the selected provider and model. It does not switch provider, model, or endpoint on failure. The provider's model effort setting is pinned for Codex runs when selected. Local/API providers without an effort control run at their provider default. A Stop action aborts the active request; any completed partial token usage is retained without a performance score.
 
-| Input context | Input USD/M | Cached input USD/M | Output USD/M |
-| --- | ---: | ---: | ---: |
-| At most 200,000 tokens | 2.00 | 0.50 | 6.00 |
-| Above 200,000 tokens | 4.00 | 1.00 | 12.00 |
+## Usage, performance, and cost
 
-The comparison seed records these two pricing configurations with separate provenance. Grok 4.7 quality, measured speed, latency, cost per benchmark task and subscription quota remain unknown; historical Grok 4.6 evaluations retain their original identity. Usage estimates use the standard tier and disclose their approximation; they do not model the long-context surcharge. The fast variant is a separate offering and is not assigned these base-model prices in the comparison catalog.
+- **Tokens per run** includes the input and output tokens across all five calls. Provider-reported counts are preferred. If a provider omits a count, PortOS estimates the missing side as characters divided by four and labels the run estimated or mixed.
+- **Performance** is the count of exact deterministic answers divided by five. The tasks and scoring version are included in each observation's configuration.
+- **API-equivalent cost** is shown only when PortOS has a model-specific or family API rate. It uses the run's token counts and the rates in `server/lib/modelPricing.js`. It is a reference estimate, not a subscription charge or quota-burn measurement. GPT-5.6 Sol/Luna and GPT-6 Sol/Luna rates were checked against [OpenAI's GPT-6 launch announcement](https://openai.com/index/introducing-gpt-6-sol-and-luna/).
+- **Local inference** is compared on tokens and score. It receives no dollar cost and is not treated as free hardware or energy.
+- **Subscription allowance** is not allocated per request by Codex/ChatGPT plans. Usage depends on model, effort, task, and plan window, so the chart does not convert API-equivalent dollars into claimed plan consumption. See [OpenAI's usage guidance](https://help.openai.com/en/articles/20001516-managing-usage-with-gpt-6-astra-in-work-and-codex).
+- A configured free provider is offered as a comparison target, but PortOS does not infer its rate limit or remaining quota from a free label.
 
-## Research workflow
+## Machine-local data
 
-1. Choose a browsing-capable CoS provider and model in the Comparison research panel and save. The `model-comparison-refresh` task ships **disabled and on-demand**; boot and page reads make no LLM calls.
-2. Run research from the panel or CoS Schedule. CoS must have Improvement enabled. The task reports failures through the ordinary CoS run lifecycle. The queue confirmation is not research completion.
-3. The agent reads the current catalog and sanitized enabled-provider inventory. Explicit discovery probes read current provider model lists, including Ollama-backed providers, without writing provider settings or running model inference. Model installation and provider enabling never silently launch research; the next user-triggered or explicitly scheduled run discovers additions.
-4. Missing configured combinations take priority over stale observations and other new releases. Each run is bounded to 20 configurations and 20 provider discoveries; remaining gaps are reported. Unavailable sources preserve existing evidence.
-5. In CoS Schedule, find **model-comparison-refresh** to set recurring cron cadence, research effort/model or a custom prompt. Scheduling is opt-in; the chosen research provider consumes quota or API budget. A custom prompt follows the normal CoS prompt-pin contract.
-6. After CoS verifies its import, reload Comparison data. Discovery is an ephemeral read; it does not change provider selections or model lists elsewhere in PortOS.
+Observations append to `data/model-comparison.json`, an existing machine-local file-primary store. No run results are included in `data.reference`, federated, or uploaded by the benchmark feature. A record keeps the run id, provider/model/effort identity, score, token basis, duration, and optional API-equivalent estimate. It does not keep prompt text or model output. Imports cannot add retired Artificial Analysis Intelligence Index or SWE-bench score rows. Migration 409 removes those rows from installed catalogs while preserving other observations and usage.
 
-## Catalog and import contract
+Public price references may remain in the seed; they are not presented as PortOS performance scores. External benchmark score imports from Artificial Analysis and SWE-bench are no longer exposed by the comparison API or seeded into new installs.
 
-`data/model-comparison.json` is a machine-local, externally researched reference snapshot seeded by `data.reference/model-comparison.json`. The server reads and validates it on every request. No federation: provider inventory and local configuration context belong to this install. No history or cross-record queries are stored; import merges a bounded snapshot by stable observation ID. Filesystem backups include it. See the storage classification in `STORAGE.md`.
+## Daily model and effort updates
 
-Endpoints (relative to the configured PortOS API origin):
+The scheduled model research task checks official model releases and effort options and reports actionable changes for maintainers. When that research confirms a new model or effort option:
 
-- `GET /api/providers/comparison` → `{ schemaVersion: 1, observations, inventory }`. Inventory contains only provider IDs/names/types, discovery capability, model IDs, supported effort labels, and each model's `catalogModel` — the public benchmark-index name the endpoint ID normalizes to, or `null`. No credentials or endpoints. `catalogModel` is derived server-side by `catalogSlugForProviderModel`, so the coverage list and the chart's default scope cannot disagree about whether a model has evidence; never re-derive it in the client.
-- `POST /api/providers/comparison/discover` with `{ "providerId": "example-provider" }` → current `{ providerId, models: [{ model, efforts }] }`. Explicit discovery only; failures remain visible.
-- `POST /api/providers/comparison/import` accepts `{ schemaVersion: 1, observations: [...] }`. GET's `inventory` field is not an import field. The UI also accepts this JSON as a file.
-- `POST /api/providers/comparison/sync-aa` with optional `{ "apiKey": "..." }` → fetches model metadata directly from the Artificial Analysis API, normalizes observations, and imports them. The API-reported `intelligence_index_version` determines observation IDs, benchmark labels and metric methodology. Missing/invalid versions, malformed/empty pages, or a version change during pagination fail before import; new benchmark versions never overwrite older-version evidence. Back-compat alias for the generalized source sync below.
-- `POST /api/providers/comparison/sync/:source` with an optional `{ "apiKey": "..." }` (used only by `artificial-analysis`) → the same import contract for any declared source. `GET` reports the selectable list as `syncSources: [{ id, label, requiresKey }]`. Built-in sources: `artificial-analysis`, `openrouter`, `openrouter-endpoints`, `epoch-ai`, `swebench`, and `livecodebench` — see "Benchmark source sync" below.
+1. Add the model to `data.reference/providers.json` only for provider accounts that can actually select it; add an additive migration when existing installs need the choice.
+2. Update the model's API reference rates in `server/lib/modelPricing.js` from an official pricing source and move `PRICING_AS_OF` forward.
+3. Use `effortLevelsForProvider()` and provider-published model capability data for available efforts. Do not infer an unsupported effort rung from another model in the family.
+4. Keep performance blank until this PortOS install runs the fixed task set on that exact model and effort. No source leaderboard score is copied into the PortOS chart.
 
-Use the actual configured origin, optional authentication and trusted local HTTP mirror described in `PORTS.md`; do not hardcode an install address. Never put credentials in a catalog, command argument, source URL, output report or repository file. Existing authenticated PortOS tooling can perform the POST. Direct local file replacement bypasses import preservation checks and is not the research workflow.
-
-The exact schema is `modelComparisonImportSchema` in `server/lib/validation.js`. Each observation has:
-
-| Field | Meaning |
-| --- | --- |
-| `id` | Stable public observation identity, including benchmark version/configuration |
-| `provider`, `model`, `effort` | Exact inference provider, model ID and evaluated effort; use `unspecified` when the source does not identify effort |
-| `configuration` | Revision, quantization, runtime, endpoint tier or evaluated setup; no machine identity |
-| `billing` | `api`, `subscription`, `local`, or `unknown` |
-| `benchmark` | Benchmark name **and version**, never a mixture of versions |
-| `quality`, `costPerTask` | Published quality score and USD per benchmark task |
-| `inputPerMillion`, `outputPerMillion`, `reasoningPerMillion` | USD per million tokens for each independently verified token class |
-| `responseSeconds`, `tokensPerSecond` | Measured E2E seconds and output throughput |
-| `quota` | `null` or `{ unitsPerTask, unit, source }`; unit must identify its plan/workload |
-| `notes` | Source limitations, scope and interpretation |
-
-Each non-null metric is `{ "value": 12.3, "source": { "url": "https://example.com/benchmark", "retrievedAt": "2026-09-05T00:00:00Z", "methodology": "Example benchmark v1, exact workload and measurement scope" } }`. This is invented schema illustration, not benchmark data. All nullable fields must be present. At least one sourced metric is required. Sources must be HTTPS and dates cannot be in the future. Imports contain 1–12,000 unique observation IDs; the merged catalog is capped at 12,000 to fit the complete Epoch AI benchmark snapshot in one validated, atomic merge.
-
-Validate a candidate locally from the PortOS root, without writing anything:
-
-```sh
-node --input-type=module -e 'import { readFile } from "node:fs/promises"; import { modelComparisonImportSchema } from "./server/lib/validation.js"; modelComparisonImportSchema.parse(JSON.parse(await readFile(process.argv[1], "utf8"))); console.log("Catalog schema valid");' /path/to/candidate.json
-```
-
-Then POST the validated JSON using the normal authenticated API client and GET the catalog to verify. Reusing an ID with changed provider/model/effort/configuration/billing/benchmark is rejected. Create a new ID for a changed identity. Null or older incoming metrics retain the previous metric, and unrelated observations remain. Concurrent imports serialize the read/merge/write operation. A malformed or unsupported-version stored catalog fails visibly and cannot be overwritten by an import.
-
-Partial source refreshes cannot erase old evidence. To retract incorrect data, an operator must deliberately repair the local catalog while preserving a recovery copy; autonomous research does not delete observations. A future schema migration must explicitly preserve installed evidence and source provenance.
-
-## Benchmark source sync
-
-Artificial Analysis is not the only source the page can pull: **Models → Comparison → Sync benchmark data** offers every source `GET /api/providers/comparison` lists as `syncSources`. Each sync is an explicit user action (or an explicitly scheduled task run) — never a boot-time or background call. All sources share the import contract above: server-side fetch, schema validation, and per-metric merge keyed by stable observation ID. No seed ships for any synced source — the fetch happens on demand into this install's catalog, so nothing is bundled or redistributed by PortOS itself; the source's own publication terms govern the data it serves.
-
-- **OpenRouter routed pricing** (`openrouter`) — reads the public model list and maps `pricing.prompt`, `pricing.completion`, and a published `pricing.internal_reasoning` to uncached input, output and reasoning USD per million tokens. Every row identifies the exact routed model in its configuration. Each mapped minimum-prompt-token or UTC-window override becomes a separate identity using the published tier rates, without interpolation; unmodified token classes retain their base rate. Audio/cache-only charges are not represented by this schema. Zero-price `:free` offers stay zero. The source URL and methodology describe OpenRouter's routing price, not a model creator's first-party rate. No key required.
-- **OpenRouter endpoint performance** (`openrouter-endpoints`) — reads each model's endpoint list and records p50 `latency_last_30m` and `throughput_last_30m` as separate per-serving-endpoint observations. Endpoint tag, provider name and model ID, quantization and context limits remain in configuration and in the stable identity; no model-level or cross-provider speed is inferred. Missing p50 values stay null. No key required.
-- **Epoch AI benchmarks** (`epoch-ai`) — downloads the CSV bundle on demand and imports each available benchmark/model/run-configuration score as its own quality observation. The benchmark name includes the published version or release date, while reasoning effort, model version, harness and other run details remain in the configuration and identity. Notes attribute the Capabilities & Benchmarking dataset under CC BY 4.0 and state that external-run rows retain their original licensing. No seed ships and no key is required.
-- **SWE-bench** (`swebench`) — fetches [swebench.com](https://www.swebench.com/) and reads the `leaderboard-data` JSON the site renders from. Each scored-track submission becomes one observation: benchmark `SWE-bench <track> (pass@1, <agent>)` — the scaffold is part of the name, and several submissions one model+agent pair carries stay distinct — with the resolved-task percentage as quality and the mean USD cost per instance as `costPerTask`. The observation ID keys on the submission folder, so leaderboard row order never changes an identity and a re-submission under the same folder refreshes in place. The site's `Test` tab (a system-test playground, not a scored leaderboard) and rows without an attributable model identity (`Undisclosed`, `Multi`-vendor lineups) stay absent rather than becoming a fake series. No key required.
-- **LiveCodeBench** (`livecodebench`) — fetches LiveCodeBench's published `performances_generation.json` and aggregates pass@1 per model across the full date window. The window span is part of the benchmark name — `LiveCodeBench (generation, pass@1, <start> to <end>)` — so a sync that picks up newly added problems starts a new series instead of mixing different windows. The serving family (`model_style`) names the provider where it is unambiguous; unrecognized families stay `Unknown` with the style in notes. Costs, throughput and quota are not published by this source. No key required.
-
-
-## Selectable axes and free Zen coverage
-
-Both axes offer benchmark score, cost per task, speed (output tokens/s), response time (seconds), and input/output token prices. `xAxis` and `yAxis` are bookmarkable and saved with the other chart settings. Changing either clears zoom bounds and selects linear scaling. The X scale can still be logarithmic; zero prices are excluded on log scale and counted explicitly. Missing selected metrics stay in the evidence table, whose quality/cost columns retain their original units regardless of chart axes. Speed and latency remain measurements of their source workloads, not the selected quality benchmark.
-
-The September 6, 2026 snapshot ships eight exact Zen endpoint IDs (the CLI prefixes these with `opencode/`) from the [live Zen model list](https://opencode.ai/zen/v1/models), cross-checked against the OpenCode entries in [Models.dev](https://models.dev/api.json): Big Pickle, DeepSeek V4 Flash Free, MiMo V2.5 Free, Ling 3.0 Flash Fin Free, Nemotron 3 Ultra Free, Nemotron 3.5 Lightning Free, and Muse Spark 1.2/1.3 Contributor Free. Models.dev lists additional historic free entries that the live endpoint no longer advertises; those were excluded.
-
-[Zen's pricing page](https://opencode.ai/docs/zen/) lists six of these; Muse 1.2 and DeepSeek V4 Flash Free are confirmed by the live endpoint plus Models.dev. Each row carries zero published input/output rates, with unknown quota, reasoning-token billing, benchmark task cost, quality and throughput. The free offers are temporary and subject to provider data-use terms. Name similarity does not prove that an AA-tested model matches Zen's revision, effort or serving configuration.
-
-Pricing-only rows appear alongside the selected benchmark as explicitly unbenchmarked evidence. Select input price versus output price to plot them, or use scenario cost with zero reasoning tokens to calculate their published input/output charge. A missing quality measurement cannot become a zero score. Migration 356 appends missing shipped Zen IDs to existing catalogs without overwriting locally researched rows; it validates the entire result before writing and refuses malformed/future-version data.
-
-The September 15, 2026 snapshot adds the two NVIDIA NIM free-endpoint IDs currently shipped on the `nvidia-nim` provider and its OpenCode wrappers: `google/gemma-4-31b-it` and `poolside/laguna-xs-2.1`, from the [Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) and [Laguna XS 2.1](https://build.nvidia.com/poolside/laguna-xs-2.1) prototype pages. Each row carries zero published input/output rates, with unknown quota, reasoning-token billing, benchmark task cost, quality and throughput. The free NIM offer is a trial endpoint subject to NVIDIA credits, rate limits, and data-use terms. Name similarity does not prove that an AA-tested or locally served revision matches NIM's serving configuration. Migration 388 appends missing shipped NIM IDs the same way 356 does for Zen.
-
-## Local coding agents and the install catalog
-
-The models PortOS can dispatch are not only the ones named in `data.reference/providers.json`. The shipped `ollama` and `lmstudio` provider records carry an **empty** model list — what a user can select is whatever they pulled — so the install catalog in `server/lib/localLlmCatalog.js` is the other half of scope. `scripts/prune-model-comparison-seed.js` derives both, and a coding model reaching the install picker without benchmark rows is a coverage gap, not a design choice.
-
-A local backend ID names a *build* of the weights, not the model the index benchmarked, and the difference is not decidable from the text — so a catalog entry **declares** its index name in a `benchmarkModel` field and `catalogSlugForProviderModel` looks it up instead of guessing. Both of an entry's backend IDs (and its retired aliases) resolve through the same declaration, so `ornith:35b` and `lmstudio-community/Ornith-1.0-35B-GGUF` are one model. **Omit `benchmarkModel` unless the evaluated configuration has been checked against the entry**; the model then carries no benchmark evidence, which is the honest state. Textual guessing was tried and rejected: stripping `-Reasoning` off Cisco's GGUF lands on the *different* `foundation-sec-8b`, and folding `qwen3.8:27b-mlx` onto `qwen3.8-27b` would plot a hosted API's price and throughput under a 4-bit local build.
-
-The September 16, 2026 snapshot adds ten agentic-coding rows for the catalog's coding tier. **The scaffold is part of the benchmark name**, because the chart separates series on `benchmark` alone and two harnesses disagree by more than most models do — a Cline result and an OpenHands result are not one axis:
-
-| Model | SWE-bench Verified | SWE-bench Pro | Benchmark group (scaffold) |
-| --- | ---: | ---: | --- |
-| [Ornith 1.0 35B](https://huggingface.co/ornith-ai/Ornith-1.0-35B) | 75.6 | 50.4 | OpenHands, temp=1.0, top_p=0.95 |
-| [Qwen3.6 35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) | 73.4 | 49.5 | Qwen internal scaffold (bash + file-edit), 200K context |
-| [Ornith 1.0 9B](https://ornith.ai/ornith_1_0.html) | 69.4 | 42.9 | OpenHands, temp=1.0, top_p=0.95 |
-| [Devstral Small 2 24B](https://mistral.ai/news/devstral-2-vibe-cli/) | 68.0 | — | Cline |
-| [North Mini Code 1.0](https://sebastianraschka.com/blog/2026/north-mini-code-agentic-coding.html) | 67.6 | 40.2 | SWE-Agent v1.1.0 |
-| [Qwen3-Coder 30B](https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/discussions/30) | 51.6 | — | OpenHands, 100 turns |
-
-So **Qwen3-Coder 30B and Ornith 1.0 35B compare directly** — both sit in `SWE-bench Verified (pass@1, OpenHands)` — while the Cline and SWE-Agent results stay on their own axes rather than joining a ranking they did not earn.
-
-Every row is quality only. A hosted price or throughput would describe someone else's endpoint, and none of these numbers describes the quantized GGUF build PortOS installs or this machine's hardware — a local measurement belongs in the per-model assessment, not here. Publisher self-reports are not independently reproduced: Qwen's Qwen3-Coder figure ships without the OpenHands commit, serving config or tool-call parser, and Cohere's table mixes its own runs with public reports and Artificial Analysis values. Codestral 22B and the Qwen2.5-Coder builds carry no rows because no current sourced evaluation covers them; an absent row stays absent rather than becoming an estimate. Migration 389 appends the shipped coding IDs the same way 388 does for NIM.
-
-## Research: skill-specific comparisons
-
-Research checked September 6, 2026. These are candidate adapters and metrics, not newly imported scores. The current benchmark selector already separates named/versioned evaluations; a future skill selector should narrow that list, never mix unrelated score scales.
-
-| Skill | Primary source / metrics | Interpretation and ingestion requirements |
-| --- | --- | --- |
-| Software coding: repository work | [SWE-bench](https://www.swebench.com/): resolved-task percentage, Verified / Pro / Multimodal tracks | Record track, dataset revision, agent scaffold, tools, budget and model effort. A full agent's result is not a model-only score; keep different scaffolds separate. The live leaderboard sync (`swebench`) imports the scored tracks on demand; the site's `Test` tab stays excluded. |
-| Software coding: code generation | [LiveCodeBench](https://livecodebench.github.io/): generation, self-repair, execution and test-output prediction | Its date-windowed contest problems address contamination. Pin release, date window and sampling/pass@k configuration; do not compare different windows. The live sync (`livecodebench`) imports the generation split aggregated per model with the window span in the benchmark name; the other splits are candidates for the same adapter. |
-| Creative writing | [EQ-Bench Creative Writing v3](https://eqbench.com/creative_writing.html): rubric score, Elo, repetition and slop frequency | LLM-judged results carry judge/prompt bias. Elo is relative to a participant pool; repetition/slop are diagnostics, not a substitute for human editorial judgment. Pin judge version, rubric and leaderboard snapshot. Inspect linked repository data rather than scraping an empty JavaScript-rendered table. |
-| Image analysis | [MMMU](https://mmmu-benchmark.github.io/): multimodal subject accuracy; MMMU-Pro as a separate benchmark | Measures image-grounded academic understanding, not image generation quality. Pin original/Pro, split, image resolution, prompting and tool access. Report aggregate plus subject coverage; model support for images alone is not an accuracy measurement. |
-| Tool use | [Berkeley Function Calling Leaderboard V4](https://gorilla.cs.berkeley.edu/leaderboard.html): function-calling and agentic task accuracy | Preserve version and category (single/parallel calls, multi-turn, agentic) with tool schemas and execution setup. A syntactically valid call does not prove task success. Use project-published evaluation artifacts and keep different categories distinct. |
-| General / coding / math / runtime | [Artificial Analysis API](https://artificialanalysis.ai/api-reference): intelligence, coding and math indices; individual evaluations; output throughput; time to first token | Existing sync is the easiest extension. The documented response has additional evaluation fields and TTFT. Keep TTFT separate from E2E response time and retain workload/percentile. Key-based server-side fetch, caching and attribution are required; documentation example numbers are not observations. |
-
-### Recommended next implementation
-
-1. Introduce a versioned benchmark registry with stable ID, skill, version, score unit, direction, source adapter and required evaluation configuration. Start with coding and writing; add vision and tool-use only with verified coverage. Offer visible missing-data states for skills without measurements.
-2. Keep observations per benchmark/configuration, not a single mutable `codingScore` on a model. Add explicit source model identity and separately verified endpoint mappings. An alias can aid discovery without authorizing transfer of speed, pricing or scores.
-3. Add a skill selector that filters the benchmark selector. Axis labels and preference direction come from the registry (some diagnostic metrics are lower-is-better); no universal normalized skill score or cross-benchmark averaging.
-4. Extend AA's existing explicit sync with separately versioned coding/math evaluations and TTFT, then build bounded, opt-in snapshot importers for the other sources. Confirm dataset/result redistribution terms before bundling results; public visibility alone does not establish redistribution rights.
-5. Preserve original score and provenance, evaluation date, source retrieval date, sample count/confidence interval where published, judge/scaffold and workload. Render coverage/freshness and measured-versus-reference distinctions. Stable IDs must encode materially different evaluation configurations; schema changes need compatibility/migration tests.
-6. Validate at the import/API and rendered selection boundaries: no mixed versions or units, no cross-endpoint performance transfer, no null-to-zero coercion, and no boot-time research calls. Use the existing Scheduled Task for research rather than introducing a second scheduler.
-
-## September 10, 2026 data audit
-
-The reported Grok inversion is present in the source; no score has been adjusted to force an increasing effort curve. The screenshot matches the retained September 5 v4.2 snapshot (high 50.6, xhigh 49.3). Its xhigh $1.723/task was a client-side estimate because that snapshot had no published xhigh cost. The historical numbers cannot be revalidated against today's changed index.
-
-Fresh authenticated reads of AA's paginated `/api/v2/language/models/free` returned 644 unique model IDs, consistently declaring `intelligence_index_version: 4.3`. All 644 intelligence values (including nulls) matched the separately fetched [documented API](https://artificialanalysis.ai/api-reference) `/api/v2/data/llms/models`. The [high](https://artificialanalysis.ai/models/grok-4-6) and [xhigh](https://artificialanalysis.ai/models/grok-4-6-xhigh) pages independently identify the current index as v4.3. Documentation example scores were not used.
-
-| Configuration | v4.3 intelligence | Published USD/task |
-| --- | ---: | ---: |
-| Grok 4.6 low | 35.4 | 0.4753 |
-| Grok 4.6 medium | 43.0 | 1.4963 |
-| Grok 4.6 high | 44.4 | 1.8589 |
-| Grok 4.6 xhigh | 44.3 | 2.3237 |
-
-Other checked v4.3 scores include GPT-5.6 Sol max (47.1), Claude Fable 5.1 adaptive/max/default fallback (53.4), and Gemini 3.8 Flash high (41.2). The audit covers all 637 models with at least one published metric, omitting seven entirely empty rows. The shipped refresh includes 111 v4.3 observations within the existing provider/anchor scope (230 total observations); full-index sync remains available on demand. All old observations and Zen pricing evidence remain intact. Migration 375 adds missing v4.3 observations to existing installs without replacing locally researched values.
-
-Higher reasoning effort is not a guarantee of a higher benchmark score. The current Grok difference is only 0.1 point; these API responses provide no uncertainty intervals establishing that it is statistically meaningful. Latency measures can also vary between endpoint snapshots and are independent of the quality evaluation. Compare within the selected benchmark version and inspect each metric's retrieval date; the normal 30-day stale indicator cannot detect a benchmark revision within that window.
+The existing local model assessment remains the source for machine-specific local throughput, context fit, and hardware measurements. Those results can inform future benchmark design, but they do not become task-quality scores without a comparable PortOS task run.
