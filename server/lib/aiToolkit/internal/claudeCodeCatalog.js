@@ -23,7 +23,7 @@
  * subscription-auth CLI provider does not have. A `type: 'api'` Anthropic
  * record with a key still goes through `_refreshAPIProviderModels`.
  *
- * Pure by design (the fs read lives in `providers.js` with the rest of this
+ * Pure by design (the fs read lives in `providerCatalogService.js` with the rest of this
  * directory's I/O) and self-contained — no imports out to other PortOS modules,
  * see ../AGENTS.md.
  */

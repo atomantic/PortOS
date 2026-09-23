@@ -12,7 +12,7 @@
  * demands.
  *
  * Kept in `internal/` (like `gateways.js` and `ollamaBacked.js`) because
- * `providers.js` is the only caller and this directory stays self-contained —
+ * `providerCatalogService.js` is the only caller and this directory stays self-contained —
  * no imports out to other PortOS modules (see ../AGENTS.md).
  */
 
