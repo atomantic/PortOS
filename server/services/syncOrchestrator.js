@@ -44,6 +44,7 @@ const withLock = createMutex();
 let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
+let lastOnlinePeerIds = null;
 // 0 = "never swept this process" — runTombstoneSweep() always runs the FIRST
 // tick after boot (or after a restart) regardless of this value, then waits
 // out the full interval before the next one. Reset alongside the timer in
@@ -725,7 +726,7 @@ const emptyCoverage = () => ({ universe: new Set(), pipeline: new Set(), mediaCo
 /**
  * Sync all data from a single peer
  */
-export async function syncWithPeer(peer) {
+export async function syncWithPeer(peer, { logStart = true, onCategoryFailure } = {}) {
   if (!peer.instanceId) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
 
   const peerId = peer.instanceId;
@@ -760,6 +761,7 @@ export async function syncWithPeer(peer) {
   const categoryFailures = [];
   const recordCategoryFailure = (category, err) => {
     categoryFailures.push(`${category}: ${err?.message ?? String(err)}`);
+    onCategoryFailure?.(category, err);
   };
   // Null unless EVERY attempted category failed — the cursor write and the
   // terminal `complete` emit must agree on that verdict.
@@ -784,7 +786,9 @@ export async function syncWithPeer(peer) {
 
     const categories = getEffectiveCategories(peer);
     const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
-    console.log(`🔄 Sync starting with ${peerLogLabel(peer)}: categories=${enabledNames.join(',') || 'none'}`);
+    if (logStart) {
+      console.log(`🔄 Sync starting with ${peerLogLabel(peer)}: categories=${enabledNames.join(',') || 'none'}`);
+    }
     emitSyncProgress({ phase: 'start', peerId });
 
     // Read cursor snapshot outside lock so network I/O doesn't block other peers
@@ -995,15 +999,38 @@ export async function syncAllPeers() {
   const peers = await getPeers();
   const online = peers.filter(p => p.enabled && hasAnySyncEnabled(p) && p.status === 'online' && p.instanceId);
 
-  if (online.length > 0) {
-    const names = online.map(p => peerLogLabel(p)).join(', ');
-    console.log(`🔄 Sync cycle: ${online.length} peer${online.length === 1 ? '' : 's'} online (${names})`);
+  const onlinePeerIds = [...new Set(online.map(p => p.instanceId))].sort();
+  const membershipChanged = lastOnlinePeerIds !== null
+    && (onlinePeerIds.length !== lastOnlinePeerIds.length
+      || onlinePeerIds.some((peerId, index) => peerId !== lastOnlinePeerIds[index]));
+  lastOnlinePeerIds = onlinePeerIds;
+
+  if (membershipChanged) {
+    if (online.length > 0) {
+      const names = online.map(p => peerLogLabel(p)).join(', ');
+      console.log(`🔄 Sync cycle: ${online.length} peer${online.length === 1 ? '' : 's'} online (${names})`);
+    } else {
+      console.log('🔄 Sync cycle: peer membership changed (0 online)');
+    }
   }
 
-  const settled = await Promise.allSettled(online.map(p => syncWithPeer(p)));
+  let cycleFailed = false;
+  const settled = await Promise.allSettled(online.map(p => syncWithPeer(p, {
+    // The periodic path cannot know whether a sync will change data until it
+    // finishes. Keep the start line only for an observable membership change.
+    logStart: membershipChanged,
+    onCategoryFailure: () => { cycleFailed = true; },
+  })));
+  for (let i = 0; i < settled.length; i++) {
+    const result = settled[i];
+    if (result.status === 'rejected') {
+      cycleFailed = true;
+      logFailureWithStack(`❌ Sync with ${peerLogLabel(online[i])} failed`, result.reason);
+    }
+  }
 
-  // Aggregate per-cycle change counts across peers so the heartbeat is loud
-  // about totals even when individual per-peer logs short-circuit on no-op.
+  // Aggregate applied counts so the cycle summary can stay quiet unless a
+  // category changed, failed, or online peer membership changed.
   let cycleChanges = 0;
   for (const r of settled) {
     if (r.status !== 'fulfilled' || !r.value) continue;
@@ -1013,7 +1040,7 @@ export async function syncAllPeers() {
       cycleChanges += v?.totalApplied || 0;
     }
   }
-  if (online.length > 0) {
+  if (cycleChanges > 0 || cycleFailed || membershipChanged) {
     console.log(`🔄 Sync cycle complete: ${cycleChanges} change${cycleChanges === 1 ? '' : 's'} applied across ${online.length} peer${online.length === 1 ? '' : 's'}`);
   }
 
@@ -1055,6 +1082,7 @@ export function initSyncOrchestrator() {
   // tombstone sweeps on the first tick — see their interval constants above.
   lastTombstoneSweepAt = 0;
   lastBrainSweepAt = 0;
+  lastOnlinePeerIds = null;
   // Sync immediately when a peer comes online
   peerOnlineHandler = (peer) => {
     if (!hasAnySyncEnabled(peer)) return;
@@ -1161,6 +1189,7 @@ async function runBrainTombstoneSweep() {
 export function stopSyncOrchestrator() {
   lastTombstoneSweepAt = 0;
   lastBrainSweepAt = 0;
+  lastOnlinePeerIds = null;
   if (peerOnlineHandler) {
     instanceEvents.removeListener('peer:online', peerOnlineHandler);
     peerOnlineHandler = null;

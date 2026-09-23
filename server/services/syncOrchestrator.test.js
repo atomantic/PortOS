@@ -1216,6 +1216,108 @@ describe('syncOrchestrator', () => {
   });
 
   describe('syncAllPeers', () => {
+    afterEach(async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['goals', 'character', 'digitalTwin', 'meatspace']);
+    });
+
+    const brainOnlyPeer = { ...mockPeer, syncCategories: { brain: true, usage: false } };
+    const serveBrainNoOp = () => mockFetch.mockImplementation(async (url) => {
+      if (url.includes('/api/brain/reconcile/checksum')) return { ok: true, json: async () => ({ checksum: 'local-cksum' }) };
+      if (url.includes('/api/brain/sync')) return { ok: true, json: async () => ({ changes: [], maxSeq: 0, hasMore: false }) };
+      return { ok: true, json: async () => ({}) };
+    });
+
+    it('emits no per-tick logs for unchanged no-op cycles', async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue([]);
+      getPeers.mockResolvedValue([brainOnlyPeer]);
+      serveBrainNoOp();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        await syncAllPeers();
+        await syncAllPeers();
+
+        expect(logSpy).not.toHaveBeenCalled();
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    });
+
+    it('logs a cycle when online peer membership changes', async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue([]);
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      getPeers.mockResolvedValue([]);
+
+      try {
+        await syncAllPeers();
+        getPeers.mockResolvedValue([brainOnlyPeer]);
+        serveBrainNoOp();
+        await syncAllPeers();
+
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle: 1 peer online'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync starting with test-peer'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 0 changes applied across 1 peer'));
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it('keeps the cycle summary when a sync applies changes', async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue([]);
+      getPeers.mockResolvedValue([brainOnlyPeer]);
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/api/brain/reconcile/checksum')) return { ok: true, json: async () => ({ checksum: 'local-cksum' }) };
+        if (url.includes('/api/brain/sync')) return {
+          ok: true,
+          json: async () => ({ changes: [{ seq: 1, op: 'create', type: 'people', id: 'p1', record: {} }], maxSeq: 1, hasMore: false }),
+        };
+        return { ok: true, json: async () => ({}) };
+      });
+      applyBrainChanges.mockResolvedValueOnce({ inserted: 1, updated: 0, deleted: 0, skipped: 0 });
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      try {
+        await syncAllPeers();
+
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Synced with test-peer: 1 brain changes'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 1 change applied across 1 peer'));
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it('keeps category failure lines and the cycle summary visible', async () => {
+      const dataSync = await import('./dataSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['usage']);
+      dataSync.getChecksum.mockResolvedValue({ checksum: 'local' });
+      dataSync.applyRemote.mockRejectedValue(new Error('peer refused the usage snapshot'));
+      getPeers.mockResolvedValue([{ ...mockPeer, syncCategories: { usage: true } }]);
+      mockFetch.mockImplementation(async (url) => {
+        if (url.includes('/checksum')) return { ok: true, json: async () => ({ checksum: 'remote' }) };
+        if (url.includes('/snapshot')) return { ok: true, json: async () => ({ data: { instances: {} }, checksum: 'remote' }) };
+        return { ok: true, json: async () => ({}) };
+      });
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        await syncAllPeers();
+
+        expect(errorSpy.mock.calls.some(([message]) => String(message).includes('usage sync with test-peer failed'))).toBe(true);
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 0 changes applied across 1 peer'));
+      } finally {
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    });
+
     it('iterates online peers with instanceId', async () => {
       const onlinePeer = { ...mockPeer };
       const offlinePeer = { ...mockPeer, name: 'offline', status: 'offline', instanceId: 'p2' };
