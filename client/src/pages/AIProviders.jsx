@@ -492,13 +492,15 @@ export default function AIProviders() {
   // user at the top of the list — a card several screens down was unreachable
   // after refreshing it.
   //
-  // Only the two fields a refresh writes are taken from the response: the record
+  // Only the fields a refresh writes are taken from the response: the record
   // it returns is a bare `presentProvider`, so replacing the whole entry would
   // drop the fields only the LIST endpoint adds (`executionModes`,
-  // `prerequisitesMet`, the codex account) and un-group a unified card. Those
-  // two fields fan out to every mode in the group server-side
+  // `prerequisitesMet`, the codex account) and un-group a unified card. The
+  // model and catalog fields fan out to every mode in the group server-side
   // (`sharedModeUpdates`), so they are applied to the siblings here too rather
   // than leaving them showing the pre-refresh catalog until the next poll.
+  // `modelCatalog` is the unscoped full list when model access hides entries;
+  // the editor saves from it, so it must move with each refresh.
   // `modelContextWindows` is copied even when absent — a refresh that pruned it
   // must not leave the stale map behind.
   const handleRefreshModels = async (id) => {
@@ -507,11 +509,12 @@ export default function AIProviders() {
       const result = await api.refreshProviderModels(id, { silent: true });
       if (result) {
         toast.success(`Models refreshed for ${result.name}`);
+        const modelCatalog = Array.isArray(result.modelCatalog) ? result.modelCatalog : result.models;
         setProviders(current => {
           const refreshed = current.find(p => p.id === result.id);
           const group = new Set([result.id, ...(refreshed?.executionModes || []).map(mode => mode.id)]);
           return current.map(p => (group.has(p.id)
-            ? { ...p, models: result.models, modelContextWindows: result.modelContextWindows }
+            ? { ...p, models: result.models, modelCatalog, modelContextWindows: result.modelContextWindows }
             : p));
         });
         // The catalog a card just learned is graded by the readiness checklist,

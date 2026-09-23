@@ -2049,6 +2049,51 @@ describe('AIProviders model refresh', () => {
     expect(screen.getAllByRole('button', { name: 'Refresh Models' })).toHaveLength(1);
   });
 
+  it.each([
+    { mode: 'CLI', providerId: 'claude-code' },
+    { mode: 'TUI', providerId: 'claude-code-tui' },
+  ])('uses the refreshed full catalog when editing a paired $mode preset', async ({ mode, providerId }) => {
+    const catalogBeforeRefresh = ['example-claude-old', 'example-claude-retired'];
+    const catalogAfterRefresh = ['example-claude-current', 'example-claude-preview'];
+    const claudeExecutionModes = [{ id: 'claude-code', type: 'cli' }, { id: 'claude-code-tui', type: 'tui' }];
+    const claudeProviders = {
+      activeProvider: null,
+      providers: ['cli', 'tui'].map((type) => ({
+        id: `claude-code${type === 'tui' ? '-tui' : ''}`,
+        name: `Claude Code${type === 'tui' ? ' TUI' : ''}`,
+        type,
+        command: 'claude',
+        enabled: true,
+        models: [catalogBeforeRefresh[0]],
+        modelCatalog: catalogBeforeRefresh,
+        modelAccess: { mode: 'allow', patterns: ['example-claude-*'] },
+        canRefreshModels: true,
+        executionModes: claudeExecutionModes,
+      })),
+    };
+    api.getProviders.mockResolvedValue(claudeProviders);
+    api.refreshProviderModels.mockResolvedValue({
+      ...claudeProviders.providers[0],
+      models: [catalogAfterRefresh[0]],
+      modelCatalog: catalogAfterRefresh,
+      canRefreshModels: true,
+    });
+    api.updateProvider.mockResolvedValue({});
+
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Models refreshed for Claude Code'));
+
+    fireEvent.click(await screen.findByRole('button', { name: `Edit ${mode}` }));
+    await openEditorTab('Models');
+    const catalogField = screen.getByRole('textbox', { name: /Available Models/i });
+    expect(catalogField).toHaveValue(catalogAfterRefresh.join(', '));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateProvider).toHaveBeenCalled());
+    expect(api.updateProvider).toHaveBeenCalledWith(providerId, expect.objectContaining({ models: catalogAfterRefresh }));
+  });
+
   it('keeps the stored catalog when the refresh is unsupported', async () => {
     api.refreshProviderModels.mockResolvedValue(null);
 
