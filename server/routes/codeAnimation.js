@@ -6,6 +6,7 @@
  *   POST /api/code-animation/brief          write a brief from the universe → { brief }
  *   POST /api/code-animation/prompt         resolve configurations → { prompt, attachments, frame }
  *   POST /api/code-animation/generate       start a provider run → 202 job
+ *   GET  /api/code-animation/jobs           list saved jobs for the gallery
  *   GET  /api/code-animation/generate/:id   poll a job (html once completed)
  */
 
@@ -19,6 +20,7 @@ import {
   buildCodeAnimationRequest,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
+  listCodeAnimationJobs,
   getCodeAnimationOptions,
   startCodeAnimationGeneration,
 } from '../services/codeAnimation/index.js';
@@ -72,6 +74,7 @@ const briefSchema = z.object({
 }).strict();
 
 const generateSchema = briefSchema.extend({
+  seedIdea: z.string().trim().max(L.seedIdeaMax).default(''),
   providerId: z.string().trim().min(1).max(128),
   model: z.string().trim().max(256).optional(),
   effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()),
@@ -117,9 +120,13 @@ router.post('/generate', asyncHandler(async (req, res) => {
   res.status(202).json(await startCodeAnimationGeneration(input));
 }));
 
+router.get('/jobs', asyncHandler(async (_req, res) => {
+  res.json(await listCodeAnimationJobs());
+}));
+
 router.get('/generate/:id', asyncHandler(async (req, res) => {
-  const job = getCodeAnimationJob(req.params.id);
-  if (!job) throw new ServerError('Generation job not found (it may have expired or the server restarted)', { status: 404, code: 'NOT_FOUND' });
+  const job = await getCodeAnimationJob(req.params.id);
+  if (!job) throw new ServerError('Generation job not found', { status: 404, code: 'NOT_FOUND' });
   res.json(job);
 }));
 

@@ -26,5 +26,7 @@ export const startCodeAnimationGeneration = (brief, options) => request('/code-a
   ...options,
 });
 
+export const listCodeAnimationJobs = (options) => request('/code-animation/jobs', options);
+
 export const getCodeAnimationJob = (id, options) =>
   request(`/code-animation/generate/${encodeURIComponent(id)}`, options);

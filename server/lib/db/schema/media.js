@@ -174,4 +174,22 @@ export const mediaDdl = [
     // images-vs-videos. A composite (kind, created_at DESC) serves both.
     `CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC)`,
 
+    // Code Animation jobs. The searchable gallery fields are mirrored into
+    // columns; the full brief/provider/status record lives in JSONB, while the
+    // generated HTML is a managed file at data/code-animations/<id>.html.
+    // Machine-local generated work: it has no peer-sync cursor or tombstone.
+    `CREATE TABLE IF NOT EXISTS code_animation_jobs (
+      id TEXT PRIMARY KEY,
+      status VARCHAR(16) NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      concept TEXT NOT NULL DEFAULT '',
+      provider_id TEXT,
+      model TEXT,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_code_animation_jobs_created ON code_animation_jobs (created_at DESC, id DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_code_animation_jobs_status_created ON code_animation_jobs (status, created_at DESC)`,
+
 ];
