@@ -32,6 +32,10 @@ describe('selectModelForTask — learning-suggested tier resolution', () => {
     expect(result.model).toBe('light-model');
     expect(result.tier).toBe('light');
     expect(result.reason).toBe('learning-suggested');
+    // Stated here at decision time (#8148) so a downstream caller can flag a
+    // silent downgrade off the provider default without re-deriving it from
+    // matching the `reason` string.
+    expect(result.isLearningTierOverride).toBe(true);
   });
 
   it('resolves a thinking-level suggestion (high) through getModelForLevel instead of dropping to default', async () => {
@@ -41,6 +45,7 @@ describe('selectModelForTask — learning-suggested tier resolution', () => {
     expect(result.model).toBe('heavy-model');
     expect(result.tier).toBe('high');
     expect(result.reason).toBe('learning-suggested');
+    expect(result.isLearningTierOverride).toBe(true);
   });
 
   it('does NOT honor a local-preferred thinking-level suggestion under a cloud provider — falls through with an accurate tier', async () => {
@@ -50,6 +55,7 @@ describe('selectModelForTask — learning-suggested tier resolution', () => {
     const result = await selectModelForTask(benignTask, PROVIDER);
     expect(result.tier).toBe('default');
     expect(result.reason).toBe('standard-task');
+    expect(result.isLearningTierOverride).toBeUndefined();
   });
 
   it('falls through to default when the suggested tier resolves to no model', async () => {
@@ -58,6 +64,16 @@ describe('selectModelForTask — learning-suggested tier resolution', () => {
     const result = await selectModelForTask(benignTask, PROVIDER);
     expect(result.tier).toBe('default');
     expect(result.reason).toBe('standard-task');
+    expect(result.isLearningTierOverride).toBeUndefined();
+  });
+
+  it('also marks isLearningTierOverride when avoiding a bad tier rather than following a specific suggestion', async () => {
+    suggestModelTier.mockResolvedValue({ suggested: null, avoidTiers: ['heavy'], reason: 'r' });
+    const result = await selectModelForTask(benignTask, PROVIDER);
+    expect(result.model).toBe('medium-model');
+    expect(result.tier).toBe('medium');
+    expect(result.reason).toBe('learning-avoid-bad-tier');
+    expect(result.isLearningTierOverride).toBe(true);
   });
 });
 

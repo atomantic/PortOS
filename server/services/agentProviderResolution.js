@@ -375,8 +375,13 @@ async function resolveOrdinaryProviderAndModel(task) {
   // configured default without the task ever asking for that — surface it
   // loudly rather than let "ran on the configured default" and "the learning
   // system downgraded it" collapse into the same quiet info log (#8148).
-  const isLearningOverride = modelSelection.reason === 'learning-suggested' || modelSelection.reason === 'learning-avoid-bad-tier';
-  const downgradedFromDefault = isLearningOverride && !!provider.defaultModel && selectedModel !== provider.defaultModel;
+  // `isLearningTierOverride` is a fact `selectModelForTask` states at the
+  // moment it makes the substitution, not re-derived here from `reason`
+  // string-matching (a proxy a future learning-tier reason could bypass);
+  // this only re-checks the FINAL model against the default because the
+  // fallback-model-pin and invalid-model-list branches above can still
+  // change `selectedModel` after that decision was made.
+  const downgradedFromDefault = !!modelSelection.isLearningTierOverride && !!provider.defaultModel && selectedModel !== provider.defaultModel;
   if (downgradedFromDefault) {
     modelSelection.downgradedFromDefault = true;
     modelSelection.configuredDefault = provider.defaultModel;
@@ -385,9 +390,11 @@ async function resolveOrdinaryProviderAndModel(task) {
   const logMessage = modelSelection.learningReason
     ? `Model selection: ${selectedModel} (${modelSelection.reason} - ${modelSelection.learningReason})`
     : `Model selection: ${selectedModel} (${modelSelection.reason})`;
-  emitLog(downgradedFromDefault ? 'warn' : 'info', downgradedFromDefault
+  const logLevel = downgradedFromDefault ? 'warn' : 'info';
+  const logText = downgradedFromDefault
     ? `${logMessage} — differs from provider's configured default "${provider.defaultModel}" (learning system substituted this model)`
-    : logMessage, {
+    : logMessage;
+  emitLog(logLevel, logText, {
     taskId: task.id,
     model: selectedModel,
     tier: modelSelection.tier,
