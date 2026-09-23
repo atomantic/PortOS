@@ -49,6 +49,16 @@ const importDefaultsUnder = async (env, expectedOrigin) => {
 };
 
 describe('taskPromptDefaults integrity snapshot', () => {
+  it('keeps the lifecycle prompt history under the renamed task key', () => {
+    expect(DEFAULT_TASK_PROMPTS['ui-lifecycle']).toContain('UI lifecycle and state audit');
+    expect(PROMPT_VERSIONS['ui-lifecycle']).toBe(2);
+    expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).toHaveProperty('ui-lifecycle');
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS['ui-lifecycle']).toHaveLength(1);
+    expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).not.toHaveProperty('react-lifecycle');
+    expect(SNAPSHOT.PROMPT_VERSIONS).not.toHaveProperty('react-lifecycle');
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS).not.toHaveProperty('react-lifecycle');
+  });
+
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {
     const current = DEFAULT_TASK_PROMPTS['module-hygiene'];
 

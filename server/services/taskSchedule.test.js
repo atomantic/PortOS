@@ -1859,6 +1859,7 @@ describe('taskSchedule', () => {
     const FILE_ISSUES_LANES = [
       ['data-safety', NO_PRELOAD],
       ['simplify', NO_PRELOAD],
+      ['ui-lifecycle', NO_PRELOAD],
       ['module-hygiene', DEDUP_PRELOAD],
       // Derived, so a seventh better-* lane cannot be added without landing here.
       ...[...AUDIT_TASK_TYPES]

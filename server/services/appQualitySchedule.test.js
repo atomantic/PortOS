@@ -83,6 +83,15 @@ describe('resolveQualityChecks', () => {
     expect(security.reason).toMatch(/previous audit/);
   });
 
+  it('recognizes a retired lifecycle category in stored applicability results', async () => {
+    query.mockResolvedValue({ rows: [{ category: 'react-lifecycle', report: { coverage: 'not-applicable' } }] });
+    const { checks } = await resolveQualityChecks(appWith(['package.json', 'src/App.jsx']));
+    expect(checks.find(check => check.taskType === 'ui-lifecycle')).toMatchObject({
+      applicable: false,
+      reason: 'a previous audit reported this category as not applicable here',
+    });
+  });
+
   it('treats a repository it could only skim as unknown, not as empty', async () => {
     // `git ls-files` unavailable (not a checkout, git missing, timeout) falls
     // back to a two-level listing, which cannot see src/components/App.jsx.

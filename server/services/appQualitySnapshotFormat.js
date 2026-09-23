@@ -15,7 +15,7 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { AUDIT_DEFINITIONS } from '../lib/auditCatalog.js';
+import { AUDIT_DEFINITIONS, LEGACY_AUDIT_TASK_TYPE_ALIASES } from '../lib/auditCatalog.js';
 import { auditQualityReportSchema } from '../lib/auditQuality.js';
 
 export const APP_QUALITY_FILE_SCHEMA_VERSION = 2;
@@ -27,6 +27,7 @@ export const MAX_QUALITY_SNAPSHOT_ROWS = 10000;
 
 const REPOSITORY = /^[a-f0-9]{64}$/;
 const CATEGORIES = new Set(Object.keys(AUDIT_DEFINITIONS));
+const READABLE_CATEGORIES = new Set([...CATEGORIES, ...Object.keys(LEGACY_AUDIT_TASK_TYPE_ALIASES)]);
 const COVERAGE = new Set(QUALITY_COVERAGE_VALUES);
 const CONFIDENCE = new Set(QUALITY_CONFIDENCE_VALUES);
 const V1_KEYS = new Set(['schemaVersion', 'repository', 'measurements']);
@@ -224,7 +225,7 @@ function parseV2(value) {
     return { status: 'malformed' };
   }
   if (typeof value.repository !== 'string' || !REPOSITORY.test(value.repository)) return { status: 'malformed' };
-  const categories = parseDictionary(value.categories, CATEGORIES);
+  const categories = parseDictionary(value.categories, READABLE_CATEGORIES);
   const coverage = parseDictionary(value.coverage, COVERAGE);
   const confidence = parseDictionary(value.confidence, CONFIDENCE);
   if (!categories || !coverage || !confidence) return { status: 'malformed' };

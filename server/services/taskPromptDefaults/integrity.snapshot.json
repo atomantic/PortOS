@@ -40,7 +40,6 @@
     "pr-reviewer-review": "a4b35a1dc44e03b3d0ecf1a4e1bae6df",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
-    "react-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
     "release-check": "cd936b9a4fb76273b36ec54c3ed6d5ba",
@@ -51,6 +50,7 @@
     "test-coverage": "36beffc0c2959be5d818ded54b3fe298",
     "typing": "bd7cb874b2784395280b116369c7e7ac",
     "ui-bugs": "073bea13a94b0266c53b5f55bb2344b9",
+    "ui-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
     "ux": "b8c0bde4075685625443a405b2c70b50"
   },
@@ -90,7 +90,6 @@
     "plan-task": 19,
     "pr-reviewer": 5,
     "pr-watcher": 2,
-    "react-lifecycle": 2,
     "reference-watch": 3,
     "refresh-local-llm-catalog": 4,
     "release-check": 14,
@@ -101,6 +100,7 @@
     "test-coverage": 3,
     "typing": 3,
     "ui-bugs": 3,
+    "ui-lifecycle": 2,
     "user-action-review": 2,
     "ux": 3
   },
@@ -312,9 +312,6 @@
     "pr-watcher": [
       "53ead8e26d396849bfa78f28550bd691"
     ],
-    "react-lifecycle": [
-      "14b3816d1bcc10f0d7d6357e55cc5e69"
-    ],
     "reference-watch": [
       "f9322140bff7d3f603799c09ce468da9",
       "722ca590fb4b6323c98850a176b9b309"
@@ -359,6 +356,9 @@
     "ui-bugs": [
       "01d2a7e034713195f33071f2c71a3c99",
       "def9ad96bd74ab397233f234d79a1974"
+    ],
+    "ui-lifecycle": [
+      "14b3816d1bcc10f0d7d6357e55cc5e69"
     ],
     "user-action-review": [
       "945a716d446d26a03e2805d28bd1ae16"

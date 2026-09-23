@@ -57,6 +57,11 @@ const API_URL_PLACEHOLDER = '{{PORTOS_API_URL}}';
 // (issue #3359).
 const LEGACY_API_ORIGIN = 'http://localhost:5555';
 
+// Prompt history follows a scheduled task when its public task key is renamed.
+// The old key remains here only so installs carrying its persisted prompt body
+// can still recognize that body as shipped after the task config is migrated.
+const PROMPT_KEY_RENAMES = Object.freeze({ 'react-lifecycle': 'ui-lifecycle' });
+
 // Longest first: the two origins can overlap — `PORTOS_API_URL=http://localhost`
 // (port 80) is a prefix of the legacy literal, and replacing it first would turn
 // `http://localhost:5555` into `{{PORTOS_API_URL}}:5555`, which the legacy pass
@@ -119,6 +124,16 @@ export const advancePromptIntegritySnapshot = (committed, defaults) => {
   const history = { ...committed.PREVIOUS_DEFAULT_PROMPTS };
   const retired = [];
   const drift = [];
+
+  for (const [oldKey, newKey] of Object.entries(PROMPT_KEY_RENAMES)) {
+    const moved = [...(history[oldKey] || [])];
+    const oldCurrent = committed.DEFAULT_TASK_PROMPTS[oldKey];
+    if (oldCurrent && oldCurrent !== next.DEFAULT_TASK_PROMPTS[newKey]) moved.push(oldCurrent);
+    if (moved.length) {
+      history[newKey] = [...new Set([...(history[newKey] || []), ...moved])];
+    }
+    delete history[oldKey];
+  }
 
   for (const [key, to] of Object.entries(next.PROMPT_VERSIONS)) {
     if (committed.PROMPT_VERSIONS[key] > to) drift.push({ key, version: to, reason: 'rollback' });

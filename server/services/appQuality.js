@@ -2,6 +2,7 @@
 import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';
+import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, latestQualityRecords } from '../lib/auditQuality.js';
 import { collectAppQuality, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
 
@@ -9,7 +10,8 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
   if (!success || !workspacePath || !task?.metadata?.app || !agentId) return false;
   const contents = await (deps.readFile || tryReadFile)(doneSentinelPath(workspacePath, agentId));
   const { summary } = parseSentinelPayload(contents);
-  const report = parseAuditQualityReport(summary, taskType);
+  const category = normalizeAuditTaskType(taskType);
+  const report = parseAuditQualityReport(summary, category);
   if (!report) {
     console.warn(`⚠️ Audit quality report missing or invalid for ${agentId} (${taskType})`);
     return false;
@@ -24,7 +26,7 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
     `INSERT INTO app_quality_measurements (app_id, category, agent_id, assessed_at, report)
      VALUES ($1, $2, $3, $4, $5::jsonb)
      ON CONFLICT (app_id, category, agent_id) DO NOTHING`,
-    [task.metadata.app, taskType, agentId, assessedAt, JSON.stringify(report)]
+    [task.metadata.app, category, agentId, assessedAt, JSON.stringify(report)]
   );
   return true;
 }

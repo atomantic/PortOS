@@ -118,6 +118,24 @@ it('normalizes v1 JSON idempotently and keeps its measurement id off the v2 byte
   expect(first.canonical).not.toContain(measurementId);
 });
 
+it('reads retired task categories and emits them under their current audit name', () => {
+  const legacy = {
+    schemaVersion: 2,
+    repository,
+    reportVersion: 1,
+    categories: ['react-lifecycle'],
+    coverage: [...QUALITY_COVERAGE_VALUES],
+    confidence: [...QUALITY_CONFIDENCE_VALUES],
+    measurements: [['2026-09-22T00:00:00.000Z', 0, 78, 4, 0, 2, 42, 42]],
+  };
+
+  const parsed = classifyQualitySnapshot(JSON.stringify(legacy));
+
+  expect(parsed.status).toBe('v2');
+  expect(parsed.records[0]).toMatchObject({ category: 'ui-lifecycle', score: 78 });
+  expect(JSON.parse(parsed.canonical).categories).toEqual(['ui-lifecycle']);
+});
+
 it('rejects future, unrecognized, malformed, duplicate-day, and invalid-index documents', () => {
   expect(classifyQualitySnapshot('category\tscore\n').status).toBe('unrecognized');
   expect(classifyQualitySnapshot('{"quality":true}').status).toBe('unrecognized');
