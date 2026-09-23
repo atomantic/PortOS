@@ -93,6 +93,38 @@ export async function resolveAgentProviderAndModel(task) {
 }
 
 /**
+ * Flags `modelSelection` when the learning system substituted a weaker tier
+ * than the provider's configured default for a task that never pinned one —
+ * shared by the ordinary and public-review resolution paths (#8148).
+ *
+ * Only a literal `medium`/`light` `tierToModel` pick counts as "weaker":
+ * `selectModelForTask`'s learning branches can also land on `heavy`/`high`/
+ * `xhigh` (a stronger tier proven out by history), which must NOT be flagged
+ * merely because its model id differs from `provider.defaultModel` — that
+ * would mislabel a legitimate upgrade as a downgrade.
+ *
+ * `selectedModel === modelSelection.model` guards against a DOWNSTREAM
+ * override (a fallback-provider model pin, or the invalid-model-list
+ * fallback in the ordinary path) silently inheriting this flag: those
+ * substitutions happen for reasons unrelated to learning, after
+ * `modelSelection` was already decided, and must not be reported as if the
+ * learning system chose them.
+ */
+function flagLearningDowngrade(modelSelection, selectedModel, provider) {
+  const isWeakerLearningTier = modelSelection.tier === 'medium' || modelSelection.tier === 'light';
+  const downgradedFromDefault = !!modelSelection.isLearningTierOverride
+    && isWeakerLearningTier
+    && !!provider.defaultModel
+    && selectedModel === modelSelection.model
+    && selectedModel !== provider.defaultModel;
+  if (downgradedFromDefault) {
+    modelSelection.downgradedFromDefault = true;
+    modelSelection.configuredDefault = provider.defaultModel;
+  }
+  return downgradedFromDefault;
+}
+
+/**
  * Provider + model for a public-review stage. A stage's own provider/model/
  * effort pins (`metadata.provider` / `metadata.model`, set by the pipeline
  * hand-off from the stage config) are honored or fail permanently with a
@@ -140,10 +172,15 @@ async function resolvePublicReviewAgentProvider(task, posture) {
   const selectedModel = honorPin
     ? pinnedModel
     : (modelSelection.model || provider.defaultModel || null);
-  emitLog('info', `Public-review stage (${posture}) resolved to provider ${provider.id}${selectedModel ? ` model ${selectedModel}` : ''}`, {
+  const downgradedFromDefault = flagLearningDowngrade(modelSelection, selectedModel, provider);
+  const logMessage = `Public-review stage (${posture}) resolved to provider ${provider.id}${selectedModel ? ` model ${selectedModel}` : ''}`;
+  emitLog(downgradedFromDefault ? 'warn' : 'info', downgradedFromDefault
+    ? `${logMessage} — differs from provider's configured default "${provider.defaultModel}" (learning system substituted this model)`
+    : logMessage, {
     taskId: task.id,
     providerId: provider.id,
     model: selectedModel,
+    ...(downgradedFromDefault && { downgradedFromDefault: true, configuredDefault: provider.defaultModel })
   });
   return { ok: true, provider, selectedModel, modelSelection };
 }
@@ -374,18 +411,12 @@ async function resolveOrdinaryProviderAndModel(task) {
   // The learning-based tiers can pick a weaker model than the provider's
   // configured default without the task ever asking for that — surface it
   // loudly rather than let "ran on the configured default" and "the learning
-  // system downgraded it" collapse into the same quiet info log (#8148).
-  // `isLearningTierOverride` is a fact `selectModelForTask` states at the
-  // moment it makes the substitution, not re-derived here from `reason`
-  // string-matching (a proxy a future learning-tier reason could bypass);
-  // this only re-checks the FINAL model against the default because the
-  // fallback-model-pin and invalid-model-list branches above can still
-  // change `selectedModel` after that decision was made.
-  const downgradedFromDefault = !!modelSelection.isLearningTierOverride && !!provider.defaultModel && selectedModel !== provider.defaultModel;
-  if (downgradedFromDefault) {
-    modelSelection.downgradedFromDefault = true;
-    modelSelection.configuredDefault = provider.defaultModel;
-  }
+  // system downgraded it" collapse into the same quiet info log (#8148). The
+  // fallback-model-pin and invalid-model-list branches above can still change
+  // `selectedModel` after `modelSelection` was decided, which is exactly what
+  // `flagLearningDowngrade`'s `selectedModel === modelSelection.model` guard
+  // excludes.
+  const downgradedFromDefault = flagLearningDowngrade(modelSelection, selectedModel, provider);
 
   const logMessage = modelSelection.learningReason
     ? `Model selection: ${selectedModel} (${modelSelection.reason} - ${modelSelection.learningReason})`
