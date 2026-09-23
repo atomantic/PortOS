@@ -400,7 +400,7 @@ router.get('/sessions/:sessionId', asyncHandler(async (req, res) => {
 
 router.patch('/sessions/:sessionId', asyncHandler(async (req, res) => {
   const patch = validateRequest(hostedSessionPatchSchema, req.body);
-  res.json(updateHostedSession(req.params.sessionId, patch));
+  res.json(await updateHostedSession(req.params.sessionId, patch));
 }));
 
 router.delete('/sessions/:sessionId', asyncHandler(async (req, res) => {

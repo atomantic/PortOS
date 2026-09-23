@@ -376,17 +376,47 @@ export function _getInternalSession(sessionId) {
 
 /**
  * Update hosted session state (e.g. audio target, playback phase, current node).
+ *
+ * `currentNodeId` is validated against the session's CURRENT `episodeId` (only
+ * when it actually changes — a phase/hold-index-only update skips the lookup).
+ * Without this, a client that drifted from the server's episode (the host
+ * advanced an episode without the server learning about it, #8112) would push
+ * a node id that belongs to a different episode's graph; the audience's next
+ * turn then resolves `findNode` against the WRONG episode, throws "Scene not
+ * found", and silently falls back to canned narration with no visible error.
+ * Rejecting here fails loudly instead, so a future client bug can't degrade
+ * the same way in silence.
  */
-export function updateHostedSession(sessionId, patch = {}, { io } = {}) {
+export async function updateHostedSession(sessionId, patch = {}, { io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session || session.status !== 'active') {
     throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
   }
 
+  // A `switchHostedEpisode` in flight is about to overwrite currentNodeId /
+  // playbackPhase / activeHoldIndex with the NEW episode's values anyway. The
+  // client's playback-sync effect fires on the very next React commit — well
+  // before the switch's async loom-read/preflight work resolves server-side
+  // — so a `currentNodeId` racing in during that window legitimately belonged
+  // to the OLD episode a moment ago. Treat it as stale and no-op rather than
+  // reject it as a `NODE_NOT_IN_EPISODE` bug (#8112).
+  if (session.switchingEpisode) {
+    return sanitizeHostedSession(session);
+  }
+
   if (patch.audioTarget && FABLELOOM_AUDIO_TARGETS.includes(patch.audioTarget)) {
     session.audioTarget = patch.audioTarget;
   }
-  if (patch.currentNodeId) {
+  if (patch.currentNodeId && patch.currentNodeId !== session.currentNodeId) {
+    const loom = await getLoom(session.loomId);
+    const episode = loom?.episodes?.find((e) => e.id === session.episodeId) || null;
+    const nodeBelongsToEpisode = !!episode?.nodes?.some((n) => n.id === patch.currentNodeId);
+    if (!nodeBelongsToEpisode) {
+      throw new ServerError('currentNodeId does not belong to the hosted session\'s current episode', {
+        status: 400,
+        code: 'NODE_NOT_IN_EPISODE',
+      });
+    }
     session.currentNodeId = patch.currentNodeId;
   }
   if (patch.playbackPhase) {
@@ -401,6 +431,100 @@ export function updateHostedSession(sessionId, patch = {}, { io } = {}) {
     io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:session:sync', sanitized);
   }
   return sanitized;
+}
+
+/**
+ * Re-bind a hosted session to a different episode of the same loom, so the
+ * audience's phone stays connected across an episode transition instead of
+ * being silently stranded on the old episode's graph (#8112).
+ *
+ * Aborts any in-flight turn against the OLD episode first (a turn that
+ * resolves mid-switch must not land narration/a transition against the new
+ * one), re-runs the same readiness preflight `createHostedSession` requires,
+ * and — on failure — ends the session outright via `endHostedSession` rather
+ * than leaving it half-bound to an episode that can't play. Resets
+ * `currentNodeId` to the new episode's opening node and clears the
+ * transcript/turnPhase so the audience view starts clean.
+ */
+export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
+  const session = activeSessions.get(sessionId);
+  if (!session || session.status !== 'active') {
+    throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
+  }
+
+  // Serializes switches — without it, two overlapping calls (a host
+  // double-clicking "Next Episode" before the first one's async work
+  // resolves) could race and let the EARLIER request commit last, rebinding
+  // the session to an episode the UI has already left.
+  if (session.switchingEpisode) {
+    throw new ServerError('An episode switch is already in progress', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
+  }
+
+  // Abort BEFORE the first await: a turn already in flight against the OLD
+  // episode must not be able to resolve and commit narration/a transition
+  // while this function is off awaiting the loom read below.
+  if (session.activeTurn?.abortController) {
+    session.activeTurn.abortController.abort('episode_switch');
+    session.activeTurn = null;
+  }
+  // Blocks `startHostedListening` from starting a NEW turn for the rest of
+  // this function — without it, a turn that starts during the awaits below
+  // would run against the OLD episode and could commit/emit AFTER this
+  // switch's `hosted:session:sync`, mixing old-episode content into the new
+  // episode. Always cleared in `finally`, including on every early return.
+  session.switchingEpisode = true;
+
+  // Re-checked after every await below — a host "end", DELETE /sessions/:id,
+  // or the TTL sweep can tear this session down while we're off reading the
+  // loom or running preflight. Without this a switch that loses that race
+  // would resurrect a deleted session's state and emit `hosted:session:sync`
+  // AFTER the room already saw the terminal `hosted:session:ended`.
+  const isLive = () => activeSessions.get(sessionId) === session && session.status === 'active';
+
+  try {
+    const loom = await getLoom(session.loomId);
+    if (!isLive()) return { ok: false, ended: true, reason: 'session_ended' };
+    if (!loom) {
+      throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
+    }
+    const episode = findEpisode(loom, episodeId);
+
+    const preflight = await checkHostedSessionReadiness({ loomId: session.loomId, episodeId, loom, episode });
+    if (!isLive()) return { ok: false, ended: true, reason: 'session_ended' };
+    const startNode = preflight.ready
+      ? episode.nodes?.find((n) => n.id === episode.startNodeId) || null
+      : null;
+    if (!preflight.ready || !startNode) {
+      endHostedSession(sessionId, { reason: 'episode_not_ready', io });
+      return { ok: false, ended: true, reason: 'episode_not_ready', preflight };
+    }
+
+    return commitHostedEpisodeSwitch(session, sessionId, episodeId, startNode, { io });
+  } finally {
+    session.switchingEpisode = false;
+  }
+}
+
+function commitHostedEpisodeSwitch(session, sessionId, episodeId, startNode, { io }) {
+  const now = new Date();
+  session.episodeId = episodeId;
+  session.currentNodeId = startNode.id;
+  session.playbackPhase = initialPhaseForNode(startNode);
+  session.activeHoldIndex = 0;
+  session.turnPhase = 'idle';
+  session.transcript = [{
+    id: randomUUID(),
+    role: 'narrator',
+    text: startNode.prose || startNode.title || '',
+    timestamp: now.toISOString(),
+  }];
+  session.recentTts = [];
+
+  const sanitized = sanitizeHostedSession(session);
+  if (io) {
+    io.of('/fableloom-hosted').to(`session:${sessionId}`).emit('hosted:session:sync', sanitized);
+  }
+  return { ok: true, session: sanitized };
 }
 
 /**
@@ -434,6 +558,14 @@ export async function startHostedListening(sessionId, { io } = {}) {
   const session = activeSessions.get(sessionId);
   if (!session || session.status !== 'active') {
     throw new ServerError('Session is not active', { status: 400, code: 'SESSION_INACTIVE' });
+  }
+
+  // `switchHostedEpisode` holds this while it's off awaiting the loom read
+  // and readiness preflight. Without this gate a turn could start against the
+  // OLD episode mid-switch, then commit and emit AFTER the new episode's
+  // `hosted:session:sync` — mixing old-episode content into the new episode.
+  if (session.switchingEpisode) {
+    throw new ServerError('An episode switch is in progress', { status: 409, code: 'EPISODE_SWITCH_IN_PROGRESS' });
   }
 
   const loom = await getLoom(session.loomId);

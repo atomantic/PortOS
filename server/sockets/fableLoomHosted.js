@@ -14,6 +14,7 @@ import {
   processHostedUtterance,
   sanitizeHostedSession,
   startHostedListening,
+  switchHostedEpisode,
   updateHostedSession,
   verifyHostedToken,
 } from '../services/fableLoom/hostedSession.js';
@@ -130,10 +131,10 @@ export function registerFableLoomHostedNamespace(io) {
     const liveSession = () => _getInternalSession(sessionId);
 
     // --- Host actions ---
-    socket.on('hosted:playback:update', (data) => {
+    socket.on('hosted:playback:update', async (data) => {
       if (socket.hostedRole !== 'host') return;
       try {
-        const updated = updateHostedSession(sessionId, {
+        const updated = await updateHostedSession(sessionId, {
           playbackPhase: data?.phase,
           activeHoldIndex: data?.activeHoldIndex,
           currentNodeId: data?.nodeId,
@@ -144,17 +145,37 @@ export function registerFableLoomHostedNamespace(io) {
           nodeId: updated.currentNodeId,
         });
       } catch (err) {
-        socket.emit('hosted:error', { code: 'UPDATE_FAILED', message: err.message });
+        socket.emit('hosted:error', { code: err.code || 'UPDATE_FAILED', message: err.message });
       }
     });
 
-    socket.on('hosted:audio:target', (data) => {
+    socket.on('hosted:audio:target', async (data) => {
       if (socket.hostedRole !== 'host') return;
       try {
-        const updated = updateHostedSession(sessionId, { audioTarget: data?.target }, { io });
+        const updated = await updateHostedSession(sessionId, { audioTarget: data?.target }, { io });
         ns.to(room).emit('hosted:audio:target:updated', { audioTarget: updated.audioTarget });
       } catch (err) {
         socket.emit('hosted:error', { code: 'TARGET_UPDATE_FAILED', message: err.message });
+      }
+    });
+
+    // Host advanced to a different episode ("Next: Episode N") — re-bind THIS
+    // hosted session to it rather than letting the server keep resolving
+    // audience turns against the old episode's graph (#8112). On preflight
+    // failure `switchHostedEpisode` already ends the session and broadcasts
+    // `hosted:session:ended` with reason `episode_not_ready`; there is no live
+    // room left to answer with a second error frame.
+    socket.on('hosted:episode:switch', async (data) => {
+      if (socket.hostedRole !== 'host') return;
+      const episodeId = typeof data?.episodeId === 'string' ? data.episodeId : null;
+      if (!episodeId) {
+        socket.emit('hosted:error', { code: 'EPISODE_ID_REQUIRED', message: 'episodeId is required' });
+        return;
+      }
+      try {
+        await switchHostedEpisode(sessionId, episodeId, { io });
+      } catch (err) {
+        socket.emit('hosted:error', { code: err.code || 'EPISODE_SWITCH_FAILED', message: err.message });
       }
     });
 

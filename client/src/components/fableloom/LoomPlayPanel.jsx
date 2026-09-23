@@ -20,6 +20,7 @@ import MediaImage from '../MediaImage';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { playLoomTurn } from '../../services/api';
 import { sceneProseClass } from './fieldStyles';
+import toast from '../ui/Toast';
 import LoomHostedSessionModal from './LoomHostedSessionModal';
 import { audienceCanParticipate } from '../../../../server/lib/fableLoomParticipation.js';
 import {
@@ -110,6 +111,19 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
   const hostAudioPlayerRef = useRef(null);
   const scrollRef = useRef(null);
   const hostedSocketRef = useRef(null);
+  // The episode id the server-side hosted session is currently bound to —
+  // null while no session is active, otherwise re-armed to the current
+  // episode the moment a session connects (it was created for THAT episode).
+  const hostedEpisodeIdRef = useRef(null);
+  // Names the episode a pending `hosted:episode:switch` targeted, so a
+  // resulting `hosted:session:ended{reason:'episode_not_ready'}` can name it
+  // in the toast even though the server payload carries only the reason.
+  const pendingHostedEpisodeSwitchRef = useRef(null);
+  // Always the CURRENT episode id, read from the `hosted:session:sync`
+  // handler below (which closes over the socket-connect effect's render and
+  // would otherwise see a stale `episode`).
+  const latestEpisodeIdRef = useRef(episode.id);
+  useEffect(() => { latestEpisodeIdRef.current = episode.id; }, [episode.id]);
 
   // Socket connection when hosted session is active
   useEffect(() => {
@@ -143,6 +157,22 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
       }
     });
 
+    // The server rejects a second `hosted:episode:switch` sent while an
+    // earlier one is still in flight (409 EPISODE_SWITCH_IN_PROGRESS) — a
+    // host who advances episodes faster than that round trip would otherwise
+    // strand the hosted session on whichever earlier target won the race.
+    // Every `hosted:session:sync` (including the one the in-flight switch
+    // itself broadcasts on commit) names the server's current episode; if it
+    // no longer matches what the host is actually showing, request the
+    // CURRENT one again rather than leaving the mismatch unresolved (#8112).
+    socket.on('hosted:session:sync', (data) => {
+      if (data?.episodeId && data.episodeId !== latestEpisodeIdRef.current) {
+        hostedEpisodeIdRef.current = latestEpisodeIdRef.current;
+        pendingHostedEpisodeSwitchRef.current = { id: latestEpisodeIdRef.current, label: pendingHostedEpisodeSwitchRef.current?.label };
+        hostedSocketRef.current?.emit('hosted:episode:switch', { episodeId: latestEpisodeIdRef.current });
+      }
+    });
+
     socket.on('hosted:story:transition', (data) => {
       if (data.node) {
         setScene(data.node);
@@ -151,10 +181,15 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
       }
     });
 
-    socket.on('hosted:session:ended', () => {
+    socket.on('hosted:session:ended', (data) => {
       setHostedSession(null);
       setHostedAudienceConnected(false);
       setHostedTurnPhase('idle');
+      if (data?.reason === 'episode_not_ready') {
+        const label = pendingHostedEpisodeSwitchRef.current?.label || 'The next episode';
+        toast.error(`Hosted session ended — ${label} isn't ready for hosted play.`);
+      }
+      pendingHostedEpisodeSwitchRef.current = null;
     });
 
     return () => {
@@ -162,6 +197,34 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
       hostedSocketRef.current = null;
     };
   }, [hostedSession?.id, hostedSession?.token]);
+
+  // Re-bind the server-side hosted session when the host advances to a
+  // different episode (e.g. the "Next: Episode N" button). Without this the
+  // server keeps resolving audience turns against the OLD episode's graph —
+  // `findNode` throws, and every turn silently falls back to canned
+  // narration while the UI still claims the session is connected (#8112).
+  // Runs in the commit BEFORE the scene/playback-sync effect below re-points
+  // `scene` at the new episode's opening node, so the switch always reaches
+  // the server ahead of the first `hosted:playback:update` for that node.
+  useEffect(() => {
+    if (!hostedSession?.id) {
+      hostedEpisodeIdRef.current = null;
+      return;
+    }
+    if (hostedEpisodeIdRef.current === null) {
+      // A session that just connected/was created is already bound to the
+      // episode that was active when it was created — nothing to switch.
+      hostedEpisodeIdRef.current = episode.id;
+      return;
+    }
+    if (hostedEpisodeIdRef.current === episode.id) return;
+    hostedEpisodeIdRef.current = episode.id;
+    pendingHostedEpisodeSwitchRef.current = {
+      id: episode.id,
+      label: `Episode ${episode.number || episodeIndex + 1}`,
+    };
+    hostedSocketRef.current?.emit('hosted:episode:switch', { episodeId: episode.id });
+  }, [episode.id, episode.number, episodeIndex, hostedSession?.id]);
 
   // Sync playback phase & scene updates to hosted audience
   useEffect(() => {

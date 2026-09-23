@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({ playLoomTurn: vi.fn() }));
@@ -16,9 +16,11 @@ vi.mock('./LoomHostedSessionModal', () => ({
     </button>
   ),
 }));
+vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 import { playLoomTurn } from '../../services/api';
 import { io } from 'socket.io-client';
+import toast from '../ui/Toast';
 import LoomPlayPanel from './LoomPlayPanel';
 
 const loom = { id: 'loom-1', name: 'The Hollow Crown', episodes: [] };
@@ -385,6 +387,109 @@ describe('LoomPlayPanel', () => {
 
     expect(await screen.findByText('Episode two begins.')).toBeInTheDocument();
     expect(screen.queryByText('Episode one ends.')).not.toBeInTheDocument();
+  });
+
+  // #8112: without this, the server-side hosted session keeps resolving
+  // audience turns against episode 1's graph after the host advances — every
+  // turn throws "Scene not found" and silently falls back to canned
+  // narration while the UI still claims the session is connected.
+  it('re-binds the hosted session before syncing playback when advancing episodes during a hosted session', async () => {
+    const user = userEvent.setup();
+    const first = {
+      id: 'ep-1', number: 1, title: 'One', startNodeId: 'end-1',
+      nodes: [{ id: 'end-1', title: 'First ending', prose: 'Episode one ends.', isEnding: true, transitions: [] }],
+    };
+    const second = {
+      id: 'ep-2', number: 2, title: 'Two', startNodeId: 'start-2',
+      nodes: [{ id: 'start-2', title: 'Second opening', prose: 'Episode two begins.', transitions: [] }],
+    };
+    render(<LoomPlayPanel loom={{ ...loom, episodes: [first, second] }} episode={first} />);
+
+    await user.click(screen.getByRole('button', { name: 'Host (QR)' }));
+    await user.click(screen.getByRole('button', { name: 'Start hosted session' }));
+
+    const hostedSocket = io.mock.results.at(-1).value;
+    hostedSocket.emit.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Next: Episode 2' }));
+
+    await waitFor(() => expect(hostedSocket.emit).toHaveBeenCalledWith(
+      'hosted:episode:switch', { episodeId: 'ep-2' },
+    ));
+
+    const calls = hostedSocket.emit.mock.calls;
+    const switchIndex = calls.findIndex(([event]) => event === 'hosted:episode:switch');
+    const playbackIndex = calls.findIndex(
+      ([event, payload]) => event === 'hosted:playback:update' && payload?.nodeId === 'start-2',
+    );
+    expect(switchIndex).toBeGreaterThanOrEqual(0);
+    expect(playbackIndex).toBeGreaterThan(switchIndex);
+  });
+
+  it('clears the hosted session and toasts naming the episode when the switch target fails preflight', async () => {
+    const user = userEvent.setup();
+    const first = {
+      id: 'ep-1', number: 1, title: 'One', startNodeId: 'end-1',
+      nodes: [{ id: 'end-1', title: 'First ending', prose: 'Episode one ends.', isEnding: true, transitions: [] }],
+    };
+    const second = {
+      id: 'ep-2', number: 2, title: 'Two', startNodeId: 'start-2',
+      nodes: [{ id: 'start-2', title: 'Second opening', prose: 'Episode two begins.', transitions: [] }],
+    };
+    render(<LoomPlayPanel loom={{ ...loom, episodes: [first, second] }} episode={first} />);
+
+    await user.click(screen.getByRole('button', { name: 'Host (QR)' }));
+    await user.click(screen.getByRole('button', { name: 'Start hosted session' }));
+
+    await user.click(screen.getByRole('button', { name: 'Next: Episode 2' }));
+
+    const hostedSocket = io.mock.results.at(-1).value;
+    const endedHandler = hostedSocket.on.mock.calls.find(([event]) => event === 'hosted:session:ended')?.[1];
+    act(() => { endedHandler({ sessionId: 'host-session', reason: 'episode_not_ready' }); });
+
+    expect(await screen.findByRole('button', { name: 'Host (QR)' })).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('Episode 2'));
+  });
+
+  // #8112: the server rejects a second hosted:episode:switch sent while an
+  // earlier one is still in flight (409 EPISODE_SWITCH_IN_PROGRESS). A host
+  // who advances past the in-flight target before it settles would otherwise
+  // strand the hosted session on that earlier, now-stale episode with no
+  // retry. Every hosted:session:sync — including the one the in-flight
+  // switch itself broadcasts on commit — names the server's current
+  // episode; a mismatch against what the host is showing now must trigger a
+  // corrective re-request.
+  it('re-requests the current episode when session:sync settles on a stale target', async () => {
+    const user = userEvent.setup();
+    const first = {
+      id: 'ep-1', number: 1, title: 'One', startNodeId: 'end-1',
+      nodes: [{ id: 'end-1', title: 'First ending', prose: 'Episode one ends.', isEnding: true, transitions: [] }],
+    };
+    const second = {
+      id: 'ep-2', number: 2, title: 'Two', startNodeId: 'end-2',
+      nodes: [{ id: 'end-2', title: 'Second ending', prose: 'Episode two ends too.', isEnding: true, transitions: [] }],
+    };
+    const third = {
+      id: 'ep-3', number: 3, title: 'Three', startNodeId: 'start-3',
+      nodes: [{ id: 'start-3', title: 'Third opening', prose: 'Episode three begins.', transitions: [] }],
+    };
+    render(<LoomPlayPanel loom={{ ...loom, episodes: [first, second, third] }} episode={first} />);
+
+    await user.click(screen.getByRole('button', { name: 'Host (QR)' }));
+    await user.click(screen.getByRole('button', { name: 'Start hosted session' }));
+
+    await user.click(screen.getByRole('button', { name: 'Next: Episode 2' }));
+    await user.click(screen.getByRole('button', { name: 'Next: Episode 3' }));
+
+    const hostedSocket = io.mock.results.at(-1).value;
+    hostedSocket.emit.mockClear();
+
+    // The in-flight switch for episode 2 finally commits and broadcasts its
+    // own sync — stale, because the host is already showing episode 3.
+    const syncHandler = hostedSocket.on.mock.calls.find(([event]) => event === 'hosted:session:sync')?.[1];
+    act(() => { syncHandler({ episodeId: 'ep-2' }); });
+
+    expect(hostedSocket.emit).toHaveBeenCalledWith('hosted:episode:switch', { episodeId: 'ep-3' });
   });
 
   it('shows an authored overnight voicemail at an episode boundary', async () => {
