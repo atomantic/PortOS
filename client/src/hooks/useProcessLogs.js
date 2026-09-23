@@ -20,6 +20,13 @@ const FLUSH_MS = 250;
 // the first consumer subscribes, later consumers attach to the existing
 // entry, and only the last consumer to leave unsubscribes. One shared socket
 // listener per event fans each frame out to every attached consumer.
+//
+// Keyed by `processName` alone (not `processName + appId`): the server's own
+// stream key (`streamKey`) and its no-appId fallback lookup
+// (`resolvePm2HomeForProcess`) both already treat `processName` as globally
+// unique across apps, so two different apps sharing one PM2 process name
+// already collide on the SERVER's single socket-scoped stream slot today —
+// this registry mirrors that existing invariant rather than introducing one.
 const registry = new Map(); // processName -> entry
 
 const createEntry = (processName, lines, appId) => ({
