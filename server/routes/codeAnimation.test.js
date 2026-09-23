@@ -97,13 +97,11 @@ describe('POST /api/code-animation/brief', () => {
       onScreenText: '0:02 "One light remains"',
       styleNotes: 'colder blues at the climax',
     });
-    expect(res.body.moodBoardId).toBe('board-1');
-    expect(res.body.llm).toEqual({ provider: 'api-1', model: 'example-model', runId: 'run-b' });
     const call = runPromptThroughProvider.mock.calls[0][0];
     expect(call.source).toBe('code-animation-brief');
     expect(call.cwd).toBe(PATHS.data);
     expect(call.prompt).toContain('a chase that ends in silence');
-    expect(call.prompt).toContain('- Mira — role: lamplighter');
+    expect(call.prompt).toContain('  - Mira [lamplighter]: tall, oil-stained coat');
     expect(call.prompt).toContain('Mood board: "Dusk"');
     // The brief is text — no reference images are attached or named.
     expect(call.screenshots).toBeUndefined();

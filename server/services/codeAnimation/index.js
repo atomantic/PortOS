@@ -31,12 +31,6 @@ import {
   CODE_ANIMATION_RENDERERS,
   CODE_ANIMATION_RESOLUTIONS,
 } from './prompt.js';
-import {
-  buildCodeAnimationBriefPrompt,
-  extractBriefIdea,
-  projectCanonForBrief,
-  CODE_ANIMATION_BRIEF_LIMITS,
-} from './brief.js';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 const resolveUploadImage = makePathResolver(() => PATHS.uploads, { extensions: IMAGE_EXTENSIONS });
@@ -52,7 +46,6 @@ export function getCodeAnimationOptions() {
     resolutions: Object.keys(CODE_ANIMATION_RESOLUTIONS),
     renderers: CODE_ANIMATION_RENDERERS,
     limits: CODE_ANIMATION_LIMITS,
-    briefLimits: CODE_ANIMATION_BRIEF_LIMITS,
     messages: CODE_ANIMATION_MESSAGES,
     audioGlobal: CODE_ANIMATION_AUDIO_GLOBAL,
     audioExtensions: UPLOAD_AUDIO_EXTENSIONS,
@@ -84,16 +77,18 @@ function fillReferences(candidates, slots) {
   return images;
 }
 
-// The narrative half of a universe — its bible text and canon cast. Only the
-// brief writer reads it: the coding prompt is art direction, and a logline or a
-// character's motivations would just crowd out the runtime contract.
+// The narrative half of a universe — its bible text and canon arrays, passed
+// through for `renderCanonForPrompt` to project. Only the brief writer reads
+// it: the coding prompt is art direction, and a logline or a character's
+// motivations would just crowd out the runtime contract.
 function universeNarrative(universe) {
+  const { characters, places, objects } = universe;
   return {
     logline: trimTo(universe.logline, 2_000),
     premise: trimTo(universe.premise, 4_000),
-    characters: projectCanonForBrief(universe.characters, 'characters', CODE_ANIMATION_BRIEF_LIMITS.charactersMax),
-    places: projectCanonForBrief(universe.places, 'places', CODE_ANIMATION_BRIEF_LIMITS.placesMax),
-    objects: projectCanonForBrief(universe.objects, 'objects', CODE_ANIMATION_BRIEF_LIMITS.objectsMax),
+    characters,
+    places,
+    objects,
   };
 }
 
@@ -236,16 +231,27 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
  * way a series or story is generated from a universe. Synchronous — a few
  * hundred words comes back inside one request, unlike the HTML generation.
  *
- * Returns `{ brief, moodBoardId, llm }`; the client drops `brief` straight into
- * the form so the user can edit it before building the animation prompt.
+ * Returns `{ brief }`, which the client drops straight into the form so the
+ * user can edit it before building the animation prompt.
  */
 export async function generateCodeAnimationBrief(input) {
+  // With no world and no words the model has nothing to be faithful to, and a
+  // blank-slate brief is not what this writer is for. The rule lives here, not
+  // in the route, so a non-HTTP caller gets it too.
+  const { title, concept } = input.current || {};
+  if (!input.universeId && !input.seedIdea && !concept && !title) {
+    throw new ServerError('Pick a universe or describe a starting idea to write a brief from', { status: 400, code: 'BRIEF_INPUT_REQUIRED' });
+  }
   const { assertProvider, resolveProviderAndModel, runPromptThroughProvider } = await import('../promptRunner.js');
-  const { provider, selectedModel } = await resolveProviderAndModel({ providerId: input.providerId, model: input.model });
+  const { buildCodeAnimationBriefPrompt, extractBriefIdea } = await import('./brief.js');
+  // Resolving the provider and loading the universe are independent — only the
+  // board depends on which universe came back. No image slots: the brief is
+  // text, and the style images are already the coding prompt's job.
+  const [{ provider, selectedModel }, universe] = await Promise.all([
+    resolveProviderAndModel({ providerId: input.providerId, model: input.model }),
+    resolveUniverse(input.universeId, { imageSlots: 0, narrative: true }),
+  ]);
   assertProvider(provider, { message: 'No AI provider available to write the brief', code: 'PROVIDER_UNAVAILABLE', status: 400 });
-  // No image slots: the brief is text, and the style images are already the
-  // coding prompt's job.
-  const universe = await resolveUniverse(input.universeId, { imageSlots: 0, narrative: true });
   const moodBoardId = input.moodBoardId === undefined ? universe?.moodBoardId : input.moodBoardId;
   const { board } = await resolveMoodBoard(moodBoardId, { imageSlots: 0 });
   const prompt = buildCodeAnimationBriefPrompt({
@@ -268,7 +274,7 @@ export async function generateCodeAnimationBrief(input) {
   });
   const brief = extractBriefIdea(text);
   console.log(`✅ Code animation brief written — runId=${runId || 'n/a'} concept=${brief.concept.length} chars`);
-  return { brief, moodBoardId: moodBoardId || null, llm: { provider: provider.id, model: selectedModel || null, runId: runId || null } };
+  return { brief };
 }
 
 // Drop settled jobs past their TTL, then the oldest settled ones past the cap.

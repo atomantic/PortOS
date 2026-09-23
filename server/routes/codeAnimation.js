@@ -28,7 +28,6 @@ import {
   CODE_ANIMATION_RENDERERS,
   CODE_ANIMATION_RESOLUTIONS,
 } from '../services/codeAnimation/prompt.js';
-import { CODE_ANIMATION_BRIEF_LIMITS } from '../services/codeAnimation/brief.js';
 
 const router = Router();
 const L = CODE_ANIMATION_LIMITS;
@@ -46,7 +45,7 @@ const formatSchema = z.object({
 });
 
 const briefSchema = z.object({
-  title: z.string().trim().max(200).default(''),
+  title: z.string().trim().max(L.titleMax).default(''),
   concept: z.string().trim().min(1, 'Describe what happens in the animation').max(L.conceptMax),
   onScreenText: z.string().trim().max(L.textMax).default(''),
   // Refinements on top of the universe style — the universe is the art direction.
@@ -84,14 +83,16 @@ const generateSchema = briefSchema.extend({
 const briefIdeaSchema = z.object({
   universeId: optionalId,
   moodBoardId: optionalId,
-  seedIdea: z.string().trim().max(CODE_ANIMATION_BRIEF_LIMITS.seedIdeaMax).default(''),
-  current: z.object({
-    title: z.string().trim().max(200).default(''),
-    concept: z.string().trim().max(L.conceptMax).default(''),
-    onScreenText: z.string().trim().max(L.textMax).default(''),
-    styleNotes: z.string().trim().max(L.styleNotesMax).default(''),
-  }).prefault({}),
-  format: formatSchema.prefault({}),
+  seedIdea: z.string().trim().max(L.seedIdeaMax).default(''),
+  // The same brief, partially filled — derived from briefSchema so the field
+  // caps are stated once, with `concept` relaxed because there may be none yet.
+  current: briefSchema
+    .pick({ title: true, onScreenText: true, styleNotes: true })
+    .extend({ concept: z.string().trim().max(L.conceptMax).default('') })
+    .prefault({}),
+  // Only the two the writer's prompt reads — the renderer, fps, and resolution
+  // condition the picture, not the story.
+  format: formatSchema.pick({ durationSeconds: true, aspectRatio: true }).prefault({}),
   providerId: z.string().trim().max(128).optional(),
   model: z.string().trim().max(256).optional(),
   effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()),
@@ -102,13 +103,7 @@ router.get('/options', (_req, res) => {
 });
 
 router.post('/brief', asyncHandler(async (req, res) => {
-  const input = validateRequest(briefIdeaSchema, req.body ?? {});
-  // With no world and no words the model has nothing to be faithful to, and a
-  // blank-slate brief is not what this button is for.
-  if (!input.universeId && !input.seedIdea && !input.current.concept && !input.current.title) {
-    throw new ServerError('Pick a universe or describe a starting idea to write a brief from', { status: 400, code: 'BRIEF_INPUT_REQUIRED' });
-  }
-  res.json(await generateCodeAnimationBrief(input));
+  res.json(await generateCodeAnimationBrief(validateRequest(briefIdeaSchema, req.body ?? {})));
 }));
 
 router.post('/prompt', asyncHandler(async (req, res) => {

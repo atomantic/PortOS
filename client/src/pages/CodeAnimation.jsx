@@ -92,7 +92,9 @@ function toBriefIdeaInput(draft) {
       onScreenText: draft.onScreenText,
       styleNotes: draft.styleNotes,
     },
-    format: draft.format,
+    // The writer's prompt reads only these two — the rest of the format
+    // conditions the picture, not the story.
+    format: { durationSeconds: draft.format.durationSeconds, aspectRatio: draft.format.aspectRatio },
   };
 }
 
@@ -368,7 +370,7 @@ export default function CodeAnimation() {
               <label htmlFor="ca-seed" className={labelClass}>
                 Starting idea <span className="text-gray-600">(optional; what the brief writer starts from)</span>
               </label>
-              <textarea id="ca-seed" rows={2} value={draft.seedIdea} maxLength={options?.briefLimits?.seedIdeaMax} onChange={(event) => update({ seedIdea: event.target.value })} placeholder="A chase through the lower market that ends in silence" className={`${inputClass} resize-y`} />
+              <textarea id="ca-seed" rows={2} value={draft.seedIdea} maxLength={limits?.seedIdeaMax} onChange={(event) => update({ seedIdea: event.target.value })} placeholder="A chase through the lower market that ends in silence" className={`${inputClass} resize-y`} />
               <p className="mt-1 text-xs text-gray-500">
                 {draft.universeId
                   ? 'Write brief casts the film from this universe\u2019s characters, places, and tone.'

@@ -57,6 +57,8 @@ export const CODE_ANIMATION_LIMITS = Object.freeze({
   durationMin: 3,
   durationMax: 180,
   fpsOptions: [24, 30, 60],
+  titleMax: 200,
+  seedIdeaMax: 2_000,
   conceptMax: 6_000,
   textMax: 4_000,
   styleNotesMax: 2_000,
@@ -85,6 +87,22 @@ export function resolveFrameSize(aspectRatio, resolution) {
 
 const bulletList = (values) => values.map((value) => `- ${value}`).join('\n');
 
+/**
+ * The universe's curated style, as prompt lines. Shared with the brief writer
+ * so the two prompts describing one universe can't drift in what they show the
+ * model. Excludes the free-text `styleNotes`, which each caller frames itself.
+ */
+export function universeStyleLines(universe) {
+  const lines = [];
+  if (universe.embrace?.length) lines.push(`Visual style to embrace: ${universe.embrace.join(', ')}`);
+  if (universe.avoid?.length) lines.push(`Visual style to avoid: ${universe.avoid.join(', ')}`);
+  if (universe.styleReferences?.length) {
+    lines.push('Style references curated for this universe:');
+    lines.push(bulletList(universe.styleReferences.map((ref) => (ref.title ? `${ref.title}: ${ref.prompt}` : ref.prompt))));
+  }
+  return lines;
+}
+
 // The art direction. The universe's style guide IS the look — the same curated
 // tokens every other Create surface renders that world with — so the film
 // matches the universe's stills and videos; the per-animation notes only
@@ -93,12 +111,7 @@ function artDirectionSection({ universe, styleNotes, hasMoodBoard }) {
   const lines = [];
   if (universe) {
     lines.push(`The art style comes from the universe "${universe.name}". Match its established look exactly — this film must sit beside the universe's other artwork as the same world.`);
-    if (universe.embrace?.length) lines.push(`Visual style to embrace: ${universe.embrace.join(', ')}`);
-    if (universe.avoid?.length) lines.push(`Visual style to avoid: ${universe.avoid.join(', ')}`);
-    if (universe.styleReferences?.length) {
-      lines.push('Style references curated for this universe:');
-      lines.push(bulletList(universe.styleReferences.map((ref) => (ref.title ? `${ref.title}: ${ref.prompt}` : ref.prompt))));
-    }
+    lines.push(...universeStyleLines(universe));
     if (isNonBlankStr(universe.styleNotes)) {
       lines.push(`Tone and staging notes (context for mood — do not depict entities they name unless the brief asks): ${universe.styleNotes}`);
     }

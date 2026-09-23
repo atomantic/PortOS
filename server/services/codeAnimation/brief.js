@@ -18,92 +18,32 @@
 
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { extractJson } from '../../lib/jsonExtract.js';
+import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { CODE_ANIMATION_LIMITS, moodBoardSection } from './prompt.js';
-
-export const CODE_ANIMATION_BRIEF_LIMITS = Object.freeze({
-  seedIdeaMax: 2_000,
-  charactersMax: 10,
-  placesMax: 6,
-  objectsMax: 6,
-  fieldMax: 600,
-});
-
-const B = CODE_ANIMATION_BRIEF_LIMITS;
-
-// The canon fields a 20-second animated film can actually act on: who someone
-// is, what they look like, what they want. Deliberately narrower than the
-// bible's full prompt-field set (`lib/storyBible.js#PROMPT_FIELDS`) — psychology
-// sliders, wardrobes, and relationship graphs would swamp the prompt without
-// changing a single frame.
-const CANON_FIELDS = Object.freeze({
-  characters: ['role', 'physicalDescription', 'visualNotes', 'personality', 'motivations', 'coreTheme'],
-  places: ['description', 'palette', 'timeOfDay', 'recurringDetails'],
-  objects: ['description', 'significance'],
-});
-
-const stringField = (value) => {
-  if (Array.isArray(value)) return trimTo(value.filter(isNonBlankStr).join(', '), B.fieldMax);
-  return isNonBlankStr(value) ? trimTo(value, B.fieldMax) : '';
-};
-
-/**
- * Project one canon kind down to the named-entity lines the brief writer reads.
- * Entries with nothing but a name still make the list — the writer needs to
- * know the world HAS them.
- */
-export function projectCanonForBrief(entries, kind, cap) {
-  const fields = CANON_FIELDS[kind] || [];
-  return (Array.isArray(entries) ? entries : [])
-    .filter((entry) => isNonBlankStr(entry?.name))
-    .slice(0, cap)
-    .map((entry) => {
-      const projected = { name: trimTo(entry.name, 120) };
-      for (const field of fields) {
-        const value = stringField(entry[field]);
-        if (value) projected[field] = value;
-      }
-      return projected;
-    });
-}
-
-const canonBlock = (heading, rows) => {
-  if (!rows.length) return '';
-  const lines = rows.map((row) => {
-    const { name, ...rest } = row;
-    const detail = Object.entries(rest).map(([key, value]) => `${key}: ${value}`).join('; ');
-    return detail ? `- ${name} — ${detail}` : `- ${name}`;
-  });
-  return `${heading}\n${lines.join('\n')}`;
-};
+import { CODE_ANIMATION_LIMITS, moodBoardSection, universeStyleLines } from './prompt.js';
 
 function universeSection(universe) {
-  if (!universe) return '';
   const lines = [`The film is set in the universe "${universe.name}". Everything you write must be canon to it.`];
   if (isNonBlankStr(universe.logline)) lines.push(`Logline: ${universe.logline}`);
   if (isNonBlankStr(universe.premise)) lines.push(`Premise: ${universe.premise}`);
-  if (universe.embrace?.length) lines.push(`Visual style to embrace: ${universe.embrace.join(', ')}`);
-  if (universe.avoid?.length) lines.push(`Visual style to avoid: ${universe.avoid.join(', ')}`);
+  lines.push(...universeStyleLines(universe));
   if (isNonBlankStr(universe.styleNotes)) lines.push(`Tone, staging, and pacing notes: ${universe.styleNotes}`);
-  if (universe.styleReferences?.length) {
-    lines.push('Style references curated for this universe:');
-    lines.push(universe.styleReferences.map((ref) => `- ${ref.title ? `${ref.title}: ` : ''}${ref.prompt}`).join('\n'));
-  }
   return lines.join('\n');
 }
 
+// The cast the film is drawn from. `renderCanonForPrompt` is the project-wide
+// canon→prompt block: it carries the per-kind formatting, the entry caps with
+// their "+N more" footer, and — the reason a local projection would be wrong —
+// the reveal gate, so a spoiler-flagged character's concealed history never
+// reaches a generation prompt.
 function castSection(universe) {
-  const blocks = [
-    canonBlock('CHARACTERS (cast the film from these — use their names):', universe?.characters || []),
-    canonBlock('PLACES (stage the film in these):', universe?.places || []),
-    canonBlock('OBJECTS that matter in this world:', universe?.objects || []),
-  ].filter(Boolean);
-  if (!blocks.length) {
+  const canon = renderCanonForPrompt(universe, { respectRevealGates: true });
+  if (!canon) {
     return universe
       ? 'This universe has no canon characters, places, or objects recorded yet — invent ones that fit its logline and tone, and keep the cast small.'
       : '';
   }
-  return `${blocks.join('\n\n')}\n\nPrefer the canon above over inventing new entities. A character you use must behave, speak, and look as their entry describes.`;
+  return `CANON — cast the film from these and use their names:\n${canon}\n\nPrefer the canon above over inventing new entities. A character you use must behave, speak, and look as their entry describes.`;
 }
 
 function currentSection(current) {
@@ -121,7 +61,7 @@ function currentSection(current) {
  * Build the prompt that asks a model to write an animation brief.
  *
  * @param {object} input
- * @param {object|null} [input.universe] - `{ name, logline, premise, embrace, avoid, styleNotes, styleReferences, characters, places, objects }`
+ * @param {object|null} [input.universe] - the resolved universe: style tokens plus `{ logline, premise, characters, places, objects }`
  * @param {object|null} [input.moodBoard] - `collectBoardStyleContext` output
  * @param {string} [input.seedIdea] - the artist's starting spark, if any
  * @param {{ durationSeconds: number, aspectRatio: string }} input.format
@@ -140,12 +80,12 @@ export function buildCodeAnimationBriefPrompt({
     `You are a short-film director and writer. Write the brief for a ${durationSeconds}-second ${aspectRatio} animated film that will be drawn entirely in code — procedural shapes, strokes, particles, and typography, with no photographic or hand-drawn assets. Write something a creative coder can actually stage: silhouettes, light, motion, and a handful of clear beats rather than dialogue, facial acting, or crowds.`,
   ];
   if (isNonBlankStr(seedIdea)) {
-    sections.push(`THE ARTIST'S SPARK — this is the film they want; honor it:\n${trimTo(seedIdea, B.seedIdeaMax)}`);
+    sections.push(`THE ARTIST'S SPARK — this is the film they want; honor it:\n${trimTo(seedIdea, CODE_ANIMATION_LIMITS.seedIdeaMax)}`);
   }
-  const universeText = universeSection(universe);
-  if (universeText) sections.push(`UNIVERSE:\n${universeText}`);
-  const castText = castSection(universe);
-  if (castText) sections.push(castText);
+  if (universe) {
+    sections.push(`UNIVERSE:\n${universeSection(universe)}`);
+    sections.push(castSection(universe));
+  }
   const boardText = moodBoardSection(moodBoard);
   if (boardText) sections.push(boardText);
   const currentText = currentSection(current);
@@ -184,7 +124,7 @@ export function extractBriefIdea(raw) {
     });
   }
   return {
-    title: briefField(value.title, 200),
+    title: briefField(value.title, CODE_ANIMATION_LIMITS.titleMax),
     concept,
     onScreenText: briefField(value.onScreenText, CODE_ANIMATION_LIMITS.textMax),
     styleNotes: briefField(value.styleNotes, CODE_ANIMATION_LIMITS.styleNotesMax),

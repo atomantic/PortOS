@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildCodeAnimationBriefPrompt,
-  extractBriefIdea,
-  projectCanonForBrief,
-} from './brief.js';
+import { buildCodeAnimationBriefPrompt, extractBriefIdea } from './brief.js';
 import { CODE_ANIMATION_LIMITS } from './prompt.js';
 
 const FORMAT = { durationSeconds: 20, aspectRatio: '16:9' };
@@ -21,25 +17,6 @@ const UNIVERSE = {
   objects: [{ name: 'The Brass Wick', significance: 'the last lamp that never gutters' }],
 };
 
-describe('projectCanonForBrief', () => {
-  it('keeps the named entities and the fields a film can stage, and caps the list', () => {
-    const rows = projectCanonForBrief([
-      { name: 'Mira', role: 'lamplighter', motivations: ['keep the lamps lit', 'find her brother'], sliders: { warmth: 3 }, id: 'chr-1' },
-      { name: '  ', role: 'nobody' },
-      { name: 'Corin' },
-      { name: 'Vale' },
-    ], 'characters', 2);
-    expect(rows).toEqual([
-      { name: 'Mira', role: 'lamplighter', motivations: 'keep the lamps lit, find her brother' },
-      { name: 'Corin' },
-    ]);
-  });
-
-  it('is empty for a universe with no canon of that kind', () => {
-    expect(projectCanonForBrief(undefined, 'places', 6)).toEqual([]);
-  });
-});
-
 describe('buildCodeAnimationBriefPrompt', () => {
   it('grounds the brief in the universe bible, its cast, and the artist\'s spark', () => {
     const prompt = buildCodeAnimationBriefPrompt({
@@ -53,9 +30,9 @@ describe('buildCodeAnimationBriefPrompt', () => {
     expect(prompt).toContain('a chase that ends in silence');
     expect(prompt).toContain('The film is set in the universe "Example Universe"');
     expect(prompt).toContain('Logline: A drowned city keeps its lamps lit');
-    expect(prompt).toContain('- Mira — role: lamplighter; physicalDescription: tall, oil-stained coat');
-    expect(prompt).toContain('- The Lower Market — description: flooded arcade of stalls');
-    expect(prompt).toContain('- The Brass Wick — significance: the last lamp that never gutters');
+    expect(prompt).toContain('  - Mira [lamplighter]: tall, oil-stained coat');
+    expect(prompt).toContain('  - The Lower Market: flooded arcade of stalls');
+    expect(prompt).toContain('  - The Brass Wick (the last lamp that never gutters)');
     expect(prompt).toContain('Mood board: "Dusk"');
     expect(prompt).toContain('Title: The Brass Wick');
     expect(prompt).toContain('"title": "..."');
@@ -67,12 +44,33 @@ describe('buildCodeAnimationBriefPrompt', () => {
       format: FORMAT,
     });
     expect(prompt).toContain('no canon characters, places, or objects recorded yet');
-    expect(prompt).not.toContain('CHARACTERS (');
+    expect(prompt).not.toContain('CANON —');
   });
 
   it('falls back to a blank-slate instruction with nothing to go on', () => {
     const prompt = buildCodeAnimationBriefPrompt({ format: FORMAT });
     expect(prompt).toContain('invent a striking, self-contained concept');
+  });
+
+  it('withholds a reveal-gated character\'s concealed canon', () => {
+    const prompt = buildCodeAnimationBriefPrompt({
+      universe: {
+        ...UNIVERSE,
+        characters: [{
+          name: 'Corin',
+          role: 'archivist',
+          spoiler: true,
+          surfaceDescriptor: 'a quiet clerk',
+          background: 'signed the order that drowned the city',
+          personality: 'remorseless',
+        }],
+      },
+      format: FORMAT,
+    });
+    expect(prompt).toContain('a quiet clerk');
+    expect(prompt).toContain('reveal-gated');
+    expect(prompt).not.toContain('signed the order that drowned the city');
+    expect(prompt).not.toContain('remorseless');
   });
 });
 
@@ -100,7 +98,7 @@ describe('extractBriefIdea', () => {
       onScreenText: 'O'.repeat(CODE_ANIMATION_LIMITS.textMax + 100),
       styleNotes: 'S'.repeat(CODE_ANIMATION_LIMITS.styleNotesMax + 100),
     }));
-    expect(parsed.title.length).toBe(200);
+    expect(parsed.title.length).toBe(CODE_ANIMATION_LIMITS.titleMax);
     expect(parsed.concept.length).toBe(CODE_ANIMATION_LIMITS.conceptMax);
     expect(parsed.onScreenText.length).toBe(CODE_ANIMATION_LIMITS.textMax);
     expect(parsed.styleNotes.length).toBe(CODE_ANIMATION_LIMITS.styleNotesMax);
