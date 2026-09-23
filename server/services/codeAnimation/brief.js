@@ -39,9 +39,7 @@ function universeSection(universe) {
 function castSection(universe) {
   const canon = renderCanonForPrompt(universe, { respectRevealGates: true });
   if (!canon) {
-    return universe
-      ? 'This universe has no canon characters, places, or objects recorded yet — invent ones that fit its logline and tone, and keep the cast small.'
-      : '';
+    return 'This universe has no canon characters, places, or objects recorded yet — invent ones that fit its logline and tone, and keep the cast small.';
   }
   return `CANON — cast the film from these and use their names:\n${canon}\n\nPrefer the canon above over inventing new entities. A character you use must behave, speak, and look as their entry describes.`;
 }
