@@ -536,9 +536,17 @@ export default function LinksTab({ onRefresh }) {
       const data = over?.data?.current;
       if (!data || data.kind !== LINK_SLOT_KIND) return null;
       const link = active?.data?.current?.link;
-      const alreadyThere = !!link && link.bucketId === data.bucketId;
-      const bucketSize = links.filter(l => l.bucketId === data.bucketId).length + (alreadyThere ? 0 : 1);
-      return `position ${data.index + 1} of ${bucketSize} in ${bucketName(data.bucketId)}`;
+      if (!link) return null;
+      // Reuse the same helper the actual move persists with, rather than
+      // hand-rolling the position math again: dropping an already-in-bucket
+      // link on its own bucket's trailing "append" slot lands ONE EARLIER
+      // than the raw slot index once the link's own current slot is removed
+      // from under it, and only reorderLinksInBucket's insertAt adjustment
+      // gets that right (see its own tests for the exact case).
+      const { renumbered } = reorderLinksInBucket(links, link, data.bucketId, data.index);
+      const finalIndex = renumbered.findIndex(r => r.id === link.id);
+      if (finalIndex === -1) return null;
+      return `position ${finalIndex + 1} of ${renumbered.length} in ${bucketName(data.bucketId)}`;
     };
     const itemLabel = (active) => {
       const data = active?.data?.current;

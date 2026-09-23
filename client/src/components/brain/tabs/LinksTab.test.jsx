@@ -491,10 +491,29 @@ describe('LinksTab drag-and-drop wiring', () => {
     getBrainLinks.mockResolvedValue({ links: twoInBucket });
     await renderTab();
 
+    // Slot index 2 is the trailing "append to the end" slot for a 2-chip
+    // bucket — dropping Alpha (currently index 0) there moves it after Charlie.
+    const active = { data: { current: { kind: LINK_KIND, link: twoInBucket[0], bucketId: 'b1', index: 0 } } };
+    const over = { data: { current: { kind: LINK_SLOT_KIND, bucketId: 'b1', index: 2 } } };
+    const message = dndState.context.accessibility.announcements.onDragEnd({ active, over });
+    expect(message).toBe('Moved Alpha to position 2 of 2 in Reading.');
+  });
+
+  it('announces the position a link stays at when dropped back on its own current slot', async () => {
+    const twoInBucket = [
+      link('a', 'none', { bucketId: 'b1', bucketOrder: 0, title: 'Alpha' }),
+      link('c', 'none', { bucketId: 'b1', bucketOrder: 1, title: 'Charlie' }),
+    ];
+    getBrainLinks.mockResolvedValue({ links: twoInBucket });
+    await renderTab();
+
+    // Slot index 1 ("insert before Charlie") is exactly Alpha's current
+    // position — the regression this guards was reporting "position 3 of 2"
+    // by not accounting for the dragged link's own slot disappearing first.
     const active = { data: { current: { kind: LINK_KIND, link: twoInBucket[0], bucketId: 'b1', index: 0 } } };
     const over = { data: { current: { kind: LINK_SLOT_KIND, bucketId: 'b1', index: 1 } } };
     const message = dndState.context.accessibility.announcements.onDragEnd({ active, over });
-    expect(message).toBe('Moved Alpha to position 2 of 2 in Reading.');
+    expect(message).toBe('Moved Alpha to position 1 of 2 in Reading.');
   });
 
   it('announces the destination position when a bucket drag ends', async () => {
