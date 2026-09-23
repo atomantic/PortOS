@@ -441,16 +441,19 @@ export async function switchHostedEpisode(sessionId, episodeId, { io } = {}) {
     throw new ServerError('Hosted session not found or ended', { status: 404, code: 'SESSION_NOT_FOUND' });
   }
 
+  // Abort BEFORE the first await: a turn already in flight against the OLD
+  // episode must not be able to resolve and commit narration/a transition
+  // while this function is off awaiting the loom read below.
+  if (session.activeTurn?.abortController) {
+    session.activeTurn.abortController.abort('episode_switch');
+    session.activeTurn = null;
+  }
+
   const loom = await getLoom(session.loomId);
   if (!loom) {
     throw new ServerError('Loom not found', { status: 404, code: 'NOT_FOUND' });
   }
   const episode = findEpisode(loom, episodeId);
-
-  if (session.activeTurn?.abortController) {
-    session.activeTurn.abortController.abort('episode_switch');
-    session.activeTurn = null;
-  }
 
   const preflight = await checkHostedSessionReadiness({ loomId: session.loomId, episodeId, loom, episode });
   const startNode = preflight.ready
