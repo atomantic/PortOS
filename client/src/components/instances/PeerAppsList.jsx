@@ -16,7 +16,7 @@ export default function PeerAppsList({ apps, peerAddress, peerHost }) {
       <div className="space-y-1">
         {apps.map(app => (
           <div key={app.id} className="flex items-center gap-2 text-xs">
-            <AppIcon icon={app.icon || 'package'} size={14} className="text-gray-400 shrink-0" />
+            <AppIcon icon={app.icon || 'package'} size={14} ariaLabel={app.name} className="text-gray-400 shrink-0" />
             {app.uiPort && app.overallStatus === 'online' ? (
               <a
                 href={`${linkBase.scheme}://${linkBase.host}:${app.uiPort}`}

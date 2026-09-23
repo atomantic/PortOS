@@ -173,8 +173,9 @@ function getAppIconUrl(appId) {
   return `${base}/api/apps/${appId}/icon`;
 }
 
-export default function AppIcon({ icon, appId, hasAppIcon, size = 24, className = '', ariaLabel, fillContainer = false }) {
+export default function AppIcon({ icon, appId, hasAppIcon, size = 24, className = '', ariaLabel, appName, fillContainer = false }) {
   const [imgError, setImgError] = useState(false);
+  const accessibleName = ariaLabel || appName;
 
   // Show real app icon image if the app has one detected. When fillContainer is
   // set, the consumer has wrapped us in a sized + clipped tile (e.g. w-8 h-8
@@ -189,24 +190,21 @@ export default function AppIcon({ icon, appId, hasAppIcon, size = 24, className 
     const imgEl = (
       <img
         src={getAppIconUrl(appId)}
-        alt={ariaLabel || ''}
+        alt={accessibleName || 'Application icon'}
         className={`w-full h-full rounded-[22%] object-cover ${className}`}
         onError={() => setImgError(true)}
       />
     );
 
-    if (ariaLabel) {
-      return <span role="img" aria-label={ariaLabel} className={wrapperClass} style={wrapperStyle}>{imgEl}</span>;
-    }
-    return <span aria-hidden="true" className={wrapperClass} style={wrapperStyle}>{imgEl}</span>;
+    return <span className={wrapperClass} style={wrapperStyle}>{imgEl}</span>;
   }
 
   // Fall back to SVG icon
   const IconComponent = icons[icon] || icons.package;
 
-  if (ariaLabel) {
+  if (accessibleName) {
     return (
-      <span role="img" aria-label={ariaLabel}>
+      <span role="img" aria-label={accessibleName}>
         <IconComponent size={size} className={className} />
       </span>
     );

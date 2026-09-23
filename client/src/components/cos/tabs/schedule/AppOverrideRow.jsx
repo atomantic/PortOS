@@ -131,7 +131,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
   return (
     <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-3 py-2 px-3 rounded hover:bg-port-card/30">
       <div className="flex items-center gap-2 min-w-0 w-full sm:w-auto sm:flex-1">
-        <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={16} className="text-gray-400 shrink-0" />
+        <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={16} ariaLabel={app.name} className="text-gray-400 shrink-0" />
         <span className="text-sm text-white truncate flex-1">{app.name}</span>
         <div className="sm:hidden flex items-center gap-1.5 shrink-0" title={enabledToggleTitle}>{enabledToggle}</div>
       </div>
