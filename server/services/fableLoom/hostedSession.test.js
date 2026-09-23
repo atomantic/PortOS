@@ -587,6 +587,28 @@ describe('fableLoom hostedSession', () => {
       expect(listenRes.ok).toBe(true);
     });
 
+    it('rejects a listen request whose loom read resumes after an episode switch', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const pendingRead = deferred();
+      records.getLoom
+        .mockImplementationOnce(() => pendingRead.promise)
+        .mockResolvedValueOnce(mockLoom);
+
+      const pendingListen = startHostedListening(session.id, { io });
+      await switchHostedEpisode(session.id, 'ep-2', { io });
+      const syncIndex = io.emits.findLastIndex((event) => event.event === 'hosted:session:sync');
+
+      pendingRead.resolve(mockLoom);
+      await expect(pendingListen).rejects.toMatchObject({
+        status: 409,
+        code: 'EPISODE_SWITCH_IN_PROGRESS',
+      });
+
+      expect(getHostedSession(session.id)).toMatchObject({ episodeId: 'ep-2', turnPhase: 'idle' });
+      expect(io.emits.slice(syncIndex + 1).some((event) => event.event === 'hosted:turn:phase')).toBe(false);
+    });
+
     // Without this, a host double-clicking "Next Episode" before the first
     // switch's async loom-read/preflight resolves fires two overlapping
     // calls that race — the earlier request could commit last and rebind the
