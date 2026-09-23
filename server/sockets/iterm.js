@@ -39,8 +39,8 @@ export const registerItermHandlers = (socket) => {
   socket.on('iterm:input', (rawData) => {
     const validated = validateSocketData(itermInputSchema, rawData, socket, 'iterm:input');
     if (!validated) return;
-    if (!itermBridge.sendItermInput(validated.id, validated.data)) {
-      socket.emit('iterm:error', { id: validated.id, error: 'iTerm2 session not found' });
+    if (!itermBridge.sendItermInput(validated.id, validated.data, socket)) {
+      socket.emit('iterm:error', { id: validated.id, error: 'Not viewing this iTerm2 session' });
     }
   });
 };

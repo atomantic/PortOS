@@ -213,14 +213,17 @@ describe('itermBridge', () => {
     expect(fake.count('getBufferRequest')).toBe(2);
   });
 
-  it('types byte-exact input in order', async () => {
+  it('types byte-exact input in order, only from a viewing socket', async () => {
     await listAndConnect();
+    const viewer = fakeSocket('typist');
+    expect(bridge.sendInput('iterm-BBBB-1', 'x', viewer)).toBe(false); // not viewing yet
+    bridge.attachViewer('iterm-BBBB-1', viewer);
     const inputs = ['l', 's', '\r', '\x1b[A', '\x03', '\x1b[200~line one\nline two\x1b[201~'];
-    for (const data of inputs) expect(bridge.sendInput('iterm-BBBB-1', data)).toBe(true);
+    for (const data of inputs) expect(bridge.sendInput('iterm-BBBB-1', data, viewer)).toBe(true);
     await vi.waitFor(() => expect(fake.count('sendTextRequest')).toBe(inputs.length));
     expect(fake.requests.filter((r) => r.sendTextRequest).map((r) => [r.sendTextRequest.session, r.sendTextRequest.text]))
       .toEqual(inputs.map((text) => ['BBBB-1', text]));
-    expect(bridge.sendInput('iterm-missing', 'x')).toBe(false);
+    expect(bridge.sendInput('iterm-missing', 'x', viewer)).toBe(false);
   });
 
   it('drops a terminated session and tells its viewers', async () => {

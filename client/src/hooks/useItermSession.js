@@ -20,7 +20,8 @@ export const ITERM_SHELL_PATH = '/shell/iterm';
  *   - PortOS cannot create, stop or restart iTerm2 sessions.
  *
  * The selected session lives in the URL (`/shell/iterm/:itermSessionId`).
- * With no id, the first listed session is selected with a replace navigation.
+ * With no id, the first listed session is selected with a replace navigation;
+ * an id the connected bridge no longer lists falls back to the view root.
  * `pendingRef = { target, generation }` gates `iterm:attached` by strict
  * equality so a response for a session the user already left is dropped.
  *
@@ -123,7 +124,9 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
       attachedIdRef.current = null;
       setAttachedId(null);
       termRef.current?.writeln('\r\n\x1b[33m[iTerm2 session closed]\x1b[0m');
-      navigateRef.current(ITERM_SHELL_PATH, { replace: true });
+      // No navigation here: the bridge also sends this when its iTerm2
+      // connection drops, and the URL must survive that. The next list
+      // decides — re-attach if it is back, fall back if it is really gone.
     };
     const handleError = ({ id, error }) => {
       if (id !== pendingRef.current.target && id !== attachedIdRef.current) return;
@@ -158,6 +161,9 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
   }, [socket, enabled, setPending, sizeTo]);
 
   const sessionIds = sessions?.map((s) => s.id).join('\n') ?? null;
+  // Only a connected bridge's list is authoritative about what exists; while
+  // iTerm2 is reconnecting the list is empty and the URL must stay put.
+  const listAuthoritative = status?.state === 'connected';
 
   // URL → attachment. No id: select the first session. Unknown id once the
   // list is in: fall back to the view root rather than a dead deep link.
@@ -169,7 +175,7 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
       return;
     }
     if (!ids.includes(itermSessionId)) {
-      navigateRef.current(ITERM_SHELL_PATH, { replace: true });
+      if (listAuthoritative) navigateRef.current(ITERM_SHELL_PATH, { replace: true });
       return;
     }
     if (attachedIdRef.current === itermSessionId || pendingRef.current.target === itermSessionId) return;
@@ -186,7 +192,7 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
       term.writeln('\x1b[36mAttaching to iTerm2 session...\x1b[0m');
     }
     socket.emit('iterm:attach', { id: itermSessionId });
-  }, [socket, enabled, itermSessionId, sessionIds, setPending]);
+  }, [socket, enabled, itermSessionId, sessionIds, listAuthoritative, setPending]);
 
   const selectSession = useCallback((id) => {
     if (id !== itermSessionId) navigateRef.current(`${ITERM_SHELL_PATH}/${id}`);

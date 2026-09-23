@@ -605,9 +605,10 @@ export function createItermBridge(deps = {}) {
     return released;
   };
 
-  const sendInput = (id, data) => {
+  // Input comes only from a socket that is viewing the session.
+  const sendInput = (id, data, socket) => {
     const entry = sessions.get(id);
-    if (!entry || !conn) return false;
+    if (!entry || !conn || !entry.viewers.has(socket)) return false;
     // Per-session FIFO: each keystroke batch waits for the previous one's
     // acknowledgement, so order survives however fast the viewer types.
     entry.inputTail = entry.inputTail

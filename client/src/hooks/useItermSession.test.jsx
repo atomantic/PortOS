@@ -123,4 +123,19 @@ describe('useItermSession', () => {
       ['iterm:attach', { id: 'iterm-AAAA' }],
     ]);
   });
+
+  it('keeps the URL through an iTerm2 reconnect and falls back only once a live list drops the session', () => {
+    renderAt('/shell/iterm/iterm-BBBB');
+    fire('iterm:sessions', LIST);
+    fire('iterm:attached', { id: 'iterm-BBBB', cols: 100, rows: 30, bufferedOutput: '' });
+    // The bridge lost iTerm2: exit + an empty, non-authoritative list.
+    fire('iterm:exit', { id: 'iterm-BBBB' });
+    fire('iterm:sessions', { status: { state: 'disconnected' }, sessions: [] });
+    expect(location.pathname).toBe('/shell/iterm/iterm-BBBB');
+    fire('iterm:sessions', LIST);
+    expect(emitsOf('iterm:attach').at(-1)).toEqual(['iterm:attach', { id: 'iterm-BBBB' }]);
+    // Now it really closes.
+    fire('iterm:sessions', { status: { state: 'connected' }, sessions: [session('iterm-AAAA')] });
+    expect(location.pathname).toBe('/shell/iterm/iterm-AAAA');
+  });
 });
