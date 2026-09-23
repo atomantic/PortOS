@@ -192,6 +192,27 @@ describe('reportFailureBeforeCancel', () => {
     expect(annotation).toContain('windows-server (shard 3)');
   });
 
+  it('names the crashed test file in the fallback when a native Vitest worker crash killed the step (issue 8152)', async () => {
+    // `run-ci-tests.js` writes CI_CRASHED_TEST_FILE via $GITHUB_ENV when a
+    // worker crash reproduces on retry — the failing-step lookup can't see
+    // this itself because the crash killed the step before Actions recorded
+    // a per-step failure the jobs API can read back.
+    const { fetchImpl, logger } = setup();
+    fetchImpl.mockImplementation((url) => (
+      url === JOBS_URL ? Promise.reject(new Error('network unavailable')) : Promise.resolve(response(202))
+    ));
+
+    await cancelCurrentCiRun({
+      env: { ...ANNOTATION_ENV, CI_CRASHED_TEST_FILE: 'server/services/sprites/importer.test.js' },
+      fetchImpl,
+      logger,
+    });
+
+    const annotation = logger.log.mock.calls.map(([line]) => line).find((line) => line.startsWith('::error'));
+    expect(annotation).toContain('server/services/sprites/importer.test.js');
+    expect(annotation).not.toContain('open this job\'s log');
+  });
+
   it('annotates even when the environment cannot authorize a cancel', async () => {
     const { fetchImpl, logger } = setup();
 

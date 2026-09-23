@@ -68,9 +68,17 @@ async function reportFailureBeforeCancel({ env, fetchImpl, logger, writeSummary,
     ...target,
     timeoutMs: DIAGNOSTIC_TIMEOUT_MS,
   });
+  // `scripts/run-ci-tests.js` sets this via $GITHUB_ENV when a Vitest worker
+  // crashed natively (a Windows fail-fast abort, not an assertion) and the
+  // crash reproduced on a same-file retry — the API lookup above can't see
+  // this because it names FAILED STEPS, and the crash killed the step before
+  // any per-test output named the file (issue 8152).
+  const crashedFile = safeWorkflowText(env.CI_CRASHED_TEST_FILE);
   const lines = found?.length
     ? found.map(formatFailedJob)
-    : [`${label} — the failing step could not be read from the Actions API; open this job's log`];
+    : [crashedFile
+      ? `${label} — the failing step could not be read from the Actions API; the Vitest worker crashed natively on ${crashedFile} (see this job's log)`
+      : `${label} — the failing step could not be read from the Actions API; open this job's log`];
 
   try {
     for (const line of lines) logger.log?.(formatErrorAnnotation(`CI failed: ${label}`, line));

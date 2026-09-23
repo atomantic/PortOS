@@ -4,8 +4,12 @@ import { join } from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  extractCrashedTestFile,
+  hasOtherTestFailures,
+  planCrashRetry,
   recordVitestDuration,
   relatedInputs,
+  repoRelativeFromCrashPath,
   requiresSourceFiles,
   shardArgs,
   toRunnerPath,
@@ -114,6 +118,105 @@ describe('requiresSourceFiles', () => {
     expect(requiresSourceFiles('related', ['server/services/auth.js'])).toBe(false);
     expect(requiresSourceFiles('files', [])).toBe(false);
     expect(requiresSourceFiles('full', [])).toBe(false);
+  });
+});
+
+describe('extractCrashedTestFile', () => {
+  // Verbatim shape of Vitest's own message for a forked worker that aborted
+  // natively (issue 8152 — a Windows 0xC0000409 fail-fast), trimmed to the
+  // two lines the regex actually needs.
+  const CRASH_OUTPUT = [
+    '⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯',
+    'Error: [vitest-pool]: Worker forks emitted error.',
+    'Caused by: Error: Worker exited unexpectedly with exit code 3221226505 during started state while running test file D:/a/PortOS/PortOS/server/services/sprites/importer.test.js',
+    '  Test Files  798 passed | 2 skipped (801)',
+  ].join('\n');
+
+  it('pulls the crashed file out of a native worker-crash error', () => {
+    expect(extractCrashedTestFile(CRASH_OUTPUT)).toBe(
+      'D:/a/PortOS/PortOS/server/services/sprites/importer.test.js',
+    );
+  });
+
+  it('finds nothing in an ordinary assertion failure or empty output', () => {
+    expect(extractCrashedTestFile('FAIL server/lib/foo.test.js > bar\nExpected 1 to be 2')).toBeNull();
+    expect(extractCrashedTestFile('')).toBeNull();
+    expect(extractCrashedTestFile(undefined)).toBeNull();
+  });
+});
+
+describe('repoRelativeFromCrashPath', () => {
+  it('maps an absolute Windows or POSIX runner path onto its workspace', () => {
+    expect(repoRelativeFromCrashPath('D:/a/PortOS/PortOS/server/services/sprites/importer.test.js'))
+      .toBe('server/services/sprites/importer.test.js');
+    expect(repoRelativeFromCrashPath('/home/runner/work/PortOS/PortOS/client/src/lib/foo.test.js'))
+      .toBe('client/src/lib/foo.test.js');
+  });
+
+  it('returns null when the path names neither workspace', () => {
+    expect(repoRelativeFromCrashPath('D:/a/PortOS/PortOS/scripts/foo.test.js')).toBeNull();
+    expect(repoRelativeFromCrashPath('')).toBeNull();
+  });
+});
+
+describe('planCrashRetry', () => {
+  const CRASH_OUTPUT = 'Caused by: Error: Worker exited unexpectedly with exit code 3221226505 '
+    + 'during started state while running test file D:/a/PortOS/PortOS/server/services/sprites/importer.test.js';
+
+  it('plans a same-workspace single-file retry for a matching crash', () => {
+    expect(planCrashRetry('server', CRASH_OUTPUT)).toEqual({
+      retry: true,
+      relPath: 'server/services/sprites/importer.test.js',
+      selector: './services/sprites/importer.test.js',
+    });
+  });
+
+  it('declines to retry a crash reported in the other workspace', () => {
+    // A server-shard crash never gets replayed as a client-scoped selector.
+    expect(planCrashRetry('client', CRASH_OUTPUT)).toEqual({
+      retry: false,
+      crashedPath: 'D:/a/PortOS/PortOS/server/services/sprites/importer.test.js',
+    });
+  });
+
+  it('declines to retry an ordinary test failure', () => {
+    expect(planCrashRetry('server', 'FAIL server/lib/foo.test.js\nExpected true to be false')).toEqual({
+      retry: false,
+    });
+  });
+});
+
+describe('hasOtherTestFailures', () => {
+  // The real end-of-run summary block from the crash this fixes (issue 8152):
+  // one crashed file counted in neither "Test Files" nor "Tests", and exactly
+  // one unhandled error — the crash itself, nothing else.
+  const CLEAN_RUN_SUMMARY = [
+    'Test Files  798 passed | 2 skipped (801)',
+    '     Tests  15077 passed | 61 skipped (15145)',
+    '    Errors  1 error',
+  ].join('\n');
+
+  it('reads false from a summary with no failures and exactly one (the crash\'s own) unhandled error', () => {
+    expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY)).toBe(false);
+  });
+
+  it('reads true when either summary line reports a real failure, whichever order it lists the counts', () => {
+    expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY.replace(
+      'Test Files  798 passed', 'Test Files  1 failed | 797 passed',
+    ))).toBe(true);
+    expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY.replace(
+      'Tests  15077 passed', 'Tests  15076 passed | 1 failed',
+    ))).toBe(true);
+  });
+
+  it('reads true when a second, unrelated unhandled error shares the run with the crash', () => {
+    expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY.replace('1 error', '2 errors'))).toBe(true);
+  });
+
+  it('fails closed (assumes a real failure) when any summary line is missing', () => {
+    expect(hasOtherTestFailures('')).toBe(true);
+    expect(hasOtherTestFailures('Test Files  798 passed | 2 skipped (801)')).toBe(true);
+    expect(hasOtherTestFailures('some unrelated crash output with no summary at all')).toBe(true);
   });
 });
 
