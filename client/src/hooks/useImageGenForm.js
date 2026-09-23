@@ -119,10 +119,10 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
     };
     const dn = {
       external: perMode.external.denoise,
-      local: perMode.denoise,
-      codex: perMode.denoise,
-      grok: perMode.denoise,
-      agy: perMode.denoise,
+      local: perMode.local.denoise,
+      codex: perMode.codex.denoise,
+      grok: perMode.grok.denoise,
+      agy: perMode.agy.denoise,
     };
     const saved = settings?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
     const next = configureBackends(backends, saved);
