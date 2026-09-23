@@ -750,7 +750,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('claim-issue v25 leaves the same volunteer-claim state the issue-watcher leaves', () => {
     const current = DEFAULT_TASK_PROMPTS['claim-issue'];
 
-    expect(PROMPT_VERSIONS['claim-issue']).toBe(34);
+    expect(PROMPT_VERSIONS['claim-issue']).toBe(35);
     expect(current).toContain('**a volunteer claim IS a claim**');
     for (const command of formatVolunteerClaimCommands('"${CANDIDATE}"')) {
       expect(current).toContain(command);
@@ -765,7 +765,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
   });
 
   it('publishes claim work when a required local review is unavailable, but leaves it unmerged and silent', () => {
-    const cases = [['claim-issue', 34], ['claim-issue-gitlab', 31], ['claim-issue-jira', 20]];
+    const cases = [['claim-issue', 35], ['claim-issue-gitlab', 31], ['claim-issue-jira', 20]];
 
     for (const [key, version] of cases) {
       const current = DEFAULT_TASK_PROMPTS[key];

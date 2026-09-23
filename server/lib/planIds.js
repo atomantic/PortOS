@@ -237,10 +237,18 @@ export function listOpenPullRequestHeadRefs(repoPath) {
 
 /**
  * Extract the PLAN.md slug from a git ref ONLY when the ref matches one of
- * the two documented claim patterns:
+ * the three documented claim patterns:
  *   - `claim/<slug>`                       (human / TUI / scheduler path)
  *   - `cos/<task>/<slug>/<agent>`          (CoS sub-agent path)
+ *   - `next/<slug>`                        (slashdo `/do:next` path — #8161)
  * after stripping any single leading remote prefix (e.g. `origin/`).
+ *
+ * The `next/<slug>` branch is created by the bundled slashdo `/do:next`
+ * skill, not by PortOS's own claim-issue flow (which uses `claim/issue-<n>`
+ * under `data/cos/worktrees/claim-*`) — but a claim agent can still end up
+ * running `/do:next` itself, so its branch must be recognized as a live
+ * claim by the same scanners, or the branch reads as an orphan and a
+ * concurrent scan can re-dispatch onto the same issue mid-flight.
  *
  * Returns null for refs that don't match — e.g. `feature/foo`, `main`,
  * `release`, or `origin/HEAD`. Without this gate, the segment-walking
@@ -250,13 +258,15 @@ export function listOpenPullRequestHeadRefs(repoPath) {
  */
 export function extractSlugFromRef(ref) {
   if (typeof ref !== 'string' || !ref) return null;
-  const stripped = /^[^/]+\/(claim|cos)\//.test(ref)
+  const stripped = /^[^/]+\/(claim|cos|next)\//.test(ref)
     ? ref.replace(/^[^/]+\//, '')
     : ref;
   const m1 = /^claim\/(.+)$/.exec(stripped);
   if (m1) return m1[1];
   const m2 = /^cos\/[^/]+\/([^/]+)\/[^/]+$/.exec(stripped);
   if (m2) return m2[1];
+  const m3 = /^next\/(.+)$/.exec(stripped);
+  if (m3) return m3[1];
   return null;
 }
 

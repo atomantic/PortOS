@@ -94,7 +94,9 @@ async function inspectApp(app, tasks) {
     else if (pr.checks.some(check => ['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED', 'WAITING'].includes(check.status))) disposition = 'waiting-for-ci-review';
     // A live external claim branch is not proof of an orphan. Leave its owner
     // accountable until the existing claim/reconcile flow establishes otherwise.
-    else if (issueNumberFromRef(pr.headBranch) || /^claim\//.test(pr.headBranch)) {
+    // `next/` covers the slashdo `/do:next` branch convention (#8161) alongside
+    // this install's own `claim/` prefix — either one is a live external claim.
+    else if (issueNumberFromRef(pr.headBranch) || /^(claim|next)\//.test(pr.headBranch)) {
       const number = issueNumberFromRef(pr.headBranch);
       if (!number) disposition = 'unknown';
       else {

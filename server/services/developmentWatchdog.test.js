@@ -119,6 +119,17 @@ it('keeps explicit live claim and open dependency evidence out of dispatch', asy
   expect(receipt.decisions[0].reason).toBe('open-dependency'); expect(m.adds).toEqual([]);
 });
 
+it('treats a slashdo /do:next branch (next/issue-<num>) as a live external claim, not an orphan (#8161)', async () => {
+  // Before #8161, issueNumberFromRef (perpetualWork.js, via planIds.extractSlugFromRef)
+  // only recognized claim/ and cos/.../ prefixes, so a next/issue-<num> PR fell through
+  // every branch of the disposition chain and read as 'eligible' — dispatching a
+  // coordinator onto a branch a live /do:next run was still pushing to.
+  m.prs = [{ ...orphan, headBranch: 'next/issue-5' }]; m.dependencyOpen = true;
+  const receipt = await runDevelopmentWatchdog({ force: true });
+  expect(receipt.apps[0].pullRequests[0]).toMatchObject({ disposition: 'unknown', reason: 'external-claim-owner-unverified' });
+  expect(m.adds).toEqual([]);
+});
+
 it('turns failed or malformed claim reads into unknown evidence instead of aborting the scan', async () => {
   m.prs = [orphan]; m.execGhFailureOn = 'issue';
   let receipt = await runDevelopmentWatchdog({ force: true });
