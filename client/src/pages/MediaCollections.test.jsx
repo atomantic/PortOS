@@ -5,16 +5,24 @@ import { MemoryRouter, Routes, Route, useLocation, useNavigate } from 'react-rou
 import { typeSettled } from '../test/settledInput';
 
 // ── Spy on the shared cancelable-debounce boundary ───────────────────────────
-// `schedule` still delegates to a REAL setTimeout so the existing
-// mirror-to-URL tests keep their real timing behavior; only `cancel` is a
-// spy, so a rendered test can assert MediaCollections actually cancels the
-// pending query→URL mirror before navigating to a newly-created collection
-// (#8187) — a stale mirror write left free to fire after that navigation can
-// land later and clobber the detail route back to the list route.
+// Wraps the REAL hook (not a stand-in) so its actual schedule/cancel
+// semantics stay in force — a spy that merely recorded a call, without also
+// exercising real cancellation, would pass even if `cancel()` were a no-op.
+// This lets a rendered test assert both that MediaCollections calls cancel
+// before navigating to a newly-created collection AND that doing so actually
+// stops the pending query→URL mirror from firing afterward (#8187) — a
+// stale write left free to fire after that navigation can land later and
+// clobber the detail route back to the list route.
 const { cancelQueryMirrorSpy } = vi.hoisted(() => ({ cancelQueryMirrorSpy: vi.fn() }));
-vi.mock('../hooks/useCancelableDebounce', () => ({
-  default: () => [(fn, delay) => setTimeout(fn, delay), cancelQueryMirrorSpy],
-}));
+vi.mock('../hooks/useCancelableDebounce', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    default: (...args) => {
+      const [schedule, cancel] = actual.default(...args);
+      return [schedule, (...cancelArgs) => { cancelQueryMirrorSpy(...cancelArgs); return cancel(...cancelArgs); }];
+    },
+  };
+});
 
 // ── Mock API calls ───────────────────────────────────────────────────────────
 vi.mock('../services/api', () => ({
@@ -262,6 +270,13 @@ describe('MediaCollections', () => {
     await user.click(screen.getByRole('button', { name: /create/i }));
     await waitFor(() => expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4'));
     expect(cancelQueryMirrorSpy).toHaveBeenCalled();
+
+    // The cancel call is only meaningful if it actually stops the mirror
+    // from firing — wait past its 300ms delay (real timers; the mock above
+    // wraps the REAL hook) and confirm the detail route is still current
+    // rather than having been clobbered back to the list route.
+    await new Promise((resolve) => { setTimeout(resolve, 350); });
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/media/collections/col-4');
   });
 
   it('preserves sibling URL params when one filter changes', async () => {
