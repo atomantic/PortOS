@@ -11,6 +11,79 @@ const MAX_LINES = 1000;
 // ~250ms debounce for high-frequency state writes.
 const FLUSH_MS = 250;
 
+// The server keeps ONE `pm2 logs` stream per (socket.id, processName)
+// (server/sockets/logs.js) — a second `logs:subscribe` for a key already in
+// use kills the first stream and starts another, so two mounted
+// `useProcessLogs` consumers of the same process (e.g. the desktop launch
+// panel and the Processes tab) would otherwise clobber each other's stream
+// (#8113). This module-level registry makes the CLIENT the refcount owner:
+// the first consumer subscribes, later consumers attach to the existing
+// entry, and only the last consumer to leave unsubscribes. One shared socket
+// listener per event fans each frame out to every attached consumer.
+//
+// Keyed by `processName` alone (not `processName + appId`): the server's own
+// stream key (`streamKey`) and its no-appId fallback lookup
+// (`resolvePm2HomeForProcess`) both already treat `processName` as globally
+// unique across apps, so two different apps sharing one PM2 process name
+// already collide on the SERVER's single socket-scoped stream slot today —
+// this registry mirrors that existing invariant rather than introducing one.
+const registry = new Map(); // processName -> entry
+
+const createEntry = (processName, lines, appId) => ({
+  processName,
+  appId,
+  lines,
+  consumers: new Set(), // Set<{ onLine, onSubscribed }>
+  buffer: [], // shared tail buffer for late joiners, capped at MAX_LINES
+  subscribed: false,
+});
+
+const subscribeEntry = (entry) => {
+  entry.subscribed = false;
+  socket.emit('logs:subscribe', {
+    processName: entry.processName,
+    lines: entry.lines,
+    ...(entry.appId ? { appId: entry.appId } : {}),
+  });
+};
+
+const appendToEntry = (entry, payload) => {
+  entry.buffer.push(payload);
+  if (entry.buffer.length > MAX_LINES) entry.buffer.splice(0, entry.buffer.length - MAX_LINES);
+  entry.consumers.forEach((consumer) => consumer.onLine(payload));
+};
+
+// One listener per event for the whole module. A per-consumer `socket.on`
+// would need a per-consumer `socket.off` on unmount, and the LAST consumer
+// leaving must not silence the SURVIVING consumers of other processes.
+socket.on('logs:line', (data) => {
+  const entry = registry.get(data.processName);
+  if (!entry) return;
+  appendToEntry(entry, { line: data.line, type: data.type, timestamp: data.timestamp });
+});
+
+socket.on('logs:subscribed', (data) => {
+  const entry = registry.get(data.processName);
+  if (!entry) return;
+  entry.subscribed = true;
+  entry.consumers.forEach((consumer) => consumer.onSubscribed());
+});
+
+socket.on('logs:error', (data) => {
+  const entry = registry.get(data.processName);
+  if (!entry) return;
+  appendToEntry(entry, { line: `Error: ${data.error}`, type: 'stderr', timestamp: Date.now() });
+});
+
+// The server drops every stream owned by a disconnected socket
+// (`cleanupSocketStreams`), so a reconnect must re-subscribe every still-live
+// entry, or every mounted consumer freezes with no error frame ever emitted.
+socket.on('connect', () => {
+  registry.forEach((entry) => {
+    if (entry.consumers.size > 0) subscribeEntry(entry);
+  });
+});
+
 /**
  * Subscribe to one PM2 process's live log stream over the shared socket.
  *
@@ -20,6 +93,13 @@ const FLUSH_MS = 250;
  * line, and a stale frame from a just-unsubscribed process would otherwise be
  * appended to the new one's buffer.
  *
+ * Multiple consumers naming the same `processName` (e.g. the desktop launch
+ * panel and the Processes tab tailing the same app) share one underlying
+ * server stream via the module-level registry above — see #8113. A later
+ * consumer is seeded from the shared entry's current tail instead of
+ * triggering a re-subscribe, so the earlier consumer never sees its tail
+ * replayed a second time.
+ *
  * @param {string|null} processName PM2 process to tail; falsy = unsubscribed/idle.
  * @param {object} [options]
  * @param {number} [options.lines=500] Tail depth requested on subscribe.
@@ -28,6 +108,8 @@ const FLUSH_MS = 250;
  * @returns {{ logs: Array<{line: string, type: string, timestamp: number}>, subscribed: boolean, clear: () => void }}
  *   `clear()` empties the local buffer only — the stream stays subscribed, so
  *   new lines keep arriving (this backs a "Clear" button, not an unsubscribe).
+ *   It never mutates the shared entry buffer, so it does not affect any other
+ *   consumer's view of the same process.
  */
 export function useProcessLogs(processName, options = {}) {
   const { lines = 500, appId } = options;
@@ -39,7 +121,7 @@ export function useProcessLogs(processName, options = {}) {
   useEffect(() => {
     setLogs([]);
     setSubscribed(false);
-    if (!processName) return;
+    if (!processName) return undefined;
 
     const flush = () => {
       flushTimerRef.current = null;
@@ -51,48 +133,54 @@ export function useProcessLogs(processName, options = {}) {
         return combined.length > MAX_LINES ? combined.slice(-MAX_LINES) : combined;
       });
     };
-    const append = (entry) => {
+    const queueLine = (entry) => {
       pendingRef.current.push(entry);
       if (flushTimerRef.current == null) flushTimerRef.current = setTimeout(flush, FLUSH_MS);
     };
 
-    socket.emit('logs:subscribe', { processName, lines, ...(appId ? { appId } : {}) });
+    let entry = registry.get(processName);
+    const isFirstConsumer = !entry;
+    if (!entry) {
+      entry = createEntry(processName, lines, appId);
+      registry.set(processName, entry);
+    }
 
-    const handleLog = (data) => {
-      if (data.processName !== processName) return;
-      append({ line: data.line, type: data.type, timestamp: data.timestamp });
+    const consumer = {
+      onLine: queueLine,
+      onSubscribed: () => setSubscribed(true),
     };
+    entry.consumers.add(consumer);
 
-    const handleSubscribed = (data) => {
-      if (data.processName === processName) setSubscribed(true);
-    };
-
-    const handleError = (data) => {
-      if (data.processName !== processName) return;
-      append({ line: `Error: ${data.error}`, type: 'stderr', timestamp: Date.now() });
-    };
-
-    socket.on('logs:line', handleLog);
-    socket.on('logs:subscribed', handleSubscribed);
-    socket.on('logs:error', handleError);
+    if (isFirstConsumer) {
+      subscribeEntry(entry);
+    } else {
+      // Late joiner: seed from the existing entry's tail (capped to this
+      // consumer's own `lines`) instead of re-subscribing, which would
+      // replay the tail into every consumer already watching this stream.
+      if (entry.subscribed) setSubscribed(true);
+      const seeded = entry.buffer.slice(-lines);
+      if (seeded.length > 0) setLogs(seeded);
+    }
 
     return () => {
-      socket.emit('logs:unsubscribe', { processName });
-      socket.off('logs:line', handleLog);
-      socket.off('logs:subscribed', handleSubscribed);
-      socket.off('logs:error', handleError);
-      // Drop the pending batch with the subscription: the effect re-run clears
-      // `logs` anyway, so flushing here would append the old process's tail to
-      // the new one's empty buffer.
+      entry.consumers.delete(consumer);
       if (flushTimerRef.current != null) clearTimeout(flushTimerRef.current);
       flushTimerRef.current = null;
       pendingRef.current = [];
+      // Last consumer out unsubscribes and drops the entry so a later
+      // remount starts a fresh stream instead of replaying a stale tail.
+      if (entry.consumers.size === 0) {
+        registry.delete(processName);
+        socket.emit('logs:unsubscribe', { processName });
+      }
     };
   }, [processName, lines, appId]);
 
   const clear = useCallback(() => {
     // Also drop anything buffered but not yet flushed, or a pending timer would
-    // repopulate the list the user just cleared.
+    // repopulate the list the user just cleared. This only touches THIS
+    // consumer's own state — the shared entry buffer other consumers seed
+    // from is left untouched.
     pendingRef.current = [];
     setLogs([]);
   }, []);
