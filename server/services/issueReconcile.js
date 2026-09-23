@@ -106,10 +106,14 @@ export function daysSince(iso, now = Date.now()) {
 const normalizeLogin = (value) => String(value || '').trim().toLowerCase();
 
 /**
- * Extract the issue number a git ref claims, or null. Recognizes both claim
- * conventions:
+ * Extract the issue number a git ref claims, or null. Unlike
+ * `planIds.extractSlugFromRef`, this doesn't gate on a specific claim-branch
+ * prefix — it matches `issue-<num>` as a whole path segment anywhere in the
+ * ref, so it already recognizes every claim convention that embeds that
+ * token, including:
  *   - human / TUI:  `claim/issue-<num>`
  *   - CoS sub-agent: `cos/<task>/issue-<num>/<agent>`
+ *   - slashdo `/do:next`: `next/issue-<num>` (#8161)
  * The number must be a whole path segment (terminated by `/` or end-of-ref), so
  * `issue-222` never matches inside `issue-2220`. Remote-tracking refs
  * (`origin/claim/issue-<num>`) match the same way — the `refs/remotes/origin/`

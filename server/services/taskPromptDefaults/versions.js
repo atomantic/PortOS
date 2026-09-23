@@ -89,7 +89,11 @@ export const PROMPT_VERSIONS = {
 
 // Claim prompts enforce host-control security eligibility before any claim or handoff.
 // Dependency reconciliation requires positive completion evidence and preserves manual blockers.
-PROMPT_VERSIONS['claim-issue'] = 34;
+// v35 (claim-issue): Phase 2 tells the agent not to delegate the claim to the bundled
+// slashdo /do:next skill — its next/issue-<num> branch and sibling worktree convention
+// differ from this flow's claim/issue-<num>, which is what made a /do:next-created PR
+// invisible to the watchdog's live-claim check (#8161; server/lib/planIds.js).
+PROMPT_VERSIONS['claim-issue'] = 35;
 PROMPT_VERSIONS['claim-issue-gitlab'] = 31;
 PROMPT_VERSIONS['claim-issue-jira'] = 20;
 

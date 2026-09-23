@@ -219,6 +219,11 @@ describe('perpetualWork', () => {
       expect(issueNumberFromRef('cos/claim-issue/issue-45/agent-x')).toBe(45);
     });
 
+    it('extracts from a next/issue-<num> ref (slashdo /do:next, #8161)', () => {
+      expect(issueNumberFromRef('next/issue-8149')).toBe(8149);
+      expect(issueNumberFromRef('origin/next/issue-8149')).toBe(8149);
+    });
+
     it('returns null for non-claim refs', () => {
       expect(issueNumberFromRef('feature/foo')).toBe(null);
       expect(issueNumberFromRef('main')).toBe(null);
