@@ -1,4 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal()),
+  readFile: vi.fn(),
+}));
 
 // gitRemote is the ONLY effectful dependency of the async resolvers below, so
 // mocking it lets `resolveAppForgeTarget` run its real composition (tracker
@@ -9,7 +14,9 @@ vi.mock('./gitRemote.js', () => ({
 }));
 
 import { getOriginInfo, readOriginRemoteUrl } from './gitRemote.js';
-import { repoIssueUrlBase, resolveAppForgeTarget } from './workTracker.js';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { repoIssueUrlBase, resolveAppForgeTarget, resolveAppWorkTracker } from './workTracker.js';
 import {
   WORK_TRACKERS,
   CONCRETE_WORK_TRACKERS,
@@ -226,6 +233,105 @@ describe('hostFromOriginUrl', () => {
   it('a subgroup GitLab remote resolves to the gitlab tracker end-to-end', () => {
     const host = hostFromOriginUrl('git@gitlab.com:group/subgroup/repo.git');
     expect(resolveWorkTracker({ configured: 'auto', host }).resolved).toBe('gitlab');
+  });
+});
+
+describe('resolveAppWorkTracker — CLI auth fallback for enterprise hosts (#8191)', () => {
+  const enterpriseOrigin = 'https://git.example-corp.com/acme/widget.git';
+  const ghConfigDir = 'example-gh-config';
+  const glabConfigDir = 'example-glab-config';
+  const ghConfigPath = path.join(ghConfigDir, 'hosts.yml');
+  const glabConfigPath = path.join(glabConfigDir, 'config.yml');
+
+  function setConfigs({ gh = false, glab = false, errorCode = 'ENOENT' } = {}) {
+    readFile.mockImplementation(async (configPath) => {
+      if (configPath === ghConfigPath && gh) {
+        return 'git.example-corp.com:\n  user: example\n';
+      }
+      if (configPath === glabConfigPath && glab) {
+        return 'hosts:\n  git.example-corp.com:\n    user: example\n';
+      }
+      const error = new Error('configuration unavailable');
+      error.code = errorCode;
+      throw error;
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('GH_CONFIG_DIR', ghConfigDir);
+    vi.stubEnv('GLAB_CONFIG_DIR', glabConfigDir);
+    readOriginRemoteUrl.mockResolvedValue(enterpriseOrigin);
+    setConfigs();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('resolves a custom host present in the gh hosts config as GitHub', async () => {
+    setConfigs({ gh: true });
+
+    await expect(resolveAppWorkTracker({ repoPath: '/repo', workTracker: 'auto' })).resolves.toMatchObject({
+      configured: 'auto',
+      resolved: 'github',
+      source: 'cli-config',
+      host: 'git.example-corp.com',
+      forge: 'gh',
+    });
+    expect(readFile).toHaveBeenCalledWith(ghConfigPath, 'utf8');
+  });
+
+  it('resolves a custom host present in the glab config as GitLab', async () => {
+    setConfigs({ glab: true });
+
+    await expect(resolveAppWorkTracker({ repoPath: '/repo', workTracker: 'auto' })).resolves.toMatchObject({
+      configured: 'auto',
+      resolved: 'gitlab',
+      source: 'cli-config',
+      host: 'git.example-corp.com',
+      forge: 'glab',
+    });
+    expect(readFile).toHaveBeenCalledWith(glabConfigPath, 'utf8');
+  });
+
+  it('threads the auto-detected forge into the app forge target', async () => {
+    setConfigs({ gh: true });
+    getOriginInfo.mockResolvedValue({
+      host: 'git.example-corp.com',
+      fullName: 'acme/widget',
+      originUrl: enterpriseOrigin,
+    });
+
+    const { tracker, target } = await resolveAppForgeTarget({ repoPath: '/repo', workTracker: 'auto' });
+    expect(tracker).toBe('github');
+    expect(target).toMatchObject({
+      forge: 'github',
+      fullName: 'acme/widget',
+      repoSpec: 'git.example-corp.com/acme/widget',
+    });
+  });
+
+  it('keeps the PLAN.md fallback when neither CLI recognizes the host', async () => {
+    await expect(resolveAppWorkTracker({ repoPath: '/repo', workTracker: 'auto' })).resolves.toMatchObject({
+      configured: 'auto',
+      resolved: 'plan',
+      source: 'fallback',
+      host: 'git.example-corp.com',
+      forge: null,
+    });
+    expect(readFile).toHaveBeenCalledWith(ghConfigPath, 'utf8');
+    expect(readFile).toHaveBeenCalledWith(glabConfigPath, 'utf8');
+  });
+
+  it('degrades to PLAN.md without throwing when CLI auth configuration cannot be read', async () => {
+    setConfigs({ errorCode: 'EACCES' });
+
+    await expect(resolveAppWorkTracker({ repoPath: '/repo', workTracker: 'auto' })).resolves.toMatchObject({
+      resolved: 'plan',
+      source: 'fallback',
+      forge: null,
+    });
   });
 });
 
