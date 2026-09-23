@@ -17,6 +17,7 @@ it('scores only on explicit action and clears stale results when input changes',
   fireEvent.change(screen.getByLabelText(/Options/), { target: { value: 'billing\nsales' } });
   fireEvent.click(screen.getByRole('button', { name: 'Run experiment' }));
   expect(await screen.findByText('Choice: billing')).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Run experiment' })).toBeEnabled());
   expect(mocks.score).toHaveBeenCalledWith(expect.objectContaining({ premise: 'Duplicate invoice', options: ['billing', 'sales'] }), { silent: true });
   fireEvent.change(screen.getByLabelText('Premise'), { target: { value: 'Another input' } });
   expect(screen.queryByText('Choice: billing')).not.toBeInTheDocument();
