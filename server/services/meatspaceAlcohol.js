@@ -260,12 +260,11 @@ export async function updateDrink(date, index, updates) {
     const entry = log.entries.find(e => e.date === date);
     if (!entry?.alcohol?.drinks?.[index]) return null;
 
-    const drink = entry.alcohol.drinks[index];
+    const drink = stampDailyLogEventEdit(entry.alcohol.drinks[index]);
     if (updates.name !== undefined) drink.name = updates.name;
     if (updates.oz !== undefined) drink.oz = updates.oz;
     if (updates.abv !== undefined) drink.abv = updates.abv;
     if (updates.count !== undefined) drink.count = updates.count;
-    stampDailyLogEventEdit(drink);
 
     // Move to different date if requested
     const newDate = updates.date;

@@ -239,6 +239,23 @@ describe('daily-log event identity (#8143)', () => {
     }
   });
 
+  it('does not merge a legacy row back in after one peer edits it', async () => {
+    const legacyLog = { entries: [day([{ name: 'Example Stout', oz: 12, abv: 5, count: 1 }])] };
+    await seed(path(), legacyLog);
+    await alcohol.updateDrink(date, 0, { count: 2 });
+    const edited = JSON.parse(await readFile(path(), 'utf8'));
+
+    // Pulling the unedited peer's copy leaves the edit as the only row...
+    await dataSync.applyRemote('meatspace', { 'daily-log.json': legacyLog });
+    expect((await savedDay()).alcohol.drinks).toEqual(edited.entries[0].alcohol.drinks);
+    // ...and the unedited peer drops its legacy copy when it pulls the edit.
+    await seed(path(), legacyLog);
+    await dataSync.applyRemote('meatspace', { 'daily-log.json': edited });
+    const merged = await savedDay();
+    expect(merged.alcohol.drinks).toEqual(edited.entries[0].alcohol.drinks);
+    expect(merged.alcohol.standardDrinks).toBe(2);
+  });
+
   it('refuses a daily log from a peer on a newer meatspace schema', async () => {
     await seed(path(), { entries: [day([lager('drink-a')])] });
     const before = await readFile(path(), 'utf8');

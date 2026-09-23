@@ -206,11 +206,10 @@ export async function updateNicotine(date, index, updates) {
     const entry = log.entries.find(e => e.date === date);
     if (!entry?.nicotine?.items?.[index]) return null;
 
-    const item = entry.nicotine.items[index];
+    const item = stampDailyLogEventEdit(entry.nicotine.items[index]);
     if (updates.product !== undefined) item.product = updates.product;
     if (updates.mgPerUnit !== undefined) item.mgPerUnit = updates.mgPerUnit;
     if (updates.count !== undefined) item.count = updates.count;
-    stampDailyLogEventEdit(item);
 
     // Move to different date if requested
     const newDate = updates.date;

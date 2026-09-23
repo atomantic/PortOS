@@ -165,12 +165,16 @@ const preferLogEventCopy = (a, b) => {
 // one logged event: copies of it collapse to the preferred copy, and two
 // identical rows with different ids stay two events. A row without an `id` was
 // logged before events had identity, so it keeps the old content-keyed dedupe —
-// its identical twin on a peer is the same row synced earlier, not a new event.
+// its identical twin on a peer is the same row synced earlier, not a new event —
+// and is dropped once an edit has turned it into an identified event (`replaces`).
 const mergeDailyLogEvents = (local, remote) => {
+  const records = [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])];
   const merged = [];
   const indexById = new Map();
-  const seenLegacy = new Set();
-  for (const record of [...(Array.isArray(local) ? local : []), ...(Array.isArray(remote) ? remote : [])]) {
+  const seenLegacy = new Set(
+    records.filter((r) => logEventId(r) && isPlainObject(r.replaces)).map((r) => canonicalStringify(r.replaces)),
+  );
+  for (const record of records) {
     const id = logEventId(record);
     if (id) {
       const index = indexById.get(id);

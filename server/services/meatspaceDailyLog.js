@@ -120,11 +120,16 @@ export function newDailyLogEvent(fields, now = new Date().toISOString()) {
 }
 
 /**
- * Restamp an edited event so the edit wins over a peer's older copy. A legacy row
- * (no `id`) gets one here, so later edits to it merge by identity too.
+ * Restamp an event about to be edited so the edit wins over a peer's older copy.
+ * Call it BEFORE changing any field: a legacy row (no `id`) gets an id here and
+ * records its pre-edit content in `replaces`, so a peer that still holds the
+ * unedited legacy row does not merge it back in as a second event.
  */
 export function stampDailyLogEventEdit(event, now = new Date().toISOString()) {
-  if (typeof event.id !== 'string' || !event.id) event.id = randomUUID();
+  if (typeof event.id !== 'string' || !event.id) {
+    event.replaces = { ...event };
+    event.id = randomUUID();
+  }
   event.updatedAt = now;
   return event;
 }
