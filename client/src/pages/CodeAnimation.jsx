@@ -368,6 +368,44 @@ export default function CodeAnimation() {
             </label>
           </section>
 
+          <section className="rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-format-heading">
+            <h2 id="ca-format-heading" className="mb-3 text-sm font-semibold text-white">Format</h2>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div>
+                <label htmlFor="ca-duration" className={labelClass}>Duration (s)</label>
+                <input id="ca-duration" type="number" min={limits?.durationMin ?? 3} max={limits?.durationMax ?? 180} value={draft.format.durationSeconds} onChange={(event) => updateFormat({ durationSeconds: Math.round(Number(event.target.value) || 0) })} className={inputClass} />
+              </div>
+              <div>
+                <label htmlFor="ca-aspect" className={labelClass}>Aspect</label>
+                <select id="ca-aspect" value={draft.format.aspectRatio} onChange={(event) => updateFormat({ aspectRatio: event.target.value })} className={inputClass}>
+                  {(options?.aspectRatios || ['16:9']).map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="ca-resolution" className={labelClass}>Resolution</label>
+                <select id="ca-resolution" value={draft.format.resolution} onChange={(event) => updateFormat({ resolution: event.target.value })} className={inputClass}>
+                  {(options?.resolutions || ['1080p']).map((res) => <option key={res} value={res}>{res}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="ca-fps" className={labelClass}>FPS</label>
+                <select id="ca-fps" value={draft.format.fps} onChange={(event) => updateFormat({ fps: Number(event.target.value) })} className={inputClass}>
+                  {(limits?.fpsOptions || [30]).map((fps) => <option key={fps} value={fps}>{fps}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="ca-renderer" className={labelClass}>Renderer</label>
+                <select id="ca-renderer" value={draft.renderer} onChange={(event) => update({ renderer: event.target.value })} className={inputClass}>
+                  {(options?.renderers || ['auto']).map((renderer) => <option key={renderer} value={renderer}>{renderer}</option>)}
+                </select>
+              </div>
+              <label className="flex items-end gap-2 pb-2 text-xs text-gray-300">
+                <input type="checkbox" checked={draft.interactive} onChange={(event) => update({ interactive: event.target.checked })} />
+                Interactive
+              </label>
+            </div>
+          </section>
+
           <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-brief-heading">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 id="ca-brief-heading" className="flex items-center gap-2 text-sm font-semibold text-white"><Sparkles className="h-4 w-4 text-port-accent" /> Brief</h2>
@@ -456,43 +494,6 @@ export default function CodeAnimation() {
             {uploading && <p className="flex items-center gap-2 text-xs text-gray-400"><LoaderCircle className="h-3 w-3 animate-spin" /> Uploading…</p>}
           </section>
 
-          <section className="rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-format-heading">
-            <h2 id="ca-format-heading" className="mb-3 text-sm font-semibold text-white">Format</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <div>
-                <label htmlFor="ca-duration" className={labelClass}>Duration (s)</label>
-                <input id="ca-duration" type="number" min={limits?.durationMin ?? 3} max={limits?.durationMax ?? 180} value={draft.format.durationSeconds} onChange={(event) => updateFormat({ durationSeconds: Math.round(Number(event.target.value) || 0) })} className={inputClass} />
-              </div>
-              <div>
-                <label htmlFor="ca-aspect" className={labelClass}>Aspect</label>
-                <select id="ca-aspect" value={draft.format.aspectRatio} onChange={(event) => updateFormat({ aspectRatio: event.target.value })} className={inputClass}>
-                  {(options?.aspectRatios || ['16:9']).map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="ca-resolution" className={labelClass}>Resolution</label>
-                <select id="ca-resolution" value={draft.format.resolution} onChange={(event) => updateFormat({ resolution: event.target.value })} className={inputClass}>
-                  {(options?.resolutions || ['1080p']).map((res) => <option key={res} value={res}>{res}</option>)}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="ca-fps" className={labelClass}>FPS</label>
-                <select id="ca-fps" value={draft.format.fps} onChange={(event) => updateFormat({ fps: Number(event.target.value) })} className={inputClass}>
-                  {(limits?.fpsOptions || [30]).map((fps) => <option key={fps} value={fps}>{fps}</option>)}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="ca-renderer" className={labelClass}>Renderer</label>
-                <select id="ca-renderer" value={draft.renderer} onChange={(event) => update({ renderer: event.target.value })} className={inputClass}>
-                  {(options?.renderers || ['auto']).map((renderer) => <option key={renderer} value={renderer}>{renderer}</option>)}
-                </select>
-              </div>
-              <label className="flex items-end gap-2 pb-2 text-xs text-gray-300">
-                <input type="checkbox" checked={draft.interactive} onChange={(event) => update({ interactive: event.target.checked })} />
-                Interactive
-              </label>
-            </div>
-          </section>
         </div>
 
         <div className="space-y-4">
