@@ -752,13 +752,33 @@ const splitWindowsCommand = (command) => {
 // One PowerShell SPAWN per call. Fine for the one-per-launch probes that reach
 // it today; a fan-out or polled caller must instead take a single
 // `Get-CimInstance Win32_Process` snapshot and match every PID against it.
+//
+// A loaded CI runner can leave this CIM query slower than a snappy timeout
+// tolerates (#8138) — a caller reads a thrown/timed-out query the same as any
+// other probe failure (fail-closed, rethrown — see processMatches below), so
+// a merely-slow host must not be treated as "job identity unknown" on the
+// first hiccup. Give it real headroom and one retry before letting the error
+// propagate.
+const CIM_QUERY_TIMEOUT_MS = 15000;
+const queryWin32Command = async (pid, attempt = 0) => {
+  try {
+    const { stdout } = await execFileAsync('powershell', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+      // `pid` is already parsed by Number.parseInt and range-checked by every
+      // caller, so it cannot carry anything but digits into this filter.
+      `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue; if ($p) { [Console]::Out.WriteLine($p.CommandLine) }`,
+    ], safeChildProcessOptions({ timeout: CIM_QUERY_TIMEOUT_MS }));
+    return stdout;
+  } catch (err) {
+    if (attempt === 0) {
+      console.warn(`⚠️ CIM process query for pid ${pid} failed, retrying once: ${err.message}`);
+      return queryWin32Command(pid, 1);
+    }
+    throw err;
+  }
+};
 const processMatchesWin32 = async (pid, { executable, args }) => {
-  const { stdout } = await execFileAsync('powershell', [
-    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-    // `pid` is already parsed by Number.parseInt and range-checked by every
-    // caller, so it cannot carry anything but digits into this filter.
-    `$p = Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction SilentlyContinue; if ($p) { [Console]::Out.WriteLine($p.CommandLine) }`,
-  ], safeChildProcessOptions({ timeout: 5000 }));
+  const stdout = await queryWin32Command(pid);
   const command = stdout.trim();
   // The process exited between the liveness probe and here, or Windows refused
   // the query — either way this is not our job.

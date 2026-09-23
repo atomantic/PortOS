@@ -35,9 +35,6 @@ const tmpControlDir = async () => {
   dirs.push(d);
   return d;
 };
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
-});
 
 // Collect a stream's 'data' chunks into a single string.
 const collect = (emitter) => {
@@ -76,6 +73,53 @@ const waitUntil = async (predicate, { timeoutMs = 5000 } = {}) => {
 const isAliveForTest = (pid) => {
   try { process.kill(pid, 0); return true; } catch { return false; }
 };
+
+// Best-effort: kill whatever detached child a test left running under this
+// control dir, and WAIT for it to actually exit, before the control dir gets
+// removed. Skipping this races the rm against a still-open stderr.log handle:
+// the OS refuses the unlink with EBUSY (Windows) or ENOTEMPTY, and that
+// secondary cleanup failure was masking whatever assertion the test actually
+// failed on (#8138). Read the pid straight off disk and kill it directly with
+// `taskkill`/SIGKILL rather than going through `killProcessTree` — several
+// tests in this file mock that import, and a leftover process must still die
+// for real in cleanup regardless of what a given test stubbed.
+const killLeftoverChild = async (controlDir) => {
+  const pidRaw = await readFile(join(controlDir, 'pid'), 'utf8').catch(() => '');
+  const pid = Number.parseInt(pidRaw, 10);
+  if (!Number.isFinite(pid) || pid <= 0) return;
+  // A handful of fixtures write `process.pid` (this very worker) into a
+  // synthetic control dir to stand in for "some live process" — killing it
+  // would take the test runner down with it, not the job under test.
+  if (pid === process.pid) return;
+  // The supervisor's `exit` sentinel means the job already finished and this
+  // control dir's pid is stale — the OS is free to have handed that number to
+  // an unrelated process by the time cleanup runs (this suite spawns/reaps
+  // dozens of short-lived children per file). Only signal a pid whose own job
+  // is still marked running, exactly like reapDetached's own guard, so a
+  // best-effort cleanup can never SIGKILL a process this test never spawned.
+  const exitWritten = (await readFile(join(controlDir, 'exit'), 'utf8').catch(() => '')).length > 0;
+  if (exitWritten) return;
+  if (IS_POSIX) {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  } else {
+    // `/T` takes the job's own descendants with it too, so a leftover
+    // ffmpeg/python fixture doesn't linger past the test that spawned it.
+    await execFileAsync('taskkill', ['/pid', String(pid), '/T', '/F']).catch(() => {});
+  }
+  await waitUntil(() => !isAliveForTest(pid), { timeoutMs: 5000 });
+};
+
+afterEach(async () => {
+  const pending = dirs.splice(0);
+  await Promise.all(pending.map(async (d) => {
+    await killLeftoverChild(d).catch(() => {});
+    // Retry on EBUSY/ENOTEMPTY (Windows can hold stderr.log open a beat after
+    // the process exits, and the wait above is best-effort) rather than
+    // letting cleanup itself throw and mask the real test failure alongside
+    // it.
+    await rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }));
+});
 
 const ppidOf = async (pid) => {
   const { stdout } = await execFileAsync('ps', ['-o', 'ppid=', '-p', String(pid)]).catch(() => ({ stdout: '' }));
