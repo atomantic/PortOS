@@ -41,6 +41,33 @@ describe('model comparison seed scope', () => {
     }
   });
 
+  it('ships the September 22 Artificial Analysis v4.3.2 curves for current frontier models', async () => {
+    const seed = await readSeed();
+    const rows = seed.observations.filter(row => row.benchmark === 'Artificial Analysis Intelligence Index v4.3.2');
+    const expectedEfforts = {
+      'gpt-6-astra': ['high', 'low', 'max', 'medium', 'xhigh'],
+      'gpt-6-sol': ['high', 'low', 'max', 'medium', 'non-reasoning', 'xhigh'],
+      'gpt-6-luna': ['high', 'low', 'max', 'medium', 'non-reasoning', 'xhigh'],
+      'gpt-5.6-terra': ['high', 'low', 'max', 'medium', 'non-reasoning', 'xhigh'],
+      'claude-opus-5.5': ['high', 'low', 'max', 'medium', 'xhigh'],
+    };
+    expect(rows).toHaveLength(28);
+    for (const [model, efforts] of Object.entries(expectedEfforts)) {
+      const modelRows = rows.filter(row => row.model === model);
+      expect(modelRows.map(row => row.effort).sort()).toEqual(efforts);
+      expect(modelRows.every(row => row.id.startsWith('aa-v4.3.2-'))).toBe(true);
+      expect(modelRows.every(row => row.quality)).toBe(true);
+      for (const row of modelRows) {
+        const metrics = ['quality', 'costPerTask', 'inputPerMillion', 'outputPerMillion', 'responseSeconds', 'tokensPerSecond']
+          .map(key => row[key])
+          .filter(Boolean);
+        expect(metrics.length).toBeGreaterThan(0);
+        expect(metrics.every(metric => metric.source.url.startsWith('https://artificialanalysis.ai/models/'))).toBe(true);
+        expect(metrics.every(metric => metric.source.retrievedAt.startsWith('2026-09-22T'))).toBe(true);
+      }
+    }
+  });
+
   it('scopes every benchmark name the local install catalog declares', async () => {
     // `ollama` and `lmstudio` ship with `models: []`, so providers.json alone
     // drops every model PortOS ships an installer for.
