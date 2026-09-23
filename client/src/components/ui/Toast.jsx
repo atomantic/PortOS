@@ -13,8 +13,10 @@
 import { Loader2 } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { uuidv4 } from '../../lib/uuid.js';
+import { isEditableTarget } from '../../lib/a11yKeyboard.js';
 
 let toasts = [];
+let toastSeq = 0;
 const listeners = new Set();
 
 function notify() {
@@ -89,7 +91,12 @@ function add(content, opts = {}, type = 'default') {
   const collapseAfter = Number.isFinite(opts.collapseAfter) && opts.collapseAfter > 0
     ? opts.collapseAfter
     : COLLAPSE_AFTER_MS;
-  const entry = { id, type, content, icon: opts.icon, duration, style: opts.style, label: opts.label, collapseAfter };
+  // `seq` marks WHEN this entry was last touched, independent of its
+  // position in `toasts` — a same-id re-add (loading→success) replaces the
+  // entry IN PLACE at its original array index so the stack doesn't jump, so
+  // array order alone can't answer "which toast is newest" once an update
+  // has happened. The Alt+Shift+N jump below reads this instead of `[last]`.
+  const entry = { id, type, content, icon: opts.icon, duration, style: opts.style, label: opts.label, collapseAfter, seq: ++toastSeq };
 
   const idx = toasts.findIndex(t => t.id === id);
   toasts = idx !== -1
@@ -97,7 +104,11 @@ function add(content, opts = {}, type = 'default') {
     : [...toasts, entry];
   notify();
 
-  if (duration !== Infinity) setTimeout(() => dismiss(id), duration);
+  // The finite-duration dismiss timer used to be armed HERE, at creation, and
+  // never touched again — so hovering or focusing a toast (the `held` state
+  // below) could not pause it, and a keyboard user reaching for an Undo
+  // button lost it mid-reach. It now lives in `ToastItem`'s own effect, which
+  // can see `held` and pause/resume around it (#8117).
   return id;
 }
 
@@ -124,12 +135,64 @@ const TYPE_CLASS = { success: 'text-port-success', error: 'text-port-error', loa
 
 export function Toaster({ position = 'bottom-right', toastOptions = {} }) {
   const [items, setItems] = useState([]);
+  const regionRef = useRef(null);
+  // Where to send focus back on Escape — only set while focus is parked
+  // inside the notification region via the Alt+Shift+N jump below.
+  const returnFocusRef = useRef(null);
 
   useEffect(() => {
     const fn = ts => setItems(ts);
     listeners.add(fn);
     return () => listeners.delete(fn);
   }, []);
+
+  // The keyboard path into the notification region (#8117): the Toaster is
+  // mounted last in `main.jsx` so its buttons sit at the very end of tab
+  // order, and nothing previously moved focus there directly. Alt+Shift+N
+  // focuses the newest toast's first control (falling back to the toast body,
+  // which is always `tabIndex={-1}`); Escape while focus is inside a toast
+  // returns it to whatever held it before the jump.
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && e.code === 'KeyN') {
+        // `code`, not `key` — macOS remaps Option+letter to a different
+        // character (Option+Shift+N is typically `˜`), which would silently
+        // break the shortcut on every Mac if matched on `key`. Not routed
+        // through `shouldIgnoreGlobalKey`: that predicate drops every
+        // Alt-chorded keydown by default, and Alt is exactly the chord this
+        // shortcut needs, so the editable-target guard is applied directly
+        // instead.
+        if (isEditableTarget(e.target)) return;
+        // An open `aria-modal` dialog owns the focus trap (WCAG 2.4.3) —
+        // jumping focus out to a toast behind it would break that trap, so
+        // this stands down exactly like `shouldIgnoreGlobalKey`'s dialog
+        // guard does for the shortcut hooks that route through it.
+        if (document.querySelector('[aria-modal="true"]')) return;
+        const region = regionRef.current;
+        // `seq`, not array position — a same-id re-add (loading→success)
+        // replaces the entry in place at its original index, so the LAST
+        // item isn't necessarily the one most recently touched.
+        const newest = items.reduce((a, b) => (!a || b.seq > a.seq ? b : a), null);
+        if (!region || !newest) return;
+        const toastEl = region.querySelector(`[data-toast-id="${newest.id}"]`);
+        if (!toastEl) return;
+        const focusTarget = toastEl.tagName === 'BUTTON'
+          ? toastEl
+          : (toastEl.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') ?? toastEl);
+        e.preventDefault();
+        returnFocusRef.current = document.activeElement;
+        focusTarget.focus();
+        return;
+      }
+      if (e.key === 'Escape' && returnFocusRef.current && regionRef.current?.contains(document.activeElement)) {
+        const toReturn = returnFocusRef.current;
+        returnFocusRef.current = null;
+        toReturn.focus();
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [items]);
 
   const posClass = {
     'bottom-right':  'bottom-4 right-4 items-end',
@@ -149,9 +212,11 @@ export function Toaster({ position = 'bottom-right', toastOptions = {} }) {
     // per-toast rather than on the container avoids the whole stack being
     // re-read when one entry changes.
     <div
+      ref={regionRef}
       className={`fixed ${posClass} z-[9999] flex flex-col gap-2 pointer-events-none`}
       role="region"
       aria-label="Notifications"
+      aria-keyshortcuts="Alt+Shift+N"
     >
       {items.map(t => (
         <ToastItem key={t.id} t={t} toastOptions={toastOptions} />
@@ -206,6 +271,44 @@ function ToastItem({ t, toastOptions }) {
     const timer = setTimeout(() => setCollapsed(true), collapseAfter);
     return () => clearTimeout(timer);
   }, [collapsible, collapsed, held, collapseAfter]);
+
+  // The finite-duration dismiss timer, moved here from `add()` (#8117) so it
+  // can pause while `held` and resume with the time that was actually left,
+  // instead of firing on a fixed wall-clock deadline a hovering mouse or a
+  // focused button couldn't touch.
+  //
+  // `remainingRef` is the ms left on the countdown; it survives across
+  // pause/resume because a ref, unlike state, doesn't trigger its own
+  // re-render/effect cycle. `prevSeqRef` detects a same-id re-add that needs
+  // a fresh countdown — `t.seq` (assigned in `add()`) bumps on EVERY call for
+  // this id, including one whose content/type/duration are byte-identical to
+  // what's already showing, matching the old behaviour where `add()` armed a
+  // brand-new timer on every call regardless of whether anything visibly
+  // changed. Comparing `content`/`type`/`duration` by value instead would
+  // miss that case (nothing would look different to React) and also miss a
+  // swap that keeps identical content/type but changes just the duration —
+  // e.g. an Infinity toast re-added as finite — where `remainingRef` would
+  // otherwise keep holding `Infinity`; `setTimeout(fn, Infinity)` clamps to 0
+  // in JS, so that toast would dismiss almost immediately instead of
+  // honouring its new duration.
+  const remainingRef = useRef(t.duration);
+  const prevSeqRef = useRef(t.seq);
+
+  useEffect(() => {
+    const isNewArm = prevSeqRef.current !== t.seq;
+    prevSeqRef.current = t.seq;
+
+    if (t.duration === Infinity) return undefined;
+    if (isNewArm) remainingRef.current = t.duration;
+    if (held) return undefined;
+
+    const start = Date.now();
+    const timer = setTimeout(() => dismiss(t.id), remainingRef.current);
+    return () => {
+      clearTimeout(timer);
+      remainingRef.current = Math.max(0, remainingRef.current - (Date.now() - start));
+    };
+  }, [t.id, t.duration, t.seq, held]);
 
   // Re-entering `add()` with the same id replaces the entry in place (a
   // loading→success swap, a coalesced AI-status error picking up another
@@ -266,6 +369,7 @@ function ToastItem({ t, toastOptions }) {
         // folds it away again on its own.
         <button
           type="button"
+          data-toast-id={t.id}
           onClick={e => {
             refocusOnExpand.current = e.detail === 0;
             setCollapsed(false);
@@ -278,6 +382,7 @@ function ToastItem({ t, toastOptions }) {
       )}
       <div
         ref={bodyRef}
+        data-toast-id={t.id}
         style={bodyStyle}
         // Focusable only programmatically (see the refocus effect); -1 keeps
         // the body itself out of the tab sequence so it never sits between the
@@ -295,6 +400,15 @@ function ToastItem({ t, toastOptions }) {
         {iconNode && <span className={`shrink-0 ${iconClass} ${iconBoxClass}`} aria-hidden="true">{iconNode}</span>}
         <div className="flex-1 min-w-0">
           {typeof t.content === 'function' ? t.content({ id: t.id }) : <span>{t.content}</span>}
+          {/* Render-prop toasts are the actionable ones — an Undo/Reconcile/
+              Rate button that a screen-reader user hears announced but can't
+              reach in the normal tab order (the Toaster mounts last in
+              `main.jsx`). Naming the shortcut in the same live announcement
+              tells them how to get there without needing sighted discovery of
+              a global shortcuts list. */}
+          {typeof t.content === 'function' && (
+            <span className="sr-only"> Press Alt+Shift+N to reach its actions.</span>
+          )}
         </div>
       </div>
     </>

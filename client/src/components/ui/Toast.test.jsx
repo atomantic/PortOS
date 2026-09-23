@@ -300,6 +300,18 @@ describe('long-lived toasts stop blocking the page', () => {
     expect(screen.getByRole('button', { name: 'Show notification: Stuck forever' })).toBeVisible();
   });
 
+  it('reveals the Alt+Shift+N hint to screen readers on an actionable (render-prop) toast', () => {
+    act(() => {
+      toast(() => <button type="button">Reconcile</button>, { duration: Infinity, label: 'Install out of sync' });
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Press Alt+Shift+N to reach its actions.');
+  });
+
+  it('does not add the hint to a plain string toast', () => {
+    act(() => { toast('Export complete'); });
+    expect(screen.getByRole('status')).not.toHaveTextContent('Alt+Shift+N');
+  });
+
   it('hides rather than unmounts, so a self-dismissing toast keeps its timers', () => {
     const unmounted = vi.fn();
     function SelfManaging() {
@@ -314,5 +326,225 @@ describe('long-lived toasts stop blocking the page', () => {
     // timer and strand the pill on screen forever.
     expect(unmounted).not.toHaveBeenCalled();
     expect(screen.getByText('Agent finished')).toBeInTheDocument();
+  });
+});
+
+/**
+ * #8117: a finite toast's dismiss timer used to be armed once, outside React,
+ * at creation — hover and focus could not touch it, so a keyboard user
+ * reaching for an Undo button lost it mid-reach, and a mouse user hovering
+ * over Undo could lose it while still reading. It now lives inside
+ * `ToastItem` and pauses/resumes around the same `held` (hover-or-focus-
+ * within) state that already gates the pill collapse above.
+ */
+describe('finite toasts pause their dismiss timer while held', () => {
+  const advance = (ms) => act(() => { vi.advanceTimersByTime(ms); });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    render(<Toaster />);
+  });
+
+  it('stays present past its duration while hovered, then dismisses after the remaining time once released', () => {
+    act(() => { toast('Dismissed: a warning · Undo', { duration: 8000 }); });
+
+    const status = screen.getByRole('status');
+    fireEvent.mouseEnter(status);
+
+    // Well past the original 8s deadline — still here because the pointer is
+    // holding it open.
+    advance(20000);
+    expect(screen.getByRole('status')).toBeVisible();
+
+    fireEvent.mouseLeave(status);
+
+    // Hover started immediately after creation, so none of the original 8s
+    // had elapsed — the full 8s is still owed after release.
+    advance(7000);
+    expect(screen.getByRole('status')).toBeVisible();
+    advance(1000);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('stays present past its duration while focus is inside it, then dismisses after release', () => {
+    act(() => {
+      toast(() => <button type="button">Undo</button>, { duration: 8000, label: 'Comment fix applied' });
+    });
+
+    const button = screen.getByRole('button', { name: 'Undo' });
+    fireEvent.focus(button);
+
+    advance(20000);
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeVisible();
+
+    fireEvent.blur(button);
+    advance(8000);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('dismisses only after the REMAINING time, not the full duration, once released partway through', () => {
+    act(() => { toast('Saved with a note', { duration: 8000 }); });
+
+    const status = screen.getByRole('status');
+    advance(5000); // 3s left on the clock
+    fireEvent.mouseEnter(status);
+    advance(10000); // held well past the original deadline
+    fireEvent.mouseLeave(status);
+
+    advance(2999);
+    expect(screen.getByRole('status')).toBeVisible();
+    advance(1);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('restarts the countdown on a same-id re-add whose content, type, and duration are all unchanged', () => {
+    // Regression: `add()` used to arm a brand-new timer on EVERY call for an
+    // id, even one whose content/type/duration are byte-identical to what's
+    // already showing (a caller "refreshing" the same toast). Comparing
+    // content/type/duration by value can't see that call happened at all —
+    // nothing looks different — so the fix has to key off something that
+    // changes on every add(), not just on a visible difference.
+    act(() => { toast('Still syncing...', { id: 'sync-status', duration: 8000 }); });
+    advance(6000); // 2s left
+
+    act(() => { toast('Still syncing...', { id: 'sync-status', duration: 8000 }); });
+
+    // If the countdown hadn't restarted, this would already be dismissed at
+    // the old deadline (6000 + 2000 = 8000, i.e. right about now).
+    advance(6001);
+    expect(screen.getByRole('status')).toBeVisible();
+    advance(1999);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('restarts the countdown when a same-id swap changes only the duration, not the content', () => {
+    // Regression: an Infinity→finite swap that keeps identical content/type
+    // must still reset the countdown. `remainingRef` was previously left at
+    // its stale Infinity value, and `setTimeout(fn, Infinity)` clamps to 0 in
+    // JS — the toast would have dismissed on the very next tick instead of
+    // honouring the new duration.
+    act(() => { toast('Reconnecting to the agent...', { id: 'agent-status', duration: Infinity }); });
+    advance(50000); // never dismisses on its own while Infinity
+
+    act(() => { toast('Reconnecting to the agent...', { id: 'agent-status', duration: 5000 }); });
+
+    advance(4999);
+    expect(screen.getByRole('status')).toBeVisible();
+    advance(1);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('restarts the countdown from the new duration on a same-id content swap (loading → success)', () => {
+    act(() => { toast.loading('Applying fix...', { id: 'apply-fix' }); });
+    advance(50000); // loading is Infinity — never dismisses on its own
+
+    act(() => { toast.success('Fix applied · Undo', { id: 'apply-fix', duration: 6000 }); });
+
+    // The new 6s duration, not any leftover from the (nonexistent) loading timer.
+    advance(5999);
+    expect(screen.getByRole('status')).toBeVisible();
+    advance(1);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+});
+
+describe('Alt+Shift+N focuses the newest toast, and Escape returns focus', () => {
+  const advance = (ms) => act(() => { vi.advanceTimersByTime(ms); });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  const pressJumpShortcut = () => {
+    fireEvent.keyDown(document, { altKey: true, shiftKey: true, code: 'KeyN' });
+  };
+
+  it("focuses the newest toast's first button in one keystroke", () => {
+    render(<Toaster />);
+    act(() => {
+      toast(() => <button type="button">Undo</button>, { duration: Infinity, label: 'Dismissed a warning' });
+    });
+
+    pressJumpShortcut();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Undo' }));
+  });
+
+  it('follows a same-id update to an older toast, not just the last one added', () => {
+    // Regression: `add()` replaces a same-id entry IN PLACE at its original
+    // array index (so the stack doesn't visually jump), so "the last item in
+    // the array" stops being "the most recently touched toast" once an
+    // earlier one gets updated after a later one was added.
+    render(<Toaster />);
+    act(() => {
+      toast(() => <button type="button">First Undo</button>, { id: 'first', duration: Infinity, label: 'First' });
+    });
+    act(() => {
+      toast(() => <span>Second, unrelated</span>, { id: 'second', duration: Infinity, label: 'Second' });
+    });
+    // Update the FIRST (older, lower array index) toast — it's now the most
+    // recently touched, even though it isn't last in the array.
+    act(() => {
+      toast(() => <button type="button">Updated Undo</button>, { id: 'first', duration: Infinity, label: 'First' });
+    });
+
+    pressJumpShortcut();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Updated Undo' }));
+  });
+
+  it('holds the toast open once the jump lands focus inside it, even past its duration', () => {
+    render(<Toaster />);
+    act(() => {
+      toast(() => <button type="button">Undo</button>, { duration: 8000, label: 'Dismissed a warning' });
+    });
+
+    pressJumpShortcut();
+    advance(20000);
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeVisible();
+  });
+
+  it('falls back to the toast body when it has no focusable control', () => {
+    render(<Toaster />);
+    act(() => { toast('Backup finished'); });
+
+    pressJumpShortcut();
+    expect(document.activeElement).toBe(screen.getByRole('status'));
+  });
+
+  it('ignores the shortcut while typing in an editable field', () => {
+    render(
+      <>
+        <input aria-label="search" />
+        <Toaster />
+      </>
+    );
+    act(() => { toast(() => <button type="button">Undo</button>, { duration: Infinity, label: 'x' }); });
+
+    const input = screen.getByRole('textbox', { name: 'search' });
+    input.focus();
+    fireEvent.keyDown(input, { altKey: true, shiftKey: true, code: 'KeyN' });
+
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('restores focus to the previously focused element on Escape', () => {
+    render(
+      <>
+        <button type="button">Page button</button>
+        <Toaster />
+      </>
+    );
+    act(() => {
+      toast(() => <button type="button">Undo</button>, { duration: Infinity, label: 'x' });
+    });
+
+    const pageButton = screen.getByRole('button', { name: 'Page button' });
+    pageButton.focus();
+    expect(document.activeElement).toBe(pageButton);
+
+    pressJumpShortcut();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Undo' }));
+
+    fireEvent.keyDown(document.activeElement, { key: 'Escape' });
+    expect(document.activeElement).toBe(pageButton);
   });
 });
