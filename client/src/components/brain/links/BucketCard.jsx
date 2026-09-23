@@ -1,27 +1,33 @@
 import { useState, Fragment } from 'react';
 import { Plus, Edit2, Trash2, Save, X, Check, GripVertical } from 'lucide-react';
+import { useDraggable, useDroppable } from '@dnd-kit/core';
 import BrailleSpinner from '../../BrailleSpinner';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import LinkChip from './LinkChip';
-import { bucketColor, BUCKET_COLORS, BUCKET_COLOR_KEYS, LINK_DND_TYPE, BUCKET_DND_TYPE } from './bucketColors';
-import { chipInsertIndex } from './bucketReorder';
+import { bucketColor, BUCKET_COLORS, BUCKET_COLOR_KEYS } from './bucketColors';
+import { bucketDropId, chipSlotId, BUCKET_KIND, LINK_KIND, LINK_SLOT_KIND } from './bucketDnd';
 
 /**
  * A single bucket (bookmark group): colored header with inline edit/delete,
- * a grid of link chips, and an inline "add URL" affordance. Acts as a drop
- * target so a link can be dragged in (from the list or another bucket) and
- * so buckets can be reordered by dragging their headers.
+ * a grid of link chips, and an inline "add URL" affordance.
+ *
+ * Drag-and-drop is dnd-kit, driven by the ONE `DndContext` in `LinksTab`
+ * (buckets and chips share it so a link can move from the flat list straight
+ * into a bucket). This card registers two independent drop targets: the
+ * whole card is a 'bucket' droppable (reordering the board), and each chip —
+ * plus the chip area as a whole, for "append to the end" — is a 'link-slot'
+ * droppable (filing/reordering a link). The two never collide because
+ * `linksCollisionDetection` only matches droppables of the dragged item's own
+ * kind.
  */
 export default function BucketCard({
   bucket,
+  bucketIndex,
   links,
   onUpdate,
   onDelete,
   onAddLink,
   onRemoveLink,
-  onDropLink,
-  onReorderBucket,
-  onMoveLink
 }) {
   const formFromBucket = () => ({ name: bucket.name, color: bucket.color, icon: bucket.icon || '' });
   const [editing, setEditing] = useState(false);
@@ -29,38 +35,25 @@ export default function BucketCard({
   const [form, setForm] = useState(formFromBucket);
   const [addUrl, setAddUrl] = useState('');
   const [adding, setAdding] = useState(false);
-  const [dropActive, setDropActive] = useState(false);
-  // The chip index where a dragged link would be inserted (null = no chip-level
-  // drop in progress); renders a vertical insertion bar at that position.
-  const [dropIndex, setDropIndex] = useState(null);
 
   const colors = bucketColor(bucket.color);
 
-  // Insert a chip before or after the chip at index `i` based on which half of
-  // it the pointer is over (chips flow left-to-right within a wrapping row).
-  const dropIndexFor = (e, i) => chipInsertIndex(e.currentTarget.getBoundingClientRect(), e.clientX, i);
-
-  // While dragging a link over a chip: show a precise insertion bar instead of
-  // the whole-card drop ring. Bucket-reorder drags (no link payload) fall
-  // through so they bubble to the card's drop handler.
-  const handleChipDragOver = (e, i) => {
-    if (!e.dataTransfer.types.includes(LINK_DND_TYPE)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setDropActive(false);
-    setDropIndex(dropIndexFor(e, i));
-  };
-
-  const handleChipDrop = (e, i) => {
-    const linkId = e.dataTransfer.getData(LINK_DND_TYPE);
-    if (!linkId) return; // not a chip drag — let the card handle bucket reorder
-    e.preventDefault();
-    e.stopPropagation();
-    const targetIndex = dropIndexFor(e, i);
-    setDropIndex(null);
-    setDropActive(false);
-    onMoveLink?.(linkId, targetIndex);
-  };
+  const { setNodeRef: setCardDropRef, isOver: isBucketOver } = useDroppable({
+    id: bucketDropId(bucket.id),
+    data: { kind: BUCKET_KIND, bucketId: bucket.id, bucketName: bucket.name, bucketIndex },
+  });
+  const {
+    attributes: bucketDragAttrs, listeners: bucketDragListeners,
+    setNodeRef: setBucketDragRef, setActivatorNodeRef: setBucketActivatorRef,
+    isDragging: isBucketDragging,
+  } = useDraggable({
+    id: `bucket-drag:${bucket.id}`,
+    data: { kind: BUCKET_KIND, bucket, bucketIndex },
+  });
+  const { setNodeRef: setEndSlotRef, isOver: isEndSlotOver } = useDroppable({
+    id: chipSlotId(bucket.id, links.length),
+    data: { kind: LINK_SLOT_KIND, bucketId: bucket.id, bucketName: bucket.name, bucketIndex, index: links.length },
+  });
 
   const startEdit = () => {
     setForm(formFromBucket());
@@ -86,32 +79,10 @@ export default function BucketCard({
 
   return (
     <div
+      ref={setCardDropRef}
       className={`flex flex-col bg-port-card border rounded-lg overflow-hidden transition-colors ${
-        dropActive ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'
-      }`}
-      onDragOver={(e) => { e.preventDefault(); if (dropIndex === null) setDropActive(true); }}
-      // Don't clear dropIndex here: native dragleave bubbles, so a chip→gap
-      // crossing would fire this and wipe the armed marker before a gap/bar
-      // release — defeating the guarded clear on the chips row below. The chips
-      // row's own dragleave (with a relatedTarget guard) owns clearing.
-      onDragLeave={() => setDropActive(false)}
-      onDrop={(e) => {
-        e.preventDefault();
-        const insertAt = dropIndex; // capture the visible insertion point before clearing
-        setDropActive(false);
-        setDropIndex(null);
-        const linkId = e.dataTransfer.getData(LINK_DND_TYPE);
-        if (linkId) {
-          // Releasing in a chip gap / on the insertion bar bubbles here rather
-          // than to a chip's own handler — honor the marker that was showing
-          // (land at that index) instead of silently appending.
-          if (insertAt !== null) onMoveLink?.(linkId, insertAt);
-          else onDropLink?.(linkId);
-          return;
-        }
-        const draggedBucketId = e.dataTransfer.getData(BUCKET_DND_TYPE);
-        if (draggedBucketId) onReorderBucket?.(draggedBucketId);
-      }}
+        isBucketOver ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'
+      } ${isBucketDragging ? 'opacity-30' : ''}`}
     >
       {/* Header */}
       {editing ? (
@@ -171,15 +142,18 @@ export default function BucketCard({
       ) : (
         // py-1 rather than py-2: the 44px action buttons now set the row height,
         // so the larger tap targets don't also inflate the header.
-        <div
-          className={`flex items-center gap-2 px-3 py-1 border-b cursor-grab ${colors.header}`}
-          draggable
-          onDragStart={(e) => {
-            e.dataTransfer.setData(BUCKET_DND_TYPE, bucket.id);
-            e.dataTransfer.effectAllowed = 'move';
-          }}
-        >
-          <GripVertical size={14} className="shrink-0 text-gray-500" />
+        <div ref={setBucketDragRef} className={`flex items-center gap-2 px-3 py-1 border-b ${colors.header}`}>
+          <button
+            type="button"
+            ref={setBucketActivatorRef}
+            {...bucketDragAttrs}
+            {...bucketDragListeners}
+            className="shrink-0 flex items-center justify-center text-gray-500 cursor-grab active:cursor-grabbing"
+            aria-label={`Reorder bucket ${bucket.name}`}
+            title="Drag to reorder buckets"
+          >
+            <GripVertical size={14} />
+          </button>
           {bucket.icon && <span className="shrink-0 text-base leading-none">{bucket.icon}</span>}
           <h3 className={`font-medium truncate flex-1 ${colors.text}`}>{bucket.name}</h3>
           <span className="text-xs text-gray-500">{links.length}</span>
@@ -212,25 +186,19 @@ export default function BucketCard({
 
       {/* Chips */}
       <div
-        className="flex flex-wrap gap-2 p-3 min-h-[2.5rem]"
-        onDragLeave={(e) => {
-          // Only clear when the pointer truly left the chips area — crossing
-          // between chips fires its own dragleave we don't want to react to.
-          if (!e.currentTarget.contains(e.relatedTarget)) setDropIndex(null);
-        }}
+        ref={setEndSlotRef}
+        className={`flex flex-wrap gap-2 p-3 min-h-[2.5rem] rounded transition-colors ${
+          isEndSlotOver ? 'bg-port-accent/10 ring-1 ring-inset ring-port-accent' : ''
+        }`}
       >
-        {links.length === 0 && dropIndex === null && (
+        {links.length === 0 && (
           <span className="text-xs text-gray-600 italic">Drop links here or add a URL below.</span>
         )}
         {links.map((link, i) => (
           <Fragment key={link.id}>
-            {dropIndex === i && <ChipInsertionBar />}
-            <div className="max-w-full min-w-0" onDragOver={(e) => handleChipDragOver(e, i)} onDrop={(e) => handleChipDrop(e, i)}>
-              <LinkChip link={link} onRemove={onRemoveLink} draggable />
-            </div>
+            <DraggableLinkChip bucket={bucket} bucketIndex={bucketIndex} link={link} index={i} onRemove={onRemoveLink} />
           </Fragment>
         ))}
-        {dropIndex === links.length && links.length > 0 && <ChipInsertionBar />}
       </div>
 
       {/* Add URL */}
@@ -258,9 +226,31 @@ export default function BucketCard({
   );
 }
 
-/** A thin vertical accent bar marking where a dragged chip will land. */
-function ChipInsertionBar() {
-  // pointer-events-none so the bar isn't itself a drag target — a release on it
-  // passes through to the chips row (and bubbles to the card drop handler).
-  return <div className="w-0.5 self-stretch min-h-[1.75rem] rounded-full bg-port-accent pointer-events-none" aria-hidden="true" />;
+/**
+ * A chip that is BOTH a drag source (moving itself elsewhere) and a drop
+ * target (another link dropped here is inserted before it) — the same
+ * "slot doubles as source" shape `KanbanBoard.jsx`'s `DraggableTicket` uses.
+ */
+function DraggableLinkChip({ bucket, bucketIndex, link, index, onRemove }) {
+  const { setNodeRef: setSlotRef, isOver } = useDroppable({
+    id: chipSlotId(bucket.id, index),
+    data: { kind: LINK_SLOT_KIND, bucketId: bucket.id, bucketName: bucket.name, bucketIndex, index },
+  });
+  const {
+    attributes, listeners, setNodeRef: setDragRef, setActivatorNodeRef, isDragging,
+  } = useDraggable({
+    id: `link-chip:${link.id}`,
+    data: { kind: LINK_KIND, link, bucketId: bucket.id, index },
+  });
+
+  return (
+    <div
+      ref={(node) => { setSlotRef(node); setDragRef(node); }}
+      className={`max-w-full min-w-0 rounded-md transition-[box-shadow] ${isDragging ? 'opacity-30' : ''} ${
+        isOver ? 'ring-2 ring-port-accent ring-offset-1 ring-offset-port-card' : ''
+      }`}
+    >
+      <LinkChip link={link} onRemove={onRemove} dragHandleProps={{ attributes, listeners, setActivatorNodeRef }} />
+    </div>
+  );
 }

@@ -1,23 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { reorderLinksInBucket, chipInsertIndex } from './bucketReorder';
+import { reorderLinksInBucket } from './bucketReorder';
 
 const mk = (id, bucketId, bucketOrder) => ({ id, bucketId, bucketOrder });
-
-describe('chipInsertIndex', () => {
-  const rect = { left: 100, width: 40 }; // midpoint at 120
-
-  it('inserts before the chip when the pointer is in its left half', () => {
-    expect(chipInsertIndex(rect, 110, 3)).toBe(3);
-  });
-
-  it('inserts after the chip when the pointer is in its right half', () => {
-    expect(chipInsertIndex(rect, 130, 3)).toBe(4);
-  });
-
-  it('treats the exact midpoint as "before" (not strictly greater)', () => {
-    expect(chipInsertIndex(rect, 120, 3)).toBe(3);
-  });
-});
 
 describe('reorderLinksInBucket', () => {
   it('moves a chip later within its bucket, accounting for its own removal', () => {

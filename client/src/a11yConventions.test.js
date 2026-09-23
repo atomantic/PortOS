@@ -3712,6 +3712,48 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     expect(offenders, `DndContext registered without a KeyboardSensor — every dnd-kit handle already announces itself as draggable and tells the user to press Space, so a pointer-only sensor list is a WCAG 2.1.1 failure. Add useSensor(KeyboardSensor, { coordinateGetter }) (sortableKeyboardCoordinates for a SortableContext, createFreeDroppableKeyboardCoordinates from lib/dndKeyboardCoordinates.js for free droppables):\n${offenders.join('\n')}`).toEqual([]);
   });
 
+  it('never reintroduces native HTML5 drag-and-drop (#8120)', () => {
+    // A JSX `draggable` attribute means the browser's OWN drag-and-drop, which
+    // has no keyboard or assistive-technology path at all — that gap is
+    // exactly what the tree-wide dnd-kit migration (#6911, #7243, #8120)
+    // replaced. Brain → Links was the last native site (buckets and chips,
+    // both via `dataTransfer`); see `components/brain/links/bucketDnd.js` for
+    // the worked multi-container (bucket-reorder + cross-bucket chip-reorder)
+    // example this rule now guards. `draggable={false}` (or `"false"`) is the
+    // one legitimate spelling left: it suppresses the browser's default drag
+    // on an `<a>`/`<img>` nested inside a dnd-kit handle so it stops fighting
+    // the pointer sensor — see the anchors in `LinkChip.jsx`.
+    const DRAGGABLE_ATTR = /(?:^|\s)draggable(?:\s*=\s*(?:\{([^}]*)\}|"([^"]*)"|'([^']*)'))?(?=[\s/>])/;
+    const offendersIn = (file, src) => {
+      const out = [];
+      for (const node of forEachOpeningTag(src, undefined)) {
+        const m = DRAGGABLE_ATTR.exec(node.tag);
+        if (!m) continue;
+        const value = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+        if (value === 'false' || value === "'false'" || value === '"false"') continue;
+        out.push(`${file}:${lineOf(src, node.index)}`);
+      }
+      return out;
+    };
+
+    // Probe first — the tree is green by construction, so nothing left in it
+    // pins what the walk rejects.
+    expect(offendersIn('probe.jsx', '<div draggable>x</div>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<div draggable={true}>x</div>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<div draggable="true">x</div>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<div draggable={isDraggable}>x</div>')).toEqual(['probe.jsx:1']);
+    // …the one exempt spelling, in both a JSX-expression and a plain string:
+    expect(offendersIn('probe.jsx', '<div draggable={false}>x</div>')).toEqual([]);
+    expect(offendersIn('probe.jsx', '<a draggable="false" href="x">x</a>')).toEqual([]);
+    // A bare mention of the word (prose, an object key) is not the JSX attribute.
+    expect(offendersIn('probe.jsx', '<div>draggable</div>')).toEqual([]);
+    expect(offendersIn('probe.jsx', "const draggable = true;\n<div />")).toEqual([]);
+
+    const offenders = [];
+    for (const file of trackedJsxFiles()) offenders.push(...offendersIn(file, maskedSourceOf(file)));
+    expect(offenders, `A JSX draggable attribute other than draggable={false} — native HTML5 drag-and-drop has no keyboard path. Migrate to dnd-kit (useDraggable/useDroppable + a KeyboardSensor); components/brain/links/bucketDnd.js is a worked multi-container example:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
   // --- routed-page top-level heading (#7245) -------------------------------
   //
   // A routed page with no <h1> inverts the document outline: heading

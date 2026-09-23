@@ -7,12 +7,12 @@ import BucketCard from './BucketCard';
 /**
  * The bucket board: a responsive grid of bucket cards plus a "new bucket"
  * affordance. The bucket collection + links (the single source of truth) live
- * in the parent LinksTab and flow in via props. Drag-and-drop is carried via
- * dataTransfer (link id / bucket id) so a link dragged from the list, a chip
- * dragged from another bucket, and a bucket header dragged to reorder all
- * resolve the same way regardless of which component started the drag.
+ * in the parent LinksTab and flow in via props. Drag-and-drop (reordering
+ * buckets, filing/reordering chips) is dnd-kit, driven by the ONE
+ * `DndContext` the parent `LinksTab` mounts around this board and the flat
+ * link list — see `bucketDnd.js` for the shared coordinate/collision logic.
  */
-export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, onAddLinkToBucket, onBucketDeleted, onMoveLinkToIndex }) {
+export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, onAddLinkToBucket, onBucketDeleted }) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
 
@@ -51,39 +51,6 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
     }
   }, [onBucketDeleted, setBuckets]);
 
-  // --- Drag: move a link (from the list or another bucket) into a bucket ---
-  const handleDropLink = useCallback((linkId, bucketId) => {
-    const link = links.find(l => l.id === linkId);
-    if (link && link.bucketId !== bucketId) {
-      onAssignLink?.(link, bucketId);
-    }
-  }, [links, onAssignLink]);
-
-  // --- Drag: drop a chip at a specific position within (or into) a bucket ---
-  const handleMoveLink = useCallback((linkId, bucketId, targetIndex) => {
-    const link = links.find(l => l.id === linkId);
-    if (link) onMoveLinkToIndex?.(link, bucketId, targetIndex);
-  }, [links, onMoveLinkToIndex]);
-
-  // --- Drag: reorder buckets ---
-  const handleReorder = useCallback((draggedId, targetBucket) => {
-    if (!draggedId || draggedId === targetBucket.id) return;
-
-    setBuckets(prev => {
-      const ids = prev.map(b => b.id);
-      const from = ids.indexOf(draggedId);
-      const to = ids.indexOf(targetBucket.id);
-      if (from === -1 || to === -1) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      api.reorderBrainBuckets(next.map(b => b.id), { silent: true }).catch(err => {
-        toast.error(err.message || 'Failed to reorder buckets');
-      });
-      return next;
-    });
-  }, [setBuckets]);
-
   const groupedLinks = useMemo(() => {
     const grouped = new Map();
     links.forEach(link => {
@@ -103,18 +70,16 @@ export default function BucketBoard({ links, buckets, setBuckets, onAssignLink, 
   return (
     <div className="@container">
       <div className="grid grid-cols-1 @md:grid-cols-2 @4xl:grid-cols-3 gap-4">
-        {buckets.map(bucket => (
+        {buckets.map((bucket, bucketIndex) => (
           <BucketCard
             key={bucket.id}
             bucket={bucket}
+            bucketIndex={bucketIndex}
             links={groupedLinks.get(bucket.id) || []}
             onUpdate={handleUpdate}
             onDelete={handleDelete}
             onAddLink={onAddLinkToBucket}
             onRemoveLink={(link) => onAssignLink?.(link, null)}
-            onDropLink={(linkId) => handleDropLink(linkId, bucket.id)}
-            onReorderBucket={(draggedId) => handleReorder(draggedId, bucket)}
-            onMoveLink={(linkId, index) => handleMoveLink(linkId, bucket.id, index)}
           />
         ))}
 

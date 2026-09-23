@@ -31,4 +31,15 @@ describe('LinkChip', () => {
     fireEvent.click(screen.getByTitle('Remove from bucket'));
     expect(onRemove).toHaveBeenCalledWith(link);
   });
+
+  it('renders no drag handle when dragHandleProps is omitted', () => {
+    render(<LinkChip link={link} />);
+    expect(screen.queryByLabelText(/Drag /)).toBeNull();
+  });
+
+  it('renders a named, focusable drag handle when dragHandleProps is supplied', () => {
+    render(<LinkChip link={link} dragHandleProps={{ attributes: {}, listeners: {}, setActivatorNodeRef: () => {} }} />);
+    const handle = screen.getByLabelText('Drag Example Docs');
+    expect(handle.tagName).toBe('BUTTON');
+  });
 });
