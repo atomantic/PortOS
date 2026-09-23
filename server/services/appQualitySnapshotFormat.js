@@ -113,6 +113,12 @@ function compareRecords(a, b) {
     || compareText(a.category, b.category);
 }
 
+function formatArrayEntries(values) {
+  if (values.length === 0) return '[]';
+  // Keep each immutable snapshot item on one diff line, including each row.
+  return `[\n${values.map(value => `    ${JSON.stringify(value)}`).join(',\n')}\n  ]`;
+}
+
 function canonicalize(repository, records) {
   const categories = [...new Set(records.map(record => record.category))].sort(compareText);
   const categoryIndex = new Map(categories.map((category, index) => [category, index]));
@@ -128,15 +134,18 @@ function canonicalize(repository, records) {
     record.scannedFiles,
     record.totalFiles,
   ]);
-  return `${JSON.stringify({
-    schemaVersion: APP_QUALITY_FILE_SCHEMA_VERSION,
-    repository,
-    reportVersion: APP_QUALITY_REPORT_VERSION,
-    categories,
-    coverage: [...QUALITY_COVERAGE_VALUES],
-    confidence: [...QUALITY_CONFIDENCE_VALUES],
-    measurements,
-  }, null, 2)}\n`;
+  return [
+    '{',
+    `  "schemaVersion": ${APP_QUALITY_FILE_SCHEMA_VERSION},`,
+    `  "repository": ${JSON.stringify(repository)},`,
+    `  "reportVersion": ${APP_QUALITY_REPORT_VERSION},`,
+    `  "categories": ${formatArrayEntries(categories)},`,
+    `  "coverage": ${formatArrayEntries(QUALITY_COVERAGE_VALUES)},`,
+    `  "confidence": ${formatArrayEntries(QUALITY_CONFIDENCE_VALUES)},`,
+    `  "measurements": ${formatArrayEntries(measurements)}`,
+    '}',
+    '',
+  ].join('\n');
 }
 
 /** Canonical v2 text, or null when the records are not a valid projection. */
