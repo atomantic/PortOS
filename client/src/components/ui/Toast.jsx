@@ -16,6 +16,7 @@ import { uuidv4 } from '../../lib/uuid.js';
 import { isEditableTarget } from '../../lib/a11yKeyboard.js';
 
 let toasts = [];
+let toastSeq = 0;
 const listeners = new Set();
 
 function notify() {
@@ -90,7 +91,12 @@ function add(content, opts = {}, type = 'default') {
   const collapseAfter = Number.isFinite(opts.collapseAfter) && opts.collapseAfter > 0
     ? opts.collapseAfter
     : COLLAPSE_AFTER_MS;
-  const entry = { id, type, content, icon: opts.icon, duration, style: opts.style, label: opts.label, collapseAfter };
+  // `seq` marks WHEN this entry was last touched, independent of its
+  // position in `toasts` — a same-id re-add (loading→success) replaces the
+  // entry IN PLACE at its original array index so the stack doesn't jump, so
+  // array order alone can't answer "which toast is newest" once an update
+  // has happened. The Alt+Shift+N jump below reads this instead of `[last]`.
+  const entry = { id, type, content, icon: opts.icon, duration, style: opts.style, label: opts.label, collapseAfter, seq: ++toastSeq };
 
   const idx = toasts.findIndex(t => t.id === id);
   toasts = idx !== -1
@@ -163,7 +169,10 @@ export function Toaster({ position = 'bottom-right', toastOptions = {} }) {
         // guard does for the shortcut hooks that route through it.
         if (document.querySelector('[aria-modal="true"]')) return;
         const region = regionRef.current;
-        const newest = items[items.length - 1];
+        // `seq`, not array position — a same-id re-add (loading→success)
+        // replaces the entry in place at its original index, so the LAST
+        // item isn't necessarily the one most recently touched.
+        const newest = items.reduce((a, b) => (!a || b.seq > a.seq ? b : a), null);
         if (!region || !newest) return;
         const toastEl = region.querySelector(`[data-toast-id="${newest.id}"]`);
         if (!toastEl) return;

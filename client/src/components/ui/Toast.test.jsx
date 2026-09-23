@@ -449,6 +449,28 @@ describe('Alt+Shift+N focuses the newest toast, and Escape returns focus', () =>
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Undo' }));
   });
 
+  it('follows a same-id update to an older toast, not just the last one added', () => {
+    // Regression: `add()` replaces a same-id entry IN PLACE at its original
+    // array index (so the stack doesn't visually jump), so "the last item in
+    // the array" stops being "the most recently touched toast" once an
+    // earlier one gets updated after a later one was added.
+    render(<Toaster />);
+    act(() => {
+      toast(() => <button type="button">First Undo</button>, { id: 'first', duration: Infinity, label: 'First' });
+    });
+    act(() => {
+      toast(() => <span>Second, unrelated</span>, { id: 'second', duration: Infinity, label: 'Second' });
+    });
+    // Update the FIRST (older, lower array index) toast — it's now the most
+    // recently touched, even though it isn't last in the array.
+    act(() => {
+      toast(() => <button type="button">Updated Undo</button>, { id: 'first', duration: Infinity, label: 'First' });
+    });
+
+    pressJumpShortcut();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Updated Undo' }));
+  });
+
   it('holds the toast open once the jump lands focus inside it, even past its duration', () => {
     render(<Toaster />);
     act(() => {
