@@ -852,6 +852,113 @@ describe('codeReview helpers', () => {
       expect(request.messages[0].content).toContain('test-only change')
     })
 
+    it('ships a complete section relocation without exempting a duplicate insertion', async () => {
+      const objective = 'On the code animation page, I think the format should be ordered before the brief.'
+      const formatSection = [
+        '          <section className="rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-format-heading">',
+        '            <h2 id="ca-format-heading" className="mb-3 text-sm font-semibold text-white">Format</h2>',
+        '            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">',
+        '              <div>',
+        '                <label htmlFor="ca-duration" className={labelClass}>Duration (s)</label>',
+        '                <input id="ca-duration" type="number" min={limits?.durationMin ?? 3} max={limits?.durationMax ?? 180} value={draft.format.durationSeconds} onChange={(event) => updateFormat({ durationSeconds: Math.round(Number(event.target.value) || 0) })} className={inputClass} />',
+        '              </div>',
+        '              <div>',
+        '                <label htmlFor="ca-aspect" className={labelClass}>Aspect</label>',
+        '                <select id="ca-aspect" value={draft.format.aspectRatio} onChange={(event) => updateFormat({ aspectRatio: event.target.value })} className={inputClass}>',
+        "                  {(options?.aspectRatios || ['16:9']).map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}",
+        '                </select>',
+        '              </div>',
+        '              <div>',
+        '                <label htmlFor="ca-resolution" className={labelClass}>Resolution</label>',
+        '                <select id="ca-resolution" value={draft.format.resolution} onChange={(event) => updateFormat({ resolution: event.target.value })} className={inputClass}>',
+        "                  {(options?.resolutions || ['1080p']).map((res) => <option key={res} value={res}>{res}</option>)}",
+        '                </select>',
+        '              </div>',
+        '              <div>',
+        '                <label htmlFor="ca-fps" className={labelClass}>FPS</label>',
+        '                <select id="ca-fps" value={draft.format.fps} onChange={(event) => updateFormat({ fps: Number(event.target.value) })} className={inputClass}>',
+        '                  {(limits?.fpsOptions || [30]).map((fps) => <option key={fps} value={fps}>{fps}</option>)}',
+        '                </select>',
+        '              </div>',
+        '              <div>',
+        '                <label htmlFor="ca-renderer" className={labelClass}>Renderer</label>',
+        '                <select id="ca-renderer" value={draft.renderer} onChange={(event) => update({ renderer: event.target.value })} className={inputClass}>',
+        "                  {(options?.renderers || ['auto']).map((renderer) => <option key={renderer} value={renderer}>{renderer}</option>)}",
+        '                </select>',
+        '              </div>',
+        '              <label className="flex items-end gap-2 pb-2 text-xs text-gray-300">',
+        '                <input type="checkbox" checked={draft.interactive} onChange={(event) => update({ interactive: event.target.checked })} />',
+        '                Interactive',
+        '              </label>',
+        '            </div>',
+        '          </section>',
+      ].join('\n')
+      const addedFormatSection = formatSection.split('\n').map((line) => `+${line}`).join('\n')
+      const removedFormatSection = formatSection.split('\n').map((line) => `-${line}`).join('\n')
+      const retainedFormatSection = formatSection.split('\n').map((line) => ` ${line}`).join('\n')
+      const relocationDiff = [
+        'diff --git a/client/src/pages/CodeAnimation.jsx b/client/src/pages/CodeAnimation.jsx',
+        '@@ -368,6 +368,44 @@',
+        '           </section>',
+        addedFormatSection,
+        '+',
+        '           <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-brief-heading">',
+        '             <h2 id="ca-brief-heading">Brief</h2>',
+        '@@ -456,43 +494,6 @@',
+        '           </section>',
+        removedFormatSection,
+        '         </div>',
+      ].join('\n')
+      const duplicateDiff = [
+        'diff --git a/client/src/pages/CodeAnimation.jsx b/client/src/pages/CodeAnimation.jsx',
+        '@@ -368,6 +368,44 @@',
+        '           </section>',
+        addedFormatSection,
+        '+',
+        '           <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-brief-heading">',
+        '             <h2 id="ca-brief-heading">Brief</h2>',
+        '@@ -456,43 +494,43 @@',
+        retainedFormatSection,
+      ].join('\n')
+
+      global.fetch = vi.fn(async (_url, init) => {
+        const request = JSON.parse(init.body)
+        const rubric = request.messages[0].content
+        const evidence = request.messages[1].content
+        const rubricRecognizesNarrowMove = rubric.includes('same complete named section')
+          && rubric.includes('materially unchanged contents')
+          && rubric.includes('added duplicate whose old copy remains')
+        const addedAtRequestedPosition = evidence.indexOf(addedFormatSection) < evidence.indexOf('aria-labelledby="ca-brief-heading"')
+        const removedFromFormerPosition = evidence.indexOf(removedFormatSection) > evidence.indexOf('aria-labelledby="ca-brief-heading"')
+        const isMatchedMove = rubricRecognizesNarrowMove && addedAtRequestedPosition && removedFromFormerPosition
+        return mockJsonResponse({
+          choices: [{ message: { content: JSON.stringify(isMatchedMove
+            ? { verdict: 'ship', missing: [], unrequested: [], evidence: 'The diff shows the section before Brief, but no test or check result was supplied.' }
+            : { verdict: 'fix-first', missing: [], unrequested: ['a duplicate Format section'], evidence: 'The old Format section remains after the new copy is inserted.' }) } }],
+        })
+      })
+
+      const moved = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: relocationDiff })
+      const duplicated = await runLocalGoalFidelityReview({ backend: 'ollama', model: 'example-model', objective, diff: duplicateDiff })
+
+      expect(moved).toMatchObject({
+        ok: true,
+        verdict: 'ship',
+        missing: [],
+        unrequested: [],
+        evidence: 'The diff shows the section before Brief, but no test or check result was supplied.',
+      })
+      expect(duplicated).toMatchObject({
+        ok: true,
+        verdict: 'fix-first',
+        missing: [],
+        unrequested: ['a duplicate Format section'],
+      })
+      const prompt = JSON.parse(global.fetch.mock.calls[0][1].body).messages[0].content
+      expect(prompt).toContain('same complete named section')
+      expect(prompt).toContain('added duplicate whose old copy remains')
+    })
+
     it('escapes a diff that carries its own fence so it cannot break out into the objective half', async () => {
       await runLocalGoalFidelityReview({
         backend: 'ollama',
