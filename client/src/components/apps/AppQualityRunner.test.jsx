@@ -40,13 +40,15 @@ it('allows one category and recovers from launch failure without reporting a run
   expect(startMaintenanceRun.mock.calls[0][0]).toMatchObject({ mode: 'file-issues', taskTypes: ['performance'] });
 });
 
-it('preserves run overrides when moving controls into a category row', async () => {
+it('preserves run overrides when reopening the drawer for one category', async () => {
   startMaintenanceRun.mockResolvedValue({ run: { id: 'run-2', status: 'running', steps: [] } });
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('link', { name: 'Run checks' }));
   await findEnabledByRole('button', { name: 'Run 2 checks now' });
   fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'fix' } });
   fireEvent.click(screen.getByText('Use high effort'));
-  fireEvent.click(screen.getByRole('link', { name: 'Configure and run Security' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  fireEvent.click(screen.getByRole('link', { name: 'Run Security check' }));
   expect(screen.getByLabelText('Checks')).toHaveValue('security');
   expect(screen.getByLabelText('Mode')).toHaveValue('fix');
   fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
