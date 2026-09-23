@@ -69,6 +69,33 @@ it('serializes canonical v2 rows with stable indexes and no provenance', () => {
       ['2026-09-21T00:00:00.000Z', 1, null, 0, 3, 0, 0, 4],
     ],
   });
+  expect(text).toBe([
+    '{',
+    '  "schemaVersion": 2,',
+    `  "repository": "${repository}",`,
+    '  "reportVersion": 1,',
+    '  "categories": [',
+    '    "security",',
+    '    "typing"',
+    '  ],',
+    '  "coverage": [',
+    '    "broad",',
+    '    "partial",',
+    '    "unavailable",',
+    '    "not-applicable"',
+    '  ],',
+    '  "confidence": [',
+    '    "low",',
+    '    "medium",',
+    '    "high"',
+    '  ],',
+    '  "measurements": [',
+    '    ["2026-09-20T00:00:00.000Z",0,82,5,0,2,120,120],',
+    '    ["2026-09-21T00:00:00.000Z",1,null,0,3,0,0,4]',
+    '  ]',
+    '}',
+    '',
+  ].join('\n'));
   expect(text.endsWith('\n')).toBe(true);
   expect(text).not.toMatch(/measurementId|example-user|agent-example|summary/);
   expect(classifyQualitySnapshot(text).canonical).toBe(text);
