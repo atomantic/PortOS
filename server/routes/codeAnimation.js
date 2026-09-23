@@ -3,6 +3,7 @@
  * animation film (and optionally run it to get the HTML).
  *
  *   GET  /api/code-animation/options        formats, limits, host contract
+ *   POST /api/code-animation/brief          write a brief from the universe → { brief }
  *   POST /api/code-animation/prompt         resolve configurations → { prompt, attachments, frame }
  *   POST /api/code-animation/generate       start a provider run → 202 job
  *   GET  /api/code-animation/generate/:id   poll a job (html once completed)
@@ -16,6 +17,7 @@ import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { emptyToNull } from '../lib/zodCompat.js';
 import {
   buildCodeAnimationRequest,
+  generateCodeAnimationBrief,
   getCodeAnimationJob,
   getCodeAnimationOptions,
   startCodeAnimationGeneration,
@@ -35,18 +37,20 @@ const uploadFilenameSchema = z.string().trim().min(1).max(256)
   .regex(/^[^/\\]+$/, 'filename must be an upload basename');
 const optionalId = z.preprocess(emptyToNull, z.string().trim().min(1).max(128).nullable().optional());
 
+const formatSchema = z.object({
+  durationSeconds: z.number().int().min(L.durationMin).max(L.durationMax).default(20),
+  aspectRatio: z.enum(Object.keys(CODE_ANIMATION_ASPECT_RATIOS)).default('16:9'),
+  resolution: z.enum(Object.keys(CODE_ANIMATION_RESOLUTIONS)).default('1080p'),
+  fps: z.number().int().refine((fps) => L.fpsOptions.includes(fps), 'Unsupported frame rate').default(30),
+});
+
 const briefSchema = z.object({
-  title: z.string().trim().max(200).default(''),
+  title: z.string().trim().max(L.titleMax).default(''),
   concept: z.string().trim().min(1, 'Describe what happens in the animation').max(L.conceptMax),
   onScreenText: z.string().trim().max(L.textMax).default(''),
   // Refinements on top of the universe style — the universe is the art direction.
   styleNotes: z.string().trim().max(L.styleNotesMax).default(''),
-  format: z.object({
-    durationSeconds: z.number().int().min(L.durationMin).max(L.durationMax).default(20),
-    aspectRatio: z.enum(Object.keys(CODE_ANIMATION_ASPECT_RATIOS)).default('16:9'),
-    resolution: z.enum(Object.keys(CODE_ANIMATION_RESOLUTIONS)).default('1080p'),
-    fps: z.number().int().refine((fps) => L.fpsOptions.includes(fps), 'Unsupported frame rate').default(30),
-  }).prefault({}),
+  format: formatSchema.prefault({}),
   renderer: z.enum(CODE_ANIMATION_RENDERERS).default('auto'),
   interactive: z.boolean().default(false),
   soundtrack: z.enum(['none', 'procedural']).default('none'),
@@ -73,9 +77,34 @@ const generateSchema = briefSchema.extend({
   effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()),
 }).strict();
 
+// Writing the brief needs only the art-direction selections plus whatever the
+// artist has typed so far — never the uploads or audio, which condition the
+// picture, not the story.
+const briefIdeaSchema = z.object({
+  universeId: optionalId,
+  moodBoardId: optionalId,
+  seedIdea: z.string().trim().max(L.seedIdeaMax).default(''),
+  // The same brief, partially filled — derived from briefSchema so the field
+  // caps are stated once, with `concept` relaxed because there may be none yet.
+  current: briefSchema
+    .pick({ title: true, onScreenText: true, styleNotes: true })
+    .extend({ concept: z.string().trim().max(L.conceptMax).default('') })
+    .prefault({}),
+  // Only the two the writer's prompt reads — the renderer, fps, and resolution
+  // condition the picture, not the story.
+  format: formatSchema.pick({ durationSeconds: true, aspectRatio: true }).prefault({}),
+  providerId: z.string().trim().max(128).optional(),
+  model: z.string().trim().max(256).optional(),
+  effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()),
+}).strict();
+
 router.get('/options', (_req, res) => {
   res.json(getCodeAnimationOptions());
 });
+
+router.post('/brief', asyncHandler(async (req, res) => {
+  res.json(await generateCodeAnimationBrief(validateRequest(briefIdeaSchema, req.body ?? {})));
+}));
 
 router.post('/prompt', asyncHandler(async (req, res) => {
   const input = validateRequest(briefSchema, req.body ?? {});

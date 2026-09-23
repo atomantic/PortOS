@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, FileCode2, Globe, ImagePlus, LoaderCircle, Music2, Sparkles, Wand2, X } from 'lucide-react';
+import { Copy, FileCode2, Globe, ImagePlus, LoaderCircle, Music2, PenLine, Sparkles, Wand2, X } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -9,6 +9,7 @@ import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import toast from '../components/ui/Toast';
 import {
   buildCodeAnimationPrompt,
+  generateCodeAnimationBrief,
   getCodeAnimationJob,
   getCodeAnimationOptions,
   listMoodBoardNames,
@@ -29,6 +30,7 @@ const BOARD_NONE = 'none';
 
 const DEFAULT_DRAFT = {
   title: '',
+  seedIdea: '',
   concept: '',
   onScreenText: '',
   styleNotes: '',
@@ -49,10 +51,17 @@ const loadDraft = () => {
   return { ...DEFAULT_DRAFT, ...stored, format: { ...DEFAULT_DRAFT.format, ...(stored.format || {}) } };
 };
 
-// The draft → the server's brief shape. An absent moodBoardId follows the
-// universe's linked board; '' means none.
+// The mood-board choice as the server reads it: an ABSENT moodBoardId follows
+// the universe's linked board, '' means none.
+function moodBoardSelection(draft) {
+  if (draft.moodBoardChoice === BOARD_NONE) return { moodBoardId: '' };
+  if (draft.moodBoardChoice !== BOARD_FOLLOW_UNIVERSE) return { moodBoardId: draft.moodBoardChoice };
+  return {};
+}
+
+// The draft → the server's brief shape.
 function toBrief(draft) {
-  const brief = {
+  return {
     title: draft.title,
     concept: draft.concept,
     onScreenText: draft.onScreenText,
@@ -67,10 +76,26 @@ function toBrief(draft) {
     audio: draft.audio
       ? { filename: draft.audio.filename, label: draft.audio.label, durationSeconds: draft.audio.durationSeconds ?? null, notes: draft.audio.notes }
       : null,
+    ...moodBoardSelection(draft),
   };
-  if (draft.moodBoardChoice === BOARD_NONE) brief.moodBoardId = '';
-  else if (draft.moodBoardChoice !== BOARD_FOLLOW_UNIVERSE) brief.moodBoardId = draft.moodBoardChoice;
-  return brief;
+}
+// The draft → the brief-writer's input: art direction plus whatever the artist
+// has typed so far, which the model builds on rather than discards.
+function toBriefIdeaInput(draft) {
+  return {
+    universeId: draft.universeId || null,
+    ...moodBoardSelection(draft),
+    seedIdea: draft.seedIdea,
+    current: {
+      title: draft.title,
+      concept: draft.concept,
+      onScreenText: draft.onScreenText,
+      styleNotes: draft.styleNotes,
+    },
+    // The writer's prompt reads only these two — the rest of the format
+    // conditions the picture, not the story.
+    format: { durationSeconds: draft.format.durationSeconds, aspectRatio: draft.format.aspectRatio },
+  };
 }
 
 const readAudioDuration = (file) => new Promise((resolve) => {
@@ -112,6 +137,7 @@ export default function CodeAnimation() {
   const [draft, setDraft] = useState(loadDraft);
   const [uploading, setUploading] = useState(false);
   const [building, setBuilding] = useState(false);
+  const [writingBrief, setWritingBrief] = useState(false);
   // The last built prompt, tagged with the brief it was built from.
   const [built, setBuilt] = useState(null);
   const [starting, setStarting] = useState(false);
@@ -153,6 +179,10 @@ export default function CodeAnimation() {
   const audioAccept = (options?.audioExtensions || ['mp3', 'wav', 'ogg', 'm4a']).map((ext) => `.${ext}`).join(',');
   const generating = job?.id === jobId && job.status === 'running';
   const canBuild = draft.concept.trim().length > 0 && !building && !uploading;
+  // The writer needs a world or some words to be faithful to — it is not a
+  // blank-slate idea generator.
+  const briefSeeds = !!(draft.universeId || draft.seedIdea.trim() || draft.concept.trim() || draft.title.trim());
+  const canWriteBrief = briefSeeds && !writingBrief;
 
   // Poll the generation job named in the URL until it settles. The ref drops a
   // response for a job the user has since replaced.
@@ -206,6 +236,31 @@ export default function CodeAnimation() {
     const [durationSeconds, saved] = await Promise.all([readAudioDuration(file), uploadOrToast(file)]);
     setUploading(false);
     if (saved) update({ audio: { filename: saved.filename, label: file.name, durationSeconds, notes: '', url: saved.path } });
+  };
+
+  // Ask a model to write the brief from the universe's bible and canon cast,
+  // the way a series or story is generated from a universe. The result lands in
+  // the form as an editable draft — nothing is generated from it until the user
+  // builds the prompt.
+  const handleWriteBrief = async () => {
+    if (!canWriteBrief) return;
+    setWritingBrief(true);
+    const result = await generateCodeAnimationBrief({
+      ...toBriefIdeaInput(draft),
+      providerId: selectedProviderId || undefined,
+      model: selectedModel || undefined,
+      effort: effort || undefined,
+    }, { silent: true }).catch((error) => {
+      toast.error(error.message || 'Failed to write the brief');
+      return null;
+    });
+    setWritingBrief(false);
+    if (!result?.brief) return;
+    const { title, concept, onScreenText, styleNotes } = result.brief;
+    // Style refinements live in the Style section, not the brief — only replace
+    // the artist's own notes when the writer actually asked for a refinement.
+    update({ title, concept, onScreenText, ...(styleNotes ? { styleNotes } : {}) });
+    toast.success('Brief written — edit it before building the prompt');
   };
 
   const handleBuild = async () => {
@@ -304,7 +359,24 @@ export default function CodeAnimation() {
           </section>
 
           <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4" aria-labelledby="ca-brief-heading">
-            <h2 id="ca-brief-heading" className="flex items-center gap-2 text-sm font-semibold text-white"><Sparkles className="h-4 w-4 text-port-accent" /> Brief</h2>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 id="ca-brief-heading" className="flex items-center gap-2 text-sm font-semibold text-white"><Sparkles className="h-4 w-4 text-port-accent" /> Brief</h2>
+              <button type="button" onClick={handleWriteBrief} disabled={!canWriteBrief} className={buttonSecondary} title={briefSeeds ? undefined : 'Pick a universe or write a starting idea first'}>
+                {writingBrief ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <PenLine className="h-4 w-4" />}
+                Write brief
+              </button>
+            </div>
+            <div>
+              <label htmlFor="ca-seed" className={labelClass}>
+                Starting idea <span className="text-gray-600">(optional; what the brief writer starts from)</span>
+              </label>
+              <textarea id="ca-seed" rows={2} value={draft.seedIdea} maxLength={limits?.seedIdeaMax} onChange={(event) => update({ seedIdea: event.target.value })} placeholder="A chase through the lower market that ends in silence" className={`${inputClass} resize-y`} />
+              <p className="mt-1 text-xs text-gray-500">
+                {draft.universeId
+                  ? 'Write brief casts the film from this universe\u2019s characters, places, and tone.'
+                  : 'Pick a universe above to have the brief cast from its characters and places.'}
+              </p>
+            </div>
             <div>
               <label htmlFor="ca-title" className={labelClass}>Title <span className="text-gray-600">(optional)</span></label>
               <input id="ca-title" value={draft.title} maxLength={200} onChange={(event) => update({ title: event.target.value })} placeholder="The Lantern Keeper" className={inputClass} />

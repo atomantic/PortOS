@@ -77,7 +77,22 @@ function fillReferences(candidates, slots) {
   return images;
 }
 
-async function resolveUniverse(universeId, { imageSlots }) {
+// The narrative half of a universe — its bible text and canon arrays, passed
+// through for `renderCanonForPrompt` to project. Only the brief writer reads
+// it: the coding prompt is art direction, and a logline or a character's
+// motivations would just crowd out the runtime contract.
+function universeNarrative(universe) {
+  const { characters, places, objects } = universe;
+  return {
+    logline: trimTo(universe.logline, 2_000),
+    premise: trimTo(universe.premise, 4_000),
+    characters,
+    places,
+    objects,
+  };
+}
+
+async function resolveUniverse(universeId, { imageSlots, narrative = false }) {
   if (!universeId) return null;
   const { getUniverse } = await import('../universeBuilder/crud.js');
   const universe = await getUniverse(universeId).catch((error) => {
@@ -107,6 +122,7 @@ async function resolveUniverse(universeId, { imageSlots }) {
     styleReferences,
     moodBoardId: isNonBlankStr(universe.moodBoardId) ? universe.moodBoardId : null,
     images,
+    ...(narrative ? universeNarrative(universe) : {}),
   };
 }
 
@@ -207,6 +223,58 @@ export async function buildCodeAnimationRequest(input, { delivery = 'copy' } = {
     audioUrl: audio?.url || null,
     referencePaths: referenceImages.map((image) => image.path),
   };
+}
+
+/**
+ * Write the brief itself: ask a model for a title / concept / on-screen text /
+ * style refinement grounded in the universe's bible and canon cast, the same
+ * way a series or story is generated from a universe. Synchronous — a few
+ * hundred words comes back inside one request, unlike the HTML generation.
+ *
+ * Returns `{ brief }`, which the client drops straight into the form so the
+ * user can edit it before building the animation prompt.
+ */
+export async function generateCodeAnimationBrief(input) {
+  // With no world and no words the model has nothing to be faithful to, and a
+  // blank-slate brief is not what this writer is for. The rule lives here, not
+  // in the route, so a non-HTTP caller gets it too.
+  const { title, concept } = input.current || {};
+  if (!input.universeId && !input.seedIdea && !concept && !title) {
+    throw new ServerError('Pick a universe or describe a starting idea to write a brief from', { status: 400, code: 'BRIEF_INPUT_REQUIRED' });
+  }
+  const { assertProvider, resolveProviderAndModel, runPromptThroughProvider } = await import('../promptRunner.js');
+  const { buildCodeAnimationBriefPrompt, extractBriefIdea } = await import('./brief.js');
+  // Resolving the provider and loading the universe are independent — only the
+  // board depends on which universe came back. No image slots: the brief is
+  // text, and the style images are already the coding prompt's job.
+  const [{ provider, selectedModel }, universe] = await Promise.all([
+    resolveProviderAndModel({ providerId: input.providerId, model: input.model }),
+    resolveUniverse(input.universeId, { imageSlots: 0, narrative: true }),
+  ]);
+  assertProvider(provider, { message: 'No AI provider available to write the brief', code: 'PROVIDER_UNAVAILABLE', status: 400 });
+  const moodBoardId = input.moodBoardId === undefined ? universe?.moodBoardId : input.moodBoardId;
+  const { board } = await resolveMoodBoard(moodBoardId, { imageSlots: 0 });
+  const prompt = buildCodeAnimationBriefPrompt({
+    universe,
+    moodBoard: board,
+    seedIdea: input.seedIdea,
+    format: input.format,
+    current: input.current,
+  });
+  console.log(`📝 Code animation brief writing on ${provider.id}/${selectedModel || 'default'}${universe ? ` for universe "${universe.name}"` : ''}`);
+  const { text, runId } = await runPromptThroughProvider({
+    provider,
+    model: selectedModel || undefined,
+    effort: input.effort || undefined,
+    prompt,
+    source: 'code-animation-brief',
+    // Same containment as the HTML generation: a CLI/TUI agent only needs to
+    // print a JSON document, never to touch the PortOS checkout.
+    cwd: PATHS.data,
+  });
+  const brief = extractBriefIdea(text);
+  console.log(`✅ Code animation brief written — runId=${runId || 'n/a'} concept=${brief.concept.length} chars`);
+  return { brief };
 }
 
 // Drop settled jobs past their TTL, then the oldest settled ones past the cap.
