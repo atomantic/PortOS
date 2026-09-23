@@ -151,6 +151,7 @@ router.post('/', asyncHandler(async (req, res, next) => {
   }
 
   const app = await appsService.createApp(data);
+  notifyAppsChanged('create', app.id);
   res.status(201).json(app);
 }));
 
@@ -220,10 +221,12 @@ router.put('/:id', asyncHandler(async (req, res, next) => {
 
   if (liUpdate !== undefined) {
     const merged = await appsService.updateAppLayeredIntelligence(req.params.id, liUpdate);
+    notifyAppsChanged('update', req.params.id);
     res.json(merged || app);
     return;
   }
 
+  notifyAppsChanged('update', req.params.id);
   res.json(app);
 }));
 
@@ -259,7 +262,7 @@ router.post('/:id/archive', asyncHandler(async (req, res) => {
   }
 
   console.log(`📦 Archived app: ${app.name}`);
-  notifyAppsChanged('archive');
+  notifyAppsChanged('archive', app.id);
   res.json(app);
 }));
 
@@ -272,7 +275,7 @@ router.post('/:id/unarchive', asyncHandler(async (req, res) => {
   }
 
   console.log(`📤 Unarchived app: ${app.name}`);
-  notifyAppsChanged('unarchive');
+  notifyAppsChanged('unarchive', app.id);
   res.json(app);
 }));
 
