@@ -102,6 +102,10 @@ const NARROWED = [
     'needs CUT_TYPES/SAFE_CUT_TYPES only'],
   ['services/apps.js', 'lib/validation.js',
     'needs sanitizeTaskMetadata, which cosValidation.js declares'],
+  ['services/apps.js', 'services/pm2.js',
+    'keeps PM2 process projections out of the registry graph'],
+  ['services/apps.js', 'services/streamingDetect.js',
+    'reads process-type vocabulary from the dependency-free leaf'],
   ['services/memoryEmbeddings.js', 'services/memoryBackend.js',
     'needs DEFAULT_MEMORY_CONFIG, which memoryConfig.js declares'],
   ['lib/llmRoutePin.js', 'lib/storyBible.js',
@@ -158,12 +162,21 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('lib/pipelineValidation.js', 'lib/editorial/checkInfra/taxonomy.js')).toBe(true);
     expect(reaches('services/apps.js', 'lib/cosValidation.js')).toBe(true);
+    expect(reaches('services/appProcessTypes.js', 'services/appProcessTypes.js')).toBe(true);
+    expect(reaches('services/streamingDetect.js', 'services/appProcessTypes.js')).toBe(true);
+    expect(reaches('services/appProcessStatus.js', 'services/apps.js')).toBe(true);
+    expect(reaches('services/appProcessStatus.js', 'services/pm2.js')).toBe(true);
     expect(reaches('services/memoryEmbeddings.js', 'services/memoryConfig.js')).toBe(true);
     expect(reaches('lib/llmRoutePin.js', 'lib/textUtils.js')).toBe(true);
     expect(reaches('lib/slashdoInvocation.js', 'lib/providerVendors.js')).toBe(true);
     expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
     expect(reaches('services/instances.js', 'services/instanceIdentity.js')).toBe(true);
     expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
+  });
+
+  it('keeps the process-type vocabulary dependency-free', () => {
+    const entry = abs('services/appProcessTypes.js');
+    expect([...staticImportClosure(entry).files]).toEqual([entry]);
   });
 
   // And a control on the other side: the barrels themselves still reach what

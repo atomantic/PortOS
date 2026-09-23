@@ -13,6 +13,8 @@ const makeLogProcess = () => {
 
 vi.mock('../services/apps.js', () => ({
   getAppById: vi.fn(),
+}));
+vi.mock('../services/appProcessStatus.js', () => ({
   resolvePm2HomeForProcess: vi.fn(),
 }));
 
@@ -23,6 +25,7 @@ vi.mock('../services/pm2.js', () => ({
 }));
 
 import * as appsService from '../services/apps.js';
+import * as appProcessStatus from '../services/appProcessStatus.js';
 import * as pm2Service from '../services/pm2.js';
 import logsRoutes from './logs.js';
 
@@ -72,22 +75,22 @@ describe('log routes PM2_HOME resolution', () => {
   });
 
   it('fetches static logs for a process from its resolved custom PM2 home', async () => {
-    appsService.resolvePm2HomeForProcess.mockResolvedValue('/tmp/example-pm2');
+    appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue('/tmp/example-pm2');
 
     const response = await request(createApp()).get('/api/logs/example-api?lines=50');
 
     expect(response.status).toBe(200);
-    expect(appsService.resolvePm2HomeForProcess).toHaveBeenCalledWith('example-api');
+    expect(appProcessStatus.resolvePm2HomeForProcess).toHaveBeenCalledWith('example-api');
     expect(pm2Service.getLogs).toHaveBeenCalledWith('example-api', 50, '/tmp/example-pm2');
   });
 
   it('follows a process from its resolved custom PM2 home', async () => {
-    appsService.resolvePm2HomeForProcess.mockResolvedValue('/tmp/example-pm2');
+    appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue('/tmp/example-pm2');
 
     const response = await request(createApp()).get('/api/logs/example-api?follow=true');
 
     expect(response.status).toBe(200);
-    expect(appsService.resolvePm2HomeForProcess).toHaveBeenCalledWith('example-api');
+    expect(appProcessStatus.resolvePm2HomeForProcess).toHaveBeenCalledWith('example-api');
     expect(pm2Service.buildEnv).toHaveBeenCalledWith('/tmp/example-pm2');
     expect(pm2Service.spawnPm2).toHaveBeenCalledWith(
       ['logs', 'example-api', '--raw', '--lines', '100'],
@@ -96,7 +99,7 @@ describe('log routes PM2_HOME resolution', () => {
   });
 
   it('follows a process from the default PM2 home when no custom home resolves', async () => {
-    appsService.resolvePm2HomeForProcess.mockResolvedValue(null);
+    appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue(null);
 
     const response = await request(createApp()).get('/api/logs/example-api?follow=true&lines=25');
 

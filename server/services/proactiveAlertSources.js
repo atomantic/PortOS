@@ -11,7 +11,7 @@ import { getHealthAlertResolutions, healthAlertEvidence, recordHealthAlertResolu
 import { getGoals } from './identity.js';
 import { getPerformanceSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
-import { annotateExpectedExit } from './apps.js';
+import { annotateExpectedExit } from './appProcessStatus.js';
 import { getCareSummary } from './tribe.js';
 import { findUnansweredTribeThreads } from './tribeOutreach.js';
 

@@ -19,7 +19,8 @@ vi.mock('./pm2.js', () => ({
 }));
 vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
-vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), resolvePm2HomeForProcess: vi.fn(), updateApp: vi.fn() }));
+vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), updateApp: vi.fn() }));
+vi.mock('./appProcessStatus.js', () => ({ resolvePm2HomeForProcess: vi.fn() }));
 // logAction appends to the real history file — mock it or this suite writes to data/.
 vi.mock('./history.js', () => ({ logAction: vi.fn(async () => {}) }));
 vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn() } }));
@@ -86,7 +87,8 @@ vi.mock('../sockets/voice.js', () => ({ registerVoiceHandlers: vi.fn() }));
 
 import { initSocket } from './socket.js';
 import { spawnPm2 } from './pm2.js';
-import { getAppById, notifyAppsChanged, resolvePm2HomeForProcess } from './apps.js';
+import { getAppById, notifyAppsChanged } from './apps.js';
+import { resolvePm2HomeForProcess } from './appProcessStatus.js';
 import { logAction } from './history.js';
 import { cosEvents } from './cosEvents.js';
 import { beeperSocketEvents } from './beeperSocketEvents.js';

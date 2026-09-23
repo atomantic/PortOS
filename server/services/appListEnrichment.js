@@ -15,7 +15,8 @@
  * a single shared implementation without importing a service from a route.
  */
 
-import { usesPm2, parseEcosystemFromPath } from './streamingDetect.js';
+import { usesPm2 } from './appProcessTypes.js';
+import { parseEcosystemFromPath } from './streamingDetect.js';
 import { listProcessesStrict } from './pm2.js';
 import { hasDeployScript } from './appDeployer.js';
 import { checkScripts } from './xcodeScripts.js';
@@ -72,7 +73,7 @@ export function computeOverallStatus(statusValues, degraded) {
  * successful read with no processes) — those homes are tracked so their apps
  * report `unknown` (status unavailable) + `degraded: true` instead of
  * `not_started` (confidently not running). See `getAppStatuses()` in
- * `apps.js` for the same absent-vs-empty distinction.
+ * `appProcessStatus.js` for the same absent-vs-empty distinction.
  *
  * @param {Array<object>} apps - raw app records (e.g. from `getAllApps()`)
  * @returns {Promise<Array<object>>} PM2-status-enriched app records

@@ -46,8 +46,7 @@ vi.mock('../services/auth.js', () => ({
 // exercise the desktop exemption set it, everything else leaves it empty.
 const mock = vi.hoisted(() => ({ desktopProcessNames: new Set() }));
 
-vi.mock('../services/apps.js', () => ({
-  getAllApps: vi.fn().mockResolvedValue([]),
+vi.mock('../services/appProcessStatus.js', () => ({
   getAppStatusSummary: vi.fn().mockResolvedValue({
     total: 0,
     online: 0,
@@ -55,7 +54,6 @@ vi.mock('../services/apps.js', () => ({
     notStarted: 0,
     unmanaged: 0
   }),
-  // Mirrors the real helper: stamps expectedExit from the desktop-owned names.
   annotateExpectedExit: vi.fn(async (processes) =>
     processes.map(p => ({ ...p, expectedExit: mock.desktopProcessNames.has(p?.name) }))
   )

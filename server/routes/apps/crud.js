@@ -23,7 +23,7 @@ import { notifyAppsChanged, PORTOS_APP_ID } from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
 import { validateRequest, appSchema, appUpdateSchema } from '../../lib/validation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { usesPm2 } from '../../services/streamingDetect.js';
+import { usesPm2 } from '../../services/appProcessTypes.js';
 import { detectAppIcon } from '../../services/appIconDetect.js';
 import { hasDeployScript } from '../../services/appDeployer.js';
 import { checkScripts } from '../../services/xcodeScripts.js';

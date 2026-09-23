@@ -683,7 +683,7 @@ describe('no spawn site rebuilds the CLI child env by hand', () => {
     // composer, and the dormancy is why its missing CLAUDECODE strip / OpenCode
     // map is not a live PortOS gap someone needs to chase.
     ['lib/aiToolkit/runner.js', 'vendored toolkit — must not import out to other PortOS modules, and its spawn is dormant under PortOS\'s setCliRunner override'],
-    ['lib/aiToolkit/providers.js', 'vendored toolkit — must not import out to other PortOS modules; capability probe only (codex app-server), runs no models'],
+    ['lib/aiToolkit/internal/providerCatalogService.js', 'vendored toolkit catalog probes — must not import out to other PortOS modules'],
   ]);
 
   // Two independent markers, because either one alone has a blind spot: a new

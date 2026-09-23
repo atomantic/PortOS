@@ -177,6 +177,8 @@ const activeAppsRef = { value: [
 const desktopNamesRef = { value: new Set() };
 vi.mock('../apps.js', () => ({
   getActiveApps: vi.fn(async () => activeAppsRef.value),
+}));
+vi.mock('../appProcessStatus.js', () => ({
   annotateExpectedExit: vi.fn(async (procs) =>
     procs.map(p => ({ ...p, expectedExit: desktopNamesRef.value.has(p?.name) }))
   ),

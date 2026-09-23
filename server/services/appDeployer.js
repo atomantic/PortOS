@@ -1,7 +1,7 @@
 import { spawn } from '../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { NON_PM2_TYPES } from './streamingDetect.js';
+import { NON_PM2_TYPES } from './appProcessTypes.js';
 import { getAppById } from './apps.js';
 import { resolveBashBinary } from '../lib/bashResolver.js';
 import { DEPLOY_FLAGS } from '../lib/appDeployFlags.js';
