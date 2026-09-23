@@ -307,20 +307,43 @@ export default function VideoTimelineEditor() {
     updatedAtRef.current = updated.updatedAt;
     setProject((p) => ({ ...p, updatedAt: updated.updatedAt }));
     return true;
+  }).finally(() => {
+    if (pendingLanesRef.current === next) pendingLanesRef.current = null;
   }), [projectId, refresh, queueWrite]);
 
   // Debounced save: trim/fade edits fire many PATCHes per drag if we don't
   // batch them. 400ms gives the user time to stop fiddling before we hit the
   // server.
   const saveTimerRef = useRef(null);
+  const pendingLanesRef = useRef(null);
   const queueSave = useCallback((next) => {
     clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => saveTimeline(next), 400);
+    pendingLanesRef.current = next;
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      saveTimeline(next);
+    }, 400);
   }, [saveTimeline]);
 
-  // Drop any pending debounced save when the editor unmounts so a stale
-  // timeout doesn't fire after navigation.
-  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
+  // Keep the browser's native leave prompt active only while edits await save.
+  useEffect(() => {
+    const preventLeavingWithPendingSave = (event) => {
+      if (pendingLanesRef.current == null) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', preventLeavingWithPendingSave);
+    return () => window.removeEventListener('beforeunload', preventLeavingWithPendingSave);
+  }, []);
+
+  // Navigation can unmount the editor before the debounce fires. Flush the
+  // latest lanes so the final edit is persisted instead of silently dropped.
+  useEffect(() => () => {
+    if (saveTimerRef.current == null) return;
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    if (pendingLanesRef.current != null) saveTimeline(pendingLanesRef.current);
+  }, [saveTimeline]);
 
   const updateLanes = useCallback((updater) => {
     setLanes((prev) => {

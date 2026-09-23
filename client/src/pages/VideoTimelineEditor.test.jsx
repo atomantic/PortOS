@@ -38,6 +38,7 @@ const api = vi.hoisted(() => ({
   gallery: [],
   music: { tracks: [] },
   galleryThrows: false,
+  updateTimelineProject: vi.fn(async () => ({ updatedAt: 'u2' })),
 }));
 
 vi.mock('../services/api', () => ({
@@ -48,7 +49,7 @@ vi.mock('../services/api', () => ({
     return api.gallery.filter(row => filenames.includes(row.filename));
   },
   listMusicLibrary: async () => api.music,
-  updateTimelineProject: async () => ({ updatedAt: 'u2' }),
+  updateTimelineProject: (...args) => api.updateTimelineProject(...args),
   renderTimelineProject: async () => ({ jobId: 'j1' }),
 }));
 
@@ -84,12 +85,52 @@ beforeEach(() => {
   api.gallery = [{ filename: 'plate.png' }, { filename: 'logo.png' }];
   api.music = { tracks: [{ filename: 'bed.mp3', label: 'Bed' }] };
   api.galleryThrows = false;
+  api.updateTimelineProject.mockClear();
 });
 
 const renderEditor = async () => {
   render(<VideoTimelineEditor />);
   await awaitPageLoaded('Loading timeline project');
 };
+
+describe('pending lane saves', () => {
+  it('flushes the latest edit exactly once when unmounted before the debounce', async () => {
+    const view = render(<VideoTimelineEditor />);
+    await awaitPageLoaded('Loading timeline project');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+    view.unmount();
+
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledTimes(1));
+    expect(api.updateTimelineProject.mock.calls[0][1].segments).toHaveLength(1);
+    expect(api.updateTimelineProject.mock.calls[0][1].segments[0].clipId).toBe(CLIP_A);
+  });
+
+  it('does not save on unmount when no lane edit is pending', async () => {
+    const view = render(<VideoTimelineEditor />);
+    await awaitPageLoaded('Loading timeline project');
+
+    view.unmount();
+
+    expect(api.updateTimelineProject).not.toHaveBeenCalled();
+  });
+
+  it('prevents unload only while a debounced save is pending', async () => {
+    const view = render(<VideoTimelineEditor />);
+    await awaitPageLoaded('Loading timeline project');
+    fireEvent.click(screen.getByRole('button', { name: 'Add to timeline' }));
+
+    const pendingUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(pendingUnload);
+    expect(pendingUnload.defaultPrevented).toBe(true);
+
+    await waitFor(() => expect(api.updateTimelineProject).toHaveBeenCalledTimes(1), { timeout: 1500 });
+    const savedUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(savedUnload);
+    expect(savedUnload.defaultPrevented).toBe(false);
+    view.unmount();
+  });
+});
 
 describe('lane visibility', () => {
   it('shows the empty-timeline hint only when EVERY lane is empty', async () => {
