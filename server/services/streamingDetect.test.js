@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, streamDetection, classifyNonNodeType, isStandardizable, usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, NON_NODE_TYPES, NON_STANDARDIZABLE_TYPES } from './streamingDetect.js';
+import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortForProcess, rewriteEcosystemPorts, rewriteEcosystemPortsByProcess, writeEcosystemPorts, writeEcosystemPortsByProcess, writeEcosystemPortEdits, streamDetection, classifyNonNodeType, isStandardizable, NON_NODE_TYPES, NON_STANDARDIZABLE_TYPES } from './streamingDetect.js';
+import { usesPm2, DESKTOP_TYPES, NON_PM2_TYPES, isDesktopType } from './appProcessTypes.js';
 
 // streamDetection shells out to PM2 and scans for an app icon; neither is under
 // test here and both are slow/environment-dependent.
@@ -1022,6 +1023,15 @@ describe('resolveViteConfigPortForProcess', () => {
 // client-side version of this test therefore passes on a dev machine and fails
 // in CI. Keep the import one-way.
 describe('client mirror of the app-type sets', () => {
+  it('keeps compatibility exports backed by the process-type leaf', async () => {
+    const legacy = await import('./streamingDetect.js');
+    const leaf = await import('./appProcessTypes.js');
+    expect(legacy.NON_PM2_TYPES).toBe(leaf.NON_PM2_TYPES);
+    expect(legacy.usesPm2).toBe(leaf.usesPm2);
+    expect(legacy.DESKTOP_TYPES).toBe(leaf.DESKTOP_TYPES);
+    expect(legacy.isDesktopType).toBe(leaf.isDesktopType);
+  });
+
   it('matches DESKTOP_TYPES', async () => {
     const client = await import('../../client/src/components/apps/constants.js');
     expect([...client.DESKTOP_TYPES].sort()).toEqual([...DESKTOP_TYPES].sort());

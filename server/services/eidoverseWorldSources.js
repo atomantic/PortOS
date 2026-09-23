@@ -8,7 +8,8 @@
 
 import { statfs } from 'node:fs/promises';
 import { parseFilesystemStats } from '../lib/fileCore.js';
-import { getAllApps, getAppStatuses } from './apps.js';
+import { getAllApps } from './apps.js';
+import { getAppStatuses } from './appProcessStatus.js';
 import { getStatus as getCosStatus, getAgents, getCosTasks, getTodayActivity } from './cos.js';
 import { getPendingCounts } from './review.js';
 import { getPeers } from './instances.js';

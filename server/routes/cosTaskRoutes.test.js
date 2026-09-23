@@ -64,7 +64,7 @@ vi.mock('../services/cosTaskGenerator.js', () => ({
   buildJiraTicketTask: vi.fn(),
 }));
 vi.mock('../services/apps.js', () => ({ getAppById: vi.fn(), getAppWorkTracker: vi.fn(), PORTOS_APP_ID: 'portos-default' }));
-vi.mock('../services/streamingDetect.js', () => ({ NON_PM2_TYPES: new Set() }));
+vi.mock('../services/appProcessTypes.js', () => ({ NON_PM2_TYPES: new Set() }));
 vi.mock('../services/instances.js', () => ({ getAssignableInstances: vi.fn() }));
 vi.mock('../services/managedAppRepositories.js', () => ({ resolveManagedAppIssueTarget: vi.fn() }));
 vi.mock('../services/goalFidelityCalibration.js', () => ({ reportGoalFidelityFalsePositive: vi.fn() }));

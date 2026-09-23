@@ -5,9 +5,8 @@ import { homedir } from 'os';
 import { listProcessesStrict } from './pm2.js';
 import { safeJSONParse, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { detectAppIcon } from './appIconDetect.js';
-
-/** App types that do not use PM2 for process management */
-export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
+import { NON_PM2_TYPES, usesPm2, DESKTOP_TYPES, isDesktopType } from './appProcessTypes.js';
+export { NON_PM2_TYPES, usesPm2, DESKTOP_TYPES, isDesktopType };
 
 /**
  * Language markers, checked FIRST: a repo's LANGUAGE beats its packaging, so a
@@ -92,19 +91,6 @@ export const NON_STANDARDIZABLE_TYPES = new Set([...NON_PM2_TYPES, ...NON_NODE_T
 export const isStandardizable = (type) => !NON_STANDARDIZABLE_TYPES.has(type);
 
 /**
- * App types that run a GUI/desktop process with no HTTP port (e.g. a Godot
- * game binary). These are still supervised through PM2, but launched from the
- * app's own `startCommands` — never an ecosystem web-server config — and with
- * autorestart OFF: the user closing the window is a NORMAL exit (code 0), not a
- * crash to relaunch. Port-dependent surfaces (Open UI, HTTP probes) branch on
- * "has a port" rather than assuming one.
- */
-export const DESKTOP_TYPES = new Set(['desktop']);
-
-/** Check if an app type is a portless GUI/desktop process. */
-export const isDesktopType = (type) => DESKTOP_TYPES.has(type);
-
-/**
  * Detect an optional native Godot launch target alongside the repo's normal
  * web-process configuration.
  *
@@ -146,9 +132,6 @@ export function detectGodotNativeLaunch(dirPath) {
  * and silently reverts on the next refresh.
  */
 const ECOSYSTEM_CONFIG_FILENAMES = ['ecosystem.config.js', 'ecosystem.config.cjs'];
-
-/** Check if an app type uses PM2 for process management */
-export const usesPm2 = (type) => !NON_PM2_TYPES.has(type);
 
 /**
  * Count the run of consecutive backslashes immediately before `idx`.

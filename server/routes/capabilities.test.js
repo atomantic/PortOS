@@ -62,7 +62,7 @@ vi.mock('../services/telegram.js', () => ({
 vi.mock('../services/telegramBridge.js', () => ({
   getStatus: vi.fn(() => ({ connected: false, hasBotToken: false, hasChatId: false })),
 }));
-vi.mock('../services/apps.js', () => ({
+vi.mock('../services/appProcessStatus.js', () => ({
   getAppStatusSummary: vi.fn(async () => ({ total: 2, online: 2, stopped: 0, notStarted: 0, unmanaged: 0 })),
 }));
 

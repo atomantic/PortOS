@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import * as appsService from '../services/apps.js';
+import { getAppById } from '../services/apps.js';
+import { resolvePm2HomeForProcess } from '../services/appProcessStatus.js';
 import * as pm2Service from '../services/pm2.js';
 import { spawnPm2 } from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -42,7 +43,7 @@ router.get('/:processName', asyncHandler(async (req, res) => {
     throw new ServerError('Invalid process name', { status: 400, code: 'INVALID_PROCESS_NAME' });
   }
 
-  const pm2Home = await appsService.resolvePm2HomeForProcess(safeProcessName);
+  const pm2Home = await resolvePm2HomeForProcess(safeProcessName);
 
   if (!follow) {
     // Static log fetch
@@ -102,7 +103,7 @@ router.get('/:processName', asyncHandler(async (req, res) => {
 
 // GET /api/logs/app/:appId - Get logs for all processes of an app
 router.get('/app/:appId', asyncHandler(async (req, res) => {
-  const app = await appsService.getAppById(req.params.appId);
+  const app = await getAppById(req.params.appId);
 
   if (!app) {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });

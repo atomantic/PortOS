@@ -15,7 +15,7 @@ import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories
 import { workTrackerLabel } from '../lib/workTracker.js';
 import { runningAgentsByTaskId, settleTaskSourceSpawnWindow } from '../lib/cosSpawnWindow.js';
 import { getSlashdoWorkflow, slashdoWorkflowAppliesTo, SLASHDO_COMMAND_NAMES } from '../lib/slashdoCatalog.js';
-import { NON_PM2_TYPES } from '../services/streamingDetect.js';
+import { NON_PM2_TYPES } from '../services/appProcessTypes.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { recordUserAction } from '../services/userActions.js';
 import { fileInvestigationTask } from '../services/investigationTaskProducer.js';

@@ -9,7 +9,8 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { getReservedPorts, getAllApps } from './apps.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { usesPm2, isStandardizable } from './streamingDetect.js';
+import { usesPm2 } from './appProcessTypes.js';
+import { isStandardizable } from './streamingDetect.js';
 import { getListeningPorts } from '../lib/platform.js';
 
 const execAsync = promisify(exec);

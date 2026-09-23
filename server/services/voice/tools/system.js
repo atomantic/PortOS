@@ -3,7 +3,7 @@
 // the "ops / things running" mental model but gate on separate regexes.
 
 import { listProcesses, restartApp } from '../../pm2.js';
-import { annotateExpectedExit } from '../../apps.js';
+import { annotateExpectedExit } from '../../appProcessStatus.js';
 import { getItems, getFeeds, markItemRead, markAllRead } from '../../feeds.js';
 import { clampLimit } from './shared.js';
 
