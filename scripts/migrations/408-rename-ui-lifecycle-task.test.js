@@ -30,11 +30,13 @@ describe('migration 408 — rename the UI lifecycle task', () => {
           enabled: true,
           providerId: 'legacy-provider',
           prompt: 'custom prompt',
+          runAfter: ['security', 'legacy-prerequisite', 'react-lifecycle'],
           taskMetadata: { fileIssues: true, useWorktree: false },
         },
         'ui-lifecycle': {
           enabled: false,
           model: 'current-model',
+          runAfter: ['current-prerequisite', 'ui-lifecycle'],
           taskMetadata: { openPR: false },
         },
         'another-task': { runAfter: ['security', 'react-lifecycle'] },
@@ -75,6 +77,7 @@ describe('migration 408 — rename the UI lifecycle task', () => {
       model: 'current-model',
       prompt: 'custom prompt',
       taskMetadata: { fileIssues: true, useWorktree: false, openPR: false },
+      runAfter: ['security', 'legacy-prerequisite', 'ui-lifecycle', 'current-prerequisite'],
     });
     expect(schedule.tasks['another-task'].runAfter).toEqual(['security', 'ui-lifecycle']);
     expect(schedule.executions).not.toHaveProperty('task:react-lifecycle');
