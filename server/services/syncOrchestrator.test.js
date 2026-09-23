@@ -1261,7 +1261,7 @@ describe('syncOrchestrator', () => {
         await syncAllPeers();
 
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle: 1 peer online'));
-        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync starting with peer'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync starting with peer 1'));
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 0 changes applied across 1 peer'));
       } finally {
         logSpy.mockRestore();
@@ -1286,7 +1286,7 @@ describe('syncOrchestrator', () => {
       try {
         await syncAllPeers();
 
-        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Synced with peer: 1 brain changes'));
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Synced with peer 1: 1 brain changes'));
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 1 change applied across 1 peer'));
       } finally {
         logSpy.mockRestore();
@@ -1310,7 +1310,7 @@ describe('syncOrchestrator', () => {
       try {
         await syncAllPeers();
 
-        expect(errorSpy.mock.calls.some(([message]) => String(message).includes('usage sync with peer failed'))).toBe(true);
+        expect(errorSpy.mock.calls.some(([message]) => String(message).includes('usage sync with peer 1 failed'))).toBe(true);
         expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Sync cycle complete: 0 changes applied across 1 peer'));
       } finally {
         logSpy.mockRestore();

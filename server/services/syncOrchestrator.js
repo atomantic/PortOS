@@ -726,10 +726,11 @@ const emptyCoverage = () => ({ universe: new Set(), pipeline: new Set(), mediaCo
 /**
  * Sync all data from a single peer
  */
-export async function syncWithPeer(peer, { logStart = true, onCategoryFailure } = {}) {
+export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, peerOrdinal = null } = {}) {
   if (!peer.instanceId) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
 
   const peerId = peer.instanceId;
+  const logLabel = peerLogLabel(peerOrdinal);
 
   // Prevent concurrent syncs for the same peer
   if (syncingPeers.has(peerId)) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
@@ -787,7 +788,7 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure } 
     const categories = getEffectiveCategories(peer);
     const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
     if (logStart) {
-      console.log(`🔄 Sync starting with ${peerLogLabel(peer)}: categories=${enabledNames.join(',') || 'none'}`);
+      console.log(`🔄 Sync starting with ${logLabel}: categories=${enabledNames.join(',') || 'none'}`);
     }
     emitSyncProgress({ phase: 'start', peerId });
 
@@ -855,7 +856,7 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure } 
         enabledDataCats.map(cat =>
           syncDataCategoryFromPeer(peer, peerId, cat, cachedChecksums, scopedInstanceId)
             .catch(err => {
-              logFailureWithStack(`⚠️ ${cat} sync with ${peerLogLabel(peer)} failed`, err);
+              logFailureWithStack(`⚠️ ${cat} sync with ${logLabel} failed`, err);
               recordCategoryFailure(cat, err);
               return { totalApplied: 0, checksum: null };
             })
@@ -909,7 +910,7 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure } 
       if (result.totalApplied > 0) parts.push(`${result.totalApplied} ${cat}`);
     }
     if (parts.length > 0) {
-      console.log(`🔄 Synced with ${peerLogLabel(peer)}: ${parts.join(', ')} changes`);
+      console.log(`🔄 Synced with ${logLabel}: ${parts.join(', ')} changes`);
     }
 
     const totalApplied = brainResult.totalApplied + memoryResult.totalApplied
@@ -1007,7 +1008,7 @@ export async function syncAllPeers() {
 
   if (membershipChanged) {
     if (online.length > 0) {
-      const names = online.map(p => peerLogLabel(p)).join(', ');
+      const names = online.map((_, index) => peerLogLabel(index)).join(', ');
       console.log(`🔄 Sync cycle: ${online.length} peer${online.length === 1 ? '' : 's'} online (${names})`);
     } else {
       console.log('🔄 Sync cycle: peer membership changed (0 online)');
@@ -1015,17 +1016,18 @@ export async function syncAllPeers() {
   }
 
   let cycleFailed = false;
-  const settled = await Promise.allSettled(online.map(p => syncWithPeer(p, {
+  const settled = await Promise.allSettled(online.map((p, index) => syncWithPeer(p, {
     // The periodic path cannot know whether a sync will change data until it
     // finishes. Keep the start line only for an observable membership change.
     logStart: membershipChanged,
+    peerOrdinal: index,
     onCategoryFailure: () => { cycleFailed = true; },
   })));
   for (let i = 0; i < settled.length; i++) {
     const result = settled[i];
     if (result.status === 'rejected') {
       cycleFailed = true;
-      logFailureWithStack(`❌ Sync with ${peerLogLabel(online[i])} failed`, result.reason);
+      logFailureWithStack(`❌ Sync with ${peerLogLabel(i)} failed`, result.reason);
     }
   }
 

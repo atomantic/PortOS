@@ -216,8 +216,8 @@ function validName(name, fallback) {
  * Peer display names, hosts, addresses and instance IDs can identify a machine.
  * Keep server logs generic so runtime sync events do not persist that data.
  */
-export function peerLogLabel() {
-  return 'peer';
+export function peerLogLabel(ordinal = null) {
+  return Number.isInteger(ordinal) && ordinal >= 0 ? `peer ${ordinal + 1}` : 'peer';
 }
 
 function isIPAddress(str) {
