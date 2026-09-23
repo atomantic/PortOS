@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { exec, spawn } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { platform } from 'os';
-import { createApp, getReservedPorts } from '../services/apps.js';
+import { createApp, getReservedPorts, notifyAppsChanged } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, scaffoldSchema } from '../lib/validation.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
@@ -585,6 +585,8 @@ Thumbs.db
     pm2ProcessNames: pm2Names,
     envFile: '.env'
   });
+
+  notifyAppsChanged('create', app.id);
 
   addStep('Register in PortOS', 'done');
 

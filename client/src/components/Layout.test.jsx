@@ -3,6 +3,7 @@ import { render, screen, within, act, fireEvent, waitFor } from '@testing-librar
 import { MemoryRouter, useLocation } from 'react-router';
 import { PINNED_KEY } from '../utils/navWorkingSet.js';
 import * as api from '../services/api';
+import socket from '../services/socket';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
 
@@ -562,7 +563,24 @@ describe('Layout — dynamic third-level navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand Universes' }));
     expect(screen.getByRole('link', { name: 'Example Series' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Example Universe' })).toBeTruthy();
+  });
 
+  it('updates dynamic apps navigation when apps:changed is emitted', async () => {
+    let appsChangedHandler;
+    socket.on.mockImplementation((event, handler) => {
+      if (event === 'apps:changed') appsChangedHandler = handler;
+    });
+    api.getApps.mockResolvedValueOnce([]);
+    await renderLayout('/apps');
+
+    expect(screen.queryByRole('link', { name: 'Super New App' })).not.toBeInTheDocument();
+
+    api.getApps.mockResolvedValueOnce([{ id: 'super-new-app', name: 'Super New App' }]);
+    await act(async () => {
+      appsChangedHandler?.();
+    });
+
+    expect(await screen.findByRole('link', { name: 'Super New App' })).toBeInTheDocument();
   });
 });
 

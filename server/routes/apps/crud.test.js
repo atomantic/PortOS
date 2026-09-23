@@ -299,6 +299,7 @@ describe('Apps CRUD Routes', () => {
       expect(response.status).toBe(201);
       expect(response.body.id).toBe('app-001');
       expect(appsService.createApp).toHaveBeenCalledWith(expect.objectContaining({ name: 'New App' }));
+      expect(appsService.notifyAppsChanged).toHaveBeenCalledWith('create', 'app-001');
     });
 
     it('should return 400 if validation fails', async () => {
@@ -322,6 +323,7 @@ describe('Apps CRUD Routes', () => {
 
       expect(response.status).toBe(200);
       expect(appsService.updateApp).toHaveBeenCalledWith('app-001', expect.objectContaining({ name: 'Updated Name' }));
+      expect(appsService.notifyAppsChanged).toHaveBeenCalledWith('update', 'app-001');
     });
 
     it('should return 404 if app not found', async () => {

@@ -42,7 +42,8 @@ vi.mock('../lib/childProcess.js', () => ({
 
 vi.mock('../services/apps.js', () => ({
   createApp: vi.fn().mockResolvedValue({ id: 'app-001', name: 'Test' }),
-  getReservedPorts: vi.fn().mockResolvedValue([])
+  getReservedPorts: vi.fn().mockResolvedValue([]),
+  notifyAppsChanged: vi.fn()
 }));
 
 vi.mock('../lib/workspaceRoots.js', () => ({
