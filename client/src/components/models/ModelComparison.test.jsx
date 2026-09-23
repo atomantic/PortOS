@@ -68,6 +68,8 @@ it('runs the explicitly selected provider, model and effort, then displays the s
   render(<ModelComparison />);
 
   await screen.findByTestId('xaxis');
+  await waitFor(() => expect(screen.getByLabelText('Model')).toHaveValue('gpt-6-luna'));
+  await waitFor(() => expect(screen.getByLabelText('Reasoning effort')).toBeEnabled());
   fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'high' } });
   fireEvent.click(screen.getByRole('button', { name: 'Run five tasks' }));
 

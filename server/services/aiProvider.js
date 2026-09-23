@@ -342,7 +342,14 @@ async function callCodexSubscription(provider, model, prompt, {
     if (!turn.error) {
       if (turn.effortClamped) statusOp.update('model:corrected', turn.clampReason, { model: turn.model });
       statusOp.complete(`${doneLabel} done (${elapsedSec()}s)`, throughput(turn.usage?.outputTokens));
-      return { result: { text: turn.text, usage: turn.usage } };
+      return { result: {
+        text: turn.text,
+        usage: turn.usage,
+        model: turn.model,
+        effort: turn.effort,
+        effortClamped: turn.effortClamped,
+        clampReason: turn.clampReason,
+      } };
     }
 
     reason = turn.error.message;
@@ -534,7 +541,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
       return { text: retry.text, ...(retry.usage ? { usage: retry.usage } : {}) };
     }
     statusOp.error(retry.error, { model: retryModel });
-    return { error: retry.error };
+    return { error: retry.error, ...(Number.isInteger(retry.status) ? { status: retry.status } : {}) };
   };
 
   if (options.allowModelRecovery !== false && first.status === 400 && LM_STUDIO_NO_MODEL_RE.test(first.body || '')) {
@@ -560,7 +567,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   }
 
   statusOp.error(first.error);
-  return { error: first.error };
+  return { error: first.error, ...(Number.isInteger(first.status) ? { status: first.status } : {}) };
 }
 
 // Extracted to lib/llmText.js in #4901 — unfencing a string needs no provider,

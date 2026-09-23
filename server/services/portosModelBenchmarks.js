@@ -5,6 +5,7 @@ import { estimateCostUsd, isFreeProvider, pricingAsOfForModel, resolveModelRates
 import { familyForProvider } from '../lib/providerFamilies.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { isCodexTextTransportEnabled } from '../lib/codexTurn.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { callProviderAISimple } from './aiProvider.js';
 import { recordPortosModelBenchmark } from './modelComparison.js';
 
@@ -105,7 +106,7 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
   const family = familyForProvider(provider);
   const rate = !isLocalProvider(provider) ? resolveModelRates(family || provider.id, model) : null;
   const canPriceEquivalent = rate && ['exact', 'family'].includes(rate.matched);
-  const selectedEffort = effort || (isCodexTextTransportEnabled(provider) ? provider.effort : null) || 'default';
+  let selectedEffort = effort || (isCodexTextTransportEnabled(provider) ? provider.effort : null) || 'default';
   const runProvider = {
     ...provider,
     fallbackProvider: null,
@@ -113,6 +114,7 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
   };
   const startedAt = Date.now();
   const results = [];
+  let failureReason = null;
 
   for (const task of TASKS) {
     if (signal?.aborted) break;
@@ -123,13 +125,23 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
       signal,
       allowModelRecovery: false,
     });
-    if (result?.error || typeof result?.text !== 'string') break;
+    if (result?.error || typeof result?.text !== 'string') {
+      if (signal?.aborted || result?.canceled) break;
+      failureReason = Number.isInteger(result?.status) ? `Provider returned HTTP ${result.status}` : 'Provider request failed';
+      break;
+    }
+    if (isCodexTextTransportEnabled(provider) && typeof result.effort === 'string' && result.effort) {
+      selectedEffort = result.effort;
+    }
     const usage = usageFor(result, prompt);
     results.push({ task, correct: grade(task, result.text), ...usage });
   }
 
   if (results.length === 0) {
-    throw new Error(signal?.aborted ? 'Benchmark run cancelled before a task completed.' : 'The selected provider did not complete a benchmark task.');
+    const reason = signal?.aborted ? 'Benchmark run cancelled before a task completed.'
+      : failureReason ? `Benchmark could not complete its first task. ${failureReason}.`
+        : 'The selected provider did not complete a benchmark task.';
+    throw new ServerError(reason, { status: 502 });
   }
 
   const finishedAt = Date.now();
@@ -185,11 +197,11 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
     quota: null,
     notes: complete
       ? `${passedTasks}/${TASKS.length} deterministic checks passed. No prompt or model response is stored. Subscription quota use is not attributable per task; any API-equivalent amount is a reference estimate only.`
-      : `${completedTasks}/${TASKS.length} tasks completed before the run stopped. No performance score assigned. No prompt or model response is stored.`,
+      : `${completedTasks}/${TASKS.length} tasks completed before the run stopped. ${failureReason ? `${failureReason}.` : signal?.aborted ? 'Run cancelled by the user.' : 'Run stopped before all tasks completed.'} No performance score assigned. No prompt or model response is stored.`,
   };
 
   await recordPortosModelBenchmark(observation);
-  return { observation, complete };
+  return { observation, complete, failureReason };
 }
 
 export const PORTOS_BENCHMARK_TASK_COUNT = TASKS.length;

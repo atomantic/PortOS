@@ -142,7 +142,9 @@ export default function ModelComparison() {
         if (result.complete) {
           toast.success(`Benchmark saved: ${formatCount(result.observation.quality.value)}% correct`);
         } else {
-          toast.warning(`Partial benchmark saved: ${result.observation.completedTasks}/${result.observation.totalTasks} tasks; no score assigned.`);
+          const reason = result.failureReason ? ` ${result.failureReason}.` : '';
+          setStatus(`Partial benchmark saved: ${result.observation.completedTasks}/${result.observation.totalTasks} tasks; no score assigned.${reason}`);
+          toast.warning(`Partial benchmark saved: ${result.observation.completedTasks}/${result.observation.totalTasks} tasks; no score assigned.${reason}`);
         }
       })
       .catch(err => {

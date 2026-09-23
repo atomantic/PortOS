@@ -1,6 +1,6 @@
 # PortOS Model Benchmarks
 
-**Models → Comparison** runs a small, fixed PortOS task set against models this install can use. The chart can show total tokens per five-task run or estimated API-equivalent cost per 1,000 runs on the X axis, against exact-answer score on the Y axis. Token mode includes local models. Cost mode includes only models with a known API-rate reference. A run is initiated by a person from the page; reads, startup, imports, and scheduled research never call a model.
+**Models → Comparison** runs a small, fixed PortOS task set against models this install can use. The chart can show total tokens per five-task run or estimated API-equivalent cost per 1,000 runs on the X axis, against exact-answer score on the Y axis. Token mode includes local models. Cost mode includes only models with a known API-rate reference. Benchmark runs are started by a person from the page; reads, startup, and imports never dispatch benchmark calls. The scheduled model research task uses its configured model to produce a research report, but does not run the benchmark or change benchmark results.
 
 ## PortOS Task Bench v1
 
@@ -34,7 +34,7 @@ Public price references may remain in the seed; they are not presented as PortOS
 The scheduled model research task checks official model releases and effort options and reports actionable changes for maintainers. When that research confirms a new model or effort option:
 
 1. Add the model to `data.reference/providers.json` only for provider accounts that can actually select it; add an additive migration when existing installs need the choice.
-2. Update the model's API reference rates in `server/lib/modelPricing.js` from an official pricing source and move `PRICING_AS_OF` forward.
+2. Update the model's API reference rates in `server/lib/modelPricing.js` from an official pricing source and record the model's verification date with `pricingAsOfForModel()`. Move the global `PRICING_AS_OF` date only when all rates are rechecked.
 3. Use `effortLevelsForProvider()` and provider-published model capability data for available efforts. Do not infer an unsupported effort rung from another model in the family.
 4. Keep performance blank until this PortOS install runs the fixed task set on that exact model and effort. No source leaderboard score is copied into the PortOS chart.
 
