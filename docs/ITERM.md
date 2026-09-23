@@ -10,6 +10,10 @@ On a Mac running iTerm2, PortOS can list the terminals you already have open in 
 
 The first time PortOS connects, macOS may ask whether PortOS (the process running `osascript`) may control iTerm2. Allow it under **System Settings → Privacy & Security → Automation**.
 
+## Security
+
+Input is delivered to the selected live terminal exactly as typed and can run commands with the host user's privileges. Treat access to the PortOS socket as host-command access; this view adds no command allowlist. PortOS authentication and HTTPS are optional and off by default, so keep the instance on its private network and use a strong, unique instance password.
+
 ## Using it
 
 With the feature on, the Shell page header shows a `PortOS | iTerm2` switch. `/shell` and `/shell/:sessionId` stay PortOS shells. `/shell/iterm` lists the iTerm2 sessions, grouped window › tab › pane, and `/shell/iterm/iterm-<uuid>` opens one directly (⌘K "iterm" goes there too). The view has an amber iTerm2 frame and badge plus a `cols×rows · sized by iTerm` geometry badge. The input helpers (Ctrl-C, Esc, arrows, paste, quick commands, fullscreen) all work. New, Stop, Restart, the cd picker and the provider launcher are absent on purpose.
