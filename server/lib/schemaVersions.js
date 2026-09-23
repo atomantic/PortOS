@@ -760,6 +760,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   //    restamping) resolve to the larger `count` on equal stamps.
   //  - v1 → v0: a v0 receiver scopes meatspace to no schema keys, so it cannot
   //    gate; it unions the id'd rows by content and keeps them verbatim.
+  //    Its content union still keeps an edited row beside the unedited copy (it
+  //    cannot read `replaces`) — the same double row an edit between two v0
+  //    peers has always produced, cleared once that peer upgrades.
   // The key exists so the NEXT incompatible daily-log change can bump to 2 and
   // have v1 receivers reject it.
   meatspace: 1,
