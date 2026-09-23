@@ -24,6 +24,7 @@ import {
   recurrenceMilestoneReached,
   appendRecentOutcome,
   computeWindowedStats,
+  executionDurationKey,
   DEFAULT_WINDOW_MAX_COUNT,
   DEFAULT_WINDOW_MAX_AGE_MS,
   ENVIRONMENTAL_ERROR_CATEGORIES
@@ -52,6 +53,70 @@ export { ENVIRONMENTAL_ERROR_CATEGORIES };
  * the same way. Additive + back-compat: tolerates a learning.json that predates
  * the `environmentalFailures` key. No-op when the failure carries no category.
  */
+/**
+ * The empty duration bucket every ETA-shaped aggregate starts from. One literal so
+ * `byTaskType` and `byTaskTypeExecution` cannot persist different shapes on their
+ * first write — they already had: the task-type initializer relied on `|| 0` for the
+ * success-only fields while the execution one seeded them.
+ */
+const emptyDurationBucket = () => ({
+  completed: 0,
+  succeeded: 0,
+  failed: 0,
+  totalDurationMs: 0,
+  successDurationMs: 0,
+  successMaxDurationMs: 0,
+  avgDurationMs: 0,
+  maxDurationMs: 0,
+  p80DurationMs: 0,
+  lastCompleted: null,
+  successRate: 0
+});
+
+/**
+ * Fold one completion into an ETA-shaped duration bucket. Pure — mutates and returns
+ * `metrics`. The single place the "success-only durations drive the ETA" rule lives:
+ * a failed agent often loops long in an error path, so only successful runs feed
+ * `calculateDurationETA`. Shared by the `byTaskType` and `byTaskTypeExecution` folds
+ * below so the two dimensions can never disagree about what an ETA is.
+ *
+ * The bounded `recentOutcomes` ring stays at the call site — only `byTaskType` carries
+ * one (it feeds LI's windowed success rate, which the duration-only execution bucket
+ * has no part in).
+ */
+function foldDurationOutcome(metrics, { success, duration = 0, at } = {}) {
+  metrics.completed++;
+  if (success) {
+    metrics.succeeded++;
+    metrics.successDurationMs = (metrics.successDurationMs || 0) + duration;
+    metrics.successMaxDurationMs = Math.max(metrics.successMaxDurationMs || 0, duration);
+  } else {
+    metrics.failed++;
+  }
+  metrics.totalDurationMs += duration;
+  Object.assign(metrics, calculateDurationETA(metrics));
+  metrics.lastCompleted = at || new Date().toISOString();
+  metrics.successRate = Math.round((metrics.succeeded / metrics.completed) * 100);
+  return metrics;
+}
+
+/**
+ * Fold one completion's duration into its execution-scoped bucket (issue #8001).
+ * Pure — mutates and returns `data`. A null `key` (the run's provider or model was
+ * never recorded) is a no-op: a partial key would merge unlike runs into one
+ * estimate, which is exactly the blur this dimension exists to remove.
+ *
+ * The caller applies the environmental-failure gate (#2618) before reaching here, so
+ * an outage teaches this dimension nothing either.
+ */
+function recordExecutionDuration(data, { key, success, duration = 0, at } = {}) {
+  if (!key) return data;
+  if (!data.byTaskTypeExecution) data.byTaskTypeExecution = {};
+  if (!data.byTaskTypeExecution[key]) data.byTaskTypeExecution[key] = emptyDurationBucket();
+  foldDurationOutcome(data.byTaskTypeExecution[key], { success, duration, at });
+  return data;
+}
+
 export function recordEnvironmentalFailure(data, { category, taskType } = {}) {
   if (!category) return data;
   if (!data.environmentalFailures) data.environmentalFailures = {};
@@ -471,15 +536,7 @@ export async function recordTaskCompletion(agent, task) {
     // Initialize task type bucket if needed
     if (!data.byTaskType[taskType]) {
       data.byTaskType[taskType] = {
-        completed: 0,
-        succeeded: 0,
-        failed: 0,
-        totalDurationMs: 0,
-        avgDurationMs: 0,
-        maxDurationMs: 0,
-        p80DurationMs: 0,
-        lastCompleted: null,
-        successRate: 0,
+        ...emptyDurationBucket(),
         // Bounded recency ring (issue #2460) — feeds the windowed rate LI reads.
         recentOutcomes: []
       };
@@ -498,21 +555,7 @@ export async function recordTaskCompletion(agent, task) {
     }
 
     // Update task type metrics
-    const typeMetrics = data.byTaskType[taskType];
-    typeMetrics.completed++;
-    if (outcomeSuccess) {
-      typeMetrics.succeeded++;
-      // Only include successful durations in ETA calculations — failed agents often
-      // run long in error loops and skew estimates
-      typeMetrics.successDurationMs = (typeMetrics.successDurationMs || 0) + duration;
-      typeMetrics.successMaxDurationMs = Math.max(typeMetrics.successMaxDurationMs || 0, duration);
-    } else {
-      typeMetrics.failed++;
-    }
-    typeMetrics.totalDurationMs += duration;
-    Object.assign(typeMetrics, calculateDurationETA(typeMetrics));
-    typeMetrics.lastCompleted = new Date().toISOString();
-    typeMetrics.successRate = Math.round((typeMetrics.succeeded / typeMetrics.completed) * 100);
+    const typeMetrics = foldDurationOutcome(data.byTaskType[taskType], { success: outcomeSuccess, duration });
     // Append this run to the bounded recency ring (issue #2460). The lifetime
     // counters above never decay; the ring lets LI read a recency-windowed rate so
     // a since-resolved failure burst ages out of the "is work needed" signal
@@ -527,6 +570,25 @@ export async function recordTaskCompletion(agent, task) {
       success: outcomeSuccess,
       at: typeMetrics.lastCompleted,
       durationMs: Number.isFinite(durationMs) ? durationMs : null
+    });
+
+    // Fold the same duration into the execution-scoped bucket (issue #8001) —
+    // task type × the provider/model/effort this run actually executed on, which
+    // is what makes a local-Ollama release check and a cloud one two estimates
+    // instead of one wrong average. Stamped with the SAME `lastCompleted` the
+    // task-type bucket just took so the prune sweep sees one consistent clock.
+    // `?? null` (not `||`) on effort: a provider with no effort control is
+    // genuinely absent, and the key builder maps that to its own sentinel.
+    recordExecutionDuration(data, {
+      key: executionDurationKey({
+        taskType,
+        providerId: agent.metadata?.providerId,
+        model: agent.metadata?.model,
+        effort: agent.metadata?.effort ?? null
+      }),
+      success: outcomeSuccess,
+      duration,
+      at: typeMetrics.lastCompleted
     });
 
     // Update model tier metrics
@@ -817,6 +879,14 @@ export async function recalculateModelTierMetrics() {
  * Rebuild success-only duration stats from the agent archive.
  * Scans all completed agent metadata to recalculate avgDurationMs, maxDurationMs, and p80DurationMs
  * using only successful agent durations (failed agents often run long in error loops and skew ETAs).
+ *
+ * Also rebuilds `byTaskTypeExecution` (issue #8001) from the SAME archive pass, so the two
+ * dimensions can never disagree about the same runs after a recalc (issue #8010). This REPLACES
+ * the map wholesale rather than merging into it — consistent with how this recalc always
+ * replaces the derived aggregate it rebuilds — using the shared `executionDurationKey` /
+ * `foldDurationOutcome` the live recorder uses, so the rebuilt shape can't drift from the
+ * recorded one. `saveLearningData` applies the existing stale-prune + `EXECUTION_BUCKET_CAP`
+ * sweep to the replaced map on the way out, same as it does for a live write.
  */
 export async function recalculateDurationStats() {
   return withLock(async () => {
@@ -829,6 +899,8 @@ export async function recalculateDurationStats() {
   }
   data.totals.successDurationMs = 0;
   data.totals.successMaxDurationMs = 0;
+
+  const byTaskTypeExecution = {};
 
   let agentCount = 0;
   let successCount = 0;
@@ -885,14 +957,40 @@ export async function recalculateDurationStats() {
       // bypass, banking its duration into the success-only ETAs.
       if (isSkipLearningVerdict(vp)) continue;
       const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
-      if (!outcomeSuccess || duration <= 0) continue;
-
-      successCount++;
       const taskType = extractTaskType({
         description: meta.metadata?.taskDescription,
         metadata: meta.metadata,
         taskType: meta.metadata?.taskType
       });
+
+      // Execution-scoped bucket (issue #8001/#8010): folds every non-environmental
+      // completion — success OR fail, any duration — mirroring the live
+      // `recordExecutionDuration` call, which is NOT gated on success/duration>0 the
+      // way the success-only byTaskType recalc below is. Applies the SAME
+      // environmental-failure gate (#2618) the live recorder uses so an archived
+      // outage never dents this dimension either.
+      const errorCategory = meta.result?.errorAnalysis?.category || null;
+      const errorOrigin = meta.result?.errorAnalysis?.origin ?? null;
+      if (!shouldDivertToEnvironmental(outcomeSuccess, errorCategory, errorOrigin)) {
+        const executionKey = executionDurationKey({
+          taskType,
+          providerId: meta.metadata?.providerId,
+          model: meta.metadata?.model,
+          effort: meta.metadata?.effort ?? null
+        });
+        if (executionKey) {
+          if (!byTaskTypeExecution[executionKey]) byTaskTypeExecution[executionKey] = emptyDurationBucket();
+          foldDurationOutcome(byTaskTypeExecution[executionKey], {
+            success: outcomeSuccess,
+            duration,
+            at: meta.completedAt
+          });
+        }
+      }
+
+      if (!outcomeSuccess || duration <= 0) continue;
+
+      successCount++;
 
       if (data.byTaskType[taskType]) {
         data.byTaskType[taskType].successDurationMs += duration;
@@ -916,6 +1014,8 @@ export async function recalculateDurationStats() {
   if ((data.totals.succeeded || 0) > 0 && data.totals.successDurationMs > 0) {
     Object.assign(data.totals, calculateDurationETA(data.totals));
   }
+
+  data.byTaskTypeExecution = byTaskTypeExecution;
 
   await saveLearningData(data);
 

@@ -23,9 +23,10 @@ Any **compatible** combination of enabled parts is runnable without a stored rec
 The stored records, **grouped by harness** and ordered within a group by readiness (what can run first, what you switched on but cannot run yet second, what is switched off last). Readiness is still on every card as its color and badge; it no longer decides which section a card lands in. A record this machine's hardware cannot run is parked in a collapsed *Unavailable on this machine* section — kept, because the file is shared with your other machines.
 
 - **Compatibility matrix** — harness rows × service columns, each cell the server's verdict on that pair (`GET /api/providers/catalog`, nothing recomputed in the browser): **offered** (click for a prefilled "New preset"), **blocked** with its reason (a side switched off, a missing key or endpoint), or **unreachable**.
-- **Compose custom preset…** (overflow menu) — the same compose flow every picker offers, with "Save as preset" as its only exit.
-- **Add Preset** — a hand-written legacy record, for a backend no definition describes.
+- **Add Preset** — the shared compose flow (harness → method → service → optional model, effort, and credential bootstrap), saved through `POST /api/providers/presets`. Choosing it does not contact a provider; the catalog already knows which enabled pairs are compatible. On success the preset editor opens so the preset-owned fields can be set without retyping the service connection.
+- **Add standalone preset** (overflow menu, and a second control when the list is empty) — the hand-written legacy record, for a backend no definition describes. `/ai/presets/new` is still that form.
 - The preset editor (`/ai/presets/:presetId`; `/ai/edit/:providerId` is a kept alias) shows a **derived** preset's connection-owned fields — type, command, endpoint, key, inline bootstrap — as *Derived from service …* with a link to the service, because the server re-materializes them from that service on every save and refuses an edit that would move one. Name, arguments, timeouts, model pins, effort and generation settings stay the preset's own. A **legacy** preset is fully hand-editable, as before, and offers *Convert to derived preset* when re-deriving it would change nothing about how it runs.
+- A harness with both CLI and TUI modes has one shared provider configuration: catalog, access policy, model and tier pins, effort, fallback, hardware requirements, and generation settings. The mode records remain addressable by their existing ids so saved tasks and peers keep working. When legacy records conflict on a shared setting, the CLI value takes precedence; if CLI is unset, a configured TUI value is retained. Their model catalogs and known context windows are merged. Arguments, headless-only arguments, timeouts, TUI timing, and CLI transport consent remain mode-specific because they control how each mode launches.
 - **Tiers** (Light / Medium / Heavy / Ultra, [MODEL_TIERS.md](./MODEL_TIERS.md)) are pins on a preset, so a `model: "heavy"` selection resolves on whichever preset the task names.
 
 ### Harnesses (`/ai/harnesses`)
@@ -36,7 +37,22 @@ One card per registry harness: the **enable switch** (the user's word; a harness
 
 ### Services (`/ai/services`)
 
-One card per instance: definition, plan badge, readiness (*Ready*, *Needs a credential*, *Needs an endpoint*, *Switched off*), where its credential comes from (stored here, the environment, the install `.env`, the harness's own sign-in, or a bootstrap wrapper) with a *Get a key* link for a keyed vendor still waiting on one, its endpoints, and its catalog state. **Refresh catalog** is the one action on this page that contacts a provider, and it is never run on mount, on toggle, or on display (root `AGENTS.md`, AI Provider Usage Policy) — it lists the instance's models through its definition's strategy (probe the endpoint, ask the daemon, ask the program that signs in, or the declared list) and filters them to the plan, then re-derives every preset on the instance.
+One card per instance, grouped by what the **definition** offers rather than by the plan this instance declared:
+
+| Category | Rule |
+|---|---|
+| **Local** | `definition.family` is `local` (a daemon), whatever plan the instance selected. |
+| **Subscriptions** | `definition.family` is `subscription` (the harness signs in). A definition that offers neither free nor paid, but lists `subscription`, lands here too. An account-backed service is not filed under free. |
+| **Free + paid** | The definition lists both `free` and `paid`. An OpenRouter, NVIDIA NIM, or OpenCode Zen instance stays here whether this row's plan is free or paid. |
+| **Free only** | Not local or subscription, and the definition offers `free` but not `paid` (including a fleet peer, whose plan is free). |
+| **Paid only** | The definition offers `paid` but not `free`. |
+| **Other/legacy** | No definition, or a shape the rules above cannot name. The row stays visible. |
+
+The instance plan pill (`free`, `paid`, `subscription`, `local`) stays on the card next to that category. Filter chips show a count for each category (and All) after the current search. Search matches the service label, slug, and definition label/id/family. Sort is by name (A→Z), readiness (what can run first), or preset count (busiest first); equal rows break ties by name, then slug. Categories with nothing to show are omitted. The card grid is `auto-fit` with a `min(100%, 18rem)` track, so a narrow viewport stays one column and does not scroll sideways.
+
+**Create preset** on a card opens the same compose flow as Add Preset, with that service selected once a compatible harness and method are chosen. The button stays visible but disabled — and says why — when the service is switched off, not ready, or has no definition. Opening the composer does not refresh a catalog or contact a provider. A ready derived preset still owns only its name, arguments, timeouts, model pins, effort, and generation settings; the service keeps the command, endpoint, credential, backend environment, and catalog.
+
+Each card also shows readiness (*Ready*, *Needs a credential*, *Needs an endpoint*, *Switched off*), where its credential comes from (stored here, the environment, the install `.env`, the harness's own sign-in, or a bootstrap wrapper) with a *Get a key* link for a keyed vendor still waiting on one, its endpoints, and its catalog state. **Refresh catalog** is the one action on this page that contacts a provider, and it is never run on mount, on toggle, on display, or on opening compose (root `AGENTS.md`, AI Provider Usage Policy) — it lists the instance's models through its definition's strategy (probe the endpoint, ask the daemon, ask the program that signs in, or the declared list) and filters them to the plan, then re-derives every preset on the instance.
 
 **Add Service** walks definition → plan → credential / endpoint. A subscription needs neither (the harness signs in); a hosted API takes a key you store, a conventional environment variable, or a bootstrap wrapper; a local runtime needs the endpoint this install reaches it at. A service still named by a preset cannot be deleted.
 

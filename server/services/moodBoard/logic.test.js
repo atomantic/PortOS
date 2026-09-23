@@ -20,6 +20,7 @@ import {
   healPinterestFeedRecord,
   clearPinterestLinkRecord,
   appendPinterestPins,
+  appendImportedItems,
 } from './logic.js';
 
 describe('buildBoardRecord', () => {
@@ -411,5 +412,44 @@ describe('appendPinterestPins', () => {
     const { added, aborted } = appendPinterestPins(b, [imp(1)], { syncedAt: 's9', expectedFeedUrl: 'now.rss' });
     expect(aborted).toBe(false);
     expect(added).toBe(1);
+  });
+});
+
+describe('appendImportedItems', () => {
+  const board = () => buildBoardRecord({ name: 'A' }, { id: 'mb-1', now: 't0' });
+
+  it('appends image and video items', () => {
+    const { board: next, added } = appendImportedItems(board(), [
+      { type: 'image', imageUrl: '/data/images/a.jpg', source: 'https://x.com/i/status/1#0' },
+      { type: 'video', mediaKey: 'video:x-abc.mp4', imageUrl: '/data/images/poster.jpg', source: 'https://x.com/i/status/1#video' },
+    ]);
+    expect(added).toBe(2);
+    expect(next.items[0]).toMatchObject({ type: 'image', imageUrl: '/data/images/a.jpg' });
+    expect(next.items[1]).toMatchObject({ type: 'video', mediaKey: 'video:x-abc.mp4', imageUrl: '/data/images/poster.jpg' });
+  });
+
+  it('dedupes against existing item sources', () => {
+    const existing = { ...board(), items: [{ id: 'mbi-x', type: 'image', source: 'https://x.com/i/status/1#0' }] };
+    const { added, board: next } = appendImportedItems(existing, [
+      { type: 'image', imageUrl: '/data/images/a.jpg', source: 'https://x.com/i/status/1#0' },
+      { type: 'image', imageUrl: '/data/images/b.jpg', source: 'https://x.com/i/status/1#1' },
+    ]);
+    expect(added).toBe(1);
+    expect(next.items).toHaveLength(2);
+  });
+
+  it('truncates to MAX_ITEMS_PER_BOARD capacity', () => {
+    const full = { ...board(), items: Array.from({ length: MAX_ITEMS_PER_BOARD - 1 }, (_, i) => ({ id: `e${i}`, type: 'image', source: `e${i}` })) };
+    const { added } = appendImportedItems(full, [
+      { type: 'image', imageUrl: '/data/images/a.jpg', source: 's1' },
+      { type: 'image', imageUrl: '/data/images/b.jpg', source: 's2' },
+    ]);
+    expect(added).toBe(1);
+  });
+
+  it('handles an empty/non-array imported list', () => {
+    const { added, board: next } = appendImportedItems(board(), []);
+    expect(added).toBe(0);
+    expect(next.items).toEqual([]);
   });
 });

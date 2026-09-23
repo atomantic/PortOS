@@ -7,6 +7,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 // not the DB-backed board logic (covered by moodBoard/db.test.js).
 vi.mock('../services/moodBoard/index.js', () => ({
   listBoards: vi.fn(async () => []),
+  listBoardNames: vi.fn(async () => []),
   getBoard: vi.fn(),
   createBoard: vi.fn(),
   updateBoard: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('../services/moodBoard/index.js', () => ({
   linkPinterestBoard: vi.fn(),
   unlinkPinterestBoard: vi.fn(),
   syncPinterestBoard: vi.fn(),
+  importXPost: vi.fn(),
 }));
 
 // The synthesis service pulls the aiProvider/promptRunner stack — stub it so
@@ -39,6 +41,14 @@ const makeApp = () => {
 
 describe('mood-board routes', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('GET /names serves the picker projection rather than a board lookup', async () => {
+    svc.listBoardNames.mockResolvedValueOnce([{ id: 'mb-1', name: 'A' }]);
+    const res = await request(makeApp()).get('/api/mood-boards/names');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'mb-1', name: 'A' }]);
+    expect(svc.getBoard).not.toHaveBeenCalled();
+  });
 
   describe('GET /', () => {
     it('returns the full boards array by default', async () => {
@@ -114,6 +124,22 @@ describe('mood-board routes', () => {
       });
       expect(res.status).toBe(400);
       expect(synthesizeBoardStyle).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/x-post', () => {
+    it('validates the body and passes it to the service', async () => {
+      svc.importXPost.mockResolvedValueOnce({ board: { id: 'mb-1' }, added: 2 });
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/x-post').send({ url: 'https://x.com/user/status/1' });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ board: { id: 'mb-1' }, added: 2 });
+      expect(svc.importXPost).toHaveBeenCalledWith('mb-1', { url: 'https://x.com/user/status/1' });
+    });
+
+    it('400s on a non-http(s) url (schema gate)', async () => {
+      const res = await request(makeApp()).post('/api/mood-boards/mb-1/x-post').send({ url: 'not a url' });
+      expect(res.status).toBe(400);
+      expect(svc.importXPost).not.toHaveBeenCalled();
     });
   });
 });

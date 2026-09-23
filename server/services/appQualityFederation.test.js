@@ -2,6 +2,8 @@ import { it, expect, vi } from 'vitest';
 import { mockNoPeers } from '../lib/mockPathsDataRoot.js';
 import { exportPortosQuality, collectPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality } from './appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
+import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { qualityFileFromWireSnapshot } from './appQualitySnapshotFormat.js';
 vi.mock('./instances.js', () => mockNoPeers());
 const now = Date.parse('2026-09-10T12:00:00Z');
 const peer = { id: 'peer-a', instanceId: 'instance-a', enabled: true, address: '192.0.2.1', port: 5555 };
@@ -18,6 +20,7 @@ const response = payload => new Response(JSON.stringify(payload), { status: 200 
 it('exports only validated local numeric evidence to approved sync peers', async () => {
   const local = deps([row('security', 40)]);
   const payload = await exportPortosQuality(peer.instanceId, 30, local);
+  expect(PORTOS_SCHEMA_VERSIONS.appQuality).toBe(1);
   expect(payload).toMatchObject({ schemaVersion: 1, measurements: [{ report: { category: 'security', score: 40 } }] });
   expect(JSON.stringify(payload)).not.toMatch(/Private|Users|agent-security|summary|app_id|github/);
   expect(local.query.mock.calls[0][1][0]).toBe('portos-default');
@@ -45,6 +48,15 @@ it('combines newest categories in app view and UTC history without changing othe
   expect(history.points.at(-1)).toMatchObject({ score: 70, ratedCategories: 2 });
   expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(70);
   expect((await exportPortosQuality(peer.instanceId, 30, local)).measurements.map(m => m.report.score)).toEqual([20]);
+});
+
+it('reads stored lifecycle measurements under the renamed category', async () => {
+  const [app] = await enrichAppsWithQuality(
+    [{ id: 'portos-default' }],
+    deps([row('react-lifecycle', 73)]),
+  );
+  expect(app.quality.categories.find(category => category.id === 'ui-lifecycle'))
+    .toMatchObject({ score: 73, coverage: 'broad', stale: false });
 });
 
 it('keeps local scores on old, offline, malformed, oversize or mismatched peers and rejects future evidence', async () => {
@@ -137,6 +149,42 @@ it('reads a managed app\'s committed .quality.json as release evidence and rejec
   expect(await readReleaseQuality(file(JSON.stringify({ ...published, schemaVersion: 2 })), managed)).toEqual([]);
   expect(await readReleaseQuality(file(JSON.stringify({ quality: published })), managed)).toEqual([]);
   expect(await readReleaseQuality(local, { id: 'local-id' })).toEqual([]);
+});
+
+it('reads v2 and legacy snapshot files without writing, and drops future dates', async () => {
+  const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
+  const managed = { id: 'local-id', repoPath: '/repo/example-app' };
+  const published = await buildQualitySnapshot(managed, 30, { ...deps([row('security', 76)]), getOriginInfo });
+  const v2 = qualityFileFromWireSnapshot(published);
+  const writes = [];
+  const file = bodyFor => ({
+    ...deps([]), getOriginInfo, getPeers: async () => [],
+    writeFile: async () => { writes.push('write'); },
+    readFile: async path => bodyFor(path),
+  });
+
+  const records = await readReleaseQuality(file(() => v2), managed);
+  expect(records).toMatchObject([{ category: 'security', sourcePeerName: 'Release snapshot', report: { score: 76 } }]);
+  expect(writes).toEqual([]);
+  expect(v2).not.toContain('measurementId');
+  expect(v2).not.toContain(published.measurements[0].measurementId);
+  expect(JSON.stringify(records)).not.toMatch(/Users|agent-security|app_id|github/);
+
+  const legacy = await readReleaseQuality(file(path => {
+    if (path.endsWith('.quality.json')) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return JSON.stringify(published);
+  }), managed);
+  expect(legacy).toMatchObject([{ report: { score: 76 } }]);
+
+  const occupied = await readReleaseQuality(file(path => {
+    if (path.endsWith('.quality.json')) return JSON.stringify({ schemaVersion: 3 });
+    return JSON.stringify(published);
+  }), managed);
+  expect(occupied).toEqual([]);
+
+  const future = JSON.parse(v2);
+  future.measurements.push(['2026-09-11T00:00:00.000Z', 0, 10, 1, 0, 2, 12, 12]);
+  expect(await readReleaseQuality(file(() => JSON.stringify(future)), managed)).toMatchObject([{ report: { score: 76 } }]);
 });
 
 it('keeps one broken checkout from failing the whole list or its own history read', async () => {

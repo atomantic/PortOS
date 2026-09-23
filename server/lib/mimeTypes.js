@@ -95,6 +95,12 @@ export const EXTENSION_MIME_MAP = {
  * miscellaneous text/config types that are not meaningful attachment types.
  * The attachments route validates against this set; uploads uses the full map.
  */
+// Audio extensions (no dot) POST /api/uploads accepts as playable tracks —
+// every audio/* entry above except MIDI, which is a score, not a recording.
+export const UPLOAD_AUDIO_EXTENSIONS = Object.freeze(Object.entries(EXTENSION_MIME_MAP)
+  .filter(([, mime]) => mime.startsWith('audio/') && mime !== 'audio/midi')
+  .map(([ext]) => ext.slice(1)));
+
 export const ATTACHMENT_ALLOWED_EXTENSIONS = new Set([
   '.txt', '.md', '.json', '.csv', '.xml', '.yaml', '.yml',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf',
@@ -155,6 +161,24 @@ export function detectImageFormat(buf) {
       buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38 &&
       (buf[4] === 0x37 || buf[4] === 0x39) && buf[5] === 0x61) {
     return { format: 'gif', ext: '.gif', mime: 'image/gif' };
+  }
+  return null;
+}
+
+/**
+ * Magic-byte sniff of a video buffer. Mirrors `detectImageFormat`'s reasoning —
+ * a remote CDN's Content-Type isn't trustworthy, so downloaded video bytes
+ * (e.g. the mood-board X post importer) are verified from the leading bytes.
+ * Recognises an ISO-BMFF/MP4 container, which carries an `ftyp` box within its
+ * first few dozen bytes (X serves a looping GIF as an mp4 too).
+ *
+ * @param {Buffer} buf - Raw decoded video bytes
+ * @returns {{ format: 'mp4', ext: string, mime: string } | null}
+ */
+export function detectVideoFormat(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length <= 16) return null;
+  if (buf.subarray(0, 64).includes('ftyp')) {
+    return { format: 'mp4', ext: '.mp4', mime: 'video/mp4' };
   }
   return null;
 }

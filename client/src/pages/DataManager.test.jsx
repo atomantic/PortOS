@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import DataManager from './DataManager';
+import socket from '../services/socket';
+import { getTombstoneSweepStatus } from '../services/api';
 
 // A directory with no server-side CATEGORIES entry comes back `classified: false`
 // with both permission flags off. The row must explain *why* Archive/Purge are
@@ -20,7 +22,7 @@ vi.mock('../services/api', () => ({
   sweepTombstonesNow: vi.fn(),
 }));
 
-vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
+vi.mock('../services/socket', () => ({ default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 const UNKNOWN_DESCRIPTION = "Not classified — PortOS doesn't know if this is safe to remove";
 
@@ -37,6 +39,40 @@ const overview = {
     { key: 'prompts', path: 'data/prompts', label: 'Prompts', description: 'AI prompt templates', archivable: false, deletable: false, classified: true, size: 1000, fileCount: 4 },
   ],
 };
+
+// #8110: TombstoneGcSection listened for `instances:peers:updated` without
+// ever emitting `instances:subscribe` — the server sends that event only to
+// its `instances` subscriber Set, so the handler could never fire unless some
+// OTHER page (Instances.jsx) happened to hold the subscription. It must now
+// hold its own subscription and re-subscribe + refetch after a reconnect.
+describe('DataManager tombstone GC peer-refusal subscription (#8110)', () => {
+  beforeEach(() => {
+    getDataOverview.mockReset().mockResolvedValue(overview);
+    getDataCategory.mockReset().mockResolvedValue({ key: 'mystery-dir', items: [] });
+    getTombstoneSweepStatus.mockClear();
+    socket.emit.mockClear();
+  });
+
+  it('subscribes to the instances room on mount', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument());
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('instances:subscribe'));
+  });
+
+  it('re-subscribes and refetches refusal status after a socket reconnect', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText(UNKNOWN_DESCRIPTION)).toBeInTheDocument());
+    const initialCalls = getTombstoneSweepStatus.mock.calls.length;
+
+    const connectHandler = socket.on.mock.calls.find(([event]) => event === 'connect')?.[1];
+    expect(connectHandler).toBeTypeOf('function');
+    socket.emit.mockClear();
+    await act(async () => connectHandler());
+
+    await waitFor(() => expect(socket.emit).toHaveBeenCalledWith('instances:subscribe'));
+    await waitFor(() => expect(getTombstoneSweepStatus.mock.calls.length).toBeGreaterThan(initialCalls));
+  });
+});
 
 describe('DataManager unclassified rows (#3285)', () => {
   beforeEach(() => {

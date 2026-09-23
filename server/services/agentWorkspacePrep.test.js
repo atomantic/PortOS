@@ -33,6 +33,13 @@ vi.mock('./taskConflict.js', () => ({ detectConflicts: vi.fn().mockResolvedValue
 // pure predicate over git's own wording, and re-stating that regex in the mock
 // would make every branch-busy assertion below agree with a copy of the code
 // instead of with the code.
+vi.mock('../lib/claimContinuation.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    claimContinuationWorkspace: vi.fn((...args) => actual.claimContinuationWorkspace(...args)),
+  };
+});
 vi.mock('./worktreeManager.js', async (importOriginal) => ({
   ...(await importOriginal()),
   createWorktree: vi.fn(),
@@ -56,6 +63,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 
 import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
+import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 import { updateTask, getAgents } from './cos.js';
 import { ensureLatest } from './git.js';
 import { execGit } from '../lib/execGit.js';
@@ -420,6 +428,40 @@ describe('prepareAgentWorkspace — resuming an interrupted run', () => {
     const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: resumeTask() });
 
     expect(r.outcome).toBe('blocked');
+  });
+
+  it('continues a relaunched claim inside the existing claim worktree', async () => {
+    claimContinuationWorkspace.mockReturnValueOnce({
+      workspacePath: '/mock/worktrees/claim-portos-issue-42',
+      worktreeInfo: {
+        worktreePath: '/mock/worktrees/claim-portos-issue-42',
+        branchName: 'claim/issue-42',
+        baseBranch: null,
+        existingBranch: true,
+        adopted: true,
+        claimResumeInPlace: true,
+      },
+    });
+    const task = {
+      id: 't-claim', taskType: 'user',
+      metadata: {
+        claimFlow: true,
+        claimTarget: '42',
+        claimResumeInPlace: true,
+        existingBranch: 'claim/issue-42',
+        resumeWorktreePath: '/mock/worktrees/claim-portos-issue-42',
+        useWorktree: false,
+      },
+    };
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+
+    expect(r.outcome).toBe('ready');
+    expect(r.workspacePath).toBe('/mock/worktrees/claim-portos-issue-42');
+    expect(r.worktreeInfo.claimResumeInPlace).toBe(true);
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(adoptWorktree).not.toHaveBeenCalled();
+    expect(ensureLatest).not.toHaveBeenCalled();
   });
 
   it('ignores a stale worktree pointer with no branch to resume', async () => {

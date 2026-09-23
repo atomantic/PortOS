@@ -495,10 +495,44 @@ export function claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) {
   *   (`PR_COMPLETIONS`): `MERGE_ON_GREEN` suppresses the reviewer pin and emits
   *   the merge-on-green handoff instead; any other value keeps the pin.
   */
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false, prCompletion = null } = {}) {
+/**
+ * Relaunch of a claim whose previous run already cut the worktree. Null unless
+ * the resume pointer says to stay in that directory.
+ */
+export function claimResumeContext(task, worktreeInfo = null) {
+  const meta = task?.metadata;
+  if (meta?.claimResumeInPlace !== true && meta?.claimResumeInPlace !== 'true') return null;
+  const worktreePath = worktreeInfo?.worktreePath || meta.resumeWorktreePath;
+  const branchName = worktreeInfo?.branchName || meta.existingBranch;
+  const priorAgentId = meta.resumedFromAgentId;
+  if (!worktreePath || !branchName || !priorAgentId) return null;
+  return { priorAgentId, branchName, worktreePath };
+}
+
+/**
+ * Overrides the claim prompt's "already in progress / already on this branch →
+ * exit" rule for the markers THIS task's previous run left behind.
+ */
+export function buildClaimResumeOverride({ priorAgentId, branchName, worktreePath } = {}) {
+  if (!priorAgentId || !branchName || !worktreePath) return '';
+  return [
+    '## Relaunch — finish the claim already started',
+    `This run continues \`${priorAgentId}\` on the same task. That run already claimed this work and left it in \`${worktreePath}\` on branch \`${branchName}\`.`,
+    '',
+    'Those markers belong to this task. The `in-progress` label, an assignee that is this account, and the existing branch and worktree are the claim you are finishing. The Target Issue Constraint and Phase 1 rule that say to exit when the issue is already in progress or already checked out on that branch do not apply to them. Finish the work in this worktree.',
+    '',
+    `Stay in \`${worktreePath}\` on \`${branchName}\`. Skip creating another worktree. Continue at the first phase that is not already done and ship it.`,
+    '',
+    'Stop without taking the work when a different human left a clear active claim comment, or the issue is closed or parked for a human (`needs-input`, `blocked`). A contributor\'s claim is not this relaunch.',
+  ].join('\n');
+}
+
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', leavePrOpen = false, prCompletion = null, claimResume = null } = {}) {
   const isMergeOnGreen = prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
+  const resumeOverride = buildClaimResumeOverride(claimResume || {});
   const lines = [
+    ...(resumeOverride ? [resumeOverride, ''] : []),
     ...(pin ? [pin, ''] : []),
     '## Claim Workflow Handoff',
     ...(leavePrOpen ? [
@@ -510,6 +544,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
       '',
     ] : []),
     'This is a self-managed claim flow. The claim prompt above owns its claim worktree, branch, PR/MR, review, merge or human-handoff, and cleanup. Follow its phase-specific exit conditions — do NOT stop after a code commit or hand the lifecycle back to PortOS.',
+    ...(resumeOverride ? ['When the relaunch section above applies, finish this task\'s existing claim in the worktree named there.'] : []),
     '',
     ...(!isMergeOnGreen ? [
       `Required-review publication rule: if a required local reviewer cannot return a verdict because of a missing CLI, quota/provider or transport failure, timeout, malformed/empty response, or no-verdict result, record the local phase as \`review-blocked\` rather than substituting a self-review. Still push and open the PR/MR, leave it open, preserve the claim markers and branch, and stop before merge. ${REVIEW_UNAVAILABLE_REPORTING_NOTE} A substantive rejection, failed build/test, unpushed fix, or state/publication failure still blocks publication.`,

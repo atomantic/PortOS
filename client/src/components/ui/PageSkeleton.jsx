@@ -160,7 +160,7 @@ export default function PageSkeleton({
   const body = layout === 'grid'
     ? <div className={`grid grid-cols-1 gap-4 items-start ${gridColsClass}`}>{cardBlocks}</div>
     : (
-      <div className={`grid grid-cols-1 gap-6 items-start ${sidebar ? 'lg:grid-cols-[1fr_360px]' : ''}`}>
+      <div className={`grid grid-cols-1 gap-6 items-start ${sidebar ? '@5xl/skeleton:grid-cols-[minmax(0,1fr)_360px]' : ''}`}>
         {stackedCards}
         {sidebar && (
           <SkeletonCard titleWidthClass="w-1/3" lineWidths={['w-full', 'w-5/6', 'w-4/6']} />
@@ -173,7 +173,7 @@ export default function PageSkeleton({
   if (header === 'bar') {
     return (
       <div
-        className={`flex flex-col min-h-0 ${fullHeight ? 'h-full' : ''}`}
+        className={`@container/skeleton flex flex-col min-h-0 ${fullHeight ? 'h-full' : ''}`}
         role="status"
         aria-busy="true"
         aria-label={label}
@@ -208,7 +208,7 @@ export default function PageSkeleton({
 
   return (
     <div
-      className={`${padded ? 'p-4 md:p-6' : ''} ${fullHeight ? 'h-full overflow-y-auto' : ''}`}
+      className={`@container/skeleton min-w-0 ${padded ? 'p-4 md:p-6' : ''} ${fullHeight ? 'h-full overflow-y-auto' : ''}`}
       role="status"
       aria-busy="true"
       aria-label={label}

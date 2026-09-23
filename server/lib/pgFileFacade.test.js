@@ -12,20 +12,24 @@ const { isFileBackend, resolvePgBackend, createPgFileFacade, createRecordStoreBa
 const tick = () => new Promise((r) => setImmediate(r));
 
 describe('isFileBackend', () => {
-  const orig = { MEMORY_BACKEND: process.env.MEMORY_BACKEND, NODE_ENV: process.env.NODE_ENV };
+  const orig = { MEMORY_BACKEND: process.env.MEMORY_BACKEND, NODE_ENV: process.env.NODE_ENV, VITEST: process.env.VITEST };
   afterEach(() => {
     process.env.MEMORY_BACKEND = orig.MEMORY_BACKEND;
     process.env.NODE_ENV = orig.NODE_ENV;
+    if (orig.VITEST === undefined) delete process.env.VITEST;
+    else process.env.VITEST = orig.VITEST;
   });
 
   it('is true under NODE_ENV=test', () => {
     process.env.NODE_ENV = 'test';
     delete process.env.MEMORY_BACKEND;
+    delete process.env.VITEST;
     expect(isFileBackend()).toBe(true);
   });
 
   it('is true under MEMORY_BACKEND=file even when not test', () => {
     process.env.NODE_ENV = 'production';
+    delete process.env.VITEST;
     process.env.MEMORY_BACKEND = 'file';
     expect(isFileBackend()).toBe(true);
   });
@@ -33,7 +37,22 @@ describe('isFileBackend', () => {
   it('is false when neither escape hatch is set', () => {
     process.env.NODE_ENV = 'production';
     delete process.env.MEMORY_BACKEND;
+    delete process.env.VITEST;
     expect(isFileBackend()).toBe(false);
+  });
+
+  it('is true when VITEST is set even if NODE_ENV is absent', () => {
+    delete process.env.NODE_ENV;
+    delete process.env.MEMORY_BACKEND;
+    process.env.VITEST = 'true';
+    expect(isFileBackend()).toBe(true);
+  });
+
+  it('is true when VITEST is set even if NODE_ENV is production', () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.MEMORY_BACKEND;
+    process.env.VITEST = '1';
+    expect(isFileBackend()).toBe(true);
   });
 });
 
@@ -72,8 +91,10 @@ describe('createPgFileFacade', () => {
 
   it('selects the PG backend when the escape hatch is off', async () => {
     const prev = process.env.NODE_ENV;
+    const prevVitest = process.env.VITEST;
     process.env.NODE_ENV = 'production';
     delete process.env.MEMORY_BACKEND;
+    delete process.env.VITEST;
     try {
       const makeFile = vi.fn();
       const makePg = vi.fn(async () => ({ name: 'postgres' }));
@@ -84,6 +105,8 @@ describe('createPgFileFacade', () => {
       expect(makePg).toHaveBeenCalledTimes(1);
     } finally {
       process.env.NODE_ENV = prev;
+      if (prevVitest === undefined) delete process.env.VITEST;
+      else process.env.VITEST = prevVitest;
     }
   });
 });
@@ -126,12 +149,14 @@ describe('resolvePgBackend', () => {
 });
 
 describe('createRecordStoreBackendSelector', () => {
-  const orig = { MEMORY_BACKEND: process.env.MEMORY_BACKEND, NODE_ENV: process.env.NODE_ENV };
+  const orig = { MEMORY_BACKEND: process.env.MEMORY_BACKEND, NODE_ENV: process.env.NODE_ENV, VITEST: process.env.VITEST };
   beforeEach(() => { checkHealth.mockReset(); ensureSchema.mockClear(); });
   afterEach(() => {
     process.env.NODE_ENV = orig.NODE_ENV;
     if (orig.MEMORY_BACKEND === undefined) delete process.env.MEMORY_BACKEND;
     else process.env.MEMORY_BACKEND = orig.MEMORY_BACKEND;
+    if (orig.VITEST === undefined) delete process.env.VITEST;
+    else process.env.VITEST = orig.VITEST;
   });
 
   const loaders = () => ({
@@ -153,6 +178,7 @@ describe('createRecordStoreBackendSelector', () => {
 
   it('selects the file backend under MEMORY_BACKEND=file outside test mode', async () => {
     process.env.NODE_ENV = 'production';
+    delete process.env.VITEST;
     process.env.MEMORY_BACKEND = 'file';
     const { loadFileBackend, loadDbBackend } = loaders();
     const { selectBackend, getBackendName } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
@@ -163,6 +189,7 @@ describe('createRecordStoreBackendSelector', () => {
 
   it('honors a custom isTestMode predicate (the isTestRunner posture) and keeps the file escape hatch', async () => {
     process.env.NODE_ENV = 'production';
+    delete process.env.VITEST;
     delete process.env.MEMORY_BACKEND;
     const { loadFileBackend, loadDbBackend } = loaders();
     const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
@@ -188,6 +215,7 @@ describe('createRecordStoreBackendSelector', () => {
   it('brings Postgres up (ensureSchema → onDbReady → import) and memoizes the selection', async () => {
     process.env.NODE_ENV = 'production';
     delete process.env.MEMORY_BACKEND;
+    delete process.env.VITEST;
     checkHealth.mockResolvedValue({ connected: true });
     const order = [];
     ensureSchema.mockImplementation(async () => { order.push('ensureSchema'); });
@@ -208,6 +236,7 @@ describe('createRecordStoreBackendSelector', () => {
   it('throws the store-specific requirement message when Postgres is unreachable', async () => {
     process.env.NODE_ENV = 'production';
     delete process.env.MEMORY_BACKEND;
+    delete process.env.VITEST;
     checkHealth.mockResolvedValue({ connected: false });
     const { loadFileBackend, loadDbBackend } = loaders();
     const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
@@ -221,6 +250,7 @@ describe('createRecordStoreBackendSelector', () => {
   it('falls back to a labeled default requirement message', async () => {
     process.env.NODE_ENV = 'production';
     delete process.env.MEMORY_BACKEND;
+    delete process.env.VITEST;
     checkHealth.mockResolvedValue({ connected: false });
     const { loadFileBackend, loadDbBackend } = loaders();
     const { selectBackend } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
@@ -230,6 +260,7 @@ describe('createRecordStoreBackendSelector', () => {
   it('retries selection after a failed Postgres bring-up instead of caching the failure', async () => {
     process.env.NODE_ENV = 'production';
     delete process.env.MEMORY_BACKEND;
+    delete process.env.VITEST;
     checkHealth.mockResolvedValueOnce({ connected: false }).mockResolvedValueOnce({ connected: true });
     const { loadFileBackend, loadDbBackend } = loaders();
     const { selectBackend, getBackendName } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });

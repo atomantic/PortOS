@@ -4,7 +4,7 @@ import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { formatCooldown, formatDateTime } from '../../../utils/formatters';
-import { clickableProps } from '../../../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
 
 export default function ToolsTab({ agentId, agent }) {
   const [selectedAccountId, setSelectedAccountId] = useState('');
@@ -416,6 +416,7 @@ export default function ToolsTab({ agentId, agent }) {
                     }`}
                     onClick={() => handleViewPost(post)}
                     {...clickableProps(() => handleViewPost(post))}
+                    onKeyDown={onActivateKeyDown(() => handleViewPost(post))}
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
@@ -656,7 +657,12 @@ export default function ToolsTab({ agentId, agent }) {
                         }`}
                       >
                         <div className="flex items-start justify-between">
-                          <div className="flex-1 min-w-0 cursor-pointer" onClick={() => !isPublished && handleLoadDraft(draft)} {...clickableProps(() => handleLoadDraft(draft), { disabled: isPublished })}>
+                          <div
+                            className="flex-1 min-w-0 cursor-pointer"
+                            onClick={() => !isPublished && handleLoadDraft(draft)}
+                            {...clickableProps(() => handleLoadDraft(draft), { disabled: isPublished })}
+                            onKeyDown={isPublished ? undefined : onActivateKeyDown(() => handleLoadDraft(draft))}
+                          >
                             <div className="flex items-center gap-2">
                               <span className={`text-xs px-1.5 py-0.5 rounded ${isPublished ? 'bg-port-success/20 text-port-success' : 'bg-port-accent/20 text-port-accent'}`}>
                                 {isPublished ? 'published' : draft.type}
@@ -720,6 +726,7 @@ export default function ToolsTab({ agentId, agent }) {
                         }`}
                         onClick={() => setReplyToId(replyToId === comment.id ? null : comment.id)}
                         {...clickableProps(() => setReplyToId(replyToId === comment.id ? null : comment.id))}
+                        onKeyDown={onActivateKeyDown(() => setReplyToId(replyToId === comment.id ? null : comment.id))}
                       >
                         <span className="text-port-accent">{(typeof comment.author === 'object' ? comment.author?.name : comment.author) || 'anon'}</span>
                         <span className="text-gray-500">: {comment.content?.substring(0, 150)}</span>

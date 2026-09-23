@@ -137,3 +137,51 @@ pull request, and queues the existing merge-on-green sweep (`queuePendingMerge`
 on GitHub; GitLab auto-merge when the pipeline succeeds). No review is requested.
 The live checkout is not committed, staged, or switched. An unchanged snapshot
 still skips git entirely.
+
+## September 22: compact file schema v2
+
+The sections above coupled the checked-in file to the federation object
+(`{ schemaVersion, repository, measurements }`). A file-format change would have
+forced a peer wire rollout. Those are now two adapters over one normalized
+record. `PORTOS_SCHEMA_VERSIONS.appQuality` stays 1, and peers still exchange
+the v1 object payload. The checked-in file is schema v2.
+
+v2 keeps the opaque origin fingerprint and replaces per-row objects with sorted
+dictionaries plus fixed rows:
+
+`[assessedAt, categoryIndex, score, worstSeverity, coverageIndex, confidenceIndex, scannedFiles, totalFiles]`
+
+`reportVersion` is 1. Category dictionaries list the categories that appear, in
+order. Coverage and confidence dictionaries are the full enums in their declared
+order. Scores stay nullable. Timestamps stay ISO instants, not midnight dates.
+`measurementId` is not stored. While a v1 file still carries that id, release
+reads keep it for same-timestamp ordering. v2 reads use a transient digest of
+the normalized row. The digest is not written. Database provenance fields are
+unchanged.
+
+The canonical artifact stays JSON. An append-only TSV, CSV, or NDJSON log was
+rejected: the database is already the immutable history, and a checked-in append
+log would be unbounded, harder to validate, and more conflict-prone. The file
+remains the bounded release projection: one row per UTC day and category, the
+30-day lookback, and the 4 MiB cap. PostgreSQL retention is unchanged. No
+`scripts/migrations/` entry is involved; those migrations own `data/` paths.
+
+Readers accept v1 `.quality.json` and, only when that file is absent, the
+historical `quality-snapshot.json` filename. A read never mutates the checkout.
+Malformed rows, unknown keys, invalid dictionary indexes, duplicate UTC
+day/category winners, a mismatched origin fingerprint, and oversize files fail
+closed. A future `schemaVersion` is recognized and left unparsed.
+
+`npm run quality:snapshot` writes canonical v2 whenever the database has current
+evidence, including when the committed file is still valid v1. It does not
+invent rows the database does not have, and it does not replace a non-empty
+file when evidence is absent. A future schema, an unrecognized document, a
+malformed snapshot, or an oversize file is left untouched and reported as
+`unsupported-format`. A second publish whose normalized v2 bytes are already on
+the default branch or the snapshot branch does not open another pull request.
+
+`npm run quality:snapshot -- --migrate` converts a v1 file, or the historical
+filename, through the same temporary worktree, scoped commit, and
+merge-on-green pull request. It uses only rows already in the file. When the
+historical filename is the source, the commit also removes it. Unknown future
+formats stay in place.

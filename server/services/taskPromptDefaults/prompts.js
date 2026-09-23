@@ -355,20 +355,32 @@ Repository: {repoPath}
 
 If the project has no user interface, say so and exit cleanly.
 
+## Skip what static analysis already covers
+
+Check for a JSX/TSX a11y linter already wired into the project (e.g. Biome's
+\`a11y\` rule group, \`eslint-plugin-jsx-a11y\`) before you start, and run it if
+one exists. Do NOT re-derive or file findings that linter already catches
+deterministically on every commit — missing \`alt\`/labels, invalid or
+unsupported ARIA props/roles, an unlabeled form control, a clickable element
+with no keyboard handler, a non-interactive element given an interactive ARIA
+role, an interactive role that isn't focusable, or \`aria-hidden="true"\` on a
+focusable element. Spend your budget on what only a live agent driving the
+running interface can establish.
+
 ## Hunt for
 
-- **Keyboard traps and unreachable controls** — an interactive element that
-  cannot be reached or activated by keyboard, a custom control with no key
-  handling, a dialog that does not trap and restore focus.
+- **Keyboard traps and unreachable controls** — a custom control the linter
+  above can't see is missing (e.g. one built without a native/ARIA element at
+  all), a dialog that does not trap and restore focus, or a genuinely
+  unreachable path a static scan of individual elements can't catch.
 - **Missing focus indication** — a focus style removed and never replaced, so
   keyboard users cannot tell where they are.
-- **Unlabeled controls** — an icon-only button, an input with no associated
-  label, a form control whose only label is placeholder text.
 - **Images and media without text alternatives** — a meaningful image with no
-  description, or a decorative one announced as content.
-- **Semantics faked with generic elements** — a clickable element that is not a
-  button or link, a heading order that skips levels, a list that is not marked
-  up as one, a table without headers.
+  description, or a decorative one announced as content — when the linter
+  above doesn't already cover this project's markup.
+- **Semantics faked with generic elements** — a heading order that skips
+  levels, a list that is not marked up as one, a table without headers, or a
+  faked-semantics case the linter's element-vs-role rules don't cover.
 - **Dynamic changes nobody is told about** — an async result, validation error,
   or toast that appears with no live region, so a screen-reader user never
   learns it happened.
@@ -766,7 +778,7 @@ interface the same way and hold to the same checklist.
 Duplicate findings are noise. Do NOT file:
 
 - **Raw console errors / broken elements / failed requests** — \`ui-bugs\` owns these.
-- **Viewport breakage** (overflow, sub-44px tap targets, horizontal scroll) — \`mobile-responsive\` owns these.
+- **Touch-only mechanics** (hover-only controls and tap-target sizing) — \`mobile-responsive\` owns these. Responsive layout failures ARE part of this UX audit; deduplicate against findings from that sibling task.
 - **ARIA labels, contrast ratios, keyboard traps** — \`accessibility\` owns these.
 
 Mention an overlap only when it is the *cause* of a UX failure you are filing
@@ -787,9 +799,14 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
 
 3. **Walk each main route** with Playwright MCP. For every route:
    - \`browser_navigate\` to it, then \`browser_snapshot\` to read the structure.
-   - \`browser_resize\` to **1440x900** (desktop) and **375x812** (mobile) and
+   - \`browser_resize\` to **1440x900**, **1280x800**, **1024x768**, **768x1024**, **390x844**, and **320x812** and
      snapshot at each — the fold differs, and a buried primary action is the
      single most common finding.
+
+   - Test with the navigation sidebar expanded and collapsed, and at 200% zoom.
+   - Resize dashboard widgets and embedded panels to 240px, 320px, and 480px wide on a desktop viewport. Viewport breakpoints do not prove a narrow container fits.
+   - Inspect empty, populated, loading, and error states with synthetic long names, URLs, and action labels. Check bounding rectangles and scrollWidth/clientWidth on the page AND cards: overflow-hidden can conceal unreachable controls even when the document has no horizontal scrollbar. Exempt only intentional local scroll regions such as tables/timelines; verify their keyboard access.
+   - Record route/widget, viewport AND container width, state, sidebar mode, blocked action, and responsible component. Report unvisited routes/states as untested, never as passing.
 
 4. **Evaluate each route against this named checklist.** Cite the checklist
    number in the finding so results are reproducible rather than vibes:
@@ -812,6 +829,8 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
    7. **Information hierarchy matches the user's task** — what they came for is
       the most prominent thing, not the densest table or the newest feature.
 
+   8. **Narrow-container reflow** — no overlapping cards, clipped controls, off-screen actions, or page-level horizontal scroll. Toolbars wrap, flexible children shrink, long strings wrap or have an accessible full-value path, and side panels stack before squeezing the primary work. Consult the app's design standard; for PortOS use docs/UX_DESIGN_GUIDE.md.
+
 5. **File ONE item per finding** using the "Record" mechanics under "Where to
    record findings" above. Each finding must carry:
 
@@ -819,7 +838,7 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
      naming the screen and the problem (e.g.
      \`ux-settings-save-below-fold-on-mobile\`); ≤80 chars total; unique against
      every existing \`[ux-…]\` slug (re-check before each record).
-   - **The screen/route** you audited and which checklist item (1–7) it failed.
+   - **The screen/route** you audited and which checklist item (1–8) it failed.
    - **What the user is trying to do** on that screen.
    - **Why the current design impedes it** — 1–2 sentences, concrete and
      observable, referencing what you saw in the snapshot.
@@ -1049,7 +1068,7 @@ Trace client callers through to server routes and schemas, hunting for:
 For each finding, name the caller AND the route with \`file.js:LINE\`, the shape
 that gets through, and the concrete failure it produces.`,
 
-  'react-lifecycle': `[Improvement: {appName}] UI lifecycle and state audit
+  'ui-lifecycle': `[Improvement: {appName}] UI lifecycle and state audit
 
 Audit {appName}'s UI resource lifetimes and state correctness.
 
@@ -2929,8 +2948,19 @@ Check for existing release tags that lack a corresponding GitHub Release:
    - Report it explicitly as "Unpublished release detected: vX.Y.Z".
    - Find its changelog body (for example, \`.changelog/vX.Y.Z.md\` or \`.changelog/vX.Y.x.md\`).
    - Check whether a newer version exists.
+   - When publishing it, pass the complete named heading without its leading # as the GitHub title with --title, not only the version.
    - Publish it with \`gh release create "vX.Y.Z"\`, using \`--notes-file\` or \`--body-file\`; pass \`--latest=false\` when a newer release exists, and \`--latest\` only for the newest version.
 4. Report missing releases reconciled before continuing.
+
+## Release naming and notes
+
+When the canonical release workflow compiles the notes for a new release, the agent in charge of the release MUST choose the release name. Read the complete release range and identify the one or two biggest user-visible wins — especially performance, reliability, accessibility, or bandwidth improvements — then choose a short, memorable, fun name that is accurate to those wins (for example, \`Performant Dragon\`). The name is a theme, not a new product claim: do not invent benefits, use private data, repeat implementation jargon, or settle for a generic label such as \`Update\`.
+
+The versioned changelog's first heading MUST be exactly:
+
+\`# Release vX.Y.Z - <Fun Name>\`
+
+Use the ASCII \` - \` separator, keep the name on one line, and keep the same name in the release notes and GitHub release title. Do not leave the bare \`# Release vX.Y.Z\` heading or put the name only in a later section; the GitHub Actions workflow extracts this heading to title the release. If correcting an already-published release, update the changelog body and GitHub release title together.
 
 The canonical workflow owns readiness and should count both the current changelog and any uncollected per-branch fragments (for example, \`.changelog/next/\`) across the assembled notes. If the changelog README documents a preview/collect command, use only that documented command — Do NOT guess a command name. If fewer than two substantive entries remain, stop without creating a release PR.
 

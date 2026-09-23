@@ -44,6 +44,12 @@ describe('ProviderComposePopover', () => {
     expect(container.textContent).toBe('');
   });
 
+  it('renders the dialog panel on an opaque card surface, so page content cannot bleed through', () => {
+    render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.className).toMatch('bg-port-card');
+  });
+
   it('renders only the Harness select until a harness is chosen, then narrows step by step', async () => {
     render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
     expect(screen.getByLabelText('Harness')).toBeTruthy();
@@ -177,6 +183,47 @@ describe('ProviderComposePopover', () => {
     });
     expect(onPresetSaved).toHaveBeenCalledWith({ id: 'pi-tui-nvidia-nim-free' });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers only enabled services from the compatible pair list', async () => {
+    mocked.useProviderCatalog.mockReturnValue({
+      ...CATALOG,
+      compatiblePairs: () => [
+        { slug: 'nvidia-nim-free', label: 'NVIDIA NIM', enabled: true, credentialVia: 'stored', readiness: 'ready', catalog: { models: [] } },
+        { slug: 'off', label: 'Switched off', enabled: false, credentialVia: 'stored', readiness: 'disabled', catalog: { models: [] } },
+      ],
+    });
+    render(<ProviderComposePopover open onClose={vi.fn()} onCompose={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'pi' } });
+    fireEvent.change(await screen.findByLabelText('Method'), { target: { value: 'tui' } });
+    const labels = Array.from((await screen.findByLabelText('Service')).querySelectorAll('option')).map((option) => option.textContent);
+    expect(labels).toContain('NVIDIA NIM');
+    expect(labels).not.toContain('Switched off');
+  });
+
+  it('restores a service seed after a compatible harness and method, and leaves an incompatible one unselected', async () => {
+    const initial = { serviceSlug: 'nvidia-nim-free' };
+    render(<ProviderComposePopover open initial={initial} onClose={vi.fn()} onCompose={vi.fn()} />);
+    expect(screen.queryByLabelText('Model')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'pi' } });
+    expect(screen.queryByLabelText('Service')).toBeNull();
+    fireEvent.change(await screen.findByLabelText('Method'), { target: { value: 'tui' } });
+    expect(await screen.findByLabelText('Service')).toHaveValue('nvidia-nim-free');
+
+    // Clearing the method hides the seeded service's model; choosing it again
+    // puts the same service back.
+    fireEvent.change(screen.getByLabelText('Method'), { target: { value: '' } });
+    expect(screen.queryByLabelText('Model')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'tui' } });
+    expect(screen.getByLabelText('Service')).toHaveValue('nvidia-nim-free');
+
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'claude' } });
+    fireEvent.change(await screen.findByLabelText('Method'), { target: { value: 'cli' } });
+    expect(screen.getByLabelText('Service')).toHaveValue('');
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'anthropic' } });
+    fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'tui' } });
+    expect(screen.getByLabelText('Service')).toHaveValue('anthropic');
   });
 
   it('resets its fields every time it is reopened', async () => {

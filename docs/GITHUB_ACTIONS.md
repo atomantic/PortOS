@@ -831,6 +831,10 @@ Triggers on push to `release` branch. Steps:
    - Then: `.changelog/v{major}.{minor}.x.md` (pattern match, replaces placeholders)
    - Fallback: generates changelog from commit messages
 6. Creates the GitHub release with tag `v{version}`.
+   The first changelog heading should be `# Release v{version} - {Fun Name}`;
+   the workflow uses that complete heading without `# ` as the GitHub release
+   title, with `Release v{version}` as the backward-compatible fallback for
+   older unnamed notes.
 7. If a pattern changelog file (`.changelog/v{major}.{minor}.x.md`) was used,
    archives it on `main` (renames `.x.md` to the exact version).
 8. If the archive step ran, fast-forwards `release` to match `main`.

@@ -4,7 +4,7 @@ import * as api from '../services/api';
 import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
-import { clickableProps } from '../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 export function HistoryPage() {
   const [history, setHistory] = useState([]);
@@ -173,6 +173,7 @@ export function HistoryPage() {
                   className="p-3 sm:p-4 hover:bg-port-border/20 cursor-pointer group"
                   onClick={() => toggleExpand(entry.id)}
                   {...clickableProps(() => toggleExpand(entry.id))}
+                  onKeyDown={onActivateKeyDown(() => toggleExpand(entry.id))}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
                     <div className="flex items-center gap-3 flex-1 min-w-0">

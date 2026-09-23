@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AUDIT_DEFINITIONS } from './auditCatalog.js';
+import { AUDIT_DEFINITIONS, normalizeAuditTaskType } from './auditCatalog.js';
 import { safeJSONParse } from './jsonIo.js';
 
 const REPORT_PREFIX = 'QUALITY_AUDIT_JSON: ';
@@ -22,7 +22,7 @@ export const AUDIT_DISCOVERY = Object.freeze({
   simplify: 'Scan source exports, callers and repeated blocks across the repository; rank proven dead subsystems and duplicated behavior by maintenance cost and drift.',
   'module-hygiene': 'Inventory module sizes, imports, responsibilities and catalogs across source roots; inspect the largest responsibility tangles and most reused missing abstractions.',
   'api-contract': 'Inventory all routes, schemas and clients; compare request/response and version contracts, prioritizing destructive writes and widely consumed APIs.',
-  'react-lifecycle': 'Identify the UI runtime, then scan resource lifetimes, subscriptions, async state updates and shared state across views; rank resource leaks, stale writes and corrupted user state.',
+  'ui-lifecycle': 'Identify the UI runtime, then scan resource lifetimes, subscriptions, async state updates and shared state across views; rank resource leaks, stale writes and corrupted user state.',
   observability: 'Inventory critical workflows and their failure/status signals; rank invisible data loss, silent failures and operations that cannot be diagnosed.',
   copy: 'Inventory shared messages, destructive confirmations, setup and empty/error screens; rank wording that causes wrong actions or prevents task completion.',
   'better-complexity': 'Run an available language-aware complexity analyzer over all first-party source roots. Otherwise use repository-wide branching searches to shortlist functions, then count decision points manually. Publish the top measured functions and counts; file length is only a discovery hint.',
@@ -34,18 +34,19 @@ export const AUDIT_DISCOVERY = Object.freeze({
 });
 
 export function auditQualityInstructions(taskType) {
-  if (!Object.hasOwn(AUDIT_DEFINITIONS, taskType)) return '';
+  const category = normalizeAuditTaskType(taskType);
+  if (!Object.hasOwn(AUDIT_DEFINITIONS, category)) return '';
   return `## Repository-wide discovery, worst offender first, and quality assessment
 
 This contract overrides narrower slice-selection or ranking advice in the mission, including customized prompts. Preserve the selected file-issues/fix mode and documented non-issues.
 1. Inventory all first-party source roots with git ls-files or rg --files, excluding vendored/generated/build/dependency output. Do a cheap repository-wide signal scan BEFORE choosing where to investigate. Do not deep-read the entire repository.
-2. Category search: ${AUDIT_DISCOVERY[taskType]}
+2. Category search: ${AUDIT_DISCOVERY[category]}
 3. Rank at least the top five candidates (or all if fewer), with paths, measured signals, impact, reach, confidence and why higher candidates win. Validate the top candidates through callers, tests and relevant history before filing or fixing. Severity and user impact outrank ease, small scope and recency. Churn and fan-in break ties; inactivity alone never dismisses a severe offender. If the raw worst is exempt, already filed or not actionable, report why and continue down the ranking. Existing unresolved issues still count against quality. Never pick a nit while a verified major problem remains actionable.
 4. Keep investigation bounded after this scan. Report scanned roots, tools/commands, candidate ranking, exclusions, reviewed paths, unreviewed inventory and stopping reason. If tools or budget prevent broad discovery, report partial coverage, never claim a global worst or a clean repository.
 5. Assess the PRE-FIX codebase for this category on 0–100 (higher is healthier): 90–100 no material defect found after broad evidence; 70–89 localized moderate debt; 40–69 significant recurring or widespread problems; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. Score the category, not the agent's performance or issue count. Explain the score using severity, prevalence and concrete evidence. Do not award points merely for filing or fixing this run. Use score:null for unavailable or inapplicable assessment; zero is a real score.
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
 7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Keep ordinary completion/PR instructions and summaries too.
-QUALITY_AUDIT_JSON: {"version":1,"category":"${taskType}","score":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
+QUALITY_AUDIT_JSON: {"version":1,"category":"${category}","score":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
 Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial scores are provisional and excluded from the overall score. If unavailable or not-applicable, score must be null and explain why. Even a zero-finding audit returns this assessment.`;
 }
 
@@ -61,7 +62,8 @@ export const appListQuerySchema = appQualityQuerySchema.extend({
 
 export const auditQualityReportSchema = z.object({
   version: z.literal(1),
-  category: z.string().refine(value => Object.hasOwn(AUDIT_DEFINITIONS, value)),
+  category: z.string().transform(normalizeAuditTaskType)
+    .refine(value => Object.hasOwn(AUDIT_DEFINITIONS, value)),
   score: z.number().int().min(0).max(100).nullable(),
   worstSeverity: z.number().int().min(0).max(10),
   coverage: z.enum(['broad', 'partial', 'unavailable', 'not-applicable']),
@@ -78,14 +80,18 @@ export function parseAuditQualityReport(summary, category) {
   const lines = summary.split(/\r?\n/).filter(line => line.startsWith(REPORT_PREFIX));
   if (lines.length !== 1) return null;
   const parsed = auditQualityReportSchema.safeParse(safeJSONParse(lines[0].slice(REPORT_PREFIX.length), null));
-  return parsed.success && parsed.data.category === category ? parsed.data : null;
+  return parsed.success && parsed.data.category === normalizeAuditTaskType(category) ? parsed.data : null;
 }
 
 export const AUDIT_FRESHNESS_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function summarizeAppQuality(records = [], now = Date.now()) {
+  const normalizedRecords = records.map(record => ({
+    ...record,
+    category: normalizeAuditTaskType(record.category),
+  }));
   const categories = Object.entries(AUDIT_DEFINITIONS).map(([id, definition]) => {
-    const record = records.find(row => row.category === id);
+    const record = normalizedRecords.find(row => row.category === id);
     const report = auditQualityReportSchema.safeParse(record?.report);
     const valid = report.success && report.data.category === id;
     const assessedAt = record?.assessedAt;
@@ -109,6 +115,7 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
   const dayMs = 86400000;
   const today = Math.floor(now / dayMs) * dayMs;
   const sorted = records.filter(r => Number.isFinite(Date.parse(r.assessedAt)))
+    .map(record => ({ ...record, category: normalizeAuditTaskType(record.category) }))
     .sort(compareQualityRecords);
   const latest = new Map();
   let cursor = 0;
@@ -132,7 +139,10 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
 /** One newest measurement per category, with a stable run tie-break across all installs. */
 export function latestQualityRecords(records) {
   const latest = new Map();
-  for (const record of [...records].sort(compareQualityRecords)) latest.set(record.category, record);
+  for (const record of [...records].sort(compareQualityRecords)) {
+    const normalized = { ...record, category: normalizeAuditTaskType(record.category) };
+    latest.set(normalized.category, normalized);
+  }
   return [...latest.values()];
 }
 

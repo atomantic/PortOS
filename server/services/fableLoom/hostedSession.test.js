@@ -14,6 +14,7 @@ import {
   startHostedListening,
   startHostedSessionSweep,
   stopHostedSessionSweep,
+  switchHostedEpisode,
   updateHostedSession,
   verifyHostedToken,
 } from './hostedSession.js';
@@ -64,6 +65,27 @@ describe('fableLoom hostedSession', () => {
           transitions: [],
         },
       ],
+    }, {
+      id: 'ep-2',
+      title: 'Episode 2',
+      startNodeId: 'node-ep2-start',
+      nodes: [
+        {
+          id: 'node-ep2-start',
+          title: 'Mountain Pass',
+          prose: 'Snow crunches underfoot as you climb.',
+          playbackMode: 'decision',
+          audienceConnection: 'connected',
+          protagonistPresence: 'offscreen',
+          isEnding: false,
+          transitions: [{ id: 'tr-ep2-1', targetNodeId: 'node-ep2-start', intent: 'keep climbing', triggers: ['climb'] }],
+        },
+      ],
+    }, {
+      id: 'ep-3-not-ready',
+      title: 'Episode 3',
+      startNodeId: 'missing-start-node',
+      nodes: [],
     }],
   };
 
@@ -428,6 +450,204 @@ describe('fableLoom hostedSession', () => {
       // reads as a successfully-empty utterance rather than a cancellation.
       expect(weave.playTurn).not.toHaveBeenCalled();
       expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+    });
+  });
+
+  // #8112: the host can advance episodes without the server ever learning
+  // about it, so a hosted session used to keep resolving audience turns
+  // against the OLD episode's graph — findNode throws "Scene not found" and
+  // every turn silently falls back to canned narration.
+  describe('updateHostedSession — currentNodeId episode validation', () => {
+    it('accepts a currentNodeId that belongs to the session episode', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const updated = await updateHostedSession(session.id, { currentNodeId: 'node-2' });
+      expect(updated.currentNodeId).toBe('node-2');
+    });
+
+    it('rejects a currentNodeId from another episode and leaves the session unchanged', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      await expect(updateHostedSession(session.id, { currentNodeId: 'node-ep2-start' }))
+        .rejects.toMatchObject({ status: 400, code: 'NODE_NOT_IN_EPISODE' });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-start');
+    });
+
+    it('skips the episode lookup when currentNodeId is unchanged', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      records.getLoom.mockClear();
+      const updated = await updateHostedSession(session.id, { currentNodeId: 'node-start', playbackPhase: 'hold' });
+      expect(updated.playbackPhase).toBe('hold');
+      expect(records.getLoom).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('switchHostedEpisode', () => {
+    it('re-binds the session to the new episode, resets to its opening node, and clears the transcript', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const result = await switchHostedEpisode(session.id, 'ep-2', { io });
+      expect(result.ok).toBe(true);
+      expect(result.session.currentNodeId).toBe('node-ep2-start');
+
+      const updated = getHostedSession(session.id);
+      expect(updated.currentNodeId).toBe('node-ep2-start');
+      expect(updated.playbackPhase).toBe('hold');
+      expect(updated.turnPhase).toBe('idle');
+      expect(updated.transcript).toHaveLength(1);
+      expect(updated.transcript[0].role).toBe('narrator');
+
+      // A subsequent audience turn resolves against episode 2's graph rather
+      // than throwing "Scene not found" against the old episode.
+      vi.spyOn(weave, 'playTurn').mockResolvedValue({
+        action: 'stay',
+        narration: 'The pass stretches on.',
+        node: { id: 'node-ep2-start' },
+      });
+      await startHostedListening(session.id, { io });
+      const turnResult = await processHostedUtterance(session.id, { textMessage: 'keep climbing', io });
+      expect(turnResult.playResult.narration).toBe('The pass stretches on.');
+      expect(weave.playTurn).toHaveBeenCalledWith('loom-1', 'ep-2', expect.objectContaining({ nodeId: 'node-ep2-start' }));
+
+      expect(io.emits.some((e) => e.event === 'hosted:session:sync')).toBe(true);
+    });
+
+    it('aborts an in-flight turn against the old episode before switching', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      await startHostedListening(session.id, { io });
+
+      const storyTurn = deferred();
+      vi.spyOn(weave, 'playTurn').mockImplementation(() => storyTurn.promise);
+      const pending = processHostedUtterance(session.id, { textMessage: 'enter the forest', io });
+      await vi.waitFor(() => expect(weave.playTurn).toHaveBeenCalled());
+
+      await switchHostedEpisode(session.id, 'ep-2', { io });
+      storyTurn.resolve({ action: 'stay', narration: 'too late', node: { id: 'node-start' } });
+
+      await expect(pending).resolves.toMatchObject({ aborted: true });
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-ep2-start');
+    });
+
+    it('ends the session with reason episode_not_ready when the target episode fails preflight', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const result = await switchHostedEpisode(session.id, 'ep-3-not-ready', { io });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('episode_not_ready');
+      expect(getHostedSession(session.id)).toBeNull();
+      expect(io.emits.at(-1)).toMatchObject({ event: 'hosted:session:ended', payload: { reason: 'episode_not_ready' } });
+    });
+
+    it('throws when the target episode does not belong to the session loom', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      await expect(switchHostedEpisode(session.id, 'not-an-episode')).rejects.toMatchObject({ status: 404 });
+    });
+
+    // A host "end", DELETE /sessions/:id, or the TTL sweep can land while
+    // switchHostedEpisode is off awaiting the loom read or preflight. Losing
+    // that race must not resurrect the deleted session's state or emit
+    // hosted:session:sync AFTER the room already saw hosted:session:ended.
+    it('does not resurrect a session torn down while awaiting the loom read', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const loomRead = deferred();
+      records.getLoom.mockImplementationOnce(() => loomRead.promise);
+
+      const pending = switchHostedEpisode(session.id, 'ep-2', { io });
+      endHostedSession(session.id, { reason: 'host_ended', io });
+      loomRead.resolve(mockLoom);
+
+      await expect(pending).resolves.toMatchObject({ ok: false, reason: 'session_ended' });
+      expect(getHostedSession(session.id)).toBeNull();
+      expect(io.emits.at(-1).event).toBe('hosted:session:ended');
+    });
+
+    // Without this gate a turn that starts while the switch is off awaiting
+    // the loom read/preflight would run against the OLD episode and could
+    // commit and emit AFTER the new episode's hosted:session:sync, mixing
+    // old-episode content into the new episode.
+    it('refuses to start a new turn while a switch is in flight, and allows one once it settles', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const loomRead = deferred();
+      records.getLoom.mockImplementationOnce(() => loomRead.promise);
+
+      const pending = switchHostedEpisode(session.id, 'ep-2');
+      await expect(startHostedListening(session.id)).rejects.toMatchObject({
+        status: 409,
+        code: 'EPISODE_SWITCH_IN_PROGRESS',
+      });
+
+      loomRead.resolve(mockLoom);
+      await pending;
+
+      const listenRes = await startHostedListening(session.id);
+      expect(listenRes.ok).toBe(true);
+    });
+
+    it('rejects a listen request whose loom read resumes after an episode switch', async () => {
+      const io = makeIo();
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+      const pendingRead = deferred();
+      records.getLoom
+        .mockImplementationOnce(() => pendingRead.promise)
+        .mockResolvedValueOnce(mockLoom);
+
+      const pendingListen = startHostedListening(session.id, { io });
+      await switchHostedEpisode(session.id, 'ep-2', { io });
+      const syncIndex = io.emits.findLastIndex((event) => event.event === 'hosted:session:sync');
+
+      pendingRead.resolve(mockLoom);
+      await expect(pendingListen).rejects.toMatchObject({
+        status: 409,
+        code: 'EPISODE_SWITCH_IN_PROGRESS',
+      });
+
+      expect(getHostedSession(session.id)).toMatchObject({ episodeId: 'ep-2', turnPhase: 'idle' });
+      expect(io.emits.slice(syncIndex + 1).some((event) => event.event === 'hosted:turn:phase')).toBe(false);
+    });
+
+    // Without this, a host double-clicking "Next Episode" before the first
+    // switch's async loom-read/preflight resolves fires two overlapping
+    // calls that race — the earlier request could commit last and rebind the
+    // session to an episode the UI already left.
+    it('rejects a second switch while one is already in flight', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const loomRead = deferred();
+      records.getLoom.mockImplementationOnce(() => loomRead.promise);
+
+      const pending = switchHostedEpisode(session.id, 'ep-2');
+      await expect(switchHostedEpisode(session.id, 'ep-3-not-ready')).rejects.toMatchObject({
+        status: 409,
+        code: 'EPISODE_SWITCH_IN_PROGRESS',
+      });
+
+      loomRead.resolve(mockLoom);
+      await expect(pending).resolves.toMatchObject({ ok: true });
+      expect(getHostedSession(session.id).episodeId).toBe('ep-2');
+    });
+
+    // The client's playback-sync effect fires on the very next React commit
+    // after "Next Episode" — well before switchHostedEpisode's async work
+    // resolves server-side — so a `hosted:playback:update` racing in during
+    // that window carries a currentNodeId that legitimately belonged to the
+    // OLD episode a moment ago. It must no-op, not reject as drift (#8112).
+    it('treats a currentNodeId update that races with an in-flight switch as a stale no-op', async () => {
+      const { session } = await createHostedSession('loom-1', 'ep-1');
+
+      const loomRead = deferred();
+      records.getLoom.mockImplementationOnce(() => loomRead.promise);
+
+      const pending = switchHostedEpisode(session.id, 'ep-2');
+      const updated = await updateHostedSession(session.id, { currentNodeId: 'node-2' });
+      expect(updated.currentNodeId).toBe('node-start');
+
+      loomRead.resolve(mockLoom);
+      await pending;
+      expect(getHostedSession(session.id).currentNodeId).toBe('node-ep2-start');
     });
   });
 

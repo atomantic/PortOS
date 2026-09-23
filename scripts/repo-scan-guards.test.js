@@ -64,6 +64,7 @@ const STRUCTURALLY_SELECTED = new Map([
   ['client/src/providerSelectConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/preWrapClasses.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/responsiveGridConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
+  ['client/src/socketSubscriptionConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/storageConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   ['client/src/subNavConventions.test.js', 'structuralTestsFor: client/src/**.js(x)'],
   // Its subject is the TEST files, and `client/src/**.js(x)` matches those too

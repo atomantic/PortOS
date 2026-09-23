@@ -5,10 +5,12 @@ import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintain
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { DEVELOPMENT_ACTIVE_STATUSES, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
+import { safeJSONParse } from '../lib/jsonIo.js';
 
 let scanTail = Promise.resolve();
 const tasksFrom = data => [...data.user.tasks, ...data.cos.tasks];
 const ownershipTask = (app, pr) => ({ metadata: { app: app.id, reviewLoopPRUrl: pr.url } });
+const parseGithubJson = value => safeJSONParse(value, null, { allowArray: false });
 
 function authorized(state, appId, write = false) {
   const role = normalizePersistentMindMaintainer(state.config?.persistentMindMaintainer);
@@ -96,8 +98,10 @@ async function inspectApp(app, tasks) {
       const number = issueNumberFromRef(pr.headBranch);
       if (!number) disposition = 'unknown';
       else {
-        const claim = JSON.parse(await execGh(['issue', 'view', String(number), '--repo', target.repoSpec, '--json', 'state,labels'], undefined, exec));
-        if (claim.state === 'OPEN' && claim.labels?.some(label => label.name === 'in-progress')) disposition = 'unknown';
+        const claim = await execGh(['issue', 'view', String(number), '--repo', target.repoSpec, '--json', 'state,labels'], undefined, exec)
+          .then(parseGithubJson).catch(() => null);
+        if (!claim || typeof claim !== 'object' || typeof claim.state !== 'string' || !Array.isArray(claim.labels)
+          || (claim.state === 'OPEN' && claim.labels.some(label => label.name === 'in-progress'))) disposition = 'unknown';
       }
     }
     row.pullRequests.push({ number: pr.number, headSha: pr.headSha, fingerprint: JSON.stringify([pr.headSha, pr.reviewDecision, pr.mergeStateStatus, pr.checks, pr.labels]), disposition, taskId: owner?.id || null,
@@ -180,9 +184,13 @@ async function dispatch(app, decision) {
   const exec = await resolveForgeExecOptions(app.repoPath, { forgeAccount: target.fullName.startsWith('atomantic/') ? 'atomantic' : app.forgeAccount });
   const { execGh } = await import('./github.js');
   const { parseBlockingIssueNumbers } = await import('./blockedIssueReconcile.js');
-  const body = JSON.parse(await execGh([decision.kind === 'pr' ? 'pr' : 'issue', 'view', String(item.number), '--repo', target.repoSpec, '--json', 'body'], undefined, exec));
+  const body = await execGh([decision.kind === 'pr' ? 'pr' : 'issue', 'view', String(item.number), '--repo', target.repoSpec, '--json', 'body'], undefined, exec)
+    .then(parseGithubJson).catch(() => null);
+  if (!body || typeof body.body !== 'string') return { reason: 'forge-read-failed' };
   for (const number of parseBlockingIssueNumbers(body.body)) {
-    const dependency = JSON.parse(await execGh(['issue', 'view', String(number), '--repo', target.repoSpec, '--json', 'state'], undefined, exec));
+    const dependency = await execGh(['issue', 'view', String(number), '--repo', target.repoSpec, '--json', 'state'], undefined, exec)
+      .then(parseGithubJson).catch(() => null);
+    if (!dependency || typeof dependency.state !== 'string') return { reason: 'dependency-read-failed' };
     if (dependency.state !== 'CLOSED') return { reason: 'open-dependency' };
   }
   const finalState = await loadState();

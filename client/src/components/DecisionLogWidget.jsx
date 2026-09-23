@@ -237,7 +237,7 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
   };
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
+    <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-3 min-w-0">
@@ -259,7 +259,7 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
             to="/cos/learning"
             className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
           >
-            <span className="hidden sm:inline">Details</span>
+            <span className="@max-xs:sr-only">Details</span>
             <ChevronRight size={16} />
           </Link>
         </div>

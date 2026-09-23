@@ -40,6 +40,43 @@ vi.mock('../../hooks/useProviderModels', () => ({
   }),
 }));
 
+// For lifecycle tests (#8108), the mock tracks whether edit state persists across goal switches.
+vi.mock('./GoalDetailPanel', async (importOriginal) => {
+  const actual = await importOriginal();
+  const React = await import('react');
+  return {
+    ...actual,
+    default: ({ goal, onClose, onRefresh }) => {
+      const [isEditing, setIsEditing] = React.useState(false);
+      const [formTitle, setFormTitle] = React.useState('');
+
+      return (
+        <div>
+          <span data-testid="detail-panel-goal">{goal.title}</span>
+          {isEditing && (
+            <div data-testid="edit-form">
+              <input
+                data-testid="edit-form-title"
+                value={formTitle}
+                onChange={(e) => setFormTitle(e.target.value)}
+                placeholder="Edit title"
+              />
+              <button type="button" onClick={() => setIsEditing(false)}>cancel-edit</button>
+            </div>
+          )}
+          {!isEditing && (
+            <button type="button" onClick={() => { setIsEditing(true); setFormTitle(goal.title); }}>
+              start-edit
+            </button>
+          )}
+          <button type="button" onClick={onClose}>close-detail</button>
+          <button type="button" onClick={onRefresh}>refresh-detail</button>
+        </div>
+      );
+    },
+  };
+});
+
 import GoalsTreeView from './GoalsTreeView';
 
 // Invented placeholder goals — never real records from a running install.

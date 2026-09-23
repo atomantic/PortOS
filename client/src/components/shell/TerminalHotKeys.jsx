@@ -1,4 +1,4 @@
-import { OctagonX, ChevronsLeft, ClipboardPaste, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, ChevronsUp, ChevronsDown } from 'lucide-react';
+import { OctagonX, ChevronsLeft, ClipboardPaste, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, CornerDownLeft, ChevronsUp, ChevronsDown, CornerUpLeft } from 'lucide-react';
 import ShellImageDrop from './ShellImageDrop';
 
 // Hot buttons for arrow / Enter entry — handy on touch devices and for driving TUI
@@ -32,7 +32,7 @@ export const SCROLL_KEYS = [
 //
 // `popoverPlacement` is which way the Photo composer opens — 'above' for the
 // fullscreen bar, which is pinned to the bottom of the viewport.
-export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, handlePaste, sendNavKey, scrollPage, showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent, sendImage, popoverPlacement = 'below' }) {
+export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, sendEsc, handlePaste, sendNavKey, scrollPage, showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent, sendImage, popoverPlacement = 'below' }) {
   return (
     <>
       <button
@@ -54,6 +54,15 @@ export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, handlePaste, sen
         <span className="hidden sm:inline">Ctrl+C</span>
       </button>
       <button
+        onClick={sendEsc}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-port-card hover:bg-port-border text-gray-300 hover:text-white rounded text-xs font-mono transition-colors border border-port-border min-h-[40px] shrink-0"
+        title="Send Escape key"
+        aria-label="Send Escape key"
+      >
+        <CornerUpLeft size={14} />
+        <span className="hidden sm:inline">Esc</span>
+      </button>
+      <button
         onClick={handlePaste}
         className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent hover:text-port-accent/80 rounded text-xs font-mono transition-colors border border-port-accent/30 min-h-[40px] shrink-0"
         title="Paste clipboard contents"
@@ -73,9 +82,11 @@ export default function TerminalHotKeys({ sendCtrlB, sendCtrlC, handlePaste, sen
           onBlur={() => setShowPasteInput(false)}
         />
       )}
-      <ShellImageDrop onSend={sendImage} placement={popoverPlacement} />
-      <div className="w-px h-6 bg-port-border shrink-0" />
-      {SCROLL_KEYS.map((key) => (
+      {/* Photo and view-scroll are PortOS-PTY only: the iTerm2 view (#8114) has
+          no image endpoint and no scrollback, so it omits both callbacks. */}
+      {sendImage && <ShellImageDrop onSend={sendImage} placement={popoverPlacement} />}
+      {scrollPage && <div className="w-px h-6 bg-port-border shrink-0" />}
+      {scrollPage && SCROLL_KEYS.map((key) => (
         <button
           key={key.label}
           onClick={() => scrollPage(key.direction)}

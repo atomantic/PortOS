@@ -7,9 +7,9 @@ import { buildAgentRegistration } from './agentRegistrationRecord.js';
 // so a field nobody lists simply does not survive the spawn — the failure mode the
 // module header records (`quotaBurnStepId`, #6406). These pin the one field whose
 // absence is invisible at spawn time and only shows up as a missing link in the UI.
-const args = (taskMetadata) => ({
+const args = (taskMetadata, provider = { id: 'claude', command: 'claude' }) => ({
   task: { id: 'task-1', description: 'do the thing', taskType: 'user', priority: 'normal', metadata: taskMetadata },
-  provider: { id: 'claude', command: 'claude' },
+  provider,
   instanceId: 'instance-1',
   workspacePath: '/tmp/ws',
   sourceWorkspace: null,
@@ -58,4 +58,34 @@ it('retains recovery lineage and the persisted boolean marker through task markd
   expect(task.metadata.isRecovery).toBe('true');
   const record = buildAgentRegistration({ ...args({}), task });
   expect(record).toMatchObject({ isRecovery: true, recoveryOrigin });
+});
+
+it('projects non-secret provider route provenance for active and archived cards', () => {
+  const record = buildAgentRegistration(args({}, {
+    id: 'claude-ollama',
+    name: 'Claude Ollama',
+    type: 'cli',
+    command: 'claude',
+    method: 'cli',
+    harnessId: 'claude',
+    serviceId: 'ollama',
+    servicePlan: 'local',
+    credentialBootstrapId: 'example-auth',
+    credentialBootstrap: { command: 'example-auth' },
+    envVars: { EXAMPLE_SECRET: 'must-not-be-copied' },
+  }));
+
+  expect(record).toMatchObject({
+    providerId: 'claude-ollama',
+    providerName: 'Claude Ollama',
+    providerType: 'cli',
+    providerMethod: 'cli',
+    harnessId: 'claude',
+    serviceId: 'ollama',
+    servicePlan: 'local',
+    providerCredentialBootstrapId: 'example-auth',
+    providerHasCredentialBootstrap: true,
+  });
+  expect(record).not.toHaveProperty('envVars');
+  expect(record).not.toHaveProperty('credentialBootstrap');
 });

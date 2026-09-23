@@ -280,14 +280,14 @@ export default function CreateApp() {
   const hasRailContent = detecting || detected || detectionLog.length > 0;
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="@container/page min-w-0 max-w-5xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-white">Add App</h1>
         <p className="text-gray-500">Import an existing project or create a new one from a template</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
+        <div className="grid grid-cols-1 @5xl/page:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
           {/* Left column — path input + configuration form */}
           <div className="space-y-6 min-w-0">
             {/* Path Input */}
@@ -487,7 +487,7 @@ export default function CreateApp() {
           </div>
 
           {/* Right column — detection status rail */}
-          <aside className="space-y-3 lg:sticky lg:top-4 self-start">
+          <aside className="space-y-3 @5xl/page:sticky @5xl/page:top-4 self-start">
             {/* Detection Progress */}
             {detecting && (
               <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">

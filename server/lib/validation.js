@@ -296,7 +296,7 @@ export const appSchema = z.object({
   // task when it diverges. See lib/repoStateExpectations.js. Unset = ON: an install
   // that never hears about a leaked branch just accumulates them.
   verifyRepoStateOnCompletion: z.boolean().optional(),
-  // Unset/false = off (default); true = land a `.quality.json` quality snapshot through a merge-on-green PR after each audit.
+  // Unset/false = off (default); true = land a `.quality.json` quality snapshot through an immediately-merged PR after each audit.
   publishQualitySnapshot: z.boolean().optional(),
   featureOverrides: appFeatureOverridesSchema.optional(),
   jira: jiraConfigSchema.optional().nullable(),
@@ -2245,7 +2245,9 @@ export const modelComparisonObservationSchema = z.object({
 }).strict();
 export const modelComparisonImportSchema = z.object({
   schemaVersion: z.literal(1),
-  observations: z.array(modelComparisonObservationSchema).min(1).max(2000),
+  // The on-demand Epoch AI sync imports several thousand independently
+  // attributed model/benchmark/configuration rows in one atomic catalog merge.
+  observations: z.array(modelComparisonObservationSchema).min(1).max(12000),
 }).strict().superRefine((value, ctx) => {
   const ids = new Set();
   value.observations.forEach((row, index) => {

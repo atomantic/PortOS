@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { ExternalLink, Plug, RefreshCw, Trash2 } from 'lucide-react';
+import { ExternalLink, Plug, RefreshCw, Trash2, Wand2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import Banner from '../ui/Banner';
 import Pill from '../ui/Pill';
 import EmptyState from '../EmptyState';
+import CollapsibleSection from '../ui/CollapsibleSection';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { FormField } from '../ui/FormField';
 import ToggleSwitch from '../ToggleSwitch';
 import { INPUT_CLASS } from '../apps/constants';
 import * as api from '../../services/api';
 import { invalidateProviderCatalog } from '../../hooks/useProviderCatalog';
-import { catalogSummary, draftFromTransports, serviceReadinessCopy, transportsFromDraft } from '../../lib/providerManagement';
+import {
+  SERVICE_CATEGORIES, catalogSummary, classifyServiceCategory, draftFromTransports, serviceCategoryById,
+  serviceMatchesQuery, servicePresetAction, serviceReadinessCopy, sortServices, transportsFromDraft,
+} from '../../lib/providerManagement';
 import { pluralize } from '../../lib/textUtils';
 import { formatCount } from '../../utils/formatters';
 import ProviderReadiness from './ProviderReadiness';
@@ -51,16 +55,23 @@ const draftFrom = (service) => ({ label: service.label || '', transports: draftF
 
 function ServiceCard({
   service, open, busy, presets, subject, readiness, servingModel, onAutoSetup, onUseServedModel, onServeWantedModel,
-  onSelect, onToggle, onRefresh, onSave, onClearKey, onDelete,
+  onSelect, onToggle, onRefresh, onSave, onClearKey, onDelete, onCreatePreset,
 }) {
   const ref = useRef(null);
   useEffect(() => {
     if (open) ref.current?.scrollIntoView?.({ block: 'nearest' });
   }, [open]);
   // Re-seeded only when the row's revision moves, so a poll that changed
-  // nothing cannot wipe a half-typed edit.
+  // nothing cannot wipe a half-typed edit. The initial state already matches
+  // the loaded service; skip the redundant mount reset so a fast first edit
+  // cannot be overwritten by the passive effect.
   const [draft, setDraft] = useState(() => draftFrom(service));
-  useEffect(() => { setDraft(draftFrom(service)); }, [service.id, service.revision]); // eslint-disable-line react-hooks/exhaustive-deps
+  const draftVersionRef = useRef({ id: service.id, revision: service.revision });
+  useEffect(() => {
+    if (draftVersionRef.current.id === service.id && draftVersionRef.current.revision === service.revision) return;
+    draftVersionRef.current = { id: service.id, revision: service.revision };
+    setDraft(draftFrom(service));
+  }, [service.id, service.revision]); // eslint-disable-line react-hooks/exhaustive-deps
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const set = (key) => (e) => setDraft((prev) => ({ ...prev, [key]: e.target.value }));
   const setTransport = (protocol) => (e) => setDraft((prev) => ({ ...prev, transports: { ...prev.transports, [protocol]: e.target.value } }));
@@ -69,12 +80,14 @@ function ServiceCard({
   const readinessCopy = serviceReadinessCopy(service.readiness);
   const slug = serviceRef(service);
   const definition = service.definition;
+  const category = serviceCategoryById(classifyServiceCategory(service));
+  const presetAction = servicePresetAction(service);
 
   return (
     <article
       ref={ref}
       aria-labelledby={`service-${service.id}-title`}
-      className={`bg-port-card border rounded-xl ${open ? 'border-port-accent ring-1 ring-port-accent/40' : 'border-port-border'}`}
+      className={`min-w-0 bg-port-card border rounded-xl ${open ? 'border-port-accent ring-1 ring-port-accent/40' : 'border-port-border'}`}
     >
       <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between">
         <button
@@ -90,21 +103,36 @@ function ServiceCard({
           </h3>
           <p className="mt-1 text-xs text-gray-400 flex flex-wrap items-center gap-2">
             <span>{definition?.label || service.kind}</span>
+            <Pill tone="accent" size="xs">{category.label}</Pill>
             <Pill tone={PLAN_TONE[service.plan] || 'muted'} size="xs">{service.plan}</Pill>
             <Pill tone={readinessCopy.tone} size="xs">{readinessCopy.label}</Pill>
             <span className={CATALOG_TONE_CLASS[summary.tone]}>{summary.text}</span>
           </p>
         </button>
-        <span className="flex items-center gap-2 text-sm text-gray-300 shrink-0">
-          <ToggleSwitch
-            size="sm"
-            enabled={service.enabled}
-            disabled={busy}
-            ariaLabel={`${service.enabled ? 'Disable' : 'Enable'} ${serviceName(service)}`}
-            onChange={() => onToggle(service, !service.enabled)}
-          />
-          {service.enabled ? 'Enabled' : 'Disabled'}
-        </span>
+        <div className="flex flex-col items-start gap-2 shrink-0 sm:items-end">
+          <span className="flex items-center gap-2 text-sm text-gray-300">
+            <ToggleSwitch
+              size="sm"
+              enabled={service.enabled}
+              disabled={busy}
+              ariaLabel={`${service.enabled ? 'Disable' : 'Enable'} ${serviceName(service)}`}
+              onChange={() => onToggle(service, !service.enabled)}
+            />
+            {service.enabled ? 'Enabled' : 'Disabled'}
+          </span>
+          <button
+            type="button"
+            disabled={busy || !presetAction.enabled}
+            aria-label={presetAction.label}
+            onClick={() => {
+              if (!presetAction.enabled) return;
+              onCreatePreset?.(service);
+            }}
+            className="inline-flex min-h-[36px] items-center gap-1 px-2.5 py-1 text-xs rounded-lg border border-port-border text-gray-200 hover:text-white disabled:opacity-50"
+          >
+            <Wand2 className="w-3.5 h-3.5" aria-hidden="true" /> Create preset
+          </button>
+        </div>
       </div>
 
       {open && (
@@ -211,7 +239,7 @@ function ServiceCard({
             </h4>
             {presets.length === 0 ? (
               <p className="text-xs text-gray-500">
-                None yet — compose one from any picker, or from the compatibility matrix on the{' '}
+                None yet — use Create preset on this card, or compose one from the{' '}
                 <Link to="/ai/presets" className="text-port-accent hover:underline">Presets view</Link>.
               </p>
             ) : (
@@ -243,15 +271,19 @@ function ServiceCard({
  * @param {function} [props.onServeWantedModel]
  * @param {object} [props.servingModel] - preset id → relaunch in flight.
  * @param {function} props.onChanged - a service write may re-materialize derived presets; the page reloads them.
+ * @param {function} [props.onCreatePreset] - open the page compose flow seeded with this service.
  */
 export default function ProviderServicesTab({
   selectedServiceSlug = null, creating = false, presets = [], readiness = {},
-  onAutoSetup, onUseServedModel, onServeWantedModel, servingModel = {}, onChanged,
+  onAutoSetup, onUseServedModel, onServeWantedModel, servingModel = {}, onChanged, onCreatePreset,
 }) {
   const navigate = useNavigate();
   const [services, setServices] = useState(null); // null = not loaded
   const [loadError, setLoadError] = useState(null);
   const [busy, setBusy] = useState({});
+  const [category, setCategory] = useState('all');
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState('name');
 
   const load = useCallback(async () => {
     const data = await api.getProviderServices({ silent: true }).catch((err) => ({ err }));
@@ -273,6 +305,27 @@ export default function ProviderServicesTab({
     }
     return map;
   }, [presets]);
+
+  const presetCountOf = useCallback((service) => (presetsByService[service?.slug] || []).length, [presetsByService]);
+
+  const organized = useMemo(() => {
+    const loaded = services || [];
+    const matched = loaded.filter((service) => serviceMatchesQuery(service, query));
+    const counts = { all: matched.length };
+    for (const entry of SERVICE_CATEGORIES) counts[entry.id] = 0;
+    for (const service of matched) counts[classifyServiceCategory(service)] += 1;
+    const inCategory = category === 'all'
+      ? matched
+      : matched.filter((service) => classifyServiceCategory(service) === category);
+    const ordered = sortServices(inCategory, sort, presetCountOf);
+    const groups = SERVICE_CATEGORIES
+      .map((entry) => ({
+        ...entry,
+        services: ordered.filter((service) => classifyServiceCategory(service) === entry.id),
+      }))
+      .filter((group) => group.services.length > 0);
+    return { counts, groups, shown: ordered.length };
+  }, [services, query, category, sort, presetCountOf]);
 
   const selected = useMemo(() => (services || []).find((service) => service.slug === selectedServiceSlug || service.id === selectedServiceSlug) || null, [services, selectedServiceSlug]);
   useEffect(() => {
@@ -365,32 +418,92 @@ export default function ProviderServicesTab({
         />
       )}
       {services?.length > 0 && (
-        <div className="grid gap-4">
-          {services.map((service) => {
-            const servicePresets = presetsByService[service.slug] || [];
-            const subject = servicePresets.find((preset) => readiness[preset.id]) || null;
-            return (
-              <ServiceCard
-                key={service.id}
-                service={service}
-                open={selected?.id === service.id}
-                busy={Boolean(busy[service.id])}
-                presets={servicePresets}
-                subject={subject}
-                readiness={subject ? readiness[subject.id] : null}
-                servingModel={servingModel}
-                onAutoSetup={onAutoSetup}
-                onUseServedModel={onUseServedModel}
-                onServeWantedModel={onServeWantedModel}
-                onSelect={select}
-                onToggle={handleToggle}
-                onRefresh={handleRefresh}
-                onSave={handleSave}
-                onClearKey={handleClearKey}
-                onDelete={handleDelete}
+        <div className="space-y-4">
+          <div role="group" aria-label="Filter services by category" className="flex flex-wrap gap-2">
+            {[{ id: 'all', label: 'All' }, ...SERVICE_CATEGORIES].map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                aria-pressed={category === entry.id}
+                onClick={() => setCategory(entry.id)}
+                className={`inline-flex min-h-[36px] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${category === entry.id ? 'border-port-accent bg-port-accent/15 text-white' : 'border-port-border text-gray-300 hover:text-white'}`}
+              >
+                <span>{entry.label}</span>
+                <span className="text-gray-400">{formatCount(organized.counts[entry.id] || 0)}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1">
+              <label htmlFor="service-search" className="mb-1 block text-xs text-gray-400">Search</label>
+              <input
+                id="service-search"
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Name, slug, or definition"
+                className={INPUT_CLASS}
               />
-            );
-          })}
+            </div>
+            <div className="sm:w-48">
+              <label htmlFor="service-sort" className="mb-1 block text-xs text-gray-400">Sort</label>
+              <select id="service-sort" value={sort} onChange={(event) => setSort(event.target.value)} className={INPUT_CLASS}>
+                <option value="name">Name</option>
+                <option value="readiness">Readiness</option>
+                <option value="presets">Preset count</option>
+              </select>
+            </div>
+          </div>
+          <p className="text-xs text-gray-400" aria-live="polite">
+            Showing {formatCount(organized.shown)} {organized.shown === 1 ? 'service' : 'services'}
+            {category !== 'all' ? ` in ${serviceCategoryById(category).label}` : ''}
+          </p>
+          {organized.groups.length === 0 && (
+            <p className="text-sm text-gray-500">No services match this filter.</p>
+          )}
+          {organized.groups.map((group) => (
+            <CollapsibleSection
+              key={group.id}
+              id={`service-category-${group.id}`}
+              size="lg"
+              defaultOpen
+              buttonClassName="flex-wrap"
+              bodyClassName="grid gap-4 pt-3 grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))]"
+              label={(
+                <span className="flex flex-wrap items-center gap-2">
+                  <span>{group.label}</span>
+                  <span className="text-xs text-gray-400">{formatCount(group.services.length)}</span>
+                </span>
+              )}
+            >
+              {group.services.map((service) => {
+                const servicePresets = presetsByService[service.slug] || [];
+                const subject = servicePresets.find((preset) => readiness[preset.id]) || null;
+                return (
+                  <ServiceCard
+                    key={service.id}
+                    service={service}
+                    open={selected?.id === service.id}
+                    busy={Boolean(busy[service.id])}
+                    presets={servicePresets}
+                    subject={subject}
+                    readiness={subject ? readiness[subject.id] : null}
+                    servingModel={servingModel}
+                    onAutoSetup={onAutoSetup}
+                    onUseServedModel={onUseServedModel}
+                    onServeWantedModel={onServeWantedModel}
+                    onSelect={select}
+                    onToggle={handleToggle}
+                    onRefresh={handleRefresh}
+                    onSave={handleSave}
+                    onClearKey={handleClearKey}
+                    onDelete={handleDelete}
+                    onCreatePreset={onCreatePreset}
+                  />
+                );
+              })}
+            </CollapsibleSection>
+          ))}
         </div>
       )}
       {creating && (

@@ -13,7 +13,7 @@ import { PATHS, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js'
 import { randomUUID } from 'crypto';
 import { createRun } from './runner.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
-import { getAllProviders, getActiveProvider } from './providers.js';
+import { listSelectableProviders, getActiveProvider } from './providers.js';
 
 export const loopEvents = new EventEmitter();
 
@@ -448,18 +448,31 @@ export async function updateLoop(id, updates) {
 }
 
 export async function getAvailableProviders() {
-  const result = await getAllProviders();
-  const providers = Array.isArray(result) ? result : (result?.providers || []);
+  const providers = await listSelectableProviders();
   const active = await getActiveProvider().catch(() => null);
   return {
-    providers: providers.map(p => ({
-      id: p.id,
-      name: p.name,
-      type: p.type,
-      command: p.command,
-      defaultModel: p.defaultModel,
-      isActive: active?.id === p.id
-    })),
+    providers: providers
+      .filter(p => p?.enabled !== false || active?.id === p.id)
+      .map(p => ({
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        command: p.command,
+        defaultModel: p.defaultModel,
+        enabled: p.enabled !== false,
+        models: Array.isArray(p.models) ? p.models : [],
+        harnessId: p.harnessId,
+        method: p.method,
+        serviceId: p.serviceId,
+        gatewayBacked: p.gatewayBacked,
+        ollamaBacked: p.ollamaBacked,
+        effortLevels: p.effortLevels,
+        effortLevelsByModel: p.effortLevelsByModel,
+        hardwareCompatibility: p.hardwareCompatibility,
+        modelHardwareCompatibility: p.modelHardwareCompatibility,
+        unavailableReason: p.unavailableReason,
+        isActive: active?.id === p.id
+      })),
     activeProviderId: active?.id || null
   };
 }

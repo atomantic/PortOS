@@ -234,7 +234,7 @@ export default function MediaAnnotate() {
     <div className="flex flex-col h-full overflow-y-auto">
       <div className="p-3 md:p-4 border-b border-port-border flex flex-wrap items-center gap-2 sticky top-0 bg-port-bg/95 backdrop-blur z-10">
         <Link to={backPath} className="text-gray-400 hover:text-white inline-flex items-center gap-1 text-sm mr-1" title={`Back to ${backLabel}`}>
-          <ArrowLeft className="w-4 h-4" /> <span className="hidden sm:inline">{backLabel}</span>
+          <ArrowLeft className="w-4 h-4" /> <span className="max-sm:sr-only">{backLabel}</span>
         </Link>
 
         {/* Draw / erase */}
@@ -304,7 +304,7 @@ export default function MediaAnnotate() {
             className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
             title="Undo last stroke"
           >
-            <Undo2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Undo</span>
+            <Undo2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Undo</span>
           </button>
           <button
             type="button"
@@ -313,7 +313,7 @@ export default function MediaAnnotate() {
             className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
             title="Clear all strokes"
           >
-            <Trash2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Clear</span>
+            <Trash2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Clear</span>
           </button>
           <button
             type="button"
@@ -322,7 +322,7 @@ export default function MediaAnnotate() {
             className="px-2 py-1.5 text-xs bg-port-card border border-port-border rounded hover:bg-port-border disabled:opacity-40 inline-flex items-center gap-1"
             title="Download flattened PNG"
           >
-            <Download className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Export</span>
+            <Download className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Export</span>
           </button>
           <button
             type="button"
@@ -343,7 +343,7 @@ export default function MediaAnnotate() {
               className="px-3 py-1.5 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-40 inline-flex items-center gap-1"
               title={strokes.length === 0 ? 'Draw over the image first' : 'Re-render this image guided by your annotations'}
             >
-              <Wand2 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Re-render</span>
+              <Wand2 className="w-3.5 h-3.5" /> <span className="max-sm:sr-only">Re-render</span>
             </button>
           ) : null}
         </div>

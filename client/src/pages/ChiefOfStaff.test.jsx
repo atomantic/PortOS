@@ -821,6 +821,73 @@ describe('ChiefOfStaff stale queue-read guard', () => {
   });
 });
 
+describe('ChiefOfStaff speaking timer ownership', () => {
+  const getSocketHandler = (event) => socketStub.on.mock.calls
+    .filter(([registeredEvent]) => registeredEvent === event)
+    .at(-1)?.[1];
+  const isSpeaking = (container) => Boolean(container.querySelector('.mouth.speaking'));
+
+  it('keeps the newest event speaking through stale timers and health completion', async () => {
+    withFakeTimers();
+    const configView = await renderSettledConfigTab();
+    vi.useRealTimers();
+    vi.useFakeTimers();
+    const handleAgentSpawned = getSocketHandler('cos:agent:spawned');
+    const handleAgentCompleted = getSocketHandler('cos:agent:completed');
+    const handleCosLog = getSocketHandler('cos:log');
+
+    await act(async () => {
+      handleAgentSpawned({ id: 'agent-1', agentId: 'agent-1', metadata: {} });
+    });
+    expect(isSpeaking(configView.container)).toBe(true);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => {
+      handleAgentCompleted({ agentId: 'agent-1', result: { success: true } });
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(SPEAKING_MS - 1); });
+    expect(isSpeaking(configView.container)).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(isSpeaking(configView.container)).toBe(false);
+
+    await act(async () => { handleAgentSpawned({ id: 'agent-2', metadata: {} }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => { handleCosLog({ level: 'success', message: 'Task finished' }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1499); });
+    expect(isSpeaking(configView.container)).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(isSpeaking(configView.container)).toBe(false);
+
+    await import('../components/cos/tabs/HealthTab');
+    let releaseHealth;
+    api.forceHealthCheck.mockImplementation(() => new Promise(resolve => { releaseHealth = resolve; }));
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /^Issues:/ })[0]);
+    });
+    const runCheck = screen.getByRole('button', { name: 'Run Check' });
+    await act(async () => { fireEvent.click(runCheck); });
+    expect(api.forceHealthCheck).toHaveBeenCalledWith({ silent: true });
+    expect(isSpeaking(configView.container)).toBe(true);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => {
+      getSocketHandler('cos:agent:completed')({ agentId: 'agent-3', result: { success: true } });
+      releaseHealth({ metrics: { timestamp: 2 }, issues: [] });
+    });
+    expect(isSpeaking(configView.container)).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(SPEAKING_MS - 1); });
+    expect(isSpeaking(configView.container)).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(isSpeaking(configView.container)).toBe(false);
+
+    await act(async () => { getSocketHandler('cos:agent:spawned')({ id: 'agent-4', metadata: {} }); });
+    const timersBeforeUnmount = vi.getTimerCount();
+    expect(timersBeforeUnmount).toBeGreaterThan(0);
+    configView.unmount();
+    expect(vi.getTimerCount()).toBeLessThan(timersBeforeUnmount);
+  });
+});
+
 // A single warning-level health issue parked the avatar on "Investigating
 // issue..." with Active 0. Nothing on screen said what was being investigated,
 // and the Issues tile was an inert <div> holding the number 1, so the detail was

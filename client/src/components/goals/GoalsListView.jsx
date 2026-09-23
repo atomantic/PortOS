@@ -14,7 +14,7 @@ import EmptyState from '../EmptyState';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { enabledApiProviderFilter } from '../../utils/providers';
-import { clickableProps } from '../../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard.js';
 
 // Arrow keys step row-to-row through the tree instead of nudging the drag 25px
 // at a time. The dragged goal's own row is skipped: it IS a drop target (every
@@ -83,6 +83,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
         onClick={() => onSelect(goal)}
         {...clickableProps(() => onSelect(goal))}
+        onKeyDown={onActivateKeyDown(() => onSelect(goal))}
       >
         {/* dnd-kit's `attributes` make this a focusable role="button", so it
             needs a name of its own — otherwise it is announced as an unlabeled
@@ -93,6 +94,7 @@ function GoalRow({ goal, depth, expandedIds, onToggle, onSelect, selectedId, onA
           {...attributes}
           {...listeners}
           onClick={e => e.stopPropagation()}
+          onKeyDown={listeners?.onKeyDown}
         >
           <GripVertical className="w-3.5 h-3.5 text-gray-600 hover:text-gray-400" />
         </div>
@@ -579,6 +581,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
         <div className="absolute inset-0 sm:relative sm:inset-auto z-20 sm:z-auto">
           {selectedGoal ? (
             <GoalDetailPanel
+              key={selectedGoal.id}
               goal={selectedGoal}
               allGoals={data?.flat}
               onClose={closeDetail}

@@ -293,7 +293,7 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   // composeComicPagePrompt only returns '' when panels.length === 0, which is
   // already rejected above. The "(continuation of previous beat)" placeholder
   // covers panels with no description, so the prompt is non-empty by here.
-  const { loras: characterLoras, triggerByKey } = await applyCharacterLorasToRender({
+  const { loras: characterLoras, triggerByKey, selectedModel } = await applyCharacterLorasToRender({
     matchedCharacters, mode, options, settings,
   });
 
@@ -307,6 +307,7 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   const jobId = enqueueImageJob({
     prompt, world, settings, mode, series,
     options: { ...options, initImagePath, initImageStrength, ...loraRenderOptions(characterLoras) },
+    selectedModel,
     owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
     logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}${fromReference ? ` (${autoReference ? 'auto-ref' : 'ref'} page ${referencePageIndex + 1})` : ''}`,
   });
@@ -542,7 +543,7 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     });
   }
 
-  const { loras: characterLoras } = await applyCharacterLorasToRender({
+  const { loras: characterLoras, selectedModel } = await applyCharacterLorasToRender({
     matchedCharacters, mode, options, settings,
   });
   // composeVisualPrompt is shared with the episode-video batch path, so the
@@ -556,6 +557,7 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
   const jobId = enqueueImageJob({
     prompt, world, settings, mode, series,
     options: { ...options, ...loraRenderOptions(characterLoras) },
+    selectedModel,
     owner: `pipeline:${issueId}:${stageId}`,
     logLine: `🎬 Pipeline visual — issue=${issueId.slice(0, 8)} stage=${stageId}`,
   });

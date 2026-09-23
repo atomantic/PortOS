@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../services/api', () => ({
@@ -13,7 +13,7 @@ vi.mock('../services/api', () => ({
 }));
 
 vi.mock('../services/socket', () => ({
-  default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
+  default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 
 // Mirror the real hook's on-mount fetch (the page clears `loading` only from
@@ -31,6 +31,29 @@ vi.mock('../hooks/useAutoRefetch', async () => {
 });
 
 import Loops from './Loops';
+import socket from '../services/socket';
+import * as api from '../services/api';
+
+describe('Loops reconnect resubscribe (#8110)', () => {
+  // The server rebuilds an empty per-socket subscriber Set on every reconnect
+  // (restart, self-update, sleep, a network blip). Without a reconnect-driven
+  // re-subscribe, the live output and status streams went silent for the rest
+  // of the tab's life after the first reconnect.
+  it('re-subscribes loops:* and refetches the list on a socket reconnect', async () => {
+    render(<Loops />);
+    await screen.findByText('No loops yet');
+    expect(socket.emit).toHaveBeenCalledWith('loops:subscribe');
+    const getLoopsCalls = api.getLoops.mock.calls.length;
+
+    const connectHandler = socket.on.mock.calls.find(([event]) => event === 'connect')?.[1];
+    expect(connectHandler).toBeTypeOf('function');
+    socket.emit.mockClear();
+    await act(async () => connectHandler());
+
+    expect(socket.emit).toHaveBeenCalledWith('loops:subscribe');
+    await waitFor(() => expect(api.getLoops.mock.calls.length).toBeGreaterThan(getLoopsCalls));
+  });
+});
 
 describe('Loops new-loop form label associations', () => {
   it('pairs the Interval label with the custom-interval input via explicit htmlFor/id', async () => {

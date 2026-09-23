@@ -5,9 +5,7 @@
 
 import { getAllProviders } from './providers.js';
 import { startAIOp } from './aiStatusEvents.js';
-import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } from './ollamaManager.js';
-import { ensureMtplxProviderReady, isMtplxProvider } from './mtplxServerManager.js';
-import { ensureSlotstreamProviderReady, isSlotstreamProvider } from './slotstreamServerManager.js';
+import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
 // localModelHealing is lazy-imported at its (rare, error-recovery) call site
 // below — a static import here pulls its notifications/providers deps (which
 // eagerly import fileUtils `PATHS`) into every aiProvider consumer's module
@@ -498,40 +496,17 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     });
   }
 
-  if (isOllamaProvider(provider)) {
-    statusOp.update('provider:starting', 'Starting Ollama if needed…', { providerId: provider.id });
-    const ready = await ensureOllamaProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
-    if (!ready.success) {
-      const error = `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`;
-      statusOp.error(error);
-      return { error };
-    }
-  }
-
-  // The idle reaper may have stopped MTPLX to release its checkpoint. This is
-  // the lazy half of that bargain — and the only place the idle clock is
-  // refreshed, so a run that takes an hour still counts as use throughout.
-  if (isMtplxProvider(provider)) {
-    statusOp.update('provider:starting', 'Starting MTPLX if needed…', { providerId: provider.id });
-    const ready = await ensureMtplxProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
-    if (!ready.success) {
-      const error = `MTPLX is not running and PortOS could not start it: ${ready.error || 'unknown error'}`;
-      statusOp.error(error);
-      return { error };
-    }
-  }
-
-  // Same bargain for Slotstream: this is the only place a simple call refreshes
-  // its idle clock, so without this branch the reaper would stop the daemon
-  // mid-session and the next call would get a bare connection refusal.
-  if (isSlotstreamProvider(provider)) {
-    statusOp.update('provider:starting', 'Starting Slotstream if needed…', { providerId: provider.id });
-    const ready = await ensureSlotstreamProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
-    if (!ready.success) {
-      const error = `Slotstream is not running and PortOS could not start it: ${ready.error || 'unknown error'}`;
-      statusOp.error(error);
-      return { error };
-    }
+  // The idle reaper may stop a managed local runtime (Ollama, MTPLX,
+  // Slotstream) to release memory/checkpoint. This is the lazy half of that
+  // bargain — the only place a simple call refreshes the idle clock, so a
+  // run that takes an hour still counts as use throughout, and the next call
+  // doesn't get a bare connection refusal.
+  const ready = await ensureManagedRuntimeReady(provider, {
+    onStarting: (label) => statusOp.update('provider:starting', `Starting ${label} if needed…`, { providerId: provider.id }),
+  });
+  if (!ready.success) {
+    statusOp.error(ready.error);
+    return { error: ready.error };
   }
 
   const first = await postChatCompletion(provider, model, body, opts);

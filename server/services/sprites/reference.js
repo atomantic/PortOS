@@ -32,10 +32,11 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
-  IMAGE_GEN_MODE, resolveQueueImageMode, LOCAL_IMAGEGEN_DEFAULT_MODEL,
+  IMAGE_GEN_MODE, resolveQueueImageMode,
 } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
+import { selectLocalImageModelFromSettings } from '../imageGen/prepareParams.js';
 import { imageModeCandidates, pickUsableMode } from '../../lib/renderModeLadder.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { getSettings } from '../settings.js';
@@ -574,10 +575,18 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   const localPinModel = (!spritePin.mode || spritePin.mode === IMAGE_GEN_MODE.LOCAL)
     ? spritePin.modelId
     : null;
+  const selectedLocalModel = mode === IMAGE_GEN_MODE.LOCAL
+    ? selectLocalImageModelFromSettings(settings, body.model || undefined, undefined, localPinModel)
+    : null;
+  if (mode === IMAGE_GEN_MODE.LOCAL && !selectedLocalModel) {
+    throw new ServerError('No local image-gen models are registered.', {
+      status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL',
+    });
+  }
   const effectiveModel = mode === IMAGE_GEN_MODE.CODEX || mode === IMAGE_GEN_MODE.AGY
     ? cloud.modelId
     : mode === IMAGE_GEN_MODE.LOCAL
-      ? (body.model || localPinModel || settings.imageGen?.local?.modelId || LOCAL_IMAGEGEN_DEFAULT_MODEL)
+      ? selectedLocalModel.id
       : null;
   const baseParams = {
     prompt,

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import { Bot, Cpu, Gauge, Network, Package, Wand2 } from 'lucide-react';
+import { Bot, Cpu, Gauge, Network, Package, Plus } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -21,6 +21,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import OverflowMenu from '../components/ui/OverflowMenu';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import ProviderCard from '../components/providers/ProviderCard';
+import ProviderEnvVars from '../components/providers/ProviderEnvVars';
 import ProviderForm from '../components/providers/ProviderForm';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 import FleetProviderSetup from '../components/providers/FleetProviderSetup';
@@ -209,10 +210,10 @@ export default function AIProviders() {
   const closeForm = useCallback(() => navigate('/ai/presets'), [navigate]);
   const openForm = useCallback((target) => navigate(target ? presetEditPath(target.id) : '/ai/presets/new'), [navigate]);
 
-  // The compatibility matrix and the "Compose custom…" action open the shared
-  // compose flow (#7566) on this page with "Save as preset" as its only exit:
-  // there is no selection here to hand a one-off composite to. `null` =
-  // closed; an object (possibly empty) = open, prefilled with those steps.
+  // The compatibility matrix, Add Preset, and a service card open the shared
+  // compose flow (#7566, #8014) with "Save as preset" as its only exit: there
+  // is no selection here to hand a one-off composite to. `null` = closed; an
+  // object (possibly empty, or `{ serviceSlug }` from a service card) = open.
   const [composeInitial, setComposeInitial] = useState(null);
   const compositionCatalog = useProviderCatalog(activeTab === 'presets');
 
@@ -491,13 +492,15 @@ export default function AIProviders() {
   // user at the top of the list — a card several screens down was unreachable
   // after refreshing it.
   //
-  // Only the two fields a refresh writes are taken from the response: the record
+  // Only the fields a refresh writes are taken from the response: the record
   // it returns is a bare `presentProvider`, so replacing the whole entry would
   // drop the fields only the LIST endpoint adds (`executionModes`,
-  // `prerequisitesMet`, the codex account) and un-group a unified card. Those
-  // two fields fan out to every mode in the group server-side
+  // `prerequisitesMet`, the codex account) and un-group a unified card. The
+  // model and catalog fields fan out to every mode in the group server-side
   // (`sharedModeUpdates`), so they are applied to the siblings here too rather
   // than leaving them showing the pre-refresh catalog until the next poll.
+  // `modelCatalog` is the unscoped full list when model access hides entries;
+  // the editor saves from it, so it must move with each refresh.
   // `modelContextWindows` is copied even when absent — a refresh that pruned it
   // must not leave the stale map behind.
   const handleRefreshModels = async (id) => {
@@ -506,11 +509,12 @@ export default function AIProviders() {
       const result = await api.refreshProviderModels(id, { silent: true });
       if (result) {
         toast.success(`Models refreshed for ${result.name}`);
+        const modelCatalog = Array.isArray(result.modelCatalog) ? result.modelCatalog : result.models;
         setProviders(current => {
           const refreshed = current.find(p => p.id === result.id);
           const group = new Set([result.id, ...(refreshed?.executionModes || []).map(mode => mode.id)]);
           return current.map(p => (group.has(p.id)
-            ? { ...p, models: result.models, modelContextWindows: result.modelContextWindows }
+            ? { ...p, models: result.models, modelCatalog, modelContextWindows: result.modelContextWindows }
             : p));
         });
         // The catalog a card just learned is graded by the readiness checklist,
@@ -772,8 +776,9 @@ export default function AIProviders() {
   // stays one row tall on a 360px viewport and the first provider card is
   // reachable without scrolling (issue #5653).
   const secondaryActions = [
-    // A named combination of enabled parts, saved without hand-typing a record.
-    { id: 'compose-custom', label: 'Compose custom preset…', icon: Wand2, onSelect: () => setComposeInitial({}) },
+    // A handwritten record for a backend no service definition describes.
+    // Add Preset itself opens the compose flow.
+    { id: 'standalone-preset', label: 'Add standalone preset', icon: Plus, onSelect: () => openForm(null) },
     { id: 'orchestration-profiles', label: 'Orchestration profiles', icon: Cpu, to: '/settings/orchestration' },
     { id: 'compare-models', label: 'Compare local models', icon: Gauge, to: '/models/performance' },
     { id: 'fleet-setup', label: 'Fleet setup', icon: Network, to: '/ai/fleet' },
@@ -798,7 +803,7 @@ export default function AIProviders() {
         {showRunPanel ? 'Hide Runner' : 'Run Prompt'}
       </button>
       <button
-        onClick={() => openForm(null)}
+        onClick={() => setComposeInitial({})}
         className="inline-flex min-h-[40px] items-center rounded-lg bg-port-border px-3 py-1.5 text-sm text-white transition-colors hover:bg-port-border/80"
       >
         Add Preset
@@ -843,6 +848,7 @@ export default function AIProviders() {
           onServeWantedModel={handleServeWantedModel}
           servingModel={servingModel}
           onChanged={loadData}
+          onCreatePreset={(service) => setComposeInitial({ serviceSlug: service.slug || service.id })}
         />
       )}
 
@@ -957,16 +963,11 @@ export default function AIProviders() {
                         </p>
                       )}
                       {provider.envVars && Object.keys(provider.envVars).length > 0 && (
-                        <div className="mt-0.5">
-                          <span>Env:</span>
-                          {Object.entries(provider.envVars).map(([k, v]) => (
-                            <div key={k}>
-                              <code className="ml-1 text-orange-400">
-                                {k}={provider.secretEnvVars?.includes(k) ? (v === '' ? '(not set)' : '***') : v}
-                              </code>
-                            </div>
-                          ))}
-                        </div>
+                        <ProviderEnvVars
+                          envVars={provider.envVars}
+                          secretEnvVars={provider.secretEnvVars}
+                          className="mt-0.5"
+                        />
                       )}
                     </div>
                   </div>
@@ -1199,12 +1200,21 @@ export default function AIProviders() {
             })}
 
             {providers.length === 0 && (
-              <EmptyState
-                title="No presets configured"
-                message="A preset is a named harness × service combination. Add a service, then compose a preset on it — or add a legacy record by hand — to enable autonomous CoS, voice, and AI-assisted features across PortOS."
-                actionLabel="Add Preset"
-                onAction={() => openForm(null)}
-              />
+              <div className="flex flex-col items-center">
+                <EmptyState
+                  title="No presets configured"
+                  message="A preset is a named harness × service combination. Add Preset composes one from a service. Add standalone preset is for a backend no service definition describes."
+                  actionLabel="Add Preset"
+                  onAction={() => setComposeInitial({})}
+                />
+                <button
+                  type="button"
+                  onClick={() => openForm(null)}
+                  className="mb-6 text-sm text-gray-400 underline-offset-2 hover:text-white hover:underline"
+                >
+                  Add standalone preset
+                </button>
+              </div>
             )}
           </>
         )}
@@ -1233,18 +1243,6 @@ export default function AIProviders() {
           onSave={() => { closeForm(); loadData(); }}
         />
       )}
-      <ProviderComposePopover
-        open={composeInitial !== null}
-        initial={composeInitial}
-        useOnce={false}
-        title="Compose a new preset"
-        onClose={() => setComposeInitial(null)}
-        onPresetSaved={(preset) => {
-          toast.success(`${preset.name} saved as a preset`);
-          loadData();
-          navigate(presetEditPath(preset.id));
-        }}
-      />
       {fleetSetupOpen && (
         <FleetProviderSetup
           peers={fleetPeers}
@@ -1259,6 +1257,20 @@ export default function AIProviders() {
       )}
       </div>
 
+      {/* Compose is opened from Presets and from a service card, so it has to
+          stay mounted when the Services tab is the one on screen. */}
+      <ProviderComposePopover
+        open={composeInitial !== null}
+        initial={composeInitial}
+        useOnce={false}
+        title="Compose a new preset"
+        onClose={() => setComposeInitial(null)}
+        onPresetSaved={(preset) => {
+          toast.success(`${preset.name} saved as a preset`);
+          loadData();
+          navigate(presetEditPath(preset.id));
+        }}
+      />
       {/* These streams can be opened from the Harnesses and Services tabs as
           well as Presets, so their renderers must outlive the tab fragment. */}
       <RuntimeInstallModal

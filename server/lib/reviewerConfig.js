@@ -15,7 +15,7 @@ import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffo
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
-import { isReviewerConfigFault } from './reviewerHealth.js';
+import { activeReviewerGroupIndex, isReviewerConfigFault } from './reviewerHealth.js';
 export { REVIEWER_CONFIG_FAULT_CODES, isReviewerConfigFault } from './reviewerHealth.js';
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
@@ -838,7 +838,7 @@ export const resolveReviewerEfforts = keyedReviewerPinResolver(normalizeReviewer
  */
 export function resolveReviewerConfig(metadata, codeReviewDefaults, defaultReviewers) {
   return {
-    reviewers: prioritizeToolFreeReviewers(normalizeReviewers(metadata, defaultReviewers)),
+    reviewers: resolveReviewerGroup(metadata, codeReviewDefaults, defaultReviewers),
     usernames: resolveReviewUsernames(metadata?.usernames, codeReviewDefaults?.usernames),
     optionalReviewers: resolveOptionalReviewers(metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers),
     reviewerMaxRounds: resolveReviewerMaxRounds(metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds),
@@ -1313,23 +1313,52 @@ export function normalizeReviewers(meta, fallback = DEFAULT_REVIEWERS) {
   const source = Array.isArray(raw.reviewers)
     ? raw.reviewers
     : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
+  const out = normalizeReviewerList(source);
+  if (out.length) return out;
+  const fallbackList = normalizeReviewerList(fallback);
+  return fallbackList.length ? [...fallbackList] : [...DEFAULT_REVIEWERS];
+}
+
+/**
+ * Resolve an explicit task reviewer list as its preferred tier, followed by
+ * the system Code Review Defaults tiers. This lets scheduled task overrides
+ * retain their choice while inheriting a configured default when that tier is
+ * paused. Tasks without a reviewer-list override keep the existing resolved
+ * default selection.
+ */
+export function resolveReviewerGroup(metadata, codeReviewDefaults, defaultReviewers, normalize = normalizeReviewers) {
+  const raw = metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {};
+  const source = Array.isArray(raw.reviewers)
+    ? raw.reviewers
+    : (typeof raw.reviewer === 'string' && raw.reviewer ? [raw.reviewer] : []);
+  const taskGroup = normalizeReviewerList(source);
+  if (!taskGroup.length) {
+    return prioritizeToolFreeReviewers(normalize(metadata, defaultReviewers));
+  }
+
+  const configuredGroups = Array.isArray(codeReviewDefaults?.reviewerFallbackGroups)
+    ? codeReviewDefaults.reviewerFallbackGroups
+    : [defaultReviewers ?? codeReviewDefaults?.reviewers];
+  const fallbackGroups = configuredGroups
+    .map(normalizeReviewerList)
+    .filter(group => group.length);
+  const groups = [taskGroup, ...fallbackGroups];
+  const activeGroup = groups[activeReviewerGroupIndex(groups, codeReviewDefaults?.reviewerHealth)];
+  return prioritizeToolFreeReviewers(activeGroup || taskGroup);
+}
+
+function normalizeReviewerList(list) {
   const seen = new Set();
   const out = [];
-  for (const r of source) {
-    const normalized = REVIEWER_ALIASES[r] || r;
-    if (isReviewer(normalized) && !seen.has(normalized)) { seen.add(normalized); out.push(normalized); }
-  }
-  if (out.length) return out;
-  const fallbackList = [];
-  const fallbackSeen = new Set();
-  for (const r of Array.isArray(fallback) ? fallback : []) {
-    const normalized = REVIEWER_ALIASES[r] || r;
-    if (isReviewer(normalized) && !fallbackSeen.has(normalized)) {
-      fallbackSeen.add(normalized);
-      fallbackList.push(normalized);
+  for (const raw of Array.isArray(list) ? list : []) {
+    if (typeof raw !== 'string') continue;
+    const normalized = REVIEWER_ALIASES[raw] || raw;
+    if (isReviewer(normalized) && !seen.has(normalized)) {
+      seen.add(normalized);
+      out.push(normalized);
     }
   }
-  return fallbackList.length ? [...fallbackList] : [...DEFAULT_REVIEWERS];
+  return out;
 }
 
 /**

@@ -121,7 +121,16 @@ export async function run(command, config) {
   if (missing) throw new ServerError(`FaceTime setup incomplete: ${missing}`, { status: 409, code: missing });
   const result = await bufferedSpawn(facetimeHelperPath(), [command, voiceConfig.facetime.targetHandle, voiceConfig.facetime.targetName], { timeoutMs: FACETIME_TIMEOUT_MS });
   if (result.timedOut) throw new ServerError('FaceTime helper timed out', { status: 504, code: 'timeout' });
-  const parsed = facetimeControlResultSchema.safeParse(JSON.parse(result.stdout));
+  // A helper crash prints a stack or dyld line, not the JSON protocol. That
+  // must stay the 502 invalid-helper-result contract; a bare JSON.parse
+  // throws SyntaxError and the route turns it into a 500.
+  let raw;
+  try {
+    raw = JSON.parse(result.stdout);
+  } catch {
+    throw new ServerError('FaceTime helper returned an invalid result', { status: 502, code: 'invalid-helper-result' });
+  }
+  const parsed = facetimeControlResultSchema.safeParse(raw);
   if (!parsed.success) throw new ServerError('FaceTime helper returned an invalid result', { status: 502, code: 'invalid-helper-result' });
   if (!result.success || !parsed.data.ok) {
     throw new ServerError(parsed.data.message || 'FaceTime helper failed', { status: 502, code: parsed.data.errorCode || 'helper-failed' });

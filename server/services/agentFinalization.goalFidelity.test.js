@@ -545,6 +545,17 @@ describe('finalizeAgent — goal-fidelity gate', () => {
       });
     });
 
+    it('does not raise a separate hold alert when a follow-up task carries the finding', async () => {
+      runGoalFidelityFollowUpMock.mockResolvedValue({
+        ran: true,
+        task: { id: 'cos-9', approvalRequired: true, duplicate: false },
+      });
+      await finalize();
+      expect(completion().success).toBe(false);
+      expect(completion().goalFidelity.followUp).toMatchObject({ taskId: 'cos-9', taskApprovalRequired: true });
+      expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
+    });
+
     it('hands investigators the selected issue objective and the commits actually reviewed', async () => {
       const head = 'a'.repeat(40);
       const base = 'b'.repeat(40);

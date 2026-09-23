@@ -247,12 +247,12 @@ function StoryBuilderIndex() {
   const intake = useStoryImportIntake(onCreated);
 
   return (
-    // Wide two-column shell above lg: create form left, "Continue a story" list
-    // right (mirrors the POST launcher redesign, #1986). Below lg the grid
+    // Wide two-column shell when the container fits: create form left, "Continue a story" list
+    // right (mirrors the POST launcher redesign, #1986). In narrow containers the grid
     // collapses to a single stacked column so mobile is unchanged. The 22rem
     // sidebar track is reserved even with no sessions so the form keeps a
     // comfortable ~48rem width instead of stretching the full shell.
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div className="@container/page min-w-0 max-w-6xl mx-auto space-y-6">
       <header>
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Sparkles className="w-6 h-6 text-port-accent" /> Story Builder
@@ -263,7 +263,7 @@ function StoryBuilderIndex() {
         </p>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
+      <div className="grid grid-cols-1 @5xl/page:grid-cols-[minmax(0,1fr)_22rem] gap-6 items-start">
       <section className="bg-port-card border border-port-border rounded-lg">
         <TabPills
           tabs={INTAKE_TAB_ITEMS}

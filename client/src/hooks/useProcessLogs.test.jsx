@@ -2,13 +2,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, cleanup } from '@testing-library/react';
 
 // Mock the shared socket so the test can drive the `logs:*` handlers the hook
-// registers and observe the subscribe/unsubscribe emits it sends.
-const handlers = new Map();
-const emitted = [];
+// registers and observe the subscribe/unsubscribe emits it sends. The hook now
+// binds ONE listener per event at module load (shared across every consumer,
+// per #8113's refcount registry), so `on` must support multiple registrations
+// per event — unlike the earlier single-consumer version, `handlers` is never
+// cleared between tests: the module-level listeners are bound exactly once
+// for the whole file and must keep dispatching to every subsequent test.
+const { handlers, emitted } = vi.hoisted(() => ({
+  handlers: new Map(), // event -> Set<fn>
+  emitted: [],
+}));
 vi.mock('../services/socket', () => ({
   default: {
-    on: (event, fn) => { handlers.set(event, fn); },
-    off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
+    on: (event, fn) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(fn);
+    },
+    off: (event, fn) => { handlers.get(event)?.delete(fn); },
     emit: (event, ...args) => { emitted.push([event, ...args]); },
   },
 }));
@@ -20,17 +30,17 @@ import { useProcessLogs } from './useProcessLogs.js';
 const FLUSH_MS = 250;
 const flushLines = () => act(() => { vi.advanceTimersByTime(FLUSH_MS); });
 
-/** Fire a socket frame and let the batch flush, so `logs` reflects it. */
+/** Fire a socket frame on every registered listener and let the batch flush. */
 const fire = (event, payload) => {
-  act(() => { handlers.get(event)?.(payload); });
+  act(() => { handlers.get(event)?.forEach(fn => fn(payload)); });
   flushLines();
 };
 /** Fire a frame WITHOUT flushing — for asserting the debounce itself. */
-const fireRaw = (event, payload) => act(() => { handlers.get(event)?.(payload); });
+const fireRaw = (event, payload) => act(() => { handlers.get(event)?.forEach(fn => fn(payload)); });
 const emitsOf = (event) => emitted.filter(([e]) => e === event).map(([, payload]) => payload);
 
 describe('useProcessLogs', () => {
-  beforeEach(() => { handlers.clear(); emitted.length = 0; vi.useFakeTimers(); });
+  beforeEach(() => { emitted.length = 0; vi.useFakeTimers(); });
   afterEach(() => { cleanup(); vi.useRealTimers(); });
 
   it('subscribes to the named process and reports lines', () => {
@@ -120,7 +130,7 @@ describe('useProcessLogs', () => {
     const { result } = renderHook(() => useProcessLogs('game'));
     act(() => {
       for (let i = 0; i < 1100; i++) {
-        handlers.get('logs:line')?.({ processName: 'game', line: `l${i}`, type: 'stdout', timestamp: i });
+        handlers.get('logs:line')?.forEach(fn => fn({ processName: 'game', line: `l${i}`, type: 'stdout', timestamp: i }));
       }
     });
     flushLines();
@@ -140,7 +150,7 @@ describe('useProcessLogs', () => {
 
     act(() => {
       for (let i = 0; i < 50; i++) {
-        handlers.get('logs:line')?.({ processName: 'game', line: `l${i}`, type: 'stdout', timestamp: i });
+        handlers.get('logs:line')?.forEach(fn => fn({ processName: 'game', line: `l${i}`, type: 'stdout', timestamp: i }));
       }
     });
     // Nothing applied yet — still inside the debounce window.
@@ -179,14 +189,127 @@ describe('useProcessLogs', () => {
     expect(result.current.logs).toEqual([]);
   });
 
-  it('tears down its listeners on unmount', () => {
-    const { unmount } = renderHook(() => useProcessLogs('game'));
-    expect(handlers.has('logs:line')).toBe(true);
+  // --- Shared-stream registry (#8113) ---------------------------------
 
-    unmount();
+  it('two consumers of the same process share one subscribe, not two', () => {
+    const first = renderHook(() => useProcessLogs('game'));
+    const second = renderHook(() => useProcessLogs('game'));
 
-    expect(handlers.has('logs:line')).toBe(false);
-    expect(handlers.has('logs:subscribed')).toBe(false);
-    expect(handlers.has('logs:error')).toBe(false);
+    // Only the first consumer triggered a `logs:subscribe`.
+    expect(emitsOf('logs:subscribe')).toHaveLength(1);
+
+    fire('logs:line', { processName: 'game', line: 'shared', type: 'stdout', timestamp: 1 });
+    expect(first.result.current.logs).toEqual([{ line: 'shared', type: 'stdout', timestamp: 1 }]);
+    expect(second.result.current.logs).toEqual([{ line: 'shared', type: 'stdout', timestamp: 1 }]);
+
+    first.unmount();
+    second.unmount();
+  });
+
+  it('unmounting one of two consumers does not unsubscribe or freeze the survivor', () => {
+    const first = renderHook(() => useProcessLogs('game'));
+    const second = renderHook(() => useProcessLogs('game'));
+
+    first.unmount();
+    // The survivor is still attached — the server stream must stay alive.
+    expect(emitsOf('logs:unsubscribe')).toEqual([]);
+
+    fire('logs:line', { processName: 'game', line: 'still here', type: 'stdout', timestamp: 2 });
+    expect(second.result.current.logs).toEqual([{ line: 'still here', type: 'stdout', timestamp: 2 }]);
+
+    second.unmount();
+    // Now the last consumer left — exactly one unsubscribe.
+    expect(emitsOf('logs:unsubscribe')).toEqual([{ processName: 'game' }]);
+  });
+
+  it('a late-joining consumer is seeded from the existing tail without re-subscribing or duplicating the first consumer\'s tail', () => {
+    const first = renderHook(() => useProcessLogs('game'));
+    fire('logs:line', { processName: 'game', line: 'a', type: 'stdout', timestamp: 1 });
+    fire('logs:line', { processName: 'game', line: 'b', type: 'stdout', timestamp: 2 });
+
+    const second = renderHook(() => useProcessLogs('game'));
+
+    // Still exactly one subscribe — the late joiner attached instead of
+    // triggering a second `pm2 logs` spawn.
+    expect(emitsOf('logs:subscribe')).toHaveLength(1);
+    // Seeded with the tail seen so far, not an empty buffer.
+    expect(second.result.current.logs).toEqual([
+      { line: 'a', type: 'stdout', timestamp: 1 },
+      { line: 'b', type: 'stdout', timestamp: 2 },
+    ]);
+    // The first consumer's own view is untouched by the late joiner — no
+    // duplicated tail.
+    expect(first.result.current.logs).toEqual([
+      { line: 'a', type: 'stdout', timestamp: 1 },
+      { line: 'b', type: 'stdout', timestamp: 2 },
+    ]);
+
+    first.unmount();
+    second.unmount();
+  });
+
+  it('expands the shared PM2 tail when a later consumer requests more history', () => {
+    const first = renderHook(() => useProcessLogs('game', { lines: 200 }));
+    fire('logs:line', { processName: 'game', line: 'short tail', type: 'stdout', timestamp: 1 });
+
+    const second = renderHook(() => useProcessLogs('game', { lines: 500 }));
+
+    expect(emitsOf('logs:subscribe')).toEqual([
+      { processName: 'game', lines: 200 },
+      { processName: 'game', lines: 500 },
+    ]);
+    expect(first.result.current.logs).toEqual([]);
+    expect(second.result.current.logs).toEqual([]);
+
+    act(() => {
+      for (let index = 0; index < 500; index += 1) {
+        handlers.get('logs:line')?.forEach(fn => fn({
+          processName: 'game', line: `expanded replay ${index}`, type: 'stdout', timestamp: index + 2,
+        }));
+      }
+    });
+    flushLines();
+
+    expect(first.result.current.logs).toHaveLength(500);
+    expect(second.result.current.logs).toEqual(first.result.current.logs);
+
+    first.unmount();
+    second.unmount();
+  });
+
+  it('clear() on one consumer does not empty another consumer\'s lines', () => {
+    const first = renderHook(() => useProcessLogs('game'));
+    const second = renderHook(() => useProcessLogs('game'));
+    fire('logs:line', { processName: 'game', line: 'a', type: 'stdout', timestamp: 1 });
+
+    act(() => { first.result.current.clear(); });
+    expect(first.result.current.logs).toEqual([]);
+    expect(second.result.current.logs).toEqual([{ line: 'a', type: 'stdout', timestamp: 1 }]);
+
+    first.unmount();
+    second.unmount();
+  });
+
+  it('replaces the replayed tail and resumes streaming after a reconnect', () => {
+    const { result } = renderHook(() => useProcessLogs('game'));
+    expect(emitsOf('logs:subscribe')).toHaveLength(1);
+
+    fire('logs:line', { processName: 'game', line: 'recent', type: 'stdout', timestamp: 1 });
+    expect(result.current.logs).toHaveLength(1);
+
+    // Server drops every stream owned by a disconnected socket
+    // (cleanupSocketStreams) — a mounted consumer must re-subscribe on
+    // 'connect' or it freezes with no error frame ever emitted. The new stream
+    // replays its tail, so clear the old tail before those lines arrive.
+    fireRaw('connect', undefined);
+    expect(emitsOf('logs:subscribe')).toHaveLength(2);
+    expect(result.current.logs).toEqual([]);
+
+    fire('logs:line', { processName: 'game', line: 'recent', type: 'stdout', timestamp: 2 });
+    fire('logs:line', { processName: 'game', line: 'resumed', type: 'stdout', timestamp: 3 });
+    expect(result.current.logs).toEqual([
+      { line: 'recent', type: 'stdout', timestamp: 2 },
+      { line: 'resumed', type: 'stdout', timestamp: 3 },
+    ]);
   });
 });

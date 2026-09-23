@@ -10,6 +10,17 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
+// Issue #8104: `streamCompletion` routes every API-shaped provider through the
+// single shared managed-runtime wake instead of an Ollama-only check, so
+// MTPLX/Slotstream get woken (and their idle clock refreshed) too. Mocked here
+// so these tests assert the DISPATCH — that askService consults the shared
+// gate for any provider and never sends the chat request when it fails —
+// without depending on the real MTPLX/Slotstream/Ollama manager modules,
+// which are covered on their own terms in providerExecutionReadiness.test.js.
+vi.mock('./providerExecutionReadiness.js', () => ({
+  ensureManagedRuntimeReady: vi.fn(),
+}));
+
 vi.mock('../lib/childProcess.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, spawn: vi.fn() };
@@ -68,6 +79,7 @@ const identity = await import('./identity.js');
 const character = await import('./character.js');
 const calendarSync = await import('./calendarSync.js');
 const providers = await import('./providers.js');
+const providerExecutionReadiness = await import('./providerExecutionReadiness.js');
 
 const askService = await import('./askService.js');
 
@@ -85,6 +97,7 @@ beforeEach(() => {
   character.getCharacter.mockResolvedValue({ name: 'Adam', class: 'Developer' });
   calendarSync.getEvents.mockResolvedValue({ events: [] });
   catalogDB.hybridSearchIngredients.mockResolvedValue([]);
+  providerExecutionReadiness.ensureManagedRuntimeReady.mockResolvedValue({ success: true });
 });
 
 describe('gatherSources', () => {
@@ -762,6 +775,58 @@ describe('runAsk', () => {
       expect(events.find((e) => e.type === 'error')).toBeUndefined();
       expect(events.find((e) => e.type === 'done')).toBeDefined();
       expect(callCount).toBe(1);
+    });
+  });
+
+  describe('managed-runtime wake (issue #8104)', () => {
+    // Before this fix, `streamCompletion` only called `ensureProviderReady`
+    // from ollamaManager.js — a daemon stopped by the idle reaper (MTPLX,
+    // Slotstream) was never woken for an Ask turn and every request against
+    // it failed with a bare connection refusal instead. It now routes through
+    // the shared `ensureManagedRuntimeReady`, which recognizes all three.
+    it('consults the shared managed-runtime gate before sending the chat request', async () => {
+      providers.getActiveProvider.mockResolvedValue(fakeStreamProvider());
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(buildSSEResponse(['Hello.']));
+
+      const events = [];
+      for await (const evt of askService.runAsk({ question: 'hi' })) events.push(evt);
+
+      expect(providerExecutionReadiness.ensureManagedRuntimeReady).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'fake' }),
+      );
+      // The gate ran before the chat request went out, not after. (Read the
+      // call order BEFORE mockRestore(), which also resets the recorded calls.)
+      expect(fetchSpy.mock.calls.length).toBeGreaterThan(0);
+      const gateOrder = providerExecutionReadiness.ensureManagedRuntimeReady.mock.invocationCallOrder[0];
+      const fetchOrder = fetchSpy.mock.invocationCallOrder[0];
+      fetchSpy.mockRestore();
+      expect(gateOrder).toBeLessThan(fetchOrder);
+    });
+
+    // Covers MTPLX and Slotstream (and any future managed runtime) through the
+    // one shared contract, rather than re-deriving each manager's own
+    // recognition logic here — that's `providerExecutionReadiness.test.js`'s
+    // job. What Ask owns is: a failed wake must stop the turn before fetch,
+    // and the runtime's own error message must reach the caller unmodified.
+    it('never sends the chat request when the managed runtime fails to wake, and surfaces its error', async () => {
+      providers.getActiveProvider.mockResolvedValue(fakeStreamProvider());
+      providerExecutionReadiness.ensureManagedRuntimeReady.mockResolvedValue({
+        success: false,
+        error: 'MTPLX is not running and PortOS could not start it: checkpoint failed to load',
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(buildSSEResponse(['should not reach here']));
+
+      const events = [];
+      for await (const evt of askService.runAsk({ question: 'hi' })) events.push(evt);
+      const callCount = fetchSpy.mock.calls.length;
+      fetchSpy.mockRestore();
+
+      const errorEvt = events.find((e) => e.type === 'error');
+      expect(errorEvt?.error).toBe(
+        'Provider stream failed: MTPLX is not running and PortOS could not start it: checkpoint failed to load',
+      );
+      expect(events.find((e) => e.type === 'done')).toBeUndefined();
+      expect(callCount).toBe(0);
     });
   });
 });

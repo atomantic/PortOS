@@ -364,11 +364,12 @@ export default function InboxTab({ onRefresh, settings }) {
   return (
     // Full-bleed dashboard grid: capture form spans the top, filed/done entries
     // fill the main column, and a persistent stats + Needs-Review rail sits on
-    // the right at xl+. Below xl it collapses to a single column (mobile flow:
+    // the right when the container fits. In narrow containers it collapses to a single column (mobile flow:
     // form → Needs Review → entries).
-    <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4 content-start">
+    <div className="@container/inbox min-w-0">
+    <div className="grid grid-cols-1 @5xl/inbox:grid-cols-[minmax(0,1fr)_360px] gap-4 content-start">
       {/* Capture input — spans both columns */}
-      <form onSubmit={handleSubmit} className="xl:col-span-2">
+      <form onSubmit={handleSubmit} className="@5xl/inbox:col-span-2">
         <div className="flex gap-2">
           <input
             ref={inputRef}
@@ -444,7 +445,7 @@ export default function InboxTab({ onRefresh, settings }) {
       {/* Creative batch action — appears once any captured note is flagged
           creative. Sends them all into the catalog ingest review in one hop. */}
       {creativeEntries.length > 0 && (
-        <div className="xl:col-span-2 flex items-center justify-between gap-3 p-3 bg-port-accent-2/10 border border-port-accent-2/30 rounded-lg">
+        <div className="@5xl/inbox:col-span-2 flex items-center justify-between gap-3 p-3 bg-port-accent-2/10 border border-port-accent-2/30 rounded-lg">
           <span className="text-sm text-port-accent-2 flex items-center gap-2">
             <Sparkles className="w-4 h-4 flex-shrink-0" />
             {creativeEntries.length} creative {creativeEntries.length === 1 ? 'note' : 'notes'} ready to become catalog ingredients
@@ -463,9 +464,9 @@ export default function InboxTab({ onRefresh, settings }) {
           Capped to the viewport and given its own scroll on xl+ so a long
           Needs-Review queue stays reachable instead of growing past the fold
           (the very problem #1173 set out to fix). */}
-      <div className="flex flex-col gap-4 xl:col-start-2 xl:row-start-2 xl:sticky xl:top-0 xl:self-start xl:max-h-[calc(100dvh-7rem)] xl:overflow-y-auto">
+      <div className="flex flex-col gap-4 @5xl/inbox:col-start-2 @5xl/inbox:row-start-2 @5xl/inbox:sticky @5xl/inbox:top-0 @5xl/inbox:self-start @5xl/inbox:max-h-[calc(100dvh-7rem)] @5xl/inbox:overflow-y-auto">
         {/* Overview stats — desktop rail only (counts also live in the page header) */}
-        <div className="hidden xl:block p-3 bg-port-card border border-port-border rounded-lg">
+        <div className="hidden @5xl/inbox:block p-3 bg-port-card border border-port-border rounded-lg">
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-medium text-gray-300">Overview</span>
             <button
@@ -630,7 +631,7 @@ export default function InboxTab({ onRefresh, settings }) {
             )}
           </div>
         ) : (
-          <div className="hidden xl:flex items-center gap-2 p-3 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
+          <div className="hidden @5xl/inbox:flex items-center gap-2 p-3 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">
             <CheckCircle size={16} className="text-port-success" />
             Nothing needs review.
           </div>
@@ -638,7 +639,7 @@ export default function InboxTab({ onRefresh, settings }) {
       </div>
 
       {/* Main entries column */}
-      <div className="flex flex-col min-w-0 xl:col-start-1 xl:row-start-2">
+      <div className="flex flex-col min-w-0 @5xl/inbox:col-start-1 @5xl/inbox:row-start-2">
         {/* Classifying section */}
         {classifyingEntries.length > 0 && (
           <div className="mb-4">
@@ -1010,6 +1011,7 @@ export default function InboxTab({ onRefresh, settings }) {
           onLoadMore={paged.loadMore}
         />
       </div>
+    </div>
     </div>
   );
 }

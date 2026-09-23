@@ -100,6 +100,31 @@ describe('advancePromptIntegritySnapshot', () => {
     expect(snapshot.PREVIOUS_DEFAULT_PROMPTS).toEqual({ audit: [V1] });
   });
 
+  it('moves current and retired hashes with a renamed prompt key', () => {
+    const oldBody = 'old lifecycle body';
+    const oldCurrent = hashPromptBody(oldBody);
+    const oldRetired = 'a'.repeat(32);
+    const renamedSource = {
+      DEFAULT_TASK_PROMPTS: { 'ui-lifecycle': 'new lifecycle body' },
+      PROMPT_VERSIONS: { 'ui-lifecycle': 2 },
+      REFERENCE_WATCH_AUDITED_VERSION: 3,
+    };
+    const committed = {
+      ...buildPromptIntegritySnapshot({
+        DEFAULT_TASK_PROMPTS: { 'react-lifecycle': oldBody },
+        PROMPT_VERSIONS: { 'react-lifecycle': 2 },
+        REFERENCE_WATCH_AUDITED_VERSION: 3,
+      }),
+      PREVIOUS_DEFAULT_PROMPTS: { 'react-lifecycle': [oldRetired] },
+    };
+
+    const { snapshot, drift, dropped } = advancePromptIntegritySnapshot(committed, renamedSource);
+
+    expect({ drift, dropped }).toEqual({ drift: [], dropped: [] });
+    expect(snapshot.PREVIOUS_DEFAULT_PROMPTS).toEqual({ 'ui-lifecycle': [oldRetired, oldCurrent] });
+    expect(snapshot.PREVIOUS_DEFAULT_PROMPTS).not.toHaveProperty('react-lifecycle');
+  });
+
   it('is a no-op on an unchanged source, byte for byte', () => {
     const committed = committedFor(source({ audit: 'audit v2 body', auditVersion: 2 }), { audit: [V1] });
     const { snapshot, retired, drift, dropped } = advancePromptIntegritySnapshot(committed, source({ audit: 'audit v2 body', auditVersion: 2 }));

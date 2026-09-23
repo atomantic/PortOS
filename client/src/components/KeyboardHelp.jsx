@@ -13,6 +13,7 @@ const SHORTCUT_SECTIONS = [
       { keys: [`${modKey}+K`], description: 'Open command palette' },
       { keys: ['?'], description: 'Show keyboard shortcuts' },
       { keys: ['Esc'], description: 'Close overlays' },
+      { keys: ['Alt+Shift+N'], description: 'Focus the newest notification' },
     ],
   },
   {

@@ -309,7 +309,7 @@ export async function verifyAgentRepoState({ agentId, task, agentState, success,
       emitLog('info', `🔎 Repo state only partly readable for ${agentId} (${branchName}) — could not check: ${observed.unreadable.join(', ')}`, { agentId, branchName });
       return { verified: false, skipReason: REPO_STATE_SKIPS.PROBE_INCOMPLETE, issues: [], observed, recoveryTaskId: null };
     }
-    emitLog('info', `🔎 Repo state verified clean for ${agentId} (${branchName})`, { agentId, branchName });
+    emitLog('info', `🔎 Agent branch ${branchName} verified clean for ${agentId}`, { agentId, branchName });
     return { verified: true, skipReason: null, issues: [], observed, recoveryTaskId: null };
   }
 

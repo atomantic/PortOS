@@ -70,6 +70,7 @@ export function withCreativeLatitude(prompt) {
 /** Prefixes whose stages/runs generate or edit creative work (story, art, canon). */
 export const CREATIVE_PREFIXES = Object.freeze([
   'cd-', // Creative Director: treatments, plans, scene evaluation
+  'code-animation-', // procedurally coded animation films in a universe's style
   'deck-', // Decks: sample-image style analysis, deck casting, card prompts
   'fableloom-',
   'importer-', // extracts canon/arcs out of existing (often licensed) source works

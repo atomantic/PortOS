@@ -81,6 +81,19 @@ export const shellAttachSchema = z.object({
 // shell:stop — session ID
 export const shellStopSchema = shellSessionIdSchema;
 
+// iterm:* — the iTerm2 view's own events (#8114). Ids are `iterm-<iTerm session
+// UUID>` and never overlap PortOS shell session ids.
+const itermSessionId = z.string().regex(/^iterm-[A-Za-z0-9-]{1,64}$/, 'id must be an iTerm2 session id');
+
+// iterm:attach / iterm:detach — the iTerm2 session to start or stop viewing.
+export const itermSessionRefSchema = z.object({ id: itermSessionId });
+
+// iterm:input — exact bytes to type into the iTerm2 session.
+export const itermInputSchema = z.object({
+  id: itermSessionId,
+  data: z.string().max(1_000_000)
+});
+
 // app:update — app ID for pull/install/restart cycle. `acknowledgeFork` and
 // `acknowledgePersistentMindImageBackup` are only consulted for the PortOS app
 // record — they mirror POST /api/update/execute's executeSchema so App

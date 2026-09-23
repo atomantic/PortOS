@@ -11,7 +11,7 @@ better-test-coverage, better-performance, better-accessibility,
 better-documentation, better-ui-bugs, better-mobile-responsive,
 better-error-handling, better-typing, better-console-errors, better-ux,
 better-data-safety, better-simplify, better-module-hygiene, better-api-contract,
-better-react-lifecycle, better-observability, and better-copy. The six existing
+better-ui-lifecycle, better-observability, and better-copy. The six existing
 better-* names remain unchanged.
 
 Operational tasks (claims, review pipelines, reconciliation, releases, repo sync),

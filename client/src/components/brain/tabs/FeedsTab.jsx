@@ -201,7 +201,7 @@ export default function FeedsTab({ onRefresh }) {
               title="Mark all as read"
             >
               <CheckCheck size={14} />
-              <span className="hidden sm:inline">Mark all read</span>
+              <span className="max-sm:sr-only">Mark all read</span>
             </button>
           )}
           {feeds.length > 0 && (
@@ -212,7 +212,7 @@ export default function FeedsTab({ onRefresh }) {
               title="Refresh all feeds"
             >
               <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-              <span className="hidden sm:inline">Refresh</span>
+              <span className="max-sm:sr-only">Refresh</span>
             </button>
           )}
         </div>

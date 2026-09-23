@@ -510,6 +510,62 @@ export function createRunnerService(config = {}) {
         env: childEnv,
         windowsHide: true
       });
+
+      // Same tick as spawn. Node emits 'error' (ENOENT, EACCES, EMFILE) and
+      // does not follow it with 'close' when the process never starts; an
+      // unlistened 'error' is an uncaught exception that exits the server.
+      // A child that dies before reading stdin emits EPIPE on the pipe — that
+      // stream error is the same crash if nobody is listening. 'close' and
+      // 'error' share one settlement so a race cannot double-fire hooks.
+      let settled = false;
+      let timeoutHandle = null;
+      const releaseRun = () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        activeRuns.delete(runId);
+      };
+
+      childProcess.stdin?.on('error', () => {});
+      childProcess.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        releaseRun();
+        const message = err?.message || 'CLI spawn failed';
+        console.error(`❌ Run ${runId} spawn error: ${message}`);
+        void (async () => {
+          // The 'error' event is the classification: a missing binary's message
+          // matches SPAWN_ERROR, but EACCES/EMFILE do not, and a null category
+          // is read as an unknown provider failure. Keep the raw message — the
+          // pattern's extracted text drops the spawn detail callers match on.
+          const errorAnalysis = analyzeError(message, -1);
+          errorAnalysis.category = ERROR_CATEGORIES.SPAWN_ERROR;
+          errorAnalysis.hasError = true;
+          errorAnalysis.requiresFallback = true;
+          errorAnalysis.message = message;
+          const failMetadata = {
+            endTime: new Date().toISOString(),
+            duration: Date.now() - startTime,
+            exitCode: -1,
+            success: false,
+            error: message,
+            errorCategory: ERROR_CATEGORIES.SPAWN_ERROR,
+            errorAnalysis,
+            outputSize: Buffer.byteLength(output),
+          };
+          try {
+            let metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+            if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) metadata = {};
+            Object.assign(metadata, failMetadata);
+            await atomicWrite(outputPath, output);
+            await atomicWrite(metadataPath, metadata);
+            Object.assign(failMetadata, metadata);
+          } catch (writeErr) {
+            console.error(`❌ Run ${runId} spawn-error finalization failed: ${writeErr.message}`);
+          }
+          safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
+        })();
+      });
+
       if (childProcess.stdin) {
         childProcess.stdin.write(prompt);
         childProcess.stdin.end();
@@ -518,7 +574,7 @@ export function createRunnerService(config = {}) {
       activeRuns.set(runId, childProcess);
       hooks.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
 
-      const timeoutHandle = setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         if (childProcess && !childProcess.killed) {
           console.log(`⏱️ Run ${runId} timed out after ${timeout}ms`);
           killProcessTree(childProcess);
@@ -538,13 +594,14 @@ export function createRunnerService(config = {}) {
       });
 
       childProcess.on('close', async (code) => {
+        if (settled) return;
+        settled = true;
         // Runs outside the request lifecycle — an uncaught throw from
         // atomicWrite/handleProviderError/hooks would surface as an unhandled
         // rejection and crash the process, so guard the body and still settle
         // the caller on failure.
         try {
-          clearTimeout(timeoutHandle);
-          activeRuns.delete(runId);
+          releaseRun();
 
           await atomicWrite(outputPath, output);
 

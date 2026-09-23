@@ -43,6 +43,7 @@ import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
 import { CodexRoutingNotice, GatewayKeyHint } from './ProviderNotices';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import ProviderEnvVars from './ProviderEnvVars';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist".
 // The editor states the same thing in its own inline banner, in prose.
@@ -413,7 +414,7 @@ export default function ProviderCard({
         )}
         {unified && (
           <div className="text-xs text-gray-400 space-y-1">
-            <p>CLI and TUI share enablement and the model catalog. Edit a mode to configure its arguments and model defaults.</p>
+            <p>CLI and TUI share one provider configuration, including the catalog, model defaults, tier pins, effort, fallback, and generation settings. Edit either mode to update it. Arguments, timeouts, TUI timing, and CLI transport consent stay specific to their mode.</p>
             {modes.filter(mode => mode.id !== provider.id && statuses[mode.id]?.available === false).map(mode => (
               <p key={mode.id} className="text-port-warning">
                 {mode.type.toUpperCase()} benched: {statuses[mode.id].message || statuses[mode.id].reason}{' '}
@@ -637,16 +638,11 @@ export default function ProviderCard({
             </p>
           )}
           {provider.envVars && Object.keys(provider.envVars).length > 0 && (
-            <div className="text-xs mt-1">
-              <span className="text-gray-400">Env:</span>
-              {Object.entries(provider.envVars).map(([k, v]) => (
-                <div key={k}>
-                  <code className="ml-1 text-orange-400">
-                    {k}={provider.secretEnvVars?.includes(k) ? (v === '' ? '(not set)' : '***') : v}
-                  </code>
-                </div>
-              ))}
-            </div>
+            <ProviderEnvVars
+              envVars={provider.envVars}
+              secretEnvVars={provider.secretEnvVars}
+              className="mt-1"
+            />
           )}
         </div>
 

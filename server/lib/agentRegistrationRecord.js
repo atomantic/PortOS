@@ -97,6 +97,18 @@ export function buildAgentRegistration({
     taskType: task.taskType,
     priority: task.priority,
     providerId: provider.id,
+    // Immutable, non-secret route provenance for the active/completed cards.
+    // Keep this as individual fields rather than copying the provider record:
+    // envVars, endpoints, args and credentials are execution details, not run
+    // metadata that should be persisted or rendered in the card.
+    providerName: provider.name || null,
+    providerType: provider.type || null,
+    providerMethod: provider.method || provider.type || null,
+    harnessId: provider.harnessId || null,
+    serviceId: provider.serviceId || null,
+    servicePlan: provider.servicePlan || null,
+    providerCredentialBootstrapId: provider.credentialBootstrapId || null,
+    providerHasCredentialBootstrap: Boolean(provider.credentialBootstrap),
     // Persisted alongside the id because the cleanup path's `agentOpensOwnPr`
     // gate must derive from the SAME `canTypeSlashCommands` predicate the prompt
     // used to decide whether the agent opens its own PR (#3114). An id alone

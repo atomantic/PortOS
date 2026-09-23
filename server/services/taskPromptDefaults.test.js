@@ -49,6 +49,16 @@ const importDefaultsUnder = async (env, expectedOrigin) => {
 };
 
 describe('taskPromptDefaults integrity snapshot', () => {
+  it('keeps the lifecycle prompt history under the renamed task key', () => {
+    expect(DEFAULT_TASK_PROMPTS['ui-lifecycle']).toContain('UI lifecycle and state audit');
+    expect(PROMPT_VERSIONS['ui-lifecycle']).toBe(2);
+    expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).toHaveProperty('ui-lifecycle');
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS['ui-lifecycle']).toHaveLength(1);
+    expect(SNAPSHOT.DEFAULT_TASK_PROMPTS).not.toHaveProperty('react-lifecycle');
+    expect(SNAPSHOT.PROMPT_VERSIONS).not.toHaveProperty('react-lifecycle');
+    expect(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS).not.toHaveProperty('react-lifecycle');
+  });
+
   it('module-hygiene v1 is generic, evidence-led, and bounded', () => {
     const current = DEFAULT_TASK_PROMPTS['module-hygiene'];
 
@@ -592,12 +602,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // release-check READS the changelog rather than writing it, so its fix is the
   // mirror image: an unreleased set that lives in uncollected fragments must not
   // read as "not enough work accumulated for a release".
-  it('release-check v13 fixes failing tests/CI instead of halting', () => {
+  it('release-check v14 names releases from their biggest user-visible wins', () => {
     const current = DEFAULT_TASK_PROMPTS['release-check'];
-    expect(PROMPT_VERSIONS['release-check']).toBeGreaterThanOrEqual(13);
+    expect(PROMPT_VERSIONS['release-check']).toBeGreaterThanOrEqual(14);
     expect(current).toContain('Reconcile Missing Releases');
     expect(current).toContain('Unpublished release detected');
     expect(current).toContain('--latest=false');
+    expect(current).toContain('one or two biggest user-visible wins');
+    expect(current).toContain('# Release vX.Y.Z - <Fun Name>');
+    expect(current).toContain('GitHub Actions workflow extracts this heading');
     expect(current).toContain('per-branch fragments');
     expect(current).toContain('assembled');
     // release-check is a generic {appName} prompt — it runs against managed apps,

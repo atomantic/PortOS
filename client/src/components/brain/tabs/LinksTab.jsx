@@ -1,5 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link } from 'react-router';
+import {
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor,
+  useDraggable, useSensor, useSensors,
+} from '@dnd-kit/core';
 import * as api from '../../../services/api';
 import {
   Link2,
@@ -33,8 +37,12 @@ import { timeAgo } from '../../../utils/formatters';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 import BucketBoard from '../links/BucketBoard';
 import RepoRestudyPanel from '../RepoRestudyPanel';
-import { LINK_DND_TYPE } from '../links/bucketColors';
+import LinkChip from '../links/LinkChip';
 import { reorderLinksInBucket } from '../links/bucketReorder';
+import {
+  linksCollisionDetection, linksKeyboardCoordinates,
+  BUCKET_KIND, LINK_KIND, LINK_SLOT_KIND,
+} from '../links/bucketDnd';
 import { normalizeUrl as normalizeUrlShared } from '../../../utils/urlNormalize';
 
 /**
@@ -465,6 +473,110 @@ export default function LinksTab({ onRefresh }) {
     }
   };
 
+  // --- Drag-and-drop: buckets (reorder) and links (file/reorder into a
+  // bucket, from the flat list or from another chip) share ONE DndContext so
+  // a link picked up in the list can be dropped straight into a bucket at a
+  // specific position. See bucketDnd.js for the coordinate/collision logic.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: linksKeyboardCoordinates }),
+  );
+  const [activeDrag, setActiveDrag] = useState(null);
+
+  const handleReorderBuckets = useCallback((draggedId, targetId) => {
+    if (!draggedId || draggedId === targetId) return;
+    setBuckets(prev => {
+      const ids = prev.map(b => b.id);
+      const from = ids.indexOf(draggedId);
+      const to = ids.indexOf(targetId);
+      if (from === -1 || to === -1) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      api.reorderBrainBuckets(next.map(b => b.id), { silent: true }).catch(err => {
+        toast.error(err.message || 'Failed to reorder buckets');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleDragStart = useCallback((event) => {
+    setActiveDrag(event.active.data.current || null);
+  }, []);
+
+  const handleDragEnd = useCallback((event) => {
+    const { active, over } = event;
+    setActiveDrag(null);
+    if (!over || !active) return;
+    const activeData = active.data.current || {};
+    const overData = over.data.current || {};
+    if (activeData.kind === BUCKET_KIND && overData.kind === BUCKET_KIND) {
+      handleReorderBuckets(activeData.bucket?.id, overData.bucketId);
+      return;
+    }
+    if (activeData.kind === LINK_KIND && overData.kind === LINK_SLOT_KIND && activeData.link) {
+      handleMoveLinkToIndex(activeData.link, overData.bucketId, overData.index);
+    }
+  }, [handleReorderBuckets, handleMoveLinkToIndex]);
+
+  const handleDragCancel = useCallback(() => setActiveDrag(null), []);
+
+  // dnd-kit's stock announcements only say "draggable item N" (an id). Name
+  // the bucket/link and its destination instead, using the live counts so
+  // "position 2 of 5" stays accurate as buckets fill up.
+  const dndAccessibility = useMemo(() => {
+    const bucketName = (id) => buckets.find(b => b.id === id)?.name || 'Unfiled';
+    const describeBucketTarget = (over) => {
+      const bucketId = over?.data?.current?.bucketId;
+      if (!bucketId) return null;
+      const idx = buckets.findIndex(b => b.id === bucketId);
+      return idx === -1 ? null : `position ${idx + 1} of ${buckets.length}`;
+    };
+    const describeLinkTarget = (active, over) => {
+      const data = over?.data?.current;
+      if (!data || data.kind !== LINK_SLOT_KIND) return null;
+      const link = active?.data?.current?.link;
+      if (!link) return null;
+      // Reuse the same helper the actual move persists with, rather than
+      // hand-rolling the position math again: dropping an already-in-bucket
+      // link on its own bucket's trailing "append" slot lands ONE EARLIER
+      // than the raw slot index once the link's own current slot is removed
+      // from under it, and only reorderLinksInBucket's insertAt adjustment
+      // gets that right (see its own tests for the exact case).
+      const { renumbered } = reorderLinksInBucket(links, link, data.bucketId, data.index);
+      const finalIndex = renumbered.findIndex(r => r.id === link.id);
+      if (finalIndex === -1) return null;
+      return `position ${finalIndex + 1} of ${renumbered.length} in ${bucketName(data.bucketId)}`;
+    };
+    const itemLabel = (active) => {
+      const data = active?.data?.current;
+      if (!data) return 'item';
+      return data.kind === BUCKET_KIND ? `bucket ${data.bucket?.name || ''}`.trim() : (data.link?.title || 'link');
+    };
+    const destinationFor = (active, over) => (active?.data?.current?.kind === BUCKET_KIND
+      ? describeBucketTarget(over)
+      : describeLinkTarget(active, over));
+    return {
+      announcements: {
+        onDragStart: ({ active }) => (active?.data?.current?.kind === BUCKET_KIND
+          ? `Picked up ${itemLabel(active)}. Use the arrow keys to choose a new position, Space to drop it there, or Escape to cancel.`
+          : `Picked up ${itemLabel(active)}. Use the arrow keys to choose a bucket and position, Space to file it there, or Escape to cancel.`),
+        onDragOver: ({ active, over }) => {
+          const dest = destinationFor(active, over);
+          return dest ? `${itemLabel(active)} is over ${dest}.` : `${itemLabel(active)} is not over a valid destination.`;
+        },
+        onDragEnd: ({ active, over }) => {
+          const dest = destinationFor(active, over);
+          return dest ? `Moved ${itemLabel(active)} to ${dest}.` : `${itemLabel(active)} was dropped outside a valid destination and did not move.`;
+        },
+        onDragCancel: ({ active }) => `Cancelled moving ${itemLabel(active)}. It stayed where it was.`,
+      },
+      screenReaderInstructions: {
+        draggable: 'To move this item, press Space or Enter. While dragging, use the arrow keys to choose a destination, then press Space to drop it there, or Escape to cancel.',
+      },
+    };
+  }, [links, buckets]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -475,6 +587,14 @@ export default function LinksTab({ onRefresh }) {
 
   return (
     <div className="flex flex-col h-full">
+      <DndContext
+        sensors={sensors}
+        collisionDetection={linksCollisionDetection}
+        accessibility={dndAccessibility}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(340px,440px)] gap-6 items-start">
         {/* Left column: entry form, filters, and the full link list */}
         <div className="min-w-0 flex flex-col">
@@ -627,17 +747,12 @@ export default function LinksTab({ onRefresh }) {
           return (
           <div
             key={link.id}
-            draggable={!isEditing}
-            onDragStart={!isEditing ? (e) => {
-              e.dataTransfer.setData(LINK_DND_TYPE, link.id);
-              e.dataTransfer.effectAllowed = 'move';
-            } : undefined}
-            className={`p-4 bg-port-card border border-port-border rounded-lg ${isEditing ? '' : 'cursor-grab'}`}
+            className="p-4 bg-port-card border border-port-border rounded-lg"
           >
             {/* Header row */}
             <div className="flex items-start justify-between gap-3 mb-2">
               {!isEditing && (
-                <GripVertical size={16} className="shrink-0 mt-0.5 text-gray-600" title="Drag to a bucket" />
+                <LinkDragHandle link={link} />
               )}
               {editingId === link.id ? (
                 <div className="flex-1 space-y-2">
@@ -1041,7 +1156,7 @@ export default function LinksTab({ onRefresh }) {
           <div className="flex items-center gap-2 mb-3 flex-wrap">
             <FolderClosed size={16} className="text-port-accent shrink-0" />
             <h2 className="text-sm font-semibold text-gray-300">Buckets</h2>
-            <span className="text-xs text-gray-500">Group links — drag chips between buckets.</span>
+            <span className="text-xs text-gray-500">Group links — drag chips (or use a chip/bucket's grip handle with the keyboard) to reorder or move between buckets.</span>
           </div>
           <BucketBoard
             links={links}
@@ -1049,11 +1164,58 @@ export default function LinksTab({ onRefresh }) {
             setBuckets={setBuckets}
             onAssignLink={handleAssignLink}
             onAddLinkToBucket={handleAddLinkToBucket}
-            onMoveLinkToIndex={handleMoveLinkToIndex}
             onBucketDeleted={(bucketId) => setLinks(prev => prev.map(l => (l.bucketId === bucketId ? { ...l, bucketId: null } : l)))}
           />
         </aside>
       </div>
+      <DragOverlay>
+        {activeDrag?.kind === LINK_KIND && activeDrag.link && (
+          <div className="rotate-1 shadow-lg">
+            <LinkChip link={activeDrag.link} />
+          </div>
+        )}
+        {activeDrag?.kind === BUCKET_KIND && activeDrag.bucket && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded bg-port-card border border-port-accent text-sm text-port-accent shadow-lg">
+            {activeDrag.bucket.icon && <span className="text-base leading-none">{activeDrag.bucket.icon}</span>}
+            {activeDrag.bucket.name}
+          </div>
+        )}
+      </DragOverlay>
+      </DndContext>
     </div>
+  );
+}
+
+/**
+ * Drag source for a link-list row: dnd-kit's `attributes`/`listeners` must be
+ * spread on a real focusable element (not the whole row, which also hosts
+ * click targets like Edit/Delete/Open), so the grip icon becomes a dedicated
+ * handle — the same shape as `LibraryPane.jsx`'s `WorkRow` and
+ * `KanbanBoard.jsx`'s `DraggableTicket`. Its `data.bucketId`/`index` are
+ * always null: a list row isn't rendered inside any one bucket's order, so a
+ * keyboard pickup here always enters bucket order fresh (see
+ * `bucketDnd.js`'s fallback for "no current position").
+ */
+function LinkDragHandle({ link, disabled }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useDraggable({
+    id: `link-list:${link.id}`,
+    data: { kind: LINK_KIND, link, bucketId: null, index: null },
+    disabled,
+  });
+  return (
+    <button
+      type="button"
+      ref={(node) => { setNodeRef(node); setActivatorNodeRef(node); }}
+      {...attributes}
+      {...listeners}
+      disabled={disabled}
+      className={`shrink-0 mt-0.5 flex items-center justify-center text-gray-600 hover:text-gray-400 ${
+        disabled ? 'cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing'
+      } ${isDragging ? 'opacity-30' : ''}`}
+      aria-label={`Drag ${link.title} to a bucket`}
+      title="Drag to a bucket"
+    >
+      <GripVertical size={16} />
+    </button>
   );
 }

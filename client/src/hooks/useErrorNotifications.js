@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import { useSocketSubscription } from './useSocketSubscription';
 
 // Render an error's context object as a single-line suffix (empty when absent)
 // so the console stays on one interpolated line instead of expanding a group.
@@ -16,13 +17,18 @@ export function useErrorNotifications() {
     toast('Recovery agent dispatched', { icon: '🔧' });
   }, []);
 
+  // Re-emits `errors:subscribe` on every socket reconnect, since the server's
+  // per-socket subscriber Set is empty on the reconnected socket — without
+  // this, error toasts (including the unattended-run `BACKUP_DB_DUMP_FAILED`
+  // toast this hook exists to surface) go silent for the rest of the tab's
+  // life after the first server restart/self-update.
+  useSocketSubscription('errors');
+
   useEffect(() => {
-    // Subscribe to targeted error broadcasts. We listen to ONLY `error:notified`
+    // Listen to targeted error broadcasts. We listen to ONLY `error:notified`
     // (subscriber-scoped) and skip `error:occurred` (broadcast-to-all) — the
     // server emits both for every error, so listening to both doubled every
     // toast. The Toast layer also dedupes by content as a defense in depth.
-    socket.emit('errors:subscribe');
-
     const handleError = (error) => {
       // A degraded DB backup is warning-severity (the file backup succeeded)
       // but MUST still surface — its whole point is "find out the day it
@@ -87,7 +93,6 @@ export function useErrorNotifications() {
     socket.on('error:recover:requested', handleRecoveryRequested);
 
     return () => {
-      socket.emit('errors:unsubscribe');
       socket.off('error:notified', handleError);
       socket.off('system:critical-error', handleCriticalError);
       socket.off('error:recover:requested', handleRecoveryRequested);

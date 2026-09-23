@@ -1,7 +1,7 @@
 import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
 import AppQualityScheduleForm from './AppQualityScheduleForm';
-import { Fragment, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { formatDateShort } from '../../utils/formatters';
 import { publishAppQualitySnapshot } from '../../services/apiApps';
@@ -17,11 +17,15 @@ const PUBLISH_SKIPPED = {
   'no-remote': 'App repo has no origin remote to open a pull request against',
   'no-default-branch': 'Could not resolve the repository default branch',
   'pr-failed': 'Could not open a quality snapshot pull request',
+  'unsupported-format': 'The committed quality file is in an unsupported format. Publish left it in place.',
+  'invalid-evidence': 'The current measurements could not be written as a snapshot. Publish left the file in place.',
 };
 
 export default function AppQuality({ app, detail = false }) {
   const [params] = useSearchParams();
   const [publishing, setPublishing] = useState(false);
+  const [categorySort, setCategorySort] = useState('score');
+  const categorySortId = useId();
   // User-initiated, so every outcome toasts (the wrapper is silent).
   const publishSnapshot = async () => {
     setPublishing(true);
@@ -30,7 +34,7 @@ export default function AppQuality({ app, detail = false }) {
     if (result?.failure) return toast.error(result.failure.message || 'Could not publish the quality snapshot');
     if (result?.published) {
       return toast.success(result.prUrl
-        ? 'Quality snapshot pull request opened; it will merge when CI is green'
+        ? 'Quality snapshot pull request opened; it merges immediately'
         : 'Quality snapshot published to .quality.json');
     }
     toast(PUBLISH_SKIPPED[result?.reason] || 'Nothing to publish to .quality.json');
@@ -44,7 +48,21 @@ export default function AppQuality({ app, detail = false }) {
   };
   const score = quality?.score;
   const sortedCategories = quality?.categories
-    ? [...quality.categories].sort((a, b) => (a.score ?? Infinity) - (b.score ?? Infinity))
+    ? [...quality.categories].sort((a, b) => {
+      if (categorySort === 'oldest-run') {
+        const aRun = Date.parse(a.assessedAt);
+        const bRun = Date.parse(b.assessedAt);
+        const aHasRun = Number.isFinite(aRun);
+        const bHasRun = Number.isFinite(bRun);
+        if (aHasRun !== bHasRun) return aHasRun ? 1 : -1;
+        if (aHasRun && aRun !== bRun) return aRun - bRun;
+      } else {
+        const aScore = a.score ?? Infinity;
+        const bScore = b.score ?? Infinity;
+        if (aScore !== bScore) return aScore < bScore ? -1 : 1;
+      }
+      return a.label.localeCompare(b.label) || a.id.localeCompare(b.id);
+    })
     : [];
   const hasAssessments = quality?.categories?.some(category => category.assessedAt);
   const unscoredLabel = hasAssessments ? 'Quality: no qualifying score' : 'Quality: not assessed';
@@ -120,7 +138,21 @@ export default function AppQuality({ app, detail = false }) {
       </div>
       {!!quality?.categories?.length && (
         <section aria-label="Category breakdown" className="min-w-0">
-          <h4 className="text-sm font-medium mb-2">Category breakdown</h4>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h4 className="text-sm font-medium">Category breakdown</h4>
+            <label htmlFor={categorySortId} className="flex items-center gap-2 text-xs text-gray-400">
+              Sort by
+              <select
+                id={categorySortId}
+                value={categorySort}
+                onChange={event => setCategorySort(event.target.value)}
+                className="rounded border border-port-border bg-port-bg px-2 py-1 text-port-text"
+              >
+                <option value="score">Worst score</option>
+                <option value="oldest-run">Oldest last run</option>
+              </select>
+            </label>
+          </div>
           <table className="w-full text-sm text-left">
             <thead className="text-gray-400 sticky top-0 bg-port-card">
               <tr>

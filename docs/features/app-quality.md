@@ -92,6 +92,40 @@ runs. The local detail endpoint `/api/apps/:id/quality-history?days=90` reads on
 that app's measurements and bounds results to the last measurement per UTC day
 and category, including a 30-day lookback to seed the selected range.
 
+## Release snapshot file
+
+A managed app can publish its recent numeric scores into `.quality.json` at the
+repository root. The file is a bounded projection, not the audit history:
+PostgreSQL keeps every measurement, and the file keeps one row per UTC day and
+category for the same 30-day window the quality panel uses, capped at 4 MiB.
+Publish opens an immediately-merged pull request on `portos/quality-snapshot` and
+does not commit the live checkout. With no local evidence, a non-empty file is
+left as it is.
+
+The checked-in schema is v2. It stores an opaque origin fingerprint, sorted
+category and enum dictionaries, and fixed rows
+`[assessedAt, categoryIndex, score, worstSeverity, coverageIndex, confidenceIndex, scannedFiles, totalFiles]`.
+Scores stay nullable. Timestamps stay ISO instants. The file does not store
+summaries, paths, app names, agent ids, or `measurementId`. Same-timestamp
+ordering uses a transient digest of the row, computed when the file is read.
+
+That file is not the peer federation payload. Peers still exchange schema v1
+objects. Upgrading the file does not require every peer to upgrade.
+
+Readers accept a v1 `.quality.json` and, when that file is absent, the historical
+`quality-snapshot.json` name. A read never rewrites the checkout. Future schemas,
+unrecognized documents (including TSV, CSV, or NDJSON), malformed snapshots, and
+oversize files are not evidence and are not overwritten. TSV is not the
+canonical artifact: an append-only text log would grow without a bound and would
+be harder to validate, while the database is already the history.
+
+`npm run quality:snapshot` writes canonical v2 from local evidence, including
+when the committed file is still v1. `npm run quality:snapshot -- --migrate`
+converts a v1 file or the historical filename to canonical v2 using only the
+rows already stored, through the same pull request. A second publish of the
+same normalized v2 snapshot does not open another pull request. Duplicate rows
+for one UTC day and category are rejected rather than silently dropped.
+
 ## Weekly quality schedule
 
 The app's Quality tab carries a **Weekly quality schedule** form that configures

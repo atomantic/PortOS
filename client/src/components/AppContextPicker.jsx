@@ -48,6 +48,7 @@ export default function AppContextPicker({
                 appId={selectedApp.id}
                 hasAppIcon={!!selectedApp.appIconPath}
                 size={14}
+                ariaLabel={selectedApp.name}
                 className="mt-0.5 shrink-0 text-gray-400"
               />
               <div className="min-w-0">

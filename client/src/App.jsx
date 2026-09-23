@@ -81,6 +81,7 @@ const Game = lazyWithReload(() => import('./pages/Game'));
 const MusicVideo = lazyWithReload(() => import('./pages/MusicVideo'));
 const Sprites = lazyWithReload(() => import('./pages/Sprites'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
+const CodeAnimation = lazyWithReload(() => import('./pages/CodeAnimation'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
 const Decks = lazyWithReload(() => import('./pages/Decks'));
 const DeckDetail = lazyWithReload(() => import('./pages/DeckDetail'));
@@ -416,6 +417,9 @@ export default function App() {
           <Route path="local-llm/playground" element={<LocalLlmPlayground />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
+          {/* The iTerm2 view (#8114): the static `iterm` segment outranks :sessionId. */}
+          <Route path="shell/iterm" element={<Shell />} />
+          <Route path="shell/iterm/:itermSessionId" element={<Shell />} />
           <Route path="shell/:sessionId" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
           <Route path="insights" element={<Navigate to="/insights/overview" replace />} />
@@ -592,6 +596,8 @@ export default function App() {
           <Route path="catalog" element={<Catalog />} />
           <Route path="catalog/ingest" element={<CatalogIngest />} />
           <Route path="catalog/:type/:id" element={<CatalogIngredient />} />
+          <Route path="code-animation" element={<CodeAnimation />} />
+          <Route path="code-animation/:jobId" element={<CodeAnimation />} />
           <Route path="mood-boards" element={<MoodBoards />} />
           <Route path="mood-boards/:id" element={<MoodBoardDetail />} />
           <Route path="decks" element={<Decks />} />

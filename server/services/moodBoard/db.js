@@ -36,6 +36,7 @@ import {
   healPinterestFeedRecord,
   clearPinterestLinkRecord,
   appendPinterestPins,
+  appendImportedItems as appendImportedItemsRecord,
 } from './logic.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes, deleteSyncBaseHash,
@@ -81,6 +82,15 @@ export async function listBoards({ includeDeleted = false } = {}) {
     ? await query(`SELECT data FROM mood_boards ORDER BY updated_at DESC`)
     : await query(`SELECT data FROM mood_boards WHERE deleted = FALSE ORDER BY updated_at DESC`);
   return result.rows.map(rowToBoard);
+}
+
+/**
+ * Live boards as `{ id, name }`, newest first — for pickers that need only the
+ * label, without reading and shipping every board's items (up to 500 each).
+ */
+export async function listBoardNames() {
+  const result = await query(`SELECT id, data->>'name' AS name FROM mood_boards WHERE deleted = FALSE ORDER BY updated_at DESC`);
+  return result.rows.map((row) => ({ id: row.id, name: row.name || '' }));
 }
 
 export async function getBoard(id, { includeDeleted = false } = {}) {
@@ -276,6 +286,17 @@ export async function appendPinterestItems(id, imported, opts = {}) {
   const { board, result } = await withLockedBoard(id, (b) => {
     const { board: next, added, aborted } = appendPinterestPins(b, imported, opts);
     return { board: next, result: { added, aborted }, skipPersist: aborted };
+  });
+  return { board, ...result };
+}
+
+// Append already-downloaded one-shot import items (X post importer) in ONE
+// locked write. Unlike appendPinterestItems, there's no persisted link to
+// stamp or race against — skips the write entirely when nothing new landed.
+export async function appendImportedItems(id, imported) {
+  const { board, result } = await withLockedBoard(id, (b) => {
+    const { board: next, added } = appendImportedItemsRecord(b, imported);
+    return { board: next, result: { added }, skipPersist: added === 0 };
   });
   return { board, ...result };
 }

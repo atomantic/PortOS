@@ -103,6 +103,15 @@ export const INSTANCE_FEATURES = Object.freeze([
     defaultEnabled: true,
   }),
   Object.freeze({
+    id: 'iterm',
+    label: 'iTerm2 sessions',
+    description: 'Show and type into this Mac\'s live iTerm2 sessions from the Shell page. Needs iTerm2 with Settings → General → Magic → Enable Python API.',
+    // The detector in services/instanceFeatures.js turns it on only on a Mac
+    // with iTerm2 installed and its Python API enabled; no host is ever probed
+    // beyond an app-bundle check and one `defaults read` (docs/ITERM.md).
+    defaultEnabled: false,
+  }),
+  Object.freeze({
     id: 'rigging',
     label: 'Character rigging',
     description: 'Blender-backed rigging for generated 3D characters. Needs a provisioned Blender Python runtime on this machine.',

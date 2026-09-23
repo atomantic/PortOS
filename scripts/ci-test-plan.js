@@ -236,6 +236,15 @@ export const ALWAYS_RUN_TESTS = [
   // `.env.example` itself is not a scope the selector routes to a runner.
   'server/envExampleDrift.test.js',
   'server/lib/generatedManifests.test.js',
+  // Base-relative server import-growth guard (#7993). A new eager edge in a
+  // widely reached module multiplies across suites this file does not import,
+  // so impact selection would not reach it unless the diff touched this file.
+  // Docs-only plans and rebases onto a moved base still need the comparison. It reads
+  // CI_BASE_SHA — the same variable main() requires for a pull request that
+  // is not forced full — and fails closed when that commit cannot be read.
+  // Pregate copies the sha into the test process so the local run uses this
+  // plan's base, not a second guess.
+  'server/lib/importScoping.test.js',
   // Whole-tree scanner: any server/client file can add a hardcoded "Models →"
   // breadcrumb, with no import edge back to this file.
   'server/lib/localProviderRuntime.test.js',
@@ -427,13 +436,14 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   // Both `.js` and `.jsx`: the StrictMode mounted-ref bug the first guard covers
   // reached its widest blast radius through a plain-`.js` hook (`useAsyncAction`),
   // so a `.jsx`-only trigger would miss the case that matters most, and the
-  // responsive-grid, popover-clamp, pre-wrap/break, safe-storage,
-  // heading-truncation, sub-nav, and global-shadow guards read class strings, storage
-  // accesses, declarations, and JSX markup out of both extensions.
+  // responsive-grid, popover-clamp, pre-wrap/break, safe-storage, heading-truncation,
+  // sub-nav, dashboard-widget container-query, and global-shadow guards read class
+  // strings, storage accesses, declarations, and JSX markup out of both extensions.
   // None of these files has a source sibling or imports an app module, so nothing
   // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
     add('client/src/asyncEffectDisposalConventions.test.js');
+    add('client/src/dashboardWidgetContainerConventions.test.js');
     add('client/src/globalShadowConventions.test.js');
     add('client/src/headingTruncationConventions.test.js');
     add('client/src/hooks/mountedRefConventions.test.js');
@@ -443,6 +453,7 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
     add('client/src/preWrapClasses.test.js');
     add('client/src/providerSelectConventions.test.js');
     add('client/src/responsiveGridConventions.test.js');
+    add('client/src/socketSubscriptionConventions.test.js');
     add('client/src/storageConventions.test.js');
     add('client/src/subNavConventions.test.js');
     // Same trigger, different subject: this one scans the TEST files for an

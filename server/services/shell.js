@@ -825,7 +825,7 @@ export function resizeSession(sessionId, cols, rows) {
 export function killSession(sessionId) {
   const session = shellSessions.get(sessionId);
   if (session) {
-    console.log(`🐚 Killing shell session ${sessionId.slice(0, 8)}`);
+    console.log(`🐚 Killing shell session ${sessionId}`);
     session.pty.kill();
     shellSessions.delete(sessionId);
     runHook('onExit', session, session.onExit, { exitCode: null, killed: true });

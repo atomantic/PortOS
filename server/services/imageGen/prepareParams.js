@@ -1,5 +1,10 @@
 /**
- * prepareGenerateParams — pre-dispatch preparation for POST /image-gen/generate.
+ * Shared image-generation preparation and local model selection.
+ *
+ * `selectLocalImageModel`, `selectLocalImageModelFromSettings`, and
+ * `resolveLocalImageModel` are the canonical owner of local image model
+ * identity for every queueing surface. `prepareGenerateParams` also owns
+ * pre-dispatch preparation for POST /image-gen/generate:
  *
  * Handles everything between Zod validation and the final dispatch branch:
  *   - resolve effective backend mode + per-render cleaners
@@ -27,8 +32,8 @@ import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { getSettings } from '../settings.js';
-import { IMAGE_GEN_MODE, resolveImageCleaners } from './index.js';
-import { LOCAL_IMAGEGEN_DEFAULT_MODEL, editIncapableModeError, isEditCapableMode, modeLabel } from './modes.js';
+import { resolveImageCleaners } from './index.js';
+import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL, editIncapableModeError, isEditCapableMode, modeLabel } from './modes.js';
 import {
   cloudPromptRequired, maxInputImages, resolveCloudProviderConfig, resolveRenderTargetConfig,
 } from './cloudProviderConfig.js';
@@ -88,8 +93,9 @@ const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '
  */
 export function selectLocalImageModel(modelId, allModels = getImageModels(), pinnedId = null) {
   const requestedModel = allModels.find((model) => model.id === modelId);
+  const pinnedIds = (Array.isArray(pinnedId) ? pinnedId : [pinnedId]).filter(Boolean);
   return requestedModel || [
-    allModels.find((model) => model.id === pinnedId),
+    ...pinnedIds.map((id) => allModels.find((model) => model.id === id)),
     allModels.find((model) => model.id === LOCAL_IMAGEGEN_DEFAULT_MODEL),
     ...allModels,
   ].filter(Boolean).find((model) => isHardwareCompatible(model.hardwareCompatibility)) || allModels[0];
@@ -99,12 +105,16 @@ export function selectLocalImageModel(modelId, allModels = getImageModels(), pin
  * Select the local image model honoring the install-wide pin
  * (`settings.imageGen.local.modelId`). Call this from any site that has
  * settings and only needs identity (FLUX.2 gate, FableLoom capability)
- * rather than the full `resolveLocalImageModel` pre-dispatch validator —
+ * An optional `recordModelId` is another persisted preference, checked before
+ * the install pin and filtered by the same hardware gate. Use this for local
+ * record pins; do not pass those pins as explicit request model IDs.
+ *
+ * Call this rather than the full `resolveLocalImageModel` pre-dispatch validator —
  * that path also checks pythonPath / edit-only / unknown id, which is too
  * heavy before init images exist.
  */
-export function selectLocalImageModelFromSettings(settings, modelId, allModels = getImageModels()) {
-  return selectLocalImageModel(modelId, allModels, settings?.imageGen?.local?.modelId || null);
+export function selectLocalImageModelFromSettings(settings, modelId, allModels = getImageModels(), recordModelId = null) {
+  return selectLocalImageModel(modelId, allModels, [recordModelId, settings?.imageGen?.local?.modelId].filter(Boolean));
 }
 
 /**

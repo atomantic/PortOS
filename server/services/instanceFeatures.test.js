@@ -45,6 +45,12 @@ vi.mock('./rigging/readiness.js', () => ({
   }),
 }));
 
+// The iTerm2 detector reads a macOS preference; keep a dev Mac's own iTerm2
+// setup out of this suite's answers.
+vi.mock('./itermAuth.js', () => ({
+  detectItermInstall: vi.fn(async () => ({ state: 'not-installed' })),
+}));
+
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => mock.portosOrigin),
 }));
@@ -308,7 +314,7 @@ describe('instance features', () => {
     const { features } = await getInstanceFeatures();
     expect(Object.fromEntries(features.map((f) => [f.id, f.enabled]))).toEqual({
       post: true, autobiography: true, datadog: true, jira: false, eidoverse: false, gsd: false, 'cos-task-templates': false, openclaw: false, health: true,
-      rigging: false, facetime: false, imessage: true, signal: true, x: true, 'stacker-news': true, beeper: false,
+      iterm: false, rigging: false, facetime: false, imessage: true, signal: true, x: true, 'stacker-news': true, beeper: false,
       jev: false,
       'laya-mlx': false,
     });

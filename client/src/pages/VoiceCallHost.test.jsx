@@ -37,12 +37,38 @@ const devices = [
   { label: 'BlackHole 2ch', kind: 'audiooutput', deviceId: 'out-1' },
 ];
 
+const exclusiveLock = () => {
+  let held = false;
+  navigator.locks.request = vi.fn((_name, _options, fn) => {
+    if (held) return Promise.resolve(fn(null));
+    held = true;
+    return Promise.resolve(fn(true)).then(() => { held = false; });
+  });
+};
+
+const audioContext = ({ addModule = () => Promise.resolve() } = {}) => {
+  const close = vi.fn(() => Promise.resolve());
+  vi.stubGlobal('AudioContext', function FakeAudioContext() {
+    this.sampleRate = 48000;
+    this.audioWorklet = { addModule };
+    this.createMediaStreamSource = () => ({ connect: vi.fn(), disconnect: vi.fn() });
+    this.close = close;
+  });
+  vi.stubGlobal('AudioWorkletNode', function FakeAudioWorkletNode() {
+    this.port = { close: vi.fn() };
+    this.disconnect = vi.fn();
+  });
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:call-host-worklet');
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+  return { close };
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   grantCapabilities();
 });
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('VoiceCallHost', () => {
   it('says nothing reaches PortOS until the host is attached', () => {
@@ -84,6 +110,68 @@ describe('VoiceCallHost', () => {
 
     expect((await screen.findByRole('alert')).textContent).toMatch(/BlackHole 16ch/);
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('releases the lock after a missing device so a retry can open it', async () => {
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValueOnce([devices[1]]).mockResolvedValue(devices);
+    navigator.mediaDevices.getUserMedia.mockRejectedValue(new Error('permission denied'));
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    expect((await screen.findByRole('alert')).textContent).toMatch(/BlackHole 16ch/);
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/permission denied/);
+  });
+
+  it('releases the lock after permission denial so a retry requests permission again', async () => {
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    navigator.mediaDevices.getUserMedia.mockRejectedValue(new Error('permission denied'));
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/permission denied/);
+  });
+
+  it('stops a stream resolved after unmount without attaching a host', async () => {
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    let resolveStream;
+    navigator.mediaDevices.getUserMedia.mockReturnValue(new Promise((resolve) => { resolveStream = resolve; }));
+    const track = { stop: vi.fn() };
+    const { unmount } = render(<VoiceCallHost />, { wrapper: MemoryRouter });
+
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    unmount();
+    await act(async () => { resolveStream({ getTracks: () => [track] }); });
+
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:call:attach');
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:capture:start');
+  });
+
+  it('cleans up a failed worklet load and releases the lock for retry', async () => {
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    const track = { stop: vi.fn() };
+    navigator.mediaDevices.getUserMedia.mockResolvedValue({ getTracks: () => [track] });
+    const { close } = audioContext({ addModule: () => Promise.reject(new Error('worklet unavailable')) });
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    expect((await screen.findByRole('alert')).textContent).toMatch(/worklet unavailable/);
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(track.stop).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(2);
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:call:attach');
   });
 
   it('opens the exact device with every processing stage off', async () => {

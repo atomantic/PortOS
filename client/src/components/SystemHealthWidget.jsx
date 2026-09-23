@@ -74,16 +74,16 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
   const thresholds = resolveHealthThresholds(health.thresholds);
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
+    <div className="@container min-w-0 bg-port-card border border-port-border rounded-xl p-4">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${healthStyle.bg}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className={`shrink-0 p-2 rounded-lg ${healthStyle.bg}`}>
             <Server className={`w-5 h-5 ${healthStyle.color}`} />
           </div>
-          <div>
-            <h3 className="text-lg font-semibold text-white">System Health</h3>
-            <div className="flex items-center gap-2 text-sm">
+          <div className="min-w-0">
+            <h3 className="text-base @sm:text-lg font-semibold leading-tight text-white">System Health</h3>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
               <HealthIcon size={14} className={healthStyle.color} />
               <span className={healthStyle.color}>
                 {overallHealth.charAt(0).toUpperCase() + overallHealth.slice(1)}
@@ -94,9 +94,9 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-1 @sm:gap-3">
           <span
-            className={`hidden md:inline-flex ${healthStyle.color}`}
+            className={`hidden @sm:inline-flex ${healthStyle.color}`}
             title="Live load matrix — top row reflects memory/cpu/proc/apps/disk"
           >
             <MicroGlyph variant="matrix" size={28} intensity={matrixIntensity} />
@@ -115,7 +115,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             to="/system-resources/overview"
             className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
           >
-            <span className="hidden sm:inline">Details</span>
+            <span className="@max-xs:sr-only">Details</span>
             <ChevronRight size={16} />
           </Link>
         </div>
@@ -147,14 +147,14 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 @sm:grid-cols-3 @2xl:grid-cols-5 gap-3">
         {/* Memory Usage */}
         <div className="bg-port-bg/50 rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <HardDrive size={14} className="text-purple-400" />
-            <span className="text-xs text-gray-500">Memory</span>
+          <div className="flex min-w-0 items-center gap-2 mb-1">
+            <HardDrive size={14} className="hidden shrink-0 text-purple-400 @2xs:block" />
+            <span className="truncate text-xs text-gray-500">Memory</span>
           </div>
-          <div className="text-lg sm:text-xl font-bold text-port-accent">
+          <div className="text-lg @sm:text-xl font-bold text-port-accent">
             {system.memory.usagePercent}%
           </div>
           <div className="text-xs text-gray-500">
@@ -170,11 +170,11 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
 
         {/* CPU Usage */}
         <div className="bg-port-bg/50 rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <Cpu size={14} className="text-blue-400" />
-            <span className="text-xs text-gray-500">CPU</span>
+          <div className="flex min-w-0 items-center gap-2 mb-1">
+            <Cpu size={14} className="hidden shrink-0 text-blue-400 @2xs:block" />
+            <span className="truncate text-xs text-gray-500">CPU</span>
           </div>
-          <div className="text-lg sm:text-xl font-bold text-port-accent">
+          <div className="text-lg @sm:text-xl font-bold text-port-accent">
             {system.cpu.usagePercent}%
           </div>
           <div className="text-xs text-gray-500">
@@ -190,11 +190,11 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
 
         {/* Processes */}
         <div className="bg-port-bg/50 rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-1">
-            <Activity size={14} className="text-emerald-400" />
-            <span className="text-xs text-gray-500">Processes</span>
+          <div className="flex min-w-0 items-center gap-2 mb-1">
+            <Activity size={14} className="hidden shrink-0 text-emerald-400 @2xs:block" />
+            <span className="truncate text-xs text-gray-500">Processes</span>
           </div>
-          <div className="text-lg sm:text-xl font-bold text-white">
+          <div className="text-lg @sm:text-xl font-bold text-white">
             {processes.online}
             <span className="text-sm font-normal text-gray-500">/{processes.total}</span>
           </div>
@@ -214,13 +214,13 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
           className="bg-port-bg/50 rounded-lg p-3"
           title="PM2-managed apps online vs. total. Native projects (Xcode, iOS) have no detectable runtime and are listed separately."
         >
-          <div className="flex items-center gap-2 mb-1">
-            <Zap size={14} className="text-amber-400" />
-            <span className="text-xs text-gray-500">Services</span>
+          <div className="flex min-w-0 items-center gap-2 mb-1">
+            <Zap size={14} className="hidden shrink-0 text-amber-400 @2xs:block" />
+            <span className="truncate text-xs text-gray-500">Services</span>
           </div>
           {apps.total > 0 ? (
             <>
-              <div className="text-lg sm:text-xl font-bold text-white">
+              <div className="text-lg @sm:text-xl font-bold text-white">
                 {apps.online}
                 <span className="text-sm font-normal text-gray-500">/{apps.total}</span>
               </div>
@@ -242,7 +242,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             </>
           ) : (
             <>
-              <div className="text-lg sm:text-xl font-bold text-gray-500">—</div>
+              <div className="text-lg @sm:text-xl font-bold text-gray-500">—</div>
               <div className="text-xs text-gray-500">
                 {apps.unmanaged > 0 ? `${apps.unmanaged} native only` : 'No apps'}
               </div>
@@ -257,11 +257,11 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             aria-label="Open disk usage report"
             className="block rounded-lg bg-port-bg/50 p-3 transition-colors hover:bg-port-bg/80 focus:outline-none focus:ring-2 focus:ring-port-accent/60"
           >
-            <div className="flex items-center gap-2 mb-1">
-              <Database size={14} className="text-cyan-400" />
-              <span className="text-xs text-gray-500">Disk</span>
+            <div className="flex min-w-0 items-center gap-2 mb-1">
+              <Database size={14} className="hidden shrink-0 text-cyan-400 @2xs:block" />
+              <span className="truncate text-xs text-gray-500">Disk</span>
             </div>
-            <div className={`text-lg sm:text-xl font-bold ${pctTone(system.disk.usagePercent, thresholds.diskWarn, thresholds.diskCritical)}`}>
+            <div className={`text-lg @sm:text-xl font-bold ${pctTone(system.disk.usagePercent, thresholds.diskWarn, thresholds.diskCritical)}`}>
               {system.disk.usagePercent}%
             </div>
             <div className="text-xs text-gray-500">
@@ -280,10 +280,10 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
       {/* CoS Status (if running) */}
       {cos && (
         <div className="mt-4 pt-4 border-t border-port-border">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-sm">
+            <div className="flex min-w-0 items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${cos.running ? (cos.paused ? 'bg-port-warning' : 'bg-port-success animate-pulse') : 'bg-gray-500'}`} />
-              <span className="text-gray-300">Chief of Staff</span>
+              <span className="truncate text-gray-300">Chief of Staff</span>
               <span className="text-gray-500">
                 {cos.running ? (cos.paused ? 'Paused' : 'Active') : 'Stopped'}
               </span>

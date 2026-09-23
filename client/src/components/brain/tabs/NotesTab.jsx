@@ -26,7 +26,7 @@ import { timeAgo, formatBytes, formatCount } from '../../../utils/formatters';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { useNoteSave } from '../../../hooks/useNoteSave.js';
 import useUrlParams from '../../../hooks/useUrlParams';
-import { clickableProps } from '../../../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import ForceSaveNoteRow from '../../ForceSaveNoteRow.jsx';
 
@@ -612,6 +612,7 @@ export default function NotesTab() {
                 className="px-1.5 py-0.5 rounded text-xs bg-port-accent/20 text-port-accent cursor-pointer hover:bg-port-accent/30"
                 onClick={() => { setSearchInput(`#${t.tag}`); handleSearch(`#${t.tag}`); }}
                 {...clickableProps(() => { setSearchInput(`#${t.tag}`); handleSearch(`#${t.tag}`); })}
+                onKeyDown={onActivateKeyDown(() => { setSearchInput(`#${t.tag}`); handleSearch(`#${t.tag}`); })}
               >
                 #{t.tag} <span className="text-gray-500">{t.count}</span>
               </span>

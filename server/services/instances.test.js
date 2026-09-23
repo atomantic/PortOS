@@ -64,6 +64,7 @@ import {
   getPeers,
   getAssignableInstances,
   addPeer,
+  peerLogLabel,
   removePeer,
   updatePeer,
   probePeer,
@@ -170,6 +171,15 @@ describe('instances.js', () => {
       const result = await getPeers();
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('peerLogLabel', () => {
+    it('uses anonymous cycle ordinals without exposing peer identity', () => {
+      expect(peerLogLabel()).toBe('peer');
+      expect(peerLogLabel(0)).toBe('peer 1');
+      expect(peerLogLabel(1)).toBe('peer 2');
+      expect(peerLogLabel({ name: 'Example Machine', host: 'peer.example', address: '192.0.2.20', instanceId: 'abc123def456' })).toBe('peer');
     });
   });
 

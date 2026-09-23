@@ -47,6 +47,7 @@ import {
   MAX_OBJECTIVE_CHARS,
   formatGoalFidelitySummary,
   goalFidelityHoldsRun,
+  goalFidelityLogMarker,
   isDependencyAuditSummaryDiff,
   mergeOutcomeObjective,
   mergeOutcomeReview,
@@ -1201,7 +1202,7 @@ export async function finalizeAgent({
     return { drifted: false };
   });
   if (drift.drifted) {
-    emitLog('warn', `⚠️ ${drift.message} — reported by ${agentId}; PortOS will not repair it automatically`, {
+    emitLog('warn', `${drift.message} — reported by ${agentId}; PortOS will not repair it automatically`, {
       agentId, taskId: task?.id, category: drift.category
     });
   } else if (drift.unattributed) {
@@ -1210,7 +1211,7 @@ export async function finalizeAgent({
     // human's terminal, `update.sh`'s pull) moved it. Unreviewed commits on the
     // primary are still worth surfacing, but this run did not cause them, so it is
     // warn-logged WITHOUT downgrading an otherwise-successful run to a failure.
-    emitLog('warn', `⚠️ ${drift.message} — not attributable to ${agentId}; surfacing without failing the run`, {
+    emitLog('warn', `${drift.message} — not attributable to ${agentId}; this run stays successful`, {
       agentId, taskId: task?.id
     });
   } else if (drift.fastForwarded) {
@@ -1279,17 +1280,17 @@ export async function finalizeAgent({
   const fidelity = verdict.success && !isPrivateSecurityTask(task)
     ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
       .catch(err => {
-        emitLog('warn', `⚠️ Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
+        emitLog('warn', `Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
         return { verdict: null, review: null, error: err.message };
       })
     : { verdict: null, review: null, error: null };
   const fidelityDowngrade = goalFidelityHoldsRun(fidelity.review);
   if (fidelity.review) {
-    emitLog(fidelityDowngrade ? 'warn' : 'info', `${fidelityDowngrade ? '🎯' : '✅'} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
+    emitLog(fidelityDowngrade ? 'warn' : 'info', `${goalFidelityLogMarker(fidelity.review)} ${formatGoalFidelitySummary(fidelity.review)} for ${agentId}`, {
       agentId, taskId: task?.id, verdict: fidelity.verdict
     });
   } else if (fidelity.error) {
-    emitLog('warn', `⚠️ Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
+    emitLog('warn', `Goal-fidelity review returned no verdict for ${agentId}: ${fidelity.error}`, { agentId, taskId: task?.id });
   }
   if (fidelityDowngrade) {
     const analysis = goalFidelityAnalysis(fidelity.review);
@@ -1300,10 +1301,6 @@ export async function finalizeAgent({
       error: analysis.message,
       completionReason: GOAL_FIDELITY_CATEGORY,
     });
-    // The Review Hub bridges this into a review alert: a run held because it
-    // built the wrong thing is exactly the case a human has to look at, and the
-    // named missing/unrequested items are what make the hold actionable.
-    cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
   // A finding that lives only in this run's record dies with the agent card
   // nobody opened. When the user has configured it, the follow-up files the
@@ -1317,7 +1314,7 @@ export async function finalizeAgent({
     const followUp = await import('./goalFidelityFollowUp.js')
       .then(({ runGoalFidelityFollowUp }) => runGoalFidelityFollowUp({ agentId, task, review: fidelity.review, context: fidelity.context }))
       .catch(err => {
-        emitLog('warn', `⚠️ Goal-fidelity follow-up failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
+        emitLog('warn', `Goal-fidelity follow-up failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
         return null;
       });
     if (followUp?.ran) {
@@ -1338,6 +1335,14 @@ export async function finalizeAgent({
         ...(followUp.taskError ? { taskError: followUp.taskError } : {}),
       };
     }
+  }
+
+  if (fidelityDowngrade && !fidelity.review.followUp?.taskId) {
+    // The Review Hub bridges this into a review alert when no follow-up task
+    // exists. A queued (or deduplicated) CoS investigation already carries the
+    // same finding, including when it is waiting for approval, so a second
+    // dismissible alert only asks the user to triage the same work twice.
+    cosEvents.emit(GOAL_FIDELITY_HOLD_EVENT, { agentId, taskId: task?.id, review: fidelity.review });
   }
 
   if (verdict.success && isTruthyMetaFn) {
@@ -1692,8 +1697,8 @@ async function recoverBareSentinelPayload(contents, taskType) {
 
 /**
  * Opt-in only: an app with `publishQualitySnapshot` gets its freshly recorded
- * measurement landed as the repo's `.quality.json` through a merge-on-green
- * pull request. This is a completion boundary outside the Express request
+ * measurement landed as the repo's `.quality.json` through an
+ * immediately-merged pull request. This is a completion boundary outside the Express request
  * lifecycle, so a missing repo, a git failure, or a locked index must log and
  * let finalization finish.
  */

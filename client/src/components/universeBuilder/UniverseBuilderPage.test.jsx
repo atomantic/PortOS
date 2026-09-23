@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiMocks = vi.hoisted(() => ({
   exportUniverseMarkdown: vi.fn(),
+  importUniverseMarkdown: vi.fn(),
   waitForUniverseWrites: vi.fn(),
 }));
 const downloadMock = vi.hoisted(() => ({ downloadBlob: vi.fn() }));
@@ -49,7 +50,7 @@ vi.mock('lucide-react', () => {
   return {
     ArrowLeft: Icon, BookOpen: Icon, FolderTree: Icon, ImagePlus: Icon, Layers: Icon,
     Loader2: Icon, MapPin: Icon, Network: Icon, Package: Icon, Plus: Icon, Save: Icon,
-    Trash2: Icon, Users: Icon,
+    Trash2: Icon, Upload: Icon, Users: Icon,
   };
 });
 
@@ -219,5 +220,58 @@ describe('UniverseBuilderPage Markdown export', () => {
       'Changes are still saving — try the export again in a moment',
     ));
     expect(apiMocks.exportUniverseMarkdown).not.toHaveBeenCalled();
+  });
+});
+
+describe('UniverseBuilderPage Markdown import', () => {
+  it('imports a selected Markdown file into the current universe', async () => {
+    const markdown = '# Imported World\n\n**Premise:** A new story premise.';
+    const file = new File([markdown], 'imported-world.md', { type: 'text/markdown' });
+    file.text = vi.fn().mockResolvedValue(markdown);
+    apiMocks.importUniverseMarkdown.mockResolvedValueOnce({
+      id: 'u1',
+      name: 'Imported World',
+      categories: {},
+      characters: [],
+      places: [],
+      objects: [],
+      influences: { embrace: [], avoid: [] },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/universes/u1']}>
+        <NavigationProbe />
+        <Routes>
+          <Route path="/universes/:universeId" element={<UniverseBuilderPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [file] } });
+    await waitFor(() => expect(apiMocks.importUniverseMarkdown).toHaveBeenCalledWith(
+      'u1', markdown, { silent: true },
+    ));
+    expect(toastMock.success).toHaveBeenCalledWith('Imported Markdown into Imported World');
+  });
+
+  it('reports an invalid file without saving the existing draft or calling import', async () => {
+    const file = new File(['## Characters\n\n### Mira'], 'not-a-universe.md', { type: 'text/markdown' });
+    file.text = vi.fn().mockResolvedValue('## Characters\n\n### Mira');
+
+    render(
+      <MemoryRouter initialEntries={['/universes/u1']}>
+        <NavigationProbe />
+        <Routes>
+          <Route path="/universes/:universeId" element={<UniverseBuilderPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.change(document.querySelector('input[type="file"]'), { target: { files: [file] } });
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith(
+      'Markdown must start with a top-level # universe title.',
+    ));
+    expect(apiMocks.importUniverseMarkdown).not.toHaveBeenCalled();
+    expect(apiMocks.waitForUniverseWrites).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 import { useRef, useMemo, useEffect, useState, Suspense } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
@@ -7,6 +7,8 @@ import CoSCanvasGuard from './CoSCanvasGuard';
 import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
 import { resolvePlaybackClip } from '../../hooks/useAvatarCapabilities';
 import { fitModelToHeight } from '../../utils/modelFit';
+import { graphMotionSettings } from '../graph3d/GraphScene';
+import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
 
 // Kenney Mini Characters (CC0) ship 32 named clips. We map the CoS agent
 // states onto the most evocative ones. Each entry has a clip name plus a
@@ -109,12 +111,23 @@ function StageLighting({ color }) {
   );
 }
 
+// Under frameloop='demand', state/speaking changes that only affect
+// useFrame-driven properties need to invalidate the frame so one renders.
+function InvalidateOnStateChange({ state, speaking }) {
+  const { invalidate } = useThree();
+  useEffect(() => {
+    invalidate();
+  }, [state, speaking, invalidate]);
+  return null;
+}
+
 function Scene({ state, speaking, background, variant, coverage = null }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
   return (
     <>
       <CoSBackgroundCamera enabled={background} z={3.6} />
+      <InvalidateOnStateChange state={state} speaking={speaking} />
       <StageLighting color={color} />
       <MiniCharacter state={state} speaking={speaking} variant={variant} coverage={coverage} />
       <CoSAvatarOrbitControls />
@@ -156,6 +169,7 @@ function LoadingPlaceholder({ background = false }) {
 export default function MiniCharacterCoSAvatar({ state, speaking, background = false, variant = 'mini-male-c', coverage = null }) {
   const [modelPresent, setModelPresent] = useState(null);
   const url = useMemo(() => buildModelUrl(variant), [variant]);
+  const reduceMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     let cancelled = false;
@@ -179,6 +193,7 @@ export default function MiniCharacterCoSAvatar({ state, speaking, background = f
         camera={{ position: [0, 0.2, 3.0], fov: 40 }}
         style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
+        {...graphMotionSettings(reduceMotion)}
       >
         <Suspense fallback={null}>
           <Scene state={state} speaking={speaking} background={background} variant={variant} coverage={coverage} />

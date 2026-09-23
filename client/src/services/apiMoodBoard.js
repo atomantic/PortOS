@@ -7,6 +7,9 @@ import { request } from './apiCore.js';
 
 export const listMoodBoards = (options) => request('/mood-boards', options);
 
+// `{ id, name }` only — for pickers; skips every board's inline items.
+export const listMoodBoardNames = (options) => request('/mood-boards/names', options);
+
 export const getMoodBoard = (id, options) =>
   request(`/mood-boards/${encodeURIComponent(id)}`, options);
 
@@ -77,5 +80,14 @@ export const unlinkMoodBoardPinterest = (id, options) =>
 export const syncMoodBoardPinterest = (id, options) =>
   request(`/mood-boards/${encodeURIComponent(id)}/pinterest/sync`, {
     method: 'POST',
+    ...options,
+  });
+
+// One-shot import: paste a public x.com/twitter.com post URL, server pulls its
+// attached photos/video into the board. Resolves `{ board, added }`.
+export const importMoodBoardXPost = (id, url, options) =>
+  request(`/mood-boards/${encodeURIComponent(id)}/x-post`, {
+    method: 'POST',
+    body: JSON.stringify({ url }),
     ...options,
   });

@@ -4,7 +4,7 @@ vi.mock('./runner.js', () => ({ createRun: vi.fn(), finalizeRunRecord: vi.fn() }
 vi.mock('./localLlm.js', () => ({ ensureBackendProvider: vi.fn(() => Promise.resolve()) }));
 vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('./providerStatus.js', () => ({ markProviderAvailable: vi.fn(() => Promise.resolve()) }));
-vi.mock('./ollamaManager.js', () => ({ ensureProviderReady: vi.fn(() => Promise.resolve({ success: true })) }));
+vi.mock('./providerExecutionReadiness.js', () => ({ ensureManagedRuntimeReady: vi.fn(() => Promise.resolve({ success: true })) }));
 
 import { buildPrompt, summarizeTimings, runLocalLlmTest } from './localLlmPlayground.js';
 import { __resetUsageSupport } from '../lib/openAiChatStream.js';

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { chmod, mkdtemp, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
@@ -23,18 +23,100 @@ describe('Provider Service', () => {
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
-  it('shares mode enablement and models while preserving mode-specific arguments, defaults and IDs', async () => {
+  it('shares provider settings across modes while preserving mode-specific launch settings and IDs', async () => {
     await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
-      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false, models: ['a'], args: ['--print'], defaultModel: 'a' },
-      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['b'], args: [], defaultModel: 'b' },
+      example: {
+        id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false,
+        models: ['a'], args: ['--print'], defaultModel: 'a', lightModel: 'cli-light',
+        effort: 'high', fallbackProvider: 'remote', fallbackModel: 'fallback-a',
+        temperature: 0.5, contextWindow: 64000,
+        modelContextWindows: { a: 1024 },
+      },
+      'example-tui': {
+        id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true,
+        models: ['b'], args: [], defaultModel: 'b', lightModel: 'tui-light', mediumModel: 'tui-medium',
+        effort: 'low', fallbackProvider: 'tui-fallback', fallbackModel: 'fallback-b',
+        temperature: 0.2, contextWindow: 32000,
+        timeout: 600000, modelContextWindows: { b: 2048 },
+      },
       remote: { id: 'remote', type: 'api', enabled: false, models: ['remote'] },
     } }));
     expect((await providerService.getProviderById('example')).enabled).toBe(true);
+    // Existing pairs with two model configurations converge to the CLI's
+    // settings. Runtime launch settings remain attached to their own mode.
+    expect(await providerService.getProviderById('example')).toMatchObject({
+      models: ['a', 'b'], mediumModel: 'tui-medium', modelContextWindows: { a: 1024, b: 2048 },
+    });
+    expect(await providerService.getProviderById('example-tui')).toMatchObject({
+      models: ['a', 'b'],
+      defaultModel: 'a',
+      lightModel: 'cli-light',
+      mediumModel: 'tui-medium',
+      effort: 'high',
+      fallbackProvider: 'remote',
+      fallbackModel: 'fallback-a',
+      temperature: 0.5, contextWindow: 64000,
+      modelContextWindows: { a: 1024, b: 2048 },
+      args: [], timeout: 600000,
+    });
     expect((await providerService.getActiveProvider()).id).toBe('example-tui');
-    await providerService.updateProvider('example-tui', { enabled: false, models: ['c'], args: ['--interactive'], defaultModel: 'c' });
-    expect(await providerService.getProviderById('example')).toMatchObject({ enabled: false, models: ['c'], args: ['--print'], defaultModel: 'c' });
+    await providerService.updateProvider('example-tui', {
+      enabled: false,
+      models: ['first', 'c'],
+      args: ['--interactive'],
+      defaultModel: 'c',
+      lightModel: 'shared-light',
+      mediumModel: 'shared-medium',
+      effort: 'low',
+      fallbackProvider: 'shared-fallback',
+      fallbackModel: 'fallback-c',
+      secretEnvVars: ['EXAMPLE_TOKEN'],
+      ignoreUserConfig: true,
+      temperature: 0.7,
+      contextWindow: 32768,
+    });
+    expect(await providerService.getProviderById('example')).toMatchObject({
+      enabled: false,
+      models: ['first', 'c'],
+      args: ['--print'],
+      defaultModel: 'c',
+      lightModel: 'shared-light',
+      mediumModel: 'shared-medium',
+      effort: 'low',
+      fallbackProvider: 'shared-fallback',
+      fallbackModel: 'fallback-c',
+      secretEnvVars: ['EXAMPLE_TOKEN'],
+      ignoreUserConfig: true,
+      temperature: 0.7,
+      contextWindow: 32768,
+    });
+    expect(await providerService.getProviderById('example-tui')).toMatchObject({
+      enabled: false,
+      models: ['first', 'c'],
+      args: ['--interactive'],
+      defaultModel: 'c',
+      lightModel: 'shared-light',
+      mediumModel: 'shared-medium',
+      effort: 'low',
+      fallbackProvider: 'shared-fallback',
+      fallbackModel: 'fallback-c',
+      secretEnvVars: ['EXAMPLE_TOKEN'],
+      ignoreUserConfig: true,
+      temperature: 0.7,
+      contextWindow: 32768,
+      timeout: 600000,
+    });
     expect(await providerService.getProviderById('remote')).toMatchObject({ enabled: false, models: ['remote'] });
-    const catalog = vi.spyOn(providerService, 'fetchProviderModelCatalog').mockResolvedValue({ models: ['fresh'], contextWindows: { fresh: 8192 } });
+    const catalog = vi.spyOn(providerService, 'fetchProviderModelCatalog').mockResolvedValue({
+      models: ['fresh'], contextWindows: { fresh: 8192 },
+    });
+    // The preset-card path is a single-provider refresh; its catalog and
+    // context-window update are applied to both stored modes in one update.
+    await providerService.refreshProviderModels('example-tui');
+    expect((await providerService.getProviderById('example')).models).toEqual(['fresh']);
+    expect((await providerService.getProviderById('example-tui')).models).toEqual(['fresh']);
+    expect((await providerService.getProviderById('example')).modelContextWindows).toEqual({ fresh: 8192 });
+    expect((await providerService.getProviderById('example-tui')).modelContextWindows).toEqual({ fresh: 8192 });
     await providerService.refreshProviderModelsBatch(['example-tui']);
     expect((await providerService.getProviderById('example')).models).toEqual(['fresh']);
     expect((await providerService.getProviderById('example-tui')).models).toEqual(['fresh']);
@@ -1500,8 +1582,8 @@ describe('Provider Service', () => {
       errSpy.mockRestore();
 
       // Reached the AGY fetcher (which then failed on the bogus path) rather
-      // than _fetchAnthropicModels, which would have succeeded and persisted
-      // claude ids onto an agy provider.
+      // than _fetchAnthropicModels, which would have persisted the cached
+      // Claude catalog onto an agy provider.
       expect(err.message).toMatch(/agy models' failed/);
       const after = await providerService.getProviderById('antigravity-cli');
       expect(after.models).toEqual(stored);
@@ -1510,15 +1592,94 @@ describe('Provider Service', () => {
 
     // The name test still applies once no command has claimed the provider, and
     // a `claude` command still beats an "antigravity" name — the split must not
-    // invert that.
-    it('still routes a claude-commanded provider named "antigravity" to Anthropic', async () => {
+    // invert that. The catalog is a fixture: the old assertion read this
+    // machine's `~/.claude` cache and required `claude-opus-5`, so a CI runner
+    // with no Claude install failed the refresh instead of proving the route.
+    const writeClaudeCatalog = async (models, fetchedAt = 1_700_000_000_000) => {
+      const configDir = join(TEST_DATA_DIR, 'claude-config');
+      const catalogDir = join(configDir, 'cache', 'model-catalog');
+      await mkdir(catalogDir, { recursive: true });
+      await writeFile(join(catalogDir, 'account.json'), JSON.stringify({
+        version: 2,
+        fetchedAt,
+        catalog: { surface: 'cc', config: { id: 'cc', models }, state: {} },
+      }));
+      return configDir;
+    };
+
+    const writeFakeClaude = async (versionLine) => {
+      const binDir = join(TEST_DATA_DIR, 'bin');
+      await mkdir(binDir, { recursive: true });
+      const command = join(binDir, 'claude');
+      await writeFile(command, `#!/bin/sh\nprintf '%s\\n' '${versionLine}'\n`);
+      await chmod(command, 0o755);
+      return binDir;
+    };
+
+    const claudeEnv = (configDir, binDir) => ({
+      CLAUDE_CONFIG_DIR: configDir,
+      PATH: `${binDir}${delimiter}${process.env.PATH || ''}`,
+    });
+
+    it.skipIf(process.platform === 'win32')('refreshes a claude-commanded provider from the cached catalog, not the antigravity sentinel', async () => {
+      const configDir = await writeClaudeCatalog([
+        { id: 'fixture-alpha', name: 'fixture-alpha', section: 'main' },
+        { id: 'fixture-beta', name: 'fixture-beta', section: 'main' },
+      ]);
+      const binDir = await writeFakeClaude('2.1.280 (Claude Code)');
       const p = await providerService.createProvider({
-        name: 'Claude via Antigravity', type: 'cli', command: 'claude', models: ['x'],
+        name: 'Claude via Antigravity',
+        type: 'cli',
+        command: 'claude',
+        models: ['x'],
+        envVars: claudeEnv(configDir, binDir),
       });
+
       const updated = await providerService.refreshProviderModels(p.id);
       expect(updated).not.toBeNull();
-      expect(updated.models).toContain('claude-opus-5');
+      expect(updated.models).toEqual(['fixture-alpha', 'fixture-beta']);
       expect(updated.models).not.toContain('antigravity-configured-default');
+    });
+
+    it('leaves the stored list when Claude Code has no cached catalog', async () => {
+      const p = await providerService.createProvider({
+        name: 'Claude via Antigravity',
+        type: 'cli',
+        command: 'claude',
+        models: ['x'],
+        envVars: { CLAUDE_CONFIG_DIR: join(TEST_DATA_DIR, 'empty-claude-config') },
+      });
+
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const err = await providerService.refreshProviderModels(p.id).catch(e => e);
+      errSpy.mockRestore();
+
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toMatch(/has not cached a model catalog/);
+      expect(err.status).toBe(502);
+      expect((await providerService.getProviderById(p.id)).models).toEqual(['x']);
+    });
+
+    it.skipIf(process.platform === 'win32')('tells the user to upgrade when every cached model needs a newer CLI', async () => {
+      const configDir = await writeClaudeCatalog([
+        { id: 'needs-new', name: 'needs-new', section: 'main', min_claude_code_version: '9.0.0' },
+      ]);
+      const binDir = await writeFakeClaude('2.0.0 (Claude Code)');
+      const p = await providerService.createProvider({
+        name: 'Claude Code CLI',
+        type: 'cli',
+        command: 'claude',
+        models: ['kept'],
+        envVars: claudeEnv(configDir, binDir),
+      });
+
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const err = await providerService.refreshProviderModels(p.id).catch(e => e);
+      errSpy.mockRestore();
+
+      expect(err.message).toMatch(/upgrade `claude`/);
+      expect(err.status).toBe(502);
+      expect((await providerService.getProviderById(p.id)).models).toEqual(['kept']);
     });
 
     // …and the residual NAME half of that same split is pinned too. Left

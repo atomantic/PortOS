@@ -63,7 +63,7 @@ import {
   getImageGenStatus, generateImage, generateImageMultipart, listImageModels, listLorasFull,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
   buildFormData, listMediaJobs, regenerateGalleryImage, getRegenAvailability, removeImageWatermark,
-  getFlux2Status,
+  getFlux2Status, getGalleryImages,
 } from '../services/api';
 
 // Positional slots preserve uploads across model switches. Qwen 2.1 takes up
@@ -71,6 +71,8 @@ import {
 // referenceSlotsFor reserves room for the init image where the cap is shared.
 const REFERENCE_SLOT_COUNT = 10;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
+const IMAGE_GEN_RESTORE_PARAM_KEYS = ['prompt', 'negativePrompt', 'modelId', 'width', 'height', 'seed', 'steps', 'guidance', 'quantize'];
+const IMAGE_GEN_HANDOFF_PARAM_KEYS = ['remix', ...IMAGE_GEN_RESTORE_PARAM_KEYS, 'initImageFile'];
 
 // Revoke an object URL only when it's a blob: URL we created — gallery `/data/...`
 // previews must never be revoked.
@@ -125,13 +127,21 @@ const CONNECTED_MODE_LABELS = {
 export default function ImageGen() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const remixHandoffFilename = searchParams.get('remix');
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
   const closeSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('settings'); return n; });
   const [status, setStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [models, setModels] = useState([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
   const [availableLoras, setAvailableLoras] = useState([]);
+  const [lorasLoaded, setLorasLoaded] = useState(false);
+  const [lorasLoadFailed, setLorasLoadFailed] = useState(false);
+  const [remixHandoff, setRemixHandoff] = useState(null);
+  const remixLookupSequenceRef = useRef(0);
+  const remixHandoffPending = remixHandoff?.status === 'loading' || remixHandoff?.status === 'restoring';
   // `preview` is URL-driven via `usePreviewRoute(previewItems)` — declared
   // after `previewItems` below so the resolver can match against it.
   const [showHidden, setShowHidden] = useState(false);
@@ -432,10 +442,24 @@ export default function ImageGen() {
   }, [savedCleanC2PAByMode, savedDenoiseByMode]);
 
   useEffect(() => {
-    listImageModels().then(setModels).catch(() => {});
+    listImageModels().then((loadedModels) => {
+      setModels(loadedModels);
+      setModelsLoadFailed(false);
+      setModelsLoaded(true);
+    }).catch(() => {
+      setModelsLoadFailed(true);
+      setModelsLoaded(true);
+    });
     // Use the richer /api/loras surface so the picker can show trigger
     // words + recommended scale + Civitai-derived runnerFamily.
-    listLorasFull().then(setAvailableLoras).catch(() => {});
+    listLorasFull().then((loadedLoras) => {
+      setAvailableLoras(loadedLoras);
+      setLorasLoadFailed(false);
+      setLorasLoaded(true);
+    }).catch(() => {
+      setLorasLoadFailed(true);
+      setLorasLoaded(true);
+    });
     reloadBackends();
     // Resume an in-flight job so the user can navigate away mid-render and
     // come back to the same prompt + settings + live preview frame.
@@ -534,12 +558,11 @@ export default function ImageGen() {
   // Inbound params from Media History / Send-to-i2i (?prompt=…&modelId=…&seed=…
   // and/or ?initImageFile=…). Populate form state once on mount, then strip ALL
   // consumed params in a SINGLE setSearchParams so a hot-reload/back-nav doesn't
-  // re-clobber later edits — and so the init-image strip and the remix-keys strip
-  // can't race as two competing updates (which left initImageFile in the URL).
+  // re-clobber later edits — and so the settings and init-image keys can't race
+  // as two competing updates (which left initImageFile in the URL).
   useEffect(() => {
-    const remixKeys = ['prompt', 'negativePrompt', 'modelId', 'width', 'height', 'seed', 'steps', 'guidance', 'quantize'];
     const initFile = searchParams.get('initImageFile');
-    const present = remixKeys.filter((k) => searchParams.get(k) != null);
+    const present = IMAGE_GEN_RESTORE_PARAM_KEYS.filter((k) => searchParams.get(k) != null);
     if (!initFile && present.length === 0) return;
     const get = (k) => searchParams.get(k);
     if (get('prompt')) {
@@ -563,10 +586,14 @@ export default function ImageGen() {
       setInitImage({ source: 'gallery', file: null, name: initFile, previewUrl: `/data/images/${initFile}` });
       wantI2iModeRef.current = true;
     }
+    // Older Remix links carry both this field bundle and the filename. Keep
+    // the bundle as a fallback, then let the filename restore replace it once
+    // the record and its supporting catalogs have loaded. One URL update
+    // consumes both handoffs after that lookup settles.
+    if (searchParams.get('remix')) return;
     setSearchParams((prev) => {
       const n = new URLSearchParams(prev);
-      remixKeys.forEach((k) => n.delete(k));
-      n.delete('initImageFile');
+      IMAGE_GEN_HANDOFF_PARAM_KEYS.forEach((key) => n.delete(key));
       return n;
     }, { replace: true });
   }, []);
@@ -1074,6 +1101,7 @@ export default function ImageGen() {
 
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
+    if (remixHandoffPending) return;
     // Empty prompt is allowed (e.g. i2i / unconditional generation). The disabled
     // submit button blocks clicks, but an Enter keypress in a number input still
     // fires onSubmit — gate here too so an edit-only model without a source image
@@ -1271,8 +1299,8 @@ export default function ImageGen() {
     // clear the picker so the user sees what actually produced the image.
     setStylePreset(null);
     setSelectedUniverse(null);
-    if (img.prompt) setPrompt(img.prompt);
-    if (img.negativePrompt || img.negative_prompt) setNegativePrompt(img.negativePrompt || img.negative_prompt);
+    setPrompt(img.prompt ?? img.metadata?.prompt ?? '');
+    setNegativePrompt(img.negativePrompt ?? img.negative_prompt ?? img.metadata?.negativePrompt ?? '');
     if (img.seed != null) setSeed(String(img.seed));
     if (img.steps) setSteps(String(img.steps));
     if (img.guidance != null) setGuidance(String(img.guidance));
@@ -1287,15 +1315,109 @@ export default function ImageGen() {
     const sidecarFilenames = img.loraFilenames?.length
       ? img.loraFilenames
       : (img.loraPaths || []).map((p) => p.split(/[\\/]/).pop());
-    if (sidecarFilenames.length) {
-      const restored = sidecarFilenames.map((fn, i) => {
-        const match = availableLoras.find((l) => l.filename === fn);
-        return match ? { filename: match.filename, name: match.name, scale: img.loraScales?.[i] ?? 1.0 } : null;
-      }).filter(Boolean);
-      setSelectedLoras(restored);
-    }
+    const restored = sidecarFilenames.map((fn, i) => {
+      const match = availableLoras.find((l) => l.filename === fn);
+      return match ? { filename: match.filename, name: match.name, scale: img.loraScales?.[i] ?? 1.0 } : null;
+    }).filter(Boolean);
+    setSelectedLoras(restored);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [availableLoras, models]);
+
+  const consumeRemixHandoff = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      IMAGE_GEN_HANDOFF_PARAM_KEYS.forEach((key) => next.delete(key));
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const lookupRemixHandoff = useCallback((filename) => {
+    const sequence = ++remixLookupSequenceRef.current;
+    setRemixHandoff({ filename, status: 'loading' });
+    getGalleryImages([filename], { silent: true }).then((items) => {
+      if (sequence !== remixLookupSequenceRef.current) return;
+      const record = items?.[0];
+      setRemixHandoff(record
+        ? { filename, status: 'restoring', record }
+        : { filename, status: 'missing' });
+    }).catch(() => {
+      if (sequence === remixLookupSequenceRef.current) {
+        setRemixHandoff({ filename, status: 'error' });
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!remixHandoffFilename) return;
+    lookupRemixHandoff(remixHandoffFilename);
+    return () => { remixLookupSequenceRef.current += 1; };
+  }, [remixHandoffFilename, lookupRemixHandoff]);
+
+  // Keep the old prompt/settings and Send-to-i2i handoffs intact, but wait for
+  // this record path before consuming their URL keys when a legacy Remix bundle
+  // is also present.
+  useEffect(() => {
+    if (!remixHandoff) return;
+    if (remixHandoff.status === 'missing' || remixHandoff.status === 'error') {
+      consumeRemixHandoff();
+      return;
+    }
+    if (remixHandoff.status !== 'restoring') return;
+    if (modelsLoadFailed || lorasLoadFailed) {
+      setRemixHandoff({ ...remixHandoff, status: 'error', failure: 'catalog' });
+      consumeRemixHandoff();
+      return;
+    }
+    if (!modelsLoaded || !lorasLoaded) return;
+    handleRemix(remixHandoff.record);
+    setRemixHandoff(null);
+    consumeRemixHandoff();
+  }, [remixHandoff, modelsLoaded, lorasLoaded, modelsLoadFailed, lorasLoadFailed, handleRemix, consumeRemixHandoff]);
+
+  useEffect(() => {
+    if (remixHandoffFilename) return;
+    // If a user replaces the URL while a lookup is pending, don't leave the
+    // Generate action blocked by a request that no longer owns the page.
+    setRemixHandoff((current) => (
+      current?.status === 'loading' || current?.status === 'restoring' ? null : current
+    ));
+  }, [remixHandoffFilename]);
+
+  const retryRemixHandoff = useCallback(() => {
+    const filename = remixHandoff?.filename;
+    if (!filename) return;
+    if (remixHandoff.failure === 'catalog') {
+      if (modelsLoadFailed) {
+        setModelsLoaded(false);
+        setModelsLoadFailed(false);
+        listImageModels().then((loadedModels) => {
+          setModels(loadedModels);
+          setModelsLoaded(true);
+        }).catch(() => {
+          setModelsLoadFailed(true);
+          setModelsLoaded(true);
+        });
+      }
+      if (lorasLoadFailed) {
+        setLorasLoaded(false);
+        setLorasLoadFailed(false);
+        listLorasFull().then((loadedLoras) => {
+          setAvailableLoras(loadedLoras);
+          setLorasLoaded(true);
+        }).catch(() => {
+          setLorasLoadFailed(true);
+          setLorasLoaded(true);
+        });
+      }
+    }
+    lookupRemixHandoff(filename);
+  }, [remixHandoff, modelsLoadFailed, lorasLoadFailed, lookupRemixHandoff]);
+
+  const dismissRemixHandoff = useCallback(() => {
+    remixLookupSequenceRef.current += 1;
+    setRemixHandoff(null);
+    consumeRemixHandoff();
+  }, [consumeRemixHandoff]);
 
   // The i2i init image only applies on an i2i-capable backend (local or codex).
   // Switch to one now if installed; otherwise flag the deferred effect to retry
@@ -1409,6 +1531,44 @@ export default function ImageGen() {
         </div>
       </div>
 
+      {remixHandoffPending && (
+        <p role="status" className="rounded-lg border border-port-border bg-port-card px-3 py-2 text-xs text-gray-400">
+          Restoring this image’s settings — Generate is paused until they are ready.
+        </p>
+      )}
+      {remixHandoff && (remixHandoff.status === 'error' || remixHandoff.status === 'missing') && (
+        <div
+          role="status"
+          className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+        >
+          <div>
+            {remixHandoff.failure === 'catalog'
+              ? 'Couldn’t load the model or LoRA catalog, so this image’s settings were not restored.'
+              : remixHandoff.status === 'error'
+                ? 'Couldn’t load this image’s render settings.'
+                : 'That image is no longer in the gallery, so its render settings could not be restored.'}
+            {' '}Retry the lookup or dismiss this notice.
+          </div>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={retryRemixHandoff}
+              className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={dismissRemixHandoff}
+              className="text-gray-400 hover:text-gray-200 text-xs"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       <form onSubmit={handleGenerate} className="grid min-w-0 max-w-full grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
         <div className="min-w-0 bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
           <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
@@ -1430,12 +1590,14 @@ export default function ImageGen() {
               // The probe decides WHICH backend can run, not what the user may
               // type — so it gates submit and backend selection only. Every form
               // control stays live while the status pill is still checking.
-              disabled={remoteTargetActive
+              disabled={remixHandoffPending || (remoteTargetActive
                 ? remoteBlocked !== null
-                : (localBackendPending || notConnected || editImageMissing || cloudNeedsPrompt)}
-              title={localBackendPending
-                ? 'Checking the image backend…'
-                : remoteBlocked || (editImageMissing ? 'This image-edit model needs a source image — open Options and upload one first' : cloudNeedsPrompt ? cloudPromptHint : undefined)}
+                : (localBackendPending || notConnected || editImageMissing || cloudNeedsPrompt))}
+              title={remixHandoffPending
+                ? 'Restoring this image’s settings…'
+                : localBackendPending
+                  ? 'Checking the image backend…'
+                  : remoteBlocked || (editImageMissing ? 'This image-edit model needs a source image — open Options and upload one first' : cloudNeedsPrompt ? cloudPromptHint : undefined)}
               className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}

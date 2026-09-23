@@ -120,3 +120,136 @@ describe('useAppOperation — PortOS self-update handoff', () => {
     expect(mockCheckHealth).not.toHaveBeenCalled();
   });
 });
+
+describe('useAppOperation — scoped onComplete callback', () => {
+  beforeEach(() => {
+    socketHandlers.clear();
+    emitted.length = 0;
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('calls onComplete only for the scoped app, not for other apps', () => {
+    const onCompleteA = vi.fn();
+    const onCompleteB = vi.fn();
+
+    renderHook(() => useAppOperation({ appId: 'app-a', onComplete: onCompleteA }));
+    renderHook(() => useAppOperation({ appId: 'app-b', onComplete: onCompleteB }));
+
+    act(() => {
+      socketHandlers.get('app:update:complete')({
+        appId: 'app-b',
+        success: true,
+        steps: [{ step: 'done', status: 'success' }],
+      });
+    });
+
+    expect(onCompleteA).not.toHaveBeenCalled();
+    expect(onCompleteB).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onComplete for scoped app on its completion frame', () => {
+    const onComplete = vi.fn();
+
+    renderHook(() => useAppOperation({ appId: 'app-a', onComplete }));
+
+    act(() => {
+      socketHandlers.get('app:update:complete')({
+        appId: 'app-a',
+        success: true,
+        steps: [{ step: 'done', status: 'success' }],
+      });
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onComplete on a legacy frame for a scoped app', () => {
+    const onComplete = vi.fn();
+
+    renderHook(() => useAppOperation({ appId: 'app-a', onComplete }));
+
+    act(() => {
+      socketHandlers.get('app:update:complete')({
+        success: true,
+        steps: [{ step: 'done', status: 'success' }],
+      });
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onComplete for every completion on an unscoped consumer', () => {
+    const onComplete = vi.fn();
+
+    renderHook(() => useAppOperation({ onComplete }));
+
+    act(() => {
+      socketHandlers.get('app:update:complete')({
+        appId: 'app-a',
+        success: true,
+        steps: [{ step: 'done', status: 'success' }],
+      });
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      socketHandlers.get('app:update:complete')({
+        appId: 'app-b',
+        success: true,
+        steps: [{ step: 'done', status: 'success' }],
+      });
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores scoped completion frames for apps with failed status', () => {
+    const onComplete = vi.fn();
+
+    renderHook(() => useAppOperation({ appId: 'app-a', onComplete }));
+
+    act(() => {
+      socketHandlers.get('app:update:complete')({
+        appId: 'app-a',
+        success: false,
+        steps: [{ step: 'failed', status: 'error' }],
+      });
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call onComplete for out-of-scope apps on standardize completion', () => {
+    const onComplete = vi.fn();
+
+    renderHook(() => useAppOperation({ appId: 'app-a', onComplete }));
+
+    act(() => {
+      socketHandlers.get('app:standardize:complete')({
+        appId: 'app-b',
+        success: true,
+        steps: [{ step: 'done', status: 'success' }],
+      });
+    });
+
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('calls onComplete for legacy frames on unscoped consumers', () => {
+    const onComplete = vi.fn();
+
+    renderHook(() => useAppOperation({ onComplete }));
+
+    act(() => {
+      socketHandlers.get('app:update:complete')({
+        success: true,
+        steps: [{ step: 'done', status: 'success' }],
+      });
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+});

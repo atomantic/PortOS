@@ -68,6 +68,7 @@ export { default as useBeeperRealtime } from './useBeeperRealtime.js';
 export { default as useMoltworldWs } from './useMoltworldWs.js';
 export { default as useCharacterAugmentation } from './useCharacterAugmentation.js';
 export { default as useMounted } from './useMounted.js';
+export { default as useMemoRecorder } from './useMemoRecorder.js';
 export { default as usePendingListRows } from './usePendingListRows.js';
 export { default as usePopoverPosition } from './usePopoverPosition.js';
 export { default as useAgyModels } from './useAgyModels.js';
@@ -164,8 +165,10 @@ export * from './useCatalogTypes.jsx';
 // === Sockets & lifecycle ===
 export * from './useCosTaskUpdates.js';
 export * from './usePrevious.js';
+export * from './useItermSession.js';
 export * from './useShellSession.js';
 export * from './useSocket.js';
+export * from './useSocketSubscription.js';
 export * from './useTimeTick.js';
 export * from './useUpdateChecker.jsx';
 export * from './useVisibilityEvent.js';

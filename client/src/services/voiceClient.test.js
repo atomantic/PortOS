@@ -25,6 +25,8 @@ const { socket, listeners, audio, FakeAudioContext } = vi.hoisted(() => {
     constructor() {
       this.destination = {};
       this.state = 'running';
+      this.sampleRate = 48_000;
+      this.audioWorklet = { addModule: vi.fn(() => Promise.resolve()) };
     }
 
     resume() {
@@ -47,8 +49,33 @@ const { socket, listeners, audio, FakeAudioContext } = vi.hoisted(() => {
       audio.sources.push(source);
       return source;
     }
+
+    createMediaStreamSource() {
+      return { connect: vi.fn((target) => target), disconnect: vi.fn() };
+    }
+
+    createGain() {
+      return { gain: { value: 1 }, connect: vi.fn((target) => target) };
+    }
+
+    close() {
+      this.state = 'closed';
+      return Promise.resolve();
+    }
   }
   return { socket, listeners, audio, FakeAudioContext };
+});
+
+const audioRecorderStub = vi.hoisted(() => ({ blobToWav16k: null }));
+
+vi.mock('../lib/audioRecorder.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    blobToWav16k: (...args) => audioRecorderStub.blobToWav16k
+      ? audioRecorderStub.blobToWav16k(...args)
+      : actual.blobToWav16k(...args),
+  };
 });
 
 vi.mock('./socket', () => ({ default: socket }));
@@ -56,10 +83,54 @@ vi.mock('./socket', () => ({ default: socket }));
 let voiceClient;
 let recognition;
 class FakeSpeechRecognition {
-  constructor() { recognition = this; }
-  start() {}
-  stop() {}
-  abort() {}
+  constructor() {
+    recognition = this;
+    this.startCalls = 0;
+    this.stopCalls = 0;
+  }
+  start() { this.startCalls += 1; }
+  stop() { this.stopCalls += 1; }
+  abort() { this.stop(); }
+}
+
+class FakeAudioWorkletNode {
+  constructor() {
+    this.port = { onmessage: null };
+    this.disconnect = vi.fn();
+    FakeAudioWorkletNode.last = this;
+  }
+
+  connect(target) { return target; }
+}
+
+class FakeMediaRecorder {
+  static isTypeSupported() { return true; }
+
+  constructor(stream, { mimeType }) {
+    this.stream = stream;
+    this.mimeType = mimeType;
+    this.handlers = new Map();
+    this.state = 'inactive';
+    FakeMediaRecorder.last = this;
+  }
+
+  addEventListener(event, handler) {
+    const handlers = this.handlers.get(event) || [];
+    handlers.push(handler);
+    this.handlers.set(event, handlers);
+  }
+
+  dispatch(event, payload) {
+    for (const handler of this.handlers.get(event) || []) handler(payload);
+  }
+
+  start() { this.state = 'recording'; }
+
+  stop() {
+    this.state = 'inactive';
+    this.dispatch('dataavailable', { data: { size: 1_000 } });
+    this.dispatch('stop');
+  }
 }
 
 const recognizeFinal = (text) => recognition.onresult({
@@ -80,6 +151,9 @@ describe('voice playback cancellation', () => {
   beforeAll(async () => {
     vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.stubGlobal('SpeechRecognition', FakeSpeechRecognition);
+    vi.stubGlobal('AudioWorkletNode', FakeAudioWorkletNode);
+    window.AudioContext = FakeAudioContext;
+    window.SpeechRecognition = FakeSpeechRecognition;
     voiceClient = await import('./voiceClient.js');
   });
 
@@ -89,9 +163,12 @@ describe('voice playback cancellation', () => {
     audio.decodeImpl = () => Promise.resolve({});
     audio.sources.length = 0;
     socket.emit.mockClear();
+    audioRecorderStub.blobToWav16k = null;
+    voiceClient.disposeCaptureOwner();
   });
 
   afterEach(() => {
+    voiceClient.disposeCaptureOwner();
     voiceClient.stopWebSpeechCapture();
     trigger('voice:output:detached');
     vi.restoreAllMocks();
@@ -293,5 +370,275 @@ describe('voice playback cancellation', () => {
     await voiceClient.whenPlaybackDrained();
     recognizeFinal('wait');
     expect(routeFinal).toHaveBeenCalledWith('wait');
+  });
+
+  it('drops recorder callbacks and releases the mic when its owner is disposed', async () => {
+    const previousRecorder = window.MediaRecorder;
+    const previousGlobalRecorder = globalThis.MediaRecorder;
+    const previousMediaDevices = navigator.mediaDevices;
+    const track = { stop: vi.fn() };
+    const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [track] });
+    window.MediaRecorder = FakeMediaRecorder;
+    globalThis.MediaRecorder = FakeMediaRecorder;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia },
+    });
+
+    await voiceClient.startCapture();
+    const activeRecorder = FakeMediaRecorder.last;
+    voiceClient.disposeCaptureOwner();
+    activeRecorder.dispatch('dataavailable', { data: { size: 1_000 } });
+
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(voiceClient.isCapturing()).toBe(false);
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:turn', expect.anything());
+
+    window.MediaRecorder = previousRecorder;
+    if (previousGlobalRecorder === undefined) delete globalThis.MediaRecorder;
+    else globalThis.MediaRecorder = previousGlobalRecorder;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: previousMediaDevices,
+    });
+  });
+
+  it('does not emit captured audio when the owner is disposed during WAV conversion', async () => {
+    const previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }), enumerateDevices: vi.fn().mockResolvedValue([]) },
+    });
+    let resolveConversion;
+    audioRecorderStub.blobToWav16k = vi.fn(() => new Promise((resolve) => { resolveConversion = resolve; }));
+    const previousRecorder = window.MediaRecorder;
+    const previousGlobalRecorder = globalThis.MediaRecorder;
+    window.MediaRecorder = FakeMediaRecorder;
+    globalThis.MediaRecorder = FakeMediaRecorder;
+
+    try {
+      await voiceClient.startCapture();
+      FakeMediaRecorder.last.dispatch('dataavailable', { data: new Blob(['x'.repeat(1_000)]) });
+      const pending = voiceClient.stopCapture();
+      await vi.waitFor(() => expect(audioRecorderStub.blobToWav16k).toHaveBeenCalledOnce());
+      voiceClient.disposeCaptureOwner();
+      resolveConversion({ wav: new ArrayBuffer(16), peak: 0.5 });
+
+      await expect(pending).resolves.toBeNull();
+      expect(socket.emit).not.toHaveBeenCalledWith('voice:turn', expect.anything());
+      expect(track.stop).toHaveBeenCalledOnce();
+    } finally {
+      window.MediaRecorder = previousRecorder;
+      if (previousGlobalRecorder === undefined) delete globalThis.MediaRecorder;
+      else globalThis.MediaRecorder = previousGlobalRecorder;
+      if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
+      else delete navigator.mediaDevices;
+    }
+  });
+
+  it.each(['push-to-talk', 'continuous'])('keeps a newer %s permission request guarded when an older request rejects', async (mode) => {
+    const previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    const oldRequest = (() => {
+      let resolve;
+      let reject;
+      const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+      return { promise, resolve, reject };
+    })();
+    const currentRequest = (() => {
+      let resolve;
+      const promise = new Promise((yes) => { resolve = yes; });
+      return { promise, resolve };
+    })();
+    const getUserMedia = vi.fn().mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(currentRequest.promise);
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia, enumerateDevices: vi.fn().mockResolvedValue([]) },
+    });
+    const previousRecorder = window.MediaRecorder;
+    const previousGlobalRecorder = globalThis.MediaRecorder;
+    window.MediaRecorder = FakeMediaRecorder;
+    globalThis.MediaRecorder = FakeMediaRecorder;
+
+    const start = mode === 'continuous' ? voiceClient.startContinuous : voiceClient.startCapture;
+    try {
+      const staleStart = start();
+      const staleRejected = expect(staleStart).rejects.toMatchObject({ message: 'old permission denied' });
+      voiceClient.disposeCaptureOwner();
+      const currentStart = start();
+      oldRequest.reject(new Error('old permission denied'));
+      await staleRejected;
+
+      await start();
+      expect(getUserMedia).toHaveBeenCalledTimes(2);
+
+      const track = { stop: vi.fn() };
+      currentRequest.resolve({ getTracks: () => [track] });
+      await currentStart;
+      expect(getUserMedia).toHaveBeenCalledTimes(2);
+      if (mode === 'continuous') expect(voiceClient.isContinuous()).toBe(true);
+      else expect(voiceClient.isCapturing()).toBe(true);
+    } finally {
+      voiceClient.disposeCaptureOwner();
+      await voiceClient.stopContinuous();
+      window.MediaRecorder = previousRecorder;
+      if (previousGlobalRecorder === undefined) delete globalThis.MediaRecorder;
+      else globalThis.MediaRecorder = previousGlobalRecorder;
+      if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
+      else delete navigator.mediaDevices;
+    }
+  });
+
+  it('ignores VAD worklet frames and async submissions after owner disposal', async () => {
+    const previousMediaDevices = navigator.mediaDevices;
+    const track = { stop: vi.fn() };
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
+    });
+    const onSpeechStart = vi.fn();
+    const onSubmit = vi.fn();
+
+    await voiceClient.startContinuous({ onSpeechStart, onSubmit });
+    const lateFrame = FakeAudioWorkletNode.last.port.onmessage;
+    voiceClient.disposeCaptureOwner();
+    lateFrame?.({ data: new Float32Array([1, 1, 1, 1]) });
+
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(voiceClient.isContinuous()).toBe(false);
+    expect(onSpeechStart).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(socket.emit).not.toHaveBeenCalledWith('voice:turn', expect.anything());
+
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: previousMediaDevices,
+    });
+  });
+
+  describe('continuous startup rollback', () => {
+    let previousMediaDevices;
+    let previousAudioSession;
+    let tracks;
+    let getUserMedia;
+
+    beforeEach(() => {
+      previousMediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+      previousAudioSession = Object.getOwnPropertyDescriptor(navigator, 'audioSession');
+      tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
+      getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => tracks });
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: { getUserMedia },
+      });
+      Object.defineProperty(navigator, 'audioSession', {
+        configurable: true,
+        value: { type: 'auto' },
+      });
+    });
+
+    afterEach(async () => {
+      await voiceClient.stopContinuous();
+      if (previousMediaDevices) Object.defineProperty(navigator, 'mediaDevices', previousMediaDevices);
+      else delete navigator.mediaDevices;
+      if (previousAudioSession) Object.defineProperty(navigator, 'audioSession', previousAudioSession);
+      else delete navigator.audioSession;
+    });
+
+    // Each stage leaves a different set of acquired resources to unwind.
+    it.each(['constructor', 'source', 'worklet node', 'connection', 'resume', 'module'])(
+      'releases the microphone and permits retry after a %s failure', async (stage) => {
+        const error = new Error(`${stage} failed`);
+        const fail = () => { throw error; };
+        const context = new FakeAudioContext();
+        const close = vi.spyOn(context, 'close');
+        vi.spyOn(window, 'AudioContext').mockImplementationOnce(function () {
+          if (stage === 'constructor') throw error;
+          return context;
+        });
+        if (stage === 'source') vi.spyOn(context, 'createMediaStreamSource').mockImplementationOnce(fail);
+        if (stage === 'worklet node') {
+          vi.spyOn(globalThis, 'AudioWorkletNode').mockImplementationOnce(function () { throw error; });
+        }
+        if (stage === 'connection') vi.spyOn(FakeAudioWorkletNode.prototype, 'connect').mockImplementationOnce(fail);
+        if (stage === 'resume') {
+          context.state = 'suspended';
+          vi.spyOn(context, 'resume').mockRejectedValueOnce(error);
+        }
+        if (stage === 'module') context.audioWorklet.addModule.mockRejectedValueOnce(error);
+        const createUrl = vi.spyOn(URL, 'createObjectURL');
+        const revokeUrl = vi.spyOn(URL, 'revokeObjectURL');
+
+        await expect(voiceClient.startContinuous()).rejects.toBe(error);
+
+        tracks.forEach((track) => expect(track.stop).toHaveBeenCalledOnce());
+        expect(navigator.audioSession.type).toBe('auto');
+        expect(voiceClient.isContinuous()).toBe(false);
+        expect(close).toHaveBeenCalledTimes(stage === 'constructor' ? 0 : 1);
+        createUrl.mock.results.forEach(({ value }) => expect(revokeUrl).toHaveBeenCalledWith(value));
+        await voiceClient.stopContinuous();
+        tracks.forEach((track) => expect(track.stop).toHaveBeenCalledOnce());
+
+        const retryTrack = { stop: vi.fn() };
+        getUserMedia.mockResolvedValueOnce({ getTracks: () => [retryTrack] });
+        await voiceClient.startContinuous();
+        expect(getUserMedia).toHaveBeenCalledTimes(2);
+        expect(voiceClient.isContinuous()).toBe(true);
+        expect(navigator.audioSession.type).toBe('play-and-record');
+        expect(retryTrack.stop).not.toHaveBeenCalled();
+        await voiceClient.stopContinuous();
+        expect(retryTrack.stop).toHaveBeenCalledOnce();
+        expect(navigator.audioSession.type).toBe('auto');
+      },
+    );
+
+    it.each(['resolve', 'reject'])('does not stop a retry when a disposed startup later %ss', async (outcome) => {
+      let resolveModule;
+      let rejectModule;
+      const context = new FakeAudioContext();
+      context.audioWorklet.addModule.mockImplementationOnce(() => new Promise((resolve, reject) => {
+        resolveModule = resolve;
+        rejectModule = reject;
+      }));
+      vi.spyOn(window, 'AudioContext').mockImplementationOnce(function () { return context; });
+      const pending = voiceClient.startContinuous();
+      await vi.waitFor(() => expect(context.audioWorklet.addModule).toHaveBeenCalledOnce());
+      voiceClient.disposeCaptureOwner();
+      const retryTrack = { stop: vi.fn() };
+      getUserMedia.mockResolvedValueOnce({ getTracks: () => [retryTrack] });
+      await voiceClient.startContinuous();
+
+      if (outcome === 'reject') {
+        const error = new Error('old module failed');
+        const rejection = expect(pending).rejects.toBe(error);
+        rejectModule(error);
+        await rejection;
+      } else {
+        resolveModule();
+        await expect(pending).resolves.toBeNull();
+      }
+      expect(voiceClient.isContinuous()).toBe(true);
+      expect(navigator.audioSession.type).toBe('play-and-record');
+      expect(retryTrack.stop).not.toHaveBeenCalled();
+    });
+  });
+
+  it('ignores Web Speech results and restart errors after owner disposal', () => {
+    const routeFinal = vi.fn();
+    const onError = vi.fn();
+    voiceClient.startWebSpeechCapture({ routeFinal, onError });
+    const oldRecognition = recognition;
+    voiceClient.disposeCaptureOwner();
+
+    oldRecognition.onresult?.({
+      resultIndex: 0,
+      results: [Object.assign([{ transcript: 'late result' }], { isFinal: true })],
+    });
+    oldRecognition.onerror?.({ error: 'not-allowed' });
+
+    expect(oldRecognition.stopCalls).toBe(1);
+    expect(routeFinal).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    expect(voiceClient.isWebSpeechCapturing()).toBe(false);
   });
 });

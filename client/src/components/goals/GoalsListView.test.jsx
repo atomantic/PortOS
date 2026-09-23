@@ -37,17 +37,40 @@ vi.mock('../../hooks/useProviderModels', () => ({
 // The real detail panel drags in the whole goal-editing surface (and its own API reads);
 // these tests are about WHICH goal the URL opens, so a stand-in that reports the goal it
 // was handed — and exposes its close/refresh callbacks — is the honest seam.
+// For lifecycle tests (#8108), the mock tracks whether edit state persists across goal switches.
 vi.mock('./GoalDetailPanel', async (importOriginal) => {
   const actual = await importOriginal();
+  const React = await import('react');
   return {
     ...actual,
-    default: ({ goal, onClose, onRefresh }) => (
-      <div>
-        <span>Detail panel: {goal.title}</span>
-        <button type="button" onClick={onClose}>close-detail</button>
-        <button type="button" onClick={onRefresh}>refresh-detail</button>
-      </div>
-    ),
+    default: ({ goal, onClose, onRefresh }) => {
+      const [isEditing, setIsEditing] = React.useState(false);
+      const [formTitle, setFormTitle] = React.useState('');
+
+      return (
+        <div>
+          <span data-testid="detail-panel-goal">{goal.title}</span>
+          {isEditing && (
+            <div data-testid="edit-form">
+              <input
+                data-testid="edit-form-title"
+                value={formTitle}
+                onChange={(e) => setFormTitle(e.target.value)}
+                placeholder="Edit title"
+              />
+              <button type="button" onClick={() => setIsEditing(false)}>cancel-edit</button>
+            </div>
+          )}
+          {!isEditing && (
+            <button type="button" onClick={() => { setIsEditing(true); setFormTitle(goal.title); }}>
+              start-edit
+            </button>
+          )}
+          <button type="button" onClick={onClose}>close-detail</button>
+          <button type="button" onClick={onRefresh}>refresh-detail</button>
+        </div>
+      );
+    },
   };
 });
 
@@ -166,32 +189,35 @@ describe('handleOrganize apply-failure path', () => {
 describe('routed goal selection', () => {
   it('opens no panel on the bare list route', async () => {
     await renderList();
-    expect(screen.queryByText(/Detail panel:/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('detail-panel-goal')).not.toBeInTheDocument();
   });
 
-  it('navigates to the goal’s own route when a row is clicked', async () => {
+  it('navigates to the goal\'s own route when a row is clicked', async () => {
     const user = userEvent.setup();
     await renderList();
 
     await user.click(screen.getByText('Restore the boat'));
 
     expect(currentPath()).toBe('/goals/list/g2');
-    expect(screen.getByText('Detail panel: Restore the boat')).toBeInTheDocument();
+    expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Restore the boat');
   });
 
   it('opens the deep-linked goal on mount, without a click', async () => {
     await renderList(vi.fn(), { path: '/goals/list/g1' });
-    expect(screen.getByText('Detail panel: Sail across an ocean')).toBeInTheDocument();
+    expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Sail across an ocean');
   });
 
   it('closes the panel by returning to the index when the open goal is clicked again', async () => {
     const user = userEvent.setup();
     await renderList(vi.fn(), { path: '/goals/list/g1' });
 
-    await user.click(screen.getByText('Sail across an ocean'));
+    // Click the goal row (not the panel text) to toggle it closed
+    const sailTextElements = screen.getAllByText('Sail across an ocean');
+    const listRowElement = sailTextElements.find(el => el.closest('div[role="button"]'));
+    await user.click(listRowElement);
 
     expect(currentPath()).toBe('/goals/list');
-    expect(screen.queryByText(/Detail panel:/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('detail-panel-goal')).not.toBeInTheDocument();
   });
 
   it('returns to the index when the panel closes or the goal is mutated', async () => {
@@ -208,7 +234,7 @@ describe('routed goal selection', () => {
     await renderList(vi.fn(), { path: '/goals/list/deleted-goal' });
 
     expect(screen.getByText('Goal not found')).toBeInTheDocument();
-    expect(screen.queryByText(/Detail panel:/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('detail-panel-goal')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to goals' })).toHaveAttribute('href', '/goals/list');
   });
 
@@ -265,5 +291,56 @@ describe('GoalsListView keyboard reparenting (#7243)', () => {
 
     expect(updateGoal).not.toHaveBeenCalled();
     expect(dndAnnouncement()).toMatch(/Cancelled moving Restore the boat/);
+  });
+});
+
+// Guards #8108: GoalDetailPanel must have a key={goal.id} so that switching goals
+// remounts the component and resets all useGoalDetail state (editing, form, proposed phases).
+// Without the key, switching goals reuses the component instance and the edit form survives,
+// causing saveEdit to send the old goal's form data to the new goal's id.
+describe('GoalDetailPanel lifecycle and state reset on goal switch (#8108)', () => {
+  it('resets edit state when switching from goal A to goal B', async () => {
+    const user = userEvent.setup();
+    await renderList(vi.fn(), { path: '/goals/list/g1' });
+
+    // Start with goal A (Sail across an ocean) open
+    expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Sail across an ocean');
+
+    // Enter edit mode for goal A
+    await user.click(screen.getByRole('button', { name: 'start-edit' }));
+    expect(screen.getByTestId('edit-form')).toBeInTheDocument();
+
+    // Navigate to goal B by clicking it in the list
+    // Use getAllByText and get the second match (the list row, not the detail panel)
+    const boatTextElements = screen.getAllByText('Restore the boat');
+    const listRowElement = boatTextElements.find(el => el.closest('div[role="button"]'));
+    await user.click(listRowElement);
+
+    // Goal B should now be displayed, and edit form should be closed (remounted state resets)
+    expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Restore the boat');
+    expect(screen.queryByTestId('edit-form')).not.toBeInTheDocument();
+  });
+
+  it('does not carry over edited values from goal A to goal B', async () => {
+    const user = userEvent.setup();
+    updateGoal.mockResolvedValue({ id: 'g1' });
+    await renderList(vi.fn(), { path: '/goals/list/g1' });
+
+    // Start with goal A, enter edit, and the form should show A's title
+    await user.click(screen.getByRole('button', { name: 'start-edit' }));
+    const editInput = screen.getByTestId('edit-form-title');
+    expect(editInput).toHaveValue('Sail across an ocean');
+
+    // Switch to goal B
+    const boatTextElements = screen.getAllByText('Restore the boat');
+    const listRowElement = boatTextElements.find(el => el.closest('div[role="button"]'));
+    await user.click(listRowElement);
+
+    // Now we should be viewing goal B, and edit mode should be reset
+    expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Restore the boat');
+    expect(screen.queryByTestId('edit-form')).not.toBeInTheDocument();
+
+    // Verify no updateGoal was called with goal B's id and old form data
+    expect(updateGoal).not.toHaveBeenCalled();
   });
 });

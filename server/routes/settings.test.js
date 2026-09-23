@@ -98,9 +98,16 @@ vi.mock('../services/beeperScheduler.js', () => ({
   isBeeperSchedulerRegistered: vi.fn(() => false),
 }));
 
+// The iTerm2 bridge connects only while its feature is on (#8114); what a
+// reconcile does is covered by services/itermBridge.test.js.
+vi.mock('../services/itermBridge.js', () => ({
+  reconcileItermBridge: vi.fn(async () => ({ enabled: false, connected: false })),
+}));
+
 import settingsRoutes from './settings.js';
 import codeReviewRoutes from './codeReview.js';
 import { reconcileBeeperIngestion } from '../services/beeperArming.js';
+import { reconcileItermBridge } from '../services/itermBridge.js';
 import { restartBeeperScheduler, isBeeperSchedulerRegistered } from '../services/beeperScheduler.js';
 import { updateSettingsWith } from '../services/settings.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
@@ -311,6 +318,18 @@ describe('Settings routes — instance feature participation', () => {
 
     expect(res.status).toBe(200);
     expect(reconcileBeeperIngestion).toHaveBeenCalledWith({ reason: 'feature-toggle' });
+  });
+
+  // #8114: turning iTerm2 sessions off must drop the live connection now, and a
+  // reconcile failure must not turn the already-saved toggle into a 500.
+  it('reconciles the iTerm2 bridge when its feature is toggled, without failing the save', async () => {
+    reconcileItermBridge.mockRejectedValueOnce(new Error('bridge exploded'));
+    const res = await request(buildApp())
+      .put('/api/settings/features/iterm')
+      .send({ enabled: false });
+
+    expect(res.status).toBe(200);
+    expect(reconcileItermBridge).toHaveBeenCalledWith({ reason: 'feature-toggle' });
   });
 
   // Beeper sits in the Comms group, so the group toggle moves the same gate.

@@ -12,7 +12,7 @@ import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite, writeFileGuarded
 import { createMutex } from '../lib/asyncMutex.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
 import { instanceEvents } from './instanceEvents.js';
-import { getPeers, resolveEffectiveCategories, updatePeer } from './instances.js';
+import { getPeers, peerLogLabel, resolveEffectiveCategories, updatePeer } from './instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
@@ -44,6 +44,7 @@ const withLock = createMutex();
 let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
+let lastOnlinePeerIds = null;
 // 0 = "never swept this process" — runTombstoneSweep() always runs the FIRST
 // tick after boot (or after a restart) regardless of this value, then waits
 // out the full interval before the next one. Reset alongside the timer in
@@ -725,10 +726,11 @@ const emptyCoverage = () => ({ universe: new Set(), pipeline: new Set(), mediaCo
 /**
  * Sync all data from a single peer
  */
-export async function syncWithPeer(peer) {
+export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, peerOrdinal = null } = {}) {
   if (!peer.instanceId) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
 
   const peerId = peer.instanceId;
+  const logLabel = peerLogLabel(peerOrdinal);
 
   // Prevent concurrent syncs for the same peer
   if (syncingPeers.has(peerId)) return { brain: { totalApplied: 0 }, memory: { totalApplied: 0 } };
@@ -760,6 +762,7 @@ export async function syncWithPeer(peer) {
   const categoryFailures = [];
   const recordCategoryFailure = (category, err) => {
     categoryFailures.push(`${category}: ${err?.message ?? String(err)}`);
+    onCategoryFailure?.(category, err);
   };
   // Null unless EVERY attempted category failed — the cursor write and the
   // terminal `complete` emit must agree on that verdict.
@@ -784,7 +787,9 @@ export async function syncWithPeer(peer) {
 
     const categories = getEffectiveCategories(peer);
     const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
-    console.log(`🔄 Sync starting with ${peer.name || peerId}: categories=${enabledNames.join(',') || 'none'}`);
+    if (logStart) {
+      console.log(`🔄 Sync starting with ${logLabel}: categories=${enabledNames.join(',') || 'none'}`);
+    }
     emitSyncProgress({ phase: 'start', peerId });
 
     // Read cursor snapshot outside lock so network I/O doesn't block other peers
@@ -851,7 +856,7 @@ export async function syncWithPeer(peer) {
         enabledDataCats.map(cat =>
           syncDataCategoryFromPeer(peer, peerId, cat, cachedChecksums, scopedInstanceId)
             .catch(err => {
-              logFailureWithStack(`⚠️ ${cat} sync with ${peer.name} failed`, err);
+              logFailureWithStack(`⚠️ ${cat} sync with ${logLabel} failed`, err);
               recordCategoryFailure(cat, err);
               return { totalApplied: 0, checksum: null };
             })
@@ -905,7 +910,7 @@ export async function syncWithPeer(peer) {
       if (result.totalApplied > 0) parts.push(`${result.totalApplied} ${cat}`);
     }
     if (parts.length > 0) {
-      console.log(`🔄 Synced with ${peer.name}: ${parts.join(', ')} changes`);
+      console.log(`🔄 Synced with ${logLabel}: ${parts.join(', ')} changes`);
     }
 
     const totalApplied = brainResult.totalApplied + memoryResult.totalApplied
@@ -995,15 +1000,39 @@ export async function syncAllPeers() {
   const peers = await getPeers();
   const online = peers.filter(p => p.enabled && hasAnySyncEnabled(p) && p.status === 'online' && p.instanceId);
 
-  if (online.length > 0) {
-    const names = online.map(p => p.name || p.instanceId).join(', ');
-    console.log(`🔄 Sync cycle: ${online.length} peer${online.length === 1 ? '' : 's'} online (${names})`);
+  const onlinePeerIds = [...new Set(online.map(p => p.instanceId))].sort();
+  const membershipChanged = lastOnlinePeerIds !== null
+    && (onlinePeerIds.length !== lastOnlinePeerIds.length
+      || onlinePeerIds.some((peerId, index) => peerId !== lastOnlinePeerIds[index]));
+  lastOnlinePeerIds = onlinePeerIds;
+
+  if (membershipChanged) {
+    if (online.length > 0) {
+      const names = online.map((_, index) => peerLogLabel(index)).join(', ');
+      console.log(`🔄 Sync cycle: ${online.length} peer${online.length === 1 ? '' : 's'} online (${names})`);
+    } else {
+      console.log('🔄 Sync cycle: peer membership changed (0 online)');
+    }
   }
 
-  const settled = await Promise.allSettled(online.map(p => syncWithPeer(p)));
+  let cycleFailed = false;
+  const settled = await Promise.allSettled(online.map((p, index) => syncWithPeer(p, {
+    // The periodic path cannot know whether a sync will change data until it
+    // finishes. Keep the start line only for an observable membership change.
+    logStart: membershipChanged,
+    peerOrdinal: index,
+    onCategoryFailure: () => { cycleFailed = true; },
+  })));
+  for (let i = 0; i < settled.length; i++) {
+    const result = settled[i];
+    if (result.status === 'rejected') {
+      cycleFailed = true;
+      logFailureWithStack(`❌ Sync with ${peerLogLabel(i)} failed`, result.reason);
+    }
+  }
 
-  // Aggregate per-cycle change counts across peers so the heartbeat is loud
-  // about totals even when individual per-peer logs short-circuit on no-op.
+  // Aggregate applied counts so the cycle summary can stay quiet unless a
+  // category changed, failed, or online peer membership changed.
   let cycleChanges = 0;
   for (const r of settled) {
     if (r.status !== 'fulfilled' || !r.value) continue;
@@ -1013,7 +1042,7 @@ export async function syncAllPeers() {
       cycleChanges += v?.totalApplied || 0;
     }
   }
-  if (online.length > 0) {
+  if (cycleChanges > 0 || cycleFailed || membershipChanged) {
     console.log(`🔄 Sync cycle complete: ${cycleChanges} change${cycleChanges === 1 ? '' : 's'} applied across ${online.length} peer${online.length === 1 ? '' : 's'}`);
   }
 
@@ -1055,11 +1084,12 @@ export function initSyncOrchestrator() {
   // tombstone sweeps on the first tick — see their interval constants above.
   lastTombstoneSweepAt = 0;
   lastBrainSweepAt = 0;
+  lastOnlinePeerIds = null;
   // Sync immediately when a peer comes online
   peerOnlineHandler = (peer) => {
     if (!hasAnySyncEnabled(peer)) return;
     syncWithPeer(peer).catch(err => {
-      logFailureWithStack(`❌ Sync with ${peer.name} failed`, err);
+      logFailureWithStack(`❌ Sync with ${peerLogLabel(peer)} failed`, err);
     });
   };
   instanceEvents.on('peer:online', peerOnlineHandler);
@@ -1161,6 +1191,7 @@ async function runBrainTombstoneSweep() {
 export function stopSyncOrchestrator() {
   lastTombstoneSweepAt = 0;
   lastBrainSweepAt = 0;
+  lastOnlinePeerIds = null;
   if (peerOnlineHandler) {
     instanceEvents.removeListener('peer:online', peerOnlineHandler);
     peerOnlineHandler = null;

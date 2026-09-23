@@ -101,7 +101,7 @@ legacy list for local Apps/Dashboard views.
 | GET | `/apps/:id/status` | Get PM2 status |
 | GET | `/apps/:id/logs` | Get recent logs |
 | POST | `/apps/:id/refresh-config` | Re-parse ecosystem config |
-| POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and land `.quality.json` through a merge-on-green pull request on `portos/quality-snapshot` (scoped to that one path; the live checkout is not committed). Answers `{ success, published, path }` plus the commit `hash`, `prUrl`, and `prNumber`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` / `no-remote` / `no-default-branch` / `pr-failed` when nothing was written. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any app's committed `.quality.json` is read back as a "Release snapshot" quality source, PortOS's own checkout included (`npm run quality:snapshot` is the same publish, run from the release step). |
+| POST | `/apps/:id/quality-snapshot` | Rebuild the app's numeric quality snapshot and land canonical schema v2 `.quality.json` through an immediately-merged pull request on `portos/quality-snapshot` (scoped to that one path; the live checkout is not committed). The file is not the peer wire payload (`PORTOS_SCHEMA_VERSIONS.appQuality` stays 1). A v1 file is rewritten when current evidence exists. Answers `{ success, published, path }` plus the commit `hash`, `prUrl`, and `prNumber`, or a `reason` of `no-repo-path` / `not-a-repo` / `no-evidence` / `no-changes` / `no-remote` / `no-default-branch` / `pr-failed` / `unsupported-format` / `invalid-evidence` when nothing was written. `unsupported-format` means a future, unrecognized, malformed, or oversize file was left in place. Not gated on the app's `publishQualitySnapshot` toggle — that toggle only automates the same publish after each audit. Any app's committed `.quality.json` (or a historical `quality-snapshot.json` when `.quality.json` is absent) is read back as a "Release snapshot" quality source, PortOS's own checkout included (`npm run quality:snapshot` is the same publish, run from the release step; `npm run quality:snapshot -- --migrate` converts an old file without reading the database). |
 | GET | `/apps/:id/quality-schedule` | The Quality tab's weekly-schedule form: every audit check with its applicability verdict and reason, the repository shapes that verdict came from, the cron expressions already occupied on this app, and the plan the shipped defaults produce. Read-only — no LLM call, no write. |
 | POST | `/apps/:id/quality-schedule/preview` | Re-plan for an edited form (selection, per-check delivery mode, checks per day, hour window, claim-drain task and offset). Still read-only; a POST only because the option bag carries a per-check map. |
 | POST | `/apps/:id/quality-schedule/apply` | Persist the plan as ordinary per-app task-type overrides: the selected checks enabled with their weekly cron and `fileIssues` mode, the audit types left out disabled with their interval cleared, and — when at least one selected check files issues — one daily cron for the issue-claim drain (one an earlier plan planted is retired when it is switched off or replaced). Other task types are untouched. |
@@ -763,10 +763,12 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/games` | Game projects |
 | `/api/sprites` | Sprite catalog / export |
 | `/api/threejs-models` | Procedural Three.js models |
+| `/api/code-animation` | Code Animation: LLM-written briefs, prompt building, persistent jobs gallery, and generated HTML retrieval |
 | `/api/image-to-3d` | Image-to-3D conversion |
 | `/api/rigging` | Auto-skin rigging and animation retargeting for image-to-3D models |
 | `/api/privacy` | PII vault / trusted-org / broker opt-out |
 | `/api/shell` | Browser PTY shells |
+| `/api/iterm` | iTerm2 view capability status (`GET /status` → `{ state, detail }`); sessions themselves travel over the `iterm:*` socket events ([ITERM.md](./ITERM.md)) |
 | `/api/ports` | Port scan / allocation |
 | `/api/logs` | PM2 process logs |
 | `/api/detect` | App-repo detection |
@@ -787,7 +789,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/standardize` | App PM2 standardizer |
 | `/api/stacker-news`, `/api/x` | Social integrations |
 | `/api/model-personality` | LLM personality tests |
-| `/api/providers/comparison` | Provider/model comparison catalog — discover, import, and benchmark source sync (Artificial Analysis, SWE-bench, LiveCodeBench; see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
+| `/api/providers/comparison` | Provider/model comparison catalog — discover, import, and benchmark source sync (Artificial Analysis, OpenRouter routed pricing and endpoint performance, Epoch AI, SWE-bench, LiveCodeBench; see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
 | `/api/browser` | Managed Chromium |
 | `/api/creative-commission` | Creative commissions |
 | `/api/midi-runtime` | MIDI runtime |
@@ -908,6 +910,23 @@ socket.emit('shell:resize', { sessionId, cols: 120, rows: 40 });
 
 // Stop shell session
 socket.emit('shell:stop', { sessionId });
+```
+
+### iTerm2 Sessions
+
+The Shell page's iTerm2 view uses its own `iterm:*` events, never the `shell:*` ones — see [ITERM.md](./ITERM.md). There is no start, stop or resize: iTerm2 owns its sessions' lifecycle and size.
+
+`iterm:input` types exact bytes into a live host terminal and can run commands with the host user's privileges. Treat access to the PortOS socket as host-command access; the iTerm2 view adds no command allowlist. PortOS authentication and HTTPS are optional and off by default, so keep the instance on its private network and use a strong, unique instance password.
+
+```javascript
+socket.emit('iterm:list'); // subscribe; replies (and re-broadcasts) iterm:sessions
+socket.on('iterm:sessions', ({ status, sessions }) => {}); // status.state, [{ id: 'iterm-<uuid>', windowIndex, tabIndex, paneIndex, label, cwd, cols, rows, … }]
+socket.emit('iterm:attach', { id }); // → iterm:attached { id, cols, rows, bufferedOutput } | iterm:error
+socket.on('iterm:output', ({ id, data }) => {}); // one full-screen ANSI repaint per frame
+socket.emit('iterm:input', { id, data: 'ls\r' }); // exact bytes, delivered in order
+socket.on('iterm:exit', ({ id }) => {}); // session closed or iTerm2 went away
+socket.emit('iterm:detach', { id });
+socket.emit('iterm:unlist');
 ```
 
 ### Provider Status

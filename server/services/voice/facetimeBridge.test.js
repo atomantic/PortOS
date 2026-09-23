@@ -2,8 +2,47 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
-import { describe, expect, it } from 'vitest';
-import { CALL_AUDIO_DEVICE_RATE, FACETIME_COMMANDS, blockingSetupFailure, checkAudioDevice, checkSetup, facetimeControlResultSchema } from './facetimeBridge.js';
+import { describe, expect, it, vi } from 'vitest';
+import { pinPlatform } from '../../lib/testHelper.js';
+
+// run() reaches the helper only after the feature flag, a helper binary, and
+// a readable audio-device list all pass. Those are live-install facts, so the
+// helper-result cases below substitute them and leave every other test on the
+// real implementations.
+const helperRun = vi.hoisted(() => ({
+  voiceHome: null,
+  facetimeEnabled: null,
+  spawnImpl: null,
+}));
+
+vi.mock('./config.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, voiceHome: () => helperRun.voiceHome || actual.voiceHome() };
+});
+
+vi.mock('../instanceFeatures.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    isInstanceFeatureEnabled: (...args) => (
+      helperRun.facetimeEnabled === null
+        ? actual.isInstanceFeatureEnabled(...args)
+        : Promise.resolve(helperRun.facetimeEnabled)
+    ),
+  };
+});
+
+vi.mock('../../lib/bufferedSpawn.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    bufferedSpawn: (cmd, args, opts) => (
+      helperRun.spawnImpl ? helperRun.spawnImpl(cmd, args, opts) : actual.bufferedSpawn(cmd, args, opts)
+    ),
+  };
+});
+
+import { CALL_AUDIO_DEVICE_RATE, FACETIME_COMMANDS, blockingSetupFailure, checkAudioDevice, checkSetup, facetimeControlResultSchema, run } from './facetimeBridge.js';
 
 const device = (overrides = {}) => ({
   name: 'BlackHole 16ch',
@@ -153,6 +192,71 @@ guard !matcher.matches(["Incoming call from +44 1555 123 4567"]) else { exit(4) 
       expect(typeof answer).toBe('function');
       await expect(run('answer', { facetime: { targetHandle: '', targetName: '' } }))
         .rejects.toThrow();
+    });
+  });
+
+  describe('helper stdout', () => {
+    const readyConfig = {
+      facetime: { targetHandle: '+15551234567', targetName: 'Example Caller' },
+    };
+    const audioProbe = JSON.stringify({
+      SPAudioDataType: [{
+        _items: [
+          { _name: 'BlackHole 2ch', coreaudio_device_srate: '48000', coreaudio_device_input: '2', coreaudio_device_output: '2' },
+          { _name: 'BlackHole 16ch', coreaudio_device_srate: '48000', coreaudio_device_input: '16', coreaudio_device_output: '16' },
+        ],
+      }],
+    });
+    const validResult = {
+      ok: true, command: 'probe', state: 'idle', authorized: true,
+      action: 'probe', message: 'ready', errorCode: null,
+    };
+
+    async function withReadyHelper(helperResult, body) {
+      const tempDir = mkdtempSync(join(process.env.PORTOS_TEST_TMPDIR || tmpdir(), 'portos-facetime-run-'));
+      const helperName = process.platform === 'win32' ? 'facetime-ax.exe' : 'facetime-ax';
+      writeFileSync(join(tempDir, helperName), '');
+      helperRun.voiceHome = tempDir;
+      helperRun.facetimeEnabled = true;
+      helperRun.spawnImpl = async (cmd) => (
+        cmd === 'system_profiler'
+          ? { success: true, code: 0, signal: null, stdout: audioProbe, stderr: '', timedOut: false }
+          : helperResult
+      );
+      // FaceTime setup refuses every non-macOS host before it reads helper
+      // stdout. Pin darwin so the 502 contract is what this test actually hits.
+      const restorePlatform = pinPlatform('darwin');
+      try {
+        return await body();
+      } finally {
+        helperRun.voiceHome = null;
+        helperRun.facetimeEnabled = null;
+        helperRun.spawnImpl = null;
+        restorePlatform();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+
+    it('returns the parsed helper result when stdout matches the contract', async () => {
+      await withReadyHelper(
+        { success: true, code: 0, signal: null, stdout: JSON.stringify(validResult), stderr: '', timedOut: false },
+        async () => {
+          await expect(run('probe', readyConfig)).resolves.toEqual(validResult);
+        },
+      );
+    });
+
+    it('reports non-JSON helper stdout as invalid-helper-result instead of a syntax failure', async () => {
+      await withReadyHelper(
+        { success: false, code: 1, signal: null, stdout: 'dyld: library not loaded\n', stderr: '', timedOut: false },
+        async () => {
+          await expect(run('probe', readyConfig)).rejects.toMatchObject({
+            name: 'ServerError',
+            status: 502,
+            code: 'invalid-helper-result',
+          });
+        },
+      );
     });
   });
 });

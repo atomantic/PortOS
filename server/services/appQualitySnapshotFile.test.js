@@ -1,9 +1,13 @@
 import { it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   APP_QUALITY_SNAPSHOT_FILENAME, APP_QUALITY_SNAPSHOT_MAX_BYTES, QUALITY_SNAPSHOT_BRANCH,
-  readAppQualitySnapshotFile, publishAppQualitySnapshot, __resetQualitySnapshotPublishState,
+  readAppQualitySnapshotFile, readStoredQualitySnapshot, publishAppQualitySnapshot,
+  migrateAppQualitySnapshot, __resetQualitySnapshotPublishState,
 } from './appQualitySnapshotFile.js';
+import {
+  APP_QUALITY_LEGACY_SNAPSHOT_FILENAME, qualityFileFromWireSnapshot,
+} from './appQualitySnapshotFormat.js';
 
 const app = { id: 'example-id', repoPath: '/repo/example-app' };
 const worktreePath = '/tmp/portos-quality-test';
@@ -19,6 +23,7 @@ const snapshot = (count = 1) => ({
   })),
 });
 const serialized = body => `${JSON.stringify(body, null, 2)}\n`;
+const canonical = () => qualityFileFromWireSnapshot(snapshot());
 const missingShow = { exitCode: 1, stdout: '', stderr: 'exists' };
 const gitDouble = (overrides = {}) => ({
   isRepo: vi.fn(async () => true),
@@ -35,6 +40,7 @@ const gitDouble = (overrides = {}) => ({
   unstageFiles: vi.fn(async () => true),
   commit: vi.fn(async () => ({ hash: 'abc1234', message: 'commit' })),
   createPR: vi.fn(async () => ({ success: true, url: prUrl, cli: 'gh' })),
+  mergePR: vi.fn(async () => ({ success: true })),
   parsePullRequestUrl: vi.fn(() => ({ number: 42, host: 'github.com', owner: 'example', repo: 'app' })),
   ...overrides,
 });
@@ -67,24 +73,31 @@ it('reads a committed snapshot and answers null for every unusable file', async 
   expect(await read('"a string"')).toBeNull();
   expect(await read(' '.repeat(APP_QUALITY_SNAPSHOT_MAX_BYTES + 1))).toBeNull();
   expect(await readAppQualitySnapshotFile('', { readFile: async () => '{}' })).toBeNull();
-  expect(await readAppQualitySnapshotFile('/repo/example-app', { readFile: async () => { throw new Error('ENOENT'); } })).toBeNull();
+  expect(await readAppQualitySnapshotFile('/repo/example-app', { readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } })).toBeNull();
   expect(APP_QUALITY_SNAPSHOT_FILENAME).toBe('.quality.json');
   expect(QUALITY_SNAPSHOT_BRANCH).toBe('portos/quality-snapshot');
 });
 
-it('lands a changed snapshot on a dedicated branch PR and queues merge-on-green', async () => {
+it('lands a changed snapshot from a detached worktree so the PR branch stays attachable', async () => {
   const deps = testDeps();
   expect(await publishAppQualitySnapshot(app, deps)).toEqual({
     published: true, hash: 'abc1234', path: '.quality.json',
-    prUrl, prNumber: 42, queuedMerge: true,
+    prUrl, prNumber: 42, merged: true, queuedMerge: false,
   });
   const [path, body] = deps.writeFile.mock.calls[0];
   expect(path).toBe(join(worktreePath, '.quality.json'));
-  expect(JSON.parse(body)).toEqual(snapshot());
+  expect(body).toBe(canonical());
+  expect(JSON.parse(body)).toMatchObject({
+    schemaVersion: 2,
+    reportVersion: 1,
+    categories: ['security'],
+    measurements: [['2026-09-10T10:00:00Z', 0, 82, 5, 0, 2, 12, 12]],
+  });
   expect(body.endsWith('\n')).toBe(true);
-  expect(body).not.toMatch(/Users|summary|app_id|agent-|github/);
+  expect(body).not.toMatch(/measurementId|Users|summary|app_id|agent-|github/);
+  expect(deps.buildQualitySnapshot).toHaveBeenCalledWith(app, 30, deps);
   expect(deps.addWorktree).toHaveBeenCalledWith(
-    ['worktree', 'add', '--no-track', '-B', 'portos/quality-snapshot', worktreePath, 'origin/main'],
+    ['worktree', 'add', '--detach', worktreePath, 'origin/main'],
     '/repo/example-app',
   );
   expect(deps.git.stageFiles).toHaveBeenCalledWith(worktreePath, ['.quality.json']);
@@ -98,10 +111,11 @@ it('lands a changed snapshot on a dedicated branch PR and queues merge-on-green'
     head: 'portos/quality-snapshot',
   }));
   expect(deps.git.createPR.mock.calls[0][1].body).toContain('no code review required');
-  expect(deps.queuePendingMerge).toHaveBeenCalledWith('example-id', expect.objectContaining({
-    prUrl, prNumber: 42, prBranch: 'portos/quality-snapshot',
-    sourceTask: expect.objectContaining({ metadata: { app: 'example-id' } }),
+  expect(deps.git.createPR.mock.calls[0][1].body).toContain('without waiting for CI');
+  expect(deps.git.mergePR).toHaveBeenCalledWith('/repo/example-app', 42, expect.objectContaining({
+    forgeAccount: null,
   }));
+  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
   expect(log).toHaveBeenCalledWith(`📊 Published quality snapshot for app example-id: 1 measurements → abc1234 (${prUrl})`);
   expect(deps.git.execGit).toHaveBeenCalledWith(
     ['worktree', 'remove', '--force', worktreePath], '/repo/example-app', { ignoreExitCode: true });
@@ -116,7 +130,7 @@ it('lands a changed snapshot on a dedicated branch PR and queues merge-on-green'
 });
 
 it('skips when origin already has the snapshot and does not write the live checkout', async () => {
-  const body = serialized(snapshot());
+  const body = canonical();
   const deps = testDeps({
     git: gitDouble({
       execGit: vi.fn(async (args) => args[0] === 'show' && String(args[1]).startsWith('origin/main:')
@@ -132,8 +146,8 @@ it('skips when origin already has the snapshot and does not write the live check
   expect(deps.git.stageFiles).not.toHaveBeenCalled();
 });
 
-it('re-queues an already-open snapshot PR whose branch already has the same bytes', async () => {
-  const body = serialized(snapshot());
+it('merges an already-open snapshot PR whose branch already has the same bytes without waiting for CI', async () => {
+  const body = canonical();
   const deps = testDeps({
     git: gitDouble({
       execGit: vi.fn(async (args) => args[0] === 'show' && String(args[1]).includes(QUALITY_SNAPSHOT_BRANCH)
@@ -145,10 +159,32 @@ it('re-queues an already-open snapshot PR whose branch already has the same byte
     })),
   });
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    published: true, prUrl, prNumber: 42, queuedMerge: true,
+    published: true, prUrl, prNumber: 42, merged: true, queuedMerge: false,
   });
   expect(deps.writeFile).not.toHaveBeenCalled();
   expect(deps.addWorktree).not.toHaveBeenCalled();
+  expect(deps.git.mergePR).toHaveBeenCalledWith('/repo/example-app', 42, expect.objectContaining({
+    forgeAccount: null,
+  }));
+  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
+});
+
+it('falls back to the merge-on-green queue when branch protection refuses the immediate merge', async () => {
+  const body = canonical();
+  const deps = testDeps({
+    git: gitDouble({
+      execGit: vi.fn(async (args) => args[0] === 'show' && String(args[1]).includes(QUALITY_SNAPSHOT_BRANCH)
+        ? { exitCode: 0, stdout: body, stderr: '' }
+        : missingShow),
+      mergePR: vi.fn(async () => ({ success: false, error: 'required status checks' })),
+    }),
+    probePrForBranch: vi.fn(async () => ({
+      prState: 'OPEN', prUrl, prNumber: 42, cli: 'gh', readable: true,
+    })),
+  });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
+    published: true, prUrl, prNumber: 42, merged: false, queuedMerge: true,
+  });
   expect(deps.queuePendingMerge).toHaveBeenCalledWith('example-id', expect.objectContaining({ prNumber: 42 }));
 });
 
@@ -226,7 +262,7 @@ it('force-with-lease updates an existing snapshot branch rather than committing 
   expect(deps.writeFile.mock.calls[0][0]).toBe(join(worktreePath, '.quality.json'));
 });
 
-it('adopts an already-open PR when createPR reports a conflict and still queues the merge', async () => {
+it('adopts an already-open PR when createPR reports a conflict and merges it immediately', async () => {
   const deps = testDeps({
     git: gitDouble({
       createPR: vi.fn(async () => ({ success: false, error: 'a pull request already exists' })),
@@ -236,12 +272,13 @@ it('adopts an already-open PR when createPR reports a conflict and still queues 
     })),
   });
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    published: true, prUrl, prNumber: 42, queuedMerge: true,
+    published: true, prUrl, prNumber: 42, merged: true, queuedMerge: false,
   });
-  expect(deps.queuePendingMerge).toHaveBeenCalled();
+  expect(deps.git.mergePR).toHaveBeenCalled();
+  expect(deps.queuePendingMerge).not.toHaveBeenCalled();
 });
 
-it('enables GitLab auto-merge instead of the GitHub pending-merge queue', async () => {
+it('merges a GitLab MR immediately instead of arming pipeline auto-merge', async () => {
   const execGlab = vi.fn(async () => '');
   const deps = testDeps({
     git: gitDouble({
@@ -251,11 +288,164 @@ it('enables GitLab auto-merge instead of the GitHub pending-merge queue', async 
     execGlab,
   });
   expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
-    published: true, prNumber: 7, queuedMerge: true,
+    published: true, prNumber: 7, merged: true, queuedMerge: false,
   });
   expect(deps.queuePendingMerge).not.toHaveBeenCalled();
+  expect(execGlab).toHaveBeenCalledWith(
+    ['mr', 'merge', '7', '--yes', '--when-pipeline-succeeds=false'],
+    '/repo/example-app', undefined, { rejectOnError: true },
+  );
+});
+
+it('falls back to GitLab auto-merge when the immediate merge is refused', async () => {
+  const execGlab = vi.fn()
+    .mockRejectedValueOnce(new Error('pipeline must succeed'))
+    .mockResolvedValueOnce('');
+  const deps = testDeps({
+    git: gitDouble({
+      createPR: vi.fn(async () => ({ success: true, url: 'https://gitlab.com/example/app/-/merge_requests/7', cli: 'glab' })),
+      parsePullRequestUrl: vi.fn(() => ({ number: 7, host: 'gitlab.com', owner: 'example', repo: 'app' })),
+    }),
+    execGlab,
+  });
+  expect(await publishAppQualitySnapshot(app, deps)).toMatchObject({
+    published: true, prNumber: 7, merged: false, queuedMerge: true,
+  });
+  expect(execGlab).toHaveBeenCalledWith(
+    ['mr', 'merge', '7', '--yes', '--when-pipeline-succeeds=false'],
+    '/repo/example-app', undefined, { rejectOnError: true },
+  );
   expect(execGlab).toHaveBeenCalledWith(
     ['mr', 'merge', '7', '--yes', '--auto-merge'],
     '/repo/example-app', undefined, { rejectOnError: true },
   );
+});
+
+const showFiles = files => vi.fn(async (args) => {
+  if (args[0] !== 'show') return missingShow;
+  const spec = String(args[1]);
+  const name = spec.slice(spec.lastIndexOf(':') + 1);
+  return Object.hasOwn(files, name)
+    ? { exitCode: 0, stdout: files[name], stderr: '' }
+    : missingShow;
+});
+
+it('rewrites a v1 snapshot to canonical v2 and leaves a semantically identical v2 untouched', async () => {
+  const upgrade = testDeps({ git: gitDouble({ execGit: showFiles({ '.quality.json': serialized(snapshot()) }) }) });
+  expect(await publishAppQualitySnapshot(app, upgrade)).toMatchObject({ published: true, prUrl });
+  expect(upgrade.writeFile.mock.calls[0][1]).toBe(canonical());
+  expect(upgrade.writeFile.mock.calls[0][0]).toBe(join(worktreePath, '.quality.json'));
+
+  __resetQualitySnapshotPublishState();
+  const compact = JSON.stringify(JSON.parse(canonical()));
+  const identical = testDeps({ git: gitDouble({ execGit: showFiles({ '.quality.json': compact }) }) });
+  expect(await publishAppQualitySnapshot(app, identical)).toEqual({
+    published: false, reason: 'no-changes', path: '.quality.json',
+  });
+  expect(identical.writeFile).not.toHaveBeenCalled();
+  expect(identical.addWorktree).not.toHaveBeenCalled();
+});
+
+it('does not replace a future snapshot already on the publish branch', async () => {
+  const future = JSON.stringify({ schemaVersion: 3, repository: 'a'.repeat(64) });
+  const deps = testDeps({
+    git: gitDouble({
+      execGit: vi.fn(async (args) => {
+        if (args[0] === 'show' && String(args[1]).includes(`${QUALITY_SNAPSHOT_BRANCH}:`)) {
+          return { exitCode: 0, stdout: future, stderr: '' };
+        }
+        return missingShow;
+      }),
+    }),
+  });
+  expect(await publishAppQualitySnapshot(app, deps)).toEqual({
+    published: false, reason: 'unsupported-format', path: '.quality.json',
+  });
+  expect(deps.writeFile).not.toHaveBeenCalled();
+  expect(deps.addWorktree).not.toHaveBeenCalled();
+});
+
+it('leaves a future, unrecognized, or unreadable snapshot in place', async () => {
+  const future = testDeps({
+    git: gitDouble({ execGit: showFiles({ '.quality.json': JSON.stringify({ schemaVersion: 3, repository: 'a'.repeat(64) }) }) }),
+  });
+  expect(await publishAppQualitySnapshot(app, future)).toEqual({
+    published: false, reason: 'unsupported-format', path: '.quality.json',
+  });
+  expect(future.writeFile).not.toHaveBeenCalled();
+
+  const tsv = testDeps({
+    git: gitDouble({ execGit: showFiles({ '.quality.json': 'category\tscore\nsecurity\t80\n' }) }),
+  });
+  expect((await publishAppQualitySnapshot(app, tsv)).reason).toBe('unsupported-format');
+  expect(tsv.writeFile).not.toHaveBeenCalled();
+
+  const unreadable = testDeps({
+    git: gitDouble({ execGit: vi.fn(async (args) => {
+      if (args[0] === 'show') throw new Error('git output exceeded maxBuffer');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }) }),
+  });
+  expect((await publishAppQualitySnapshot(app, unreadable)).reason).toBe('unsupported-format');
+  expect(unreadable.writeFile).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith('📊 Quality snapshot left untouched for app example-id: future');
+});
+
+it('migrates a legacy file to v2 without inventing measurements or writing the live checkout', async () => {
+  const legacyBody = serialized(snapshot());
+  const deps = testDeps({
+    git: gitDouble({ execGit: showFiles({ [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: legacyBody }) }),
+    buildQualitySnapshot: vi.fn(async () => snapshot(3)),
+  });
+  expect(await migrateAppQualitySnapshot(app, deps)).toMatchObject({ published: true, prUrl, hash: 'abc1234' });
+  expect(deps.buildQualitySnapshot).not.toHaveBeenCalled();
+  const [path, body] = deps.writeFile.mock.calls[0];
+  expect(path).toBe(join(worktreePath, '.quality.json'));
+  expect(path.startsWith(app.repoPath)).toBe(false);
+  expect(JSON.parse(body).measurements).toEqual([['2026-09-10T10:00:00Z', 0, 82, 5, 0, 2, 12, 12]]);
+  expect(deps.git.execGit).toHaveBeenCalledWith(
+    ['rm', '-f', '--', APP_QUALITY_LEGACY_SNAPSHOT_FILENAME], worktreePath);
+  expect(deps.git.commit).toHaveBeenCalledWith(worktreePath,
+    'chore: migrate quality snapshot to schema v2 (1 measurements)',
+    { paths: ['.quality.json', APP_QUALITY_LEGACY_SNAPSHOT_FILENAME] });
+
+  __resetQualitySnapshotPublishState();
+  const again = testDeps({
+    git: gitDouble({ execGit: showFiles({ '.quality.json': body }) }),
+    buildQualitySnapshot: vi.fn(async () => { throw new Error('database must stay unread'); }),
+  });
+  expect(await migrateAppQualitySnapshot(app, again)).toEqual({
+    published: false, reason: 'no-changes', path: '.quality.json',
+  });
+  expect(again.writeFile).not.toHaveBeenCalled();
+  expect(again.addWorktree).not.toHaveBeenCalled();
+});
+
+it('reads v1, v2, and the legacy filename without falling past a canonical file', async () => {
+  const v1 = serialized(snapshot());
+  const v2 = canonical();
+  const read = files => readStoredQualitySnapshot('/repo/example-app', {
+    readFile: async path => {
+      const name = basename(path);
+      if (!Object.hasOwn(files, name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      return files[name];
+    },
+  });
+  expect(APP_QUALITY_LEGACY_SNAPSHOT_FILENAME).toBe('quality-snapshot.json');
+  expect((await read({ '.quality.json': v1 })).status).toBe('v1');
+  expect((await read({ '.quality.json': v2 })).status).toBe('v2');
+  expect((await read({ [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 })).filename).toBe(APP_QUALITY_LEGACY_SNAPSHOT_FILENAME);
+  const both = await read({ '.quality.json': v2, [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 });
+  expect(both.filename).toBe('.quality.json');
+  expect(both.status).toBe('v2');
+  expect((await read({ '.quality.json': 'not-json', [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 })).status).toBe('unrecognized');
+  expect((await read({ '.quality.json': ' '.repeat(APP_QUALITY_SNAPSHOT_MAX_BYTES + 1) })).status).toBe('oversize');
+  const unreadable = await readStoredQualitySnapshot('/repo/example-app', {
+    readFile: async path => {
+      if (basename(path) === '.quality.json') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return v1;
+    },
+  });
+  expect(unreadable.status).toBe('unreadable');
+  expect(unreadable.filename).toBe('.quality.json');
 });

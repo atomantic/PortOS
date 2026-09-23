@@ -230,6 +230,46 @@ describe('speakProactive', () => {
     }
   });
 
+  it('stays quiet when voice or proactive speech is configured off', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { getVoiceConfig } = await import('./config.js');
+    try {
+      getVoiceConfig.mockResolvedValueOnce({ enabled: false });
+      const { io } = makeIo();
+      await speakProactive({ io, text: 'A new task is ready' });
+      expect(log.mock.calls.flat().join('\n')).not.toContain('voice:');
+
+      log.mockClear();
+      getVoiceConfig.mockResolvedValueOnce({
+        enabled: true,
+        llm: { proactive: { enabled: false } },
+      });
+      await speakProactive({ io, text: 'A new task is ready' });
+      expect(log.mock.calls.flat().join('\n')).not.toContain('voice:');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('still logs a quiet-hours suppression', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { getVoiceConfig } = await import('./config.js');
+    const { getLocalParts } = await import('../../lib/timezone.js');
+    try {
+      getVoiceConfig.mockResolvedValueOnce({
+        enabled: true,
+        llm: { proactive: { enabled: true, quietHours: { enabled: true, start: '22:00', end: '07:00' } } },
+      });
+      getLocalParts.mockReturnValueOnce({ hour: 23, minute: 30 });
+      const { io } = makeIo();
+      const r = await speakProactive({ io, text: 'late night ping' });
+      expect(r.reason).toBe('quiet-hours');
+      expect(log.mock.calls.flat().join('\n')).toContain('quiet-hours');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('suppresses when proactive disabled', async () => {
     const { getVoiceConfig } = await import('./config.js');
     getVoiceConfig.mockResolvedValueOnce({

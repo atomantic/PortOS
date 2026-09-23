@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Mock the provider-readiness check so any code path that touches it runs offline.
-vi.mock('./ollamaManager.js', () => ({
-  ensureProviderReady: vi.fn().mockResolvedValue({ success: true }),
+// Mock the shared managed-runtime wake (issue #8104) so any code path that
+// touches it runs offline instead of reaching the real Ollama/MTPLX/Slotstream
+// manager modules.
+vi.mock('./providerExecutionReadiness.js', () => ({
+  ensureManagedRuntimeReady: vi.fn().mockResolvedValue({ success: true }),
 }));
 // generateThemeAnalysis/refreshCrossDomainNarrative call the shared
 // aiProvider.callProviderAISimple transport (see aiProvider.test.js for its own

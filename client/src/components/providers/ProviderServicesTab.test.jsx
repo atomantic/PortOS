@@ -56,7 +56,7 @@ const Probe = () => <pre data-testid="location">{useLocation().pathname}</pre>;
 // composition catalog after a service write without being told.
 const PickerProbe = () => { useProviderCatalog(); return null; };
 
-function Host({ presets = PRESETS, onChanged = vi.fn() }) {
+function Host({ presets = PRESETS, onChanged = vi.fn(), onCreatePreset }) {
   const { serviceSlug } = useParams();
   const { pathname } = useLocation();
   return (
@@ -68,6 +68,7 @@ function Host({ presets = PRESETS, onChanged = vi.fn() }) {
         readiness={{}}
         readinessActions={{}}
         onChanged={onChanged}
+        onCreatePreset={onCreatePreset}
       />
       <Probe />
       <PickerProbe />
@@ -106,12 +107,12 @@ describe('ProviderServicesTab', () => {
   it('opens the card the URL names, links a key source, and lists the presets on it', async () => {
     renderTab('/ai/services/ollama');
     const card = await screen.findByRole('article', { name: /Ollama/ });
-    expect(within(card).getByRole('button', { name: /Ollama/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(within(card).getByRole('button', { name: /^Ollama/ })).toHaveAttribute('aria-expanded', 'true');
     expect(within(card).getByRole('link', { name: 'Claude Ollama' })).toHaveAttribute('href', '/ai/presets/claude-ollama');
     // Presets still name this service, so it cannot be deleted.
     expect(within(card).queryByRole('button', { name: /Delete/ })).not.toBeInTheDocument();
     // The keyed vendor with no key offers where to get one.
-    fireEvent.click(within(screen.getByRole('article', { name: /NVIDIA NIM/ })).getByRole('button', { name: /NVIDIA NIM/ }));
+    fireEvent.click(within(screen.getByRole('article', { name: /NVIDIA NIM/ })).getByRole('button', { name: /^NVIDIA NIM/ }));
     expect(await screen.findByRole('link', { name: /Get a key/ })).toHaveAttribute('href', 'https://build.nvidia.com');
   });
 
@@ -175,6 +176,94 @@ describe('ProviderServicesTab', () => {
     renderTab('/ai/services/nope');
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No service with id "nope"'));
     expect(screen.getByTestId('location')).toHaveTextContent('/ai/services');
+  });
+
+  it('groups mixed, local, subscription, and unknown definitions and counts each filter', async () => {
+    const subscription = {
+      id: 'uuid-claude', revision: 1, kind: 'subscription:claude', label: 'Claude', slug: 'claude-subscription', definitionId: 'claude-subscription',
+      plan: 'free', enabled: true, credentialVia: 'cli-login', hasCredentials: false, credentialSource: 'cli', bindingCount: 0,
+      readiness: 'ready', transports: {}, catalog: { state: 'unknown', models: [] },
+      definition: { id: 'claude-subscription', label: 'Claude subscription', family: 'subscription', plans: ['subscription'] },
+    };
+    const legacy = {
+      id: 'uuid-legacy', revision: 1, kind: 'custom', label: 'Hand-rolled', slug: 'hand-rolled', definitionId: null,
+      plan: 'paid', enabled: true, credentialVia: 'stored', hasCredentials: false, credentialSource: 'none', bindingCount: 0,
+      readiness: 'unknown-definition', transports: {}, catalog: { state: 'unknown', models: [] }, definition: null,
+    };
+    api.getProviderServices.mockResolvedValue({ services: [nvidia, { ...nvidia, id: 'uuid-nvidia-paid', slug: 'nvidia-nim-paid', plan: 'paid' }, ollama, subscription, legacy] });
+    renderTab();
+
+    const filters = await screen.findByRole('group', { name: 'Filter services by category' });
+    expect(within(filters).getByRole('button', { name: /All/ })).toHaveTextContent('5');
+    expect(within(filters).getByRole('button', { name: /Free \+ paid/ })).toHaveTextContent('2');
+    expect(within(filters).getByRole('button', { name: /^Local/ })).toHaveTextContent('1');
+    expect(within(filters).getByRole('button', { name: /Subscriptions/ })).toHaveTextContent('1');
+    expect(within(filters).getByRole('button', { name: /Other\/legacy/ })).toHaveTextContent('1');
+    expect(screen.getByText('Showing 5 services')).toBeInTheDocument();
+
+    const paidCard = screen.getByRole('article', { name: /nvidia-nim-paid/ });
+    expect(paidCard).toHaveTextContent('Free + paid');
+    expect(paidCard).toHaveTextContent('paid');
+    expect(screen.getByRole('article', { name: /Claude/ })).toHaveTextContent('Subscriptions');
+    expect(screen.getByRole('article', { name: /Hand-rolled/ })).toHaveTextContent('Other/legacy');
+
+    fireEvent.click(within(filters).getByRole('button', { name: /Free \+ paid/ }));
+    expect(screen.getByText('Showing 2 services in Free + paid')).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: /Ollama/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(2);
+  });
+
+  it('searches and sorts within the selected category', async () => {
+    const alpha = {
+      ...ollama,
+      id: 'uuid-alpha', revision: 1, label: 'Alpha Runtime', slug: 'alpha-runtime',
+      readiness: 'needs-endpoint', catalog: { state: 'unknown', models: [] },
+    };
+    api.getProviderServices.mockResolvedValue({ services: [nvidia, ollama, alpha] });
+    renderTab();
+    const filters = await screen.findByRole('group', { name: 'Filter services by category' });
+    fireEvent.click(within(filters).getByRole('button', { name: /^Local/ }));
+
+    let articles = screen.getAllByRole('article');
+    expect(articles[0]).toHaveTextContent('Alpha Runtime');
+    expect(articles[1]).toHaveTextContent('Ollama');
+
+    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'readiness' } });
+    articles = screen.getAllByRole('article');
+    expect(articles[0]).toHaveTextContent('Ollama');
+    expect(articles[1]).toHaveTextContent('Alpha Runtime');
+
+    fireEvent.change(screen.getByLabelText('Sort'), { target: { value: 'presets' } });
+    articles = screen.getAllByRole('article');
+    expect(articles[0]).toHaveTextContent('Ollama');
+    expect(articles[1]).toHaveTextContent('Alpha Runtime');
+
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'alpha-runtime' } });
+    expect(screen.getByText('Showing 1 service in Local')).toBeInTheDocument();
+    expect(screen.queryByRole('article', { name: /Ollama/ })).not.toBeInTheDocument();
+    expect(within(filters).getByRole('button', { name: /Free \+ paid/ })).toHaveTextContent('0');
+  });
+
+  it('starts a preset from a ready service and explains why the others cannot', async () => {
+    const onCreatePreset = vi.fn();
+    const switchedOff = { ...ollama, id: 'uuid-off', slug: 'ollama-off', label: 'Ollama Off', enabled: false, readiness: 'disabled' };
+    const undefinedService = {
+      ...nvidia, id: 'uuid-legacy', slug: 'hand-rolled', label: 'Hand-rolled', definition: null, readiness: 'unknown-definition', plan: 'paid',
+    };
+    api.getProviderServices.mockResolvedValue({ services: [nvidia, ollama, switchedOff, undefinedService] });
+    renderTab('/ai/services', { onCreatePreset });
+
+    const ready = await screen.findByRole('button', { name: 'Create preset from Ollama' });
+    expect(ready).toBeEnabled();
+    fireEvent.click(ready);
+    expect(onCreatePreset).toHaveBeenCalledWith(expect.objectContaining({ slug: 'ollama' }));
+    expect(api.refreshProviderServiceCatalog).not.toHaveBeenCalled();
+
+    expect(screen.getByRole('button', { name: /Cannot create a preset from NVIDIA NIM: it needs a credential/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Cannot create a preset from Ollama Off: it is switched off/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Cannot create a preset from Hand-rolled: it has no definition to compose from/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Cannot create a preset from NVIDIA NIM/ }));
+    expect(onCreatePreset).toHaveBeenCalledTimes(1);
   });
 });
 

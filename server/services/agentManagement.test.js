@@ -40,7 +40,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // past the window, producing a spurious failure).
 const normalizeEol = (s) => s.replace(/\r\n/g, '\n');
 const AGENT_CLI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentCliSpawning.js'), 'utf-8'));
-const AGENT_TUI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentTuiSpawning.js'), 'utf-8'));
+// The TUI `finish()` lives in the extracted session controller (#8021);
+// `agentTuiSpawning.js` is the adapter that wires it to the PTY.
+const AGENT_TUI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentTuiSpawning/sessionController.js'), 'utf-8'));
 const AGENT_LIFECYCLE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8'));
 const AGENT_RUN_FINALIZE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentRunFinalize.js'), 'utf-8'));
 const AGENT_MANAGEMENT_SRC = normalizeEol(readFileSync(join(__dirname, 'agentManagement.js'), 'utf-8'));
@@ -1497,19 +1499,24 @@ describe('close-handler skip-finalization — source contract', () => {
   // paused exit through both spawners. What only a source check can pin is the
   // ORDERING — that each spawner consults the shared sequence and bails on its
   // 'paused' verdict BEFORE it can reach finalizeAgent.
-  for (const [label, src, signature, bodyAnchor] of [
-    ['CLI close handler', AGENT_CLI_SRC, 'handleClose = async (code)', null],
-    ['TUI finish()', AGENT_TUI_SRC, 'const finish = async', '=> '],
+  // Each row carries the call spellings its own module uses: the TUI controller
+  // reaches both through the `finalization` seam it is constructed with (#8021),
+  // so a bare `finalizeAgentRunCommon(` would indexOf → -1 there and the row
+  // would fail for the wrong reason. Spelled out per row rather than matched
+  // loosely, so a seam RENAME surfaces here instead of going quietly vacuous.
+  for (const [label, src, signature, bodyAnchor, sequenceCall, finalizeCall] of [
+    ['CLI close handler', AGENT_CLI_SRC, 'handleClose = async (code)', null, 'finalizeAgentRunCommon(', 'finalizeAgent('],
+    ['TUI finish()', AGENT_TUI_SRC, 'const finish = async', '=> ', 'finalization.finalizeRunCommon(', 'finalization.finalizeAgent('],
   ]) {
-    it(`${label} routes through finalizeAgentRunCommon and returns on its paused verdict before finalizeAgent`, () => {
+    it(`${label} routes through the shared finalize sequence and returns on its paused verdict before finalizeAgent`, () => {
       const body = extractFunctionBody(src, signature, bodyAnchor);
       expect(body, `${label} body must be extractable`).toBeTruthy();
 
-      const sequencePos = body.indexOf('finalizeAgentRunCommon(');
-      expect(sequencePos, `${label} must run the shared finalize sequence`).toBeGreaterThan(-1);
+      const sequencePos = body.indexOf(sequenceCall);
+      expect(sequencePos, `${label} must run the shared finalize sequence via ${sequenceCall}`).toBeGreaterThan(-1);
 
-      const finalizePos = body.indexOf('finalizeAgent(');
-      expect(finalizePos, `${label} must still call finalizeAgent`).toBeGreaterThan(-1);
+      const finalizePos = body.indexOf(finalizeCall);
+      expect(finalizePos, `${label} must still call ${finalizeCall}`).toBeGreaterThan(-1);
       expect(sequencePos, 'shared finalize sequence must precede finalizeAgent').toBeLessThan(finalizePos);
 
       // The paused verdict is handled with an early return, before finalize.

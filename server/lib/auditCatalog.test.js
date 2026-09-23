@@ -8,6 +8,8 @@ import {
   AUDIT_REPO_CAPABILITIES,
   AUDIT_CAPABILITY_MISSING_REASON,
   auditCapabilityRequirement,
+  getAuditFilingPreset,
+  getAuditScheduleMetadata,
   FILE_ISSUES_MODE_CONTRACT,
   DO_WORK_MODE_CONTRACT,
   isAuditTaskType,
@@ -104,6 +106,20 @@ describe('AUDIT_DEFINITIONS', () => {
   it('enumerates the audits in catalog order without a second vocabulary', () => {
     expect(AUDIT_TASK_TYPE_LIST).toEqual([...AUDIT_TASK_TYPES]);
     expect(AUDIT_TASK_TYPE_LIST.every(isAuditTaskType)).toBe(true);
+  });
+
+  it('files UI lifecycle findings under framework-neutral names', () => {
+    expect(AUDIT_DEFINITIONS['ui-lifecycle'].filing).toMatchObject({
+      slugPrefix: 'ui-lifecycle-',
+      issueLabel: 'ui-lifecycle',
+      label: 'ui-lifecycle-audit',
+    });
+    expect(AUDIT_DEFINITIONS).not.toHaveProperty('react-lifecycle');
+    expect(QUOTA_BURN_PROMPT_PRESETS.map((preset) => preset.id)).toContain('ui-lifecycle-audit');
+    expect(isAuditTaskType('react-lifecycle')).toBe(true);
+    expect(AUDIT_TASK_TYPES.has('react-lifecycle')).toBe(false);
+    expect(getAuditFilingPreset('react-lifecycle').slugPrefix).toBe('ui-lifecycle-');
+    expect(getAuditScheduleMetadata('react-lifecycle').displayName).toBe('better-ui-lifecycle');
   });
 });
 

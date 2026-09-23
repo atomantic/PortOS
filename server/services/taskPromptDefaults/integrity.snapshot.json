@@ -1,6 +1,6 @@
 {
   "DEFAULT_TASK_PROMPTS": {
-    "accessibility": "76cfcab471c1a555767b71b8b9932ae0",
+    "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "cf02b10a5993baf473e0d320771f26b6",
     "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
@@ -40,10 +40,9 @@
     "pr-reviewer-review": "a4b35a1dc44e03b3d0ecf1a4e1bae6df",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
-    "react-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
-    "release-check": "5a82eec9f86ad05185ed77a42dbfd9d4",
+    "release-check": "cd936b9a4fb76273b36ec54c3ed6d5ba",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
     "security": "c5e35a12eeb06e6afe4617f4428fa1ab",
     "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
@@ -51,11 +50,12 @@
     "test-coverage": "36beffc0c2959be5d818ded54b3fe298",
     "typing": "bd7cb874b2784395280b116369c7e7ac",
     "ui-bugs": "073bea13a94b0266c53b5f55bb2344b9",
+    "ui-lifecycle": "d2eaa653e57897d3fb8b6c52c2c18e38",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "ac11f692eae40ffe8ddeaeaccbcf75e9"
+    "ux": "b8c0bde4075685625443a405b2c70b50"
   },
   "PROMPT_VERSIONS": {
-    "accessibility": 3,
+    "accessibility": 5,
     "api-contract": 1,
     "better-cognitive-load": 1,
     "better-complexity": 2,
@@ -90,10 +90,9 @@
     "plan-task": 19,
     "pr-reviewer": 5,
     "pr-watcher": 2,
-    "react-lifecycle": 2,
     "reference-watch": 3,
     "refresh-local-llm-catalog": 4,
-    "release-check": 13,
+    "release-check": 14,
     "repo-sync": 1,
     "security": 3,
     "simplify": 1,
@@ -101,15 +100,18 @@
     "test-coverage": 3,
     "typing": 3,
     "ui-bugs": 3,
+    "ui-lifecycle": 2,
     "user-action-review": 2,
-    "ux": 2
+    "ux": 3
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 3,
   "PREVIOUS_DEFAULT_PROMPTS": {
     "accessibility": [
       "ce7377d0ac57cbf0526074cfb95e3803",
       "b07cfe1e367411036ef1d4cc4b6e9d2e",
-      "372916803f32b82da38a5b2130a54baf"
+      "372916803f32b82da38a5b2130a54baf",
+      "76cfcab471c1a555767b71b8b9932ae0",
+      "762506421c793074d172d3eb794fe866"
     ],
     "better-complexity": [
       "c92b99080d0453d70bb26a412fb48ce9"
@@ -311,9 +313,6 @@
     "pr-watcher": [
       "53ead8e26d396849bfa78f28550bd691"
     ],
-    "react-lifecycle": [
-      "14b3816d1bcc10f0d7d6357e55cc5e69"
-    ],
     "reference-watch": [
       "f9322140bff7d3f603799c09ce468da9",
       "722ca590fb4b6323c98850a176b9b309"
@@ -335,7 +334,8 @@
       "afa9039cfbff21d77d601dc74eb5b81f",
       "2d2a6700c23b73bf738c2aa915e37277",
       "64be10f6ac7bcf74d4fc257089fc179b",
-      "644e5f2f6df1daf06f3792a81ba7a51a"
+      "644e5f2f6df1daf06f3792a81ba7a51a",
+      "5a82eec9f86ad05185ed77a42dbfd9d4"
     ],
     "security": [
       "b199739b21a8c45ed3778b2339ebf55f",
@@ -358,11 +358,15 @@
       "01d2a7e034713195f33071f2c71a3c99",
       "def9ad96bd74ab397233f234d79a1974"
     ],
+    "ui-lifecycle": [
+      "14b3816d1bcc10f0d7d6357e55cc5e69"
+    ],
     "user-action-review": [
       "945a716d446d26a03e2805d28bd1ae16"
     ],
     "ux": [
-      "e03d03fc7c16faa5b5db93be2896b9ad"
+      "e03d03fc7c16faa5b5db93be2896b9ad",
+      "ac11f692eae40ffe8ddeaeaccbcf75e9"
     ]
   }
 }

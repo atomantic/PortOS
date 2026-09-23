@@ -1594,10 +1594,13 @@ describe('taskSchedule', () => {
       expect(prompt).toContain('does NOT touch PLAN.md')
     })
 
-    it('release-check delegates to slashdo release and has no hardcoded reviewer', async () => {
+    it('release-check delegates to slashdo release and requires a named release heading', async () => {
       const prompt = await getTaskPrompt('release-check')
       expect(prompt).toContain('/do:release')
       expect(prompt).toContain('{reviewers}')
+      expect(prompt).toContain('# Release vX.Y.Z - <Fun Name>')
+      expect(prompt).toContain('one or two biggest user-visible wins')
+      expect(prompt).toContain('GitHub release title')
       expect(prompt.toLowerCase()).not.toContain('copilot')
       expect(prompt).not.toContain('reviewThreads')
     })
@@ -1856,6 +1859,7 @@ describe('taskSchedule', () => {
     const FILE_ISSUES_LANES = [
       ['data-safety', NO_PRELOAD],
       ['simplify', NO_PRELOAD],
+      ['ui-lifecycle', NO_PRELOAD],
       ['module-hygiene', DEDUP_PRELOAD],
       // Derived, so a seventh better-* lane cannot be added without landing here.
       ...[...AUDIT_TASK_TYPES]

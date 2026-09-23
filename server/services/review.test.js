@@ -41,6 +41,7 @@ const {
   completeItem,
   reopenItem,
   dismissItem,
+  dismissByReferenceId,
   updateItem,
   deleteItem,
   getBriefing,
@@ -180,6 +181,31 @@ describe('review service', () => {
         status: 409,
         code: 'SOURCE_ACTION_REQUIRED',
       });
+      expect(atomicWrite).not.toHaveBeenCalled();
+    });
+
+    it('dismissByReferenceId returns the matched items so a caller can tell "resolved" from "nothing to resolve" (#8007)', async () => {
+      const items = [{
+        id: 'hold-1',
+        type: 'alert',
+        title: 'Goal-fidelity hold',
+        status: 'pending',
+        metadata: { referenceId: 'agent-1', category: 'goal-fidelity', sourceOwned: true },
+        createdAt: '',
+        updatedAt: '',
+      }];
+      readFile.mockResolvedValue(JSON.stringify(items));
+
+      const matched = await dismissByReferenceId('agent-1');
+      expect(matched).toHaveLength(1);
+      expect(matched[0]).toMatchObject({ id: 'hold-1', status: 'dismissed' });
+      expect(atomicWrite).toHaveBeenCalled();
+    });
+
+    it('dismissByReferenceId returns an empty array when no pending item matches', async () => {
+      readFile.mockResolvedValue(JSON.stringify([]));
+
+      await expect(dismissByReferenceId('nothing-pending')).resolves.toEqual([]);
       expect(atomicWrite).not.toHaveBeenCalled();
     });
   });

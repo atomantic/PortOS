@@ -579,7 +579,7 @@ async function updateStatusByReferenceId(referenceId, status) {
 
   const items = await loadItems();
   const matching = items.filter(i => i.metadata?.referenceId === referenceId && i.status === 'pending');
-  if (matching.length === 0) return;
+  if (matching.length === 0) return [];
   const now = new Date().toISOString();
   for (const item of matching) {
     item.status = status;
@@ -587,6 +587,7 @@ async function updateStatusByReferenceId(referenceId, status) {
   }
   await saveItems(items);
   for (const item of matching) reviewEvents.emit('item:updated', item);
+  return matching;
 }
 
 export const dismissByReferenceId = (referenceId) => updateStatusByReferenceId(referenceId, 'dismissed');

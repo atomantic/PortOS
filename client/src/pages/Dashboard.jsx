@@ -466,7 +466,7 @@ export default function Dashboard() {
                 title="Reorder, move and resize widgets"
               >
                 <Move size={14} />
-                <span className="hidden sm:inline">Arrange</span>
+                <span className="max-sm:sr-only">Arrange</span>
               </button>
             )}
             {editingGrid && (
@@ -477,7 +477,7 @@ export default function Dashboard() {
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border hover:border-gray-600 transition-colors text-sm text-gray-400 hover:text-white min-h-[40px] disabled:opacity-50"
                 >
                   <X size={14} />
-                  <span className="hidden sm:inline">Cancel</span>
+                  <span className="max-sm:sr-only">Cancel</span>
                 </button>
                 <button
                   onClick={saveGridEdit}
@@ -485,7 +485,7 @@ export default function Dashboard() {
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white hover:bg-port-accent/80 transition-colors text-sm min-h-[40px] disabled:opacity-50"
                 >
                   <Save size={14} />
-                  <span className="hidden sm:inline">{savingGrid ? 'Saving…' : 'Save layout'}</span>
+                  <span className="max-sm:sr-only">{savingGrid ? 'Saving…' : 'Save layout'}</span>
                 </button>
               </>
             )}
@@ -495,7 +495,7 @@ export default function Dashboard() {
               title="Ambient display mode"
             >
               <Monitor size={14} />
-              <span className="hidden sm:inline">Ambient</span>
+              <span className="max-sm:sr-only">Ambient</span>
             </Link>
           </>
         )}

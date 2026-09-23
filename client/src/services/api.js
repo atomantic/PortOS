@@ -87,6 +87,7 @@ export * from './apiShell.js';
 export * from './apiMoodBoard.js';
 export * from './apiDecks.js';
 export * from './apiThreejsModels.js';
+export * from './apiCodeAnimation.js';
 export * from './apiImporter.js';
 export * from './apiStoryBuilder.js';
 export * from './apiVoice.js';

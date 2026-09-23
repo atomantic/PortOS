@@ -12,6 +12,13 @@ vi.mock('./visionCli.js', () => ({
   describeImageViaCli: vi.fn(),
 }));
 
+// Mock the shared managed-runtime wake (issue #8104) so this suite's fixtures
+// never depend on the real MTPLX/Slotstream/Ollama manager modules (and the
+// heavier deps they in turn statically import, e.g. `sleep` from fileUtils.js).
+vi.mock('./providerExecutionReadiness.js', () => ({
+  ensureManagedRuntimeReady: vi.fn(() => Promise.resolve({ success: true })),
+}));
+
 // Mock fs/promises for image loading and directory listing
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
@@ -32,6 +39,7 @@ import { getProviderById } from './providers.js';
 import { describeImageViaCli } from './visionCli.js';
 import { readFile, readdir } from 'fs/promises';
 import { resolveScreenshot } from '../lib/fileUtils.js';
+import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
 
 describe('Vision Test Service', () => {
   const mockProvider = {
@@ -367,6 +375,64 @@ describe('Vision Test Service', () => {
       describeImageViaCli.mockResolvedValue({ text: 'ok', finishReason: null, usage: null, reasoning: '' });
       await describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption', providerId: 'codex' });
       expect(describeImageViaCli).toHaveBeenCalledWith(expect.objectContaining({ timeout: 300000 }));
+    });
+
+    // Issue #8104: before this fix, the vision path only recognized Ollama on
+    // its DEFAULT port (it called `ensureOllamaProviderReady({ endpoint })`,
+    // dropping the provider's id/name) and never woke MTPLX or Slotstream at
+    // all. `callVisionAPI` now passes the full provider record through the
+    // shared `ensureManagedRuntimeReady`, so recognition (by id/name, not just
+    // the default port) and MTPLX/Slotstream coverage are both the shared
+    // gate's job, not a vision-specific copy.
+    describe('managed-runtime wake', () => {
+      it('wakes an MTPLX-recognized API provider before calling it', async () => {
+        const mtplxProvider = {
+          id: 'mtplx', name: 'MTPLX', type: 'api', endpoint: 'http://127.0.0.1:8000/v1', defaultModel: 'mtplx-vision',
+        };
+        getProviderById.mockResolvedValue(mtplxProvider);
+        global.fetch.mockResolvedValue({
+          ok: true,
+          json: () => Promise.resolve({ choices: [{ message: { content: 'a scene' } }] }),
+        });
+
+        await describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption', providerId: 'mtplx' });
+
+        expect(ensureManagedRuntimeReady).toHaveBeenCalledWith(expect.objectContaining({ id: 'mtplx' }));
+      });
+
+      // The provider carries its id/name alongside a non-default port — the
+      // shared gate (not vision-specific string matching on `:11434`) is what
+      // makes this recognizable as Ollama.
+      it('passes the full provider record (not just { endpoint }) so an Ollama provider on a non-default port is still recognized', async () => {
+        const ollamaProvider = {
+          id: 'ollama', name: 'Ollama', type: 'api', endpoint: 'http://127.0.0.1:41434/v1', defaultModel: 'llava',
+        };
+        getProviderById.mockResolvedValue(ollamaProvider);
+        global.fetch.mockResolvedValue({
+          ok: true,
+          json: () => Promise.resolve({ choices: [{ message: { content: 'a scene' } }] }),
+        });
+
+        await describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption', providerId: 'ollama' });
+
+        expect(ensureManagedRuntimeReady).toHaveBeenCalledWith(
+          expect.objectContaining({ id: 'ollama', endpoint: 'http://127.0.0.1:41434/v1' }),
+        );
+      });
+
+      it('never calls the vision endpoint when the managed runtime fails to wake', async () => {
+        getProviderById.mockResolvedValue({
+          id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1', defaultModel: 'mtplx-vision',
+        });
+        ensureManagedRuntimeReady.mockResolvedValueOnce({
+          success: false,
+          error: 'MTPLX is not running and PortOS could not start it: checkpoint failed to load',
+        });
+
+        await expect(describeImageDataUrlDetailed({ dataUrl: DATA_URL, prompt: 'caption', providerId: 'mtplx' }))
+          .rejects.toThrow('MTPLX is not running and PortOS could not start it: checkpoint failed to load');
+        expect(global.fetch).not.toHaveBeenCalled();
+      });
     });
   });
 

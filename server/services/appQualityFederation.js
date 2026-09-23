@@ -4,12 +4,14 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { query } from '../lib/db.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { auditQualityReportSchema, AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { readBodyCapped } from '../lib/safeUrlFetch.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
+import { releaseTieId } from './appQualitySnapshotFormat.js';
 
 const MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
 const sharedSummary = 'Numeric assessment shared by a federated instance; evidence remains on the source machine.';
@@ -48,7 +50,7 @@ async function eligiblePeers(deps) {
 }
 
 export function qualityRecord(row) {
-  return { category: row.category, agentId: row.agent_id,
+  return { category: normalizeAuditTaskType(row.category), agentId: row.agent_id,
     measurementId: hash(row.agent_id), assessedAt: new Date(row.assessed_at).toISOString(), report: row.report };
 }
 
@@ -133,23 +135,39 @@ export async function collectAppQuality(app, days, deps = {}) {
 }
 
 /**
- * Every app — PortOS's own checkout included — reads the `.quality.json` at its
- * repo root, under the same guards: repository match, no future dates, 4 MiB cap.
+ * Every app — PortOS's own checkout included — reads `.quality.json` (or the
+ * historical `quality-snapshot.json` when the canonical file is absent). v1 and
+ * v2 both normalize. The read never writes. Repository match, future dates, and
+ * the 4 MiB cap still apply. The peer wire schema is not used here.
  */
 async function releasePayload(deps, app) {
   const repoPath = appRepoPath(app);
   if (!repoPath) return null;
-  const { readAppQualitySnapshotFile } = await import('./appQualitySnapshotFile.js');
-  const parsed = payloadSchema.safeParse(await readAppQualitySnapshotFile(repoPath, deps));
-  return parsed.success ? parsed.data : null;
+  const { readStoredQualitySnapshot } = await import('./appQualitySnapshotFile.js');
+  const stored = await readStoredQualitySnapshot(repoPath, deps);
+  return stored.status === 'v1' || stored.status === 'v2' ? stored : null;
 }
 
 /** Shipped evidence is read-only and never re-exported as a local audit. */
 export async function readReleaseQuality(deps = {}, app = { id: PORTOS_APP_ID }) {
   const payload = await releasePayload(deps, app);
   if (!payload || payload.repository !== await repositoryKey(deps, app)) return [];
-  return payload.measurements.filter(row => Date.parse(row.assessedAt) <= (deps.now ?? Date.now())).map(row => ({
-    ...row, category: row.report.category, sourcePeerName: 'Release snapshot',
-    report: { ...row.report, summary: 'Published release assessment; original assessment date and freshness rules apply.' },
+  const now = deps.now ?? Date.now();
+  return payload.records.filter(row => Date.parse(row.assessedAt) <= now).map(row => ({
+    measurementId: releaseTieId(row),
+    assessedAt: row.assessedAt,
+    category: row.category,
+    sourcePeerName: 'Release snapshot',
+    report: {
+      version: 1,
+      category: row.category,
+      score: row.score,
+      worstSeverity: row.worstSeverity,
+      coverage: row.coverage,
+      confidence: row.confidence,
+      summary: 'Published release assessment; original assessment date and freshness rules apply.',
+      scannedFiles: row.scannedFiles,
+      totalFiles: row.totalFiles,
+    },
   }));
 }

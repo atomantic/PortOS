@@ -410,10 +410,9 @@ function imageInputForNode(run, asset) {
   return resolveImageInputPath(imageAsset?.result?.filename || null);
 }
 
-function requestedImageModel(settings, render, recordedConditioning = null) {
+function requestedImageModel(render, recordedConditioning = null) {
   return recordedConditioning?.capability?.modelId
     || render.imageModel
-    || settings.imageGen?.local?.modelId
     || undefined;
 }
 
@@ -498,7 +497,7 @@ async function prepareImageJob(run, asset) {
   const recordedConditioning = await loadRecordedConditioning(run, asset);
   const mode = resolveImageBackend(settings, run.render, recordedConditioning);
   const allModels = getImageModels();
-  const requestedModel = requestedImageModel(settings, run.render, recordedConditioning);
+  const requestedModel = requestedImageModel(run.render, recordedConditioning);
   const provisionalModel = selectLocalImageModelFromSettings(settings, requestedModel, allModels);
   const cloud = mode === IMAGE_GEN_MODE.LOCAL
     ? null
@@ -983,7 +982,7 @@ export async function planEpisodeProduction(loomId, episodeId, options = {}) {
     }
   }
   if (render.imageMode === IMAGE_GEN_MODE.LOCAL || render.imageModel) {
-    const imageModelId = render.imageModel || settings.imageGen?.local?.modelId;
+    const imageModelId = render.imageModel || selectLocalImageModelFromSettings(settings)?.id;
     if (imageModelId && !getImageModels().some((model) => model.id === imageModelId)) {
       plan.planningIssues.push(`Image model "${imageModelId}" is not available on this machine.`);
     }

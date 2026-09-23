@@ -503,7 +503,7 @@ export default function LoraDatasetDetail({ recordId }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="@container/page min-w-0 space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
           <Link to="/models/training" className="text-xs text-gray-400 hover:text-white flex items-center gap-1 mb-1">
@@ -699,7 +699,7 @@ export default function LoraDatasetDetail({ recordId }) {
         </div>
       </details>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 items-start">
+      <div className="grid grid-cols-1 @5xl/page:grid-cols-[minmax(0,1fr)_320px] gap-4 items-start">
         <DatasetImageGrid
           dataset={dataset}
           onImagesChange={onImagesChange}

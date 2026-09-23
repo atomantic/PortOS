@@ -167,7 +167,8 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
   const markDraftSaved = useCallback((snapshotSource) => {
     savedDraftSnapshotRef.current = universeDraftSnapshot(snapshotSource);
     savedStyleSnapshotRef.current = ensureInfluences(snapshotSource?.influences);
-  }, []);
+    noteUniverseUpdated(snapshotSource?.id, snapshotSource?.updatedAt);
+  }, [noteUniverseUpdated]);
 
   // Mark only the style-guide fields as saved after an atomic reference-adopt
   // PATCH. Replacing the entire baseline here would incorrectly clear dirty

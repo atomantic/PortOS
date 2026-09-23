@@ -185,11 +185,20 @@ export default function PianoRoll({ parts, tempo, getPosition, playing, height =
 
   return (
     <div ref={wrapRef} className="w-full">
-      {/* Background comes from ROLL_BG, not a theme token — see canvasRoll.js. */}
-      <canvas ref={canvasRef} className="block w-full rounded-lg" style={{ backgroundColor: ROLL_BG }} aria-hidden="true" />
-      <p className="sr-only">
-        Piano-roll visualization of the selected song layers falling onto a piano keyboard.
-      </p>
+      {/* Background comes from ROLL_BG, not a theme token — see canvasRoll.js.
+          `role="img"` + `aria-label` (rather than `aria-hidden` + a separate
+          sr-only paragraph) gives the canvas one accessible name directly —
+          `aria-hidden` on a non-focusable decorative canvas is harmless in
+          practice, but pairing it with a sighted-only visualization still
+          reads as "hide this, but here's a substitute" to a screen reader,
+          which `role="img"` states more directly. */}
+      <canvas
+        ref={canvasRef}
+        className="block w-full rounded-lg"
+        style={{ backgroundColor: ROLL_BG }}
+        role="img"
+        aria-label="Piano-roll visualization of the selected song layers falling onto a piano keyboard."
+      />
     </div>
   );
 }

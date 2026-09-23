@@ -516,7 +516,7 @@ describe('Catalog page', () => {
     expect(await screen.findByRole('button', { name: /^Retry$/i })).toBeTruthy();
     const unlinkedCalls = () => listCatalogIngredients.mock.calls.filter(([p]) => p?.unlinked).length;
     const before = unlinkedCalls();
-    await new Promise((r) => setTimeout(r, 50));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     expect(unlinkedCalls()).toBe(before); // bounded — no tight retry loop
   });
 

@@ -89,6 +89,10 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha } = {}) {
         CI_TEST_MODE: scoped.mode,
         CI_TEST_FILES: JSON.stringify(scoped.files),
         CI_TEST_SOURCES: JSON.stringify(scoped.sources),
+        // Same base the planner just used. The import-growth guard fails
+        // closed without it; omitting it here would make pregate compare
+        // against a different ref than CI.
+        ...(baseSha ? { CI_BASE_SHA: baseSha } : {}),
       },
     });
   });

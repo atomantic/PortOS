@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readdirSync, readFileSync, statSync } from 'fs';
+import { dirname, join, relative } from 'path';
+import { fileURLToPath } from 'url';
 
 const mocks = vi.hoisted(() => ({
   ensureOllama: vi.fn(),
@@ -24,7 +27,7 @@ vi.mock('./slotstreamServerManager.js', () => ({
   isSlotstreamProvider: mocks.isSlotstream,
 }));
 
-const { ensureProviderReadyForExecution } = await import('./providerExecutionReadiness.js');
+const { ensureProviderReadyForExecution, ensureManagedRuntimeReady } = await import('./providerExecutionReadiness.js');
 
 describe('provider execution readiness', () => {
   beforeEach(() => {
@@ -105,5 +108,86 @@ describe('provider execution readiness', () => {
       success: false,
       error: 'MTPLX is not running and PortOS could not start it: checkpoint failed to load',
     });
+  });
+});
+
+describe('ensureManagedRuntimeReady', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.ensureOllama.mockResolvedValue({ success: true });
+    mocks.ensureMtplx.mockResolvedValue({ success: true });
+    mocks.isOllama.mockReturnValue(false);
+    mocks.isMtplx.mockReturnValue(false);
+    mocks.ensureSlotstream.mockResolvedValue({ success: true });
+    mocks.isSlotstream.mockReturnValue(false);
+  });
+
+  it('is a no-op success for a provider no row recognizes', async () => {
+    const provider = { id: 'remote', type: 'api', endpoint: 'https://api.example.com/v1' };
+    await expect(ensureManagedRuntimeReady(provider)).resolves.toEqual({ success: true });
+    expect(mocks.ensureOllama).not.toHaveBeenCalled();
+    expect(mocks.ensureMtplx).not.toHaveBeenCalled();
+    expect(mocks.ensureSlotstream).not.toHaveBeenCalled();
+  });
+
+  it('fires onStarting with the matched runtime label before waking it', async () => {
+    const provider = { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' };
+    mocks.isMtplx.mockReturnValue(true);
+    const onStarting = vi.fn();
+
+    await expect(ensureManagedRuntimeReady(provider, { onStarting })).resolves.toEqual({ success: true });
+    expect(onStarting).toHaveBeenCalledWith('MTPLX');
+    expect(mocks.ensureMtplx).toHaveBeenCalledWith(provider);
+  });
+
+  it('turns a rejected ensure() into a failed-readiness result instead of throwing', async () => {
+    const provider = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' };
+    mocks.isOllama.mockReturnValue(true);
+    mocks.ensureOllama.mockRejectedValue(new Error('spawn ENOENT'));
+
+    await expect(ensureManagedRuntimeReady(provider)).resolves.toEqual({
+      success: false,
+      error: 'Ollama is not running and PortOS could not start it: spawn ENOENT',
+    });
+  });
+});
+
+describe('managed-runtime wake ownership (issue #8104)', () => {
+  // `bootstrap.js`'s boot-time `ensureRunning` import from `ollamaManager.js`
+  // is a different symbol (the daemon's own startup hook, not a per-call
+  // readiness gate) and stays allowed — this only guards the three symbols
+  // `providerExecutionReadiness.js` wraps into `ensureManagedRuntimeReady`.
+  const GUARDED_IMPORTS = [
+    { module: './ollamaManager.js', symbol: 'ensureProviderReady' },
+    { module: './mtplxServerManager.js', symbol: 'ensureMtplxProviderReady' },
+    { module: './slotstreamServerManager.js', symbol: 'ensureSlotstreamProviderReady' },
+  ];
+
+  const servicesDir = dirname(fileURLToPath(import.meta.url));
+
+  function listServiceFiles(dir) {
+    return readdirSync(dir).flatMap((name) => {
+      const full = join(dir, name);
+      const stat = statSync(full);
+      if (stat.isDirectory()) return listServiceFiles(full);
+      if (!name.endsWith('.js') || name.endsWith('.test.js')) return [];
+      return [full];
+    });
+  }
+
+  it('lets only providerExecutionReadiness.js import the raw per-runtime wake functions', () => {
+    const offenders = [];
+    for (const file of listServiceFiles(servicesDir)) {
+      if (relative(servicesDir, file) === 'providerExecutionReadiness.js') continue;
+      const source = readFileSync(file, 'utf8');
+      for (const { module, symbol } of GUARDED_IMPORTS) {
+        const escapedModule = module.replace(/[.]/g, '\\.');
+        const importLine = new RegExp(`import\\s*\\{[^}]*\\b${symbol}\\b[^}]*\\}\\s*from\\s*['"]${escapedModule}['"]`);
+        if (importLine.test(source)) {
+          offenders.push(`${relative(servicesDir, file)} imports ${symbol} from ${module}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

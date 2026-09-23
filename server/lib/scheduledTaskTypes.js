@@ -46,10 +46,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // Quota-burn `api-contract-audit` counterpart. Route validation, client/server
   // drift, status envelopes, and missing `asyncHandler`. Defaults to file-issues.
   'api-contract',
-  // Quota-burn `react-lifecycle-audit` counterpart. UI resource cleanup, stale
+  // Quota-burn `ui-lifecycle-audit` counterpart. UI resource cleanup, stale
   // reads, and async state ordering — distinct from `ui-bugs` (console errors)
   // and `accessibility`. Defaults to file-issues.
-  'react-lifecycle',
+  'ui-lifecycle',
   // Quota-burn `observability-audit` counterpart. Silent catches, log noise, and
   // errors logged without the context needed to reproduce them. Files under the
   // `code-quality` category and the `observability` metric label. Defaults to file-issues.
@@ -80,7 +80,7 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // Latent defects found by reading source: missing awaits, unhandled
   // rejections, unguarded null access, resource leaks, races, unbounded
   // reads. Distinct from `console-errors` (observed at runtime),
-  // `error-handling` (failure paths + resilience) and `react-lifecycle`
+  // `error-handling` (failure paths + resilience) and `ui-lifecycle`
   // (UI lifecycle and state). Files under `bug` plus the `runtime-safety` metric label.
   'better-runtime-safety',
   // Third-party dependency NECESSITY (the `do:depfree` lens) — replace

@@ -234,7 +234,7 @@ export default function SongBookImport() {
           <>
             <Link to="/songbook" className={btnClass}>
               <ArrowLeft size={15} />
-              <span className="hidden sm:inline">SongBook</span>
+              <span className="max-sm:sr-only">SongBook</span>
             </Link>
             {/* The form's own Save sits below a tall textarea + preview — on a
                 phone that is ~1000px down. This header copy keeps the primary

@@ -1,12 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, act, fireEvent } from '@testing-library/react';
 
-const handlers = new Map();
-const emitted = [];
+// useProcessLogs (#8113) binds ONE listener per event at module load, shared
+// across every mounted consumer via its refcount registry — so `on` must
+// support multiple registrations per event, and `handlers` must NOT be
+// cleared between tests: the module-level listeners are bound exactly once
+// for the whole file.
+const { handlers, emitted } = vi.hoisted(() => ({
+  handlers: new Map(), // event -> Set<fn>
+  emitted: [],
+}));
 vi.mock('../../services/socket', () => ({
   default: {
-    on: (event, fn) => { handlers.set(event, fn); },
-    off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
+    on: (event, fn) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(fn);
+    },
+    off: (event, fn) => { handlers.get(event)?.delete(fn); },
     emit: (event, ...args) => { emitted.push([event, ...args]); },
   },
 }));
@@ -17,7 +27,7 @@ import { DESKTOP_TYPES, isDesktopType, resolveLaunchPanelProcess } from './const
 // Lines are batched on a 250ms debounce in useProcessLogs — advance past it so
 // the rendered output reflects the frame.
 const fire = (event, payload) => {
-  act(() => { handlers.get(event)?.(payload); });
+  act(() => { handlers.get(event)?.forEach(fn => fn(payload)); });
   act(() => { vi.advanceTimersByTime(250); });
 };
 
@@ -32,7 +42,7 @@ const renderPanel = (props = {}) => render(
 );
 
 describe('DesktopLaunchProgress', () => {
-  beforeEach(() => { handlers.clear(); emitted.length = 0; vi.useFakeTimers(); });
+  beforeEach(() => { emitted.length = 0; vi.useFakeTimers(); });
   afterEach(() => { cleanup(); vi.useRealTimers(); });
 
   it('subscribes to the process log scoped to the app (custom PM2_HOME)', () => {

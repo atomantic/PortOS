@@ -989,6 +989,74 @@ function hasUsableNativeInputName(tag) {
   return type === 'image' && hasUsableAccessibleNameAttribute(tag, 'alt');
 }
 
+// A `<span className="hidden sm:inline">Label</span>` genuinely leaves the
+// accessibility tree below `sm` — `display:none` content is excluded from
+// accessible-name computation — so a control whose ONLY text sits inside one
+// of these wrappers announces as a bare "button"/"link" at that width. The
+// fix keeps the text in the tree and hides it only visually
+// (`max-sm:sr-only` / `@max-xs:sr-only`, see ui/TabPills.jsx:172), which is
+// why a class carrying `sr-only` is never flagged even if it also carries a
+// bare `hidden` token (`sr-only sm:hidden`, the complementary half of the
+// same idiom).
+const RESPONSIVE_HIDDEN_DISPLAY_VARIANT = /^@?[\w.-]+:(?:inline-flex|inline|flex|block)$/;
+
+function isResponsiveHiddenLabelWrapper(tag) {
+  const cls = normalizedAttributeValue(attributeValue(tag, 'className')) ?? '';
+  const classes = cls.split(/\s+/).filter(Boolean);
+  if (!classes.includes('hidden') || classes.includes('sr-only')) return false;
+  return classes.some((token) => RESPONSIVE_HIDDEN_DISPLAY_VARIANT.test(token));
+}
+
+// Same shape as `stripHiddenElementContent` (blank the whole element — both
+// tags and its body) but keyed on the responsive-hidden-label class pattern
+// instead of `hidden`/`aria-hidden` attributes.
+function stripResponsiveHiddenLabelContent(body) {
+  const spans = [];
+  for (const node of forEachOpeningTag(body, undefined, { startMode: 'jsx-text' })) {
+    if (!isResponsiveHiddenLabelWrapper(node.tag)) continue;
+    const end = node.selfClosing ? node.contentStart : node.matchingClose?.contentStart;
+    if (end !== undefined) spans.push({ start: node.index, end });
+  }
+  return blankSourceSpans(body, spans);
+}
+
+// The static-text-or-usable-expression check `hasUsableElementText` ends
+// with, factored out so `isResponsiveHiddenOnlyLabelControl` can run it twice
+// — once over the body with responsive-hidden wrappers blanked out (is there
+// a name that survives at every width?), once over the untouched body (is
+// there a name here at all, so a genuinely empty/icon-only control is left to
+// the rule that already owns it?).
+function bodyHasUsableText(body) {
+  if (!body) return false;
+  const staticText = body.replace(/\{[^{}]*\}/g, ' ').trim();
+  if (staticText) return true;
+  return [...body.matchAll(/\{([^{}]*)\}/g)].some(([, expression]) => (
+    isUsableLabelAttributeValue(normalizedAttributeValue(expression))
+  ));
+}
+
+// No aria-label/aria-labelledby, and every text node inside sits under a
+// `hidden <variant>:inline` (or `@<size>:…`) wrapper rather than the
+// `max-<bp>:sr-only` fix form — so the control's name disappears exactly
+// where that wrapper hides it.
+function isResponsiveHiddenOnlyLabelControl(src, node) {
+  if (/\baria-label\s*=/.test(node.tag) || /\baria-labelledby\s*=/.test(node.tag)) return false;
+  if (node.selfClosing) return false;
+  const closing = node.matchingClose;
+  if (!closing) return false;
+  const rawBody = maskComments(src.slice(node.contentStart, closing.index), { startMode: 'jsx-text' });
+  const withoutA11yHidden = stripHiddenElementContent(rawBody);
+  // Any text left once the responsive-hidden wrappers are ALSO blanked is
+  // visible at every width, so the control is never nameless.
+  const alwaysVisibleBody = stripJsxTags(stripResponsiveHiddenLabelContent(withoutA11yHidden)).trim();
+  if (bodyHasUsableText(alwaysVisibleBody)) return false;
+  // Nothing survives — flag it only if that's because a responsive-hidden
+  // wrapper swallowed real text, not because the control had none to begin
+  // with (that shape is `isUnnamedIconOnlyButton`'s to catch).
+  const fullBody = stripJsxTags(withoutA11yHidden).trim();
+  return bodyHasUsableText(fullBody);
+}
+
 // A FormField's only child is often a conditional rather than the control
 // itself (`{field.type === 'select' ? <select/> : <input/>}`). React still
 // clones the id onto whichever branch renders, because Children.map sees the
@@ -2290,6 +2358,60 @@ describe('a11y conventions', () => {
       }
     }
     expect(offenders, `Icon-only <button> with no aria-label/aria-labelledby — title alone isn't touch-discoverable and isn't reliably read as the accessible name; see media/MediaCard.jsx's Annotate button for the convention:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('keeps a responsive-hidden control label in the accessible name', () => {
+    // A <button>/<a>/<Link> whose only text sits inside a `hidden
+    // sm:inline`/`hidden @xs:inline` span loses its name exactly where that
+    // wrapper hides it, because `display:none` content is excluded from
+    // accessible-name computation. Convert to `max-<bp>:sr-only` /
+    // `@max-<size>:sr-only` (ui/TabPills.jsx:172 is the existing convention)
+    // so the label stays in the tree and is hidden only visually.
+    const offenders = [];
+    for (const file of trackedJsxFiles()) {
+      const src = rawSourceOf(file);
+      for (const tagName of ['button', 'a', 'Link']) {
+        for (const node of forEachOpeningTag(src, tagName)) {
+          if (!isResponsiveHiddenOnlyLabelControl(src, node)) continue;
+          offenders.push(`${file}:${lineOf(src, node.index)}`);
+        }
+      }
+    }
+    expect(offenders, `<button>/<a>/<Link> whose only accessible name is inside a "hidden <bp>:inline" (or "@<size>:…") span — convert to "max-<bp>:sr-only" / "@max-<size>:sr-only" so the label survives at every width (see ui/TabPills.jsx:172):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('flags the hidden-label shape and passes the sr-only fix (#8118)', () => {
+    const failing = '<button><X /><span className="hidden sm:inline">Save</span></button>';
+    const [failingNode] = [...forEachOpeningTag(failing, 'button')];
+    expect(isResponsiveHiddenOnlyLabelControl(failing, failingNode)).toBe(true);
+
+    const passing = '<button><X /><span className="max-sm:sr-only">Save</span></button>';
+    const [passingNode] = [...forEachOpeningTag(passing, 'button')];
+    expect(isResponsiveHiddenOnlyLabelControl(passing, passingNode)).toBe(false);
+
+    // A control that also carries always-visible text keeps a name at every
+    // width, so it is not this bug (Catalog.jsx's `Remix<span className=
+    // "hidden sm:inline"> into…</span>`).
+    const mixedVisible = '<button>Remix<span className="hidden sm:inline"> into…</span></button>';
+    const [mixedNode] = [...forEachOpeningTag(mixedVisible, 'button')];
+    expect(isResponsiveHiddenOnlyLabelControl(mixedVisible, mixedNode)).toBe(false);
+
+    // A real aria-label exempts the control even though the text is hidden
+    // the same way.
+    const labeled = '<button aria-label="Save"><X /><span className="hidden sm:inline">Save</span></button>';
+    const [labeledNode] = [...forEachOpeningTag(labeled, 'button')];
+    expect(isResponsiveHiddenOnlyLabelControl(labeled, labeledNode)).toBe(false);
+
+    // A genuinely icon-only button (no text at all) is left to
+    // `isUnnamedIconOnlyButton`, not double-flagged here.
+    const iconOnly = '<button><X /></button>';
+    const [iconOnlyNode] = [...forEachOpeningTag(iconOnly, 'button')];
+    expect(isResponsiveHiddenOnlyLabelControl(iconOnly, iconOnlyNode)).toBe(false);
+
+    // The container-query variant follows the same rule.
+    const containerFailing = '<a href="/x"><X /><span className="hidden @xs:inline">Details</span></a>';
+    const [containerNode] = [...forEachOpeningTag(containerFailing, 'a')];
+    expect(isResponsiveHiddenOnlyLabelControl(containerFailing, containerNode)).toBe(true);
   });
 
   it('keyboard-activates every clickable non-interactive element', () => {
@@ -3710,6 +3832,48 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     const offenders = [];
     for (const file of withContext) offenders.push(...offendersIn(file, maskedSourceOf(file)));
     expect(offenders, `DndContext registered without a KeyboardSensor — every dnd-kit handle already announces itself as draggable and tells the user to press Space, so a pointer-only sensor list is a WCAG 2.1.1 failure. Add useSensor(KeyboardSensor, { coordinateGetter }) (sortableKeyboardCoordinates for a SortableContext, createFreeDroppableKeyboardCoordinates from lib/dndKeyboardCoordinates.js for free droppables):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  it('never reintroduces native HTML5 drag-and-drop (#8120)', () => {
+    // A JSX `draggable` attribute means the browser's OWN drag-and-drop, which
+    // has no keyboard or assistive-technology path at all — that gap is
+    // exactly what the tree-wide dnd-kit migration (#6911, #7243, #8120)
+    // replaced. Brain → Links was the last native site (buckets and chips,
+    // both via `dataTransfer`); see `components/brain/links/bucketDnd.js` for
+    // the worked multi-container (bucket-reorder + cross-bucket chip-reorder)
+    // example this rule now guards. `draggable={false}` (or `"false"`) is the
+    // one legitimate spelling left: it suppresses the browser's default drag
+    // on an `<a>`/`<img>` nested inside a dnd-kit handle so it stops fighting
+    // the pointer sensor — see the anchors in `LinkChip.jsx`.
+    const DRAGGABLE_ATTR = /(?:^|\s)draggable(?:\s*=\s*(?:\{([^}]*)\}|"([^"]*)"|'([^']*)'))?(?=[\s/>])/;
+    const offendersIn = (file, src) => {
+      const out = [];
+      for (const node of forEachOpeningTag(src, undefined)) {
+        const m = DRAGGABLE_ATTR.exec(node.tag);
+        if (!m) continue;
+        const value = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+        if (value === 'false' || value === "'false'" || value === '"false"') continue;
+        out.push(`${file}:${lineOf(src, node.index)}`);
+      }
+      return out;
+    };
+
+    // Probe first — the tree is green by construction, so nothing left in it
+    // pins what the walk rejects.
+    expect(offendersIn('probe.jsx', '<div draggable>x</div>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<div draggable={true}>x</div>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<div draggable="true">x</div>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<div draggable={isDraggable}>x</div>')).toEqual(['probe.jsx:1']);
+    // …the one exempt spelling, in both a JSX-expression and a plain string:
+    expect(offendersIn('probe.jsx', '<div draggable={false}>x</div>')).toEqual([]);
+    expect(offendersIn('probe.jsx', '<a draggable="false" href="x">x</a>')).toEqual([]);
+    // A bare mention of the word (prose, an object key) is not the JSX attribute.
+    expect(offendersIn('probe.jsx', '<div>draggable</div>')).toEqual([]);
+    expect(offendersIn('probe.jsx', "const draggable = true;\n<div />")).toEqual([]);
+
+    const offenders = [];
+    for (const file of trackedJsxFiles()) offenders.push(...offendersIn(file, maskedSourceOf(file)));
+    expect(offenders, `A JSX draggable attribute other than draggable={false} — native HTML5 drag-and-drop has no keyboard path. Migrate to dnd-kit (useDraggable/useDroppable + a KeyboardSensor); components/brain/links/bucketDnd.js is a worked multi-container example:\n${offenders.join('\n')}`).toEqual([]);
   });
 
   // --- routed-page top-level heading (#7245) -------------------------------
