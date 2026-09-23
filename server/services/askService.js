@@ -40,7 +40,7 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
+import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { iterateOpenAiChat } from '../lib/openAiChatStream.js';
 
@@ -460,9 +460,9 @@ async function* streamCompletion(provider, model, prompt, signal) {
         throw new Error(`Provider endpoint blocked: ${guard.reason}`);
       }
     }
-    const ready = await ensureOllamaProviderReady(provider);
+    const ready = await ensureManagedRuntimeReady(provider);
     if (!ready.success) {
-      throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
+      throw new Error(ready.error);
     }
     for await (const chunk of iterateOpenAiChat({
       endpoint: provider.endpoint,

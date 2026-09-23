@@ -21,6 +21,36 @@ const failedReadiness = (runtime, result) => ({
   error: `${runtime} is not running and PortOS could not start it: ${result?.error || 'unknown error'}`,
 });
 
+// Single ordered table of every managed local runtime this install can wake
+// before an inference call. Every call site (toolkit runner, aiProvider,
+// askService, visionTest, localLlmPlayground) routes through
+// `ensureManagedRuntimeReady` instead of hand-rolling its own subset of these
+// rows — see issue #8104. Recognition (`is*Provider`) and lifecycle policy
+// (`ensure*Ready`) stay owned by each manager module; this table only orders
+// them and gives them one shared error/notify contract.
+const MANAGED_RUNTIMES = [
+  { label: 'Ollama', matches: isOllamaProvider, ensure: ensureOllamaProviderReady },
+  { label: 'MTPLX', matches: isMtplxProvider, ensure: ensureMtplxProviderReady },
+  { label: 'Slotstream', matches: isSlotstreamProvider, ensure: ensureSlotstreamProviderReady },
+];
+
+/**
+ * Wake the managed local runtime (if any) that owns `provider`, before an
+ * inference call reaches it. A provider that no row recognizes (a public API
+ * provider, or a private-network endpoint PortOS doesn't manage) is a no-op
+ * success. `onStarting(label)` fires just before the matching row's `ensure`
+ * runs, so a caller can surface a "Starting <label> if needed…" status.
+ * @returns {Promise<{success:boolean,error?:string}>}
+ */
+export async function ensureManagedRuntimeReady(provider, { onStarting } = {}) {
+  const runtime = MANAGED_RUNTIMES.find((row) => row.matches(provider));
+  if (!runtime) return { success: true };
+
+  onStarting?.(runtime.label);
+  const result = await runtime.ensure(provider).catch((err) => ({ success: false, error: err.message }));
+  return result.success ? result : failedReadiness(runtime.label, result);
+}
+
 /**
  * @returns {Promise<{success:boolean,error?:string}>}
  */
@@ -35,20 +65,5 @@ export async function ensureProviderReadyForExecution(provider) {
     };
   }
 
-  if (isOllamaProvider(provider)) {
-    const result = await ensureOllamaProviderReady(provider);
-    return result.success ? result : failedReadiness('Ollama', result);
-  }
-
-  if (isMtplxProvider(provider)) {
-    const result = await ensureMtplxProviderReady(provider);
-    return result.success ? result : failedReadiness('MTPLX', result);
-  }
-
-  if (isSlotstreamProvider(provider)) {
-    const result = await ensureSlotstreamProviderReady(provider);
-    return result.success ? result : failedReadiness('Slotstream', result);
-  }
-
-  return { success: true };
+  return ensureManagedRuntimeReady(provider);
 }

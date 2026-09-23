@@ -11,7 +11,6 @@ import { getProviderById } from './providers.js';
 import { PATHS, resolveScreenshot } from '../lib/fileUtils.js';
 import { describeFrameStats, isDegenerateFrame } from '../lib/imageFrameStats.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
-import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { describeImageViaCli } from './visionCli.js';
 import { assertSecretEndpoint, evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 
@@ -67,6 +66,11 @@ async function loadImageAsBase64(imagePath) {
 /**
  * Call LM Studio API with vision request
  * @param {Object} options - Request options
+ * @param {Object} [options.provider] - The full provider record, so a managed
+ *   local runtime (Ollama, MTPLX, Slotstream) on a non-default endpoint is
+ *   still recognized by id/name, not just its default port. Falls back to
+ *   `{ endpoint }` when omitted, matching the recognition PortOS could do
+ *   before this parameter existed.
  * @param {string} options.endpoint - API endpoint
  * @param {string} options.apiKey - API key
  * @param {string} options.model - Model to use
@@ -79,14 +83,19 @@ async function loadImageAsBase64(imagePath) {
  *   truncates mid-output and fails to parse.
  * @returns {Promise<Object>} - API response
  */
-async function callVisionAPI({ endpoint, apiKey, allowCustomEndpoint, model, imageDataUrl, prompt, timeout = DEFAULT_VISION_TIMEOUT_MS, maxTokens = 500 }) {
+async function callVisionAPI({ provider, endpoint, apiKey, allowCustomEndpoint, model, imageDataUrl, prompt, timeout = DEFAULT_VISION_TIMEOUT_MS, maxTokens = 500 }) {
   // Never send the API key to an arbitrary/metadata host (SSRF / key
   // exfiltration). Keyless local-LLM calls skip this guard entirely.
   assertSecretEndpoint(endpoint, { hasSecret: Boolean(apiKey), allowCustomEndpoint: allowCustomEndpoint === true });
 
-  await ensureOllamaProviderReady({ endpoint }).then((ready) => {
-    if (!ready.success) throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
-  });
+  // Deferred so visionTest.js's static import closure stays flat — it has
+  // many importers, and importScoping.test.js enforces the budget.
+  // See root AGENTS.md's #8104 pattern: every inference entry point routes
+  // through this one managed-runtime wake instead of hand-rolling Ollama-only
+  // dispatch.
+  const { ensureManagedRuntimeReady } = await import('./providerExecutionReadiness.js');
+  const ready = await ensureManagedRuntimeReady(provider || { endpoint });
+  if (!ready.success) throw new Error(ready.error);
 
   const response = await fetchWithTimeout(`${endpoint}/chat/completions`, {
     method: 'POST',
@@ -189,6 +198,7 @@ export async function testVision({ imagePath, prompt, expectedContent, providerI
 
   // Call vision API
   const apiResponse = await callVisionAPI({
+    provider,
     endpoint: provider.endpoint,
     apiKey: provider.apiKey,
     allowCustomEndpoint: provider.allowCustomEndpoint,
@@ -292,6 +302,7 @@ export async function describeImageDataUrlDetailed({ dataUrl, prompt, providerId
   if (!visionModel) throw new Error('No model specified and provider has no default model');
 
   const apiResponse = await callVisionAPI({
+    provider,
     endpoint: provider.endpoint,
     apiKey: provider.apiKey,
     allowCustomEndpoint: provider.allowCustomEndpoint,
