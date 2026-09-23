@@ -48,10 +48,56 @@ const DEFAULT_DRAFT = {
   interactive: false,
 };
 
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
 const loadDraft = () => {
   const stored = safeReadJsonStorage(DRAFT_KEY, null);
-  if (!stored || typeof stored !== 'object') return DEFAULT_DRAFT;
-  return { ...DEFAULT_DRAFT, ...stored, format: { ...DEFAULT_DRAFT.format, ...(stored.format || {}) } };
+  if (!isRecord(stored)) return DEFAULT_DRAFT;
+  const format = isRecord(stored.format) ? stored.format : {};
+  const referenceImages = Array.isArray(stored.referenceImages)
+    ? stored.referenceImages
+      .filter((image) => isRecord(image) && typeof image.filename === 'string' && image.filename.trim())
+      .map((image) => ({
+        filename: image.filename,
+        label: typeof image.label === 'string' ? image.label : image.filename,
+        note: typeof image.note === 'string' ? image.note : '',
+        url: `/api/uploads/${encodeURIComponent(image.filename)}`,
+      }))
+    : [];
+  const audio = isRecord(stored.audio)
+    && typeof stored.audio.filename === 'string'
+    && stored.audio.filename.trim()
+    ? {
+      filename: stored.audio.filename,
+      label: typeof stored.audio.label === 'string' ? stored.audio.label : stored.audio.filename,
+      durationSeconds: Number.isFinite(stored.audio.durationSeconds) ? stored.audio.durationSeconds : null,
+      notes: typeof stored.audio.notes === 'string' ? stored.audio.notes : '',
+      url: `/api/uploads/${encodeURIComponent(stored.audio.filename)}`,
+    }
+    : null;
+  const stringField = (key) => typeof stored[key] === 'string' ? stored[key] : DEFAULT_DRAFT[key];
+  return {
+    ...DEFAULT_DRAFT,
+    title: stringField('title'),
+    seedIdea: stringField('seedIdea'),
+    concept: stringField('concept'),
+    onScreenText: stringField('onScreenText'),
+    styleNotes: stringField('styleNotes'),
+    universeId: stringField('universeId'),
+    moodBoardChoice: stringField('moodBoardChoice'),
+    includeMoodBoardImages: typeof stored.includeMoodBoardImages === 'boolean' ? stored.includeMoodBoardImages : DEFAULT_DRAFT.includeMoodBoardImages,
+    referenceImages,
+    audio,
+    soundtrack: ['none', 'procedural'].includes(stored.soundtrack) ? stored.soundtrack : DEFAULT_DRAFT.soundtrack,
+    format: {
+      durationSeconds: Number.isFinite(format.durationSeconds) ? format.durationSeconds : DEFAULT_DRAFT.format.durationSeconds,
+      aspectRatio: typeof format.aspectRatio === 'string' ? format.aspectRatio : DEFAULT_DRAFT.format.aspectRatio,
+      resolution: typeof format.resolution === 'string' ? format.resolution : DEFAULT_DRAFT.format.resolution,
+      fps: Number.isFinite(format.fps) ? format.fps : DEFAULT_DRAFT.format.fps,
+    },
+    renderer: stringField('renderer'),
+    interactive: typeof stored.interactive === 'boolean' ? stored.interactive : DEFAULT_DRAFT.interactive,
+  };
 };
 
 // The mood-board choice as the server reads it: an ABSENT moodBoardId follows
@@ -202,6 +248,7 @@ export default function CodeAnimation() {
   const [preview, setPreview] = useState(null);
   const jobIdRef = useRef(jobId);
   const hydratedJobIdRef = useRef('');
+  const locallyStartedJobIdRef = useRef('');
   const galleryRequestRef = useRef(0);
   const {
     providers,
@@ -295,7 +342,9 @@ export default function CodeAnimation() {
       setSavedJobs((previous) => [galleryJob(next), ...previous.filter((item) => item.id !== requested)]
         .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')));
     }
-    if (hydratedJobIdRef.current !== requested && next.input) {
+    if (locallyStartedJobIdRef.current !== requested
+      && hydratedJobIdRef.current !== requested
+      && next.input) {
       hydratedJobIdRef.current = requested;
       const restoredDraft = draftFromJob(next);
       setDraft(restoredDraft);
@@ -356,6 +405,12 @@ export default function CodeAnimation() {
   // builds the prompt.
   const handleWriteBrief = async () => {
     if (!canWriteBrief) return;
+    const startingBrief = {
+      title: draft.title,
+      concept: draft.concept,
+      onScreenText: draft.onScreenText,
+      styleNotes: draft.styleNotes,
+    };
     setWritingBrief(true);
     const result = await generateCodeAnimationBrief({
       ...toBriefIdeaInput(draft),
@@ -371,7 +426,13 @@ export default function CodeAnimation() {
     const { title, concept, onScreenText, styleNotes } = result.brief;
     // Style refinements live in the Style section, not the brief — only replace
     // the artist's own notes when the writer actually asked for a refinement.
-    update({ title, concept, onScreenText, ...(styleNotes ? { styleNotes } : {}) });
+    setDraft((previous) => ({
+      ...previous,
+      ...(previous.title === startingBrief.title ? { title } : {}),
+      ...(previous.concept === startingBrief.concept ? { concept } : {}),
+      ...(previous.onScreenText === startingBrief.onScreenText ? { onScreenText } : {}),
+      ...(styleNotes && previous.styleNotes === startingBrief.styleNotes ? { styleNotes } : {}),
+    }));
     toast.success('Brief written — edit it before building the prompt');
   };
 
@@ -401,6 +462,7 @@ export default function CodeAnimation() {
     });
     setStarting(false);
     if (!started) return;
+    locallyStartedJobIdRef.current = started.id;
     setBuilt({ prompt: started.prompt, attachments: started.attachments, frame: started.frame, audioUrl: started.audioUrl, moodBoardId: started.moodBoardId, briefKey });
     setJob(started);
     setPreview(null);

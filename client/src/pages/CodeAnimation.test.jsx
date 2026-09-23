@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
+
+const pollHarness = vi.hoisted(() => ({ callbacks: new Map() }));
 
 vi.mock('../services/api', () => ({
   buildCodeAnimationPrompt: vi.fn(),
@@ -27,15 +29,23 @@ vi.mock('../hooks/useProviderModels', () => ({
     loading: false,
   }),
 }));
+vi.mock('../hooks/useAutoRefetch', () => ({
+  useAutoRefetch: (callback, interval, { enabled }) => {
+    if (enabled) pollHarness.callbacks.set(interval, callback);
+    else pollHarness.callbacks.delete(interval);
+  },
+}));
 
 import CodeAnimation from './CodeAnimation';
 import {
   buildCodeAnimationPrompt,
   generateCodeAnimationBrief,
+  getCodeAnimationJob,
   getCodeAnimationOptions,
   listMoodBoardNames,
   listUniverseNames,
   listUniverseStyles,
+  startCodeAnimationGeneration,
 } from '../services/api';
 
 const OPTIONS = {
@@ -48,8 +58,15 @@ const OPTIONS = {
   audioExtensions: ['mp3', 'wav'],
 };
 
-const renderPage = async () => {
-  const result = render(<MemoryRouter initialEntries={['/code-animation']}><CodeAnimation /></MemoryRouter>);
+const renderPage = async (initialEntry = '/code-animation') => {
+  const result = render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/code-animation" element={<CodeAnimation />} />
+        <Route path="/code-animation/:jobId" element={<CodeAnimation />} />
+      </Routes>
+    </MemoryRouter>,
+  );
   await act(async () => {});
   return result;
 };
@@ -57,6 +74,7 @@ const renderPage = async () => {
 describe('Code Animation page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pollHarness.callbacks.clear();
     localStorage.clear();
     getCodeAnimationOptions.mockResolvedValue(OPTIONS);
     listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
@@ -69,6 +87,20 @@ describe('Code Animation page', () => {
       audioUrl: null,
       moodBoardId: 'b1',
     });
+  });
+
+  it('recovers from a parseable but malformed saved draft', async () => {
+    localStorage.setItem('portos.codeAnimation.draft', JSON.stringify({
+      title: { text: 'not a string' },
+      audio: { filename: 42 },
+      format: null,
+      referenceImages: null,
+    }));
+
+    await renderPage();
+
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('');
+    expect(screen.getByText('Reference images (0/8)')).toBeInTheDocument();
   });
 
   it('builds a universe-styled prompt that follows the universe mood board by default', async () => {
@@ -143,6 +175,50 @@ describe('Code Animation page', () => {
     await waitFor(() => expect(generateCodeAnimationBrief).toHaveBeenCalled());
     expect(await screen.findByLabelText(/what happens/i)).toHaveValue('Fireflies gather over the water.');
     expect(screen.getByLabelText(/style refinements/i)).toHaveValue('more fog');
+  });
+
+  it('preserves brief fields edited while Write Brief is in flight', async () => {
+    const user = userEvent.setup();
+    let resolveBrief;
+    generateCodeAnimationBrief.mockImplementationOnce(() => new Promise((resolve) => { resolveBrief = resolve; }));
+    await renderPage();
+    await user.type(screen.getByLabelText(/starting idea/i), 'A quiet departure');
+    await user.click(screen.getByRole('button', { name: /write brief/i }));
+
+    await user.type(screen.getByLabelText(/^title/i), 'My title');
+    await user.type(screen.getByLabelText(/what happens/i), 'My concept');
+    await user.type(screen.getByLabelText(/on-screen text/i), 'My text');
+    await user.type(screen.getByLabelText(/style refinements/i), 'My style');
+
+    await act(async () => resolveBrief({
+      brief: { title: 'Generated title', concept: 'Generated concept', onScreenText: 'Generated text', styleNotes: 'Generated style' },
+    }));
+
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('My title');
+    expect(screen.getByLabelText(/what happens/i)).toHaveValue('My concept');
+    expect(screen.getByLabelText(/on-screen text/i)).toHaveValue('My text');
+    expect(screen.getByLabelText(/style refinements/i)).toHaveValue('My style');
+  });
+
+  it('keeps edits made after starting a generation when the first poll returns its input snapshot', async () => {
+    const user = userEvent.setup();
+    startCodeAnimationGeneration.mockResolvedValueOnce({
+      id: 'job-1', status: 'running', prompt: 'Built prompt', input: { title: '', concept: 'Original concept' },
+    });
+    getCodeAnimationJob.mockResolvedValueOnce({
+      id: 'job-1', status: 'running', prompt: 'Built prompt', input: { title: '', concept: 'Original concept' },
+    });
+    await renderPage();
+    await user.type(screen.getByLabelText(/what happens/i), 'Original concept');
+    await user.click(screen.getByRole('button', { name: /build prompt/i }));
+    await screen.findByLabelText('Generated prompt');
+    await user.click(screen.getByRole('button', { name: /generate animation/i }));
+    await waitFor(() => expect(startCodeAnimationGeneration).toHaveBeenCalledOnce());
+    await user.type(screen.getByLabelText(/^title/i), 'Edited after submit');
+
+    await act(async () => pollHarness.callbacks.get(3_000)());
+
+    expect(screen.getByLabelText(/^title/i)).toHaveValue('Edited after submit');
   });
 
   it('sends an explicit empty board when the user opts out of a mood board', async () => {
