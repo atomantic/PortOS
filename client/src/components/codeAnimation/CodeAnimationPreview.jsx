@@ -19,13 +19,32 @@ const slug = (text) => (text || 'code-animation').toLowerCase().replace(/[^a-z0-
 // the very top when the document has none. `<` is escaped so no value can
 // close the script element early.
 const scriptLiteral = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
-export function injectAudioGlobal(html, globalName, audioDataUrl) {
-  if (!audioDataUrl) return html;
-  const tag = `<script>window[${scriptLiteral(globalName)}] = ${scriptLiteral(audioDataUrl)};</script>`;
+const ANIMATION_CSP = [
+  "default-src 'none'",
+  "script-src 'unsafe-inline'",
+  "style-src 'unsafe-inline'",
+  'img-src data: blob:',
+  'media-src data: blob:',
+  'font-src data:',
+  "connect-src 'none'",
+  "form-action 'none'",
+  "base-uri 'none'",
+  "object-src 'none'",
+  "frame-src 'none'",
+  "worker-src 'none'",
+  "manifest-src 'none'",
+].join('; ');
+
+export function prepareAnimationHtml(html, globalName, audioDataUrl) {
+  if (!html) return html;
+  const policy = `<meta http-equiv="Content-Security-Policy" content="${ANIMATION_CSP}">`;
+  const audio = audioDataUrl
+    ? `<script>window[${scriptLiteral(globalName)}] = ${scriptLiteral(audioDataUrl)};</script>`
+    : '';
   const head = html.match(/<head[^>]*>/i);
-  if (!head) return `${tag}${html}`;
+  if (!head) return `${policy}${audio}${html}`;
   const at = head.index + head[0].length;
-  return `${html.slice(0, at)}${tag}${html.slice(at)}`;
+  return `${html.slice(0, at)}${policy}${audio}${html.slice(at)}`;
 }
 
 const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
@@ -36,8 +55,11 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
 });
 
 /**
- * Runs a generated code animation in a sandboxed iframe (scripts only — no
- * same-origin, so the page cannot reach PortOS's API or storage) and drives
+ * Runs a generated code animation in an opaque-origin sandboxed iframe. Its
+ * CSP permits the inline code and local media the film needs, while blocking
+ * network-backed subresources, fetch/websocket, and form submissions. Browser
+ * sandboxing still permits the frame to navigate itself, so this is not a
+ * complete network isolation boundary for arbitrary hostile HTML. It also drives
  * the prompt's recording handshake: Record posts `messages.record`, the page
  * answers with the WebM Blob, which can be downloaded or saved to the shared
  * video gallery.
@@ -47,8 +69,17 @@ const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
  */
 export default function CodeAnimationPreview({ html, audioUrl, messages, audioGlobal, frame, title }) {
   const iframeRef = useRef(null);
-  // status: none | loading | ready | failed; dataUrl is set only when ready.
-  const [audio, setAudio] = useState({ status: audioUrl ? 'loading' : 'none', dataUrl: null });
+  // A generated page receives the selected track only after an explicit choice.
+  // Tie that choice to the URL so a changed track needs fresh consent.
+  const [audioDecision, setAudioDecision] = useState(() => ({
+    url: audioUrl,
+    choice: audioUrl ? null : 'none',
+  }));
+  const audioChoice = audioDecision.url === audioUrl
+    ? audioDecision.choice
+    : (audioUrl ? null : 'none');
+  // status: consent | none | loading | ready | failed; dataUrl is set only when ready.
+  const [audio, setAudio] = useState({ status: audioUrl ? 'consent' : 'none', dataUrl: null });
   const [meta, setMeta] = useState(null);
   const [recording, setRecording] = useState(false);
   const [recordProgress, setRecordProgress] = useState(0);
@@ -58,8 +89,15 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
 
   useEffect(() => {
     let active = true;
-    setAudio({ status: audioUrl ? 'loading' : 'none', dataUrl: null });
-    if (!audioUrl) return () => { active = false; };
+    if (!audioUrl) {
+      setAudio({ status: 'none', dataUrl: null });
+      return () => { active = false; };
+    }
+    if (audioChoice !== 'with-audio') {
+      setAudio({ status: audioChoice === 'without-audio' ? 'none' : 'consent', dataUrl: null });
+      return () => { active = false; };
+    }
+    setAudio({ status: 'loading', dataUrl: null });
     fetch(audioUrl, { credentials: 'same-origin' })
       .then((res) => {
         if (!res.ok) throw new Error(`Audio track unavailable (${res.status})`);
@@ -75,14 +113,14 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
         toast.error(error.message);
       });
     return () => { active = false; };
-  }, [audioUrl]);
+  }, [audioUrl, audioChoice]);
 
   // Hold the frame back until the audio is in hand so the page boots once,
   // with its audio global already set.
   const srcDoc = useMemo(() => {
-    if (!html || audio.status === 'loading') return null;
-    return injectAudioGlobal(html, audioGlobal, audio.dataUrl);
-  }, [html, audioGlobal, audio]);
+    if (!html || audioChoice == null || audio.status === 'loading') return null;
+    return prepareAnimationHtml(html, audioGlobal, audio.dataUrl);
+  }, [html, audioGlobal, audioChoice, audio]);
 
   useEffect(() => {
     clearTimeout(recordTimerRef.current);
@@ -167,13 +205,36 @@ export default function CodeAnimationPreview({ html, audioUrl, messages, audioGl
           <iframe
             ref={iframeRef}
             title="Code animation preview"
-            // No allow-same-origin: generated code runs in an opaque origin
-            // and cannot touch PortOS's API, cookies, or storage.
+            // No allow-same-origin: generated code has an opaque origin. The
+            // injected CSP also blocks network resource and connection APIs.
             sandbox="allow-scripts allow-downloads"
             allow="autoplay"
             srcDoc={srcDoc}
             className="h-full w-full border-0"
           />
+        ) : audioChoice == null ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 p-5 text-center">
+            <p className="max-w-xl text-sm text-gray-200">
+              This generated animation can navigate itself. If you provide its selected audio track, its code could send that track outside PortOS.
+              Continue only if you trust this animation.
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAudioDecision({ url: audioUrl, choice: 'without-audio' })}
+                className={BUTTON_SECONDARY}
+              >
+                Preview without audio
+              </button>
+              <button
+                type="button"
+                onClick={() => setAudioDecision({ url: audioUrl, choice: 'with-audio' })}
+                className={BUTTON_PRIMARY}
+              >
+                Run with audio
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-400">
             <LoaderCircle className="h-4 w-4 animate-spin" /> Loading audio track…
