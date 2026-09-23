@@ -150,11 +150,20 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
           : { ...current, steps, completed: true };
       });
       const appId = data?.appId || scopeAppId;
-      if (appId) {
+      if (appId && inScope(appId)) {
+        // Scoped consumer in scope, or unscoped consumer with a resolvable app ID.
         clearTimeout(clearTimersRef.current[appId]);
         clearTimersRef.current[appId] = setTimeout(() => drop(appId), CLEAR_DELAY_MS);
+        onCompleteRef.current?.();
+      } else if (!scopeAppId) {
+        // Unscoped consumer always fires the callback, even for legacy frames with no app ID.
+        // Still schedule the timer only if we have an app ID to clean up.
+        onCompleteRef.current?.();
+        if (appId) {
+          clearTimeout(clearTimersRef.current[appId]);
+          clearTimersRef.current[appId] = setTimeout(() => drop(appId), CLEAR_DELAY_MS);
+        }
       }
-      onCompleteRef.current?.();
     };
 
     const requestActive = () => socket.emit('app:operations:list');
