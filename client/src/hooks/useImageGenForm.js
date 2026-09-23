@@ -143,23 +143,29 @@ export function useImageGenForm({ searchParams, setSearchParams, backend }) {
   }, [savedCleanC2PAByMode, savedDenoiseByMode, setSelectedMode]);
 
   useEffect(() => {
+    let active = true;
     listImageModels().then((loadedModels) => {
+      if (!active) return;
       setModels(loadedModels);
       setModelsLoadFailed(false);
       setModelsLoaded(true);
     }).catch(() => {
+      if (!active) return;
       setModelsLoadFailed(true);
       setModelsLoaded(true);
     });
     listLorasFull().then((loadedLoras) => {
+      if (!active) return;
       setAvailableLoras(loadedLoras);
       setLorasLoadFailed(false);
       setLorasLoaded(true);
     }).catch(() => {
+      if (!active) return;
       setLorasLoadFailed(true);
       setLorasLoaded(true);
     });
     reloadBackends();
+    return () => { active = false; };
   }, [reloadBackends]);
 
   const restoreActiveJob = useCallback((activeJob) => {

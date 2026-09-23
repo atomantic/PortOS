@@ -174,8 +174,9 @@ export function useImageGenPageRuntime() {
   }, [derived.sharesFlux2Venv, fields.modelId, refreshFlux2Status]);
 
   useEffect(() => {
+    let active = true;
     getActiveImageJob().then(({ activeJob }) => {
-      if (!activeJob) return;
+      if (!active || !activeJob) return;
       actions.restoreActiveJob(activeJob);
       setGenerating(true);
       setStatusMsg('Resuming…');
@@ -189,7 +190,10 @@ export function useImageGenPageRuntime() {
         onConnectionError: () => setGenerating(false),
       }).catch(() => {});
     }).catch(() => {});
-    return () => eventSourceRef.current?.close();
+    return () => {
+      active = false;
+      eventSourceRef.current?.close();
+    };
   }, [actions.restoreActiveJob, attachJobEvents, eventSourceRef, resumeGenerate]);
 
   const regenAvailable = !!regenInfo?.available;
