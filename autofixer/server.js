@@ -20,7 +20,7 @@ import {
   revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
-import { execPm2, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
+import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
 // Prepend the guarded pm2 shim to this process's PATH as defense-in-depth. The
 // fix agent runs in an isolated worktree with a sanitized env and (for claude)
@@ -155,21 +155,6 @@ async function saveSession(sessionId, prompt, output, metadata, patch) {
   }
 
   await saveIndex(index);
-}
-
-// Get PM2 process list
-async function getProcessList() {
-  const { stdout } = await execPm2(['jlist']);
-  const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, '');
-  const jsonStart = stripped.indexOf('[{');
-  const jsonEnd = stripped.lastIndexOf('}]');
-
-  if (jsonStart < 0 || jsonEnd < 0) {
-    console.error(`❌ [Autofixer] Invalid pm2 jlist output`);
-    return [];
-  }
-
-  return JSON.parse(stripped.substring(jsonStart, jsonEnd + 2));
 }
 
 // Get error logs for a process
@@ -403,7 +388,17 @@ async function checkAndFixProcesses() {
 
   console.log(`📋 [Autofixer] Monitoring ${monitoredProcesses.length} process(es): ${monitoredProcesses.join(', ')}`);
 
-  const pm2List = await getProcessList();
+  // `listProcessesStrict()` returns `null` when the read itself FAILED (vs `[]`
+  // for a successful read with no processes) — the absent-vs-empty contract
+  // from issue #968, now shared with `server/services/pm2.js` (#8164). A
+  // failed read must not be reported as "no PM2 processes found": that would
+  // silently skip repair on the exact cycle a crashed process most needs it.
+  const pm2List = await listProcessesStrict();
+
+  if (pm2List === null) {
+    console.error(`❌ [Autofixer] PM2 process read failed — skipping this check cycle`);
+    return;
+  }
 
   if (pm2List.length === 0) {
     console.log(`⚠️ [Autofixer] No PM2 processes found`);

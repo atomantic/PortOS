@@ -4,7 +4,9 @@ const mock = vi.hoisted(() => ({
   daemonRunning: true,
   state: null,
   savedState: null,
-  pm2Stdout: '[]',
+  // `null` = PM2 read failed (issue #8164 absent-vs-empty contract); an array
+  // (incl. []) = a successful read.
+  pm2Processes: [],
   restartImpl: null,
   events: [],
   // PM2 process names belonging to desktop (GUI) apps — exempt from auto-restart.
@@ -29,14 +31,15 @@ vi.mock('./cosState.js', () => ({
   isDaemonRunning: () => mock.daemonRunning
 }));
 
-// The jlist poll and the auto-restart both run through execPm2 now, so the mock
-// dispatches on the verb. Restarts deliberately do NOT go through
-// execFile('pm2', …, { shell: true }) — that resolves to pm2.cmd on Windows and
-// flashes a console window (docs/WINDOWS_CONSOLE.md).
+// The process READ now goes through the strict, mapped-shape reader
+// (`listProcessesStrict` — issue #8164) instead of raw `execPm2(['jlist'])` +
+// private parsing; `execPm2` remains only for the auto-restart call. Restarts
+// deliberately do NOT go through execFile('pm2', …, { shell: true }) — that
+// resolves to pm2.cmd on Windows and flashes a console window
+// (docs/WINDOWS_CONSOLE.md).
 vi.mock('./pm2.js', () => ({
-  execPm2: vi.fn(async (args) => (
-    args[0] === 'jlist' ? { stdout: mock.pm2Stdout } : mock.restartImpl(args)
-  ))
+  execPm2: vi.fn(async (args) => mock.restartImpl(args)),
+  listProcessesStrict: vi.fn(async () => mock.pm2Processes)
 }));
 
 vi.mock('../lib/memoryStats.js', () => ({
@@ -67,7 +70,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
     mock.daemonRunning = true;
     mock.state = baseState();
     mock.savedState = null;
-    mock.pm2Stdout = '[]';
+    mock.pm2Processes = [];
     mock.events = [];
     mock.desktopProcessNames = new Set();
     mock.desktopLookupError = null;
@@ -82,28 +85,46 @@ describe('cosHealthMonitor.runHealthCheck', () => {
     expect(mock.savedState).toBeNull();
   });
 
-  it('extracts the JSON array from pm2 output prefixed with ANSI noise', async () => {
-    mock.pm2Stdout = '[31mwarning[0m[{"name":"a","pm2_env":{"status":"online"},"monit":{"memory":1000}}]';
+  // Issue #8164: a FAILED PM2 read (listProcessesStrict → null) must be
+  // recorded as unavailable, never as zero processes — collapsing it to []
+  // would suppress restart of a genuinely errored process and report a
+  // health check as clean when PM2 was simply unreachable.
+  it('records PM2 metrics as unavailable (not empty) when the read fails', async () => {
+    mock.pm2Processes = null;
+    const { metrics, issues } = await runHealthCheck();
+    expect(metrics.pm2).toBeNull();
+    expect(issues.some(i => i.type === 'error' && i.category === 'processes' && /read failed/.test(i.message))).toBe(true);
+  });
+
+  it('attempts no auto-restart when the PM2 read fails', async () => {
+    mock.pm2Processes = null;
+    const restarted = [];
+    mock.restartImpl = recordRestarts(restarted);
+    await runHealthCheck();
+    expect(restarted).toEqual([]);
+  });
+
+  it('counts a genuine empty read as zero processes, not unavailable', async () => {
+    mock.pm2Processes = [];
     const { metrics } = await runHealthCheck();
-    expect(metrics.pm2).toEqual({ total: 1, online: 1, errored: 0, stopped: 0, desktopExited: 0 });
+    expect(metrics.pm2).toEqual({ total: 0, online: 0, errored: 0, stopped: 0, desktopExited: 0 });
   });
 
   it('flags a high process count over the configured limit', async () => {
-    const procs = Array.from({ length: 12 }, (_, i) => ({ name: `p${i}`, pm2_env: { status: 'online' }, monit: { memory: 0 } }));
-    mock.pm2Stdout = JSON.stringify(procs);
+    mock.pm2Processes = Array.from({ length: 12 }, (_, i) => ({ name: `p${i}`, status: 'online' }));
     const { issues } = await runHealthCheck();
     expect(issues.some(i => i.category === 'processes' && /High process count/.test(i.message))).toBe(true);
   });
 
   it('auto-restarts errored processes without reporting a resolved problem', async () => {
-    mock.pm2Stdout = JSON.stringify([{ name: 'boom', pm2_env: { status: 'errored' }, monit: { memory: 0 } }]);
+    mock.pm2Processes = [{ name: 'boom', status: 'errored' }];
     const { issues } = await runHealthCheck();
     expect(issues).toEqual([]);
     expect(issues.some(i => i.type === 'error')).toBe(false);
   });
 
   it('records an error issue and emits health:critical when a restart fails', async () => {
-    mock.pm2Stdout = JSON.stringify([{ name: 'boom', pm2_env: { status: 'errored' }, monit: { memory: 0 } }]);
+    mock.pm2Processes = [{ name: 'boom', status: 'errored' }];
     mock.restartImpl = async () => { throw new Error('restart failed'); };
     const { issues } = await runHealthCheck();
     expect(issues.some(i => i.type === 'error' && /failed to auto-restart/.test(i.message))).toBe(true);
@@ -114,13 +135,11 @@ describe('cosHealthMonitor.runHealthCheck', () => {
   // `errored`, and restarting would reopen the window the user just closed —
   // the relaunch loop `autorestart: false` prevents, by another path (#2991).
   describe('desktop (GUI) process exemption', () => {
-    const erroredGame = () => JSON.stringify([
-      { name: 'game', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
-    ]);
+    const erroredGame = () => [{ name: 'game', status: 'errored' }];
 
     it('never auto-restarts an errored desktop process', async () => {
       mock.desktopProcessNames = new Set(['game']);
-      mock.pm2Stdout = erroredGame();
+      mock.pm2Processes = erroredGame();
       const restarted = [];
       mock.restartImpl = recordRestarts(restarted);
 
@@ -132,7 +151,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
 
     it('reports a quit game separately instead of as an error', async () => {
       mock.desktopProcessNames = new Set(['game']);
-      mock.pm2Stdout = erroredGame();
+      mock.pm2Processes = erroredGame();
 
       const { metrics } = await runHealthCheck();
 
@@ -142,9 +161,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
 
     it('counts a cleanly stopped desktop process as exited too', async () => {
       mock.desktopProcessNames = new Set(['game']);
-      mock.pm2Stdout = JSON.stringify([
-        { name: 'game', pm2_env: { status: 'stopped' }, monit: { memory: 0 } }
-      ]);
+      mock.pm2Processes = [{ name: 'game', status: 'stopped' }];
 
       const { metrics } = await runHealthCheck();
 
@@ -157,10 +174,10 @@ describe('cosHealthMonitor.runHealthCheck', () => {
       // on it too would leave a live game in `total` and in no bucket at all —
       // and make the metric read identically whether it is running or quit.
       mock.desktopProcessNames = new Set(['game']);
-      mock.pm2Stdout = JSON.stringify([
-        { name: 'game', pm2_env: { status: 'online' }, monit: { memory: 0 } },
-        { name: 'web', pm2_env: { status: 'online' }, monit: { memory: 0 } }
-      ]);
+      mock.pm2Processes = [
+        { name: 'game', status: 'online' },
+        { name: 'web', status: 'online' }
+      ];
 
       const { metrics } = await runHealthCheck();
 
@@ -169,10 +186,10 @@ describe('cosHealthMonitor.runHealthCheck', () => {
 
     it('still auto-restarts non-desktop processes alongside an exempt one', async () => {
       mock.desktopProcessNames = new Set(['game']);
-      mock.pm2Stdout = JSON.stringify([
-        { name: 'game', pm2_env: { status: 'errored' }, monit: { memory: 0 } },
-        { name: 'web', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
-      ]);
+      mock.pm2Processes = [
+        { name: 'game', status: 'errored' },
+        { name: 'web', status: 'errored' }
+      ];
       const restarted = [];
       mock.restartImpl = recordRestarts(restarted, (args) => args[1]);
 
@@ -185,9 +202,7 @@ describe('cosHealthMonitor.runHealthCheck', () => {
 
     it('exempts nothing when the registry read fails (pre-existing behavior stands)', async () => {
       mock.desktopLookupError = new Error('registry unreadable');
-      mock.pm2Stdout = JSON.stringify([
-        { name: 'web', pm2_env: { status: 'errored' }, monit: { memory: 0 } }
-      ]);
+      mock.pm2Processes = [{ name: 'web', status: 'errored' }];
       const restarted = [];
       mock.restartImpl = recordRestarts(restarted, (args) => args[1]);
 
@@ -199,17 +214,17 @@ describe('cosHealthMonitor.runHealthCheck', () => {
   });
 
   it('keeps memory telemetry without flagging large processes', async () => {
-    mock.pm2Stdout = JSON.stringify([
-      { name: 'example-worker', pm2_env: { status: 'online' }, monit: { memory: 24 * 1024 ** 3 } },
-      { name: 'portos-llama-server', pm2_env: { status: 'online' }, monit: { memory: 24 * 1024 ** 3 } }
-    ]);
+    mock.pm2Processes = [
+      { name: 'example-worker', status: 'online' },
+      { name: 'portos-llama-server', status: 'online' }
+    ];
     const { metrics, issues } = await runHealthCheck();
     expect(metrics.memory).toEqual({ usedMb: 100 });
     expect(issues).toEqual([]);
   });
 
   it('persists the latest snapshot to state and emits health:check', async () => {
-    mock.pm2Stdout = '[]';
+    mock.pm2Processes = [];
     const { metrics } = await runHealthCheck();
     expect(mock.savedState.stats.lastHealthCheck).toBe(metrics.timestamp);
     expect(mock.events.some(e => e.name === 'health:check')).toBe(true);

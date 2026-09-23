@@ -294,6 +294,7 @@ export * from './forgeIssueCli.js';
 export * from './forgeIssueState.js';
 export * from './portosEnv.js';
 export * from './portosRootPlaceholder.js';
+export * from './pm2Jlist.js';
 export * from './homePath.js';
 export * from './jsonIo.js';
 export * from './settingsStore.js';

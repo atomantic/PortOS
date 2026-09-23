@@ -5,9 +5,10 @@ import { writeFile, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { createRequire } from 'module';
 import { homedir } from 'os';
-import { atomicWrite, extractJSONArray, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { parseCommandArgs } from '../lib/commandSecurity.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
+import { parsePm2JlistStdout } from '../lib/pm2Jlist.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -357,23 +358,15 @@ function shapeProcStatus(proc) {
  * Parse the stdout of a `pm2 jlist` (custom PM2_HOME CLI path) into a raw
  * process array, or `null` when the read effectively failed.
  *
- * PM2 jlist always emits a JSON array (`[]` when there are no processes), so an
- * exit-0 with empty or garbage stdout (no array literal at all) is a FAILED read
- * — not a successful "no processes." Returning `[]` there would reintroduce the
- * absent-vs-empty footgun (issue #968) for custom PM2_HOME reads. `extractJSONArray`
- * itself falls back to `'[]'` on garbage, so we must detect a real array literal
- * before trusting it (mirroring extractJSONArray's own detection) and return null
- * otherwise — matching the default-home path, which resolves null for a non-array.
+ * Compatibility re-export: the strict parser now lives in the pure
+ * `server/lib/pm2Jlist.js` (issue #8164) so package-local consumers like the
+ * autofixer can import it without the rest of this service. Kept exported here
+ * under its original name for existing first-party callers/tests.
  *
  * @param {string} stdout Raw `pm2 jlist` stdout (may carry ANSI noise).
  * @returns {Array|null} The parsed process array (incl. `[]`), or `null` on failure.
  */
-export function parseJlistStdout(stdout) {
-  const hasArrayLiteral = typeof stdout === 'string' && (stdout.includes('[{') || /\[\](?![0-9])/.test(stdout));
-  if (!hasArrayLiteral) return null;
-  const list = safeJSONParse(extractJSONArray(stdout), null);
-  return Array.isArray(list) ? list : null;
-}
+export const parseJlistStdout = parsePm2JlistStdout;
 
 /**
  * Fetch PM2 process list with TTL caching.

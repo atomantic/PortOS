@@ -678,13 +678,20 @@
       showLogin('Signed out.');
     });
 
-    // Fetch PM2 status
+    // Fetch PM2 status. A failed PM2 read answers 503 with an error object,
+    // not an array (issue #8164) — treat that as "unavailable", never clear
+    // every process to unknown/offline by iterating a non-array with forEach.
     async function fetchStatus() {
       const res = await apiFetch('/api/status');
       if (!res) return;
-      const statuses = await res.json();
+      const body = await res.json();
+      if (!res.ok || !Array.isArray(body)) {
+        processStatuses = null;
+        updateProcessList();
+        return;
+      }
       processStatuses = new Map();
-      statuses.forEach(s => { processStatuses.set(String(s.name ?? ''), s.status); });
+      body.forEach(s => { processStatuses.set(String(s.name ?? ''), s.status); });
       updateProcessList();
     }
 
@@ -720,7 +727,9 @@
         nameEl.className = 'process-name';
 
         const statusEl = document.createElement('span');
-        const statusClass = processStatusClasses.get(processStatuses.get(name)) || 'status-unknown';
+        // `processStatuses === null` means the last PM2 read failed (503) —
+        // render every process unknown rather than throwing on a missing Map.
+        const statusClass = processStatusClasses.get(processStatuses?.get(name)) || 'status-unknown';
         statusEl.classList.add('process-status', statusClass);
         nameEl.append(statusEl, document.createTextNode(name));
 

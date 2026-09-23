@@ -6,7 +6,11 @@ import { detectGodotNativeLaunch, parseEcosystemConfig, resolveViteConfigPortFor
 
 // streamDetection shells out to PM2 and scans for an app icon; neither is under
 // test here and both are slow/environment-dependent.
-vi.mock('./pm2.js', () => ({ execPm2: vi.fn(async () => ({ stdout: '[]' })) }));
+// `null` = a failed PM2 read (issue #8164 absent-vs-empty contract, matching
+// `listProcessesStrict`'s real return type); an array (incl. []) = a
+// successful read. Default to a successful empty read.
+const pm2Mock = vi.hoisted(() => ({ processes: [] }));
+vi.mock('./pm2.js', () => ({ listProcessesStrict: vi.fn(async () => pm2Mock.processes) }));
 vi.mock('./appIconDetect.js', () => ({ detectAppIcon: vi.fn(async () => null) }));
 
 describe('detectGodotNativeLaunch', () => {
@@ -1111,6 +1115,24 @@ describe('streamDetection app-type classification', () => {
       'package.json': JSON.stringify({ name: 'example', dependencies: { vite: '^5', express: '^4' } })
     });
     expect(result.type).toBe('vite+express');
+  });
+
+  // Issue #8164: a FAILED PM2 read (listProcessesStrict → null, distinct from
+  // a successful empty `[]` read) must not silently drop the process names the
+  // ecosystem config already derived, or fabricate a fake "no processes
+  // matched" status.
+  it('preserves ecosystem-derived process names and skips status when PM2 is unreachable', async () => {
+    pm2Mock.processes = null;
+    try {
+      const { result } = await detect({
+        'package.json': JSON.stringify({ name: 'example', dependencies: { express: '^4' } }),
+        'ecosystem.config.cjs': "module.exports = { apps: [{ name: 'example-api', script: 'server.js' }] };\n"
+      });
+      expect(result.pm2ProcessNames).toEqual(['example-api']);
+      expect(result.pm2Status).toBeNull();
+    } finally {
+      pm2Mock.processes = [];
+    }
   });
 });
 

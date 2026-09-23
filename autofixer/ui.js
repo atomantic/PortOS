@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { createTailscaleServers, watchCertReload } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { createSidecarAuthGate } from '../lib/sidecarAuthGate.js';
-import { PM2_BIN, execPm2, DATA_DIR, INDEX_FILE, loadApps } from './shared.js';
+import { PM2_BIN, execPm2, listProcessesStrict, DATA_DIR, INDEX_FILE, loadApps } from './shared.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -60,17 +60,20 @@ app.get('/api/history', async (req, res) => {
 });
 
 // API: Get PM2 status
+//
+// `listProcessesStrict()` returns `null` when the read itself FAILED (vs `[]`
+// for a successful read with no processes) — the absent-vs-empty contract
+// from issue #968, shared with `server/services/pm2.js` (#8164). A failed
+// read answers 503 rather than an empty array, so the dashboard doesn't
+// render "no processes" when PM2 was simply unreachable; the client handles
+// this status without breaking on `.forEach`.
 app.get('/api/status', async (req, res) => {
-  const { stdout } = await execPm2(['jlist']).catch(() => ({ stdout: '[]' }));
-  const stripped = stdout.replace(/\x1b\[[0-9;]*m/g, '');
-  const jsonStart = stripped.indexOf('[');
-  const jsonEnd = stripped.lastIndexOf(']');
+  const processes = await listProcessesStrict();
 
-  if (jsonStart < 0 || jsonEnd < 0) {
-    return res.json([]);
+  if (processes === null) {
+    return res.status(503).json({ error: 'PM2 process read failed', code: 'PM2_UNAVAILABLE' });
   }
 
-  const processes = JSON.parse(stripped.substring(jsonStart, jsonEnd + 1));
   res.json(processes.map(p => ({
     name: p.name,
     status: p.pm2_env?.status,
