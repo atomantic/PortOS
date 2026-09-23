@@ -703,6 +703,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
       {selectedGoal && (
         <div className="absolute inset-0 sm:relative sm:inset-auto z-20 sm:z-auto">
           <GoalDetailPanel
+            key={selectedGoal.id}
             goal={selectedGoal}
             allGoals={data?.flat}
             onClose={() => setSelectedNode(null)}
