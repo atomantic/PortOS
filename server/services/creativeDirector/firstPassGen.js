@@ -33,7 +33,9 @@ import { getSettings } from '../settings.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
+import { resolveLocalImageModel } from '../imageGen/prepareParams.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
 import { resolveAspectDimensions } from '../../lib/creativeDirectorPresets.js';
 import { payloadSnippet, getActiveCatalogType } from '../../lib/catalogTypes.js';
@@ -107,20 +109,24 @@ async function resolveQueueModeParams(project = null) {
     return { mode, ready: true, jobParams: { ...cloud.jobParams, cleanC2PA, denoise } };
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
-    // We pass no modelId, so the worker renders with its default ('dev') model —
-    // an mflux model that REQUIRES a configured pythonPath (the imageGen route
-    // and universeBuilderRender both reject this up front with
-    // IMAGE_GEN_NOT_CONFIGURED). First-pass gen runs fire-and-forget with no
-    // client listening, so a doomed job's SSE failure would vanish while the
-    // user is told portraits are rendering. Skip cleanly instead — same
-    // graceful-skip contract as a disabled codex.
-    const pythonPath = settings.imageGen?.local?.pythonPath || null;
-    if (!pythonPath) return { mode, ready: false, reason: 'local-not-configured' };
+    let localModel;
+    try {
+      localModel = resolveLocalImageModel(settings, {});
+    } catch (err) {
+      if (!(err instanceof ServerError)) throw err;
+      return { mode, ready: false, reason: err.code };
+    }
+    if (!localModel.selectedModel) return { mode, ready: false, reason: 'IMAGE_GEN_UNKNOWN_MODEL' };
     const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
     return {
       mode,
       ready: true,
-      jobParams: { pythonPath, cleanC2PA, denoise },
+      jobParams: {
+        pythonPath: localModel.pythonPath,
+        modelId: localModel.selectedModel.id,
+        cleanC2PA,
+        denoise,
+      },
     };
   }
   // external (or an unknown mode) — synchronous SD-API isn't suited for a

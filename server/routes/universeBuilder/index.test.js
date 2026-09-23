@@ -254,6 +254,7 @@ vi.mock('../../lib/mediaModels.js', () => ({
   isFlux2: () => false,
   isZImage: () => false,
   isErnie: () => false,
+  isEditOnly: () => false,
 }));
 
 // Controllable listSeries for DELETE /:id → 409 UNIVERSE_HAS_LIVE_SERIES test.

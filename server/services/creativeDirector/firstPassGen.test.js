@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const { resolveLocalImageModel } = vi.hoisted(() => ({ resolveLocalImageModel: vi.fn() }));
+
 // Mock the I/O boundaries; keep catalogTypes real (pure snippet transform) so
 // buildPortraitPrompt exercises the actual physicalDescription fallback chain.
 vi.mock('../mediaJobQueue/index.js', () => ({
@@ -18,6 +20,9 @@ vi.mock('../settings.js', () => ({
 vi.mock('../imageGen/index.js', () => ({
   resolveImageCleaners: vi.fn(() => ({ cleanC2PA: true, denoise: false })),
 }));
+vi.mock('../imageGen/prepareParams.js', () => ({
+  resolveLocalImageModel: (...args) => resolveLocalImageModel(...args),
+}));
 vi.mock('../catalogDB.js', () => ({
   getIngredient: vi.fn(),
   listMediaForIngredient: vi.fn(),
@@ -27,6 +32,7 @@ import { buildPortraitPrompt, enqueueFirstPassPortraits, enqueueFirstPassSceneFr
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 let jobSeq = 0;
 
@@ -36,6 +42,15 @@ beforeEach(() => {
   enqueueJob.mockImplementation(() => ({ jobId: `job-${++jobSeq}`, position: 1, status: 'queued' }));
   // Default: local mode configured, ingredients have no portrait.
   getSettings.mockResolvedValue({ imageGen: { mode: 'local', local: { pythonPath: '/py' } } });
+  resolveLocalImageModel.mockImplementation((settings) => {
+    const pythonPath = settings.imageGen?.local?.pythonPath || null;
+    if (!pythonPath) {
+      throw new ServerError('Local image generation is not configured.', {
+        status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED',
+      });
+    }
+    return { pythonPath, selectedModel: { id: settings.imageGen?.local?.modelId || 'dev' } };
+  });
   listMediaForIngredient.mockResolvedValue([]);
 });
 
@@ -84,6 +99,7 @@ describe('enqueueFirstPassPortraits', () => {
     expect(firstJob.params.catalogAttach).toEqual({ ingredientId: 'a', kind: 'portrait' });
     expect(firstJob.params.prompt).toBe('Name-a — desc a');
     expect(firstJob.params.pythonPath).toBe('/py');
+    expect(firstJob.params.modelId).toBe('dev');
     expect(firstJob.params.cleanC2PA).toBe(true);
   });
 
@@ -129,12 +145,23 @@ describe('enqueueFirstPassPortraits', () => {
     expect(getIngredient).not.toHaveBeenCalled();
   });
 
-  it('skips gracefully when local mode has no pythonPath (default model would fail unseen)', async () => {
+  it('skips gracefully with the resolver error code when the selected model needs no pythonPath', async () => {
     getSettings.mockResolvedValue({ imageGen: { mode: 'local', local: {} } });
     const out = await enqueueFirstPassPortraits([{ ingredientId: 'a' }]);
-    expect(out).toEqual({ mode: 'local', enqueued: [], skipped: [], reason: 'local-not-configured' });
+    expect(out).toEqual({ mode: 'local', enqueued: [], skipped: [], reason: 'IMAGE_GEN_NOT_CONFIGURED' });
     expect(enqueueJob).not.toHaveBeenCalled();
     expect(getIngredient).not.toHaveBeenCalled();
+  });
+
+  it('queues the install-pinned local model explicitly', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: { mode: 'local', local: { pythonPath: '/py', modelId: 'pinned-flux' } },
+    });
+    getIngredient.mockResolvedValue({ id: 'a', type: 'character', name: 'A', payload: { physicalDescription: 'd' } });
+
+    await enqueueFirstPassPortraits([{ ingredientId: 'a' }]);
+
+    expect(enqueueJob.mock.calls[0][0].params.modelId).toBe('pinned-flux');
   });
 
   it('skips gracefully for external mode (not queue-backed)', async () => {

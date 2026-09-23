@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const renderMocks = vi.hoisted(() => ({
+  getSettings: vi.fn(),
+  enqueueJob: vi.fn(),
+  getImageModels: vi.fn(),
+}));
+
 // Mock the data deps so getDatasetVariationAxes can be exercised without a
 // real universe/dataset store — it's a thin getDataset → live-subject →
 // deriveVariationAxes wrapper, and the live-subject lookup is the part the
@@ -30,14 +36,32 @@ vi.mock('sharp', () => ({
     toFile: vi.fn(async () => ({})),
   })),
 }));
+vi.mock('./settings.js', () => ({ getSettings: (...args) => renderMocks.getSettings(...args) }));
+vi.mock('./mediaJobQueue/index.js', () => ({
+  enqueueJob: (...args) => renderMocks.enqueueJob(...args),
+  mediaJobEvents: { on: vi.fn(), off: vi.fn() },
+}));
+vi.mock('./imageGen/index.js', () => ({
+  IMAGE_GEN_MODE: { LOCAL: 'local', CODEX: 'codex', EXTERNAL: 'external' },
+  resolveImageCleaners: vi.fn(() => ({ cleanC2PA: false, denoise: false })),
+}));
+vi.mock('../lib/mediaModels.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getImageModels: (...args) => renderMocks.getImageModels(...args),
+}));
 
 import {
-  buildDatasetImagePrompt, deriveVariationAxes, getDatasetVariationAxes,
+  buildDatasetImagePrompt, deriveVariationAxes, generateDatasetImages, getDatasetVariationAxes,
   normalizeCropProposals, proposeCropRegions, sliceReferenceSheet,
 } from './loraDatasetGenerate.js';
 import { extractSubjectSignaturePhrases } from './loraDatasetSubject.js';
 import { getDataset, updateDataset } from './loraDatasets.js';
 import { getUniverse } from './universeBuilder.js';
+
+const renderModels = [
+  { id: 'dev', hardwareCompatibility: { state: 'available' } },
+  { id: 'pinned-model', hardwareCompatibility: { state: 'available' } },
+];
 
 // Pure-function coverage for the kind-aware prompt builder + variation axes.
 // These are the highest-risk new logic in the object/place feature: a
@@ -221,6 +245,32 @@ describe('getDatasetVariationAxes', () => {
     getUniverse.mockResolvedValue({ places: [] });
 
     await expect(getDatasetVariationAxes('ds1')).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('generateDatasetImages local model selection', () => {
+  beforeEach(() => {
+    getDataset.mockResolvedValue({
+      id: 'ds1',
+      character: { entryKind: 'characters', universeId: 'u1', entryId: 'c1' },
+      images: [],
+    });
+    getUniverse.mockResolvedValue({
+      artStyle: 'ink-and-wash',
+      characters: [{ id: 'c1', name: 'Example Character', physicalDescription: 'A traveler.' }],
+    });
+    updateDataset.mockResolvedValue({});
+    renderMocks.getSettings.mockResolvedValue({
+      imageGen: { mode: 'local', local: { pythonPath: '/python', modelId: 'pinned-model' } },
+    });
+    renderMocks.enqueueJob.mockReturnValue({ jobId: 'job-1' });
+    renderMocks.getImageModels.mockReturnValue(renderModels);
+  });
+
+  it('queues the install-pinned model explicitly', async () => {
+    await generateDatasetImages('ds1', { count: 1 });
+
+    expect(renderMocks.enqueueJob.mock.calls[0][0].params.modelId).toBe('pinned-model');
   });
 });
 

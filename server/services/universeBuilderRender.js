@@ -16,10 +16,9 @@ import { getSettings } from './settings.js';
 import { findOrCreateUniverseCollection } from './mediaCollections.js';
 import { buildUniverseRunTag } from './universeRunTag.js';
 import { registerUniverseBuilderRun } from './universeBuilderCollectionHook.js';
-import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
-import { usesDiffusersRunner } from '../lib/runners.js';
 import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from './imageGen/modes.js';
 import { resolveRenderTargetConfig } from './imageGen/cloudProviderConfig.js';
+import { resolveLocalImageModel } from './imageGen/prepareParams.js';
 import { RENDER_TARGET, recordRenderPin } from '../lib/renderTargets.js';
 import { resolveImageCleaners } from './imageGen/index.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
@@ -86,21 +85,13 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
   // Mirror the upfront validation /api/image-gen/generate does so a doomed
   // batch fails before any jobs land in the queue.
   if (cloud && !cloud.enabled) throw cloud.disabledError;
-  if (mode === IMAGE_GEN_MODE.LOCAL) {
-    const py = settings.imageGen?.local?.pythonPath || null;
-    const allModels = getImageModels();
-    if (body.modelId && !allModels.some((m) => m.id === body.modelId)) {
-      throw new ServerError(`Unknown modelId: ${body.modelId}`, { status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL' });
-    }
-    const selectedModel = allModels.find((m) => m.id === body.modelId)
-      ?? allModels.find((m) => m.id === 'dev')
-      ?? allModels[0];
-    if (selectedModel && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !py) {
-      throw new ServerError(
-        'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
-        { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
-      );
-    }
+  const localModel = mode === IMAGE_GEN_MODE.LOCAL
+    ? resolveLocalImageModel(settings, { modelId: body.modelId })
+    : null;
+  if (mode === IMAGE_GEN_MODE.LOCAL && !localModel.selectedModel) {
+    throw new ServerError('No local image-gen models are registered.', {
+      status: 400, code: 'IMAGE_GEN_UNKNOWN_MODEL',
+    });
   }
 
   // Provision the collection up front so renders can be tagged as they
@@ -195,10 +186,15 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
       });
     } else {
       // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).
-      const py = settings.imageGen?.local?.pythonPath || null;
       queued = enqueueJob({
         kind: 'image',
-        params: { pythonPath: py, modelId: body.modelId, cleanC2PA, denoise, ...params },
+        params: {
+          pythonPath: localModel.pythonPath,
+          modelId: localModel.selectedModel.id,
+          cleanC2PA,
+          denoise,
+          ...params,
+        },
       });
     }
     jobIds.push(queued.jobId);

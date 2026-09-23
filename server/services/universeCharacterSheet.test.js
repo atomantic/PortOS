@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS, resolveSheetModelId, listSheetVariants } from './universeCharacterSheet.js';
+import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS, listSheetVariants } from './universeCharacterSheet.js';
 
 const baseUniverse = {
   id: 'u-123',
@@ -126,7 +126,7 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
     expect(out.height).toBe(REFERENCE_SHEET_CONSTANTS.DEFAULT_HEIGHT);
     // modelId resolution is deferred to render time (uses current settings,
     // not a hardcoded default). Pure prompt builder returns null so the
-    // caller chooses — see resolveSheetModelId.
+    // caller chooses through the shared local image model selector.
     expect(out.modelId).toBeNull();
     expect(out.negativePrompt).toContain('watermark');
     expect(out.negativePrompt).toContain('text artifacts');
@@ -150,52 +150,6 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
   it('throws a 400 when called with no universe or no character', () => {
     expect(() => buildCharacterReferenceSheetPrompt(null, richCharacter)).toThrow(/required/);
     expect(() => buildCharacterReferenceSheetPrompt(baseUniverse, null)).toThrow(/required/);
-  });
-});
-
-describe('universeCharacterSheet — resolveSheetModelId', () => {
-  const flux2Model = { id: 'flux2-klein-9b', runner: 'flux2' };
-  const devModel = { id: 'dev', runner: 'mflux' };
-
-  it('honors an explicit override when the model exists in the registry', () => {
-    const out = resolveSheetModelId({
-      override: 'dev',
-      settings: { imageGen: { local: { modelId: 'flux2-klein-9b' } } },
-      allModels: [flux2Model, devModel],
-    });
-    expect(out).toBe('dev');
-  });
-
-  it('ignores an override that does not match any registered model, falling through to settings', () => {
-    const out = resolveSheetModelId({
-      override: 'made-up-model',
-      settings: { imageGen: { local: { modelId: 'dev' } } },
-      allModels: [flux2Model, devModel],
-    });
-    expect(out).toBe('dev');
-  });
-
-  it('honors the user-configured local modelId from settings', () => {
-    const out = resolveSheetModelId({
-      override: '',
-      settings: { imageGen: { local: { modelId: 'dev' } } },
-      allModels: [flux2Model, devModel],
-    });
-    expect(out).toBe('dev');
-  });
-
-  it('falls back to the first available local model as a last resort', () => {
-    const out = resolveSheetModelId({
-      override: undefined,
-      settings: {},
-      allModels: [devModel, flux2Model],
-    });
-    expect(out).toBe('dev');
-  });
-
-  it('returns null when no models are registered (caller surfaces the 400)', () => {
-    const out = resolveSheetModelId({ override: undefined, settings: {}, allModels: [] });
-    expect(out).toBeNull();
   });
 });
 
