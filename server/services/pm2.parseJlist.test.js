@@ -16,6 +16,14 @@ describe('parseJlistStdout (issue #968 — custom PM2_HOME absent-vs-empty)', ()
     expect(list[0].name).toBe('svc-a');
   });
 
+  it('parses the first complete array when trailing output follows it', () => {
+    const entry = { name: 'svc-a', pm2_env: { status: 'online', args: ['literal ] and [', 'other'] } };
+    expect(parseJlistStdout(`${JSON.stringify([entry])}\n[2K`)).toEqual([entry]);
+    expect(parseJlistStdout(`${JSON.stringify([entry])}\n${JSON.stringify([{ name: 'svc-b' }])}`)).toEqual([entry]);
+    expect(parseJlistStdout('[]\n[2K')).toEqual([]);
+    expect(parseJlistStdout('[{"name":"svc-a"}\n[2K')).toBeNull();
+  });
+
   it('parses a genuine empty array as [] (read OK, no processes)', () => {
     // The literal '[]' is a successful "nothing running" — NOT a failure.
     expect(parseJlistStdout('[]')).toEqual([]);
