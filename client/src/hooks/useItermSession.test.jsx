@@ -97,5 +97,30 @@ describe('useItermSession', () => {
     expect(location.pathname).toBe('/shell/iterm/iterm-BBBB');
     expect(emitsOf('iterm:detach')).toEqual([['iterm:detach', { id: 'iterm-AAAA' }]]);
     expect(emitsOf('iterm:attach').at(-1)).toEqual(['iterm:attach', { id: 'iterm-BBBB' }]);
+    // Selecting is navigation only: the list subscription is never torn down.
+    expect(emitsOf('iterm:list')).toHaveLength(1);
+    expect(emitsOf('iterm:unlist')).toHaveLength(0);
+  });
+
+  it('detaches a superseded in-flight attach so its session stops streaming', () => {
+    const { result } = renderAt('/shell/iterm/iterm-AAAA');
+    fire('iterm:sessions', LIST);
+    act(() => result.current.selectSession('iterm-BBBB')); // A never replied
+    expect(emitsOf('iterm:detach')).toEqual([['iterm:detach', { id: 'iterm-AAAA' }]]);
+    fire('iterm:attached', { id: 'iterm-AAAA', cols: 100, rows: 30, bufferedOutput: '' });
+    expect(result.current.connected).toBe(false);
+  });
+
+  it('re-attaches the viewed session after the socket reconnects', () => {
+    renderAt('/shell/iterm/iterm-AAAA');
+    fire('iterm:sessions', LIST);
+    fire('iterm:attached', { id: 'iterm-AAAA', cols: 100, rows: 30, bufferedOutput: '' });
+    fire('disconnect');
+    fire('connect');
+    fire('iterm:sessions', LIST);
+    expect(emitsOf('iterm:attach')).toEqual([
+      ['iterm:attach', { id: 'iterm-AAAA' }],
+      ['iterm:attach', { id: 'iterm-AAAA' }],
+    ]);
   });
 });

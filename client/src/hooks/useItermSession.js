@@ -31,6 +31,10 @@ export const ITERM_SHELL_PATH = '/shell/iterm';
 export function useItermSession({ itermSessionId, enabled = true } = {}) {
   const socket = useSocket();
   const navigate = useNavigate();
+  // navigate's identity can change per location; keep it out of the socket
+  // effect's deps so a selection never tears down the list subscription.
+  const navigateRef = useRef(navigate);
+  useEffect(() => { navigateRef.current = navigate; }, [navigate]);
   const { themeId, theme: activeTheme } = useThemeContext();
   const themeMode = activeTheme?.mode ?? 'night';
   const terminalRef = useRef(null);
@@ -86,6 +90,14 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
     if (!socket || !enabled) return undefined;
 
     const handleConnect = () => socket.emit('iterm:list');
+    // The server drops a disconnected socket's views, so forget ours too; the
+    // null list makes the URL effect re-attach once the reconnect re-lists.
+    const handleDisconnect = () => {
+      attachedIdRef.current = null;
+      setAttachedId(null);
+      setPending(null);
+      setSessions(null);
+    };
     const handleSessions = ({ sessions: list, status: nextStatus } = {}) => {
       setSessions(Array.isArray(list) ? list : []);
       setStatus(nextStatus ?? null);
@@ -111,7 +123,7 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
       attachedIdRef.current = null;
       setAttachedId(null);
       termRef.current?.writeln('\r\n\x1b[33m[iTerm2 session closed]\x1b[0m');
-      navigate(ITERM_SHELL_PATH, { replace: true });
+      navigateRef.current(ITERM_SHELL_PATH, { replace: true });
     };
     const handleError = ({ id, error }) => {
       if (id !== pendingRef.current.target && id !== attachedIdRef.current) return;
@@ -120,6 +132,7 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
     };
 
     socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
     socket.on('iterm:sessions', handleSessions);
     socket.on('iterm:attached', handleAttached);
     socket.on('iterm:output', handleOutput);
@@ -129,18 +142,20 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
 
     return () => {
       socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
       socket.off('iterm:sessions', handleSessions);
       socket.off('iterm:attached', handleAttached);
       socket.off('iterm:output', handleOutput);
       socket.off('iterm:exit', handleExit);
       socket.off('iterm:error', handleError);
       if (socket.connected) {
-        if (attachedIdRef.current) socket.emit('iterm:detach', { id: attachedIdRef.current });
+        const viewing = attachedIdRef.current ?? pendingRef.current.target;
+        if (viewing) socket.emit('iterm:detach', { id: viewing });
         socket.emit('iterm:unlist');
       }
       attachedIdRef.current = null;
     };
-  }, [socket, enabled, navigate, setPending, sizeTo]);
+  }, [socket, enabled, setPending, sizeTo]);
 
   const sessionIds = sessions?.map((s) => s.id).join('\n') ?? null;
 
@@ -150,15 +165,18 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
     if (!socket || !enabled || sessionIds === null) return;
     const ids = sessionIds ? sessionIds.split('\n') : [];
     if (!itermSessionId) {
-      if (ids.length > 0) navigate(`${ITERM_SHELL_PATH}/${ids[0]}`, { replace: true });
+      if (ids.length > 0) navigateRef.current(`${ITERM_SHELL_PATH}/${ids[0]}`, { replace: true });
       return;
     }
     if (!ids.includes(itermSessionId)) {
-      navigate(ITERM_SHELL_PATH, { replace: true });
+      navigateRef.current(ITERM_SHELL_PATH, { replace: true });
       return;
     }
     if (attachedIdRef.current === itermSessionId || pendingRef.current.target === itermSessionId) return;
-    if (attachedIdRef.current) socket.emit('iterm:detach', { id: attachedIdRef.current });
+    // Stop viewing whatever this replaces — including an attach still in
+    // flight, whose late reply the pending guard will drop.
+    const superseded = attachedIdRef.current ?? pendingRef.current.target;
+    if (superseded) socket.emit('iterm:detach', { id: superseded });
     attachedIdRef.current = null;
     setAttachedId(null);
     setPending(itermSessionId);
@@ -168,11 +186,11 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
       term.writeln('\x1b[36mAttaching to iTerm2 session...\x1b[0m');
     }
     socket.emit('iterm:attach', { id: itermSessionId });
-  }, [socket, enabled, itermSessionId, sessionIds, navigate, setPending]);
+  }, [socket, enabled, itermSessionId, sessionIds, setPending]);
 
   const selectSession = useCallback((id) => {
-    if (id !== itermSessionId) navigate(`${ITERM_SHELL_PATH}/${id}`);
-  }, [itermSessionId, navigate]);
+    if (id !== itermSessionId) navigateRef.current(`${ITERM_SHELL_PATH}/${id}`);
+  }, [itermSessionId]);
 
   const sendNavKey = useCallback((key) => {
     // The frames carry no DECCKM state, so arrows always go out in CSI form,
