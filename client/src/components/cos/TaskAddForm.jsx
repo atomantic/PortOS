@@ -1588,7 +1588,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               <Bookmark size={14} aria-hidden="true" />
               <span className="hidden @sm:inline">Save Template</span>
             </button>}
-            {!queueFirst && <button
+            <button
               onClick={handleAddTask}
               disabled={isSubmitting || isEnhancing}
               className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]"
@@ -1604,7 +1604,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                   {planOnly ? (enhancePrompt ? 'Enhance & Plan' : 'Plan & File Issue') : enhancePrompt ? 'Enhance & Add' : 'Add'}
                 </>
               )}
-            </button>}
+            </button>
           </div>
         )}
         </>}
