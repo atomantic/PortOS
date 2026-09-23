@@ -26,6 +26,7 @@ export {
   listBoards,
   getBoard,
   listBoardIds,
+  listBoardNames,
   mergeBoardsFromSync,
   pruneTombstonedBoards,
 } from './db.js';

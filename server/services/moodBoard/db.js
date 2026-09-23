@@ -83,6 +83,15 @@ export async function listBoards({ includeDeleted = false } = {}) {
   return result.rows.map(rowToBoard);
 }
 
+/**
+ * Live boards as `{ id, name }`, newest first — for pickers that need only the
+ * label, without reading and shipping every board's items (up to 500 each).
+ */
+export async function listBoardNames() {
+  const result = await query(`SELECT id, data->>'name' AS name FROM mood_boards WHERE deleted = FALSE ORDER BY updated_at DESC`);
+  return result.rows.map((row) => ({ id: row.id, name: row.name || '' }));
+}
+
 export async function getBoard(id, { includeDeleted = false } = {}) {
   const result = await query(`SELECT data FROM mood_boards WHERE id = $1`, [id]);
   const board = rowToBoard(result.rows[0]);

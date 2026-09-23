@@ -133,6 +133,21 @@ export function imageUrlToAppAsset(imageUrl) {
   return null; // some other absolute path → not a served gallery asset
 }
 
+/**
+ * An image item's LOCAL asset as `{ kind: 'image'|'image-ref', filename }` —
+ * from its `image:<file>` media key or an app-path `imageUrl` — or null for
+ * text/video items and external pins. The one rule for "which file on this
+ * install is this pin", for callers that hand board images to a model.
+ */
+export function boardItemLocalImage(item) {
+  if (item?.type !== 'image') return null;
+  if (isStr(item.mediaKey) && item.mediaKey.startsWith('image:')) {
+    const filename = assetBasename(item.mediaKey.slice('image:'.length));
+    return filename ? { kind: 'image', filename } : null;
+  }
+  return imageUrlToAppAsset(item.imageUrl);
+}
+
 // Apply a PATCH to board-level fields (name/description). Absent keys preserve
 // the original; a present empty string clears (description). `items` is managed
 // only through the dedicated item ops below, never a bulk board PATCH.

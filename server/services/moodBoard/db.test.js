@@ -66,6 +66,13 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
     // The pool is closed once, by the federation describe's afterAll (runs last).
   });
 
+  it('lists live boards as id + name only', async () => {
+    const board = await db.createBoard({ name: 'Named board' });
+    created.push(board.id);
+    const row = (await db.listBoardNames()).find((b) => b.id === board.id);
+    expect(row).toEqual({ id: board.id, name: 'Named board' });
+  });
+
   it('creates, lists, and gets a board (lossless data)', async () => {
     const board = await db.createBoard({ name: 'Test board', description: 'd' });
     created.push(board.id);
@@ -125,6 +132,7 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
     expect(await db.getBoard(board.id)).toBeNull();
     expect((await db.listBoards()).some((b) => b.id === board.id)).toBe(false);
     expect(await db.listBoardIds()).not.toContain(board.id);
+    expect((await db.listBoardNames()).some((b) => b.id === board.id)).toBe(false);
     // …but includeDeleted surfaces it with the tombstone trio set.
     const tomb = await db.getBoard(board.id, { includeDeleted: true });
     expect(tomb).toMatchObject({ deleted: true });

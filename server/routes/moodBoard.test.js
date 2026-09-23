@@ -7,6 +7,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 // not the DB-backed board logic (covered by moodBoard/db.test.js).
 vi.mock('../services/moodBoard/index.js', () => ({
   listBoards: vi.fn(async () => []),
+  listBoardNames: vi.fn(async () => []),
   getBoard: vi.fn(),
   createBoard: vi.fn(),
   updateBoard: vi.fn(),
@@ -39,6 +40,14 @@ const makeApp = () => {
 
 describe('mood-board routes', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('GET /names serves the picker projection rather than a board lookup', async () => {
+    svc.listBoardNames.mockResolvedValueOnce([{ id: 'mb-1', name: 'A' }]);
+    const res = await request(makeApp()).get('/api/mood-boards/names');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'mb-1', name: 'A' }]);
+    expect(svc.getBoard).not.toHaveBeenCalled();
+  });
 
   describe('GET /', () => {
     it('returns the full boards array by default', async () => {
