@@ -471,7 +471,7 @@ const TUPLES = [
     id: 'codex', harnessId: 'codex', method: 'cli', service: 'codex-subscription',
     overrides: {
       name: 'Codex CLI',
-      models: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+      models: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
       defaultModel: 'gpt-5.6-terra', lightModel: 'gpt-5.6-luna', mediumModel: 'gpt-5.6-terra', heavyModel: 'gpt-5.6-sol', ultraModel: 'gpt-6-astra',
       contextWindow: 1000000, timeout: 300000, enabled: true,
       textTransport: 'codex-app-server', ignoreUserConfig: false,
@@ -487,7 +487,7 @@ const TUPLES = [
     id: 'codex-tui', harnessId: 'codex', method: 'tui', service: 'codex-subscription',
     overrides: {
       name: 'Codex TUI',
-      models: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+      models: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
       defaultModel: 'gpt-5.6-terra', lightModel: 'gpt-5.6-luna', mediumModel: 'gpt-5.6-terra', heavyModel: 'gpt-5.6-sol', ultraModel: 'gpt-6-astra',
       contextWindow: 1000000, enabled: false,
       textTransport: 'codex-app-server', ignoreUserConfig: false,
