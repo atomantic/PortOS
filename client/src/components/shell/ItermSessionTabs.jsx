@@ -1,5 +1,5 @@
 import { AppWindow } from 'lucide-react';
-import { clickableProps } from '../../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard.js';
 
 // Separator-agnostic basename, as in ShellSessionTabs.
 const folderName = (cwd) => cwd?.split(/[\\/]/).filter(Boolean).pop();
@@ -42,6 +42,7 @@ export default function ItermSessionTabs({ sessions, activeSessionId, onSelect }
               }`}
               onClick={() => !isActive && onSelect(s.id)}
               {...clickableProps(() => !isActive && onSelect(s.id))}
+              onKeyDown={onActivateKeyDown(() => !isActive && onSelect(s.id))}
               aria-current={isActive ? 'true' : undefined}
               title={`iTerm2 — ${where} — ${label}${s.cwd ? ` — ${s.cwd}` : ''}`}
             >
