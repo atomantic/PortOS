@@ -11,6 +11,7 @@ import { timeAgo } from '../components/feature-agents/constants';
 import { formatCount, formatDurationMs } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { clickableProps } from '../lib/a11yKeyboard.js';
 import EmptyState from '../components/EmptyState';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -362,16 +363,20 @@ export default function Loops() {
   useEffect(() => {
     fetchProviders();
 
-    socket.emit('loops:subscribe');
     const refreshEvents = ['loop:created', 'loop:stopped', 'loop:resumed', 'loop:deleted', 'loop:updated'];
     const handleRefresh = () => fetchLoops();
     refreshEvents.forEach(e => socket.on(e, handleRefresh));
 
     return () => {
-      socket.emit('loops:unsubscribe');
       refreshEvents.forEach(e => socket.off(e, handleRefresh));
     };
   }, [fetchLoops, fetchProviders]);
+
+  // Re-emits `loops:subscribe` on every socket reconnect and refetches the
+  // list, since the server's per-socket subscriber Set is empty on the
+  // reconnected socket — without this, live output and status updates go
+  // silent after a server restart/self-update until the page is reloaded.
+  useSocketSubscription('loops', { onResubscribe: fetchLoops });
 
   const handleAction = async (action, id) => {
     const entry = ACTION_MAP[action];

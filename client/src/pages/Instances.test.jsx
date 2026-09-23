@@ -41,7 +41,7 @@ vi.mock('../services/api', () => ({
   stopTailcatServe: vi.fn(),
 }));
 
-vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
+vi.mock('../services/socket', () => ({ default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 describe('AddPeerForm port default', () => {
   beforeEach(() => {
@@ -399,6 +399,25 @@ describe('Instances page connection drawers', () => {
     expect(api.syncPeer).not.toHaveBeenCalled();
     expect(api.probePeer).not.toHaveBeenCalled();
     expect(api.updateSettings).not.toHaveBeenCalled();
+  });
+
+  // #8110: the server rebuilds an empty per-socket subscriber Set on every
+  // reconnect (restart, self-update, sleep, a network blip). Without a
+  // reconnect-driven re-subscribe, peer updates and sync progress go silent
+  // for the rest of the tab's life after the first reconnect.
+  it('re-subscribes instances:* and refetches peers on a socket reconnect', async () => {
+    renderUI(<MemoryRouter><Instances /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Sync now' });
+    expect(socket.emit).toHaveBeenCalledWith('instances:subscribe');
+    const getInstancesCalls = api.getInstances.mock.calls.length;
+
+    const connectHandler = socket.on.mock.calls.find(([event]) => event === 'connect')?.[1];
+    expect(connectHandler).toBeTypeOf('function');
+    socket.emit.mockClear();
+    await act(async () => connectHandler());
+
+    expect(socket.emit).toHaveBeenCalledWith('instances:subscribe');
+    await waitFor(() => expect(api.getInstances.mock.calls.length).toBeGreaterThan(getInstancesCalls));
   });
 
   // Regression: removing the last peer must not hide orphan/serve recovery or

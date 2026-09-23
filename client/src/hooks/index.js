@@ -167,6 +167,7 @@ export * from './useCosTaskUpdates.js';
 export * from './usePrevious.js';
 export * from './useShellSession.js';
 export * from './useSocket.js';
+export * from './useSocketSubscription.js';
 export * from './useTimeTick.js';
 export * from './useUpdateChecker.jsx';
 export * from './useVisibilityEvent.js';

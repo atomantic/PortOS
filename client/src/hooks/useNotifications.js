@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useSocket } from './useSocket';
+import socket from '../services/socket';
+import { useSocketSubscription } from './useSocketSubscription';
 import * as api from '../services/api';
 
 export function useNotifications() {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
-  const socket = useSocket();
 
   const countGeneration = useRef(0);
 
@@ -20,6 +20,14 @@ export function useNotifications() {
       console.error(`❌ Failed to load notification count: ${err.message}`);
     });
   }, []);
+
+  const refresh = useCallback(async () => {
+    const [notifs] = await Promise.all([
+      api.getNotifications({ limit: 50 }),
+      refreshCount()
+    ]);
+    setNotifications(notifs);
+  }, [refreshCount]);
 
   // Fetch initial notifications
   useEffect(() => {
@@ -45,12 +53,16 @@ export function useNotifications() {
     return () => { cancelled = true; countGeneration.current++; };
   }, [refreshCount]);
 
-  // Subscribe to socket events
+  // Namespace subscription: this is the sole `notifications:*` consumer
+  // (mounted once, high in the tree, from Layout.jsx) now that OpenWorld's
+  // retired useOpenWorldData no longer shares it, so it's safe to unsubscribe
+  // on unmount. Re-emits `notifications:subscribe` on every socket reconnect
+  // and refetches the list + count so a bell that went silent during a server
+  // restart/self-update catches back up without a page reload.
+  useSocketSubscription('notifications', { onResubscribe: refresh });
+
+  // Subscribe to socket data events
   useEffect(() => {
-    if (!socket) return;
-
-    socket.emit('notifications:subscribe');
-
     const handleAdded = (notification) => {
       setNotifications(prev => [notification, ...prev.filter(n => n.id !== notification.id)]);
     };
@@ -80,10 +92,6 @@ export function useNotifications() {
     socket.on('notifications:count', handleCount);
     socket.on('notifications:cleared', handleCleared);
 
-    // notifications:* is a shared namespace; OpenWorld's useOpenWorldData also
-    // subscribes. The server keeps a per-socket Set with no ref count, so
-    // emitting notifications:unsubscribe here would also remove OpenWorld's
-    // events. Just drop the listeners; disconnect cleans up Set membership.
     return () => {
       socket.off('notifications:added', handleAdded);
       socket.off('notifications:removed', handleRemoved);
@@ -91,7 +99,7 @@ export function useNotifications() {
       socket.off('notifications:count', handleCount);
       socket.off('notifications:cleared', handleCleared);
     };
-  }, [socket]);
+  }, []);
 
   const markAsRead = useCallback(async (id) => {
     await api.markNotificationRead(id);
@@ -117,14 +125,6 @@ export function useNotifications() {
     await api.clearNotifications();
     setNotifications([]);
     await refreshCount();
-  }, [refreshCount]);
-
-  const refresh = useCallback(async () => {
-    const [notifs] = await Promise.all([
-      api.getNotifications({ limit: 50 }),
-      refreshCount()
-    ]);
-    setNotifications(notifs);
   }, [refreshCount]);
 
   return {

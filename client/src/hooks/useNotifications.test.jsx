@@ -13,13 +13,14 @@ const api = vi.hoisted(() => ({
 }));
 
 const socket = vi.hoisted(() => ({
+  connected: true,
   emit: vi.fn(),
   on: vi.fn(),
   off: vi.fn()
 }));
 
 vi.mock('../services/api', () => api);
-vi.mock('./useSocket', () => ({ useSocket: () => socket }));
+vi.mock('../services/socket', () => ({ default: socket }));
 
 import NotificationDropdown from '../components/NotificationDropdown.jsx';
 import { useNotifications } from './useNotifications.js';
@@ -100,6 +101,26 @@ async function loadedHook() {
   await waitFor(() => expect(hook.result.current.loading).toBe(false));
   return hook;
 }
+
+describe('reconnect resubscribes and refetches (#8110)', () => {
+  it('re-emits notifications:subscribe and refetches the list + count after a reconnect', async () => {
+    socket.connected = true;
+    await loadedHook();
+    expect(api.getNotifications).toHaveBeenCalledTimes(1);
+    expect(api.getNotificationCount).toHaveBeenCalledTimes(1);
+
+    const connectHandler = socket.on.mock.calls.find(([name]) => name === 'connect')?.[1];
+    expect(connectHandler).toBeTypeOf('function');
+
+    api.getNotifications.mockClear();
+    api.getNotificationCount.mockClear();
+    await act(async () => { connectHandler(); });
+
+    expect(socket.emit).toHaveBeenCalledWith('notifications:subscribe');
+    expect(api.getNotifications).toHaveBeenCalledTimes(1);
+    expect(api.getNotificationCount).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('authoritative unread totals', () => {
   it.each(['socket-first', 'http-first'])('keeps the remaining unread badge and row with %s delivery', async (order) => {
