@@ -187,17 +187,35 @@ describe('planCrashRetry', () => {
 });
 
 describe('hasOtherTestFailures', () => {
-  it('reads false only from a clean "Test Files" summary with no failed count', () => {
-    expect(hasOtherTestFailures('Test Files  798 passed | 2 skipped (801)')).toBe(false);
+  // The real end-of-run summary block from the crash this fixes (issue 8152):
+  // one crashed file counted in neither "Test Files" nor "Tests", and exactly
+  // one unhandled error — the crash itself, nothing else.
+  const CLEAN_RUN_SUMMARY = [
+    'Test Files  798 passed | 2 skipped (801)',
+    '     Tests  15077 passed | 61 skipped (15145)',
+    '    Errors  1 error',
+  ].join('\n');
+
+  it('reads false from a summary with no failures and exactly one (the crash\'s own) unhandled error', () => {
+    expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY)).toBe(false);
   });
 
-  it('reads true when the summary reports a real failure, whichever order it lists the counts', () => {
-    expect(hasOtherTestFailures('Test Files  1 failed | 797 passed | 2 skipped (800)')).toBe(true);
-    expect(hasOtherTestFailures('Test Files  797 passed | 1 failed (798)')).toBe(true);
+  it('reads true when either summary line reports a real failure, whichever order it lists the counts', () => {
+    expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY.replace(
+      'Test Files  798 passed', 'Test Files  1 failed | 797 passed',
+    ))).toBe(true);
+    expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY.replace(
+      'Tests  15077 passed', 'Tests  15076 passed | 1 failed',
+    ))).toBe(true);
   });
 
-  it('fails closed (assumes a real failure) when the summary line is missing', () => {
+  it('reads true when a second, unrelated unhandled error shares the run with the crash', () => {
+    expect(hasOtherTestFailures(CLEAN_RUN_SUMMARY.replace('1 error', '2 errors'))).toBe(true);
+  });
+
+  it('fails closed (assumes a real failure) when any summary line is missing', () => {
     expect(hasOtherTestFailures('')).toBe(true);
+    expect(hasOtherTestFailures('Test Files  798 passed | 2 skipped (801)')).toBe(true);
     expect(hasOtherTestFailures('some unrelated crash output with no summary at all')).toBe(true);
   });
 });
