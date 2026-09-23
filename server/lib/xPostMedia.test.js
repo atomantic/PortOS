@@ -42,6 +42,11 @@ describe('parseXPostUrl', () => {
     expect(() => parseXPostUrl('https://x.com/i/lists/1')).toThrow(/full post url/i);
   });
 
+  it('rejects status ids with non-path suffixes', () => {
+    expect(() => parseXPostUrl('https://x.com/someuser/status/42junk')).toThrow(/full post url/i);
+    expect(() => parseXPostUrl('https://x.com/someuser/status/42.1')).toThrow(/full post url/i);
+  });
+
   it('every ServerError carries the same error code', () => {
     for (const bad of ['', 'ftp://x.com/user/status/1', 'https://example.com/user/status/1', 'https://x.com/user']) {
       try {
