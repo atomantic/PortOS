@@ -169,27 +169,32 @@ export default function EntityCombobox({
         </button>
       </div>
       {open && (
-        <ul
+        <div
           ref={listboxRef}
           id={listId}
           role="listbox"
           className="absolute left-0 right-0 top-full mt-1 z-30 max-h-80 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg"
         >
           {filtered.length === 0 && !showCreateOption && (
-            <li className="px-3 py-2 text-xs text-gray-500">
+            <div className="px-3 py-2 text-xs text-gray-500">
               {list.length === 0
                 ? (emptyNoItems || `No ${noun}s yet — type a name.`)
                 : 'No matches'}
-            </li>
+            </div>
           )}
           {filtered.map((u, i) => (
-            <li key={u.id}>
+            <div key={u.id}>
               <button
                 type="button"
                 ref={i === activeIdx ? activeOptionRef : null}
                 id={optionId(u.id)}
                 role="option"
                 aria-selected={u.id === selectedId}
+                // Virtually focused via the input's `aria-activedescendant`
+                // (WAI-ARIA combobox pattern) — tabIndex={-1} keeps a native
+                // <button>'s default tab stop from pulling focus off the
+                // input, matching every other option row in this codebase.
+                tabIndex={-1}
                 onClick={() => { onPick(u); setOpen(false); }}
                 onMouseEnter={() => setActiveIdx(i)}
                 className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${
@@ -202,16 +207,17 @@ export default function EntityCombobox({
                 </div>
                 {u.id === selectedId && <Check size={14} className="text-port-accent" />}
               </button>
-            </li>
+            </div>
           ))}
           {showCreateOption && (
-            <li>
+            <div>
               <button
                 type="button"
                 ref={activeIdx === filtered.length ? activeOptionRef : null}
                 id={createOptionId}
                 role="option"
                 aria-selected={false}
+                tabIndex={-1}
                 disabled={busy}
                 onClick={() => { onCreate(); setOpen(false); }}
                 onMouseEnter={() => setActiveIdx(filtered.length)}
@@ -224,9 +230,9 @@ export default function EntityCombobox({
                 {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
                 {createPrefix} &ldquo;{trimmed}&rdquo;
               </button>
-            </li>
+            </div>
           )}
-        </ul>
+        </div>
       )}
     </div>
   );

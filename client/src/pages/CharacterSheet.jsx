@@ -12,7 +12,7 @@ import toast from '../components/ui/Toast';
 import { timeAgo, formatCompactCount, formatCount } from '../utils/formatters';
 import api, { generateAvatar } from '../services/api';
 import socket from '../services/socket';
-import { clickableProps } from '../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 // Silent by default — every caller owns its own error UI (a catch-block toast,
 // or the loadError banner in load()), so the request() helper must not also
@@ -531,6 +531,7 @@ export default function CharacterSheet() {
                   <span
                     onClick={() => setEditingClass(true)}
                     {...clickableProps(() => setEditingClass(true))}
+                    onKeyDown={onActivateKeyDown(() => setEditingClass(true))}
                     className="text-sm text-gray-400 cursor-pointer hover:text-port-accent transition-colors"
                     title="Click to edit your title"
                   >

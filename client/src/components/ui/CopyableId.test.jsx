@@ -40,7 +40,10 @@ describe('CopyableId', () => {
   it('stops click propagation so it does not trigger row handlers', () => {
     const onRowClick = vi.fn();
     render(
-      <div onClick={onRowClick}>
+      // Stands in for a real clickable row (e.g. HistoryPage's history row,
+      // which uses `clickableProps`/`onActivateKeyDown` for real) — this test
+      // only exercises click containment, so mirror that same keyboard prop.
+      <div onClick={onRowClick} onKeyDown={onRowClick}>
         <CopyableId id="abcdef1234567890" />
       </div>
     );

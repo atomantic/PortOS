@@ -351,6 +351,11 @@ export default function Modal({
         // matches the original hand-rolled modals' behavior so the refactor
         // stays 1:1.
         onClick={(e) => e.stopPropagation()}
+        // Same swallow, minus Escape: `handleGlobalEsc` above is a
+        // `document`-level listener (native bubbling, not React's), and it
+        // already owns stack-aware precedence for nested modals — a keydown
+        // stopPropagation here would keep Escape from ever reaching it.
+        onKeyDown={(e) => { if (e.key !== 'Escape') e.stopPropagation(); }}
       >
         {children}
       </div>

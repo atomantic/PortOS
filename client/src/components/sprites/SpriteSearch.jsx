@@ -77,20 +77,28 @@ export default function SpriteSearch({ records, onSelect }) {
         className="w-full bg-port-bg border border-port-border rounded pl-8 pr-3 py-1.5 text-sm text-white"
       />
       {showSuggestions && (
-        <ul
+        <div
           id={listId}
           role="listbox"
           aria-label="Matching sprites"
           className="absolute z-30 mt-1 w-full max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
         >
           {suggestions.length === 0 ? (
-            <li className="px-3 py-2 text-xs text-gray-500">No matches</li>
+            <div className="px-3 py-2 text-xs text-gray-500">No matches</div>
           ) : suggestions.map((r, i) => {
             const Icon = groupIconForKind(r.kind);
             return (
-              <li key={r.id} id={`sprite-opt-${r.id}`} role="option" aria-selected={i === activeIndex}>
+              <div key={r.id}>
                 <button
                   type="button"
+                  id={`sprite-opt-${r.id}`}
+                  role="option"
+                  aria-selected={i === activeIndex}
+                  // Virtually focused via the input's `aria-activedescendant`
+                  // (WAI-ARIA combobox pattern), like the other option rows in
+                  // this list — tabIndex={-1} keeps a native <button>'s
+                  // default tab stop from pulling focus off the input.
+                  tabIndex={-1}
                   onClick={() => commit(r)}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={`w-full flex items-center gap-2 text-left px-3 py-2 text-sm ${i === activeIndex ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'}`}
@@ -99,10 +107,10 @@ export default function SpriteSearch({ records, onSelect }) {
                   <span className="font-medium truncate">{r.name}</span>
                   <span className="ml-auto text-xs text-gray-500 shrink-0">{r.kind}</span>
                 </button>
-              </li>
+              </div>
             );
           })}
-        </ul>
+        </div>
       )}
     </div>
   );

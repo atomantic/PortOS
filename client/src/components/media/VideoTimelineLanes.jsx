@@ -12,7 +12,7 @@ import { memo, useEffect, useRef } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { X, Film, Plus, Music } from 'lucide-react';
 import { dndTransformToCss } from '../../lib/dndTransform';
-import { clickableProps } from '../../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../../lib/a11yKeyboard.js';
 import { assetUrl, segmentDuration } from '../../lib/videoTimelineModel';
 
 const segmentLabel = (segment, meta) => {
@@ -148,6 +148,7 @@ export const LaneBlock = memo(function LaneBlock({
       }`}
       onClick={() => onSelect(entry._key)}
       {...clickableProps(() => onSelect(entry._key))}
+      onKeyDown={onActivateKeyDown(() => onSelect(entry._key))}
     >
       <span className={`absolute top-0.5 text-[9px] text-white truncate pointer-events-none ${showRemove ? 'left-1 right-7' : 'inset-x-1'}`}>
         {isMissing ? '(missing)' : label}

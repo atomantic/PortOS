@@ -151,7 +151,7 @@ export default function BeeperPersonPicker({
         />
       </div>
       {open && createPortal(
-        <ul
+        <div
           ref={listRef}
           id={listboxId}
           role="listbox"
@@ -171,14 +171,18 @@ export default function BeeperPersonPicker({
           }}
         >
           {matches.length === 0 && (
-            <li className="px-2 py-1 text-[11px] text-gray-500">No matches</li>
+            <div className="px-2 py-1 text-[11px] text-gray-500">No matches</div>
           )}
           {matches.map((person, index) => (
-            <li
+            <div
               key={person.id}
               id={optionId(index)}
               role="option"
               aria-selected={index === activeIndex}
+              // Virtually focused via the input's `aria-activedescendant`
+              // (WAI-ARIA combobox pattern), not individually tabbable;
+              // tabIndex={-1} keeps it programmatically focusable.
+              tabIndex={-1}
               // `onMouseDown` with `preventDefault`, not `onClick`: a click
               // fires AFTER the input's own `onBlur`, which would have
               // already closed (and unmounted) this list.
@@ -188,12 +192,13 @@ export default function BeeperPersonPicker({
               }`}
             >
               {person.name}
-            </li>
+            </div>
           ))}
-          <li
+          <div
             id={optionId(createNewIndex)}
             role="option"
             aria-selected={createNewIndex === activeIndex}
+            tabIndex={-1}
             onMouseDown={(event) => { event.preventDefault(); selectRow(createNewIndex); }}
             className={`flex items-center gap-1 border-t border-port-border/60 px-2 py-1 text-[11px] ${
               createNewIndex === activeIndex ? 'bg-port-accent/20 text-white' : 'text-gray-300'
@@ -201,8 +206,8 @@ export default function BeeperPersonPicker({
           >
             <UserPlus size={10} aria-hidden="true" />
             Create new…
-          </li>
-        </ul>,
+          </div>
+        </div>,
         document.body,
       )}
     </div>

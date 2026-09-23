@@ -6,7 +6,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import DeathClockCountdown from '../../DeathClockCountdown';
 import ProvenanceChip from '../../ui/ProvenanceChip';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
-import { clickableProps } from '../../../lib/a11yKeyboard.js';
+import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard.js';
 import { formatWeight, formatPercent, formatDateShort, formatCount } from '../../../utils/formatters';
 
 function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
@@ -14,6 +14,7 @@ function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
     <div
       onClick={onClick}
       {...(onClick ? clickableProps(onClick) : {})}
+      onKeyDown={onClick ? onActivateKeyDown(onClick) : undefined}
       className={`bg-port-card border border-port-border rounded-lg p-3 ${
         onClick ? 'cursor-pointer hover:border-port-accent/50 transition-colors' : ''
       }`}

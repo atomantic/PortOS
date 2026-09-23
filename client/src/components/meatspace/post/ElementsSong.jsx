@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge, Layers, RotateCw, ShieldCheck } from 'lucide-react';
 import { submitMemoryPractice, getMemoryMastery, getMemoryItem, attestMemoryMastery } from '../../../services/api';
 import { RapidReaderModal } from '../../RapidReader';
-import { clickableProps } from '../../../lib/a11yKeyboard';
+import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard';
 import PostCompletionActions from './PostCompletionActions';
 
 // Standard periodic table layout: [row][col] = symbol or null
@@ -402,6 +402,7 @@ function ElementsSongMain({ item, mastery, onSelectMode, onBack, onAttestMastery
                     onMouseLeave={() => { setHoveredElement(null); setHoverPos(null); }}
                     onClick={() => setSelectedElement(prev => prev === sym ? null : sym)}
                     {...clickableProps(() => setSelectedElement(prev => prev === sym ? null : sym))}
+                    onKeyDown={onActivateKeyDown(() => setSelectedElement(prev => prev === sym ? null : sym))}
                   >
                     {atomicNum && <span className="text-[7px] leading-none opacity-50 absolute top-0.5 left-1">{atomicNum}</span>}
                     <span className="text-[10px] leading-none font-semibold">{sym}</span>

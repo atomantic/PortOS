@@ -26,7 +26,7 @@ import ProgressBar from '../../ui/ProgressBar';
 import { formatDurationMs } from '../../../utils/formatters';
 import { narratePipelineProse } from '../../../services/api';
 import { STAGE_LABEL } from './constants';
-import { clickableProps } from '../../../lib/a11yKeyboard';
+import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard';
 import { safeReadStorage, safeWriteStorage } from '../../../lib/safeStorage';
 import useMounted from '../../../hooks/useMounted';
 
@@ -200,6 +200,7 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
           key={`seg-${seg.index}`}
           {...clickableProps(() => jumpTo(seg.index))}
           onClick={() => jumpTo(seg.index)}
+          onKeyDown={onActivateKeyDown(() => jumpTo(seg.index))}
           title={hard ? `Hard to say: ${reasons.join('; ')}` : undefined}
           className={[
             'cursor-pointer rounded transition-colors',

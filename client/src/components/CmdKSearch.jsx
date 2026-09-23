@@ -15,6 +15,7 @@ import { RECENT_KEY, RECENT_CAP, resolveRecentNavEntries } from '../utils/navWor
 import { filterNavByFeatures } from '../lib/navFeatures.js';
 import { safeReadJsonStorage } from '../lib/safeStorage.js';
 import { escapeRegExp } from '../lib/textUtils.js';
+import { onActivateKeyDown } from '../lib/a11yKeyboard.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse };
 
@@ -428,6 +429,12 @@ export default function CmdKSearch() {
         }`}
         role="option"
         aria-selected={isFocused}
+        // Virtually focused via the input's `aria-activedescendant` (WAI-ARIA
+        // combobox pattern) rather than individually tabbable; tabIndex={-1}
+        // still lets it be moved into view and keeps this row keyboard-operable
+        // if it ever receives focus directly.
+        tabIndex={-1}
+        onKeyDown={onActivateKeyDown(() => dispatchCommand(item))}
       >
         {Icon && <Icon size={14} className="shrink-0 mt-0.5 text-gray-400" />}
         <div className="flex-1 min-w-0">

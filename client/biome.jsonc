@@ -83,7 +83,11 @@
         "useAltText": "error",
         "useAriaPropsForRole": "error",
         "useValidAriaProps": "error",
-        "noLabelWithoutControl": "error"
+        "noLabelWithoutControl": "error",
+        "useKeyWithClickEvents": "error",
+        "noNoninteractiveElementToInteractiveRole": "error",
+        "useFocusableInteractive": "error",
+        "noAriaHiddenOnFocusable": "error"
       },
       "complexity": {
         // eslint: no-regex-spaces
