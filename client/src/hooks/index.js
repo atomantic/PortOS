@@ -212,6 +212,7 @@ export * from './useSidebarUniverses.js';
 export * from './useAppDeploy.js';
 export * from './useAppOperation.js';
 export * from './useAppOverrideActions.js';
+export { default as useTaskAddForm } from './useTaskAddForm.js';
 export * from './useTaskModelPins.js';
 export * from './useCanonPatch.js';
 export * from './useDeathClock.js';

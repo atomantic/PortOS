@@ -131,6 +131,23 @@ describe('TaskAddForm responsive layout', () => {
     expect(api.addCosTask).toHaveBeenCalledTimes(1);
   });
 
+  it('does not submit twice while the first request is pending', async () => {
+    localStorage.clear();
+    let resolveTask;
+    api.addCosTask.mockReturnValue(new Promise((resolve) => { resolveTask = resolve; }));
+    render(<TaskAddForm providers={[]} apps={[]} onTaskAdded={vi.fn()} />);
+
+    const input = screen.getByRole('textbox', { name: /Task description/ });
+    fireEvent.change(input, { target: { value: 'Submit once' } });
+    const button = screen.getByRole('button', { name: 'Add' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(api.addCosTask).toHaveBeenCalledTimes(1);
+    await act(async () => { resolveTask({ id: 'example-task' }); });
+    await waitFor(() => expect(button).not.toBeDisabled());
+  });
+
   it.each([false, true])('keeps a new app selection after restoring a draft (deferred apps: %s)', async (deferred) => {
     localStorage.clear();
     localStorage.setItem('portos-cos-task-description-draft', JSON.stringify({ description: 'Inspect the selected app', app: 'draft-app' }));
