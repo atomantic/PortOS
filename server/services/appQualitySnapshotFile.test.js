@@ -73,7 +73,7 @@ it('reads a committed snapshot and answers null for every unusable file', async 
   expect(await read('"a string"')).toBeNull();
   expect(await read(' '.repeat(APP_QUALITY_SNAPSHOT_MAX_BYTES + 1))).toBeNull();
   expect(await readAppQualitySnapshotFile('', { readFile: async () => '{}' })).toBeNull();
-  expect(await readAppQualitySnapshotFile('/repo/example-app', { readFile: async () => { throw new Error('ENOENT'); } })).toBeNull();
+  expect(await readAppQualitySnapshotFile('/repo/example-app', { readFile: async () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); } })).toBeNull();
   expect(APP_QUALITY_SNAPSHOT_FILENAME).toBe('.quality.json');
   expect(QUALITY_SNAPSHOT_BRANCH).toBe('portos/quality-snapshot');
 });
@@ -427,7 +427,7 @@ it('reads v1, v2, and the legacy filename without falling past a canonical file'
   const read = files => readStoredQualitySnapshot('/repo/example-app', {
     readFile: async path => {
       const name = basename(path);
-      if (!Object.hasOwn(files, name)) throw new Error('ENOENT');
+      if (!Object.hasOwn(files, name)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
       return files[name];
     },
   });
@@ -440,4 +440,12 @@ it('reads v1, v2, and the legacy filename without falling past a canonical file'
   expect(both.status).toBe('v2');
   expect((await read({ '.quality.json': 'not-json', [APP_QUALITY_LEGACY_SNAPSHOT_FILENAME]: v1 })).status).toBe('unrecognized');
   expect((await read({ '.quality.json': ' '.repeat(APP_QUALITY_SNAPSHOT_MAX_BYTES + 1) })).status).toBe('oversize');
+  const unreadable = await readStoredQualitySnapshot('/repo/example-app', {
+    readFile: async path => {
+      if (basename(path) === '.quality.json') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return v1;
+    },
+  });
+  expect(unreadable.status).toBe('unreadable');
+  expect(unreadable.filename).toBe('.quality.json');
 });

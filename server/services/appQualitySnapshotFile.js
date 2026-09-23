@@ -51,8 +51,8 @@ async function readSnapshotEntry(repoPath, filename, deps = {}) {
     if (typeof body !== 'string') return { status: 'absent' };
     if (Buffer.byteLength(body) > APP_QUALITY_SNAPSHOT_MAX_BYTES) return { status: 'oversize' };
     return { status: 'text', body };
-  } catch {
-    return { status: 'absent' };
+  } catch (error) {
+    return { status: error?.code === 'ENOENT' ? 'absent' : 'unreadable' };
   }
 }
 
@@ -73,8 +73,8 @@ async function readClassified(repoPath, filename, deps) {
   let body;
   try {
     body = await (deps.readFile || readFile)(snapshotPath(repoPath, filename), 'utf8');
-  } catch {
-    return { status: 'absent' };
+  } catch (error) {
+    return { status: error?.code === 'ENOENT' ? 'absent' : 'unreadable', filename };
   }
   if (typeof body !== 'string') return { status: 'absent' };
   if (Buffer.byteLength(body) > APP_QUALITY_SNAPSHOT_MAX_BYTES) return { status: 'oversize' };
