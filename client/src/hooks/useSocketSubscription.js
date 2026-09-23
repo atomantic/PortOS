@@ -20,12 +20,7 @@ const registry = new Map();
 function getEntry(namespace) {
   let entry = registry.get(namespace);
   if (!entry) {
-    // Whether the socket was already connected when this namespace's FIRST
-    // consumer mounted. If it wasn't, the socket's own upcoming 'connect'
-    // event is the initial connection establishing, not a reconnect — the
-    // first synchronous `emit` below already covers it, so onResubscribe
-    // must wait for the connect AFTER that one.
-    entry = { count: 0, connectHandler: null, callbacks: new Set(), sawInitialConnect: socket.connected };
+    entry = { count: 0, connectHandler: null, callbacks: new Set() };
     registry.set(namespace, entry);
   }
   return entry;
@@ -42,10 +37,13 @@ function getEntry(namespace) {
  * - The LAST consumer to unmount emits `<namespace>:unsubscribe`.
  * - `onResubscribe`, if given, runs after every `<namespace>:subscribe`
  *   re-emission triggered by a socket `connect` event — so a consumer can
- *   refetch whatever it may have missed while disconnected. It does NOT run
- *   for the very first subscribe a mount performs; callers that also need
- *   the initial fetch already do that themselves (e.g. in a companion
- *   effect), and re-running it here would just duplicate that first fetch.
+ *   refetch whatever it may have missed while disconnected. This INCLUDES the
+ *   first `connect` a mount observes: a component can mount while the socket
+ *   is still connecting (or reconnecting after an outage that also broke its
+ *   own initial HTTP fetch), and skipping that first connect would leave
+ *   stale data uncorrected until some later reconnect. The trade-off is one
+ *   redundant refetch in the common case (mount while already-connecting,
+ *   HTTP fetch already fresh) — cheap next to silently missing a real miss.
  *
  * @param {string} namespace - a namespace registered server-side via
  *   `registerSubscriber` (e.g. 'notifications', 'errors', 'instances', 'loops').
@@ -65,10 +63,6 @@ export function useSocketSubscription(namespace, { onResubscribe } = {}) {
       socket.emit(`${namespace}:subscribe`);
       entry.connectHandler = () => {
         socket.emit(`${namespace}:subscribe`);
-        if (!entry.sawInitialConnect) {
-          entry.sawInitialConnect = true;
-          return;
-        }
         for (const cb of entry.callbacks) cb();
       };
       socket.on('connect', entry.connectHandler);

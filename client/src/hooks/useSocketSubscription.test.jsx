@@ -46,19 +46,20 @@ describe('useSocketSubscription', () => {
     expect(emitted.filter(([e]) => e === 'notifications:subscribe')).toHaveLength(3);
   });
 
-  it('does not call onResubscribe for the very first connect after mount', () => {
-    // Mounting before the socket has ever connected means the upcoming
-    // 'connect' is the initial connection establishing, not a reconnect — the
-    // synchronous subscribe emit at mount already covers it, and the caller's
-    // own initial-fetch effect (not this hook) is responsible for that first load.
+  it('calls onResubscribe on the first connect after mounting disconnected', () => {
+    // A component can mount while the socket is still connecting, or while
+    // reconnecting after an outage that also broke its own initial HTTP
+    // fetch. Skipping that first connect would leave stale data uncorrected
+    // until some LATER reconnect, so onResubscribe fires for every connect,
+    // including the first one a mount observes.
     const onResubscribe = vi.fn();
     renderHook(() => useSocketSubscription('loops', { onResubscribe }));
 
-    fire('connect'); // first-ever connect
-    expect(onResubscribe).not.toHaveBeenCalled();
-
-    fire('connect'); // a genuine reconnect
+    fire('connect');
     expect(onResubscribe).toHaveBeenCalledTimes(1);
+
+    fire('connect');
+    expect(onResubscribe).toHaveBeenCalledTimes(2);
   });
 
   it('calls onResubscribe on every reconnect when mounted while already connected', () => {
